@@ -25,8 +25,9 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
     """Whether a C initializer may convert this variable's integer value.
 
     Grouping and casts preserve value uses. Call arguments, scalar sizeof,
-    boolean results, indices and conditional selectors do not themselves
-    supply the wide integer being converted. This is candidate extraction,
+    Boolean results (including C++ requirements), indices and conditional
+    selectors do not themselves supply the wide integer being converted.
+    This is candidate extraction,
     not callee-return typing or a proof of the expression's range.
     """
     if value is None:
@@ -48,7 +49,7 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
                     return True  # grammar drift must not erase a conversion
                 stack.extend(arguments.named_children)
             continue
-        if kind in {"alignof_expression", "type_descriptor"}:
+        if kind in {"alignof_expression", "type_descriptor", "requires_expression"}:
             continue
         if kind == "identifier":
             if source[node.start_byte : node.end_byte].decode("utf-8") == variable:
@@ -82,15 +83,27 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
                 or (kind == "pointer_expression" and op == "&")
             ):
                 continue
+        if kind == "assignment_expression":
+            operator = node.child_by_field_name("operator")
+            right = node.child_by_field_name("right")
+            if operator is None or right is None:
+                return True
+            if source[operator.start_byte : operator.end_byte] != b"=":
+                # Compound assignment reads its left operand and returns the
+                # updated value; ordinary assignment only returns the RHS.
+                left = node.child_by_field_name("left")
+                if left is None:
+                    return True
+                stack.append(left)
+            stack.append(right)
+            continue
         if kind in {
             "cast_expression",
-            "assignment_expression",
             "comma_expression",
             "subscript_expression",
         }:
             field = {
                 "cast_expression": "value",
-                "assignment_expression": "right",
                 "comma_expression": "right",
                 "subscript_expression": "argument",
             }[kind]
