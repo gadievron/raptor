@@ -35,20 +35,24 @@ from core.concepts.tests import slice_vectors
 
 @pytest.fixture(autouse=True)
 def _clean_caches(monkeypatch):
-    """Use private model/memo caches and preserve the caller's warm state."""
+    """Own model and derivation memos together with held test aliases."""
     from collections import OrderedDict
     from functools import lru_cache
-
     from core.testing.module_state import isolated_module_state
 
-    cached = ab._load_cached
-    with isolated_module_state(
-        ab, {"_slice_memos": OrderedDict(), "_load_cached":
-             lru_cache(**cached.cache_parameters())(cached.__wrapped__)},
-        lock=ab._slice_memo_lock,
-    ):
-        monkeypatch.setitem(globals(), "_load_cached", ab._load_cached)
-        yield
+    replacements = {"_slice_memos": OrderedDict()}
+    for name in ("_load_cached", "_name_variants", "_pp_parts",
+                 "_grep_hint_compilable", "_grep_hint_pattern", "_word_boundary_pattern"):
+        original = getattr(ab, name)
+        replacements[name] = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(ab, replacements, lock=ab._slice_memo_lock):
+        try:
+            for name, value in replacements.items():
+                if name != "_slice_memos":
+                    monkeypatch.setitem(globals(), name, value)
+            yield
+        finally:
+            monkeypatch.undo()
 
 # ---------------------------------------------------------------------------
 # Frozen reference implementations (pre-cache code, verbatim).

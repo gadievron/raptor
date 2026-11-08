@@ -27,6 +27,23 @@ from packages.zkpox import (  # noqa: E402
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_proving_memo(monkeypatch):
+    """Own the availability memo and its imported test alias."""
+    from functools import lru_cache
+    from core.testing.module_state import isolated_module_state
+
+    original = pd.proving_stack_available
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(pd, {"proving_stack_available": private}):
+        try:
+            monkeypatch.setitem(globals(), "proving_stack_available", private)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def test_available_returns_bool():
     """Whatever the host has, the probe returns a bool and doesn't
     raise."""

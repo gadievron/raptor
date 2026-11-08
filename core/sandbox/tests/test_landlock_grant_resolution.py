@@ -44,6 +44,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_redirect_warnings():
+    """Keep warning-dedup mutations separate from borrowed process state."""
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(landlock, {"_grant_redirects_warned": set()}):
+        yield
+
+
 def _close(fd: int) -> None:
     try:
         os.close(fd)
