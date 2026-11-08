@@ -2,6 +2,8 @@
 
 from contextlib import ExitStack
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 import fcntl
 import resource
 import select
@@ -14,6 +16,7 @@ import pytest
 from core.sandbox import context as ctx
 from core.sandbox import _capture as capture
 from core.sandbox.tests.capability import requires_landlock
+from core.sandbox.python_paths import python_runtime_tool_paths
 from core.testing.module_views import module_function_view
 from core.testing.state_isolation import pin_user_state_dirs
 
@@ -73,6 +76,7 @@ def runner(tmp_path):
             options = dict(disabled=not native, target=str(tmp_path), output=str(out), block_network=False)
             if native:
                 options["restrict_reads"] = True
+                options["tool_paths"] = python_runtime_tool_paths()
             kwargs.setdefault("capture_output", True)
             kwargs.setdefault("timeout", 5)
             kwargs.setdefault("env", {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"})
@@ -361,3 +365,34 @@ def test_invalid_input_type_still_finishes_the_started_process(runner, text):
 def test_large_integral_limit_does_not_format_an_unused_loss_marker(runner):
     result = runner.execute("import os\nos.write(1,b'small')", cap=10 ** 5000)
     assert result.stdout == b"small" and result.returncode == 0
+
+
+@requires_landlock
+def test_native_runtime_grants_keep_unrelated_owned_files_unreadable(runner, monkeypatch, tmp_path):
+    """Runtime discovery must feed read grants without removing confinement."""
+    if sys.platform != "linux":
+        pytest.skip("real Linux Landlock-only executor")
+    monkeypatch.setattr(ctx, "check_net_available", lambda: False)
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: False)
+    # A sibling of target=tmp_path, never inside its existing read grant.
+    with TemporaryDirectory(prefix="runtime-witness-", dir=tmp_path.parent) as outside:
+        runtime = Path(outside) / "runtime"
+        runtime.mkdir()
+        declared = runtime / "owned-runtime-data"
+        private = Path(outside) / "unrelated-private-data"
+        declared.write_text("runtime-ok")
+        private.write_text("host-readable")
+        assert private.read_text() == "host-readable"
+        paths = python_runtime_tool_paths() + [str(runtime)]
+        monkeypatch.setitem(globals(), "python_runtime_tool_paths", lambda: paths)
+        program = (
+            "import errno\n"
+            f"assert open({str(declared)!r}).read() == 'runtime-ok'\n"
+            f"try: open({str(private)!r}).read()\n"
+            "except PermissionError as exc: assert exc.errno == errno.EACCES\n"
+            "else: raise AssertionError('read confinement was removed')\n"
+            "print('runtime-ok; unrelated read denied')\n"
+        )
+        result = runner.execute(program, native=True)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout == b"runtime-ok; unrelated read denied\n"
