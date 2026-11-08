@@ -24,8 +24,10 @@ through this module.
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -81,4 +83,24 @@ def init_scratch_repo(tmp_path: Path, name: str = "repo") -> Path:
     return repo
 
 
-__all__ = ["DEFAULT_BRANCH", "git_run", "init_scratch_repo"]
+
+def supports_non_utf8_filenames(directory: Path) -> bool:
+    """Probe filename representability without changing parser-test coverage."""
+    if os.name != "posix":
+        return False
+    with TemporaryDirectory(prefix="git-name-probe-", dir=directory) as owned:
+        name = os.path.join(owned, os.fsdecode(b"raw-\xff"))
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except UnicodeEncodeError:
+            return False
+        except OSError as error:
+            if error.errno == errno.EILSEQ:
+                return False
+            raise
+        else:
+            os.close(fd)
+            return True
+
+
+__all__ = ["DEFAULT_BRANCH", "git_run", "init_scratch_repo", "supports_non_utf8_filenames"]

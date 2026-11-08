@@ -384,10 +384,12 @@ def test_large_pathspec_list_keeps_bounded_git_commands(repo, monkeypatch):
 
 
 def test_case_insensitive_pathspec_setting_retains_git_selection(repo, monkeypatch):
-    alternative = repo / '.DEVCONTAINER/helper.py'
-    alternative.parent.mkdir()
-    alternative.write_text('case-distinct tracked input\n')
-    commit(repo)
+    # The Git tree can contain case-distinct paths even when the host cannot.
+    blob = git(repo, 'hash-object', '-w', '.devcontainer/helper.py')
+    git(repo, '-c', 'core.ignorecase=false', 'update-index', '--add', '--cacheinfo',
+        f'100644,{blob},.DEVCONTAINER/helper.py')
+    git(repo, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+        'commit', '-qm', 'case-distinct indexed input')
     monkeypatch.setenv('GIT_ICASE_PATHSPECS', '1')
     calls = _record_fingerprint_git(monkeypatch)
     # ls-tree currently rejects icase magic. If Git gains support, compare

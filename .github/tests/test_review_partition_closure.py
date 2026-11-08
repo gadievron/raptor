@@ -198,7 +198,7 @@ def test_git_paths_preserve_names_and_changed_ownership(tmp_path, capsys):
     import os
     from unittest.mock import patch
 
-    from core.testing.gitrepo import git_run, init_scratch_repo
+    from core.testing.gitrepo import git_run, init_scratch_repo, supports_non_utf8_filenames
 
     spec = importlib.util.spec_from_file_location("partition_gate_under_test", SCRIPT)
     gate = importlib.util.module_from_spec(spec)
@@ -207,7 +207,7 @@ def test_git_paths_preserve_names_and_changed_ownership(tmp_path, capsys):
     repo = init_scratch_repo(tmp_path)
     expected = ["core/café.py", "core/line\nname.py", "core/tab\tname.py",
                 'core/quote"name.py', "core/space name.py"]
-    if os.name == "posix":
+    if os.name == "posix" and supports_non_utf8_filenames(repo):
         expected.append("core/" + os.fsdecode(b"raw-\xff.py"))
     for rel in expected + ["vendored/café.py"]:
         path = repo / rel
@@ -244,3 +244,23 @@ def test_git_paths_preserve_names_and_changed_ownership(tmp_path, capsys):
     unit_map.write_text("U1: core/space*\n")
     assert gate.main(args) == 1
     assert "CHANGED-UNCLAIMED: core/café.py" in capsys.readouterr().out
+
+
+
+def test_partition_paths_decode_raw_git_names_without_creating_them(tmp_path, monkeypatch):
+    import importlib.util
+    import subprocess
+    from unittest.mock import patch
+
+    from core.testing.module_bindings import patch_module_attribute
+
+    spec = importlib.util.spec_from_file_location("partition_raw_names", SCRIPT)
+    gate = importlib.util.module_from_spec(spec)
+    with patch.object(sys, "path", sys.path.copy()):
+        spec.loader.exec_module(gate)
+    raw = b"core/raw-\xff.py\0core/line\nname.py\0"
+    patch_module_attribute(monkeypatch, gate, "subprocess", "run",
+                           lambda *a, **kw: subprocess.CompletedProcess(["git"], 0, stdout=raw, stderr=b""))
+    expected = [item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item]
+    assert gate.git_paths(str(tmp_path), "ls-files") == expected
+    assert gate.git_paths(str(tmp_path), "diff", "--name-only", "HEAD") == expected
