@@ -278,6 +278,7 @@ def validate(
             success=tool_evidence.success,
             error=tool_evidence.error,
             empty_matches_conclusive=tool_evidence.empty_matches_conclusive,
+            predicate_verdict=tool_evidence.predicate_verdict,
             # Root hash, not hash_hypothesis(hypothesis): after the
             # first refinement `hypothesis` is a replaced copy and its
             # hash would split the evidence lineage. See root_hash
@@ -498,7 +499,8 @@ def _evaluate_with_refinement(
                 evidence, "refuted", polarity=hypothesis.polarity,
             )
             return verdict, f"Tool ran cleanly with no matches: {evidence.summary}", None
-        return "inconclusive", f"LLM evaluation failed; matches present: {evidence.summary}", None
+        verdict = verdict_from(evidence, "inconclusive", polarity=hypothesis.polarity)
+        return verdict, f"LLM evaluation failed; matches present: {evidence.summary}", None
 
     data = _extract_data(response) or {}
     claim = data.get("verdict", "inconclusive" if evidence.matches else "refuted")

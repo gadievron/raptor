@@ -201,7 +201,7 @@ class SMTAdapter(ToolAdapter):
                 error="unbound call return types: encoded contradiction is conditional",
             )
 
-        if result.feasible is None:
+        if result.smt_available is not True or type(result.feasible) is not bool:
             reason = result.reasoning or "SMT verdict unknown"
             dropped = list(result.unknown or [])
             if dropped:
@@ -215,7 +215,7 @@ class SMTAdapter(ToolAdapter):
 
         dropped = list(result.unknown or [])
 
-        if result.feasible and dropped:
+        if result.feasible and (dropped or result.unknown_reasons):
             # sat over a strict subset of the conditions is NOT proof
             # that the full path is feasible — adding back the dropped
             # (unparseable) conditions can only shrink the solution
@@ -288,6 +288,7 @@ class SMTAdapter(ToolAdapter):
             # direction from the hypothesis's declared polarity
             # (never from the LLM's post-hoc reading).
             empty_matches_conclusive=not result.feasible,
+            predicate_verdict="sat" if result.feasible else "unsat",
         )
 
     def _profile(self):

@@ -128,6 +128,11 @@ class ToolEvidence:
     ladder consults this flag before downgrading a confirmed claim with
     no matches to refuted."""
 
+    predicate_verdict: str = ""
+    """SMT's definitive ``sat``/``unsat`` result for supplied predicates.
+    Independent of model entry count; it does not establish source execution.
+    Empty for failures, incomplete positive queries and other tools."""
+
     @property
     def confirms(self) -> bool:
         """True when the tool ran cleanly and produced matches."""
@@ -146,6 +151,8 @@ class ToolEvidence:
         # stays untouched for the common case.
         if self.empty_matches_conclusive:
             d["empty_matches_conclusive"] = True
+        if self.predicate_verdict:
+            d["predicate_verdict"] = self.predicate_verdict
         return d
 
 

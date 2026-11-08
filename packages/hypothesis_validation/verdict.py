@@ -56,6 +56,11 @@ def verdict_from(
 
       - If the tool didn't run successfully: inconclusive. (The error
         text lives on the evidence object; we don't reproduce it here.)
+      - A definitive SMT ``predicate_verdict`` with declared polarity is
+        interpreted mechanically: SAT confirms reachability and refutes
+        infeasibility; UNSAT gives the opposite directions. Model entry
+        count and LLM judgement do not select the result. This establishes
+        only the supplied predicates' mathematical feasibility.
       - If the tool ran, produced no matches, and the evidence carries
         ``empty_matches_conclusive`` (the adapter's assertion that the
         empty-match outcome is itself a definitive tool result — SMT
@@ -83,6 +88,17 @@ def verdict_from(
 
     matches = bool(getattr(evidence, "matches", []) or [])
     claim = _coerce(llm_claim)
+
+    # A SAT query can have an empty assignment (all guards tautological).
+    # Model entries are display data, not the mathematical verdict. Use the
+    # hypothesis's declared reading for both definitive SMT directions.
+    predicate = getattr(evidence, "predicate_verdict", "")
+    if getattr(evidence, "tool", "") == "smt" and predicate in ("sat", "unsat"):
+        if polarity in ("reachability", "infeasibility"):
+            supports = (predicate == "sat") == (polarity == "reachability")
+            return "confirmed" if supports else "refuted"
+        if predicate == "sat" and not matches:
+            return "inconclusive"  # no declared direction; never infer UNSAT
 
     if not matches and bool(
         getattr(evidence, "empty_matches_conclusive", False)
