@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
+
+from core.testing.module_bindings import mock_module_attribute
 
 from core.recall.manifest import (
     ExpectedFinding,
@@ -188,3 +195,53 @@ class TestCompare:
         assert delta["newly_found"] == ["a", "b"]
         assert delta["newly_missed"] == ["c"]
         assert delta["label_class"] == LABEL_CLASS
+
+
+class TestCollectToolchain:
+    """Version stamping is independent of the CLI's directory selection."""
+
+    def test_absent_tools_are_not_started(self):
+        consumer = import_module("core.recall.score")
+
+        with mock_module_attribute(consumer, "shutil", "which", return_value=None), \
+             mock_module_attribute(consumer, "subprocess", "run") as run:
+            assert consumer.collect_toolchain() == {"python": sys.version.split()[0]}
+        run.assert_not_called()
+
+    @pytest.mark.parametrize("stdout,stderr,returncode,expected", [
+        ("  v1.2\nadditional output\n", "", 0, "v1.2"),
+        ("", "v2.3\ndiagnostic\n", 0, "v2.3"),
+        ("v" * 100, "", 0, "v" * 80),
+        ("", "", 0, None),
+        ("v1.2", "failed", 1, None),
+    ], ids=["stdout", "stderr", "bounded", "empty", "failed"])
+    def test_versions_keep_only_successful_bounded_first_line(
+        self, stdout, stderr, returncode, expected,
+    ):
+        consumer = import_module("core.recall.score")
+
+        result = subprocess.CompletedProcess([], returncode, stdout, stderr)
+        with mock_module_attribute(consumer, "shutil", "which", return_value="/owned/tool"), \
+             mock_module_attribute(consumer, "subprocess", "run", return_value=result) as run:
+            versions = consumer.collect_toolchain()
+        assert versions == {"python": sys.version.split()[0], **(
+            {"semgrep": expected, "codeql": expected} if expected is not None else {}
+        )}
+        assert [call.args[0] for call in run.call_args_list] == [
+            ["semgrep", "--version"], ["codeql", "version", "--format=terse"],
+        ]
+        assert all(call.kwargs["timeout"] == 30 for call in run.call_args_list)
+
+    @pytest.mark.parametrize("failure", [
+        OSError("tool disappeared"), subprocess.TimeoutExpired("semgrep", 30),
+    ], ids=["spawn-error", "timeout"])
+    def test_one_tool_failure_does_not_erase_other_versions(self, failure):
+        consumer = import_module("core.recall.score")
+
+        with mock_module_attribute(consumer, "shutil", "which", return_value="/owned/tool"), \
+             mock_module_attribute(consumer, "subprocess", "run", side_effect=[
+                 failure, subprocess.CompletedProcess([], 0, "codeql-version", ""),
+             ]):
+            assert consumer.collect_toolchain() == {
+                "python": sys.version.split()[0], "codeql": "codeql-version",
+            }
