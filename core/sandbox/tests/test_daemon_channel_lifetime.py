@@ -4,6 +4,7 @@ These transport tests launch only test-authored programs; they do not claim
 namespace or read confinement. Native containment has separate integration tests.
 """
 from contextlib import ExitStack
+import errno
 import json
 import os
 from pathlib import Path
@@ -387,9 +388,25 @@ def test_terminal_probe_preserves_queued_bytes(pipes):
         assert os.read(read, 12) == b'next request'
 
 
+@pytest.mark.parametrize('omit_invalid', [False, True], ids=['native-poll', 'omitted-invalid'])
 @pytest.mark.parametrize('verb', ['recv', 'send', 'spawn'])
-def test_abandonment_precedes_pushback_empty_send_and_spawn(pipes, monkeypatch, verb):
+def test_abandonment_precedes_pushback_empty_send_and_spawn(pipes, monkeypatch, verb, omit_invalid):
     read, write = pipes()
+    if omit_invalid:
+        original = select.poll
+
+        class Poll:
+            def __init__(self):
+                self.delegate = original()
+
+            def register(self, *args):
+                return self.delegate.register(*args)
+
+            def poll(self, *args):
+                return [(fd, events) for fd, events in self.delegate.poll(*args)
+                        if not events & select.POLLNVAL]
+
+        patch_module_attribute(monkeypatch, daemon, 'select', 'poll', Poll)
     # An invalid descriptor is a real terminal event, with no borrowed endpoint.
     invalid = os.dup(read)
     os.close(invalid)
@@ -405,6 +422,21 @@ def test_abandonment_precedes_pushback_empty_send_and_spawn(pipes, monkeypatch, 
         else:
             daemon._spawn_request_target(['unused'])
     assert pushback == b'keep' and not called
+
+
+@pytest.mark.parametrize('error', [OSError(errno.EIO, 'descriptor probe failed'), KeyboardInterrupt()])
+def test_channel_descriptor_probe_preserves_unrelated_failures(pipes, monkeypatch, error):
+    read, write = pipes()
+    monkeypatch.setattr(daemon, '_REQUEST_CHANNEL_FDS', (read,))
+
+    def fail(fd):
+        assert fd == read
+        raise error
+
+    patch_module_attribute(monkeypatch, daemon, 'os', 'fstat', fail)
+    with pytest.raises(type(error)) as caught:
+        daemon._check_request_channel()
+    assert caught.value is error
 
 
 @pytest.mark.parametrize('blocking', [True, False])
