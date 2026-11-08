@@ -14,8 +14,26 @@ starved every CWE-seeded tool chain. These tests pin:
 
 from __future__ import annotations
 
+import pytest
+
 import logging
 from types import SimpleNamespace
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_unmapped_cwes():
+    """Restore borrowed caches after this test's mutations."""
+    from core.audit import orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        orchestrator,
+        {
+            "_UNMAPPED_CWES_LOGGED": set(),
+        },
+    ):
+        yield
 
 
 def _outcome(status="suspicious", cwe="", hypothesis="", hypotheses=None):
@@ -170,12 +188,24 @@ class TestUnmappedCweVisibility:
         ]
         assert len(warnings) == 1
 
-    def test_mapped_cwe_does_not_log(self, caplog):
+    def test_mapped_cwe_does_not_log(self, caplog, tmp_path, monkeypatch):
         from core.audit.orchestrator import _cwe_fallback_chain
+
+        query = tmp_path / "owned.ql"
+        query.write_text("/** @kind problem */\nimport cpp\n")
+        resolved = []
+
+        def resolve_query(spec):
+            resolved.append(spec)
+            return str(query)
+
+        monkeypatch.setattr("core.audit.orchestrator._codeql_query_file", resolve_query)
         self._reset()
         with caplog.at_level(logging.WARNING, logger="core.audit.orchestrator"):
             chain = _cwe_fallback_chain("CWE-190")
         assert chain  # dispatch entries exist
+        assert resolved and all(resolved)
+        assert {"type": "codeql", "config": {"query": str(query)}} in chain
         assert not [
             r for r in caplog.records
             if "no tool-chain dispatch" in r.getMessage()

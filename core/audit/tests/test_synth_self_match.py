@@ -6,6 +6,8 @@ design-pattern-CWE synth match needs a trust-boundary receipt from
 the context map before it can promote anything.
 """
 
+import pytest
+
 import json
 from pathlib import Path
 
@@ -16,6 +18,27 @@ from core.audit.orchestrator import (
     ReviewOutcome,
     _synth_receipt_promotion_block_reason,
 )
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_trust_boundary_memo(monkeypatch):
+    """Restore borrowed caches after this test's mutations."""
+    from core.audit import orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    cache = {}
+    with isolated_module_state(
+        orchestrator,
+        {
+            "_TRUST_BOUNDARY_KEYS_CACHE": cache,
+        },
+    ):
+        try:
+            monkeypatch.setitem(globals(), "_TRUST_BOUNDARY_KEYS_CACHE", cache)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _outcome(file="webapp/models.py", function="__eq__", **kw):
