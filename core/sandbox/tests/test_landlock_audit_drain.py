@@ -37,7 +37,8 @@ def _spawn_child(code, *inherit_fds):
     the fork hazard. The default ``close_fds`` covers what the old
     close-in-child argument did."""
     return subprocess.Popen(
-        [sys.executable, "-c", code], pass_fds=inherit_fds,
+        [sys.executable, "-I", "-S", "-B", "-c", code], pass_fds=inherit_fds,
+        env={"PATH": os.defpath},
     )
 
 
@@ -92,23 +93,30 @@ def test_drain_does_not_reap_target(monkeypatch):
         os.close(out_r)
 
 
+def _observe_exited_target_without_blocking(monkeypatch, child):
+    # Kernel exit evidence, without consuming the caller's wait status.
+    status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+    assert status.si_pid == child.pid
+    ready = mod._readable_fds
+    waits = []
+    def nonblocking(fds, timeout):
+        waits.append(timeout)
+        assert timeout == 0, "an already-exited target requested a blocking drain"
+        return ready(fds, timeout)
+    monkeypatch.setattr(mod, "_readable_fds", nonblocking)
+    return waits
+
+
 def test_drain_stops_when_child_exited_and_pipe_held_elsewhere(monkeypatch):
-    """When the target has exited but a write end survives elsewhere
-    (stray grandchild), the drain must stop after an idle tick instead
-    of waiting for an EOF that never comes."""
+    """A held writer cannot make an already-exited target wait for EOF."""
     monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 0.05)
     with pipes_for_setup(1) as ((out_r, out_w),):
         child = _spawn_child(f"import os; os.write({out_w}, b'gone')", out_w)
-    # Parent deliberately KEEPS out_w open — simulates an inherited
-    # write end outliving the target.
     try:
-        # Let the child exit first so the idle tick sees it gone.
-        time.sleep(0.2)
-        t0 = time.monotonic()
+        waits = _observe_exited_target_without_blocking(monkeypatch, child)
         drained = mod._drain_pipes_until_eof((out_r,), child.pid)
-        elapsed = time.monotonic() - t0
         assert drained[out_r] == b"gone"
-        assert elapsed < 5.0, "drain hung despite target having exited"
+        assert waits
     finally:
         os.close(out_w)
         os.close(out_r)
@@ -169,42 +177,62 @@ def test_drain_stops_when_grandchild_chatters_after_target_exit(
     assert result["drained"][out_r].startswith(b"x"), "no bytes collected"
 
 
-def test_drain_detects_exit_when_deadline_shorter_than_poll_interval():
-    """A caller deadline SHORTER than the idle poll interval must not
-    outrun exit detection.
-
-    Pre-fix the liveness probe ran on a time schedule (first probe one
-    full ``_DRAIN_IDLE_POLL_S`` in — 30s in production), so with a
-    sub-interval deadline the drain broke at the deadline with the
-    target's exit never observed, and the caller then reported a
-    target that exited 0 immediately as TimeoutExpired. The probe now
-    runs on every wake; the production poll interval is deliberately
-    NOT shrunk here.
-    """
+def test_drain_detects_exit_when_deadline_shorter_than_poll_interval(monkeypatch):
+    """Known exit is observed before a long configured idle wait."""
+    monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 30.0)
     with pipes_for_setup(1) as ((out_r, out_w),):
         child = _spawn_child(f"import os; os.write({out_w}, b'hello')", out_w)
-    # Parent deliberately KEEPS out_w open — the backgrounded-
-    # grandchild shape that holds the pipe past the target's exit.
     try:
-        time.sleep(0.3)  # let the target exit
-        t0 = time.monotonic()
+        waits = _observe_exited_target_without_blocking(monkeypatch, child)
         drained = mod._drain_pipes_until_eof(
-            (out_r,), child.pid, deadline=time.monotonic() + 5.0,
-        )
-        elapsed = time.monotonic() - t0
-        assert drained[out_r] == b"hello"
-        # Post-fix the probe sees the exit on the first wake and the
-        # bounded final sweep ends the drain immediately; pre-fix the
-        # drain slept out the whole 5s deadline. Generous margin —
-        # the pin is "exit detected long before the deadline".
-        assert elapsed < 2.5, (
-            "drain waited out the caller deadline on an "
-            "already-exited target"
-        )
+            (out_r,), child.pid, deadline=time.monotonic() + 5.0)
+        assert drained[out_r] == b"hello" and waits
     finally:
         os.close(out_w)
         os.close(out_r)
         child.wait(timeout=10)
+
+
+def test_target_exit_without_pipe_activity_has_a_bounded_liveness_wait(monkeypatch):
+    """Exit just after a probe must wake without requiring pipe EOF/data."""
+    monkeypatch.setattr(mod, "_DRAIN_IDLE_POLL_S", 30.0)
+    with pipes_for_setup(3) as ((out_r, out_w), (ready_r, ready_w), (release_r, release_w)):
+        child = _spawn_child(
+            f"import os\nos.write({ready_w},b'R')\nos.read({release_r},1)\n",
+            out_w, ready_w, release_r)
+    remaining = {out_r, out_w, ready_r, ready_w, release_r, release_w}
+    def close(fd):
+        if fd in remaining:
+            remaining.remove(fd)
+            os.close(fd)
+    readiness = mod._readable_fds
+    waits = []
+    def release_on_poll(fds, timeout):
+        if not waits:
+            os.write(release_w, b"X")
+        waits.append(timeout)
+        assert timeout <= 0.1, "pipe wait can hide a target exit until the caller deadline"
+        return readiness(fds, timeout)
+    try:
+        close(ready_w)
+        close(release_r)
+        assert os.read(ready_r, 1) == b"R"
+        monkeypatch.setattr(mod, "_readable_fds", release_on_poll)
+        drained = mod._drain_pipes_until_eof((out_r,), child.pid,
+                                             deadline=time.monotonic() + 5.0)
+        assert drained[out_r] == b"" and waits
+        status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOWAIT)
+        assert status.si_pid == child.pid
+        assert child.returncode is None, "drain changed the caller's Popen state"
+    finally:
+        close(release_w)
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+            child.wait(timeout=5)
+        for fd in list(remaining):
+            close(fd)
 
 
 def test_exited_zero_target_with_grandchild_is_not_a_timeout(tmp_path):
