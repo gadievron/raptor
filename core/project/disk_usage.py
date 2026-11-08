@@ -104,7 +104,9 @@ class Usage:
             if stat.S_ISDIR(before.mode):
                 if after is None:
                     total += before.size
-            elif len(before.links - (after.links if after else set())) >= before.nlink:
+            # A renamed/relinked inode still present in the inventory keeps
+            # its allocation even if every previous name has disappeared.
+            elif after is None and len(before.links) >= before.nlink:
                 total += before.size
         return total
 
@@ -127,8 +129,21 @@ def scan_usage(root: Path) -> Usage:
     except (OSError, ValueError):
         usage.incomplete = True
         return usage
+    link = ('root', _key(initial, root))
+    if not stat.S_ISDIR(initial.st_mode):
+        # Use the same directory-entry identity as a containing tree scan.
+        # An inode identifies shared data, not one particular hard link.
+        try:
+            parent = root.parent.stat()
+        except OSError:
+            usage.incomplete = True
+            return usage
+        if not stat.S_ISDIR(parent.st_mode) or not parent.st_ino:
+            usage.incomplete = True
+            return usage
+        link = (_key(parent, root.parent), root.name)
     try:
-        usage.add(initial, root, ('root', _key(initial, root)), root)
+        usage.add(initial, root, link, root)
     except _InventoryLimit:
         return usage
     if not stat.S_ISDIR(initial.st_mode):
