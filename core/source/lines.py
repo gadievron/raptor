@@ -31,6 +31,7 @@ __all__ = [
     "read_context",
     "read_lines",
     "slice_lines",
+    "slice_source_lines",
     "slice_text",
     "split_lines",
     "splitlines_prefix",
@@ -313,6 +314,31 @@ def slice_lines(
     if s >= e:
         return []
     return lines[s:e]
+
+
+def slice_source_lines(text: str, start_line: int, end_line: int) -> list[str]:
+    """Return source rows in a 1-indexed inclusive window.
+
+    Equivalent to ``slice_lines(split_lines(text), start_line, end_line)``.
+    Narrow windows in large native inputs split only the selected LF rows.
+    Keep interior empty rows and trim one trailing CR per row. Drop an empty
+    row only when it is the file's final normalized split element.
+    """
+    if (type(text) is str and type(start_line) is int and type(end_line) is int
+            and len(text) >= 16 * 1024 and start_line > 0 and end_line >= start_line):
+        width = end_line - start_line + 1
+        if width >= 256 and width * 2 >= text.count("\n") + 1:
+            # Broad windows already need most rows: keep the single native
+            # split rather than join and re-split nearly the whole source.
+            return _SOURCE_SPLIT_IMPL(text)[start_line - 1:end_line]
+        selected = join_lf_slice(text, start_line - 1, end_line)
+        rows = selected.split("\n")  # line-model: bounded LF source window
+        if "\r" in selected:
+            rows = [row.removesuffix("\r") for row in rows]
+        if rows[-1] == "" and end_line > text.count("\n"):
+            rows.pop()
+        return rows
+    return slice_lines(split_lines(text), start_line, end_line)
 
 
 def slice_text(

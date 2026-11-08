@@ -50,9 +50,12 @@ from pathlib import Path
 
 from core.json import save_json
 from typing import Any
-from core.source.lines import split_lines
+from core.source.lines import slice_source_lines, split_lines
 
 logger = logging.getLogger(__name__)
+
+_BOUND_LINES_IMPL = split_lines
+_BOUND_TYPE_IMPL = type
 
 _RESOURCE_MEMBER_SEPARATOR_RE = re.compile(r"->|\.")
 
@@ -1298,13 +1301,21 @@ def run_resource_bounds_check(
         span = c_function_span(source, function_name, language=language)
     except ImportError:
         span = None
-    lines = split_lines(source)
-    if span:
-        segment_lines = lines[span[0] - 1:span[1]]
+    if (_BOUND_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+            and split_lines is _BOUND_LINES_IMPL and _BOUND_TYPE_IMPL(span) is tuple
+            and tuple.__len__(span) == 2
+            and _BOUND_TYPE_IMPL(span[0]) is int and _BOUND_TYPE_IMPL(span[1]) is int
+            and span[0] > 0 and span[1] >= span[0]):
+        segment_lines = slice_source_lines(source, span[0], span[1])
         span_start = span[0]
     else:
-        segment_lines = lines
-        span_start = 1
+        lines = split_lines(source)
+        if span:
+            segment_lines = lines[span[0] - 1:span[1]]
+            span_start = span[0]
+        else:
+            segment_lines = lines
+            span_start = 1
     segment = "\n".join(segment_lines)
 
     insert_vocab = _insert_vocabulary(domain_model, Path(target_path))

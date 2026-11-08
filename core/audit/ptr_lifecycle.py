@@ -56,12 +56,16 @@ from .field_census import (
     RHS_FROM_FIELD,
     RHS_LITERAL_NULL,
     FieldCensus,
+    FunctionSpan,
     build_field_census,
 )
 from .peer_evidence import PeerEvidence, PeerExhibit
-from core.source.lines import split_lines
+from core.source.lines import slice_source_lines, split_lines
 
 logger = logging.getLogger(__name__)
+
+_ALIAS_LINES_IMPL = split_lines
+_ALIAS_TYPE_IMPL = type
 
 # Rule-id namespace (own, structural — leg B).
 RULE_STALE_ALIAS = "ptr_lifecycle:stale-alias"
@@ -758,6 +762,18 @@ def _grade(vocab_source: str, census: FieldCensus) -> str:
     return RULE_STALE_ALIAS + DETECTION_VARIANT_SUFFIX
 
 
+def _alias_segment(source: str, span: Any) -> list[str]:
+    """Extract one native census span without preparing unrelated rows."""
+    if (_ALIAS_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+            and split_lines is _ALIAS_LINES_IMPL and _ALIAS_TYPE_IMPL(span) is FunctionSpan
+            and _ALIAS_TYPE_IMPL(span.start) is int and _ALIAS_TYPE_IMPL(span.end) is int
+            and span.start > 0 and span.end >= span.start):
+        return slice_source_lines(source, span.start, span.end)
+    # Split before reading adapter coordinates, as the eager caller did.
+    lines = split_lines(source)
+    return lines[span.start - 1:span.end]
+
+
 def _adjudicate_alias(
     census: FieldCensus,
     source_texts: dict[str, str],
@@ -770,8 +786,7 @@ def _adjudicate_alias(
     context: Any = None,
 ) -> AliasEvidence:
     """Adjudicate one (event, alias-edge) pair."""
-    lines = split_lines(source_texts.get(file_path, ""))
-    segment = lines[function_span.start - 1:function_span.end]
+    segment = _alias_segment(source_texts.get(file_path, ""), function_span)
 
     # 6c parity: rcu-safe deferred free of an rcu-read alias refutes.
     if _RCU_SAFE_EVENT_RE.search(event["verb"]):
@@ -980,8 +995,7 @@ def run_ptr_lifecycle_check(
             census_tier=census.tier,
         )
 
-    lines = split_lines(source)
-    segment = lines[span.start - 1:span.end]
+    segment = _alias_segment(source, span)
     events = _find_events(segment, span.start, domain_vocab)
     if not events:
         return _inconclusive(
