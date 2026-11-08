@@ -834,6 +834,11 @@
     "count": 12,
     "kind": "literal"
   },
+  "core/audit/narrowing_bindings.py::scopes": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed tree-sitter grammar-node taxonomy for the C enum-visibility walk: nested blocks, function/prototype declarations and control-statement scopes stop enumeration traversal so their enumerators cannot leak into another lexical scope. These are parser node kinds, not target function or API vocabulary. Changes require review of the enum and declaration scope regressions."
+  },
   "core/audit/narrowing_guards.py::widths": {
     "count": 10,
     "kind": "literal",

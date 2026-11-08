@@ -35,6 +35,7 @@ import ast
 import inspect
 import json
 import textwrap
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -546,8 +547,9 @@ class TestInconclusiveRecordSurvivesCopies:
         drops the booking."""
         src = inspect.getsource(orch)
         tree = ast.parse(src)
+        parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
         missing = []
-        copies = 0
+        copies = Counter()
         blocks = [
             getattr(node, f) for node in ast.walk(tree)
             for f in ("body", "orelse", "finalbody")
@@ -562,20 +564,40 @@ class TestInconclusiveRecordSurvivesCopies:
                         and isinstance(stmt.value, ast.Attribute)
                         and stmt.value.attr == "tools_errored"):
                     continue
-                copies += 1
                 dst = ast.unparse(stmt.targets[0].value)
+                source = ast.unparse(stmt.value.value)
+                owner = parents[stmt]
+                while not isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Module)):
+                    owner = parents[owner]
+                site = (getattr(owner, "name", "<module>"), dst, source)
+                copies[site] += 1
                 window = body[i:i + 4]
                 if not any(
                     isinstance(s, ast.Assign)
+                    and len(s.targets) == 1
                     and isinstance(s.targets[0], ast.Attribute)
                     and s.targets[0].attr == "tools_inconclusive"
                     and ast.unparse(s.targets[0].value) == dst
+                    and isinstance(s.value, ast.Attribute)
+                    and s.value.attr == "tools_inconclusive"
+                    and ast.unparse(s.value.value) == source
                     for s in window
                 ):
-                    missing.append((stmt.lineno, dst))
-        # Nine manual sites remain; machine-escalation resolution now
-        # uses dataclasses.replace, which retains every record field.
-        assert copies >= 9
+                    missing.append((site, stmt.lineno))
+        # Eight manual sites remain after critic-driven demotion was removed.
+        # Machine-escalation resolution uses dataclasses.replace, retaining
+        # every field. The resolver has two manual branches (clean and dark).
+        # Pin owners and source/destination pairs so any addition, removal or
+        # move requires review, rather than merely satisfying a numeric floor.
+        assert copies == Counter({
+            ("_promote_suspicious_preconditions", "promoted", "outcome"): 1,
+            ("_hold_smt_promotion", "held", "outcome"): 1,
+            ("_dispatch_secondary_hypotheses", "rescued", "outcome"): 1,
+            ("_demote_absent_promotions", "demoted", "outcome"): 1,
+            ("_promote_outcome", "promoted", "outcome"): 1,
+            ("_resolve_gate_demoted", "resolved", "outcome"): 2,
+            ("_demote_outcome", "demoted", "outcome"): 1,
+        }), "Review the manual outcome-copy inventory after changing copy sites"
         assert missing == []
 
     def test_demote_outcome_carries_inconclusive(self):
