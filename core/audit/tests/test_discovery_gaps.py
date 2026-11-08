@@ -12,6 +12,9 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from core.audit.shared_state import SharedState
+from core.concepts.compiler import CompilationResult
+
 
 
 class TestConfidenceGate:
@@ -40,9 +43,7 @@ class TestConfidenceGate:
             ],
         }
 
-        shared = MagicMock()
-        shared.domain_model = dm
-        shared.mechanical_findings = {}
+        shared = SharedState(domain_model=dm)
 
         config = OrchestratorConfig(
             target_path=tmp_path,
@@ -53,15 +54,14 @@ class TestConfidenceGate:
         with patch(
             "core.concepts.compiler.compile_invariant",
         ) as mock_compile:
-            mock_compile.return_value = MagicMock(success=False)
+            mock_compile.return_value = CompilationResult(invariant_id="high", errors=["failed"])
             _compile_eager_invariants(config, shared, {})
 
         compiled_ids = [
             call.args[0].id for call in mock_compile.call_args_list
         ]
         assert "low" not in compiled_ids
-        if mock_compile.called:
-            assert all(cid != "low" for cid in compiled_ids)
+        assert compiled_ids and set(compiled_ids) == {"high"}
 
     def test_stale_invariants_skipped(self, tmp_path: Path) -> None:
         from core.audit.orchestrator import (
@@ -81,9 +81,7 @@ class TestConfidenceGate:
             ],
         }
 
-        shared = MagicMock()
-        shared.domain_model = dm
-        shared.mechanical_findings = {}
+        shared = SharedState(domain_model=dm)
 
         config = OrchestratorConfig(
             target_path=tmp_path,
@@ -318,9 +316,7 @@ class TestEagerCompileReturnKeys:
             ],
         }
 
-        shared = MagicMock()
-        shared.domain_model = dm
-        shared.mechanical_findings = {}
+        shared = SharedState(domain_model=dm)
 
         config = OrchestratorConfig(
             target_path=tmp_path,
@@ -335,11 +331,9 @@ class TestEagerCompileReturnKeys:
             },
         }
 
-        class _FakeResult:
-            success = True
-            rule_id = "r1"
-            rule_body = ""
-            errors: list = []
+        compiled = CompilationResult(
+            invariant_id="inv1", rule_id="r1", rule_body="rule body", dual_control=True,
+        )
 
         def _prescreen(dm, config, gaps, mf):
             mf["a.c:foo"] = [{"detector": "test"}]
@@ -348,7 +342,7 @@ class TestEagerCompileReturnKeys:
         with (
             patch(
                 "core.concepts.compiler.compile_invariant",
-                return_value=_FakeResult(),
+                return_value=compiled,
             ),
             patch(
                 "core.audit.orchestrator._run_invariant_prescreening",
