@@ -399,3 +399,148 @@ def test_cvss_jobs_cache_the_locked_extra_and_keep_dependency_groups(file, name,
     expose = named_step(source, 'Expose runtime interpreter to subsequent steps')
     assert source.index('actions/setup-python@') < source.index(restore) < source.index(expose)
     assert '\nenv:\n  VENV_PATH: .venv\n' in (ROOT / '.github/workflows' / file).read_text()
+
+
+def test_shuffled_nightly_uses_the_pr_fast_tripwire_lifecycle():
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    pr = job('tests.yml', 'python-unit-tests-fast')
+    start = 'Start LLM hostname tripwire'
+    stop = 'Stop LLM hostname tripwire and check connections'
+    assert script(named_step(source, start)) == script(named_step(pr, start))
+    assert script(named_step(source, stop)) == script(named_step(pr, stop))
+    assert '        if: always()\n' in named_step(source, stop)
+    test = 'Shuffled default-tier tests (seed ${{ matrix.iteration }})'
+    for name in (start, test, stop):
+        step = named_step(source, name)
+        assert re.findall(r'^        continue-on-error: (.+)$', step, re.M) in ([], ['false'])
+        if name != stop:
+            assert not re.search(r'^        if:', step, re.M)
+    assert source.index(start) < source.index('Shuffled default-tier tests') < source.index(stop)
+    assert source.index(stop) < source.index('Check default-tier skip count')
+
+
+def _shuffled_guard_shell(tmp_path, command, *, fail_verb='', pytest_status=0):
+    """Execute the workflow shell with owned commands and no host changes."""
+    bin_dir = tmp_path / '.venv/bin'
+    bin_dir.mkdir(parents=True)
+    trace = tmp_path / 'trace'
+    trace.mkdir()
+    runner = tmp_path / 'runner temp'
+    runner.mkdir()
+    (bin_dir / 'activate').write_text(f'export PATH="{bin_dir}:$PATH"\n')
+    python = bin_dir / 'python'
+    python.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''
+        import json, os, sys, time
+        from pathlib import Path
+        args = sys.argv[1:]
+        verb = 'pytest' if args[:2] == ['-m', 'pytest'] else args[1]
+        trace = Path(os.environ['GUARD_TRACE'])
+        (trace / (verb + '.json')).write_text(json.dumps({
+            'args': args, 'seed': os.environ.get('RAPTOR_RANDOMISE_TESTS'),
+            'budget': os.environ.get('RAPTOR_MAX_SESSION_SECONDS'),
+        }))
+        if verb == 'pytest':
+            raise SystemExit(int(os.environ['PYTEST_STATUS']))
+        directory = Path(args[args.index('--directory') + 1])
+        if verb == os.environ['FAIL_VERB']:
+            if verb == 'serve':
+                (directory / 'failed').touch()
+            raise SystemExit(1)
+        if verb == 'prepare':
+            directory.mkdir()
+        elif verb == 'serve':
+            (directory / 'ready').touch()
+        elif verb == 'wait':
+            deadline = time.monotonic() + 5
+            while not (directory / 'ready').exists():
+                if (directory / 'failed').exists():
+                    raise SystemExit(1)
+                assert time.monotonic() < deadline, 'fake server did not start'
+                time.sleep(0.005)
+        elif verb != 'stop':
+            raise AssertionError('unexpected command: ' + verb)
+    '''))
+    python.chmod(0o755)
+    sudo = bin_dir / 'sudo'
+    sudo.write_text('#!/bin/sh\n[ "$1" = "$PWD/.venv/bin/python" ] || exit 73\nexec "$@"\n')
+    sudo.chmod(0o755)
+    rendered = command.replace('${{ github.run_id }}', '12345').replace('${{ matrix.iteration }}', '2')
+    # Reap the owned fake background command even when the workflow shell fails.
+    harness = "trap 'status=$?; wait; exit \"$status\"' EXIT\n" + rendered
+    result = subprocess.run(
+        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', harness],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10,
+        env=dict(os.environ, VENV_PATH='.venv', RUNNER_TEMP=str(runner),
+                 PATH=str(bin_dir) + os.pathsep + os.environ.get('PATH', ''),
+                 GUARD_TRACE=str(trace), FAIL_VERB=fail_verb, PYTEST_STATUS=str(pytest_status)),
+    )
+    calls = {path.stem: json.loads(path.read_text()) for path in trace.glob('*.json')}
+    return result, calls, runner
+
+
+@pytest.mark.parametrize('status', [0, 1, 2], ids=['success', 'test-or-guard-failure', 'interrupted'])
+def test_shuffled_pytest_shell_keeps_guards_selection_and_exit_status(tmp_path, status):
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    run = script(named_step(source, 'Shuffled default-tier tests (seed ${{ matrix.iteration }})'))
+    result, calls, runner = _shuffled_guard_shell(tmp_path, run, pytest_status=status)
+    assert result.returncode == status, result.stdout + result.stderr
+    assert set(calls) == {'pytest'}
+    assert calls['pytest'] == {
+        'args': ['-m', 'pytest', 'core', 'packages', 'engine',
+                 '-p', 'core.testing.llm_tripwire',
+                 '--llm-tripwire-dir', str(runner / 'llm-tripwire'),
+                 '--llm-tripwire-host-dir', str(runner / 'llm-hosts'),
+                 '-n', 'auto', '--dist', 'loadfile', '--no-loadscope-reorder',
+                 '-q', '--durations=25', '--tb=short',
+                 '--junitxml=' + str(runner / 'fast-iter-2.xml')],
+        'seed': '12345-2', 'budget': '1800',
+    }
+
+
+@pytest.mark.parametrize('failure', ['', 'prepare', 'serve', 'wait'],
+                         ids=['success', 'prepare-failure', 'serve-failure', 'wait-failure'])
+def test_shuffled_tripwire_start_shell_reaches_readiness_or_fails(tmp_path, failure):
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    run = script(named_step(source, 'Start LLM hostname tripwire'))
+    result, calls, runner = _shuffled_guard_shell(tmp_path, run, fail_verb=failure)
+    assert result.returncode == (1 if failure else 0), result.stdout + result.stderr
+    assert set(calls) == ({'prepare'} if failure == 'prepare' else {'prepare', 'serve', 'wait'})
+    assert calls['prepare']['args'] == [
+        'core/testing/llm_hosts_tripwire.py', 'prepare', '--directory', str(runner / 'llm-hosts'),
+    ]
+    if failure != 'prepare':
+        assert calls['serve']['args'] == [
+            str(tmp_path / 'core/testing/llm_hosts_tripwire.py'), 'serve',
+            '--directory', str(runner / 'llm-hosts'), '--hosts-file', '/etc/hosts',
+        ]
+        assert calls['wait']['args'] == [
+            'core/testing/llm_hosts_tripwire.py', 'wait', '--directory', str(runner / 'llm-hosts'),
+        ]
+
+
+@pytest.mark.parametrize('failure', ['', 'stop'], ids=['clean', 'connections-detected'])
+def test_shuffled_cleanup_shell_preserves_connection_verdict(tmp_path, failure):
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    run = script(named_step(source, 'Stop LLM hostname tripwire and check connections'))
+    result, calls, runner = _shuffled_guard_shell(tmp_path, run, fail_verb=failure)
+    assert result.returncode == (1 if failure else 0), result.stdout + result.stderr
+    assert set(calls) == {'stop'}
+    assert calls['stop']['args'] == [
+        str(tmp_path / 'core/testing/llm_hosts_tripwire.py'), 'stop',
+        '--directory', str(runner / 'llm-hosts'),
+    ]
+
+
+def test_shuffled_nightly_retains_guard_evidence_with_existing_report():
+    source = job('nightly_shuffled.yml', 'shuffled-fast')
+    upload = named_step(source, 'Upload test results')
+    assert '        if: always()\n' in upload
+    assert '          retention-days: 14\n' in upload
+    assert set(re.findall(r'^            (.+)$', upload, re.M)) == {
+        '${{ runner.temp }}/fast-iter-${{ matrix.iteration }}.xml',
+        '${{ runner.temp }}/llm-tripwire/**/*.jsonl',
+        '${{ runner.temp }}/llm-hosts/*.jsonl',
+        '${{ runner.temp }}/llm-hosts/endpoints.json',
+        '${{ runner.temp }}/llm-hosts/server.log',
+    }
+    assert sum('uses: actions/upload-artifact@' in step for step in steps(source)) == 1
