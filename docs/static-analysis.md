@@ -436,6 +436,24 @@ Pointer-arithmetic deallocation warnings require review of the allocation
 origin and effective offset. An adjustment can be legitimate base recovery;
 unsupported recovery idioms and C++ operators need independent verification.
 
+### Array and mapping releases
+
+`free_stack_array` identifies local array objects passed to `free`, including
+variable-length and static-storage arrays. Array parameters are pointers and do
+not establish a non-heap origin. This check supplies `/audit`'s direct-array
+evidence for CWE-590.
+
+`mmap_free` tracks mapping results passed to `free` through locals, direct fields,
+pointer slots and array cells. These warnings are review candidates: check the
+mapping result, API identity and pointer provenance. Recognized pointer writes,
+address escapes and receiver changes end tracking. Computed receivers, opaque
+aliases and C++ ownership can require manual review. The check joins `/audit`'s
+CWE-762 dispatch; unmapping alone does not make a pointer valid for `free`.
+
+A no-match from these checks, or from the `popen_fclose` shutdown check, remains
+inconclusive. They cover specific release patterns rather than every ownership
+or resource-shutdown defect.
+
 ### Uninitialised returns
 
 `uninitialized_return` reports locals that may be returned without an

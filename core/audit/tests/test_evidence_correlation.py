@@ -365,6 +365,7 @@ class TestMechDetectorPromotion:
     ROLE_CASES = [
         pytest.param("use_after_free", UAF_HYP, "CWE-416", False, id="detection-uaf"),
         pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
+        pytest.param("mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
         pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ]
 

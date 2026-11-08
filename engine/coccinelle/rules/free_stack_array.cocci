@@ -1,19 +1,18 @@
-// free_stack_array.cocci — Detect free() called on a stack-allocated
-// array.
+// free_stack_array.cocci — Detect free() called on a local array object.
 //
-// A fixed-size array declared on the stack (T arr[N]) is not
-// heap-allocated. Passing it to free() is undefined behaviour —
-// typically corrupts the heap allocator's metadata because the
-// pointer doesn't point to a malloc'd chunk header.
+// Local arrays, including VLAs and static-storage arrays, are not individual
+// heap allocations. Array parameters are adjusted pointers and do not supply
+// this declaration evidence. Standard free must receive a heap base or NULL.
 //
 // CWE-590: Free of Memory not on the Heap
-// Zero-FP: a named array with a constant size is always on the stack.
 // @role: verification
+// raptor: confirm-only
+// This direct-array check does not cover every possible non-heap origin.
 
 @free_stack@
 type T;
 identifier ARR;
-constant N;
+expression N;
 position p;
 @@
 
@@ -31,6 +30,8 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "free(%s) — stack-allocated array, not heap memory. Heap corruption (CWE-590)." % ARR
+  "line_end": int(p[0].line_end),
+  "col_end": int(p[0].column_end),
+  "message": "free(%s) receives a local array object rather than an individually heap-allocated pointer (CWE-590)." % ARR
 }
 print("COCCIRESULT:" + json.dumps(msg))

@@ -7,6 +7,8 @@
 // Computed/nested receivers and opaque lifetime changes need review.
 // CWE-404: Improper Resource Shutdown or Release
 // @role: detection
+// raptor: confirm-only
+// Missing this stream-close shape cannot rule out other shutdown defects.
 
 @popen_fclose_assign exists@
 expression CMD, MODE;
