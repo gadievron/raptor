@@ -211,11 +211,15 @@ class TestRedbReadCeiling:
 
     def test_accepts_database_over_the_old_64mib_bound(self, tmp_path):
         redb_path, side_path = _write_inputs(tmp_path)
-        # Pad past 64MiB textually (json.dumps on a 65MiB value would
-        # double the test's peak memory for no added coverage).
+        # Stream the same 65MiB padding without retaining another large
+        # string while the reader runs.
         base = json.loads(redb_path.read_text())
-        pad = '"pad": "' + "x" * (65 * 1024 * 1024) + '", '
-        redb_path.write_text("{" + pad + json.dumps(base)[1:])
+        block = b"x" * (1024 * 1024)
+        with redb_path.open("wb") as stream:
+            stream.write(b'{"pad": "')
+            for _ in range(65):
+                stream.write(block)
+            stream.write(b'", ' + json.dumps(base)[1:].encode("utf-8"))
         assert redb_path.stat().st_size > 64 * 1024 * 1024
         items = prep._redb_mechanical_items(redb_path, side_path,
                                             existing=set())

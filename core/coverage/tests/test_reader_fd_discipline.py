@@ -236,8 +236,12 @@ class TestJournalReader:
         from pathlib import Path
 
         journal = tmp_path / "review-journal.jsonl"
-        journal.write_bytes(b'{"pad": "' + b"A" * (30 * 1024 * 1024)
-                            + b'"}\n')
+        block = b"A" * (1024 * 1024)
+        with journal.open("wb") as stream:
+            stream.write(b'{"pad": "')
+            for _ in range(30):
+                stream.write(block)
+            stream.write(b'"}\n')
 
         def _shrink(st: os.stat_result) -> os.stat_result:
             fields = list(st)
