@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -203,17 +204,63 @@ class TestVerifyImmediate:
         out = _verify_hypotheses_immediate(o, cfg, result)
         assert out is o
 
+    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", [
+        pytest.param("use_after_free", "use after free of a pointer", "CWE-416", False, id="detection-uaf"),
+        pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
+    ])
+    def test_prep_phase_correlation_requires_verification_grade(
+        self, tmp_path, monkeypatch, rule, hypothesis, cwe, promotes,
+    ):
+        from core.audit.evidence_grade import is_verification_evidence
+        from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
+
+        monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+        receipt = f"coccinelle:{rule}"
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert is_verification_evidence(receipt) is promotes
+        cfg = OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path / "out", on_demand_synthesis=False,
+        )
+        # The standing receipt is the only evidence. Keep unrelated library,
+        # synthesis and live-tool work outside this consumer contract.
+        monkeypatch.setattr("core.audit.orchestrator._gather_library_candidates", lambda *a: [])
+        monkeypatch.setattr("core.audit.orchestrator._hypothesis_to_tool_chain", lambda *a, **kw: [])
+        o = self._make_outcome(
+            hypothesis=hypothesis, review_result={"cwe": cwe, "hypothesis": hypothesis},
+        )
+        result = OrchestratorResult()
+        mechanical = {f"{o.file}:{o.function}": [{
+            "file": o.file, "function": o.function, "line": o.line,
+            "detector": f"cocci:{rule}", "description": hypothesis,
+        }]}
+        out = _verify_hypotheses_immediate(o, cfg, result, mechanical_findings=mechanical)
+        assert out.status == ("finding" if promotes else "suspicious")
+        assert out.evidence_tool == (receipt if promotes else "")
+        assert result.immediate_verified == int(promotes)
+        assert bool(out.review_result.get("immediate_verified")) is promotes
+        assert not out.review_result.get("ihv_all_refuted")
+
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
-    def test_prep_phase_correlation_confirms(self, mock_corr):
+    def test_prep_phase_detection_receipt_cannot_bypass_aggregation(self, mock_corr, monkeypatch, tmp_path):
+        from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
+
+        monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+        # Even an erroneous upstream admission must not launder a lead into
+        # verification. The real correlation refusal is covered above.
         mock_corr.return_value = "coccinelle:use_after_free"
-        cfg = _Config()
-        o = self._make_outcome()
-        result = _Result()
-        out = _verify_hypotheses_immediate(o, cfg, result)
-        assert out.status == "finding"
-        assert out.evidence_tool == "coccinelle:use_after_free"
-        assert result.immediate_verified == 1
-        assert out.review_result["immediate_verified"] is True
+        hypothesis = "use after free of a pointer"
+        o = self._make_outcome(
+            hypothesis=hypothesis, review_result={"cwe": "CWE-416", "hypothesis": hypothesis},
+        )
+        result = OrchestratorResult()
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
+        out = _verify_hypotheses_immediate(o, config, result)
+        assert out.status == "suspicious"
+        assert not out.evidence_tool
+        assert result.immediate_verified == 0
+        assert not out.review_result.get("immediate_verified")
+        assert out.review_result["ihv_tools"] == ["coccinelle:use_after_free"]
+        assert out.review_result["ihv_hypotheses_confirmed"] == 0
 
     @patch("core.audit.orchestrator._run_tool_chain")
     @patch("core.audit.orchestrator._hypothesis_to_tool_chain")
