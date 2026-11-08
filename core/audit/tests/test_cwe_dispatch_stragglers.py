@@ -19,6 +19,7 @@ import json
 import logging
 import re
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -431,6 +432,12 @@ class TestWarningTail:
     ):
         import core.audit.orchestrator as _orch
 
+        # Warning policy must not depend on installed query packs.
+        unresolved = Mock(return_value=None)
+        monkeypatch.setattr(
+            "core.audit.codeql_query_resolver.resolve_query_id", unresolved,
+        )
+        monkeypatch.setattr(_orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
         warned = []
         monkeypatch.setattr(
             _orch, "_warn_unmapped_cwe", lambda cwe: warned.append(cwe),
@@ -438,6 +445,9 @@ class TestWarningTail:
         for cwe in ("CWE-377", "CWE-150"):
             chain = _hypothesis_to_tool_chain("", "a.c", cwe=cwe)
             assert chain, f"{cwe} must dispatch at least one channel"
+        assert {request.args for request in unresolved.call_args_list} == {
+            ("py/insecure-temporary-file",),
+        }
         assert warned == []
 
     def test_unmapped_tail_outside_policy_keeps_warning(self, caplog):
