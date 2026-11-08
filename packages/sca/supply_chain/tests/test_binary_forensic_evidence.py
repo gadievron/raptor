@@ -18,7 +18,18 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+import pytest
+
 from core.binary import elf as core_elf
+
+
+@pytest.fixture(autouse=True)
+def _owned_binary_allowlist():
+    from packages.sca.supply_chain import binary_in_package
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(binary_in_package, {"_ALLOWLIST": None}):
+        yield
 
 
 def _write_package_json(tmp_path: Path) -> Path:

@@ -12,7 +12,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from packages.sca.supply_chain import binary_in_package
+
+
+@pytest.fixture(autouse=True)
+def _owned_binary_allowlist():
+    from packages.sca.supply_chain import binary_in_package
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(binary_in_package, {"_ALLOWLIST": None}):
+        yield
 
 
 def _write_elf(p: Path) -> None:
