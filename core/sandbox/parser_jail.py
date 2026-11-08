@@ -49,6 +49,7 @@ import time
 from pathlib import Path
 
 from core.security.log_sanitisation import has_nonprintable, sanitise_for_terminal
+from core.security.env_sanitisation import strip_env_vars
 from core.source.streams import preserving_stream_error
 
 from ._parser_jail_child import FRAME_HEADER, MAX_FRAME_PAYLOAD, READY_FRAME_ID
@@ -104,6 +105,24 @@ class _ProtocolError(Exception):
 def _raptor_dir() -> str:
     """Trusted import root of the parent code that owns this worker."""
     return str(Path(__file__).resolve().parents[2])
+
+
+
+def _worker_launch(root: str) -> tuple[list[str], dict[str, str]]:
+    """Prepare the confined parser's argv and environment in the parent."""
+    # Config imports are deliberately lazy: proxy.py imports this manager
+    # before it needs a parser process, and configuration is heavyweight.
+    from core.config import RaptorConfig
+
+    env = strip_env_vars(RaptorConfig.get_safe_env(), RaptorConfig.TARGET_ENV_STRIP_SET)
+    # This child needs code identity, not launcher credentials or dispatch
+    # authority. Reintroduce only its loaded parent's resolved import root.
+    env.update(RAPTOR_DIR=root, PYTHONPATH=root, PYTHONDONTWRITEBYTECODE="1")
+    argv = [sys.executable, "-s"]
+    if sys.version_info >= (3, 11):
+        argv.append("-P")
+    argv += ["-m", "core.sandbox._parser_jail_child"]
+    return argv, env
 
 
 def _validate_host(host: object) -> str:
@@ -381,30 +400,8 @@ class ParserJail:
         Raises ``ParserJailUnavailable`` on ANY failure — the caller
         never gets a half-confined worker.
         """
-        # Lazy import: config is heavyweight and proxy.py imports this
-        # module at module level (same precedent as the other sandbox
-        # modules' function-local RaptorConfig imports).
-        from core.config import RaptorConfig
-
         root = _raptor_dir()
-        env = RaptorConfig.get_safe_env()
-        env["RAPTOR_DIR"] = root
-        env["PYTHONPATH"] = root
-        # Belt-and-braces with the child's RLIMIT_FSIZE=0: imports must
-        # not attempt .pyc writes in the first place.
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-
-        # The child runs `python -m`, which puts its cwd at sys.path[0]
-        # AHEAD of PYTHONPATH — an attacker-influenced inherited cwd
-        # could then supply a planted `core/` tree that imports (in the
-        # worker, BEFORE self-confinement) instead of the pinned one.
-        # Two belts: run the child WITH cwd pinned to the import root,
-        # and (Python >= 3.11) `-P`, which removes the cwd sys.path
-        # entry entirely.
-        child_argv = [sys.executable]
-        if sys.version_info >= (3, 11):
-            child_argv.append("-P")
-        child_argv += ["-m", "core.sandbox._parser_jail_child"]
+        child_argv, env = _worker_launch(root)
 
         parent_sock = None
         proc = None
