@@ -202,9 +202,16 @@ class _DiskSink:
                 "dropped_reasons": dict(self.dropped_reasons)}
 
 
-def _write_single_file(chunks, src: Path, dest: Path) -> dict[str, int]:
-    """Stream a decompressed single file to ``dest`` chunk by chunk —
-    the cap lives in the ``iter_decompressed`` generator feeding us."""
+class _OversizedSingleFile(Exception):
+    """Stop a member before the atomic writer can publish truncated content."""
+
+
+def _write_single_file(chunks, src: Path, dest: Path, *,
+                       max_files: int, max_member_bytes: int) -> dict[str, Any]:
+    """Stream one member under both the entry and per-member limits."""
+    if max_files < 1:
+        raise DecompressionLimitExceeded(
+            f"archive has 1 file — exceeds cap of {max_files}", cap="entry_count")
     name = _single_file_name(src)
     target = _safe_dest_path(dest, name)
     if target is None:  # pragma: no cover — plain basename never escapes
@@ -215,9 +222,15 @@ def _write_single_file(chunks, src: Path, dest: Path) -> dict[str, int]:
         nonlocal total
         for chunk in chunks:
             total += len(chunk)
+            if total > max_member_bytes:
+                raise _OversizedSingleFile
             yield chunk
 
-    write_bytes_atomically(target, counted_chunks(), root=dest.resolve())
+    try:
+        write_bytes_atomically(target, counted_chunks(), root=dest.resolve())
+    except _OversizedSingleFile:
+        return {"files": 0, "bytes": 0, "dropped": 1,
+                "dropped_reasons": {"oversized": 1}}
     return {"files": 1, "bytes": total, "dropped": 0}
 
 
@@ -244,7 +257,15 @@ def extract_to_dir(path, dest, *,
     an empty "success" summary that downstream consumers would treat as a
     complete extraction. Filesystem resource and write/close failures propagate
     as OSError; only invalid member names/path conflicts are dropped.
+    Limits must be non-negative integers. Single compressed files count as
+    one member, including empty files; oversized members are skipped with
+    an ``"oversized"`` reason and leave any existing destination unchanged.
     """
+    for name, limit in (("max_total_bytes", max_total_bytes),
+                        ("max_files", max_files),
+                        ("max_member_bytes", max_member_bytes)):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 0:
+            raise ValueError(f"{name} must be a non-negative integer")
     src = Path(path)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -313,7 +334,9 @@ def extract_to_dir(path, dest, *,
                         sink=sink, on_skipped=_count_skip)
                     stats = sink.stats()
                 else:
-                    stats = _write_single_file(chain([head], chunks), src, dest)
+                    stats = _write_single_file(
+                        chain([head], chunks), src, dest,
+                        max_files=max_files, max_member_bytes=max_member_bytes)
     except (ZipTotalBytesExceeded, TarTotalBytesExceeded) as e:
         raise DecompressionLimitExceeded(str(e), cap="total_bytes") from e
     except (ZipEntryCountExceeded, TarEntryCountExceeded) as e:
