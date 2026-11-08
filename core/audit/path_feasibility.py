@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 from core.smt_solver._validation import require_bool
 
 logger = logging.getLogger(__name__)
+_PREDICATE_JOIN_RE = re.compile(r"(?:and|or)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -121,6 +122,50 @@ def extract_conditions_from_flow_trace(
     return conditions
 
 
+def _atomic_predicate_context(text: str, start: int, end: int) -> bool:
+    """Reject expression fragments around a complete extraction candidate.
+
+    Parentheses may enclose a prose predicate, but cannot hide its negation
+    or a continuation outside the wrapper. Inspect adjacent tokens by index
+    rather than repeatedly copying the entire preceding hypothesis.
+    """
+    left, wrappers = start - 1, 0
+    while left >= 0:
+        if text[left].isspace():
+            left -= 1
+        elif text[left] == "(":
+            wrappers += 1
+            left -= 1
+        else:
+            break
+    if left >= 0 and text[left] in ".:<>!=~?+-*/%&|^[":
+        return False
+    word_end = left + 1
+    while left >= 0 and (text[left].isalnum() or text[left] == "_"):
+        left -= 1
+    if text[left + 1:word_end].lower() in {"and", "or", "not"}:
+        return False
+
+    right = end
+    while right < len(text) and text[right].isspace():
+        right += 1
+    for _ in range(wrappers):
+        if right >= len(text) or text[right] != ")":
+            return False
+        right += 1
+        while right < len(text) and text[right].isspace():
+            right += 1
+    if right < len(text) and text[right] in "+-*/%&|^<>=!~?:[()]":
+        return False
+    if right < len(text) and text[right] == ".":
+        following = right + 1
+        while following < len(text) and text[following].isspace():
+            following += 1
+        if following < len(text) and (text[following].isalnum() or text[following] == "_"):
+            return False
+    return _PREDICATE_JOIN_RE.match(text, right) is None
+
+
 def extract_conditions_from_hypothesis(
     hypothesis: str,
 ) -> list[PathCondition]:
@@ -141,7 +186,7 @@ def extract_conditions_from_hypothesis(
     # \b pins each attempt to a word start: unanchored, a hostile
     # word run retries every suffix — quadratic. A mid-word keyword
     # ('elif' read as 'if') was a false token, not a condition.
-    if_patterns = re.findall(
+    if_patterns = re.finditer(
         r'\b(?:if|when|where|provided that|assuming)\s*(\(\s*)?'
         r'([a-zA-Z_]\w*\s*(?:<=|>=|==|!=|<|>)\s*'
         r'(?:0x[0-9a-fA-F]+|[a-zA-Z_]\w*|\d+))'
@@ -152,29 +197,29 @@ def extract_conditions_from_hypothesis(
         re.IGNORECASE,
     )
     conditions = [PathCondition(
-            text=match.strip(),
+            text=match.group(2).strip(),
             source="hypothesis",
-        ) for _, match in if_patterns]
+        ) for match in if_patterns if _atomic_predicate_context(hypothesis, *match.span())]
 
-    null_patterns = re.findall(
-        r'\b(\w+)\s+is\s+(?:non-null|not null)(?![\w-])',
+    null_patterns = re.finditer(
+        r'\b([A-Za-z_][A-Za-z0-9_]*)\s+is\s+(?:non-null|not null)(?![\w-])',
         hypothesis,
         re.IGNORECASE,
     )
     conditions.extend(PathCondition(
-            text=f"{var} != NULL",
+            text=f"{match.group(1)} != NULL",
             source="hypothesis",
-        ) for var in null_patterns)
+        ) for match in null_patterns if _atomic_predicate_context(hypothesis, *match.span()))
 
-    nonneg_patterns = re.findall(
-        r'\b(\w+)\s+(?:is|must be)\s+(non-negative|positive|greater than zero)(?![\w-])',
+    nonneg_patterns = re.finditer(
+        r'\b([A-Za-z_][A-Za-z0-9_]*)\s+(?:is|must be)\s+(non-negative|positive|greater than zero)(?![\w-])',
         hypothesis,
         re.IGNORECASE,
     )
     conditions.extend(PathCondition(
-            text=f"{var} {'>=' if phrase.lower() == 'non-negative' else '>'} 0",
+            text=f"{match.group(1)} {'>=' if match.group(2).lower() == 'non-negative' else '>'} 0",
             source="hypothesis",
-        ) for var, phrase in nonneg_patterns)
+        ) for match in nonneg_patterns if _atomic_predicate_context(hypothesis, *match.span()))
 
     return conditions
 
