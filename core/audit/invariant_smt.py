@@ -30,7 +30,8 @@ Scope — declared, not guessed:
 
 * Linear integer arithmetic over named identifiers (struct member
   chains like ``s->obuf_len`` are treated as atomic names), integer
-  constants, ``+``/``-``, ``min()``/``max()`` (encoded as ITE) and
+  constants, ``+``/``-``, mathematical ``min()``/``max()`` in supplied
+  invariants and premises (encoded as ITE) and
   simple object/type ``sizeof(...)`` operands (opaque nonnegative constants,
   including zero-sized extensions; lexical whitespace is canonicalized).
   Array and other unsupported operands require source/type modeling and decline.
@@ -38,6 +39,8 @@ Scope — declared, not guessed:
   decline; no C wraparound/overflow modelling (the
   overflow verbs cover that); no pointer, heap or alias reasoning.
   Sites needing any of that are reported ``out_of_scope``.
+  Evaluated source calls, including functions or macros spelt ``min`` and
+  ``max``, require a bound callee model; their names establish no semantics.
 * An explicitly resolved integer ABI can bind builtin integer ``sizeof``
   terms to target C-byte sizes. Its full record and provenance travel with
   the query and site receipts. Missing layouts retain the opaque size model;
