@@ -96,6 +96,17 @@ jobs:
       # without a starved runner, the tier has structurally drifted:
       # re-measure, fix the drift or consciously raise the budget with
       # the new baseline.
+      - name: Start LLM hostname tripwire
+        run: |
+          source $VENV_PATH/bin/activate
+          python core/testing/llm_hosts_tripwire.py prepare \
+            --directory "$RUNNER_TEMP/llm-hosts"
+          sudo "$PWD/$VENV_PATH/bin/python" "$PWD/core/testing/llm_hosts_tripwire.py" serve \
+            --directory "$RUNNER_TEMP/llm-hosts" --hosts-file /etc/hosts \
+            > "$RUNNER_TEMP/llm-hosts/server.log" 2>&1 &
+          python core/testing/llm_hosts_tripwire.py wait \
+            --directory "$RUNNER_TEMP/llm-hosts"
+
       - name: Shuffled default-tier tests (seed ${{ matrix.iteration }})
         run: |
           source $VENV_PATH/bin/activate
@@ -104,9 +115,18 @@ jobs:
           RAPTOR_RANDOMISE_TESTS="$seed" \
           RAPTOR_MAX_SESSION_SECONDS=1800 \
             python -m pytest core packages engine \
+            -p core.testing.llm_tripwire \
+            --llm-tripwire-dir "$RUNNER_TEMP/llm-tripwire" \
+            --llm-tripwire-host-dir "$RUNNER_TEMP/llm-hosts" \
             -n auto --dist loadfile --no-loadscope-reorder \
             -q --durations=25 --tb=short \
             --junitxml="$RUNNER_TEMP/fast-iter-${{ matrix.iteration }}.xml"
+
+      - name: Stop LLM hostname tripwire and check connections
+        if: always()
+        run: |
+          sudo "$PWD/$VENV_PATH/bin/python" "$PWD/core/testing/llm_hosts_tripwire.py" stop \
+            --directory "$RUNNER_TEMP/llm-hosts"
 
       # The full default-tier collection in one invocation — the
       # authoritative skip census for the default markers (the PR
@@ -124,6 +144,11 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: nightly-shuffled-fast-iter-${{ matrix.iteration }}
-          path: ${{ runner.temp }}/fast-iter-${{ matrix.iteration }}.xml
+          path: |
+            ${{ runner.temp }}/fast-iter-${{ matrix.iteration }}.xml
+            ${{ runner.temp }}/llm-tripwire/**/*.jsonl
+            ${{ runner.temp }}/llm-hosts/*.jsonl
+            ${{ runner.temp }}/llm-hosts/endpoints.json
+            ${{ runner.temp }}/llm-hosts/server.log
           retention-days: 14
           if-no-files-found: ignore
