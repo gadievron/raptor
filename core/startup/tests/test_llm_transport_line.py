@@ -55,6 +55,7 @@ def isolated_home(monkeypatch, tmp_path):
                 "MISTRAL_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"):
         monkeypatch.delenv(var, raising=False)
     patch_module_attribute(monkeypatch, _discovery_imports, 'shutil', 'which', lambda _bin: None)
+    patch_module_attribute(monkeypatch, startup_init, 'shutil', 'which', lambda _bin: None)
     return tmp_path
 
 

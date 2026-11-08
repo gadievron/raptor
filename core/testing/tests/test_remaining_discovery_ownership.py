@@ -1,7 +1,7 @@
 """Native discovery overrides preserve shared namespaces and inherited caches."""
 
 import ast
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import concurrent.futures
 import ctypes
 import ctypes.util
@@ -19,6 +19,35 @@ import pytest
 
 from core.testing.module_bindings import mock_module_attribute, patch_module_attribute
 from core.testing.module_views import scoped_function_imports
+
+
+@pytest.mark.parametrize('finish', [None, RuntimeError, KeyboardInterrupt],
+                         ids=['normal', 'error', 'interrupt'])
+def test_banner_home_fixture_owns_startup_path_discovery(tmp_path, finish):
+    from core.startup import init as startup
+    from core.startup.tests import test_llm_transport_line as native
+
+    borrowed_which = shutil.which
+    with pytest.MonkeyPatch.context() as inherited:
+        patch_module_attribute(inherited, startup, 'shutil', 'which',
+                               lambda _name: '/owned/claude')
+        inherited_shutil = startup.shutil
+        with pytest.raises(finish) if finish else nullcontext():
+            with pytest.MonkeyPatch.context() as scope:
+                fixture = native._owned_discovery_imports.__wrapped__(scope)
+                try:
+                    next(fixture)
+                    native.isolated_home.__wrapped__(scope, tmp_path)
+                    assert startup.shutil.which('claude') is None
+                    assert native._discovery_imports.shutil.which('claude') is None
+                    assert shutil.which is borrowed_which
+                    if finish:
+                        raise finish('owned banner fixture exit')
+                finally:
+                    fixture.close()
+        assert startup.shutil is inherited_shutil
+        assert startup.shutil.which('claude') == '/owned/claude'
+        assert shutil.which is borrowed_which
 
 
 ROOT = Path(__file__).resolve().parents[3]
