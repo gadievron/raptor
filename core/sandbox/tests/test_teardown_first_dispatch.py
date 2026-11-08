@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from core.sandbox import context as ctx
+from core.sandbox import context as ctx, python_runtime_tool_paths
 from core.sandbox.tests.capability import requires_landlock
 from core.testing.module_bindings import patch_module_attribute
 from core.testing.state_isolation import pin_user_state_dirs
@@ -60,7 +60,8 @@ def test_real_fallback_retires_the_sweeper_before_propagating_failure(tmp_path, 
               "p.poll(2000)\n")
     try:
         with ctx.sandbox(target=str(tmp_path), output=str(tmp_path),
-                         block_network=False, restrict_reads=True) as run:
+                         block_network=False, restrict_reads=True,
+                         tool_paths=python_runtime_tool_paths()) as run:
             with pytest.raises(type(primary)) as raised:
                 run([os.path.realpath(sys.executable), "-P", "-c", script],
                     pass_fds=(ready_w, park_r), capture_output=True, timeout=timeout)
