@@ -70,17 +70,18 @@ def _reset_sandbox_probe_caches(monkeypatch):
     """
     from core.sandbox import state
     from packages.sca.resolvers import _proxy_hosts as _ph
-    state._net_available_cache = None
-    state._mount_available_cache = None
-    # Never let a resolver test reach real proxy-hosts calibration.
-    monkeypatch.setattr(_ph, "_calibrated_profile", lambda *a, **k: None)
-    # ``_resolve_sandbox_binary`` also caches per-binary paths in
-    # ``state._<name>_path_cache`` attributes — they're keyed on
-    # the binary name (``unshare`` / ``prlimit``) and the path
-    # doesn't change at runtime, so we leave those alone.
-    yield
-    state._net_available_cache = None
-    state._mount_available_cache = None
+    from core.testing.module_state import isolated_module_state
+
+    # Keep the existing calibration refusal at the consumer's seam. The
+    # availability answers belong to this test; restore borrowed answers.
+    with isolated_module_state(state, {
+        "_net_available_cache": None, "_mount_available_cache": None,
+    }):
+        try:
+            monkeypatch.setattr(_ph, "_calibrated_profile", lambda *a, **k: None)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ CASES = [
     ("core.llm.tests.test_transport_route_matrix", "_hermetic_resolution"),
     ("core.llm.tests.test_config_file", "_restore_llm_caches"),
     ("core.llm.tests.test_dispatcher_integration", "clear_detection_cache"),
+    ("core.audit.tests.test_dispatcher_selfserve", "_isolated_env"),
 ]
 
 
