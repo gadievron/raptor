@@ -24,6 +24,20 @@ from core.audit.sweep import (
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_negative_control_cache(monkeypatch):
+    """Keep control-result memo mutations separate from borrowed state."""
+    from core.audit import sweep
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(sweep, {"_negative_control_cache": {}}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 class TestSweepResult:
     def test_to_log_entry(self):
         result = SweepResult(

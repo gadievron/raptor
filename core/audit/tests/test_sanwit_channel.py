@@ -1661,7 +1661,21 @@ class TestSandboxPolicy:
 
 
 @pytest.fixture(autouse=True)
-def _reset_runtime_cache():
-    sanwit_execute._reset_runtime_cache()
-    yield
-    sanwit_execute._reset_runtime_cache()
+def _reset_runtime_cache(monkeypatch):
+    """Own runtime selection and extraction memo bindings."""
+    from functools import lru_cache
+    from core.audit import sanwit
+    from core.testing.module_state import isolated_module_state
+
+    original = sanwit._extract_cached
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with (
+        isolated_module_state(
+            sanwit_execute, {"_RESOLVED": None}, lock=sanwit_execute._RESOLVE_LOCK,
+        ),
+        isolated_module_state(sanwit, {"_extract_cached": private}),
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
