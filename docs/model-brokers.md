@@ -28,6 +28,7 @@ To contribute a standard broker, edit only
   "auth_scheme": "Bearer"
 }
 ```
+**There is no need to amend any other file.**
 
 Python validates the catalog and supplies credential handling, dispatcher
 routes, SDK construction, model-family handling, and tests. Every catalog
