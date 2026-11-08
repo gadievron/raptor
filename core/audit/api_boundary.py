@@ -49,17 +49,27 @@ hint, not a receipt.
 from __future__ import annotations
 
 import bisect
+from array import array
 import logging
 import os
 import re
 from dataclasses import dataclass, field
-from core.source.lines import split_lines
+from core.source.lines import iter_source_lines, split_lines
 from pathlib import Path
 
 from core.paths import confine
+from .source_view import sanitized_view as _API_SANITIZED_VIEW_IMPL
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+_API_LINES_IMPL = split_lines
+_API_TYPE_IMPL = type
+_API_LEN_IMPL = len
+_API_COMPILE_IMPL = re.compile
+_API_ESCAPE_IMPL = re.escape
+_API_NEWLINE_RE = re.compile("\n")
+_API_CRLF_RE = re.compile("\r\n")
 
 _API_PARAM_ARRAY_RE = re.compile(r"\[[^\]]{0,256}\]")
 _API_DEFINITION_START_RE = re.compile(r"[A-Za-z_{]")
@@ -399,6 +409,9 @@ def _balanced_span(text: str, open_pos: int) -> tuple[str | None, int]:
     return None, open_pos
 
 
+_API_BALANCED_IMPL = _balanced_span
+
+
 def _split_top_level(args_text: str) -> list[str]:
     parts: list[str] = []
     depth = 0
@@ -621,6 +634,8 @@ def _site_regions(
     line_no: int,
     tail: str,
     prefix: str,
+    *,
+    start_line_no: int | None = None,
 ) -> dict[str, Any]:
     """Pre-call and post-call regions for one call site.
 
@@ -629,20 +644,23 @@ def _site_regions(
     through the extent end, ``before_body`` covers from the extent
     head (definition line, parameter list) through the text just
     before the call, and ``after_complete`` is True unless a region
-    hit the char cap.  Otherwise ``after_window`` falls back to a
+    hit the char cap. ``line_no`` identifies the closing row;
+    ``start_line_no`` supplies the opening row for a multi-line call.
+    Otherwise ``after_window`` falls back to a
     bounded window, ``before_body`` is empty, and receipts grade
     lexical (hint, never refute)."""
     call_idx = line_no - 1
+    pre_idx = call_idx if start_line_no is None else start_line_no - 1
     extent = None
     if not anomaly and extents and 0 <= call_idx < len(view_lines):
         k = bisect.bisect_right(extent_starts, call_idx) - 1
-        if k >= 0 and extents[k][0] <= call_idx <= extents[k][1]:
+        if k >= 0 and extents[k][0] <= pre_idx <= call_idx <= extents[k][1]:
             extent = extents[k]
     if extent is not None:
         after, a_tr = _capped_join(
             tail, view_lines[call_idx + 1:extent[1] + 1],
         )
-        pre_lines = view_lines[extent[0]:call_idx]
+        pre_lines = view_lines[extent[0]:pre_idx]
         pre_len = sum(len(ln) + 1 for ln in pre_lines) + len(prefix)
         if pre_len > _MAX_REGION_CHARS:
             # Oversized pre-call body: never materialize it — flag it
@@ -671,6 +689,9 @@ def _site_regions(
         "before_body": "",
         "before_truncated": False,
     }
+
+
+_API_SITE_REGIONS_IMPL = _site_regions
 
 
 def _caller_files_from_inventory(
@@ -766,6 +787,48 @@ def _walk_tree_entries(root):
             _push_children(path)
 
 
+def _lf_view(raw: str, view: str) -> str:
+    """Drop raw CRLF's CR even when sanitizing replaced it with a space.
+
+    Regex offsets remain in the unsplit view. Context rows and argument
+    text keep their former LF representation without turning bare CR into
+    new physical lines. Only native, length-preserving views use this.
+    """
+    if "\r\n" not in raw:
+        return view
+    parts: list[str] = []
+    start = 0
+    for match in _API_CRLF_RE.finditer(raw):
+        parts.append(view[start:match.start()])
+        start = match.start() + 1
+    parts.append(view[start:])
+    return "".join(parts)
+
+
+def _source_line_starts(
+    text: str, line_count: int, *, compact: bool,
+    prepared_rows: list[str] | None = None,
+) -> list[int] | array:
+    """Index raw LF offsets, retaining one start per canonical source row."""
+    if prepared_rows is not None and "\r" not in text:
+        # Native LF rows already encode the offsets. Reuse their lengths
+        # instead of constructing a regex match object per newline.
+        starts = array("Q") if compact else []
+        append = starts.append
+        offset = 0
+        for row in prepared_rows:
+            append(offset)
+            offset += _API_LEN_IMPL(row) + 1
+        return starts
+    starts = array("Q", [0]) if compact else [0]
+    starts.extend(match.end() for match in _API_NEWLINE_RE.finditer(text))
+    # split_lines drops the final empty normalized row, including a CR-only
+    # tail. Do not expose a synthetic EOF row to offset lookups.
+    if len(starts) > line_count:
+        starts.pop()
+    return starts
+
+
 def _scan_file_for_calls(
     path: Path,
     rel: str,
@@ -803,7 +866,8 @@ def _scan_file_for_calls(
     # a raw read forever. Over-cap keeps the honest size_skipped fact.
     from core.source import read_text_capped
 
-    got = read_text_capped(path, _MAX_FILE_BYTES)
+    # Keep LF coordinates through the read, including bare CR and CRLF.
+    got = read_text_capped(path, _MAX_FILE_BYTES, newline="")
     if got is None:
         return [], freport
     text, truncated = got
@@ -826,14 +890,35 @@ def _scan_file_for_calls(
     from .source_view import sanitized_view
     view = sanitized_view(text, str(path))
     sites: list[dict[str, Any]] = []
-    lines = split_lines(text)
-    view_lines = split_lines(view)
+    line_split = split_lines
+    native_lines = (_API_TYPE_IMPL(text) is str and _API_TYPE_IMPL(view) is str
+                    and line_split is _API_LINES_IMPL and len is _API_LEN_IMPL
+                    and str.__len__(text) == str.__len__(view)
+                    and sanitized_view is _API_SANITIZED_VIEW_IMPL)
+    normalize_crlf = native_lines and "\r\n" in text
+    deferred = (native_lines and str.__len__(view) >= 16 * 1024
+                and _API_TYPE_IMPL(function_name) is str
+                and _API_TYPE_IMPL(max_sites) is int
+                and _API_TYPE_IMPL(_MAX_MATCHES_EXAMINED) is int
+                and re.compile is _API_COMPILE_IMPL and re.escape is _API_ESCAPE_IMPL)
+    # Capture the eager splitter before regex/traversal callbacks. Native
+    # strings are immutable, so later binding changes cannot alter this view.
+    lines = [] if deferred else split_lines(text)
+    view_lines = [] if deferred else split_lines(_lf_view(text, view) if normalize_crlf else view)
+    raw_pending = view_pending = deferred
     call_re = re.compile(rf"(?<![\w.>]){re.escape(function_name)}\s*\(")
-    offset = 0
-    line_starts: list[int] = []
-    for ln in view_lines:
-        line_starts.append(offset)
-        offset += len(ln) + 1
+    line_starts: list[int] | array = []
+    if not deferred:
+        if native_lines and len is _API_LEN_IMPL:
+            line_starts = _source_line_starts(
+                view, len(view_lines), compact=False,
+                prepared_rows=None if normalize_crlf else view_lines,
+            )
+        else:
+            offset = 0
+            for ln in view_lines:
+                line_starts.append(offset)
+                offset += len(ln) + 1
     depths: list[int] | None = None
     anomaly = False
     extents: list[tuple[int, int]] = []
@@ -844,11 +929,20 @@ def _scan_file_for_calls(
         if examined > _MAX_MATCHES_EXAMINED or len(sites) >= max_sites:
             freport["site_capped"] = True
             break
-        # Line number via binary search over line starts.
+        if view_pending:
+            view_lines = line_split(_lf_view(text, view) if normalize_crlf else view)
+            line_starts = _source_line_starts(
+                view, len(view_lines), compact=True,
+                prepared_rows=None if normalize_crlf else view_lines,
+            )
+            view_pending = False
+        # Line number via binary search over raw LF offsets. CR trimming in
+        # view_lines must not shorten the offsets into the unsplit view.
         line_no = bisect.bisect_right(line_starts, m.start())
         line_text = view_lines[line_no - 1]
         open_pos = view.index("(", m.start())
-        args_text, _end = _balanced_span(view, open_pos)
+        span_reader = _balanced_span
+        args_text, _end = span_reader(view, open_pos)
         in_skip = bool(
             skip_span and skip_span[0] <= line_no <= skip_span[1],
         )
@@ -901,17 +995,30 @@ def _scan_file_for_calls(
             ]
         col = m.start() - line_starts[line_no - 1]
         prefix = line_text[max(0, col - _MAX_WINDOW_LINE_CHARS):col]
-        regions = _site_regions(
-            view_lines, extents, extent_starts, anomaly,
-            end_line_no, tail, prefix,
-        )
+        if _site_regions is _API_SITE_REGIONS_IMPL:
+            regions = _site_regions(
+                view_lines, extents, extent_starts, anomaly,
+                end_line_no, tail, prefix, start_line_no=line_no,
+            )
+        else:
+            # Replaced context providers retain their existing call signature.
+            regions = _site_regions(
+                view_lines, extents, extent_starts, anomaly,
+                end_line_no, tail, prefix,
+            )
+        if raw_pending:
+            lines = line_split(text)
+            raw_pending = False
         site: dict[str, Any] = {
             "file": rel,
             "line": line_no,
             "code": (lines[line_no - 1].strip()[:_MAX_WINDOW_LINE_CHARS]
                      if line_no <= len(lines)
                      else line_text.strip()[:_MAX_WINDOW_LINE_CHARS]),
-            "args": _split_top_level(args_text),
+            "args": _split_top_level(
+                _lf_view(text[open_pos + 1:_end - 1], args_text)
+                if normalize_crlf and span_reader is _API_BALANCED_IMPL else args_text
+            ),
             "window": window,
         }
         site.update(regions)
@@ -1517,7 +1624,7 @@ def address_taken_occurrences(
         resolved = confine(target_path, path)
         if resolved is None:
             continue
-        got = read_text_capped(resolved, _MAX_FILE_BYTES)
+        got = read_text_capped(resolved, _MAX_FILE_BYTES, newline="")
         if got is None:
             continue
         text, truncated = got
@@ -1531,7 +1638,10 @@ def address_taken_occurrences(
         except ValueError:
             continue
         view = sanitized_view(text, str(path))
-        for line_no, line in enumerate(split_lines(view), start=1):
+        rows = (iter_source_lines(view)
+                if _API_TYPE_IMPL(view) is str and split_lines is _API_LINES_IMPL
+                else split_lines(view))
+        for line_no, line in enumerate(rows, start=1):
             if (
                 def_span
                 and rel == def_file
@@ -1565,7 +1675,7 @@ def run_api_boundary_check(
     # same class as the smt_promotion_gate caller-gate read.
     from core.source import read_contained
 
-    defining_source = read_contained(target_path, file_path) or ""
+    defining_source = read_contained(target_path, file_path, newline="") or ""
 
     # Wrong-target defence: a hypothesis that names its
     # invoked-twice/called-again target explicitly must name the
