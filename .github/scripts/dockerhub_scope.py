@@ -21,9 +21,9 @@ import urllib.request
 
 
 DOCKERFILE = '.devcontainer/Dockerfile'
+SCOPE_SCRIPT = '.github/scripts/dockerhub_scope.py'
 OPTIONAL_INPUTS = ['.dockerignore', '.devcontainer/Dockerfile.dockerignore']
 BUILD_INPUTS = [DOCKERFILE, '.github/workflows/dockerhub-publish.yml',
-                '.github/scripts/dockerhub_scope.py',
                 '.github/scripts/prepare_sbom.py',
                 '.github/scripts/check_playwright_source.py',
                 '.github/scripts/check_node_release.py',
@@ -177,6 +177,17 @@ def should_build(repo: Path, event: str, published: str | None) -> bool:
 def matches_main(repo: Path, expected: str) -> bool:
     subprocess.run(['git', 'fetch', '--no-tags', '--depth=1', 'origin', 'refs/heads/main'],
                    cwd=repo, check=True, capture_output=True, timeout=30)
+    # Selector edits need no new image, but an old selector cannot certify
+    # publication against a newer selector's interpretation of build inputs.
+    subprocess.run(['git', 'cat-file', '-e', f'HEAD:{SCOPE_SCRIPT}'],
+                   cwd=repo, check=True, capture_output=True, timeout=10)
+    try:
+        subprocess.run(['git', 'diff', '--quiet', 'HEAD', 'FETCH_HEAD', '--', SCOPE_SCRIPT],
+                       cwd=repo, check=True, capture_output=True, timeout=10)
+    except subprocess.CalledProcessError as error:
+        if error.returncode == 1:
+            return False
+        raise
     if expected:
         try:
             return fingerprint(repo, 'FETCH_HEAD') == expected
@@ -199,7 +210,7 @@ def main(argv=None) -> None:
             print('Cannot verify current main before publication: ' + type(error).__name__, file=sys.stderr)
             raise SystemExit(2) from error
         if not matches:
-            print('Image inputs were superseded on main; publication skipped')
+            print('Image inputs or publication selector changed on main; publication skipped')
             raise SystemExit(1)
         return
     event = os.environ.get('EVENT', '')
