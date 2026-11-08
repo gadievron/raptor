@@ -8,6 +8,8 @@ the mechanical truth, the mechanical truth wins.
 import logging
 import sys
 from pathlib import Path
+
+import pytest
 from unittest.mock import MagicMock
 
 
@@ -737,3 +739,37 @@ class TestValidateMultiRound:
         assert result.verdict == "inconclusive"
         assert len(result.evidence) == 2
         assert len(adapter.run_calls) == 2
+
+
+@pytest.mark.parametrize('rule,polarity,expected', [
+    ('1 == 1', 'reachability', 'confirmed'),
+    ('x == 1', 'infeasibility', 'refuted'),
+])
+def test_native_smt_direction_and_saved_evidence(tmp_path, rule, polarity, expected):
+    pytest.importorskip('z3')
+    from packages.hypothesis_validation.adapters.smt import SMTAdapter
+
+    hypothesis = Hypothesis(claim='supplied predicates', target=tmp_path, polarity=polarity)
+    llm = FakeLLM([
+        {'tool': 'smt', 'rule': rule, 'expected_evidence': 'sat', 'reasoning': 'query'},
+        {'verdict': 'inconclusive', 'reasoning': 'no judgement', 'matches_support_claim': False},
+    ])
+    result = validate(hypothesis, [SMTAdapter()], llm)
+    assert result.verdict == expected
+    assert result.evidence[0].predicate_verdict == 'sat'
+    assert result.to_dict()['evidence'][0]['predicate_verdict'] == 'sat'
+
+
+@pytest.mark.parametrize('rule,polarity,expected', [
+    ('1 == 1', 'reachability', 'confirmed'),
+    ('x == 1', 'infeasibility', 'refuted'),
+])
+def test_native_predicate_direction_survives_evaluation_failure(tmp_path, rule, polarity, expected):
+    pytest.importorskip('z3')
+    from packages.hypothesis_validation.adapters.smt import SMTAdapter
+
+    hypothesis = Hypothesis(claim='supplied predicates', target=tmp_path, polarity=polarity)
+    evidence = SMTAdapter().run(rule, tmp_path)
+    verdict, _, _ = _evaluate_with_refinement(
+        hypothesis, evidence, FakeLLM([]), task_type='test')
+    assert verdict == expected

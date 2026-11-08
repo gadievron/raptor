@@ -112,11 +112,15 @@ def update(p: Posterior, *, confirms: bool, weight: float = 1.0) -> Posterior:
 def posterior_from(
     evidence_list: Iterable[Any],
     prior: Posterior = UNIFORM_PRIOR,
+    *,
+    polarity: str = "",
 ) -> Posterior:
     """Aggregate a list of evidence into a Beta posterior.
 
     Mechanical reading of each evidence item:
       - tool failure (`success=False`)        → no-op
+      - definitive SMT predicates              → declared polarity direction
+        (no declared direction                 → no-op)
       - tool succeeded with matches present   → confirming observation
       - tool succeeded with no matches        → refuting observation
 
@@ -134,6 +138,15 @@ def posterior_from(
     p = prior
     for e in evidence_list:
         if not getattr(e, "success", True):
+            continue
+        if getattr(e, "tool", "") == "smt" and getattr(
+            e, "predicate_verdict", "",
+        ) in ("sat", "unsat"):
+            from .verdict import verdict_from
+
+            direction = verdict_from(e, polarity=polarity)
+            if direction != "inconclusive":
+                p = update(p, confirms=direction == "confirmed")
             continue
         matches = bool(getattr(e, "matches", []) or [])
         p = update(p, confirms=matches)

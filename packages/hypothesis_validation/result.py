@@ -65,6 +65,10 @@ class Evidence:
     tracking was wired up). The runner refuses to combine evidence whose
     non-empty `refers_to` values differ — see `provenance.py`."""
 
+    predicate_verdict: str = ""
+    """Definitive supplied-predicate SMT result (``sat``/``unsat``).
+    This records mathematical feasibility, not source execution."""
+
     def to_dict(self) -> dict:
         d = {
             "tool": self.tool,
@@ -81,6 +85,8 @@ class Evidence:
             d["refers_to"] = self.refers_to
         if self.empty_matches_conclusive:
             d["empty_matches_conclusive"] = True
+        if self.predicate_verdict:
+            d["predicate_verdict"] = self.predicate_verdict
         return d
 
 

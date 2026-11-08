@@ -57,3 +57,37 @@ def test_zero_adapter_timeout_is_immediate_inconclusive_not_unlimited(tmp_path):
 def test_adapter_timeout_is_not_coerced(tmp_path, timeout):
     result = SMTAdapter().run('Value == 7', tmp_path, timeout=timeout)
     assert result.success is False and 'nonnegative integer' in result.error
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+@pytest.mark.parametrize('rule,sat', [('1 == 1', True), ('Value == 1', True),
+                                     ('Value == 0\nValue == 1', False)])
+@pytest.mark.parametrize('polarity', ['reachability', 'infeasibility'])
+@pytest.mark.parametrize('claim', ['confirmed', 'refuted', 'inconclusive'])
+def test_definitive_predicate_direction_does_not_depend_on_model_or_claim(
+    tmp_path, rule, sat, polarity, claim,
+):
+    from packages.hypothesis_validation.verdict import verdict_from
+
+    evidence = SMTAdapter().run(rule, tmp_path)
+    assert evidence.success
+    assert evidence.predicate_verdict == ('sat' if sat else 'unsat')
+    supports = sat == (polarity == 'reachability')
+    assert verdict_from(evidence, claim, polarity=polarity) == ('confirmed' if supports else 'refuted')
+
+
+@pytest.mark.skipif(not z3_available(), reason='Z3 unavailable')
+def test_empty_sat_without_declared_direction_is_not_a_refutation(tmp_path):
+    from packages.hypothesis_validation.verdict import verdict_from
+
+    evidence = SMTAdapter().run('1 == 1', tmp_path)
+    assert evidence.success and not evidence.matches
+    assert evidence.predicate_verdict == 'sat'
+    for claim in ('confirmed', 'refuted', 'inconclusive'):
+        assert verdict_from(evidence, claim) == 'inconclusive'
+
+
+def test_failed_query_does_not_publish_definitive_predicate_metadata(tmp_path):
+    evidence = SMTAdapter().run('!', tmp_path)
+    assert evidence.success is False
+    assert evidence.predicate_verdict == ''

@@ -935,3 +935,44 @@ class TestPosteriorPreservesSignal:
         # defaults, but the underlying signal is preserved for callers
         # that read p.mean directly (i.e. ranking-based triage).
         assert 0.5 < p.mean < 0.8
+
+
+@pytest.mark.parametrize('record_type', [ToolEvidence, Evidence])
+@pytest.mark.parametrize('predicate', ['sat', 'unsat'])
+def test_predicate_verdict_survives_evidence_serialisation(record_type, predicate):
+    kwargs = dict(tool='smt', rule='r', summary='diagnostic', success=True,
+                  predicate_verdict=predicate)
+    record = record_type(**kwargs)
+    assert record.to_dict()['predicate_verdict'] == predicate
+    assert 'predicate_verdict' not in record_type(
+        tool='semgrep', rule='r', summary='match', success=True).to_dict()
+
+
+def test_non_smt_tools_do_not_inherit_predicate_direction():
+    evidence = ToolEvidence(tool='semgrep', rule='r', success=True,
+                            predicate_verdict='sat')
+    assert verdict_from(evidence, 'confirmed', polarity='reachability') == 'refuted'
+
+
+def test_failure_precedes_definitive_predicate_metadata():
+    evidence = ToolEvidence(tool='smt', rule='r', success=False,
+                            predicate_verdict='sat')
+    assert verdict_from(evidence, 'confirmed', polarity='reachability') == 'inconclusive'
+
+
+@pytest.mark.parametrize('predicate,polarity,confirming', [
+    ('sat', 'reachability', True), ('sat', 'infeasibility', False),
+    ('unsat', 'reachability', False), ('unsat', 'infeasibility', True),
+])
+def test_predicate_posterior_uses_declared_direction(predicate, polarity, confirming):
+    evidence = ToolEvidence(tool='smt', rule='r', success=True,
+                            predicate_verdict=predicate)
+    posterior = posterior_from([evidence], polarity=polarity)
+    assert posterior.alpha == (2 if confirming else 1)
+    assert posterior.beta == (1 if confirming else 2)
+
+
+@pytest.mark.parametrize('predicate', ['sat', 'unsat'])
+def test_predicate_posterior_without_direction_is_unchanged(predicate):
+    evidence = Evidence(tool='smt', rule='r', summary='predicates', predicate_verdict=predicate)
+    assert posterior_from([evidence]) == UNIFORM_PRIOR
