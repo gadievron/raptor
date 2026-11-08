@@ -98,6 +98,27 @@ if __name__ == "__main__":
 """
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_database_memos(monkeypatch):
+    """Keep database cache contents and source-size accounting test-owned."""
+    import functools
+    from packages.llm_analysis import dataflow_validation
+    from core.testing.module_state import isolated_module_state
+
+    replacements = {"_db_source_cache": {}, "_db_source_cache_chars": 0}
+    for name in ("_db_indexed_files", "_db_callable_inventory"):
+        original = getattr(dataflow_validation, name)
+        replacements[name] = functools.lru_cache(**original.cache_parameters())(
+            original.__wrapped__,
+        )
+    with isolated_module_state(dataflow_validation, replacements):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _build_target_and_db(tmp_path: Path):
     """Create the target tree + a fake CodeQL database directory.
 
