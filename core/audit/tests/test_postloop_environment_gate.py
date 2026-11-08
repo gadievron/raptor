@@ -1201,7 +1201,14 @@ class TestStudyConsumerGate:
             _study_consumer_loop,
         )
 
-        guard = _StubGuard()
+        entered_guard = threading.Event()
+
+        class ObservedGuard(_StubGuard):
+            def tick(self):
+                entered_guard.set()
+                super().tick()
+
+        guard = ObservedGuard()
         guard.pause()
         config = _run_config(tmp_path, guard)
         result = OrchestratorResult()
@@ -1216,29 +1223,38 @@ class TestStudyConsumerGate:
                 checklist={}, context_map=None, evidence_index={},
                 sarif_cache=None, entry_points=set(),
                 start_time=time.monotonic(), on_progress=None,
+                # This test starts at the drain gate, after eager prep.
+                state={"study_list_built": True},
             )
 
         t = threading.Thread(target=run)
         t.start()
-        # The consumer blocks inside the paused tick before its first
-        # dequeue — the queued request is still there and no study
-        # work has started.
-        t.join(timeout=0.3)
-        assert t.is_alive()
-        _progress, queue_empty, working = queue.drain_state()
-        assert not queue_empty
-        assert not working
+        try:
+            # The consumer blocks inside the paused tick before its first
+            # dequeue — the queued request is still there and no study
+            # work has started.
+            assert entered_guard.wait(timeout=10.0), "consumer did not reach the guard"
+            assert t.is_alive()
+            _progress, queue_empty, working = queue.drain_state()
+            assert not queue_empty
+            assert not working
 
-        guard.concluded = True
-        guard.resume()
-        t.join(timeout=10.0)
-        assert not t.is_alive()
-        # The drain stopped on the environment rails; the batch was
-        # never dequeued, let alone dispatched — and the stop is
-        # booked with the fault reason.
-        assert result.terminated_by == "environment"
-        assert result.environment_fault == guard.conclude_reason
-        assert len(queue.dequeue_batch(max_items=10, timeout=0.05)) == 1
+            guard.concluded = True
+            guard.resume()
+            t.join(timeout=10.0)
+            assert not t.is_alive()
+            # The drain stopped on the environment rails; the batch was
+            # never dequeued, let alone dispatched — and the stop is
+            # booked with the fault reason.
+            assert result.terminated_by == "environment"
+            assert result.environment_fault == guard.conclude_reason
+            assert len(queue.dequeue_batch(max_items=10, timeout=0.05)) == 1
+
+        finally:
+            guard.concluded = True
+            guard.resume()
+            queue.request_stop()
+            t.join(timeout=10.0)
 
 
 class _NthTickPauseGuard:
