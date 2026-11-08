@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from core.atomic_fs import rmtree_hardened
+from core.testing.threads import retiring_threads
 from core.sandbox import host, observe_cli
 
 import core.run.scratch as _tempfile_owner
@@ -56,10 +57,20 @@ def test_observe_reclaims_restricted_output(tmp_path, monkeypatch, mode):
             rmtree_hardened(path)
 
 
-def _host(path):
-    return host.SandboxHost(_thread=threading.Thread(),
-                            _write_fd=-1, _read_fd=-1, _daemon_fds=None,
-                            _lock=threading.Lock(), _owned_output=str(path))
+def _host(path, *, worker=None):
+    """A retired channel with a completed worker unless explicitly supplied."""
+    if worker is None:
+        worker = threading.Thread(target=lambda: None)
+        with retiring_threads([worker], release=lambda: None, timeout=5):
+            worker.start()
+            worker.join(timeout=5)
+            assert not worker.is_alive(), "owned scratch worker did not finish"
+    assert worker.ident is not None, "scratch fixtures require a started or completed worker"
+    instance = host.SandboxHost(_thread=worker,
+                                _write_fd=None, _read_fd=None, _daemon_fds=None,
+                                _lock=threading.Lock(), _owned_output=str(path))
+    instance._closed = True
+    return instance
 
 
 @pytest.mark.parametrize("mode", [0o000, 0o500, 0o555])
@@ -117,26 +128,43 @@ def test_host_retains_owner_after_failed_removal(tmp_path, monkeypatch, raises):
 def test_closed_host_waits_for_live_backend_before_retry(tmp_path):
     path = tmp_path / "owned"
     path.mkdir()
-    instance = _host(path)
-    instance._closed = True
-    entered, release = threading.Event(), threading.Event()
+    entered, release, joining, closed = (threading.Event() for _ in range(4))
+    errors = []
 
     def backend():
         entered.set()
-        assert release.wait(3), "backend was not released"
+        release.wait()
 
-    worker = threading.Thread(target=backend)
-    instance._thread = worker
-    try:
+    class BackendThread(threading.Thread):
+        def join(self, timeout=None):
+            joining.set()
+            return super().join(timeout)
+
+    worker = BackendThread(target=backend)
+    workers = [worker]
+    with retiring_threads(workers, release=release.set, timeout=6):
         worker.start()
-        assert entered.wait(3), "backend did not start"
-        instance.close()
+        assert entered.wait(5), "backend did not start"
+        instance = _host(path, worker=worker)
+        def close():
+            try:
+                instance.close()
+            except BaseException as exc:
+                errors.append(exc)
+            finally:
+                closed.set()
+        closer = threading.Thread(target=close)
+        workers.append(closer)
+        closer.start()
+        assert joining.wait(5), "close did not join the live backend"
+        assert worker.is_alive() and not closed.is_set()
         assert path.exists() and instance._owned_output == str(path)
-    finally:
         release.set()
-        if worker.ident is not None:
-            worker.join(timeout=3)
-    assert not worker.is_alive(), "backend did not exit"
+        assert closed.wait(5), "close did not finish after backend release"
+        closer.join(timeout=5)
+        assert not errors
+    assert not worker.is_alive() and not closer.is_alive()
+    assert not path.exists() and instance._owned_output is None
     instance.close()
     assert not path.exists() and instance._owned_output is None
 

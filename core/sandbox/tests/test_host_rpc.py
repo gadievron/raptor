@@ -252,10 +252,10 @@ class TestHostRPCTransport(unittest.TestCase):
                 # daemon's rpc-in; the daemon exits cleanly, tearing
                 # down the sandbox chain and closing the last write
                 # handle on rpc-out.
-                os.close(host._write_fd)
-                # Keep close() from double-closing a possibly-reused
-                # fd number.
-                host._write_fd = -1
+                with host._lock:
+                    request_fd, host._write_fd = host._write_fd, None
+                    host._broken = True
+                    os.close(request_fd)
                 t0 = time.monotonic()
                 with self.assertRaises(HostRPCError) as ctx:
                     host._read_frame(timeout=20.0)
