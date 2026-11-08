@@ -64,6 +64,7 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
+from contextlib import contextmanager
 import errno
 import json
 import math
@@ -125,44 +126,125 @@ _MAX_FRAME_BYTES = 64 * 1024 * 1024
 
 
 def _read_frame(fd: int) -> dict | None:
-    hdr = b""
-    while len(hdr) < 4:
-        chunk = os.read(fd, 4 - len(hdr))
-        if not chunk:
-            if hdr:
-                raise EOFError(f"truncated RPC header: {len(hdr)} of 4 bytes")
-            return None
-        hdr += chunk
-    (length,) = struct.unpack("!I", hdr)
-    if length > _MAX_FRAME_BYTES:
-        msg = f"frame too large: {length}"
-        raise ValueError(msg)
-    body = bytearray()
-    while len(body) < length:
-        chunk = os.read(fd, length - len(body))
-        if not chunk:
-            raise EOFError(
-                f"truncated RPC body: {len(body)} of {length} bytes")
-        body.extend(chunk)
-    frame = json.loads(body.decode("utf-8"))
-    if not isinstance(frame, dict):
-        raise ValueError("RPC frame must contain a JSON object")
-    return frame
+    with _channel_nonblocking(fd):
+        hdr = b""
+        while len(hdr) < 4:
+            chunk = _channel_read(fd, 4 - len(hdr))
+            if not chunk:
+                if hdr:
+                    raise EOFError(f"truncated RPC header: {len(hdr)} of 4 bytes")
+                return None
+            hdr += chunk
+        (length,) = struct.unpack("!I", hdr)
+        if length > _MAX_FRAME_BYTES:
+            msg = f"frame too large: {length}"
+            raise ValueError(msg)
+        body = bytearray()
+        while len(body) < length:
+            chunk = _channel_read(fd, length - len(body))
+            if not chunk:
+                raise EOFError(
+                    f"truncated RPC body: {len(body)} of {length} bytes")
+            body.extend(chunk)
+        frame = json.loads(body.decode("utf-8"))
+        if not isinstance(frame, dict):
+            raise ValueError("RPC frame must contain a JSON object")
+        return frame
+
+
+# Persistent transport EOF is a request-lifetime signal, not a command.
+# Scope it to dispatch so direct helper calls have no ambient channel state.
+_REQUEST_CHANNEL_FDS = ()
+_CHANNEL_WAIT_TICK_S = 0.05
+
+
+class _RequestAbandoned(BaseException):
+    """Control flow that crosses generic handler error wrappers into cleanup."""
+
+
+@contextmanager
+def _request_channel(*, in_fd=None, out_fd=None):
+    global _REQUEST_CHANNEL_FDS
+    previous = _REQUEST_CHANNEL_FDS
+    _REQUEST_CHANNEL_FDS = tuple(fd for fd in (in_fd, out_fd) if fd is not None)
+    try:
+        _check_request_channel()
+        yield
+    finally:
+        _REQUEST_CHANNEL_FDS = previous
+
+
+def _check_request_channel():
+    if _REQUEST_CHANNEL_FDS:
+        while True:
+            try:
+                _target_ready((), (), 0)
+                return
+            except InterruptedError:
+                continue
+
+
+@contextmanager
+def _channel_nonblocking(fd):
+    blocking = None
+    try:
+        if _REQUEST_CHANNEL_FDS:
+            blocking = os.get_blocking(fd)
+            os.set_blocking(fd, False)
+        yield
+    finally:
+        if blocking is not None:
+            unwinding = sys.exc_info()[0] is not None
+            try:
+                os.set_blocking(fd, blocking)
+            except BaseException:
+                if not unwinding:
+                    raise
+
+
+def _channel_read(fd, size):
+    while True:
+        try:
+            if _REQUEST_CHANNEL_FDS:
+                readable, _ = _target_ready((fd,), (), 1.0)
+                if not readable:
+                    continue
+            return os.read(fd, size)
+        except BlockingIOError:
+            if not _REQUEST_CHANNEL_FDS:
+                raise
+        except InterruptedError:
+            continue
 
 
 def _write_frame(fd: int, payload: dict) -> None:
     body = json.dumps(payload).encode("utf-8")
-    if len(body) > _MAX_FRAME_BYTES:
+    if len(body) > _MAX_REPLY_FRAME_BYTES:
         raise ValueError(f"frame too large: {len(body)}")
     hdr = struct.pack("!I", len(body))
     # Loop the write: a frame larger than the pipe buffer may be
     # written partially, and a torn frame desyncs the whole channel.
     view = memoryview(hdr + body)
-    while view:
-        n = os.write(fd, view)
-        if n <= 0:
-            raise OSError(errno.EIO, "RPC frame write made no progress")
-        view = view[n:]
+    with _channel_nonblocking(fd):
+        while view:
+            if _REQUEST_CHANNEL_FDS:
+                try:
+                    _, writable = _target_ready((), (fd,), 1.0)
+                except InterruptedError:
+                    continue
+                if not writable:
+                    continue
+            try:
+                n = os.write(fd, view[:65536])
+            except BlockingIOError:
+                if not _REQUEST_CHANNEL_FDS:
+                    raise
+                continue
+            except InterruptedError:
+                continue
+            if n <= 0:
+                raise OSError(errno.EIO, "RPC frame write made no progress")
+            view = view[n:]
 
 
 # --------------------------------------------------------------------
@@ -512,6 +594,10 @@ def _target_ready(readers, writers, remaining):
     masks = {fd: select.POLLIN for fd in readers}
     for fd in writers:
         masks[fd] = masks.get(fd, 0) | select.POLLOUT
+    for fd in _REQUEST_CHANNEL_FDS:
+        # Watch only terminal state. Readable queued request bytes are not
+        # cancellation and must remain untouched for the next dispatch.
+        masks.setdefault(fd, 0)
     if not masks:
         return [], []
     poller = select.poll()
@@ -520,6 +606,8 @@ def _target_ready(readers, writers, remaining):
     milliseconds = max(0, math.ceil(min(remaining, 2147483.647) * 1000))
     events = dict(poller.poll(milliseconds))
     terminal = select.POLLHUP | select.POLLERR | select.POLLNVAL
+    if any(events.get(fd, 0) & terminal for fd in _REQUEST_CHANNEL_FDS):
+        raise _RequestAbandoned("RPC owner disconnected")
     return ([fd for fd in readers if events.get(fd, 0) & (select.POLLIN | terminal)],
             [fd for fd in writers if events.get(fd, 0) & (select.POLLOUT | terminal)])
 
@@ -579,6 +667,7 @@ def _recv_until(proc, terminator, per_recv_timeout: float,
     was in flight. They are consumed FIRST (they arrived before
     anything still in the pipe); the unconsumed remainder is left in
     the bytearray for the next step or the end-of-request drain."""
+    _check_request_channel()
     cap = _MAX_CAPTURE_BYTES if max_bytes is None else max(max_bytes, 0)
     deadline = time.monotonic() + per_recv_timeout
     buf = bytearray()
@@ -653,6 +742,7 @@ def _communicate_capped(
     capped buffers attached as ``output``/``stderr`` and the flags as
     ``stdout_truncated``/``stderr_truncated`` attributes.
     """
+    _check_request_channel()
     if stdout_cap is None:
         stdout_cap = _MAX_CAPTURE_BYTES
     if stderr_cap is None:
@@ -756,10 +846,21 @@ def _communicate_capped(
             if not view:
                 _close_stdin()
 
-    try:
-        proc.wait(timeout=max(deadline - time.monotonic(), 0))
-    except subprocess.TimeoutExpired:
-        raise _timeout_exc() from None
+    if _REQUEST_CHANNEL_FDS:
+        while True:
+            _check_request_channel()
+            remaining = max(deadline - time.monotonic(), 0)
+            try:
+                proc.wait(timeout=min(remaining, _CHANNEL_WAIT_TICK_S))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise _timeout_exc() from None
+    else:
+        try:
+            proc.wait(timeout=max(deadline - time.monotonic(), 0))
+        except subprocess.TimeoutExpired:
+            raise _timeout_exc() from None
     return (_got(out_fd), _got(err_fd),
             _truncated(out_fd), _truncated(err_fd))
 
@@ -821,6 +922,7 @@ def _send_capped(
     ``undelivered`` is the number of ``data`` bytes NOT written to
     the target's stdin.
     """
+    _check_request_channel()
     drained = bytearray()
     truncated = False
     if proc.stdin is None or proc.stdin.closed or not data:
@@ -934,6 +1036,7 @@ def _spawn_request_target(argv: list) -> subprocess.Popen:
     descendant survived into later RPCs inside the persistent
     sandbox, retaining pipes and mutating shared state.
     """
+    _check_request_channel()
     return subprocess.Popen(
         argv,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1082,6 +1185,7 @@ def _handle_probe(payload: dict) -> dict:
     t0 = time.monotonic()
     try:
         for i, step in enumerate(steps):
+            _check_request_channel()
             if not isinstance(step, dict):
                 return {"ok": False, "error": f"step {i} not an object"}
             if "compute" in step:
@@ -1313,6 +1417,7 @@ def _handle_conversation(payload: dict) -> dict:
     t0 = time.monotonic()
     try:
         for i, (send_spec, terminator) in enumerate(steps):
+            _check_request_channel()
             if isinstance(send_spec, bytes):
                 send_bytes = send_spec
             else:
@@ -1406,6 +1511,9 @@ _MAX_STDIN_BYTES = 8 * 1024 * 1024   # 8 MiB per spawn stdin
 # hex expansion too: a reply frame carries at most two capped streams,
 # each hex-doubled (host.py sizes its reply-frame ceiling off this).
 _MAX_CAPTURE_BYTES = 64 * 1024 * 1024   # 64 MiB retained per stream
+# Replies can contain two capped streams, both hex-encoded. The request
+# ceiling remains separate: a legitimate bounded reply can exceed 64 MiB.
+_MAX_REPLY_FRAME_BYTES = 4 * _MAX_CAPTURE_BYTES + 1024 * 1024
 
 
 def _cap(name: str, value, ceiling, fn=float):
@@ -1464,38 +1572,43 @@ def _run_one_shot() -> int:
     meaningless in one-shot mode and falls through to the
     unknown-cmd error (exit 1) here.
     """
-    in_fd = sys.stdin.fileno()
-    out_fd = sys.stdout.fileno()
-    # Same /proc-reopen hardening as the persistent loop: the one-shot
-    # channel is the daemon's own stdio, equally reopenable via
-    # /proc/<daemon>/fd/{0,1} by a spawned target while it runs.
-    if not _set_non_dumpable():
-        _log("prctl(PR_SET_DUMPABLE, 0) failed — /proc fd reopen "
-             "hardening not engaged")
     try:
-        frame = _read_frame(in_fd)
-    except Exception as e:  # noqa: BLE001
-        _write_frame(out_fd, {"ok": False,
-                              "error": (f"read_frame failed: "
-                                        f"{type(e).__name__}: {e}")})
-        return 1
-    if frame is None:
-        _write_frame(out_fd, {"ok": False, "error": "empty stdin"})
-        return 1
-    cmd = frame.get("cmd")
-    handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
-    if handler is None:
-        _write_frame(out_fd, _echo_rid(frame, {
-            "ok": False, "error": f"unknown cmd {cmd!r}"}))
-        return 1
-    try:
-        response = handler(frame)
-    except Exception as e:  # noqa: BLE001
-        response = {"ok": False,
-                    "error": (f"handler {cmd} raised: "
-                              f"{type(e).__name__}: {e}")}
-    _write_frame(out_fd, _echo_rid(frame, response))
-    return 0
+        with _request_channel(out_fd=sys.stdout.fileno()):
+            in_fd = sys.stdin.fileno()
+            out_fd = sys.stdout.fileno()
+            # Same /proc-reopen hardening as the persistent loop: the one-shot
+            # channel is the daemon's own stdio, equally reopenable via
+            # /proc/<daemon>/fd/{0,1} by a spawned target while it runs.
+            if not _set_non_dumpable():
+                _log("prctl(PR_SET_DUMPABLE, 0) failed — /proc fd reopen "
+                     "hardening not engaged")
+            try:
+                frame = _read_frame(in_fd)
+            except Exception as e:  # noqa: BLE001
+                _write_frame(out_fd, {"ok": False,
+                                      "error": (f"read_frame failed: "
+                                                f"{type(e).__name__}: {e}")})
+                return 1
+            if frame is None:
+                _write_frame(out_fd, {"ok": False, "error": "empty stdin"})
+                return 1
+            cmd = frame.get("cmd")
+            handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
+            if handler is None:
+                _write_frame(out_fd, _echo_rid(frame, {
+                    "ok": False, "error": f"unknown cmd {cmd!r}"}))
+                return 1
+            try:
+                response = handler(frame)
+            except Exception as e:  # noqa: BLE001
+                response = {"ok": False,
+                            "error": (f"handler {cmd} raised: "
+                                      f"{type(e).__name__}: {e}")}
+            _write_frame(out_fd, _echo_rid(frame, response))
+            return 0
+    except _RequestAbandoned:
+        _log("one-shot RPC output closed — request retired")
+        return 0
 
 
 def main() -> int:
@@ -1549,31 +1662,36 @@ def main() -> int:
     try:
         while True:
             try:
-                frame = _read_frame(in_fd)
+                with _request_channel(out_fd=out_fd):
+                    frame = _read_frame(in_fd)
             except Exception as e:  # noqa: BLE001
                 _log(f"read_frame failed: {type(e).__name__}: {e}")
                 return 1
             if frame is None:
                 _log("rpc-in EOF — exiting")
                 return 0
-            cmd = frame.get("cmd")
-            if cmd == "close":
-                _log("close requested — exiting")
-                _write_frame(out_fd, _echo_rid(frame, {"ok": True,
-                                                       "closed": True}))
-                return 0
-            handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
-            if handler is None:
-                _write_frame(out_fd, _echo_rid(frame, {
-                    "ok": False, "error": f"unknown cmd {cmd!r}"}))
-                continue
-            try:
-                response = handler(frame)
-            except Exception as e:  # noqa: BLE001
-                response = {"ok": False,
-                            "error": (f"handler {cmd} raised: "
-                                      f"{type(e).__name__}: {e}")}
-            _write_frame(out_fd, _echo_rid(frame, response))
+            with _request_channel(in_fd=in_fd, out_fd=out_fd):
+                cmd = frame.get("cmd")
+                if cmd == "close":
+                    _log("close requested — exiting")
+                    _write_frame(out_fd, _echo_rid(frame, {"ok": True,
+                                                           "closed": True}))
+                    return 0
+                handler = DISPATCH.get(cmd) if isinstance(cmd, str) else None
+                if handler is None:
+                    _write_frame(out_fd, _echo_rid(frame, {
+                        "ok": False, "error": f"unknown cmd {cmd!r}"}))
+                    continue
+                try:
+                    response = handler(frame)
+                except Exception as e:  # noqa: BLE001
+                    response = {"ok": False,
+                                "error": (f"handler {cmd} raised: "
+                                          f"{type(e).__name__}: {e}")}
+                _write_frame(out_fd, _echo_rid(frame, response))
+    except _RequestAbandoned:
+        _log("RPC owner disconnected — request retired")
+        return 0
     finally:
         for fd in (in_fd, out_fd):
             try:

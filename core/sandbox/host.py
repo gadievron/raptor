@@ -74,7 +74,7 @@ from typing import Any
 from core.atomic_fs import rmtree_hardened
 from core.security.log_sanitisation import sanitise_exception_message, sanitise_for_terminal
 from core.sandbox._daemon import (
-    _MAX_CAPTURE_BYTES as _DAEMON_CAPTURE_CAP,
+    _MAX_REPLY_FRAME_BYTES,
     _MAX_FRAME_BYTES as _DAEMON_REQUEST_CAP,
 )
 
@@ -82,17 +82,6 @@ log = logging.getLogger(__name__)
 
 
 _DAEMON_SCRIPT = Path(__file__).resolve().parent / "_daemon.py"
-
-# Ceiling on one daemon→parent reply frame. The daemon retains at
-# most _MAX_CAPTURE_BYTES per stream and a reply carries at most two
-# capped streams, each hex-doubled (spawn: stdout+stderr;
-# conversation: recvs+stdout), so 4x the capture cap bounds the
-# payload; 1 MiB covers JSON overhead. Sized from the daemon's cap so
-# a maximal legitimate reply always fits — pre-fix the parent
-# rejected frames over 64 MiB only AFTER the daemon had already built
-# and half-sent them, wedging the persistent channel mid-frame.
-_MAX_REPLY_FRAME_BYTES = 4 * _DAEMON_CAPTURE_CAP + 1024 * 1024
-
 
 def _rpc_deadline(timeout):
     try:

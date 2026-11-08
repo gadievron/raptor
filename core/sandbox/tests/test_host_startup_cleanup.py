@@ -226,26 +226,59 @@ def test_real_pipe_start_ping_and_close_release_resources(setup_tracker, monkeyp
     import sys
     import core.sandbox
     from core.sandbox import _daemon
+    from core.testing.processes import reap_on_exit
+    from core.testing.standalone_cli import standalone_cli_env
+    from core.testing.threads import retiring_threads
     tracker = setup_tracker
-    calls = []
+    calls, children, workers = [], [], []
+    spawn_lock = threading.Lock()
+    stopping = threading.Event()
+
+    def stop():
+        # Serialise cancellation with publication of the independently owned
+        # child so failed startup cannot leave an unregistered late spawn.
+        with spawn_lock:
+            stopping.set()
+            for proc in children:
+                if proc.poll() is None:
+                    proc.kill()
+
+    class Host(host_mod.SandboxHost):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            workers.append(self._thread)  # register before production start()
 
     def backend(argv, **kwargs):
         calls.append(kwargs)
-        return subprocess.run(
-            [sys.executable, "-S", _daemon.__file__, *argv[3:]],
-            pass_fds=kwargs["pass_fds"], capture_output=True, timeout=10,
-        )
+        with standalone_cli_env(env={"PATH": os.defpath}) as env:
+            with spawn_lock:
+                if stopping.is_set():
+                    raise RuntimeError("test backend retired before spawn")
+                proc = subprocess.Popen(
+                    [os.path.realpath(sys.executable), "-I", "-S", "-B",
+                     _daemon.__file__, *argv[3:]],
+                    pass_fds=kwargs["pass_fds"], stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, env=env, cwd=tracker.target,
+                )
+                children.append(proc)
+            with reap_on_exit(proc):
+                stdout, stderr = proc.communicate(timeout=60)
+                return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
 
     monkeypatch.setattr(core.sandbox, "run", backend)
-    host = host_mod.SandboxHost.start(target=tracker.target, startup_timeout=5)
-    try:
-        assert host._daemon_fds is None
-        assert os.path.isdir(tracker.owned[0])
-        assert len(calls) == 1
-    finally:
-        host.close()
-    assert not host._thread.is_alive()
-    assert_cleaned(tracker, None)
+    with retiring_threads(workers, release=stop, timeout=5):
+        # This checks successful ownership transfer, not deadline enforcement.
+        # Use the production startup budget; deadline tests own short budgets.
+        host = Host.start(target=tracker.target)
+        try:
+            assert host._daemon_fds is None
+            assert os.path.isdir(tracker.owned[0])
+            assert len(calls) == 1
+        finally:
+            host.close()
+        assert not host._thread.is_alive()
+        assert_cleaned(tracker, None)
+    assert all(proc.returncode == 0 for proc in children)
 
 
 def test_close_defers_private_output_cleanup_until_worker_exit(setup_tracker, monkeypatch):
