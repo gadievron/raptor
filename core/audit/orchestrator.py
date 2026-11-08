@@ -25006,7 +25006,14 @@ def _verify_hypotheses_immediate(
             ) | _skipped
 
         if tools_confirmed:
-            verifications[-1] = ClaimVerification(hyp, tuple(tools_confirmed))
+            binding = tools_confirmed.binding if isinstance(tools_confirmed, ToolChainResult) else None
+            # Empty legacy list wrappers carry no producer claim identity.
+            # Keep that missing information explicit rather than inventing it
+            # from the consumer's current location or file snapshot.
+            if (binding is not None and binding.scope == ("", "", 0, "")
+                    and binding.source_identity is None):
+                binding = None
+            verifications[-1] = ClaimVerification(hyp, tuple(tools_confirmed), binding=binding)
             logger.info(
                 "ihv: %s:%s — tool confirmed '%s' via %s",
                 file_path, function_name,
@@ -25096,6 +25103,29 @@ def _try_ihv_synthesis(
     return None
 
 
+def _record_ihv_scope_rejection(verification, outcome, config, *, hypothesis, reason, current_source=None):
+    """A failed handoff is diagnostic evidence, never a refutation."""
+    try:
+        if reason == "source-version-drift" and verification.binding is not None:
+            from .check_trace import record_source_invalidation
+
+            record_source_invalidation(
+                config.out_dir, verification.binding, source_identity_after=current_source,
+                prior_receipts=verification.receipts, prior_outcomes=(), phase="claim_admission",
+            )
+        else:
+            from .check_trace import record_claim_scope_rejection
+
+            record_claim_scope_rejection(
+                config.out_dir, verification.binding, reason=reason, receipts=verification.receipts,
+                attempted_scope={"file": outcome.file, "function": outcome.function,
+                                 "line_start": outcome.line, "hypothesis": hypothesis,
+                                 "review_hypothesis": (outcome.review_result or {}).get("hypothesis")},
+            )
+    except Exception:
+        logger.warning("could not record verification scope rejection", exc_info=True)
+
+
 def _aggregate_ihv_verdicts(
     outcome: ReviewOutcome,
     result: OrchestratorResult,
@@ -25122,9 +25152,28 @@ def _aggregate_ihv_verdicts(
     outcome.review_result.pop("immediate_verified", None)
     outcome.review_result.pop("ihv_all_refuted", None)
     tools = [receipt for v in verifications for receipt in v.receipts]
-    supports = supported_claims(
+    proposals = supported_claims(
         verifications, receipt_can_promote=_promotion_grade_receipt,
     )
+    current_source = capture_source_identity(config.target_path, outcome.file) if any(
+        support.verification.binding is not None and support.verification.binding.source_identity is not None
+        for support in proposals
+    ) else None
+    supports = []
+    for support in proposals:
+        verification = support.verification
+        mechanism = verification.hypothesis["mechanism"]
+        reason = verification.scope_rejection(
+            file=outcome.file, function=outcome.function, line_start=outcome.line,
+            hypothesis=mechanism, source_identity=current_source,
+        )
+        if reason:
+            outcome.review_result["ihv_gate_blocked"] = reason
+            _record_ihv_scope_rejection(
+                verification, outcome, config, hypothesis=mechanism, reason=reason, current_source=current_source,
+            )
+        else:
+            supports.append(support)
     if tools:
         outcome.review_result["ihv_tools"] = tools
         outcome.review_result["ihv_hypotheses_confirmed"] = len(supports)
@@ -25152,6 +25201,26 @@ def _aggregate_ihv_verdicts(
             gate_block = _ihv_context_gate(
                 candidate, config, joern_server=joern_server, claim=hyp,
             )
+        # Context validation can outlive the producer's snapshot or revise
+        # the proposed claim. Re-admit the original binding before granting
+        # promotion; a rejected handoff leaves other claims eligible.
+        verification = support.verification
+        current_source = capture_source_identity(config.target_path, candidate.file) if (
+            verification.binding is not None and verification.binding.source_identity is not None
+        ) else None
+        reason = verification.scope_rejection(
+            file=candidate.file, function=candidate.function, line_start=candidate.line,
+            hypothesis=candidate.hypothesis, source_identity=current_source,
+        )
+        if reason is None and candidate.review_result.get("hypothesis") != hyp["mechanism"]:
+            reason = "claim-revised"
+        if reason:
+            outcome.review_result["ihv_gate_blocked"] = reason
+            outcome.review_result["ihv_hypotheses_confirmed"] -= 1
+            _record_ihv_scope_rejection(
+                verification, candidate, config, hypothesis=candidate.hypothesis, reason=reason, current_source=current_source,
+            )
+            continue
         if gate_block:
             candidate.review_result["ihv_gate_blocked"] = gate_block
             # A blocked proposal must not relabel an existing verdict
@@ -25186,6 +25255,7 @@ def _aggregate_ihv_verdicts(
         return candidate
 
     if blocked is not None:
+        blocked.review_result["ihv_hypotheses_confirmed"] = outcome.review_result["ihv_hypotheses_confirmed"]
         return blocked
     current_source = capture_source_identity(config.target_path, outcome.file)
     refuted_count = sum(v.refuted and claims_refuted(

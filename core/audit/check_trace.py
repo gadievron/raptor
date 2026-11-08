@@ -83,7 +83,8 @@ def record_source_input_rejection(out_dir, results, *, current_source, requested
     )
 
 
-def record_source_invalidation(out_dir, results, *, source_identity_after, prior_receipts, prior_outcomes) -> None:
+def record_source_invalidation(out_dir, results, *, source_identity_after, prior_receipts, prior_outcomes,
+                               phase="chain_completion") -> None:
     """Retain the source-version withdrawal alongside raw checker results.
 
     This is a file-identity check, not another vulnerability checker. The
@@ -98,6 +99,26 @@ def record_source_invalidation(out_dir, results, *, source_identity_after, prior
             "source_identity_after": asdict(source_identity_after) if source_identity_after else None,
             "prior_receipts": list(prior_receipts),
             "prior_outcomes": [asdict(outcome) for outcome in prior_outcomes],
+            "phase": phase,
+        }),
+    )
+
+
+def record_claim_scope_rejection(out_dir, binding, *, attempted_scope, reason, receipts) -> None:
+    """Retain a rejected handoff without attributing its proof to the consumer.
+
+    The event's scope remains the producer's scope; attempted_scope is only
+    consumer context. A legacy record's missing scope is never backfilled.
+    """
+    from .verification_results import VerificationScope
+
+    reported = binding if binding is not None else VerificationScope("", "", 0, "")
+    record_check_observation(
+        out_dir, reported, tool="claim_binding", verdict="inconclusive",
+        rule_id="claim-scope-rejected", reason=reason,
+        result=SimpleNamespace(outcome="inconclusive", details={
+            "attempted_scope": attempted_scope, "prior_receipts": list(receipts),
+            "producer_scope_recorded": binding is not None,
         }),
     )
 

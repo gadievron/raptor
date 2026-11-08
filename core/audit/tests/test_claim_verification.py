@@ -51,6 +51,7 @@ def aggregate(tmp_path, records, *, status="clean"):
         hypothesis="original primary", review_result={"hypothesis": "original primary", "cwe_class": "CWE-190"},
     )
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
+    config.out_dir.mkdir(exist_ok=True)
     result = orch.OrchestratorResult()
     out = orch._aggregate_ihv_verdicts(
         outcome, result, [r.hypothesis for r in records], records, config,
@@ -246,3 +247,292 @@ def test_critique_boundary_is_advisory_and_idempotent(record):
     assert assessed["refuted"] is False
     assert unverified_critique(assessed) == assessed
     assert assessed.get("defeating_mechanism") == record.get("defeating_mechanism")
+
+
+@pytest.mark.parametrize("edit_stage", ["result_handoff", "context_gate"])
+def test_confirmation_snapshot_must_still_match_when_aggregation_promotes(tmp_path, monkeypatch, edit_stage):
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import ToolChainResult
+
+    path = tmp_path / "record.c"
+    source = "int Read(void) { return 0; }\n"
+    path.write_text(source)
+    initial = capture_source_identity(tmp_path, path.name)
+    config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out", immediate_verify=True)
+    config.out_dir.mkdir()
+    outcome = orch.ReviewOutcome(file=path.name, function="Read", line=1, status="suspicious",
+        body="An unresolved concern.", hypothesis="discarded error",
+        review_result={"hypothesis": "discarded error", "cwe": "CWE-252"})
+    monkeypatch.setattr(orch, "_correlated_mech_detector_tool", lambda *a: None)
+    monkeypatch.setattr(orch, "_gather_library_candidates", lambda *a: [])
+    monkeypatch.setattr(orch, "_get_llm_client", lambda *a: None)
+    monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", lambda *a, **kw: [{"type": "semgrep", "config": {}}])
+    calls = []
+
+    def run_chain(chain, **kwargs):
+        calls.append(kwargs)
+        result = ToolChainResult([STRONG], file=path.name, function="Read", line_start=1,
+                                 hypothesis="discarded error", source_identity=initial)
+        if edit_stage == "result_handoff":
+            path.write_text(source + "// changed after the checker completed\n")
+        return result
+
+    def gate(*args, **kwargs):
+        if edit_stage == "context_gate":
+            path.write_text(source + "// changed during context validation\n")
+        return None
+
+    monkeypatch.setattr(orch, "_run_tool_chain", run_chain)
+    monkeypatch.setattr(orch, "_ihv_context_gate", gate)
+    counts = orch.OrchestratorResult()
+    final = orch._verify_hypotheses_immediate(outcome, config, counts, source=source)
+    assert final.status == "suspicious"
+    assert not final.evidence_tool
+    assert not final.review_result.get("immediate_verified")
+    assert counts.immediate_verified == 0
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("changed", ["unchanged", "file", "function", "occurrence", "hypothesis", "missing_file", "missing_function", "missing_hypothesis"])
+def test_returned_confirmation_cannot_transfer_to_another_claim_occurrence(tmp_path, monkeypatch, changed):
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import ToolChainResult
+
+    source = "int Read() { return 0; }\nint Read(int n) { return n; }\nint Other() { return 0; }\n"
+    (tmp_path / "record.cpp").write_text(source)
+    (tmp_path / "other.cpp").write_text("int Read() { return 0; }\n")
+    config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out", immediate_verify=True)
+    config.out_dir.mkdir()
+    outcome = orch.ReviewOutcome(file="record.cpp", function="Read", line=1, status="suspicious",
+        body="An unresolved concern.", hypothesis="discarded error",
+        review_result={"hypothesis": "discarded error", "cwe": "CWE-252"})
+    bound = {"file": outcome.file, "function": outcome.function, "line_start": outcome.line,
+             "hypothesis": outcome.hypothesis}
+    if changed == "file":
+        bound["file"] = "other.cpp"
+    elif changed == "function":
+        bound.update(function="Other", line_start=3)
+    elif changed == "occurrence":
+        bound["line_start"] = 2
+    elif changed == "hypothesis":
+        bound["hypothesis"] = "a different concern"
+    elif changed.startswith("missing_"):
+        bound[changed.removeprefix("missing_")] = ""
+    receipt = ToolChainResult([STRONG], **bound,
+                              source_identity=capture_source_identity(tmp_path, bound["file"]))
+    monkeypatch.setattr(orch, "_correlated_mech_detector_tool", lambda *a: None)
+    monkeypatch.setattr(orch, "_gather_library_candidates", lambda *a: [])
+    monkeypatch.setattr(orch, "_get_llm_client", lambda *a: None)
+    monkeypatch.setattr(orch, "_hypothesis_to_tool_chain", lambda *a, **kw: [{"type": "semgrep", "config": {}}])
+    monkeypatch.setattr(orch, "_run_tool_chain", lambda *a, **kw: receipt)
+    monkeypatch.setattr(orch, "_ihv_context_gate", lambda *a, **kw: None)
+    counts = orch.OrchestratorResult()
+    final = orch._verify_hypotheses_immediate(outcome, config, counts, source=source)
+    assert final.status == ("finding" if changed == "unchanged" else "suspicious")
+    assert bool(final.review_result.get("immediate_verified")) is (changed == "unchanged")
+    assert counts.immediate_verified == (1 if changed == "unchanged" else 0)
+    assert final.hypothesis == outcome.hypothesis
+
+
+@pytest.mark.parametrize("field,value", [
+    ("file", "other.c"), ("function", "Other"), ("line", 2),
+    ("hypothesis", "revised concern"), ("review_hypothesis", "revised concern"),
+])
+def test_context_gate_cannot_reassign_a_bound_confirmation(tmp_path, monkeypatch, field, value):
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import VerificationScope
+
+    (tmp_path / "record.c").write_text("int Read(void) { return 0; }\n")
+    binding = VerificationScope("record.c", "Read", 0, "discarded error",
+                                capture_source_identity(tmp_path, "record.c"))
+    record = ClaimVerification({"mechanism": "discarded error"}, (STRONG,), binding=binding)
+    reached = []
+
+    def gate(candidate, *args, **kwargs):
+        reached.append(candidate.hypothesis)
+        if field == "review_hypothesis":
+            candidate.review_result["hypothesis"] = value
+        else:
+            setattr(candidate, field, value)
+        return None
+
+    monkeypatch.setattr(orch, "_ihv_context_gate", gate)
+    out, result, _ = aggregate(tmp_path, [record], status="suspicious")
+    assert reached == ["discarded error"]
+    assert out.status == "suspicious" and not out.evidence_tool
+    assert not out.review_result.get("immediate_verified")
+    assert out.hypothesis == "original primary"
+    assert result.immediate_verified == 0
+    assert out.review_result["ihv_hypotheses_confirmed"] == 0
+
+
+def test_rejected_scope_does_not_hide_a_valid_secondary_claim(tmp_path, monkeypatch):
+    from core.audit.verification_results import VerificationScope
+
+    reached = []
+    monkeypatch.setattr(orch, "_ihv_context_gate", lambda candidate, *a, **kw: reached.append(candidate.hypothesis))
+    records = [
+        ClaimVerification({"mechanism": "wrong occurrence"}, (STRONG,),
+                          binding=VerificationScope("record.c", "Read", 9, "wrong occurrence")),
+        ClaimVerification({"mechanism": "local concern"}, (STRONG,),
+                          binding=VerificationScope("record.c", "Read", 0, "local concern")),
+    ]
+    out, result, _ = aggregate(tmp_path, records, status="suspicious")
+    assert reached == ["local concern"]
+    assert out.status == "finding" and out.hypothesis == "local concern"
+    assert result.immediate_verified == 1
+    assert out.review_result["ihv_hypotheses_confirmed"] == 1
+    assert out.review_result["ihv_tools"] == [STRONG, STRONG]
+
+
+@pytest.mark.parametrize("identity_case", ["missing", "changed", "unchanged", "unknown"])
+def test_bound_confirmation_checks_source_availability_without_inventing_identity(tmp_path, identity_case):
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import VerificationScope
+
+    path = tmp_path / "record.c"
+    path.write_text("int Read(void) { return 0; }\n")
+    identity = capture_source_identity(tmp_path, path.name)
+    if identity_case == "missing":
+        path.unlink()
+    elif identity_case == "changed":
+        path.write_text("int Read(void) { return 1; }\n")
+    elif identity_case == "unknown":
+        identity = None
+    record = ClaimVerification({"mechanism": "discarded error"}, (STRONG,),
+        binding=VerificationScope(path.name, "Read", 0, "discarded error", identity))
+    out, result, _ = aggregate(tmp_path, [record], status="suspicious")
+    admitted = identity_case in {"unchanged", "unknown"}
+    assert out.status == ("finding" if admitted else "suspicious")
+    assert result.immediate_verified == int(admitted)
+    assert record.binding.source_identity == identity
+    assert record.receipts == (STRONG,)
+    assert out.review_result["ihv_tools"] == [STRONG]
+
+
+def test_receipt_binding_is_immutable_and_not_reconstructed_from_consumer():
+    from dataclasses import FrozenInstanceError
+    from core.audit.verification_results import ToolChainResult
+
+    result = ToolChainResult([STRONG], file="a.c", function="Read", line_start=2, hypothesis="error")
+    record = ClaimVerification({"mechanism": "error"}, tuple(result), binding=result.binding)
+    with pytest.raises(FrozenInstanceError):
+        record.binding.hypothesis = "other"
+    with pytest.raises(FrozenInstanceError):
+        record.binding = None
+    with pytest.raises(AttributeError):
+        result.scope = ("b.c", "Other", 3, "other")
+    with pytest.raises(AttributeError):
+        result.source_identity = None
+    assert record.binding.scope == ("a.c", "Read", 2, "error")
+
+
+def test_rejection_during_a_later_gate_updates_returned_blocked_counts(tmp_path, monkeypatch):
+    from core.audit.verification_results import VerificationScope
+
+    reached = []
+
+    def gate(candidate, *args, **kwargs):
+        reached.append(candidate.hypothesis)
+        if candidate.hypothesis == "first concern":
+            return "refuting-counter"
+        candidate.hypothesis = "changed concern"
+        return None
+
+    monkeypatch.setattr(orch, "_ihv_context_gate", gate)
+    records = [ClaimVerification({"mechanism": name}, (STRONG,),
+        binding=VerificationScope("record.c", "Read", 0, name)) for name in ("first concern", "second concern")]
+    out, result, _ = aggregate(tmp_path, records, status="suspicious")
+    assert reached == ["first concern", "second concern"]
+    assert out.status == "suspicious" and out.hypothesis == "original primary"
+    assert out.review_result["ihv_hypotheses_confirmed"] == 1
+    assert out.review_result["ihv_gate_blocked"] == "refuting-counter"
+    assert result.immediate_verified == 0
+
+
+def test_admission_source_withdrawal_reaches_normal_json_without_erasing_checker_result(tmp_path):
+    from core.audit.check_trace import record_check_observation
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import ToolChainResult
+    from core.json import load_json
+
+    source = tmp_path / "record.c"
+    source.write_text("int Read(void) { return 0; }\n")
+    initial = capture_source_identity(tmp_path, source.name)
+    checked = ToolChainResult([STRONG], file=source.name, function="Read", line_start=0,
+                              hypothesis="discarded error", source_identity=initial)
+    (tmp_path / "out").mkdir()
+    record_check_observation(tmp_path / "out", checked, tool="semgrep", verdict="confirmed",
+                             rule_id=STRONG.split(":", 1)[1], result=SimpleNamespace(outcome="confirmed"))
+    source.write_text("int Read(void) { return 1; }\n")
+    record = ClaimVerification({"mechanism": "discarded error"}, tuple(checked), binding=checked.binding)
+    out, _, _ = aggregate(tmp_path, [record], status="suspicious")
+    write_graded_findings(export_findings([out]), tmp_path / "out")
+    sidecar = load_json(tmp_path / "out" / "verification-checks.json")
+    checker = next(c for c in sidecar["checks"] if c["tool"] == "semgrep")
+    withdrawal = next(c for c in sidecar["checks"] if c["tool"] == "source_binding")
+    assert checker["outcome"] == "confirmed"
+    assert checker["source_applicability"]["status"] == "invalidated"
+    assert withdrawal["id"] in checker["source_applicability"]["validation_ids"]
+    assert withdrawal["scope"] == checker["scope"]
+    assert withdrawal["result"]["data"]["details"]["phase"] == "claim_admission"
+    assert out.status == "suspicious" and not out.evidence_tool
+
+
+@pytest.mark.parametrize("bound", [True, False])
+def test_rejected_claim_scope_keeps_producer_identity_separate_in_normal_json(tmp_path, bound):
+    from core.audit.findings_export import export_findings, write_graded_findings
+    from core.audit.verification_results import VerificationScope
+    from core.json import load_json
+
+    binding = VerificationScope("other.c", "Other", 8, "producer concern") if bound else None
+    record = ClaimVerification({"mechanism": "consumer concern"}, (STRONG,), binding=binding)
+    out = orch.ReviewOutcome(file="record.c", function="Read", line=1, status="suspicious",
+                            body="Unresolved", hypothesis="consumer concern")
+    cfg = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out")
+    cfg.out_dir.mkdir()
+    if bound:
+        orch._aggregate_ihv_verdicts(out, orch.OrchestratorResult(), [record.hypothesis], [record], cfg)
+    else:
+        # A legacy record can still be rejected for a revised consumer claim;
+        # missing producer scope must remain missing in its diagnostic event.
+        orch._record_ihv_scope_rejection(record, out, cfg, hypothesis="revised concern", reason="claim-revised")
+    write_graded_findings(export_findings([out]), cfg.out_dir)
+    checks = load_json(cfg.out_dir / "verification-checks.json")["checks"]
+    rejected = next(c for c in checks if c["tool"] == "claim_binding")
+    assert rejected["outcome"] == "inconclusive"
+    assert rejected["scope"]["file"] == ("other.c" if bound else "")
+    assert rejected["scope"]["function"] == ("Other" if bound else "")
+    details = rejected["result"]["data"]["details"]
+    assert details["attempted_scope"]["file"] == "record.c"
+    assert details["producer_scope_recorded"] is bound
+    assert details["prior_receipts"] == [STRONG]
+
+
+@pytest.mark.parametrize("source_drift", [False, True])
+def test_failed_rejection_recording_cannot_restore_confirmation(tmp_path, monkeypatch, source_drift):
+    from core.audit import check_trace
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import VerificationScope
+
+    path = tmp_path / "record.c"
+    path.write_text("int Read(void) { return 0; }\n")
+    identity = capture_source_identity(tmp_path, path.name)
+    binding = VerificationScope(path.name, "Read", 0 if source_drift else 9, "discarded error", identity)
+    if source_drift:
+        path.write_text("int Read(void) { return 1; }\n")
+    reached = []
+
+    def unavailable(*args, **kwargs):
+        reached.append(kwargs)
+        raise OSError("owned recording failure")
+
+    seam = "record_source_invalidation" if source_drift else "record_claim_scope_rejection"
+    monkeypatch.setattr(check_trace, seam, unavailable)
+    record = ClaimVerification({"mechanism": "discarded error"}, (STRONG,), binding=binding)
+    out, result, _ = aggregate(tmp_path, [record], status="suspicious")
+    assert len(reached) == 1
+    assert out.status == "suspicious" and not out.evidence_tool
+    assert result.immediate_verified == 0
+    assert out.review_result["ihv_tools"] == [STRONG]

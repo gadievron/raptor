@@ -5,6 +5,9 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from .refutation_source import SourceIdentity
+from .verification_results import VerificationScope
+
 
 def unverified_critique(record: dict[str, Any]) -> dict[str, Any]:
     """Retain a model's objection without granting refutation authority.
@@ -37,17 +40,43 @@ class ClaimVerification:
     _hypothesis: dict[str, Any] = field(repr=False)
     receipts: tuple[str, ...] = ()
     refuted: bool = False
+    binding: VerificationScope | None = None
 
-    def __init__(self, hypothesis: dict[str, Any], receipts: tuple[str, ...] = (), refuted: bool = False):
+    def __init__(self, hypothesis: dict[str, Any], receipts: tuple[str, ...] = (), refuted: bool = False,
+                 *, binding: VerificationScope | None = None):
+        if binding is not None and not isinstance(binding, VerificationScope):
+            raise TypeError("verification binding must be a VerificationScope or None")
         object.__setattr__(self, "_hypothesis", deepcopy(dict(hypothesis)))
         object.__setattr__(self, "receipts", tuple(receipts))
         object.__setattr__(self, "refuted", refuted)
+        object.__setattr__(self, "binding", binding)
         if self.refuted and self.receipts:
             raise ValueError("a refuted claim cannot also carry confirming receipts")
 
     @property
     def hypothesis(self) -> dict[str, Any]:
         return deepcopy(self._hypothesis)
+
+    def scope_rejection(self, *, file, function, line_start, hypothesis, source_identity: SourceIdentity | None) -> str | None:
+        """Return a known binding contradiction, never a proof certificate.
+
+        Legacy unbound receipts gain no scope or freshness guarantee. They
+        retain their existing grading policy until their producers migrate.
+        """
+        if hypothesis != self._hypothesis.get("mechanism"):
+            return "claim-revised"
+        if self.binding is None:
+            return None
+        if not self.binding.has_claim:
+            return "unbound-claim"
+        if not self.binding.matches_claim(file=file, function=function, line_start=line_start, hypothesis=hypothesis):
+            return "claim-scope-mismatch"
+        if self.binding.source_identity is not None:
+            if not isinstance(self.binding.source_identity, SourceIdentity):
+                return "unrecognized-source-identity"
+            if self.binding.source_identity != source_identity:
+                return "source-version-drift"
+        return None
 
 
 @dataclass(frozen=True)
