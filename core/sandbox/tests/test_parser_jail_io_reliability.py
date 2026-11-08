@@ -69,6 +69,8 @@ def test_header_and_payload_share_one_deadline(monkeypatch, frame):
             self.timeout = 1.0
             self.data = jail_mod.FRAME_HEADER.pack(len(payload), frame_id) + payload
             self.receives = 0
+            self.fragment_delay = 0.6
+            self.fragments = 0
 
         def gettimeout(self):
             return self.timeout
@@ -76,17 +78,20 @@ def test_header_and_payload_share_one_deadline(monkeypatch, frame):
         def settimeout(self, value):
             self.timeout = value
 
-        def sendall(self, data):
-            pass
+        def send(self, data):
+            return len(data)
 
         def recv(self, n):
             self.receives += 1
             # Each fragment fits the original socket timeout, but the
             # complete exchange exceeds its one-second budget.
-            if self.timeout < 0.6:
+            if self.timeout < self.fragment_delay:
+                self.fragment_delay -= self.timeout
                 clock[0] += self.timeout
                 raise socket.timeout("injected slow frame")
-            clock[0] += 0.6
+            clock[0] += self.fragment_delay
+            self.fragment_delay = 0.6
+            self.fragments += 1
             result, self.data = self.data[:n], self.data[n:]
             return result
 
@@ -109,7 +114,7 @@ def test_header_and_payload_share_one_deadline(monkeypatch, frame):
         with pytest.raises(OSError, match="round-trip timed out"):
             jail._roundtrip_locked(b"request")
     assert clock[0] == pytest.approx(1.0)
-    assert sock.receives == 2
+    assert sock.fragments == 1
     assert sock.gettimeout() == 1.0
 
 
