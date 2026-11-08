@@ -44,6 +44,9 @@ before = original.copy()
 importlib.import_module(sys.argv[2])
 assert sys.path is original
 assert sys.path == before, (before, sys.path)
+if sys.argv[2] == 'raptor_fuzzing':
+    assert 'packages.autonomous' not in sys.modules
+    assert 'core.llm.providers' not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-I", "-c", code, str(ROOT), module],

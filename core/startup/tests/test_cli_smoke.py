@@ -3,12 +3,11 @@
 Ported from the now-retired ``test/real_tests_fast.sh``. These tests verify
 that the top-level ``raptor.py`` dispatcher and per-mode subparsers reject
 invalid input and accept the documented flags, without actually running
-any analysis. Slow-path commands (``scan``, ``agentic``) are wrapped with
-a short subprocess timeout: argparse rejects unknown flags at startup
-(<100 ms), so a genuine "unrecognized argument" error is captured well
-before the timeout fires; reaching the timeout means argparse accepted
-the flag and the command started doing real work, which is success-
-equivalent for these tests.
+any analysis. Argument probes use the dispatcher's real mode-script map
+and require argparse to reject only a deliberate unknown sentinel. This
+proves the requested flags were parsed and stops before analysis begins.
+Timeouts and startup crashes are failures. Dispatcher lifecycle behavior
+remains covered by the separate entry-point and routing tests.
 
 The fixture-content greps from the original bash script (validating that
 ``test/data/*.py`` contains specific vulnerable patterns) were dropped
@@ -19,6 +18,7 @@ duplicate the existing ``compileall`` step in ``.github/workflows/tests.yml``.
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.processes import reap_on_exit
+from core.testing.standalone_cli import standalone_cli_env
 
 # parents[3] climbs:
 #   [0] core/startup/tests/  (this file's directory)
@@ -37,8 +38,8 @@ from core.testing.processes import reap_on_exit
 REPO_ROOT = Path(__file__).resolve().parents[3]
 RAPTOR_PY = REPO_ROOT / "raptor.py"
 
-# Isolation for the spawned raptor.py children. The timeout-as-success
-# pattern below SIGKILLs children mid-startup, and a killed child never
+# Isolation for the spawned raptor.py children. Cold dispatcher checks can
+# kill children mid-startup, and a killed child never
 # runs its atexit cleanup, so:
 #   - TMPDIR points at a pytest-managed dir — killed-child temp litter
 #     (LLM-dispatcher socket dirs, clone scratch) lands there instead of
@@ -135,24 +136,16 @@ def _child_env() -> dict[str, str]:
     return env
 
 
-def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Invoke ``python raptor.py <args>`` with stdout+stderr captured.
-
-    Timeout kills the child's whole PROCESS GROUP, not just the direct
-    child. ``subprocess.run(timeout=...)`` only kills the immediate
-    process — a raptor.py invocation that got past argparse has already
-    forked real work (scanner subprocesses, agentic children), and
-    those grandchildren survived the kill and kept running full scans
-    against the operator's active project after every suite run.
-    """
-    env = _child_env()
-    cmd = [sys.executable, str(RAPTOR_PY), *args]
+def _run_smoke_command(cmd, *, env, timeout, cwd=None) -> subprocess.CompletedProcess:
+    """Capture and reap the whole owned process group on every exit path."""
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         env=env,
+        cwd=cwd,
         start_new_session=True,
     )
     with reap_on_exit(proc, process_group=True):
@@ -164,26 +157,63 @@ def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProces
             except (ProcessLookupError, PermissionError):
                 proc.kill()
             out, err = proc.communicate()
-            # Preserve subprocess.run's contract: callers distinguish
-            # timeout (argparse accepted, work started) from completion.
+            # Preserve subprocess.run's timeout diagnostics for callers.
             raise subprocess.TimeoutExpired(
                 cmd, timeout, output=out, stderr=err,
             ) from None
         return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
-def _argparse_accepted(*args: str, timeout: float = 3.0) -> bool:
-    """Return True if argparse accepted the given args.
+def _run_raptor(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Invoke the real dispatcher with bounded, group-owned child execution."""
+    return _run_smoke_command(
+        [sys.executable, str(RAPTOR_PY), *args], env=_child_env(), timeout=timeout,
+    )
 
-    Either the process completed without an "unrecognized argument" error,
-    or it ran past the short timeout (meaning argparse passed and the
-    command started doing real work).
-    """
+
+_PARSER_SENTINEL = "--raptor-smoke-parser-sentinel"
+_MODE_BOOTSTRAP = '''
+import runpy
+import sys
+sys.path.insert(0, sys.argv.pop(1))
+from raptor import _mode_help_scripts
+script = _mode_help_scripts()[sys.argv.pop(1)]
+sys.argv[0] = str(script)
+runpy.run_path(str(script), run_name="__main__")
+'''
+
+
+def _run_mode_script(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Run a real mode script with owned state and no dispatcher lifecycle."""
+    with standalone_cli_env(env=_child_env()) as env:
+        # gettext can prefer LANGUAGE over LC_ALL for argparse diagnostics.
+        env.update(LC_ALL="C", LANGUAGE="C")
+        return _run_smoke_command(
+            [sys.executable, "-I", "-c", _MODE_BOOTSTRAP, str(REPO_ROOT),
+             *args],
+            env=env, timeout=timeout, cwd=env["HOME"],
+        )
+
+
+def _run_mode_parser(*args: str, timeout: float = 10.0) -> subprocess.CompletedProcess:
+    """Run the actual mode script, stopping at the unknown sentinel argument."""
+    return _run_mode_script(*args, _PARSER_SENTINEL, timeout=timeout)
+
+
+def _argparse_accepted(*args: str, timeout: float = 10.0) -> bool:
+    """Require completed parsing that rejects exactly the sentinel flag."""
     try:
-        r = _run_raptor(*args, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return True
-    return "unrecognized argument" not in (r.stdout + r.stderr)
+        r = _run_mode_parser(*args, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        print(f"mode parser did not finish: {exc}", file=sys.stderr)
+        return False
+    accepted = r.returncode == 2 and r.stderr.rstrip().endswith(
+        f": error: unrecognized arguments: {_PARSER_SENTINEL}",
+    )
+    if not accepted:
+        print(f"mode parser did not reject only the sentinel (exit {r.returncode}):\n"
+              + (r.stdout + r.stderr)[-4000:], file=sys.stderr)
+    return accepted
 
 
 def test_import_child_environment_is_isolated(monkeypatch):
@@ -381,13 +411,13 @@ def test_fuzz_accepts_autonomous():
 
 
 def test_fuzz_accepts_export_seed_corpus_without_binary(tmp_path):
-    # Absolute tmp destination: --export-seed-corpus completes fast
-    # (it is not timeout-killed like the scan modes), so a relative
-    # path would materialise the corpus into the child's cwd — the
-    # repo root (see _no_tracked_tree_side_effects).
-    assert _argparse_accepted(
-        "fuzz", "--export-seed-corpus", str(tmp_path / "seeds"),
-    )
+    # Exercise the real utility: parser acceptance alone cannot prove that
+    # post-parse validation permits exporting without --binary.
+    destination = tmp_path / "seeds"
+    result = _run_mode_script("fuzz", "--export-seed-corpus", str(destination))
+    assert result.returncode == 0, result.stdout + result.stderr
+    manifest = json.loads((destination / "manifest.json").read_text())
+    assert manifest["seed_count"] > 0
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 import raptor_fuzzing
+from core.testing.module_views import scoped_function_imports
 
 # A built-in corpus seed name (packages.fuzzing.seed_corpus) — exactly
 # the kind of predictable name a planted manifest would claim so that
@@ -99,8 +100,6 @@ def _run_cli(tmp_path: Path, monkeypatch, extra_argv: list[str]) -> Path:
     binary = tmp_path / "target-bin"
     binary.write_bytes(b"\x7fELF-stub")
     out_dir = tmp_path / "run"
-    monkeypatch.setattr(raptor_fuzzing, "AFLRunner", _FakeAFLRunner)
-    monkeypatch.setattr(raptor_fuzzing, "CrashAnalyser", _StopBeforeLLM)
     # SAGE recall is best-effort; keep the test offline and fast.
     monkeypatch.setattr(
         raptor_fuzzing, "recall_context_for_fuzzing_strategy",
@@ -114,8 +113,25 @@ def _run_cli(tmp_path: Path, monkeypatch, extra_argv: list[str]) -> Path:
         "--duration", "1",
         *extra_argv,
     ])
-    with pytest.raises(SystemExit) as excinfo:
-        raptor_fuzzing.main()
+    import packages.fuzzing as fuzzing
+    import packages.binary_analysis as binary_analysis
+
+    caller_main = raptor_fuzzing.main
+    caller_runner = fuzzing.AFLRunner
+    analyser_present = "CrashAnalyser" in vars(binary_analysis)
+    caller_analyser = vars(binary_analysis).get("CrashAnalyser")
+    with scoped_function_imports(raptor_fuzzing, ("main",), {
+        "packages.fuzzing": fuzzing,
+        "packages.binary_analysis": binary_analysis,
+    }) as imports:
+        monkeypatch.setitem(vars(getattr(imports, "packages.fuzzing")), "AFLRunner", _FakeAFLRunner)
+        monkeypatch.setitem(vars(getattr(imports, "packages.binary_analysis")), "CrashAnalyser", _StopBeforeLLM)
+        with pytest.raises(SystemExit) as excinfo:
+            raptor_fuzzing.main()
+    assert raptor_fuzzing.main is caller_main
+    assert fuzzing.AFLRunner is caller_runner
+    assert ("CrashAnalyser" in vars(binary_analysis)) is analyser_present
+    assert vars(binary_analysis).get("CrashAnalyser") is caller_analyser
     # The analyser stub aborts phase 2 -> CLI-boundary exit(1); the
     # witness records were already written by then.
     assert excinfo.value.code == 1

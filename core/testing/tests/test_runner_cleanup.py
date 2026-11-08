@@ -18,6 +18,7 @@ _RUNNERS = [
     "annotations",
     "annotations-session",
     "startup",
+    "startup-parser",
     "probe",
     "protocol",
     "lane",
@@ -28,6 +29,7 @@ _MODULES = {
     "annotations": "core.annotations.tests.test_cli",
     "annotations-session": "core.annotations.tests.test_cli",
     "startup": "core.startup.tests.test_cli_smoke",
+    "startup-parser": "core.startup.tests.test_cli_smoke",
     "probe": "core.sandbox.tests.test_coordinator_isolation",
     "protocol": "core.sandbox.tests.test_coordinator_isolation",
     "lane": "core.sandbox.tests.test_lane_isolation",
@@ -132,6 +134,8 @@ def test_runner_reclaims_process_and_pipes(runner, fault, tmp_path, monkeypatch)
             )
         if runner == "startup":
             return module._run_raptor("--help")
+        if runner == "startup-parser":
+            return module._run_mode_parser("fuzz", "--binary", "/owned")
         if runner == "probe":
             return module._run_probe_via_coordinator("pass")
         if runner == "protocol":
