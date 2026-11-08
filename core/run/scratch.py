@@ -143,8 +143,10 @@ def _reinit_after_fork_in_child() -> None:
     # inherited registrations are cleared: they are the PARENT's
     # scratch, and a child that kept refreshing them would mask the
     # parent's death from the reaper.
-    global _keepalive_lock, _keepalive_thread
+    # The inode advisory mutex has the same inherited-lock hazard.
+    global _keepalive_lock, _keepalive_thread, _inode_warn_lock
     _keepalive_lock = threading.Lock()
+    _inode_warn_lock = threading.Lock()
     _keepalive_paths.clear()
     _keepalive_thread = None
 
