@@ -1,4 +1,4 @@
-"""Both RPC directions enforce the same encoded-byte frame ceiling."""
+"""RPC directions have independent encoded-byte frame ceilings."""
 import json
 import struct
 
@@ -13,6 +13,7 @@ from core.sandbox import _daemon as daemon
 def test_exact_limit_is_writable_and_readable(payload, monkeypatch):
     body = json.dumps(payload).encode('utf-8')
     monkeypatch.setattr(daemon, '_MAX_FRAME_BYTES', len(body))
+    monkeypatch.setattr(daemon, '_MAX_REPLY_FRAME_BYTES', len(body), raising=False)
     written = bytearray()
 
     def write(fd, data):
@@ -37,7 +38,7 @@ def test_exact_limit_is_writable_and_readable(payload, monkeypatch):
 @pytest.mark.parametrize('payload', [{'text': 'plain'}, {'text': '\u2603'}, {'text': '\n'}])
 def test_oversized_write_emits_nothing(payload, monkeypatch):
     body = json.dumps(payload).encode('utf-8')
-    monkeypatch.setattr(daemon, '_MAX_FRAME_BYTES', len(body) - 1)
+    monkeypatch.setattr(daemon, '_MAX_REPLY_FRAME_BYTES', len(body) - 1, raising=False)
     writes = []
     patch_module_attribute(monkeypatch, daemon, "os", 'write', lambda fd, data: writes.append(bytes(data)) or len(data))
     with pytest.raises(ValueError, match='frame too large'):
@@ -58,3 +59,10 @@ def test_oversized_input_rejected_without_reading_body(monkeypatch):
     with pytest.raises(ValueError, match='frame too large'):
         daemon._read_frame(123)
     assert calls == [4]
+
+
+def test_reply_ceiling_matches_parent_and_covers_bounded_capture():
+    from core.sandbox import host
+    assert getattr(daemon, '_MAX_REPLY_FRAME_BYTES', None) == host._MAX_REPLY_FRAME_BYTES
+    assert daemon._MAX_REPLY_FRAME_BYTES >= 4 * daemon._MAX_CAPTURE_BYTES
+    assert daemon._MAX_REPLY_FRAME_BYTES > daemon._MAX_FRAME_BYTES
