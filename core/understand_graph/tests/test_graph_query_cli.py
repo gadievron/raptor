@@ -20,12 +20,14 @@ pins never running in CI.
 
 import json
 import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+
+import pytest
+
 
 # parents[3] = core/understand_graph/tests → … → repo root. Anchor to
 # this file, not $RAPTOR_DIR, so the wrapper resolves within this
@@ -37,6 +39,7 @@ if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import save_json  # noqa: E402
+from core.testing.standalone_cli import run_standalone_cli  # noqa: E402
 from core.understand_graph import ingest_run  # noqa: E402
 
 _ANSI_NAME = "handle\x1b[31m_request\x1b]0;pwned\x07"
@@ -79,8 +82,9 @@ def _seed_hostile_graph(tmp: Path) -> Path:
 
 def _run(*args):
     env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(WRAPPER), *args],
+        data_home=os.environ["XDG_DATA_HOME"],
         capture_output=True, text=True, timeout=60, env=env,
         cwd=str(REPO_ROOT),
     )
@@ -119,6 +123,18 @@ class GraphQueryTerminalEscapeTests(unittest.TestCase):
             # json.dumps default ensure_ascii escapes nothing below
             # 0x20 into raw bytes — the machine lane carries \u escapes.
             self.assertNotIn("\x1b", proc.stdout)
+
+
+@pytest.mark.parametrize("lane", ["--paths", "--threat-context", "--reachable-sinks"])
+def test_hostile_label_lanes_survive_stale_parent_launch(tmp_path, monkeypatch, lane):
+    graph = _seed_hostile_graph(tmp_path)
+    monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
+    proc = _run("--db", str(graph), lane)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip()
+    assert "\x1b" not in proc.stdout
+    assert "\x07" not in proc.stdout
 
 
 def _seed_two_target_graph(tmp: Path) -> tuple[Path, str, str]:
