@@ -462,15 +462,13 @@ def smt_feasibility_fields(
     record: Mapping[str, Any],
     run_dir: Path | str,
 ) -> dict:
-    """The exact attack-path ``smt_feasibility`` fields consumers act
-    on, in MAC form: ``feasible is False`` is the mechanical
-    refutation signal, ``conditions_hash`` pins WHICH condition set
-    the solver ruled on, and the path's finding id binds the verdict
-    to the finding it refutes. The MAC alone cannot tell two paths of
-    the same finding apart, so ``verify_smt_feasibility`` ALSO checks
-    the record's ``conditions_hash`` against
-    :func:`smt_conditions_hash` of the path's own conditions."""
-    return {
+    """Authenticate a diagnostic query, including its assumed profile.
+
+    Legacy stamps retain their historical verification shape. They identify
+    solver-origin predicate observations, never source-refutation evidence.
+    New scoped records additionally bind the profile used for cache identity.
+    """
+    fields = {
         "kind": _SMT_KIND,
         "run": run_binding(run_dir),
         "finding": str(
@@ -478,6 +476,10 @@ def smt_feasibility_fields(
         "feasible": str(record.get("feasible")),
         "conditions_hash": str(record.get("conditions_hash") or ""),
     }
+    if record.get("oracle_scope") == "supplied-predicates":
+        fields.update(oracle_scope="supplied-predicates",
+                      profile=str(record.get("profile") or ""))
+    return fields
 
 
 # ---------------------------------------------------------------------------
@@ -632,6 +634,10 @@ def verify_smt_feasibility(
     if not verify(
         smt_feasibility_fields(path, record, run_dir),
         record.get(PROVENANCE_KEY),
+    ):
+        return False
+    if record.get("oracle_scope") == "supplied-predicates" and (
+        record.get("profile") != (path.get("path_profile") or None)
     ):
         return False
     return (
