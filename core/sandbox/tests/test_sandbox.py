@@ -605,6 +605,34 @@ class TestLandlockEnforcement(unittest.TestCase):
         if not check_landlock_available():
             self.skipTest("Landlock not available")
 
+    def _assert_outside_write_blocked(self, **sandbox_options):
+        # Prove that the host can write this owned inode. The sandbox
+        # must deny access independently of the host filesystem's mode.
+        # Exclude the blanket /tmp grant so a portable temp directory
+        # can serve as a genuine outside-grant target on every host.
+        with TemporaryDirectory(prefix="raptor-denied-write-") as outside:
+            probe = Path(outside) / "probe"
+            probe.write_text("host-owned")
+            program = (
+                "import os,sys\n"
+                "try:\n"
+                " fd=os.open(sys.argv[1], os.O_WRONLY|os.O_TRUNC)\n"
+                "except OSError as exc:\n"
+                " print(exc.errno);sys.exit(1)\n"
+                "else:\n"
+                " os.write(fd,b'changed');os.close(fd)\n"
+            )
+            with sandbox(exclude_tmp_baseline=True, **sandbox_options) as run:
+                result = run(
+                    [os.path.realpath(sys.executable), "-S", "-c", program, str(probe)],
+                    capture_output=True, text=True, timeout=5,
+                )
+            self.assertNotEqual(result.returncode, 0)
+            # EACCES from Landlock, or ENOENT when mount isolation
+            # hides the inode. A host EROFS is not the test's witness.
+            self.assertIn(result.stdout.strip(), ("13", "2"), result.stderr)
+            self.assertEqual(probe.read_text(), "host-owned")
+
     def test_write_to_output_allowed(self):
         """Writes to the output directory succeed."""
         with TemporaryDirectory() as target, TemporaryDirectory() as output:
@@ -628,20 +656,9 @@ class TestLandlockEnforcement(unittest.TestCase):
             self.assertIn("allowed", result.stdout)
 
     def test_write_outside_blocked(self):
-        """Writes outside allowed paths are blocked — either by Landlock
-        (EACCES) or by mount-ns (/var doesn't exist in sandbox root)."""
+        """A host-writable file outside the run's grants remains unchanged."""
         with TemporaryDirectory() as target, TemporaryDirectory() as output:
-            with sandbox(target=target, output=output) as run:
-                result = run(
-                    ["sh", "-c", "echo evil > /var/tmp/sandbox_evil_test 2>&1"],
-                    capture_output=True, text=True, timeout=5,
-                )
-            combined = result.stdout + result.stderr
-            denied = ("Permission denied" in combined
-                      or "Directory nonexistent" in combined
-                      or "No such file" in combined)
-            self.assertTrue(denied,
-                            f"expected EACCES or ENOENT; got {combined!r}")
+            self._assert_outside_write_blocked(target=target, output=output)
 
     def test_relative_output_path_does_not_break_landlock(self):
         """Regression: a relative output= (e.g. 'out/scan_xxx') used to
@@ -689,30 +706,13 @@ class TestLandlockEnforcement(unittest.TestCase):
                 os.chdir(saved_cwd)
 
     def test_output_alone_engages_landlock(self):
-        """Passing only `output` engages filesystem isolation — writes
-        outside fail either via Landlock (EACCES) or mount-ns (path
-        not present in the sandbox root)."""
+        """Output-only filesystem policy denies an ungranted owned inode."""
         with TemporaryDirectory() as output:
-            with sandbox(output=output) as run:
-                result = run(
-                    ["sh", "-c", "echo evil > /var/tmp/sandbox_evil_output_only 2>&1"],
-                    capture_output=True, text=True, timeout=5,
-                )
-            combined = result.stdout + result.stderr
-            denied = ("Permission denied" in combined
-                      or "Directory nonexistent" in combined
-                      or "No such file" in combined)
-            self.assertTrue(denied,
-                            f"expected EACCES or ENOENT; got {combined!r}")
+            self._assert_outside_write_blocked(output=output)
 
     def test_allowed_ports_alone_engages_landlock(self):
-        """Passing only `allowed_tcp_ports` engages Landlock for filesystem too."""
-        with sandbox(allowed_tcp_ports=[443]) as run:
-            result = run(
-                ["sh", "-c", "echo evil > /var/tmp/sandbox_evil_ports_only 2>&1"],
-                capture_output=True, text=True, timeout=5,
-            )
-        self.assertIn("Permission denied", result.stdout + result.stderr)
+        """A TCP-port policy also engages filesystem enforcement."""
+        self._assert_outside_write_blocked(allowed_tcp_ports=[443])
 
 
 class TestPreexecLandlockGate(unittest.TestCase):
