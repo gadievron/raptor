@@ -3259,69 +3259,71 @@ def check_integer_narrowing(
         return IntegerNarrowingResult(reasoning=f"requested function scope {scope.status}")
     fallback_types = None
 
-    for i, line in enumerate(lines):
-        stripped = line.lstrip()
-        if stripped.startswith(("//", "/*")):
+    sites = guards.initializers()
+    if sites is None:
+        # A missing or failed parse retains the existing lexical diagnostic
+        # fallback, without borrowing parsed guards or verification authority.
+        sites = (
+            (m.group(1).strip(), m.group(2), i, m.end(), initializer_text(line[m.end():]))
+            for i, line in enumerate(lines)
+            if not line.lstrip().startswith(("//", "/*"))
+            for m in _NARROWING_ASSIGN_RE.finditer(line)
+        )
+    for dest_type, dest_var, i, column, rhs in sites:
+        if scope is not None and not guards.in_function(i, column, scope):
+            continue
+        dest_width = _type_to_width(dest_type)
+        if not dest_width:
             continue
 
-        for m in _NARROWING_ASSIGN_RE.finditer(line):
-            if scope is not None and not guards.in_function(i, m.end(), scope):
+        bindings = guards.visible_types(i, column)
+        if bindings is None:
+            # Preserve diagnostic leads when syntax is unavailable; this
+            # fallback never earns guard credit or verification authority.
+            if fallback_types is None:
+                fallback_types = {**_extract_param_types(source), **_extract_local_decls(lines)}
+            bindings = fallback_types
+        for src_var, src_type in bindings.items():
+            src_width = _type_to_width(src_type) if src_type else None
+            if not src_width:
                 continue
-            dest_type = m.group(1).strip()
-            dest_var = m.group(2)
-            dest_width = _type_to_width(dest_type)
-            if not dest_width:
+            if src_var == dest_var:
                 continue
-
-            rhs = initializer_text(line[m.end():])
-            bindings = guards.visible_types(i, m.end())
-            if bindings is None:
-                # Preserve diagnostic leads when syntax is unavailable; this
-                # fallback never earns guard credit or verification authority.
-                if fallback_types is None:
-                    fallback_types = {**_extract_param_types(source), **_extract_local_decls(lines)}
-                bindings = fallback_types
-            for src_var, src_type in bindings.items():
-                src_width = _type_to_width(src_type) if src_type else None
-                if not src_width:
+            if src_width <= dest_width:
+                continue
+            if re.search(rf"\b{re.escape(src_var)}\b", rhs):
+                if guards.protects(
+                    src_var, i, column, integer_range(src_type, src_width),
+                    integer_range(dest_type, dest_width), src_type,
+                ):
                     continue
-                if src_var == dest_var:
+                # Grouping preserves a value use; calls and unevaluated
+                # operands need syntax-aware filtering. Reuse the guard
+                # context's bounded parse rather than stripping parentheses.
+                if not guards.may_use_value(src_var, i, column):
                     continue
-                if src_width <= dest_width:
-                    continue
-                if re.search(rf"\b{re.escape(src_var)}\b", rhs):
-                    if guards.protects(
-                        src_var, i, m.end(), integer_range(src_type, src_width),
-                        integer_range(dest_type, dest_width), src_type,
-                    ):
-                        continue
-                    # Grouping preserves a value use; calls and unevaluated
-                    # operands need syntax-aware filtering. Reuse the guard
-                    # context's bounded parse rather than stripping parentheses.
-                    if not guards.may_use_value(src_var, i, m.end()):
-                        continue
 
-                    z3_result = _try_z3_integer_narrowing(
-                        src_var, src_type, dest_type,
-                        src_width, dest_width, i + 1,
-                    )
-                    if z3_result is not None:
-                        return z3_result
+                z3_result = _try_z3_integer_narrowing(
+                    src_var, src_type, dest_type,
+                    src_width, dest_width, i + 1,
+                )
+                if z3_result is not None:
+                    return z3_result
 
-                    return IntegerNarrowingResult(
-                        narrowing_found=True,
-                        source_type=src_type,
-                        dest_type=dest_type,
-                        source_width=src_width,
-                        dest_width=dest_width,
-                        assign_line=i + 1,
-                        reasoning=(
-                            f"'{src_var}' ({src_type}, {src_width}-bit) "
-                            f"narrowed to '{dest_var}' ({dest_type}, "
-                            f"{dest_width}-bit) at line {i + 1} "
-                            f"without bounds check"
-                        ),
-                    )
+                return IntegerNarrowingResult(
+                    narrowing_found=True,
+                    source_type=src_type,
+                    dest_type=dest_type,
+                    source_width=src_width,
+                    dest_width=dest_width,
+                    assign_line=i + 1,
+                    reasoning=(
+                        f"'{src_var}' ({src_type}, {src_width}-bit) "
+                        f"narrowed to '{dest_var}' ({dest_type}, "
+                        f"{dest_width}-bit) at line {i + 1} "
+                        f"without bounds check"
+                    ),
+                )
 
     return IntegerNarrowingResult(
         reasoning="no unchecked integer narrowing found",

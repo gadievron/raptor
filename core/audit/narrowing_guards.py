@@ -341,6 +341,33 @@ class NarrowingGuardContext:
             target = target.parent
         return target
 
+    def initializers(self):
+        """Complete scalar assignment initialisers, or None without syntax.
+
+        Each site carries its type, name, name location and complete value.
+        Character columns preserve the public location helpers' UTF-8 contract.
+        """
+        root = self._load_root()
+        if root is None or root.has_error:
+            return None
+        def sites():
+            for node in _nodes(root):
+                if node.type != "init_declarator" or node.parent.type != "declaration":
+                    continue
+                name = node.child_by_field_name("declarator")
+                value = node.child_by_field_name("value")
+                if (name is None or name.type != "identifier" or value is None
+                        or not any(child.type == "=" for child in node.children)):
+                    continue
+                row, byte_column = name.start_point
+                column = len(self.lines[row].encode("utf-8")[:byte_column].decode("utf-8"))
+                yield (
+                    self._node_source(node.parent.child_by_field_name("type")),
+                    self._node_source(name), row, column, self._node_source(value),
+                )
+
+        return sites()
+
     def visible_types(self, line, column):
         target = self._initializer_at(line, column)
         if target is None:
