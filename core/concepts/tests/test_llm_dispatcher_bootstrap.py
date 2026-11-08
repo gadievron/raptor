@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from core.testing.standalone_cli import run_standalone_cli
+from core.testing.module_views import scoped_function_imports
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 
@@ -113,6 +114,7 @@ class TestSynthesiseCheckerDispatcherBootstrap:
     def test_bootstraps_dispatcher_before_synthesis(
         self, tmp_path, monkeypatch,
     ) -> None:
+        borrowed_client = sys.modules.get("core.llm.client")
         pytest.importorskip("packages.checker_synthesis")
         mod = _load_script(
             RAPTOR_DIR / "libexec" / "raptor-synthesise-checker",
@@ -130,8 +132,8 @@ class TestSynthesiseCheckerDispatcherBootstrap:
             config=SimpleNamespace(
                 primary_model="primary-cfg", fallback_models=[]),
         )
-        import core.llm.client as llm_client
-        monkeypatch.setattr(llm_client, "LLMClient", lambda: fake_client)
+        llm_client = ModuleType("core.llm.client")
+        llm_client.LLMClient = lambda: fake_client
 
         import core.llm.dispatcher.lifecycle as lifecycle
         route_calls: list[tuple] = []
@@ -158,7 +160,11 @@ class TestSynthesiseCheckerDispatcherBootstrap:
             "--no-refine",
             "--json",
         ])
-        assert mod.main() == 0
+        original_main = mod.main
+        with scoped_function_imports(mod, ("main",), {"core.llm.client": llm_client}):
+            assert mod.main() == 0
+        assert mod.main is original_main
+        assert sys.modules.get("core.llm.client") is borrowed_client
         assert len(route_calls) == 1
         configs, label, run_dir = route_calls[0]
         assert label == "raptor-synthesise-checker"
@@ -436,6 +442,7 @@ class TestCompileInvariantsRunDir:
     def test_gate_receives_the_run_output_dir(
         self, tmp_path, monkeypatch,
     ) -> None:
+        borrowed_client = sys.modules.get("core.llm.client")
         mod = _load_script(
             RAPTOR_DIR / "libexec" / "raptor-compile-invariants",
             "raptor_compile_invariants_bootstrap",
@@ -457,8 +464,8 @@ class TestCompileInvariantsRunDir:
         )
 
         client = SimpleNamespace(config=SimpleNamespace())
-        import core.llm.client as llm_client
-        monkeypatch.setattr(llm_client, "LLMClient", lambda **kw: client)
+        llm_client = ModuleType("core.llm.client")
+        llm_client.LLMClient = lambda **kw: client
 
         import core.llm.dispatcher.lifecycle as lifecycle
         calls: list = []
@@ -474,6 +481,10 @@ class TestCompileInvariantsRunDir:
 
         monkeypatch.setattr(
             sys, "argv", ["raptor-compile-invariants", str(out_dir)])
-        assert mod.main() == 0
+        original_main = mod.main
+        with scoped_function_imports(mod, ("main",), {"core.llm.client": llm_client}):
+            assert mod.main() == 0
+        assert mod.main is original_main
+        assert sys.modules.get("core.llm.client") is borrowed_client
         assert calls == [(client, "raptor-compile-invariants",
                           out_dir.resolve())]

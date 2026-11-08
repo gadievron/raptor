@@ -213,7 +213,7 @@ def main() -> int:
         budget = bool(getattr(exc, "budget_exhausted", False))
         if not budget:
             try:
-                from core.llm.client import is_budget_exceeded_error
+                from core.llm.budget_errors import is_budget_exceeded_error
                 budget = is_budget_exceeded_error(exc)
             except ImportError:
                 pass

@@ -833,7 +833,7 @@ def _is_truncation_error(exc: BaseException) -> bool:
     classifiers.
     """
     try:
-        from core.llm.client import _exception_chain
+        from core.llm.budget_errors import _exception_chain
         chain: Any = list(_exception_chain(exc))
     except ImportError:
         chain = [exc]
@@ -3293,7 +3293,7 @@ def _run_one_batch(
         raise _BatchLLMError(msg) from None
     if kind == "err":
         try:
-            from core.llm.client import is_budget_exceeded_error
+            from core.llm.budget_errors import is_budget_exceeded_error
             budget = is_budget_exceeded_error(payload)
         except ImportError:
             budget = False
