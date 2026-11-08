@@ -459,6 +459,19 @@ A no-match from these checks, or from the `popen_fclose` shutdown check, remains
 inconclusive. They cover specific release patterns rather than every ownership
 or resource-shutdown defect.
 
+### String sizes and array parameters
+
+String-size checks review `malloc(strlen(s))` and one-byte `calloc` allocations
+that reach `strcpy`. Direct source or pointer changes end this relationship;
+complex expressions, aliases and callee effects still need capacity review.
+Parenthesised mutations can leave candidates for manual review. Other `calloc`
+element widths require independent size analysis.
+
+The array-parameter check includes variable bounds. `sizeof` on these parameters
+returns pointer width, which can be intentional. Recognised local shadowing
+suppresses parameter matches and may also hide later outer-parameter uses.
+Both checks supply review candidates; an empty result remains inconclusive.
+
 ### Uninitialised returns
 
 `uninitialized_return` reports locals that may be returned without an

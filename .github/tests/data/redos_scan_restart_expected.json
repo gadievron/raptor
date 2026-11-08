@@ -488,20 +488,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/condition_smt.py\u001f_COMPARISON_RE": {
-   "digests": [
-    "c83cc46c9b5d"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/condition_smt.py\u001f_COMPARISON_REV_RE": {
-   "digests": [
-    "3880807f1b2b"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/condition_smt.py\u001f_FREE_RE": {
    "digests": [
     "be592db3fa7b"

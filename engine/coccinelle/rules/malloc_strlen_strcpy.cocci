@@ -1,59 +1,117 @@
-// malloc_strlen_strcpy.cocci — Detect malloc(strlen(s)) followed by
-// strcpy into the allocated buffer.
-//
-// strlen() returns the number of characters EXCLUDING the NUL
-// terminator. strcpy() copies INCLUDING the NUL terminator.
-// malloc(strlen(s)) is therefore one byte too small, causing a
-// one-byte heap overflow on the NUL write.
-//
+// malloc_strlen_strcpy.cocci — Review strlen-sized allocations before strcpy.
+// strlen excludes NUL. malloc(strlen(s)) and calloc with one-byte elements
+// can omit that byte. Other calloc multipliers need independent extent analysis.
+// Direct pointer/source changes end this relationship. Complex expressions,
+// shadowing, opaque aliases, callees and API provenance still need review.
+// A match is a sizing candidate, not proof of a heap overflow.
 // CWE-131: Incorrect Calculation of Buffer Size
-// CWE-122: Heap-based Buffer Overflow
-// Zero-FP: strlen(s) without +1 is always one byte short for strcpy.
-// @role: verification
+// @role: detection
+// raptor: confirm-only
 
-@malloc_strlen@
-expression S;
-expression BUF;
+@malloc_strlen exists@
+expression BUF, SRC;
+constant ONE =~ "^\(1\|0[xX]0*1\|0+1\)[uUlL]*$";
+assignment operator op_buf, op_src, op_byte;
 position p;
 @@
 
-  BUF = \(malloc\|calloc\)(strlen(S)@p, ...);
-  ... when != BUF = ...
-  strcpy(BUF, S);
+(
+  BUF = malloc(strlen(SRC)@p);
+|
+  BUF = calloc(strlen(SRC)@p, ONE);
+|
+  BUF = calloc(ONE, strlen(SRC)@p);
+|
+  BUF = calloc(strlen(SRC)@p, (ONE));
+|
+  BUF = calloc((ONE), strlen(SRC)@p);
+|
+  BUF = calloc(strlen(SRC)@p, sizeof(char));
+|
+  BUF = calloc(sizeof(char), strlen(SRC)@p);
+)
+... when any
+    when != BUF op_buf ...
+    when != &BUF
+    when != BUF++
+    when != ++BUF
+    when != BUF--
+    when != --BUF
+    when != SRC op_src ...
+    when != &SRC
+    when != SRC++
+    when != ++SRC
+    when != SRC--
+    when != --SRC
+    when != SRC[...] op_byte ...
+    when != *SRC op_byte ...
+    when != \(strcpy\|strncpy\|strcat\|strncat\|memcpy\|memmove\|memset\)(SRC, ...)
+  strcpy(BUF, SRC);
 
-@script:python malloc_report depends on malloc_strlen@
+@script:python malloc_strlen_report depends on malloc_strlen@
 p << malloc_strlen.p;
 @@
 import json
 msg = {
-  "rule":  "malloc_strlen_strcpy",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "malloc(strlen(s)) followed by strcpy — off-by-one heap overflow, strlen excludes NUL but strcpy copies it (CWE-131). Use strlen(s) + 1."
+  "rule": "malloc_strlen_strcpy",
+  "file": p[0].file,
+  "line": int(p[0].line),
+  "col": int(p[0].column),
+  "message": "Candidate: strlen-sized allocation reaches strcpy without a recognised source or pointer change; verify capacity, source length and API identity (CWE-131)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
-@malloc_strlen_decl@
-type T;
+@malloc_strlen_decl exists@
 identifier BUF;
-expression S;
+type T;
+expression SRC;
+constant ONE =~ "^\(1\|0[xX]0*1\|0+1\)[uUlL]*$";
+assignment operator op_buf, op_src, op_byte;
 position p;
 @@
 
-  T BUF = \(malloc\|calloc\)(strlen(S)@p, ...);
-  ... when != BUF = ...
-  strcpy(BUF, S);
+(
+  T BUF = malloc(strlen(SRC)@p);
+|
+  T BUF = calloc(strlen(SRC)@p, ONE);
+|
+  T BUF = calloc(ONE, strlen(SRC)@p);
+|
+  T BUF = calloc(strlen(SRC)@p, (ONE));
+|
+  T BUF = calloc((ONE), strlen(SRC)@p);
+|
+  T BUF = calloc(strlen(SRC)@p, sizeof(char));
+|
+  T BUF = calloc(sizeof(char), strlen(SRC)@p);
+)
+... when any
+    when != BUF op_buf ...
+    when != &BUF
+    when != BUF++
+    when != ++BUF
+    when != BUF--
+    when != --BUF
+    when != SRC op_src ...
+    when != &SRC
+    when != SRC++
+    when != ++SRC
+    when != SRC--
+    when != --SRC
+    when != SRC[...] op_byte ...
+    when != *SRC op_byte ...
+    when != \(strcpy\|strncpy\|strcat\|strncat\|memcpy\|memmove\|memset\)(SRC, ...)
+  strcpy(BUF, SRC);
 
-@script:python malloc_report_decl depends on malloc_strlen_decl@
+@script:python malloc_strlen_decl_report depends on malloc_strlen_decl@
 p << malloc_strlen_decl.p;
 @@
 import json
 msg = {
-  "rule":  "malloc_strlen_strcpy",
-  "file":  p[0].file,
-  "line":  int(p[0].line),
-  "col":   int(p[0].column),
-  "message": "malloc(strlen(s)) followed by strcpy — off-by-one heap overflow, strlen excludes NUL but strcpy copies it (CWE-131). Use strlen(s) + 1."
+  "rule": "malloc_strlen_strcpy",
+  "file": p[0].file,
+  "line": int(p[0].line),
+  "col": int(p[0].column),
+  "message": "Candidate: strlen-sized allocation reaches strcpy without a recognised source or pointer change; verify capacity, source length and API identity (CWE-131)."
 }
 print("COCCIRESULT:" + json.dumps(msg))

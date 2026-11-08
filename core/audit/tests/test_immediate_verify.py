@@ -211,6 +211,9 @@ class TestVerifyImmediate:
         pytest.param("free_nonbase_ptr_inc", "free_nonbase_ptr", "invalid free of an offset pointer", "CWE-761", False, id="detection-offset-alias"),
         pytest.param("double_fclose", "double_close", "double close of a stream", "CWE-415", False, id="detection-stream-alias"),
         pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", True, id="verified-stack-alias"),
+        pytest.param("malloc_strlen_strcpy", "malloc_strlen_strcpy", "allocation size excludes the string terminator", "CWE-131", False, id="detection-string-size"),
+        pytest.param("sizeof_array_param", "sizeof_array_param", "sizeof array parameter used as copy extent", "CWE-467", False, id="detection-array-size"),
+        pytest.param("sizeof_array_param_unsized", "sizeof_array_param", "sizeof unsized array parameter used as copy extent", "CWE-467", False, id="detection-unsized-alias"),
         pytest.param("free_stack_array", "free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ])
     def test_prep_phase_correlation_requires_verification_grade(
@@ -251,6 +254,9 @@ class TestVerifyImmediate:
         pytest.param("coccinelle:mmap_free", "mapping pointer passed to free", "CWE-762", id="detection-mapping-release"),
         pytest.param("coccinelle:free_nonbase_ptr_inc", "invalid free of an offset pointer", "CWE-761", id="detection-offset-alias"),
         pytest.param("coccinelle:double_fclose", "double close of a stream", "CWE-415", id="detection-stream-alias"),
+        pytest.param("coccinelle:malloc_strlen_strcpy", "allocation size excludes the string terminator", "CWE-131", id="detection-string-size"),
+        pytest.param("coccinelle:sizeof_array_param", "sizeof array parameter used as copy extent", "CWE-467", id="detection-array-size"),
+        pytest.param("coccinelle:sizeof_array_param_unsized", "sizeof unsized array parameter used as copy extent", "CWE-467", id="detection-unsized-alias"),
     ])
     @patch("core.audit.orchestrator._correlated_mech_detector_tool")
     def test_prep_phase_detection_receipt_cannot_bypass_aggregation(
