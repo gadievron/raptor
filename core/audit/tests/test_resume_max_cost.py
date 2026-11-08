@@ -13,7 +13,6 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
-import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +20,9 @@ from unittest.mock import patch
 import argparse
 
 import pytest
+
+from core.testing.module_registry import module_registry_scope
+from core.testing.standalone_cli import run_standalone_cli
 
 from core.audit.resume import remaining_budget_usd
 
@@ -30,26 +32,20 @@ _SCRIPT = Path(__file__).resolve().parents[3] / "libexec" / "raptor-audit"
 @pytest.fixture(scope="module")
 def audit_cli():
     """Import the raptor-audit script as a module (trust marker set)."""
-    prior = os.environ.get("_RAPTOR_TRUSTED")
-    os.environ["_RAPTOR_TRUSTED"] = "1"
-    try:
-        spec = importlib.util.spec_from_loader(
-            "raptor_audit_cli_max_cost",
-            importlib.machinery.SourceFileLoader(
-                "raptor_audit_cli_max_cost", str(_SCRIPT),
-            ),
-        )
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["raptor_audit_cli_max_cost"] = mod
-        with patch.object(sys, "path", sys.path.copy()):
-            spec.loader.exec_module(mod)
-        yield mod
-    finally:
-        sys.modules.pop("raptor_audit_cli_max_cost", None)
-        if prior is None:
-            os.environ.pop("_RAPTOR_TRUSTED", None)
-        else:
-            os.environ["_RAPTOR_TRUSTED"] = prior
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("_RAPTOR_TRUSTED", "1")
+        with module_registry_scope("raptor_audit_cli_max_cost") as modules:
+            spec = importlib.util.spec_from_loader(
+                "raptor_audit_cli_max_cost",
+                importlib.machinery.SourceFileLoader(
+                    "raptor_audit_cli_max_cost", str(_SCRIPT),
+                ),
+            )
+            mod = importlib.util.module_from_spec(spec)
+            modules["raptor_audit_cli_max_cost"] = mod
+            with patch.object(sys, "path", sys.path.copy()):
+                spec.loader.exec_module(mod)
+            yield mod
 
 
 class TestResumeCostCap:
@@ -121,7 +117,7 @@ class TestResumeParserAcceptsMaxCost:
         # flag would be an argparse refusal (exit 2) before any
         # command logic runs.
         env = dict(os.environ, _RAPTOR_TRUSTED="1")
-        cp = subprocess.run(
+        cp = run_standalone_cli(
             [sys.executable, str(_SCRIPT), "resume", str(tmp_path),
              "--max-cost", "25"],
             capture_output=True, text=True, env=env, timeout=120,
@@ -132,7 +128,7 @@ class TestResumeParserAcceptsMaxCost:
 
     def test_negative_value_refused_at_parse_time(self, tmp_path: Path):
         env = dict(os.environ, _RAPTOR_TRUSTED="1")
-        cp = subprocess.run(
+        cp = run_standalone_cli(
             [sys.executable, str(_SCRIPT), "resume", str(tmp_path),
              "--max-cost", "-3"],
             capture_output=True, text=True, env=env, timeout=120,

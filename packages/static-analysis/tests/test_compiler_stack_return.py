@@ -3,15 +3,24 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
-import sys
 from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 _spec = importlib.util.spec_from_file_location('compiler_stack_tests', Path(__file__).parents[1] / 'compiler_scan.py')
-cs = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = cs
-_spec.loader.exec_module(cs)
+with module_registry_scope(_spec.name) as modules:
+    cs = importlib.util.module_from_spec(_spec)
+    modules[_spec.name] = cs
+    _spec.loader.exec_module(cs)
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope(_spec.name) as modules:
+        modules[_spec.name] = cs
+        yield
+
 
 
 def test_unconfirmed_return_warning_is_not_a_scan_finding(tmp_path, monkeypatch):

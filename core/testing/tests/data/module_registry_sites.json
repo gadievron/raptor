@@ -1,0 +1,132 @@
+{
+  "fixtures": [
+    {
+      "file": "core/audit/tests/test_audit_exit_code.py",
+      "fixture": "audit_cli",
+      "alias": "raptor_audit_cli"
+    },
+    {
+      "file": "core/audit/tests/test_resume_max_cost.py",
+      "fixture": "audit_cli",
+      "alias": "raptor_audit_cli_max_cost"
+    },
+    {
+      "file": "core/audit/tests/test_auto_siblings.py",
+      "fixture": "audit_cli",
+      "alias": "raptor_audit_cli_auto_siblings"
+    },
+    {
+      "file": "core/audit/tests/test_empty_inventory_guard.py",
+      "fixture": "audit_cli",
+      "alias": "raptor_audit_cli_empty_inv"
+    },
+    {
+      "file": ".github/scripts/tests/test_contact_gate.py",
+      "fixture": "cg",
+      "alias": "contact_gate"
+    },
+    {
+      "file": ".github/scripts/tests/test_wsl_verify_live.py",
+      "fixture": "mod",
+      "alias": "wsl_verify_live"
+    },
+    {
+      "file": ".github/tests/test_scan_restart_identity.py",
+      "fixture": "census",
+      "alias": "scan_identity_census"
+    }
+  ],
+  "collection": [
+    {
+      "file": "packages/static-analysis/tests/test_compiler_scan.py",
+      "bindings": [
+        [
+          "_spec.name",
+          "_cs"
+        ]
+      ]
+    },
+    {
+      "file": "packages/static-analysis/tests/test_compiler_overlap.py",
+      "bindings": [
+        [
+          "_spec.name",
+          "cs"
+        ]
+      ]
+    },
+    {
+      "file": "packages/static-analysis/tests/test_compiler_stack_return.py",
+      "bindings": [
+        [
+          "_spec.name",
+          "cs"
+        ]
+      ]
+    },
+    {
+      "file": ".github/tests/test_cargo_notice_inventory.py",
+      "bindings": [
+        [
+          "DEBIAN_SPEC.name",
+          "debian"
+        ],
+        [
+          "SPEC.name",
+          "tool"
+        ]
+      ]
+    },
+    {
+      "file": ".github/tests/test_debian_cargo_notices.py",
+      "bindings": [
+        [
+          "SPEC.name",
+          "tool"
+        ]
+      ]
+    },
+    {
+      "file": ".github/tests/test_report_sbom_licenses.py",
+      "bindings": [
+        [
+          "SPEC.name",
+          "tool"
+        ]
+      ]
+    }
+  ],
+  "scoped_imports": [
+    {
+      "file": ".github/scripts/tests/test_ci_publish_scope.py",
+      "bindings": [
+        [
+          "ci_change_scope",
+          "changes"
+        ],
+        [
+          "dockerhub_scope",
+          "image"
+        ]
+      ]
+    },
+    {
+      "file": ".github/scripts/tests/test_repo_invariant_scope.py",
+      "bindings": [
+        [
+          "repo_invariant_scope",
+          "scope"
+        ]
+      ]
+    },
+    {
+      "file": ".github/scripts/tests/test_update_published_image_docs.py",
+      "bindings": [
+        [
+          "update_published_image_docs",
+          "module"
+        ]
+      ]
+    }
+  ]
+}

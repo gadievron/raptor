@@ -18,18 +18,21 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "wsl_verify_live.py"
 
 
 @pytest.fixture(scope="module")
 def mod():
-    spec = importlib.util.spec_from_file_location("wsl_verify_live",
-                                                  _SCRIPT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    with patch.object(sys, "path", sys.path.copy()):
-        spec.loader.exec_module(module)
-    return module
+    with module_registry_scope("wsl_verify_live") as modules:
+        spec = importlib.util.spec_from_file_location("wsl_verify_live",
+                                                      _SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        modules[spec.name] = module
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(module)
+        yield module
 
 
 def _item(mod, item_id: str, kind: str, probe, section: str = "facts"):

@@ -8,15 +8,27 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 
 from core.testing.module_bindings import patch_module_attribute
 
 
 SCRIPTS = Path(__file__).resolve().parents[1]
-with patch.object(sys, "path", sys.path.copy()), patch.dict(sys.modules):
+with patch.object(sys, "path", sys.path.copy()), module_registry_scope('ci_change_scope', 'dockerhub_scope') as modules:
+    modules.pop('ci_change_scope', None)
+    modules.pop('dockerhub_scope', None)
     sys.path.insert(0, str(SCRIPTS))
     import ci_change_scope as changes
     import dockerhub_scope as image
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope('ci_change_scope', 'dockerhub_scope') as modules:
+        modules['ci_change_scope'] = changes
+        modules['dockerhub_scope'] = image
+        yield
 
 
 def git(repo, *args):

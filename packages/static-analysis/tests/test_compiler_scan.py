@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 # parents[3]: tests/ → static-analysis/ → packages/ → repo root
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if __name__ == "__main__":
@@ -36,11 +38,17 @@ _MODULE_PATH = Path(_REPO_ROOT) / "packages/static-analysis/compiler_scan.py"
 _spec = importlib.util.spec_from_file_location(
     "static_analysis_compiler_scan", _MODULE_PATH,
 )
-_cs = importlib.util.module_from_spec(_spec)
-# sys.modules registration BEFORE exec: the module defines dataclasses,
-# and dataclass processing resolves the defining module via sys.modules.
-sys.modules[_spec.name] = _cs
-_spec.loader.exec_module(_cs)
+with module_registry_scope(_spec.name) as modules:
+    _cs = importlib.util.module_from_spec(_spec)
+    modules[_spec.name] = _cs
+    _spec.loader.exec_module(_cs)
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope(_spec.name) as modules:
+        modules[_spec.name] = _cs
+        yield
+
 
 from core.audit import compiler_sweep
 from core.sarif.parser import merge_sarif
