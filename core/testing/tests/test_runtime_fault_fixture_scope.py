@@ -1651,11 +1651,16 @@ def _snapshots(index, borrowed):
     if row.get("delegate_module"):
         owners.append(importlib.import_module(row["delegate_module"]))
     with pytest.MonkeyPatch.context() as inherited:
-        if borrowed:
-            for owner in owners:
-                original = getattr(owner, row["binding"])
+        for owner in owners:
+            original = getattr(owner, row["binding"])
+            missing = not hasattr(original, row["attribute"]) and row.get("raising", True)
+            if borrowed or missing:
                 view = ModuleType(original.__name__)
                 vars(view).update(vars(original))
+                # Feature presence is fixture input for these ownership checks,
+                # not a requirement that the host supplies Linux-only calls.
+                if missing:
+                    setattr(view, row["attribute"], object())
                 inherited.setitem(vars(owner), row["binding"], view)
         if row.get("cache_fields") and borrowed:
             delegated = owners[-1]
@@ -1770,6 +1775,26 @@ def _exercise(index, borrowed, exit_mode, mock=True):
 @pytest.mark.parametrize("exit_mode", ["normal", "error", "interrupt"])
 def test_native_host_mock_is_owned(index, borrowed, exit_mode):
     _exercise(index, borrowed, exit_mode)
+
+
+@pytest.mark.parametrize("index", [i for i, row in enumerate(_SITES)
+                                   if row["binding"] == "os" and row["attribute"] in {"unshare", "pidfd_open"}])
+@pytest.mark.parametrize("borrowed", [False, True])
+@pytest.mark.parametrize("exit_mode", ["normal", "error", "interrupt"])
+def test_native_mock_owns_absent_platform_attribute(index, borrowed, exit_mode):
+    row = _SITES[index]
+    owner = _consumer(index)
+    original = getattr(owner, row["binding"])
+    view = ModuleType(original.__name__)
+    vars(view).update(vars(original))
+    vars(view).pop(row["attribute"], None)
+    before = dict(vars(view))
+    with pytest.MonkeyPatch.context() as scope:
+        scope.setitem(vars(owner), row["binding"], view)
+        _exercise(index, borrowed, exit_mode)
+        assert getattr(owner, row["binding"]) is view
+        _assert_namespace(view, before)
+    assert getattr(owner, row["binding"]) is original
 
 
 @pytest.mark.parametrize("index", list({row["file"]: index for index, row in enumerate(_SITES)}.values()), ids=lambda index: _SITES[index]["file"])
