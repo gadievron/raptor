@@ -476,9 +476,9 @@ class CalleeCensus:
 # LRU so the prep-phase passes stop re-parsing the same sources.
 
 _PARSE_CACHE_MAX = 256
-_parse_cache: OrderedDict[tuple[str, int, int], tuple[Any, str | None]] = (
-    OrderedDict()
-)
+_parse_cache: OrderedDict[
+    tuple[str, str], tuple[tuple[str, str], tuple[Any, str | None]],
+] = OrderedDict()
 
 
 def parse_source_cached(file_path: str, source: str):
@@ -491,11 +491,22 @@ def parse_source_cached(file_path: str, source: str):
     """
     if not _TS_AVAILABLE:
         return None, None
-    key = (file_path, len(source), hash(source))
-    cached = _parse_cache.get(key)
-    if cached is not None:
-        _parse_cache.move_to_end(key)
-        return cached
+    # Native string keys resolve hash collisions by content equality and
+    # retain references, not copies. Adapters can customise equality, hashing
+    # or encoding; parse them afresh instead of treating their hash as identity.
+    key = (file_path, source) if type(file_path) is str and type(source) is str else None
+    if key is not None:
+        cached = _parse_cache.get(key)
+        if cached is not None:
+            cached_key, result = cached
+            if cached_key[1] is source:
+                _parse_cache.move_to_end(cached_key)
+            else:
+                # Adopt the latest equal input: repeated hits on that object
+                # then use string identity rather than rescan its content.
+                del _parse_cache[cached_key]
+                _parse_cache[key] = (key, result)
+            return result
     from core.inventory.languages import detect_language
     lang = detect_language(file_path)
     parser = _get_parser(lang) if lang else None
@@ -508,9 +519,10 @@ def parse_source_cached(file_path: str, source: str):
         from core.run.gaps import parse_origin
         with parse_origin(file_path):
             result = (parser.parse(src_bytes), lang)  # type: ignore[assignment]
-    if len(_parse_cache) >= _PARSE_CACHE_MAX:
-        _parse_cache.popitem(last=False)
-    _parse_cache[key] = result
+    if key is not None:
+        if len(_parse_cache) >= _PARSE_CACHE_MAX:
+            _parse_cache.popitem(last=False)
+        _parse_cache[key] = (key, result)
     return result
 
 
