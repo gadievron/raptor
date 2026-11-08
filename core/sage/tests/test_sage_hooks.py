@@ -769,7 +769,7 @@ class TestFindingVerdictHooks(unittest.TestCase):
 
     @staticmethod
     def _stamped_verdict_row(
-        verdict="false_positive", src="deadbeef1234", ts=None, tool="smt",
+        verdict="false_positive", src="deadbeef1234", ts=None, tool="codeql:dataflow",
     ):
         """Build a finding-verdict row the way store_finding_verdict does.
 
@@ -813,7 +813,24 @@ class TestFindingVerdictHooks(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["verdict"], "false_positive")
         self.assertEqual(result["source_hash"], "deadbeef1234")
-        self.assertEqual(result["tool"], "smt")
+        self.assertEqual(result["tool"], "codeql:dataflow")
+
+    @patch("core.sage.hooks._get_client")
+    def test_recall_withholds_skip_on_legacy_bare_smt(self, mock_get_client):
+        from core.sage.hooks import recall_prior_finding_verdict
+
+        client = MagicMock()
+        client.query.return_value = [self._stamped_verdict_row(tool="smt")]
+        mock_get_client.return_value = client
+        self.assertIsNone(recall_prior_finding_verdict(
+            "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234"))
+
+    def test_operator_mint_authority_survives_bare_smt_retirement(self):
+        from core.sage.hooks import _skip_receipt_ok
+
+        # This gate runs after the caller verifies all reconstructed fields.
+        self.assertTrue(_skip_receipt_ok(
+            "finding_verdict", "smt", {"tool": "smt", "minted": "operator"}))
 
     @patch("core.sage.hooks._get_client")
     def test_recall_withholds_skip_without_receipt(self, mock_get_client):
@@ -895,7 +912,7 @@ class TestFindingVerdictHooks(unittest.TestCase):
         (the token was minted over more fields)."""
         row = self._stamped_verdict_row()
         clean, token = rowmac.strip(row["content"])
-        row["content"] = f"{clean.replace(' ||tool=smt||', '')} [mac:{token}]"
+        row["content"] = f"{clean.replace(' ||tool=codeql:dataflow||', '')} [mac:{token}]"
         mock_client = MagicMock()
         mock_client.query.return_value = [row]
         mock_get_client.return_value = mock_client
@@ -1157,15 +1174,15 @@ class TestFindingVerdictHooks(unittest.TestCase):
         )
         self.assertTrue(store_finding_verdict(
             "/repo", "CWE-89", "src/db.py", "run_query",
-            "deadbeef1234", "false_positive", evidence_tool="smt"))
+            "deadbeef1234", "false_positive", evidence_tool="smt:check-overflow"))
         content = mock_client.propose.call_args.kwargs["content"]
-        self.assertIn("||tool=smt||", content)
+        self.assertIn("||tool=smt:check-overflow||", content)
         mock_client.query.return_value = [
             {"content": content, "confidence": 0.95}]
         result = recall_prior_finding_verdict(
             "/repo", "CWE-89", "src/db.py", "run_query", "deadbeef1234")
         self.assertIsNotNone(result)
-        self.assertEqual(result["tool"], "smt")
+        self.assertEqual(result["tool"], "smt:check-overflow")
 
     @patch("core.sage.hooks._get_client")
     def test_store_without_receipt_roundtrips_to_hint(self, mock_get_client):
@@ -3292,7 +3309,7 @@ class TestRowMacDemotionPerHook(unittest.TestCase):
             hooks.store_finding_verdict(
                 repo, "CWE-89", "src/db.py", "run_query",
                 "deadbeef1234", "false_positive",
-                evidence_tool="smt",
+                evidence_tool="codeql:dataflow",
             )
 
         def recall_finding(content):

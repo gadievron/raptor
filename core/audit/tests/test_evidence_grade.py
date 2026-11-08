@@ -315,7 +315,7 @@ class TestGradeReviewResult:
         assert any(e.source == EvidenceSource.COCCINELLE for e in items)
 
     def test_evidence_tool_smt(self):
-        items = grade_review_result({}, evidence_tool="smt")
+        items = grade_review_result({}, evidence_tool="smt:check-overflow")
         assert any(e.source == EvidenceSource.SMT for e in items)
 
     def test_evidence_tool_dark_verify_confirmed(self):
@@ -475,7 +475,7 @@ class TestDetectionVariantFirewall:
             assert is_tool_evidence(stamp), stamp
 
     def test_variant_riding_a_receipt_composite_qualifies(self):
-        assert is_tool_evidence("smt+ptr_lifecycle:stale-alias-naming")
+        assert is_tool_evidence("smt:check-overflow+ptr_lifecycle:stale-alias-naming")
         assert is_tool_evidence("fail_open:handler-outcome-naming+coccinelle")
 
     def test_smt_detection_verbs_are_not_tool_evidence(self):
@@ -505,7 +505,6 @@ class TestDetectionVariantFirewall:
         # Verification-role source arithmetic receipts retain their role;
         # supplied guard models are diagnostic even with concrete values.
         for stamp in (
-            "smt",
             "smt:check-overflow",
             "smt:check-overflow:witness",
         ):
@@ -623,7 +622,7 @@ class TestProvenanceWrappers:
     provenance — the inner stamp decides, on its own merits."""
 
     def test_wrapped_tool_qualifies(self):
-        assert is_tool_evidence("clean-refuted:smt")
+        assert not is_tool_evidence("clean-refuted:smt")
         assert is_tool_evidence("clean-refuted:smt:check-overflow")
         assert is_tool_evidence("clean-refuted:semgrep+joern")
 
@@ -1406,3 +1405,33 @@ class TestStampPartOrderClosure:
                 for v in self._scope_violations(scope, "synthetic.py")[0]
             ]
             assert not hits, f"detector over-flags a benign shape:\n{snippet}"
+
+
+@pytest.mark.parametrize("stamp", [
+    "smt", "clean-refuted:smt", "clean-refuted:clean-refuted:smt",
+    "smt+smt:check-oob", "smt+ptr_lifecycle:stale-alias-naming",
+])
+def test_unqualified_smt_receipts_do_not_verify(stamp):
+    assert not is_tool_evidence(stamp)
+    assert not is_verification_evidence(stamp)
+    assert grade_review_result({}, evidence_tool=stamp) == []
+
+
+@pytest.mark.parametrize("stamp", [
+    "smt:check-overflow", "smt:check-array-bounds",
+    "clean-refuted:smt:check-overflow", "smt+codeql:dataflow",
+])
+def test_source_receipts_survive_bare_smt_retirement(stamp):
+    assert is_tool_evidence(stamp)
+    assert is_verification_evidence(stamp)
+    if not stamp.startswith("clean-refuted:"):
+        assert grade_review_result({}, evidence_tool=stamp)
+
+
+def test_unqualified_smt_is_not_classifier_fallback_evidence(monkeypatch):
+    import core.audit.evidence_grade as module
+
+    monkeypatch.setattr(module, "_channel_detection_classifier", lambda _: None)
+    assert not is_tool_evidence("smt")
+    assert not is_tool_evidence("clean-refuted:smt")
+    assert is_tool_evidence("smt:check-overflow")
