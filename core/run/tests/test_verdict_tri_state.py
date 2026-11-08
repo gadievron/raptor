@@ -335,6 +335,17 @@ def _violations_in(path: Path) -> list[str]:
         tree = ast.parse(source)
     except (SyntaxError, UnicodeDecodeError):
         return []
+    # Every rule needs a parsed verdict key or a verdict attribute. Keep
+    # parsing every file: escapes, adjacent literals and NFKC identifiers
+    # can hide these spellings from a source-text filter.
+    keys = {*VERDICT_KEYS, *_GRADED_VERDICT_KEYS, *_BOOL_ALIAS_GET_KEYS}
+    if not any(
+        (isinstance(node, ast.Constant) and isinstance(node.value, str)
+         and node.value in keys)
+        or (isinstance(node, ast.Attribute) and node.attr in VERDICT_KEYS)
+        for node in ast.walk(tree)
+    ):
+        return []
     out = []
 
     def bad(node: ast.AST, why: str) -> None:
@@ -843,3 +854,33 @@ def test_candidate_assignment_keeps_name_bound_checks(tmp_path, binding):
     hits = _violations_in(path)
     assert len(hits) == 1
     assert "name-bound raw verdict read" in hits[0]
+
+
+@pytest.mark.parametrize("source", [
+    "def run(value):\n    return normalize(value)\n",
+    "def run(record):\n    return record.get('unrelated', False)\n",
+    "is_exploitable = True\nresult = record.unrelated\n",
+])
+def test_tree_without_verdict_keys_skips_rule_analysis(tmp_path, monkeypatch, source):
+    def unexpected_rule_analysis(*args):
+        pytest.fail("tree without verdict keys reached rule analysis")
+
+    monkeypatch.setitem(globals(), "_verdict_assignment", unexpected_rule_analysis)
+    path = tmp_path / "unrelated.py"
+    path.write_text(source)
+    assert _violations_in(path) == []
+
+
+@pytest.mark.parametrize("read", [
+    "record.get('is_' 'exploitable')",
+    r"record.get('is_exploitabl\x65')",
+    "record['is_true_positive']",
+    "record.get('exploitable')",
+    "record.get('exploitability')",
+    "SimpleNamespace(**record).is_exploitable",
+    "SimpleNamespace(**record).ｉｓ＿ｅｘｐｌｏｉｔａｂｌｅ",
+])
+def test_parsed_verdict_forms_reach_rule_analysis(tmp_path, read):
+    path = tmp_path / "verdict.py"
+    path.write_text(f"def run(record):\n    if {read}:\n        pass\n")
+    assert len(_violations_in(path)) == 1
