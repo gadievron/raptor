@@ -17,20 +17,15 @@ records, autonomous/ review records.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
 from core.coverage.record import load_records
+from core.coverage.tests.summary_cli_support import REPO_ROOT, run_cli
 from core.coverage.store_summary import (
     coverage_view,
     no_lane_residual,
     store_coverage_threshold_met,
 )
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
 
 _CHECKLIST = {
     "target_path": "/x/target",
@@ -308,22 +303,16 @@ def test_top_level_wins_dedup_over_subdir_unchanged(tmp_path):
 # ------------------------------------------------------- real CLI probe
 
 
-def test_cli_shows_no_review_credit_for_forged_subdir_records(tmp_path):
+def test_cli_shows_no_review_credit_for_forged_subdir_records(tmp_path, monkeypatch):
+    monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-test-authorization")
+    monkeypatch.setenv("RAPTOR_SESSION_PID", "invalid")
+    monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "stale")
     run = _run_dir(tmp_path)
     for tool in ("llm", "journal", "mark"):
         _forge(run, "openant_scan", tool)
-    env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
-    env["RAPTOR_DIR"] = str(REPO_ROOT)
-    r = subprocess.run(
-        [sys.executable, str(CLI), str(run), "--store"],
-        env=env, capture_output=True, text=True,
-    )
+    r = run_cli(str(run), "--store")
     assert r.returncode == 0, r.stderr
     assert "no LLM review:  2" in r.stdout
-    r2 = subprocess.run(
-        [sys.executable, str(CLI), str(run), "--residual"],
-        env=env, capture_output=True, text=True,
-    )
+    r2 = run_cli(str(run), "--residual")
     assert r2.returncode == 0, r2.stderr
     assert "2 item(s) analysed by NO lane" in r2.stdout
