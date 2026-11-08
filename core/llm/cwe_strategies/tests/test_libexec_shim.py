@@ -13,16 +13,23 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SHIM = REPO_ROOT / "libexec" / "raptor-pick-strategies"
 
 
 def _run(*args, env_extra=None):
     env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
+    env.update(
+        _RAPTOR_TRUSTED="1",
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(  # noqa: PLW1510 — exit code asserted by callers
+    return run_standalone_cli(
         [sys.executable, str(SHIM), *args],
         env=env, capture_output=True, text=True,
     )

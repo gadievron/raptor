@@ -9,10 +9,6 @@ raptor-coverage-summary --scanners / --residual wiring.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -25,8 +21,8 @@ from core.coverage.store_summary import (
     scanner_overlay_view,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CLI = REPO_ROOT / "libexec" / "raptor-coverage-summary"
+from core.coverage.tests.summary_cli_support import run_cli as _run_cli
+
 
 @pytest.fixture(autouse=True)
 def _isolated_key(tmp_path, monkeypatch):
@@ -295,16 +291,6 @@ def test_multi_record_sums_state_their_scope(tmp_path):
 
 
 # ------------------------------------------------------------- CLI smoke
-
-
-def _run_cli(*args):
-    env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
-    env["RAPTOR_DIR"] = str(REPO_ROOT)
-    return subprocess.run(
-        [sys.executable, str(CLI), *args],
-        env=env, capture_output=True, text=True,
-    )
 
 
 def test_cli_scanners_view(tmp_path):

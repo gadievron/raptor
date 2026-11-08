@@ -9,6 +9,8 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 # Module-level marker — every test spawns the real
 # libexec/raptor-enrich-flow-trace-ast-view wrapper as a subprocess.
 # Top tests at 11s; opt-in via ``pytest -m integration``.
@@ -24,10 +26,16 @@ WRAPPER = REPO_ROOT / "libexec" / "raptor-enrich-flow-trace-ast-view"
 
 def _run(*args, **kwargs):
     env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-    return subprocess.run(
+    _launch_env = dict(
+        env,
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [str(WRAPPER), *args],
         capture_output=True, text=True, timeout=30,
-        env=env, **kwargs,
+        env=_launch_env, **kwargs,
     )
 
 

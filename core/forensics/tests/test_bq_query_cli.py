@@ -17,12 +17,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-bq-query"
@@ -39,9 +40,15 @@ def _base_env(**extra) -> dict:
 
 
 def _run(args, env=None, stdin=None, timeout=60):
-    return subprocess.run(
+    _launch_env = dict(
+        env if env is not None else _base_env(),
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(WRAPPER), *args],
-        env=env if env is not None else _base_env(),
+        env=_launch_env,
         input=stdin,
         capture_output=True, text=True, timeout=timeout,
         check=False,
