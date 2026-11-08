@@ -52,7 +52,9 @@ and the [package map](docs/developers.md#package-map).
 
 - **`packages/`** — independent security capabilities (scanning, fuzzing,
   CodeQL, SCA, etc.). Each package owns its domain logic, CLI, and tests.
-  Packages import from `core/` only — no cross-package imports.
+  Import shared infrastructure from `core/`; capability composition follows
+  the [layering rules](docs/developers.md#layering-rules), including their
+  limited cross-package exceptions.
 
 - **`libexec/`** — CLI entry points called by the LLM via slash commands.
   These exist so that Claude Code can invoke them as shell commands. Thin
@@ -72,8 +74,9 @@ in new dependencies when an existing module covers it.
 - **LLM calls** go through `core/llm/` — never call provider APIs
   directly. This gives you cost tracking, retries, caching, scorecard,
   and multi-provider support for free.
-- **Subprocess execution** goes through `core/sandbox/` — never use
-  `os.system` or bare `subprocess.run`.
+- **Runtime subprocess execution** goes through `core/sandbox/`. Tests of
+  owned CLI startup use the [test helpers](docs/developers.md#choosing-existing-helpers);
+  testing a sandbox boundary still requires real confinement.
 - **Configuration** goes through `core/config/` — don't invent ad-hoc env
   vars or hardcode values.
 - **Findings** follow the standard schema in `core/models/` — don't invent
@@ -109,7 +112,9 @@ for isolation and cleanup patterns, see
   resources on success and failure. Follow the
   [hermetic test guidelines](docs/developers.md#writing-hermetic-tests),
   including the CLI-loading and randomized-order checks.
-- When testing sandbox behaviour, use the sandbox itself (don't mock it).
+- When testing sandbox behaviour, use the sandbox itself. For other unit
+  tests, stub incidental tool or transport execution at the consumer's seam;
+  see [test boundary checks](docs/developers.md#prove-the-intended-boundary-was-exercised).
 - Gate slow tests (network, LLM, subprocess) with the marker
   doctrine: `@pytest.mark.slow` / `integration` / `corpus` (deselected
   by default via pytest.ini, run by the nightly lanes), or
@@ -145,6 +150,11 @@ Include the [companion checks](docs/developers.md#companion-checks-for-test-chan
 and [audit-record review](docs/developers.md#refactors-and-audit-records) that
 apply to your change, including after a rebase.
 
+Before changing a contract, follow the
+[change-impact workflow](docs/developers.md#before-changing-a-contract).
+Use the [validation selection and handover guidance](docs/developers.md#selecting-checks-and-reporting-results)
+to record what was actually checked, including after rebasing.
+
 See [CI controls](docs/ci-controls.md) for the gate inventory, local commands,
 and baseline review rules.
 
@@ -172,7 +182,10 @@ must follow these conventions:
 
 ## What not to do
 
-- Don't add paths to `sys.path` beyond `os.environ["RAPTOR_DIR"]`.
+- Library imports must leave `sys.path` unchanged. Direct entry points derive
+  their trusted import root from their own resolved file location, following
+  [the entry-point rules](docs/developers.md#layering-rules); do not use an
+  ambient `RAPTOR_DIR` as import authority.
 - Don't hardcode LLM model names — use the config system.
 - Don't commit API keys, server addresses, or internal infrastructure
   details.
