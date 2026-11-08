@@ -4150,6 +4150,7 @@ def review_one_function(
             synthesis_counter=shared.synthesis_counter,
             gap=gap,
             source=ctx.get("source"),
+            source_is_numbered=True,
         )
     elif outcome.status == "finding" and config.sweep_validate_findings:
         outcome = _sweep_validate(
@@ -24841,6 +24842,25 @@ def _refutations_match_current_source(outcome, config=None, *, target_path=None)
                            source_identity=capture_source_identity(target, outcome.file))
 
 
+def _raw_ihv_review_source(source, line_start):
+    """Invert only the exact numbered source view used by review context.
+
+    Unrecognised or empty conversions retain the supplied text so the
+    source-binding gate can reject it; they never become absent input.
+    """
+    if (not isinstance(source, str) or not source or not isinstance(line_start, int)
+            or isinstance(line_start, bool) or line_start < 1):
+        return source
+    from core.source.lines import number_lines, split_lines
+
+    lines = split_lines(source)
+    prefixes = number_lines([""] * len(lines), start_line=max(1, line_start))
+    if not lines or any(not line.startswith(prefix) for line, prefix in zip(lines, prefixes)):
+        return source
+    raw = "\n".join(line[len(prefix):] for line, prefix in zip(lines, prefixes))
+    return raw or source
+
+
 def _verify_hypotheses_immediate(
     outcome: ReviewOutcome,
     config: OrchestratorConfig,
@@ -24853,6 +24873,7 @@ def _verify_hypotheses_immediate(
     synthesis_counter: AtomicSynthesisCounter | None = None,
     gap: dict[str, Any] | None = None,
     source: str | None = None,
+    source_is_numbered: bool = False,
 ) -> ReviewOutcome:
     """Inline hypothesis verification (IHV) — the fast path.
 
@@ -24890,6 +24911,8 @@ def _verify_hypotheses_immediate(
 
     file_path = outcome.file
     function_name = outcome.function
+    if source_is_numbered and not file_path.startswith(BINARY_PATH_PREFIX):
+        source = _raw_ihv_review_source(source, outcome.line)
     cwe = hypotheses[0].get("cwe", "")
     language = _inventory_language_hint(config, file_path)
 
@@ -27443,6 +27466,7 @@ def _deepen_suspicious(
                         synthesis_counter=synthesis_counter,
                         gap=gap,
                         source=gap.get("source") or ctx.get("source"),
+                        source_is_numbered=not bool(gap.get("source")),
                     )
                 elif outcome.status == "finding" and config.sweep_validate_findings:
                     outcome = _sweep_validate(
@@ -34718,6 +34742,7 @@ def _re_review_study_enriched(
                     synthesis_counter=synthesis_counter,
                     gap=gap,
                     source=gap.get("source") or ctx.get("source"),
+                    source_is_numbered=not bool(gap.get("source")),
                 )
             elif outcome.status == "finding" and config.sweep_validate_findings:
                 outcome = _sweep_validate(

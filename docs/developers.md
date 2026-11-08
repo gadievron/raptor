@@ -679,6 +679,12 @@ failed. Fault-injection tests must prove the injected seam was reached.
 Keep stale-source refusal tests alongside admitted-source tests; do not
 bypass admission or weaken confinement to reach a downstream assertion.
 
+Prompt source carries display line numbers. Mechanical consumers must receive
+raw source, with display origins marked explicitly when a conversion is needed.
+Keep source binding after that conversion, and test the full review-to-checker
+path alongside direct checker fixtures. Do not replace stale reviewed text
+with a fresh disk read merely to make admission pass.
+
 ### Reader disclosure is part of the contract
 
 Before changing a shared reader, identify consumers of both its records and
