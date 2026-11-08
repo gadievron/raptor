@@ -175,6 +175,9 @@ def source_mutations(source, variables=None):
     def guard_frame(target):
         from .narrowing_bindings import visible_declarations
 
+        if any(item.type == "call_expression" and not in_unevaluated(item)
+               for item in descendants(target)):
+            return (), "source call requires a bound callee transition model"
         target_declarations = visible_declarations(target, data)
         current = target
         while (
@@ -213,17 +216,12 @@ def source_mutations(source, variables=None):
                         "update_expression",
                         "array_declarator",
                         "abstract_array_declarator",
+                        "call_expression",
                     }:
                         return (), "evaluated guard effects require a value-flow model"
                     if item.type != "identifier":
                         continue
                     name = text(item)
-                    if (
-                        item.parent.type == "call_expression"
-                        and item.parent.child_by_field_name("function") == item
-                        and name in {"min", "max"}
-                    ):
-                        continue
                     declaration = declarations.get(name)
                     if declaration != target_declarations.get(name):
                         return (), "guard name is rebound before the mutation"
@@ -313,14 +311,12 @@ def source_mutations(source, variables=None):
                 record(node, reason="assembly effects require a separate model")
             )
         if node.type == "call_expression":
-            callee = node.child_by_field_name("function")
-            if text(callee) not in {"min", "max"}:
-                effects.append(
-                    record(
-                        node,
-                        reason="call effects require alias or interprocedural reasoning",
-                    )
+            effects.append(
+                record(
+                    node,
+                    reason="call effects require alias or interprocedural reasoning",
                 )
+            )
         if (
             node.type == "pointer_expression"
             and text(node.child_by_field_name("operator")) == "&"

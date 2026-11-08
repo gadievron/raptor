@@ -76,8 +76,7 @@ class TestFindMutationSites:
 
 
 class TestPreservation:
-    def test_reset_needs_a_nonnegative_bound_even_when_other_writes_clamp(self):
-        # Clamping alone does not justify the reset's nonnegative premise.
+    def test_reset_needs_a_nonnegative_bound_and_calls_remain_unresolved(self):
         src = (
             "len = 0;\n"
             "len = min(n, size);\n"
@@ -86,13 +85,10 @@ class TestPreservation:
         assert res.outcome == "inconclusive", res.to_dict()
         # The reset site (len = 0) is preserved in the non-negative
         # regime and carries its negative-operand counterexample as a
-        # receipt; the clamped site is preserved unconditionally.
-        assert all(
-            s.verdict in ("preserved", "preserved_nonneg")
-            for s in res.sites
-        )
+        # receipt; the apparent clamp needs an actual callee model.
+        assert res.sites[0].verdict == "preserved_nonneg"
         clamped = [s for s in res.sites if "min" in s.code]
-        assert clamped and clamped[0].verdict == "preserved"
+        assert clamped and all(s.verdict == "out_of_scope" for s in clamped)
 
     def test_unclamped_increment_is_violable_with_model(self):
         src = "len += n;\n"
@@ -125,7 +121,7 @@ class TestPreservation:
         assert "no mutation sites" in res.reason
 
     def test_sizeof_bound_preserved(self):
-        src = "n = min(n, sizeof(snp));\n"
+        src = "n = sizeof(snp);\n"
         res = check_invariant_preservation("n <= sizeof(snp)", src)
         assert res.outcome == "preserved", res.to_dict()
 
@@ -196,7 +192,7 @@ class TestDispatchWiring:
         )
 
         # A refutation must identify the same source the checker sees.
-        (tmp_path / "a.c").write_text("len = min(n, size);\n")
+        (tmp_path / "a.c").write_text("len = size;\n")
         counters = {"smt_invariant": TierCounters()}
         confirmed = _run_tool_chain(
             [{"type": "smt_invariant",
@@ -204,7 +200,7 @@ class TestDispatchWiring:
             config=OrchestratorConfig(target_path=tmp_path, out_dir=None),
             file_path="a.c",
             function_name="f",
-            source="len = min(n, size);\n",
+            source="len = size;\n",
             hypothesis="len can exceed size",
             tier_counters=counters,
         )
