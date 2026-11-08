@@ -415,15 +415,26 @@ def _merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     output_dir.mkdir(parents=True)
 
     # --- Merge findings ---
+    from core.run.metadata import load_run_metadata
+
     total_findings = 0
     all_keys: set = set()
+    records_by_run = {}
+    origins_by_run = {}
+    metadata_by_run = {}
     for run_dir in run_dirs:
-        findings = _load_findings_from_dir(run_dir)
+        key = str(run_dir)
+        findings = _load_findings_from_dir(run_dir, strict=True)
+        records_by_run[key] = findings
+        origins_by_run[key] = _run_is_imported(run_dir)
+        metadata = load_run_metadata(run_dir)
+        metadata_by_run[key] = metadata if isinstance(metadata, dict) else {}
         total_findings += len(findings)
         for f in findings:
             all_keys.add(_finding_key(f))
 
-    merged = merge_findings(run_dirs)
+    merged = merge_findings(run_dirs, records_by_run=records_by_run,
+                            origins_by_run=origins_by_run)
     unique_count = len(all_keys)
 
     if not verify_merge(merged, total_findings, unique_count):
@@ -458,7 +469,10 @@ def _merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
             suppressed_count,
             write_queue,
         )
-        readj_records = detect_project_contradictions(run_dirs)
+        readj_records = detect_project_contradictions(
+            run_dirs, records_by_run=records_by_run, origins_by_run=origins_by_run,
+            metadata_by_run=metadata_by_run,
+        )
         readjudication_queued = queued_count(readj_records)
         queue_path = write_queue(output_dir, readj_records)
         if readjudication_queued and queue_path is not None:
@@ -480,7 +494,7 @@ def _merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
     # runs afterwards, so without the re-stamp the imported findings'
     # statuses would be laundered into local origin rank permanently
     # for every later fold.
-    imported_sources = [d.name for d in run_dirs if _run_is_imported(d)]
+    imported_sources = [d.name for d in run_dirs if origins_by_run[str(d)]]
     if imported_sources:
         from datetime import datetime, timezone
 
@@ -550,7 +564,7 @@ def _merge_runs(run_dirs: list[Path], output_dir: Path) -> dict[str, Any]:
             source = run_dir / name
             if source.is_file() and not source.is_symlink():
                 copy_file(source, bundle / name)
-        save_json(bundle / "source.json", {"source_run": str(run_dir), "imported": _run_is_imported(run_dir),
+        save_json(bundle / "source.json", {"source_run": str(run_dir), "imported": origins_by_run[str(run_dir)],
                                            "note": "Copied report claims; digests do not authenticate verdicts"})
         artefacts_preserved += 1
     for run_dir in run_dirs:

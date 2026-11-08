@@ -5,6 +5,7 @@ to avoid duplication across diff.py, merge.py, and coverage.
 """
 
 from collections import defaultdict
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -183,7 +184,7 @@ def count_vulns(findings: list[dict[str, Any]]) -> int:
 MAX_FINDINGS_JSON_BYTES = 64 * 1024 * 1024
 
 
-def _load_size_gated_json(path: Path) -> Any | None:
+def _load_size_gated_json(path: Path, *, strict: bool = False) -> Any | None:
     """``load_json`` under the findings-file byte budget.
 
     Returns ``None`` for missing files (matching ``load_json``) and
@@ -196,10 +197,19 @@ def _load_size_gated_json(path: Path) -> Any | None:
     previous name-based pre-gate alone left exactly that window).
     """
     try:
-        size = path.stat().st_size
-    except OSError:
+        info = path.lstat() if strict else path.stat()
+        size = info.st_size
+    except FileNotFoundError:
         return None
+    except OSError:
+        if strict:
+            raise
+        return None
+    if strict and not stat.S_ISREG(info.st_mode):
+        raise ValueError(f"Cannot merge findings from non-regular file: {path}")
     if size > MAX_FINDINGS_JSON_BYTES:
+        if strict:
+            raise ValueError(f"Cannot merge oversized findings file: {path}")
         logger.warning(
             "skipping %s: %d bytes exceeds the %d-byte findings-file "
             "gate — this run's findings are EXCLUDED from every "
@@ -212,7 +222,13 @@ def _load_size_gated_json(path: Path) -> Any | None:
             path, size, MAX_FINDINGS_JSON_BYTES,
         )
         return None
-    return load_json(path, max_bytes=MAX_FINDINGS_JSON_BYTES)
+    try:
+        data = load_json(path, strict=strict, max_bytes=MAX_FINDINGS_JSON_BYTES)
+    except RecursionError as exc:
+        raise ValueError(f"Findings JSON is nested too deeply: {path}") from exc
+    if strict and data is None:
+        raise ValueError(f"Cannot merge missing or null findings file: {path}")
+    return data
 
 
 def findings_from_report_context(report_context) -> list[dict[str, Any]]:
@@ -234,7 +250,32 @@ def findings_from_report_context(report_context) -> list[dict[str, Any]]:
     return rows
 
 
-def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_report=True) -> list[dict[str, Any]]:
+def _finding_rows(data: Any, path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Validate collection shape; tolerant views retain only object rows."""
+    if isinstance(data, dict):
+        # An explicitly empty primary collection is authoritative.
+        if "findings" in data:
+            data = data["findings"]
+        elif "results" in data:
+            data = data["results"]
+        elif not data:
+            data = []  # Legacy empty envelopes.
+    if not isinstance(data, list):
+        message = f"Invalid findings collection in {path}: expected a list"
+        if strict:
+            raise ValueError(message)
+        logger.warning(message)
+        return []
+    rows = [row for row in data if isinstance(row, dict)]
+    if len(rows) != len(data):
+        message = f"Invalid findings rows in {path}: expected objects"
+        if strict:
+            raise ValueError(message)
+        logger.warning(message)
+    return rows
+
+
+def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_report=True, strict: bool = False) -> list[dict[str, Any]]:
     """Load findings list from a run directory's findings.json.
 
     Standalone ``/openant`` runs write their translated findings to
@@ -248,28 +289,40 @@ def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_repor
     render through the same machinery.
 
     Oversized files (see :data:`MAX_FINDINGS_JSON_BYTES`) are skipped
-    with a warning rather than parsed wholesale into memory.
+    with a warning rather than parsed wholesale into memory. With
+    ``strict=True``, refuse unreadable, oversized or malformed artifacts
+    instead of excluding data; destructive merges must use this mode.
     """
-    data = _load_size_gated_json(run_dir / "findings.json")
+    run_dir = Path(run_dir)
+    path = run_dir / "findings.json"
+    data = _load_size_gated_json(path, strict=strict)
     if data is None:
-        data = _load_size_gated_json(run_dir / "openant_findings.json")
+        path = run_dir / "openant_findings.json"
+        data = _load_size_gated_json(path, strict=strict)
     if data is None:
         if not any((run_dir / name).exists() for name in ("findings.json", "openant_findings.json")):
-            if report_context is None and discover_report and (run_dir / "reporting-manifest.json").exists():
+            manifest = run_dir / "reporting-manifest.json"
+            if strict and report_context is None and discover_report:
+                try:
+                    info = manifest.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    if not stat.S_ISREG(info.st_mode):
+                        raise ValueError(f"Cannot merge non-regular reporting manifest: {manifest}")
+            if report_context is None and discover_report and manifest.exists():
                 from core.reporting.writer import load_committed_report
                 try:
                     report_context, _, _ = load_committed_report(run_dir)
                 except (OSError, ValueError, TypeError):
+                    if strict:
+                        raise
                     logger.warning("Committed findings snapshot unavailable in %s", run_dir)
             if report_context is not None:
                 return findings_from_report_context(report_context)
         logger.debug("No findings.json in %s", run_dir)
         return []
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return data.get("findings") or data.get("results") or []
-    return []
+    return _finding_rows(data, path, strict=strict)
 
 
 def oversized_findings_files(run_dir: Path) -> list[Path]:
@@ -320,12 +373,9 @@ def load_sca_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     the findings view opts in explicitly. Oversized files are skipped
     with a warning (same gate as :func:`load_findings_from_dir`).
     """
-    data = _load_size_gated_json(run_dir / "sca" / "findings.json")
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return data.get("findings") or data.get("results") or []
-    return []
+    path = Path(run_dir) / "sca" / "findings.json"
+    data = _load_size_gated_json(path)
+    return [] if data is None else _finding_rows(data, path)
 
 
 def merge_sca_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:
