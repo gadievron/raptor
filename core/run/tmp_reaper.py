@@ -67,6 +67,7 @@ scratch-keepalive ticks clamp to 30 min — see ``_max_age_seconds``).
 
 from __future__ import annotations
 
+from contextlib import closing
 import errno
 import logging
 import math
@@ -685,17 +686,15 @@ def _live_cwds() -> set[str] | None:
 
 def _socket_answers(sock_path: Path) -> bool:
     """True when something still accepts connections on *sock_path*."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        s.settimeout(0.2)
-        s.connect(str(sock_path))
-        return True
-    except OSError as exc:
-        # ECONNREFUSED / ENOENT → dead socket. EACCES or anything else
-        # ambiguous → assume live, err on the side of not reaping.
-        return exc.errno not in (errno.ECONNREFUSED, errno.ENOENT)
-    finally:
-        s.close()
+    from core.source.streams import preserving_stream_error
+    with preserving_stream_error(closing(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))) as stream:
+        try:
+            stream.settimeout(0.2)
+            stream.connect(str(sock_path))
+            return True
+        except OSError as exc:
+            # A refused/missing endpoint is dead; ambiguous errors retain it.
+            return exc.errno not in (errno.ECONNREFUSED, errno.ENOENT)
 
 
 # Bounded deep-scan budget for the internal-activity probe. Hitting the
@@ -707,35 +706,46 @@ _DEEP_SCAN_MAX_ENTRIES = 4096
 
 
 def _recent_activity(path: Path, now: float, max_age: float) -> bool:
-    """Any entry beneath *path* modified within the age floor?
+    """Retain recent or unjudgeable activity under a bounded, lazy scan.
 
-    The top-level mtime freezes at creation for most covered dirs (a
-    git clone scratch, a joern workspace): a live run older than the
-    floor whose tools still write INSIDE the dir must not be reaped on
-    the top-level timestamp alone (keepalive-registered dirs refresh
-    the top level; unregistered ones only show internal activity).
-    Bounded walk — no symlink follow, lstat-only, early exit on the
-    first fresh entry, hard entry cap — so a planted deep tree cannot
-    turn the sweep into a filesystem crawl. Walk errors and the cap
-    both read as activity (fail toward keeping, matching the sweep's
-    never-delete-live posture); a dir over the cap is therefore kept
-    on EVERY sweep, permanently exempt from this reaper.
+    Consume at most one entry beyond the metadata budget, never a whole
+    directory listing before checking it. Do not descend into symlink entries;
+    revalidate directory identities around each scan. Pending directory state
+    is bounded by the same budget, and each iterator closes before descent.
+    Errors, changed identities and exhausted budgets retain the tree.
     """
+    from core.source.streams import preserving_stream_error
     seen = 0
-    def failed_walk(error):
-        raise error  # An incomplete walk cannot establish inactivity.
+    path = Path(path)
     try:
-        for root, dirs, files in os.walk(path, followlinks=False, onerror=failed_walk):
-            for name in dirs + files:
-                seen += 1
-                if seen > _DEEP_SCAN_MAX_ENTRIES:
-                    return True
-                try:
-                    st = os.lstat(os.path.join(root, name))
-                except OSError:
-                    return True
-                if now - st.st_mtime < max_age:
-                    return True
+        initial = os.lstat(path)
+        if not stat.S_ISDIR(initial.st_mode) or not initial.st_ino:
+            return True
+        pending = [(path, (initial.st_dev, initial.st_ino))]
+        while pending:
+            current, expected = pending.pop()
+            observed = os.lstat(current)
+            if (not stat.S_ISDIR(observed.st_mode)
+                    or (observed.st_dev, observed.st_ino) != expected
+                    or now - observed.st_mtime < max_age):
+                return True
+            with preserving_stream_error(os.scandir(current)) as entries:
+                for entry in entries:
+                    seen += 1
+                    if seen > _DEEP_SCAN_MAX_ENTRIES:
+                        return True
+                    info = entry.stat(follow_symlinks=False)
+                    if now - info.st_mtime < max_age:
+                        return True
+                    if stat.S_ISDIR(info.st_mode):
+                        if not info.st_ino:
+                            return True
+                        pending.append((current / entry.name, (info.st_dev, info.st_ino)))
+            observed = os.lstat(current)
+            if (not stat.S_ISDIR(observed.st_mode)
+                    or (observed.st_dev, observed.st_ino) != expected
+                    or now - observed.st_mtime < max_age):
+                return True
     except OSError:
         return True
     return False
@@ -754,18 +764,17 @@ def _dir_in_use(path: Path, live_cwds: set[str] | None) -> bool:
     p = os.path.realpath(path)
     if any(cwd == p or cwd.startswith(p + os.sep) for cwd in live_cwds):
         return True
+    from core.source.streams import preserving_stream_error
     try:
-        entries = list(path.iterdir())
+        with preserving_stream_error(os.scandir(path)) as entries:
+            for entry in entries:
+                mode = entry.stat(follow_symlinks=False).st_mode
+                if stat.S_ISSOCK(mode) and _socket_answers(Path(entry.path)):
+                    return True
     except OSError:
         return True
-    for entry in entries:
-        try:
-            mode = entry.lstat().st_mode
-        except OSError:
-            return True
-        if stat.S_ISSOCK(mode) and _socket_answers(entry):
-            return True
     return False
+
 
 
 # Fixed roots swept IN ADDITION to gettempdir(). Under the launcher,
