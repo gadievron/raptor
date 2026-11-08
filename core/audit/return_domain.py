@@ -38,7 +38,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from core.source.lines import iter_source_lines, split_lines
+from core.source.lines import SourceLineSnapshot, iter_source_lines, split_lines
 from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
@@ -52,8 +52,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SITE_LINES_IMPL = split_lines
-_SITE_TYPE_IMPL = type
 
 # The witness is C-family only: the sentinel idiom under test is the
 # C error-code convention. Other languages have their own fail-open
@@ -430,10 +428,7 @@ def sentinel_comparison_sites(
         logger.debug("return_domain: parse failed for %s", file_path,
                      exc_info=True)
         return []
-    line_split = split_lines
-    lines_pending = (_SITE_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
-                     and line_split is _SITE_LINES_IMPL)
-    lines = [] if lines_pending else split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     sites: list[SentinelSite] = []
     for node in _walk(tree.root_node):
         if node.type != "call_expression":
@@ -451,9 +446,7 @@ def sentinel_comparison_sites(
         comparison = _comparison_of(node)
         if comparison is None or not _on_if_decision_edge(comparison):
             continue
-        if lines_pending:
-            lines = line_split(source)
-            lines_pending = False
+        lines = source_lines.get()
         sites.append(SentinelSite(
             file=file_path,
             line=line,

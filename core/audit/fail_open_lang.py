@@ -79,7 +79,7 @@ from typing import Any
 from typing import TYPE_CHECKING
 
 from core.source.line_index import LineSpanIndex
-from core.source.lines import iter_source_lines, split_lines
+from core.source.lines import SourceLineSnapshot, iter_source_lines, split_lines
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -450,8 +450,9 @@ def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
         logger.debug("fail_open_lang: syntax error in %s", file_path)
         return []
     from .source_view import sanitized_view
-    lines = split_lines(source)
-    view_lines = split_lines(sanitized_view(source, language="python"))
+    source_lines = SourceLineSnapshot(source, split_lines)
+    view_split = split_lines
+    view_lines = SourceLineSnapshot(sanitized_view(source, language="python"), view_split)
     enclosing = (
         _enclosing_function_names(tree, compact=True)
         if _enclosing_function_names is _ENCLOSING_NAMES_IMPL
@@ -480,8 +481,8 @@ def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
                     caught=types,
                     broad=broad,
                     outcome_kind=OUTCOME_PASS,
-                    evidence_snippet=lines[node.lineno - 1].strip()
-                    if node.lineno <= len(lines) else "",
+                    evidence_snippet=source_lines.get()[node.lineno - 1].strip()
+                    if node.lineno <= len(source_lines.get()) else "",
                     parser="ast",
                     enclosing_function=enclosing.get(node.lineno, ""),
                     try_calls=_collect_calls(node.body),
@@ -497,7 +498,7 @@ def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
         try_calls = _collect_calls(node.body)
         for handler in node.handlers:
             outcome_kind, value = _classify_python_handler(
-                handler, view_lines,
+                handler, view_lines.get(),
             )
             types, broad = _exc_types(handler)
             snippet_end = min(
@@ -513,7 +514,7 @@ def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
                 permissive_value=value,
                 evidence_snippet=" ".join(
                     ln.strip()
-                    for ln in lines[handler.lineno - 1:snippet_end]
+                    for ln in source_lines.get()[handler.lineno - 1:snippet_end]
                 ),
                 parser="ast",
                 enclosing_function=enclosing.get(handler.lineno, ""),
@@ -759,10 +760,10 @@ def c_ignored_return_sites(
         try:
             src = source.encode("utf-8", errors="replace")
             tree = parser.parse(src)
-            lines = split_lines(source)
+            source_lines = SourceLineSnapshot(source, split_lines)
             sites = []
             for node in _iter_calls_ts(tree, src, callee, function_span):
-                site = _classify_ignored_return_site(node, src, lines)
+                site = _classify_ignored_return_site(node, src, source_lines.get())
                 site.file = file_path
                 sites.append(site)
             return sites
@@ -945,10 +946,10 @@ def c_tristate_sites(
         try:
             src = source.encode("utf-8", errors="replace")
             tree = parser.parse(src)
-            lines = split_lines(source)
+            source_lines = SourceLineSnapshot(source, split_lines)
             sites = []
             for node in _iter_calls_ts(tree, src, callee, function_span):
-                site = _classify_tristate_site(node, src, lines)
+                site = _classify_tristate_site(node, src, source_lines.get())
                 site.file = file_path
                 sites.append(site)
             return sites
@@ -1251,7 +1252,7 @@ def java_handlers(
         logger.debug("fail_open_lang: java parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _java_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # The walk carries the enclosing-function name down instead of
@@ -1293,7 +1294,7 @@ def java_handlers(
                 outcome_kind=outcome_kind,
                 permissive_value=value,
                 evidence_snippet=" ".join(
-                    ln.strip() for ln in lines[line - 1:snippet_end]
+                    ln.strip() for ln in source_lines.get()[line - 1:snippet_end]
                 ),
                 parser="tree-sitter",
                 enclosing_function=enclosing,
@@ -1530,7 +1531,7 @@ def go_recover_handlers(
         logger.debug("fail_open_lang: go parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _go_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing-function node carried down the walk (per-defer
@@ -1602,7 +1603,7 @@ def go_recover_handlers(
             permissive_value=value,
             evidence_snippet=" ".join(
                 ln.strip()
-                for ln in lines[line - 1:min(len(lines), line + 2)]
+                for ln in source_lines.get()[line - 1:min(len(source_lines.get()), line + 2)]
             ),
             parser="tree-sitter",
             enclosing_function=func_name,
@@ -1757,13 +1758,19 @@ def go_discard_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = split_lines(source)
+        source_lines = SourceLineSnapshot(source, split_lines)
     except Exception:
         logger.debug("fail_open_lang: go discard scan failed for %s",
                      file_path, exc_info=True)
         return None
     sites = []
     for node in _iter_calls_ts(tree, src, callee, function_span):
+        try:
+            lines = source_lines.get()
+        except Exception:
+            logger.debug("fail_open_lang: go discard scan failed for %s",
+                         file_path, exc_info=True)
+            return None
         site = _classify_go_call_site(node, src, lines)
         site.file = file_path
         sites.append(site)
@@ -2123,7 +2130,7 @@ def js_handlers(
         logger.debug("fail_open_lang: %s parse failed for %s",
                      language, file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _js_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing-function name carried down the walk (per-handler
@@ -2164,7 +2171,7 @@ def js_handlers(
                 outcome_kind=outcome_kind,
                 permissive_value=value,
                 evidence_snippet=" ".join(
-                    ln.strip() for ln in lines[line - 1:snippet_end]
+                    ln.strip() for ln in source_lines.get()[line - 1:snippet_end]
                 ),
                 parser="tree-sitter",
                 enclosing_function=enclosing,
@@ -2202,7 +2209,7 @@ def js_handlers(
             permissive_value=value,
             evidence_snippet=" ".join(
                 ln.strip()
-                for ln in lines[line - 1:min(len(lines), line + 2)]
+                for ln in source_lines.get()[line - 1:min(len(source_lines.get()), line + 2)]
             ),
             parser="tree-sitter",
             enclosing_function=enclosing,
@@ -2434,13 +2441,19 @@ def js_unawaited_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = split_lines(source)
+        source_lines = SourceLineSnapshot(source, split_lines)
     except Exception:
         logger.debug("fail_open_lang: js unawaited scan failed for %s",
                      file_path, exc_info=True)
         return None
     sites = []
     for node in _iter_js_calls(tree, src, callee, function_span):
+        try:
+            lines = source_lines.get()
+        except Exception:
+            logger.debug("fail_open_lang: js unawaited scan failed for %s",
+                         file_path, exc_info=True)
+            return None
         site = _classify_js_unawaited_site(node, src, lines)
         site.file = file_path
         sites.append(site)
@@ -2702,13 +2715,19 @@ def rust_discard_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = split_lines(source)
+        source_lines = SourceLineSnapshot(source, split_lines)
     except Exception:
         logger.debug("fail_open_lang: rust discard scan failed for %s",
                      file_path, exc_info=True)
         return None
     sites = []
     for node in _iter_rust_calls(tree, src, callee, function_span):
+        try:
+            lines = source_lines.get()
+        except Exception:
+            logger.debug("fail_open_lang: rust discard scan failed for %s",
+                         file_path, exc_info=True)
+            return None
         site = _classify_rust_call_site(node, src, lines)
         site.file = file_path
         sites.append(site)
@@ -3021,7 +3040,7 @@ def kotlin_handlers(
         logger.debug("fail_open_lang: kotlin parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _kotlin_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing names are carried down the walk (never .parent chains
@@ -3066,7 +3085,7 @@ def kotlin_handlers(
                 outcome_kind=outcome_kind,
                 permissive_value=value,
                 evidence_snippet=" ".join(
-                    ln.strip() for ln in lines[line - 1:snippet_end]
+                    ln.strip() for ln in source_lines.get()[line - 1:snippet_end]
                 ),
                 parser="tree-sitter",
                 enclosing_function=enclosing,
@@ -3468,7 +3487,7 @@ def csharp_handlers(
         logger.debug("fail_open_lang: csharp parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _csharp_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing names carried down the walk (never .parent chains —
@@ -3507,7 +3526,7 @@ def csharp_handlers(
                 outcome_kind=outcome_kind,
                 permissive_value=value,
                 evidence_snippet=" ".join(
-                    ln.strip() for ln in lines[line - 1:snippet_end]
+                    ln.strip() for ln in source_lines.get()[line - 1:snippet_end]
                 ),
                 parser="tree-sitter",
                 enclosing_function=enclosing,
@@ -3902,7 +3921,7 @@ def swift_handlers(
         logger.debug("fail_open_lang: swift parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = split_lines(source)
+    source_lines = SourceLineSnapshot(source, split_lines)
     call_index = _swift_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing names are carried down the walk (never .parent chains
@@ -3947,7 +3966,7 @@ def swift_handlers(
                 outcome_kind=outcome_kind,
                 permissive_value=value,
                 evidence_snippet=" ".join(
-                    ln.strip() for ln in lines[line - 1:snippet_end]
+                    ln.strip() for ln in source_lines.get()[line - 1:snippet_end]
                 ),
                 parser="tree-sitter",
                 enclosing_function=enclosing,
@@ -4364,13 +4383,19 @@ def swift_erasure_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = split_lines(source)
+        source_lines = SourceLineSnapshot(source, split_lines)
     except Exception:
         logger.debug("fail_open_lang: swift erasure scan failed for %s",
                      file_path, exc_info=True)
         return None
     sites = []
     for node in _iter_swift_calls(tree, src, callee, function_span):
+        try:
+            lines = source_lines.get()
+        except Exception:
+            logger.debug("fail_open_lang: swift erasure scan failed for %s",
+                         file_path, exc_info=True)
+            return None
         site = _classify_swift_call_site(node, src, lines)
         site.file = file_path
         sites.append(site)

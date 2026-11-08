@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.audit import fail_open_verify as fv, return_domain as rd
-from core.source.lines import split_lines
+from core.source.lines import SourceLineSnapshot, split_lines
 from core.testing import requires_ts
 from core.testing.module_views import module_function_view
 
@@ -19,11 +19,14 @@ def whole_splits(function, source):
     if sys.getprofile() is not None:
         pytest.skip("profiling hook already owned")
     seen = []
+    preparation_sites = {
+        function.__code__, SourceLineSnapshot.__init__.__code__, SourceLineSnapshot.get.__code__,
+    }
 
     def observe(frame, event, arg):
         if (event == "call" and frame.f_code is split_lines.__code__
                 and frame.f_locals.get("text") is source and frame.f_back is not None
-                and frame.f_back.f_code is function.__code__):
+                and frame.f_back.f_code in preparation_sites):
             seen.append(source)
 
     try:
