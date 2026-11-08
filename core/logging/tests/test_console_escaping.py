@@ -282,11 +282,11 @@ def test_console_sweep_preserves_git_filename_bytes(tmp_path):
     import os
 
     from core.logging.console_audit import _candidates
-    from core.testing.gitrepo import git_run, init_scratch_repo
+    from core.testing.gitrepo import git_run, init_scratch_repo, supports_non_utf8_filenames
 
     repo = init_scratch_repo(tmp_path)
     names = ["space name", "café", "tab\tname", "line\nname", 'quote"name']
-    if os.name == "posix":
+    if os.name == "posix" and supports_non_utf8_filenames(repo):
         names.append(os.fsdecode(b"raw-\xff"))
     expected = {f"core/sample/{name}.py" for name in names}
     excluded = {"core/tests/café.py", "core/logging/line\nname.py",
@@ -302,3 +302,18 @@ def test_console_sweep_preserves_git_filename_bytes(tmp_path):
         assert set(candidates) == expected
         assert len(candidates) == len(expected)
         assert set(runtime_console_offences(repo)) == {f"{rel}:2" for rel in expected}
+
+
+
+def test_console_candidates_decode_raw_git_names_without_creating_them(tmp_path, monkeypatch):
+    import subprocess
+
+    from core.logging import console_audit
+    from core.testing.module_bindings import patch_module_attribute
+
+    raw = b"core/sample/raw-\xff.py\0core/sample/line\nname.py\0"
+    patch_module_attribute(monkeypatch, console_audit, "subprocess", "run",
+                           lambda *a, **kw: subprocess.CompletedProcess(["git"], 0, stdout=raw, stderr=b""))
+    assert console_audit._candidates(tmp_path) == [
+        item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item
+    ]

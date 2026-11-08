@@ -75,12 +75,12 @@ def test_graph_fingerprint_accepts_non_utf8_filenames(tmp_path):
 
 @pytest.mark.parametrize("diff_spec", [None, "HEAD"])
 def test_diff_preserves_changed_filename_bytes(tmp_path, monkeypatch, diff_spec):
-    from core.testing.gitrepo import git_run, init_scratch_repo
+    from core.testing.gitrepo import git_run, init_scratch_repo, supports_non_utf8_filenames
 
     repo = init_scratch_repo(tmp_path)
     names = ["space name.py", "café.py", "line\nname.py", "tab\tname.py",
              'quote"name.py', "trailing-space "]
-    if os.name == "posix":
+    if os.name == "posix" and supports_non_utf8_filenames(repo):
         names.append(os.fsdecode(b"raw-\xff.py"))
     for name in names:
         (repo / name).write_text("before = 1\n")
@@ -219,3 +219,17 @@ def test_overflowing_duration_total_disables_estimates(tmp_path, second):
 def test_invalid_utf8_duration_data_disables_estimates(tmp_path):
     (tmp_path / '.test_durations').write_bytes(b'\xff')
     assert test_impact._load_test_durations(tmp_path) is None
+
+
+
+def test_changed_paths_decode_raw_git_names_without_creating_them(monkeypatch):
+    import subprocess
+
+    from core.testing.module_bindings import patch_module_attribute
+
+    raw = b"raw-\xff.py\0line\nname.py\0"
+    patch_module_attribute(monkeypatch, test_impact, "subprocess", "run",
+                           lambda *a, **kw: subprocess.CompletedProcess(["git"], 0, stdout=raw, stderr=b""))
+    assert test_impact.get_changed_files_from_diff("HEAD") == [
+        item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item
+    ]
