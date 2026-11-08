@@ -1945,7 +1945,7 @@ class TestRefutedHypothesisDispatch:
 class TestSweepValidateDetectionFilter:
     """Detection-role tools must not stamp evidence in _sweep_validate."""
 
-    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close"])
+    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free"])
     def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch, rule_name):
         from core.audit.orchestrator import (
             OrchestratorConfig,
@@ -2875,3 +2875,39 @@ def _owned_codeql_pack_discovery():
         ))
         patch.setattr(resolver, "_pack_roots", lambda pack: [])
         yield
+
+
+class TestCoccinelleConfirmOnlyHeaders:
+    @pytest.mark.parametrize("text,expected", [
+        ("// raptor: confirm-only\n@r@\n", True),
+        ("\ufeff// heading\n\n// raptor: confirm-only\n@r@\n", True),
+        ("// raptor: confirm-only-extra\n@r@\n", False),
+        ("// raptor:  confirm-only\n@r@\n", False),
+        ("@r@\n// raptor: confirm-only\n", False),
+        ('@script:python@\n@@\ntext = "// raptor: confirm-only"\n', False),
+        ("# other-language comment\n// raptor: confirm-only\n", False),
+    ])
+    def test_only_exact_leading_curated_headers_activate(self, tmp_path, monkeypatch, text, expected):
+        from core.audit import sweep
+
+        curated = tmp_path / "rules"
+        curated.mkdir()
+        rule = curated / "check.cocci"
+        rule.write_text(text)
+        monkeypatch.setattr(sweep, "_CURATED_COCCINELLE_RULES_DIR", curated)
+        monkeypatch.setattr(sweep, "_RULE_MARKER_CACHE", {})
+        assert sweep.is_confirm_only_coccinelle_rule(str(rule)) is expected
+
+    def test_dynamic_rules_cannot_opt_out_or_escape_through_symlinks(self, tmp_path, monkeypatch):
+        from core.audit import sweep
+
+        curated = tmp_path / "rules"
+        curated.mkdir()
+        dynamic = tmp_path / "hypothesis.cocci"
+        dynamic.write_text("// raptor: confirm-only\n@r@\n")
+        link = curated / "escape.cocci"
+        link.symlink_to(dynamic)
+        monkeypatch.setattr(sweep, "_CURATED_COCCINELLE_RULES_DIR", curated)
+        monkeypatch.setattr(sweep, "_RULE_MARKER_CACHE", {})
+        assert not sweep.is_confirm_only_coccinelle_rule(str(dynamic))
+        assert not sweep.is_confirm_only_coccinelle_rule(str(link))
