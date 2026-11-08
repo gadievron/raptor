@@ -16,14 +16,21 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-annotate"
 
 
 def _run(args: list[str], timeout: int = 30) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    env.update(
+        _RAPTOR_TRUSTED="1",
+        _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+        RAPTOR_SESSION_PID="invalid",
+        RAPTOR_SESSION_TOKEN="stale",
+    )
+    return run_standalone_cli(
         [sys.executable, str(CLI), *args],
         env=env,
         capture_output=True,
