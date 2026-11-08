@@ -66,6 +66,7 @@ import ast
 import ctypes
 import errno
 import json
+import math
 import os
 import re
 import select
@@ -502,6 +503,70 @@ def _render_compose(chunks, recvs):
     return bytes(out)
 
 
+def _target_ready(readers, writers, remaining):
+    """Poll owned target pipes without select()'s descriptor-number limit.
+
+    This daemon is shipped as a standalone script inside the sandbox, so
+    it cannot import the parent's package-level readiness helper.
+    """
+    masks = {fd: select.POLLIN for fd in readers}
+    for fd in writers:
+        masks[fd] = masks.get(fd, 0) | select.POLLOUT
+    if not masks:
+        return [], []
+    poller = select.poll()
+    for fd, mask in masks.items():
+        poller.register(fd, mask)
+    milliseconds = max(0, math.ceil(min(remaining, 2147483.647) * 1000))
+    events = dict(poller.poll(milliseconds))
+    terminal = select.POLLHUP | select.POLLERR | select.POLLNVAL
+    return ([fd for fd in readers if events.get(fd, 0) & (select.POLLIN | terminal)],
+            [fd for fd in writers if events.get(fd, 0) & (select.POLLOUT | terminal)])
+
+
+def _target_read(fd, size):
+    try:
+        return os.read(fd, size)
+    except (BlockingIOError, InterruptedError):
+        return None
+
+
+class _StepStderr:
+    """Bounded stderr retained across interactive sends and receives.
+
+    Draining stderr is necessary even when the current step wants only
+    stdout: a child may fill stderr before reading stdin or replying.
+    The final communication consumes this prefix and its loss flag once.
+    """
+
+    def __init__(self, proc):
+        stream = proc.stderr
+        self.fd = stream.fileno() if stream is not None and not stream.closed else None
+        self.data = bytearray()
+        self.truncated = False
+        if self.fd is not None:
+            os.set_blocking(self.fd, False)
+
+    def drain(self):
+        chunk = _target_read(self.fd, 65536)
+        if chunk is None:
+            return
+        if not chunk:
+            self.fd = None
+            return
+        room = max(0, _MAX_CAPTURE_BYTES - len(self.data))
+        self.data.extend(chunk[:room])
+        self.truncated |= len(chunk) > room
+
+
+def _step_stderr(proc):
+    state = getattr(proc, "_daemon_step_stderr", None)
+    if state is None:
+        state = _StepStderr(proc)
+        proc._daemon_step_stderr = state
+    return state
+
+
 def _recv_until(proc, terminator, per_recv_timeout: float,
                 max_bytes: int | None = None,
                 pushback: bytearray | None = None) -> bytes:
@@ -516,30 +581,31 @@ def _recv_until(proc, terminator, per_recv_timeout: float,
     the bytearray for the next step or the end-of-request drain."""
     cap = _MAX_CAPTURE_BYTES if max_bytes is None else max(max_bytes, 0)
     deadline = time.monotonic() + per_recv_timeout
-    buf = b""
+    buf = bytearray()
     fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
+    stderr = _step_stderr(proc)
 
     def _read_bounded(max_chunk: int) -> bytes | None:
         if pushback:
             chunk = bytes(pushback[:max_chunk])
             del pushback[:max_chunk]
             return chunk
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return None
-        r, _, _ = select.select([fd], [], [], remaining)
-        if not r:
-            return None
-        # Read the raw fd directly. Popen's default-buffered
-        # ``proc.stdout.read1`` pulls a full buffer (8 KiB) from the
-        # kernel and returns at most ``max_chunk`` — the remainder sits
-        # in the Python-level buffer where select() on the raw fd
-        # cannot see it, so the next bounded read stalls a full
-        # ``per_recv_timeout`` (or attributes the bytes to the wrong
-        # step). Nothing else reads through ``proc.stdout`` until the
-        # final end-of-request drain (also raw-fd), so its buffer
-        # stays empty and mixing fd-level reads here is safe.
-        return os.read(fd, max_chunk)
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            readers = [fd] + ([stderr.fd] if stderr.fd is not None else [])
+            try:
+                ready, _ = _target_ready(readers, [], remaining)
+            except InterruptedError:
+                continue
+            if stderr.fd in ready:
+                stderr.drain()
+            if fd in ready:
+                chunk = _target_read(fd, max_chunk)
+                if chunk is not None:
+                    return chunk
 
     if isinstance(terminator, int):
         want = min(terminator, cap)
@@ -547,21 +613,21 @@ def _recv_until(proc, terminator, per_recv_timeout: float,
             chunk = _read_bounded(want - len(buf))
             if chunk is None or not chunk:
                 break
-            buf += chunk
-        return buf
+            buf.extend(chunk)
+        return bytes(buf)
     if terminator == "newline":
         while b"\n" not in buf and len(buf) < cap:
             chunk = _read_bounded(min(4096, cap - len(buf)))
             if chunk is None or not chunk:
                 break
-            buf += chunk
-        return buf
+            buf.extend(chunk)
+        return bytes(buf)
     while len(buf) < cap:
         chunk = _read_bounded(min(4096, cap - len(buf)))
         if chunk is None or not chunk:
             break
-        buf += chunk
-    return buf
+        buf.extend(chunk)
+    return bytes(buf)
 
 
 def _communicate_capped(
@@ -605,7 +671,18 @@ def _communicate_capped(
             bufs[fd] = bytearray()
             caps[fd] = max(cap, 0)
             trunc[fd] = False
+    step_stderr = getattr(proc, "_daemon_step_stderr", None)
+    if step_stderr is not None and err_fd is not None:
+        prefix = bytes(step_stderr.data)
+        bufs[err_fd].extend(prefix[:caps[err_fd]])
+        trunc[err_fd] = step_stderr.truncated or len(prefix) > caps[err_fd]
+        step_stderr.data.clear()
+        step_stderr.truncated = False
     pending = set(bufs)
+    if step_stderr is not None and step_stderr.fd is None:
+        pending.discard(err_fd)
+    for fd in pending:
+        os.set_blocking(fd, False)
 
     def _got(fd: int | None) -> bytes:
         return bytes(bufs[fd]) if fd is not None else b""
@@ -648,11 +725,14 @@ def _communicate_capped(
         if remaining <= 0:
             raise _timeout_exc()
         wlist = [in_file.fileno()] if in_file is not None else []
-        r, w, _ = select.select(list(pending), wlist, [], remaining)
-        if not r and not w:
-            raise _timeout_exc()
+        try:
+            r, w = _target_ready(list(pending), wlist, remaining)
+        except InterruptedError:
+            continue
         for fd in r:
-            chunk = os.read(fd, 65536)
+            chunk = _target_read(fd, 65536)
+            if chunk is None:
+                continue
             if not chunk:
                 pending.discard(fd)
                 continue
@@ -664,10 +744,14 @@ def _communicate_capped(
         if w:
             try:
                 n = os.write(in_file.fileno(), view[:65536])  # type: ignore[union-attr]
+                if n <= 0:
+                    raise OSError(errno.EIO, "target stdin made no progress")
                 view = view[n:]
-            except BlockingIOError:
+            except (BlockingIOError, InterruptedError):
                 pass
-            except (BrokenPipeError, OSError):
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.EINVAL):
+                    raise
                 view = view[:0]
             if not view:
                 _close_stdin()
@@ -745,6 +829,9 @@ def _send_capped(
     out_fd = None
     if proc.stdout is not None and not proc.stdout.closed:
         out_fd = proc.stdout.fileno()
+    if out_fd is not None:
+        os.set_blocking(out_fd, False)
+    stderr = _step_stderr(proc)
     os.set_blocking(in_fd, False)
     view = memoryview(data)
     deadline = time.monotonic() + timeout
@@ -753,12 +840,19 @@ def _send_capped(
         if remaining <= 0:
             break
         rlist = [out_fd] if out_fd is not None else []
-        r, w, _ = select.select(rlist, [in_fd], [], remaining)
-        if not r and not w:
-            break
-        if r:
-            chunk = os.read(out_fd, 65536)  # type: ignore[arg-type]
-            if not chunk:
+        if stderr.fd is not None:
+            rlist.append(stderr.fd)
+        try:
+            r, w = _target_ready(rlist, [in_fd], remaining)
+        except InterruptedError:
+            continue
+        if stderr.fd in r:
+            stderr.drain()
+        if out_fd in r:
+            chunk = _target_read(out_fd, 65536)
+            if chunk is None:
+                pass
+            elif not chunk:
                 # stdout EOF — stop watching it so a closed pipe
                 # doesn't spin the select loop.
                 out_fd = None
@@ -771,10 +865,14 @@ def _send_capped(
         if w:
             try:
                 n = os.write(in_fd, view[:65536])
+                if n <= 0:
+                    raise OSError(errno.EIO, "target stdin made no progress")
                 view = view[n:]
-            except BlockingIOError:
+            except (BlockingIOError, InterruptedError):
                 pass
-            except (BrokenPipeError, OSError):
+            except OSError as exc:
+                if exc.errno not in (errno.EPIPE, errno.EINVAL):
+                    raise
                 break
     return bytes(drained), truncated, len(view)
 
@@ -794,25 +892,30 @@ def _drain_target(
             proc, b"", wait_seconds, stdout_cap=stdout_cap,
         )
         return out, err, ot, et, False
-    except subprocess.TimeoutExpired as e:
-        _kill_request_group(proc)
-        out = e.stdout or b""
-        err = e.stderr or b""
-        ot = bool(getattr(e, "stdout_truncated", False))
-        et = bool(getattr(e, "stderr_truncated", False))
-        try:
-            t_out, t_err, t_ot, t_et = _communicate_capped(
-                proc, b"", 1.0,
-                stdout_cap=max(stdout_cap - len(out), 0),
-                stderr_cap=max(_MAX_CAPTURE_BYTES - len(err), 0),
-            )
-            out += t_out
-            err += t_err
-            ot = ot or t_ot
-            et = et or t_et
-        except subprocess.TimeoutExpired:
-            pass
-        return out, err, ot, et, True
+    except subprocess.TimeoutExpired as exc:
+        return (*_finish_timed_out_capture(proc, exc, stdout_cap), True)
+
+
+def _finish_timed_out_capture(proc, failure, stdout_cap):
+    """Merge both bounded timeout snapshots, including a timed-out tail."""
+    _kill_request_group(proc)
+    out, err = failure.stdout or b"", failure.stderr or b""
+    ot = bool(getattr(failure, "stdout_truncated", False))
+    et = bool(getattr(failure, "stderr_truncated", False))
+    try:
+        tail = _communicate_capped(
+            proc, b"", 1.0, stdout_cap=max(stdout_cap - len(out), 0),
+            stderr_cap=max(_MAX_CAPTURE_BYTES - len(err), 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A surviving pipe writer can keep the final drain open. The
+        # bytes already read still belong in the result and loss flags.
+        tail = (exc.stdout or b"", exc.stderr or b"",
+                bool(getattr(exc, "stdout_truncated", False)),
+                bool(getattr(exc, "stderr_truncated", False)))
+    except (ValueError, OSError):
+        tail = (b"", b"", False, False)
+    return out + tail[0], err + tail[1], ot or tail[2], et or tail[3]
 
 
 # --------------------------------------------------------------------
@@ -858,6 +961,28 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
             _log(f"request target {proc.pid} unreaped after SIGKILL")
 
 
+def _retire_request_target(proc):
+    """Finish the request and close every Popen-owned pipe on all paths."""
+    original = sys.exc_info()[1]
+    failures = []
+    try:
+        _kill_request_group(proc)
+    except BaseException as exc:
+        failures.append(exc)
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except BaseException as exc:
+                failures.append(exc)
+    if failures:
+        primary = original if original is not None else failures.pop(0)
+        for exc in failures:
+            primary.add_note("target cleanup: " + type(exc).__name__)
+        if original is None:
+            raise primary
+
+
 def _handle_ping(payload: dict) -> dict:
     # ``dumpable`` lets the parent (and the hardening tests) verify
     # the /proc-reopen defence engaged without needing to read the
@@ -891,25 +1016,9 @@ def _handle_spawn(payload: dict) -> dict:
             returncode: int | None = proc.returncode
             timed_out = False
         except subprocess.TimeoutExpired as e:
-            # Kill the whole request group first so pipe-holding
-            # descendants can't keep the drain below blocked.
-            _kill_request_group(proc)
-            stdout = e.stdout or b""
-            stderr = e.stderr or b""
-            out_trunc = bool(getattr(e, "stdout_truncated", False))
-            err_trunc = bool(getattr(e, "stderr_truncated", False))
-            try:
-                t_out, t_err, t_ot, t_et = _communicate_capped(
-                    proc, b"", 1.0,
-                    stdout_cap=max(_MAX_CAPTURE_BYTES - len(stdout), 0),
-                    stderr_cap=max(_MAX_CAPTURE_BYTES - len(stderr), 0),
-                )
-                stdout += t_out
-                stderr += t_err
-                out_trunc = out_trunc or t_ot
-                err_trunc = err_trunc or t_et
-            except (subprocess.TimeoutExpired, ValueError, OSError):
-                pass
+            stdout, stderr, out_trunc, err_trunc = _finish_timed_out_capture(
+                proc, e, _MAX_CAPTURE_BYTES,
+            )
             returncode = None
             timed_out = True
         return {
@@ -927,7 +1036,7 @@ def _handle_spawn(payload: dict) -> dict:
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
-        _kill_request_group(proc)
+        _retire_request_target(proc)
 
 
 def _handle_probe(payload: dict) -> dict:
@@ -1078,7 +1187,7 @@ def _handle_probe(payload: dict) -> dict:
         exit_class = _classify_exit(
             proc.returncode, target_stderr, timed_out)
     finally:
-        _kill_request_group(proc)
+        _retire_request_target(proc)
 
     wall = round(time.monotonic() - t0, 3)
     stderr_text = (target_stderr or b"").decode("utf-8", errors="replace")
@@ -1257,7 +1366,7 @@ def _handle_conversation(payload: dict) -> dict:
         exit_class = _classify_exit(
             proc.returncode, target_stderr, timed_out)
     finally:
-        _kill_request_group(proc)
+        _retire_request_target(proc)
 
     wall = round(time.monotonic() - t0, 3)
     stderr_text = (target_stderr or b"").decode("utf-8", errors="replace")
