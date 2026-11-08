@@ -7,14 +7,17 @@ from collections import Counter, defaultdict
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 from core.json import dumps_artifact, dumps_canonical, loads, save_json
 
 from .record import append_audit_log, load_verified_audit_log
+from .verification_results import SOURCE_CHANGED_REASON, SOURCE_INPUT_REASON, SOURCE_INPUT_RULE, SOURCE_VALIDATION_TOOL
 
 logger = logging.getLogger(__name__)
 CHECK_RESULTS_FILENAME = "verification-checks.json"
+SOURCE_VALIDATION_RULE = "source-version-drift"
 
 # Keep each observation comfortably below the audit log's 1 MiB row limit.
 # Large checker dumps remain explicitly partial rather than disappearing.
@@ -66,6 +69,71 @@ def record_check_observation(out_dir, results, *, tool, verdict, rule_id, reason
     except Exception:
         # Reporting must never turn a successful check into a tool error.
         logger.warning("could not record verification check", exc_info=True)
+
+
+def record_source_input_rejection(out_dir, results, *, current_source, requested_tools) -> None:
+    """Record an unbound excerpt without claiming that a checker executed."""
+    record_check_observation(
+        out_dir, results, tool=SOURCE_VALIDATION_TOOL, verdict="inconclusive",
+        rule_id=SOURCE_INPUT_RULE, reason=SOURCE_INPUT_REASON,
+        result=SimpleNamespace(outcome="inconclusive", details={
+            "source_identity_at_dispatch": asdict(current_source),
+            "requested_tools": sorted(requested_tools), "checker_execution": "not_run",
+        }),
+    )
+
+
+def record_source_invalidation(out_dir, results, *, source_identity_after, prior_receipts, prior_outcomes) -> None:
+    """Retain the source-version withdrawal alongside raw checker results.
+
+    This is a file-identity check, not another vulnerability checker. The
+    scope retains the dispatch identity so the reader can identify exactly
+    which historical observations lost applicability. Payload truncation
+    cannot erase that scoped invalidation event.
+    """
+    record_check_observation(
+        out_dir, results, tool=SOURCE_VALIDATION_TOOL, verdict="inconclusive",
+        rule_id=SOURCE_VALIDATION_RULE, reason=SOURCE_CHANGED_REASON,
+        result=SimpleNamespace(outcome="inconclusive", details={
+            "source_identity_after": asdict(source_identity_after) if source_identity_after else None,
+            "prior_receipts": list(prior_receipts),
+            "prior_outcomes": [asdict(outcome) for outcome in prior_outcomes],
+        }),
+    )
+
+
+def _apply_source_invalidations(checks: list[dict]) -> dict:
+    """Reporting-only links to admitted, exactly scoped source withdrawals.
+
+    Never infer freshness from a missing event. Identity covers one source
+    file, not dependencies, build assumptions or later publication. Existing
+    event admission handles replay and conflicting IDs before this join.
+    """
+    withdrawals = defaultdict(list)
+    for check in checks:
+        identity = check["scope"].get("source_identity")
+        if (check.get("tool") == SOURCE_VALIDATION_TOOL
+                and check.get("rule_id") == SOURCE_VALIDATION_RULE
+                and check.get("outcome") == "inconclusive"
+                and isinstance(identity, dict) and identity.get("sha256") and identity.get("version")):
+            withdrawals[dumps_canonical(check["scope"])].append(check["id"])
+    invalidated = 0
+    if withdrawals:
+        for check in checks:
+            if check.get("outcome") not in {"confirmed", "refuted"}:
+                continue
+            ids = withdrawals.get(dumps_canonical(check["scope"]))
+            if ids:
+                check["source_applicability"] = {"status": "invalidated", "validation_ids": sorted(ids)}
+                invalidated += 1
+    return {
+        "invalidations": sum(len(ids) for ids in withdrawals.values()),
+        "invalidated_observations": invalidated,
+        "unbound_inputs": sum(check.get("tool") == SOURCE_VALIDATION_TOOL
+                             and check.get("rule_id") == SOURCE_INPUT_RULE
+                             and check.get("outcome") == "inconclusive" for check in checks),
+        "scope": "source_file_only", "revalidated_at_export": False,
+    }
 
 
 def _summarize_observations(checks: list[dict]) -> dict:
@@ -167,17 +235,21 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     artifact = None
     retained_summary = _summarize_observations([])
     admission = None
+    source_validation = None
     try:
         checks, quarantined, admission = _admit_check_events(load_verified_audit_log(out_dir))
+        source_validation = _apply_source_invalidations(checks)
         retained_summary = _summarize_observations(checks)
         save_json(out_dir / CHECK_RESULTS_FILENAME, {
             "schema_version": 1, "history_complete": False, "checks": checks,
             "quarantined_checks": quarantined, "event_admission": admission,
+            "source_validation": source_validation,
             "summary": retained_summary,
             "limitations": [
                 "Only retained tool-chain observations are included; missing checks are unavailable.",
                 "Repeated event IDs count once; conflicting payloads are quarantined without claim links.",
                 "Source identities are captured at dispatch, not revalidated at export.",
+                "Source invalidations withdraw applicability without deleting raw checker outcomes.",
                 "A checker outcome does not establish that the final finding is correct.",
                 "Payload completeness concerns serialization, not proof or analysis completeness.",
             ],
@@ -187,6 +259,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     except Exception:
         status = "export_error"
         checks = []
+        source_validation = None
         retained_summary = _summarize_observations([])
         logger.warning("could not export verification checks", exc_info=True)
 
@@ -263,6 +336,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     export["verification_summary"] = {
         "schema_version": 1, "history_complete": False, "artifact": artifact, "export_status": status,
         "event_admission": admission,
+        "source_validation": source_validation,
         "findings": {"total": len(findings), "with_matching_observations": findings_with_matches,
                      "without_matching_observations": len(findings) - findings_with_matches,
                      "trace_statuses": dict(trace_statuses)},
@@ -277,6 +351,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         "limitations": [
             "Counts describe retained observations, not distinct executions or proven defects.",
             "Matching compares claim text and location; source freshness is not revalidated.",
+            "Source invalidations withdraw applicability; raw outcomes remain historical observations.",
             "Hypothesis links identify recorded checks, not support for a counterargument.",
             "Missing observations do not establish that no check ran.",
         ],
