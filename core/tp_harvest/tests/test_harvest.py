@@ -477,3 +477,51 @@ class TestCli:
         rc = cli_main([str(tmp_path / "nope")])
         assert rc == 1
         assert "not a directory" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('filename', ['findings.json', 'openant_findings.json'])
+@pytest.mark.parametrize('envelope', ['list', 'findings', 'results'])
+@pytest.mark.parametrize('include_valid', [False, True], ids=['only-malformed', 'mixed'])
+@pytest.mark.parametrize('malformed', [
+    pytest.param([None], id='one'),
+    pytest.param([None, 'not-a-row', 7, False, []], id='several'),
+])
+def test_loader_discarded_rows_remain_in_harvest_accounting(
+        run_dir, filename, envelope, include_valid, malformed):
+    primary = run_dir / 'findings.json'
+    original = load_json(primary, strict=True)['findings']
+    rows = (original if include_valid else []) + malformed
+    primary.unlink()
+    path = run_dir / filename
+    path.write_text(json.dumps(rows if envelope == 'list' else {envelope: rows}), encoding='utf-8')
+    for pass_number in range(2):
+        summary = harvest_run(run_dir, with_candidates=False)
+        assert summary['findings_total'] == len(rows)
+        assert summary['skipped']['finding_malformed'] == len(malformed)
+        assert len(summary['harvested']) == int(include_valid and pass_number == 0)
+        assert len(summary['harvested']) + sum(summary['skipped'].values()) == len(rows)
+        manifest = load_json(Path(summary['manifest']), strict=True)
+        assert manifest['last_run']['skipped'] == summary['skipped']
+        assert manifest['last_run']['harvested'] == len(summary['harvested'])
+        if not include_valid:
+            assert any('malformed rows were skipped' in note for note in summary['notes'])
+            assert not any('no findings artifact' in note for note in summary['notes'])
+
+
+def test_loader_discards_and_projection_failures_add_to_the_same_counter(run_dir, monkeypatch):
+    import core.tp_harvest.harvest as harvest_module
+
+    path = run_dir / 'findings.json'
+    rows = load_json(path, strict=True)['findings']
+    path.write_text(json.dumps({'findings': [None, 'invalid', *rows]}), encoding='utf-8')
+
+    def failed_projection(*args, **kwargs):
+        raise RuntimeError('test-owned projection failure')
+
+    monkeypatch.setattr(harvest_module, 'build_record', failed_projection)
+    summary = harvest_run(run_dir, with_candidates=False)
+    assert summary['findings_total'] == 5
+    assert summary['skipped']['finding_malformed'] == 3
+    assert summary['harvested'] == []
+    assert sum(summary['skipped'].values()) == summary['findings_total']
+    assert load_json(Path(summary['manifest']), strict=True)['last_run']['skipped'] == summary['skipped']

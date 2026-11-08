@@ -5,6 +5,7 @@ to avoid duplication across diff.py, merge.py, and coverage.
 """
 
 from collections import defaultdict
+from dataclasses import dataclass
 import stat
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -250,7 +251,19 @@ def findings_from_report_context(report_context) -> list[dict[str, Any]]:
     return rows
 
 
-def _finding_rows(data: Any, path: Path, *, strict: bool = False) -> list[dict[str, Any]]:
+@dataclass
+class FindingsLoadDisclosure:
+    """Additive counts from selected, decoded findings collections.
+
+    Missing/unreadable files and invalid collection shapes have no known row
+    count. Shadowed fallback artifacts contribute nothing. A caller may reuse
+    an instance across loads; normal list-returning callers need not supply it.
+    """
+    total_rows: int = 0
+    discarded_rows: int = 0
+
+
+def _finding_rows(data: Any, path: Path, *, strict: bool = False, disclosure: FindingsLoadDisclosure | None = None) -> list[dict[str, Any]]:
     """Validate collection shape; tolerant views retain only object rows."""
     if isinstance(data, dict):
         # An explicitly empty primary collection is authoritative.
@@ -267,6 +280,9 @@ def _finding_rows(data: Any, path: Path, *, strict: bool = False) -> list[dict[s
         logger.warning(message)
         return []
     rows = [row for row in data if isinstance(row, dict)]
+    if disclosure is not None:
+        disclosure.total_rows += len(data)
+        disclosure.discarded_rows += len(data) - len(rows)
     if len(rows) != len(data):
         message = f"Invalid findings rows in {path}: expected objects"
         if strict:
@@ -275,7 +291,7 @@ def _finding_rows(data: Any, path: Path, *, strict: bool = False) -> list[dict[s
     return rows
 
 
-def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_report=True, strict: bool = False) -> list[dict[str, Any]]:
+def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_report=True, strict: bool = False, disclosure: FindingsLoadDisclosure | None = None) -> list[dict[str, Any]]:
     """Load findings list from a run directory's findings.json.
 
     Standalone ``/openant`` runs write their translated findings to
@@ -292,6 +308,8 @@ def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_repor
     with a warning rather than parsed wholesale into memory. With
     ``strict=True``, refuse unreadable, oversized or malformed artifacts
     instead of excluding data; destructive merges must use this mode.
+    ``disclosure`` receives structured counts, including discarded non-object
+    rows, for callers that account for every input row.
     """
     run_dir = Path(run_dir)
     path = run_dir / "findings.json"
@@ -319,10 +337,13 @@ def load_findings_from_dir(run_dir: Path, *, report_context=None, discover_repor
                         raise
                     logger.warning("Committed findings snapshot unavailable in %s", run_dir)
             if report_context is not None:
-                return findings_from_report_context(report_context)
+                rows = findings_from_report_context(report_context)
+                if disclosure is not None:
+                    disclosure.total_rows += len(rows)
+                return rows
         logger.debug("No findings.json in %s", run_dir)
         return []
-    return _finding_rows(data, path, strict=strict)
+    return _finding_rows(data, path, strict=strict, disclosure=disclosure)
 
 
 def oversized_findings_files(run_dir: Path) -> list[Path]:
@@ -357,7 +378,7 @@ def oversized_findings_files(run_dir: Path) -> list[Path]:
     return out
 
 
-def load_sca_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
+def load_sca_findings_from_dir(run_dir: Path, *, disclosure: FindingsLoadDisclosure | None = None) -> list[dict[str, Any]]:
     """Load SCA findings from a run's ``sca/findings.json`` subdir.
 
     ``/sca`` and ``/agentic`` write dependency findings to
@@ -375,7 +396,7 @@ def load_sca_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     """
     path = Path(run_dir) / "sca" / "findings.json"
     data = _load_size_gated_json(path)
-    return [] if data is None else _finding_rows(data, path)
+    return [] if data is None else _finding_rows(data, path, disclosure=disclosure)
 
 
 def merge_sca_findings(run_dirs: list[Path]) -> list[dict[str, Any]]:

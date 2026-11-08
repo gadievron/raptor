@@ -228,11 +228,10 @@ def test_missing_destination_parents_are_created_after_overlap_validation(tree):
 def test_copy_reader_failure_reclaims_partial_outputs_and_keeps_source(tree, tmp_path, monkeypatch, failure):
     source, destination = tree
     cross_device(monkeypatch)
-    from core.testing.module_bindings import patch_module_attribute
-    def broken(reader, writer, **kwargs):
+    def broken(reader, writer, size):
         writer.write(b'partial')
         raise failure('read failed')
-    patch_module_attribute(monkeypatch, relocate, 'shutil', 'copyfileobj', broken)
+    monkeypatch.setattr(relocate, '_copy_sparse_contents', broken)
     # copytree aggregates ordinary IO errors in shutil.Error.
     with pytest.raises(shutil.Error if failure is OSError else failure):
         relocate.move_directory(source, destination)
