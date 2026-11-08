@@ -285,12 +285,13 @@ def _sweep_marked_processes(token: str) -> list:
 # parent falls back to SIGKILL. Sized above preexec._SWEEP_DEADLINE_S
 # so a healthy sweeper always finishes on its own.
 _TEARDOWN_SWEEP_GRACE_S = 3.0
+_TEARDOWN_KILL_GRACE_S = 5.0
 
 
 def _run_teardown_first_timeout(
     cmd: list, pk: dict, death_w_holder: list, start_new_session: bool,
 ) -> subprocess.CompletedProcess:
-    """subprocess.run equivalent whose TIMEOUT tears down sweeper-first.
+    """subprocess.run equivalent whose failures tear down sweeper-first.
 
     No-pid-namespace posture only (see the call site): the direct
     child is the PR_SET_CHILD_SUBREAPER sweeper and the target is its
@@ -301,7 +302,8 @@ def _run_teardown_first_timeout(
     per-run death pipe FIRST: the sweeper sees EOF, SIGKILLs the
     payload subtree (preexec._reaper_split), and exits on its own;
     only if it fails to exit within the grace window does the parent
-    SIGKILL it. The subprocess.run contract is preserved: returns
+    SIGKILL it. Cancellation and I/O/decode failures use the same ordering.
+    The subprocess.run contract is preserved: returns
     CompletedProcess on normal exit, raises subprocess.TimeoutExpired
     (with captured output) on deadline.
 
@@ -321,55 +323,136 @@ def _run_teardown_first_timeout(
       ``teardown_sweep_signal_unscoped`` in ``sandbox_info`` — see
       the stamp block in run().
     """
+    # Match subprocess.run's preparation without consuming the caller's
+    # dictionary or silently overriding explicit stream ownership.
+    pk = dict(pk)
     timeout = pk.pop("timeout", None)
     capture = pk.pop("capture_output", False)
-    if capture:
-        pk.setdefault("stdout", subprocess.PIPE)
-        pk.setdefault("stderr", subprocess.PIPE)
+    check = pk.pop("check", False)
     inp = pk.pop("input", None)
+    if capture:
+        if pk.get("stdout") is not None or pk.get("stderr") is not None:
+            raise ValueError("stdout and stderr may not be used with capture_output")
+        pk["stdout"] = pk["stderr"] = subprocess.PIPE
     if inp is not None:
+        if pk.get("stdin") is not None:
+            raise ValueError("stdin and input arguments may not both be used")
         pk["stdin"] = subprocess.PIPE
-    proc = subprocess.Popen(
-        cmd, start_new_session=start_new_session, **pk,
-    )
+    proc = subprocess.Popen(cmd, start_new_session=start_new_session, **pk)
     try:
         out, err = proc.communicate(input=inp, timeout=timeout)
-        return subprocess.CompletedProcess(
-            cmd, proc.returncode, out, err,
-        )
-    except subprocess.TimeoutExpired:
-        _death_w = death_w_holder[0]
-        if _death_w is not None:
-            death_w_holder[0] = None
-            # Registry-routed close (see _spawn's death-pipe write-end
-            # registry): unregisters atomically with the close so a
-            # concurrently-forked spawn child neither pins this pipe's
-            # EOF nor closes a reused fd number. Idempotent against
-            # run()'s finally close in either order.
-            from ._spawn import close_death_w as _close_death_w
-            _close_death_w(_death_w)
+    except BaseException as failure:
+        _finish_teardown_first(proc, death_w_holder, failure)
+        raise
+    finally:
+        # Popen owns only PIPE streams; caller-supplied file objects are
+        # not proc.stdin/stdout/stderr and must remain open.
+        _close_teardown_streams(proc)
+    result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    if check:
+        result.check_returncode()
+    return result
+
+
+def _close_teardown_streams(proc) -> tuple:
+    """Close all owned streams, retaining any handle still open on failure."""
+    pending = []
+    for stream in (proc.stdin, proc.stdout, proc.stderr):
+        if stream is None:
+            continue
         try:
-            out, err = proc.communicate(
-                timeout=_TEARDOWN_SWEEP_GRACE_S,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning(
-                "Sandbox: teardown-first sweep did not complete "
-                "within %.1fs after the run timeout — killing the "
-                "sweeper directly (marker backstop still runs).",
-                _TEARDOWN_SWEEP_GRACE_S,
-            )
-            proc.kill()
+            stream.close()
+        except BaseException:
+            if not stream.closed:
+                pending.append(stream)
+    return tuple(pending)
+
+
+def _timeout_snapshot(failure, proc, out=None, err=None) -> None:
+    """Keep the longest compatible cumulative snapshot, without duplication.
+
+    TimeoutExpired output is bytes even in text mode. A completed text
+    drain can add output only when its encoded prefix preserves the
+    already-captured bytes (newline translation must not rewrite evidence).
+    """
+    if not isinstance(failure, subprocess.TimeoutExpired):
+        return
+    for attr, candidate in (("output", out), ("stderr", err)):
+        current = getattr(failure, attr)
+        if isinstance(candidate, str):
+            candidate = candidate.encode(proc.encoding or "utf-8", proc.errors or "strict")
+        if isinstance(current, str):
+            current = current.encode(proc.encoding or "utf-8", proc.errors or "strict")
+        if candidate is not None and (current is None or candidate.startswith(current)):
+            current = candidate
+        setattr(failure, attr, current)
+
+
+def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException) -> None:
+    """Signal the sweeper before escalation on every communication failure.
+
+    One deadline covers each grace/kill phase, including a fallback wait
+    when communicate cannot drain or decode. Never replace the primary
+    error. An unconfirmed process or unclosed stream remains attached to
+    that error as sandbox_process/sandbox_pipes for explicit retry.
+    """
+    issues = []
+    confirmed = False
+    death_close_pending = False
+    death_w = death_w_holder[0]
+    if death_w is not None:
+        # Consume the numeric slot before releasing the descriptor. An
+        # interruption after release must not leave run()'s finally
+        # retrying a number that another run may already have reused.
+        death_w_holder[0] = None
+        try:
+            from core.sandbox._spawn import close_death_w
+            close_death_w(death_w)
+        except BaseException as exc:
+            # Close may already have consumed the fd. Record uncertainty
+            # rather than blindly restoring and retrying its number.
+            death_close_pending = True
+            issues.append(type(exc).__name__ + " while closing death pipe")
+    for killing, budget in ((False, _TEARDOWN_SWEEP_GRACE_S),
+                            (True, _TEARDOWN_KILL_GRACE_S)):
+        deadline = time.monotonic() + budget
+        if killing and proc.returncode is None:
+            with suppress(OSError, ValueError):
+                logger.warning(
+                    "Sandbox: teardown-first sweep did not finish within "
+                    "its grace period; killing the owned sweeper")
             try:
-                out, err = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                out, err = b"", b""
-                for pipe in (proc.stdout, proc.stderr, proc.stdin):
-                    if pipe is not None and not pipe.closed:
-                        pipe.close()
-        raise subprocess.TimeoutExpired(
-            cmd, timeout, output=out, stderr=err,
-        )
+                proc.kill()
+            except BaseException as exc:
+                issues.append(type(exc).__name__ + " while killing sweeper")
+        try:
+            out, err = proc.communicate(timeout=max(0, deadline - time.monotonic()))
+            _timeout_snapshot(failure, proc, out, err)
+        except BaseException as exc:
+            if isinstance(exc, subprocess.TimeoutExpired):
+                try:
+                    _timeout_snapshot(failure, proc, exc.output, exc.stderr)
+                except BaseException as snapshot_error:
+                    issues.append(type(snapshot_error).__name__ + " while preserving output")
+            else:
+                issues.append(type(exc).__name__ + " while draining sweeper")
+        try:
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
+        except BaseException as exc:
+            issues.append(type(exc).__name__ + " while waiting for sweeper")
+        else:
+            confirmed = True
+            break
+    pending_pipes = _close_teardown_streams(proc)
+    failure.sandbox_cleanup_pending = death_close_pending or not confirmed or bool(pending_pipes)
+    if not confirmed:
+        failure.sandbox_process = proc
+        issues.append("sweeper exit unconfirmed; retry sandbox_process.wait()")
+    if pending_pipes:
+        failure.sandbox_pipes = pending_pipes
+        issues.append("owned pipes remain open; retry sandbox_pipes close")
+    for issue in issues:
+        failure.add_note("sandbox cleanup: " + issue)
 
 
 def _apply_capture_ceiling(
@@ -7918,9 +8001,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         if (
                             _reaper_cell is not None
                             and _death_w is not None
-                            and _pk.get("timeout")
                         ):
-                            # Teardown-first timeout: a plain
+                            # Teardown-first failure cleanup: a plain
                             # subprocess.run timeout SIGKILLs
                             # Popen.pid, which on this path IS the
                             # subreaper sweeper — the sweep dies
@@ -7929,7 +8011,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             # marker backstop. Close the death
                             # pipe FIRST so the sweeper reaps its
                             # subtree and exits on its own; only
-                            # then kill.
+                            # then kill. Apply this to cancellation and
+                            # communication errors even without a timeout.
                             result = _dispatch_floor_check(
                                 "Landlock-only subprocess",
                                 cap=_plain_lane_cap,
@@ -7959,7 +8042,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 ),
                             )
                     except OSError as _ebadf:
-                        if _ebadf.errno != errno.EBADF:
+                        if (_ebadf.errno != errno.EBADF
+                                or getattr(_ebadf, "sandbox_cleanup_pending", False)):
                             raise
                         result = subprocess.CompletedProcess(
                             cmd, returncode=-9,
