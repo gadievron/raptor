@@ -35,10 +35,14 @@ def test_failed_attachment_never_executes_the_payload(tmp_path):
     assert not marker.exists()
 
 
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
 @pytest.mark.parametrize('approved', [False, True])
-def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(owned, tmp_path, monkeypatch, approved):
+def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(owned, tmp_path, monkeypatch, approved, platform):
     root, metadata, session_id = owned
+    patch_module_attribute(monkeypatch, supervisor, 'sys', 'platform', platform)
+    creates = []
     def unavailable(*args):
+        creates.append(args)
         raise OSError(errno.EROFS, 'no delegation')
     monkeypatch.setattr(supervisor.cgroups.Scope, 'create', unavailable)
     monkeypatch.setattr(supervisor, '_can_delegate', lambda *a: False)
@@ -52,8 +56,14 @@ def test_portable_fallback_preserves_exit_status_and_retains_uncertain_scratch(o
         assert value['state'] == 'retained'
         assert value['closure'] is None
         assert value['backend'] == 'untracked'
-        assert value['tracking_diagnostics'][0]['stage'] == 'create session cgroup'
-        assert value['tracking_diagnostics'][0]['errno'] == errno.EROFS
+        diagnostic = value['tracking_diagnostics'][0]
+        if platform == 'linux':
+            assert creates
+            assert diagnostic['stage'] == 'create session cgroup'
+            assert diagnostic['errno'] == errno.EROFS
+        else:
+            assert not creates
+            assert diagnostic['stage'] == 'systemd delegation prerequisites'
 
 
 def test_claimed_delegated_failure_cannot_rerun_payload_portably(owned, monkeypatch):
