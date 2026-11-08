@@ -7,6 +7,8 @@ proves there is no hidden hardcoded list.
 
 from __future__ import annotations
 
+import pytest
+
 import json
 import textwrap
 
@@ -20,6 +22,24 @@ from core.audit.return_contracts import (
     bind_return_contract,
     harvest_wur_declarations,
 )
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_contract_caches():
+    """Keep this test's cache writes separate from borrowed process state."""
+    from core.audit import return_contracts
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        return_contracts,
+        {
+            "_IRIS_SPEC_CACHE": {},
+            "_ANNOTATION_SCAN_CACHE": {},
+        },
+        lock=return_contracts._CONTRACT_CACHE_LOCK,
+    ):
+        yield
 
 
 class TestWurFacts:

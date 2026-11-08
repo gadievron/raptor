@@ -1,0 +1,60 @@
+[
+  {
+    "file": "core/audit/tests/test_orchestrator.py",
+    "fixture": "_owned_review_caches",
+    "module": "core.audit.orchestrator",
+    "owner": "orchestrator",
+    "fields": [
+      "_sink_guard_cache",
+      "_parse_wrapper_cache",
+      "_line_end_cache",
+      "_file_lines_cache",
+      "_file_lines_cache_bytes"
+    ],
+    "lock": "_file_lines_cache_lock"
+  },
+  {
+    "file": "core/audit/tests/test_return_contracts.py",
+    "fixture": "_owned_contract_caches",
+    "module": "core.audit.return_contracts",
+    "owner": "return_contracts",
+    "fields": [
+      "_IRIS_SPEC_CACHE",
+      "_ANNOTATION_SCAN_CACHE"
+    ],
+    "lock": "_CONTRACT_CACHE_LOCK"
+  },
+  {
+    "file": "core/audit/tests/test_refutation.py",
+    "fixture": "_owned_threading_cache",
+    "module": "core.audit.refutation",
+    "owner": "refutation",
+    "fields": [
+      "_threading_seen_cache"
+    ],
+    "lock": null
+  },
+  {
+    "file": "packages/llm_analysis/tests/test_analysis_bundle.py",
+    "fixture": "_owned_threat_model_cache",
+    "module": "packages.llm_analysis.prompts.analysis",
+    "owner": "analysis",
+    "fields": [
+      "_THREAT_MODEL_BLOCK_CACHE"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/inventory/tests/test_lexical_view.py",
+    "fixture": "_owned_lexical_state",
+    "module": "core.inventory.lexical_view",
+    "owner": "lexical_view",
+    "fields": [
+      "_VALIDATED",
+      "_memo",
+      "NONCODE_NODE_MODES"
+    ],
+    "lock": "_memo_lock",
+    "alias": "NONCODE_NODE_MODES"
+  }
+]
