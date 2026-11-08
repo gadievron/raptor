@@ -255,9 +255,25 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
+          SELECTED_MATRIX_FILE: ${{ steps.scope.outputs.python_matrix_file }}
         run: |
           set -euo pipefail
           [ -f .github/scripts/junit_durations.py ] || exit 0
+          # Timing data cannot improve a single batch. Keep the matrix in its
+          # file transport so broad selections cannot exceed environment limits.
+          python3 - <<'PYTHON' || exit 0
+          import json
+          import os
+          from pathlib import Path
+          import sys
+
+          try:
+              selected = json.loads(Path(os.environ["SELECTED_MATRIX_FILE"]).read_text(encoding="utf-8"))
+          except (OSError, ValueError):
+              sys.exit(1)
+          if not isinstance(selected, list) or len(selected) < 2:
+              sys.exit(1)
+          PYTHON
           run_id=$(gh api \
             "repos/${REPO}/actions/workflows/nightly_shuffled.yml/runs?status=success&per_page=1" \
             --jq '(.workflow_runs // [])[0].id // empty')
