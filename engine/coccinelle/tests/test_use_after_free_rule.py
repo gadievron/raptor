@@ -1,21 +1,8 @@
-"""Fixture tests for the use_after_free verification-grade rule.
-
-The rule carries ``@role: verification`` — core/audit/sweep.py grants
-it direct status promotion, so a false positive here mints a false
-"confirmed" UAF verdict. The negative fixtures pin the U12-F1
-regression: the header always claimed reassignment suppresses the
-match, but the when-clause only excluded reassignment to an allocator
-call or NULL, so the canonical safe list-free loop (the most common C
-teardown idiom in existence) and plain ``p = q`` reassignment were
-flagged as confirmed UAF.
-"""
+"""Native heap-lifetime candidate contracts and ownership controls."""
 
 from __future__ import annotations
 
-import json
 import shutil
-import subprocess
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -26,9 +13,11 @@ _RULE = (
     Path(__file__).resolve().parents[1] / "rules" / "use_after_free.cocci"
 )
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("spatch") is None, reason="coccinelle not installed",
-)
+# Real-tool fixtures belong to engine CI's native integration partition.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(shutil.which("spatch") is None, reason="coccinelle not installed"),
+]
 
 
 def _run_rule(tmp_path: Path, source: str) -> list[dict]:
@@ -178,11 +167,6 @@ class TestNegatives:
         assert results == []
 
 
-class _FakeVocab:
-    def __init__(self, deallocators: frozenset) -> None:
-        self.deallocators = deallocators
-
-
 class TestVocabRendered:
     """Behavioural pins for the vocab-rendered form.
 
@@ -197,24 +181,13 @@ class TestVocabRendered:
     def _run_rendered(
         self, tmp_path: Path, rendered: Path, source: str,
     ) -> list[dict]:
-        src = tmp_path / "target.c"
-        src.write_text(textwrap.dedent(source), encoding="utf-8")
-        proc = subprocess.run(  # noqa: S603 — fixed local binary, fixture input
-            ["spatch", "--sp-file", str(rendered), str(src),
-             "--no-show-diff"],
-            capture_output=True, text=True, timeout=120,
-        )
-        results = []
-        for stream in (proc.stdout, proc.stderr):
-            for line in stream.splitlines():
-                if line.startswith("COCCIRESULT:"):
-                    results.append(json.loads(line[len("COCCIRESULT:"):]))
-        return results
+        return run_rule(tmp_path, source, rendered)
 
     def test_learned_deallocator_joins_the_safe_set(self, tmp_path):
+        from core.audit.condition_smt import DomainVocabulary
         from engine.coccinelle.vocab_renderer import render
 
-        vocab = _FakeVocab(deallocators=frozenset({"my_project_free"}))
+        vocab = DomainVocabulary(deallocators=frozenset({"my_project_free"}))
         rendered = render(_RULE, vocab)
         assert rendered is not None
         try:
@@ -243,3 +216,68 @@ class TestVocabRendered:
             assert fires[0]["line"] == 4
         finally:
             rendered.unlink()
+
+
+@pytest.mark.parametrize("use", ["p->value", "*p", "p[0]", "(*p).value", "p[0].value"])
+def test_field_pointer_and_array_reads_report_one_access(tmp_path, use):
+    rows = _run_rule(tmp_path, f"struct node {{ int value; }};\nvoid f(struct node *p) {{ free(p); inspect({use}); }}\n")
+    assert len(rows) == 1
+    assert rows[0]["message"].startswith("Candidate:")
+
+
+def test_multiple_later_reads_survive_earlier_reads(tmp_path):
+    lines = ["struct node { int value; };", "void f(struct node *p) {", "free(p);",
+             "inspect(p->value);", "inspect(*p);", "inspect(p[0]);", "}"]
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {row["line"] for row in rows} == {lines.index(s) + 1 for s in ("inspect(p->value);", "inspect(*p);", "inspect(p[0]);")}
+    assert len(rows) == 3
+
+
+def test_ordinary_sizeof_is_not_a_runtime_access(tmp_path):
+    rows = _run_rule(tmp_path, """
+        struct node { int value; };
+        void f(struct node *p) {
+            kfree(p);
+            inspect(sizeof(*p));
+            inspect(sizeof(p->value));
+            inspect(sizeof(p[0]));
+            inspect(sizeof(p->value + 1));
+            inspect(sizeof(1 + sizeof(p->value)));
+            inspect(sizeof(record_address(p)));
+            inspect(p->value);
+        }
+    """)
+    assert len(rows) == 1
+    assert "dereferenced" in rows[0]["message"]
+
+
+def test_runtime_array_bound_is_not_blanket_suppressed_by_sizeof(tmp_path):
+    rows = _run_rule(tmp_path, """
+        struct node { int value; };
+        void f(struct node *p) {
+            free(p);
+            inspect(sizeof(int[p->value]));
+        }
+    """)
+    assert len(rows) == 1
+
+
+def test_safe_iterator_does_not_hide_a_use_in_the_same_iteration(tmp_path):
+    rows = _run_rule(tmp_path, """
+        void f(struct list_head *head) {
+            struct node *e, *next;
+            list_for_each_entry_safe(e, next, head, list) {
+                kfree(e);
+                e->value = 1;
+            }
+        }
+    """)
+    assert len(rows) == 1
+
+
+def test_opaque_callee_remains_a_review_candidate(tmp_path):
+    rows = _run_rule(tmp_path, "void f(void *p) { kfree(p); record_address(p); }\n")
+    assert len(rows) == 1
+    assert "passed to record_address" in rows[0]["message"]
+    assert "review callee behavior" in rows[0]["message"]
+    assert "dereferenced" not in rows[0]["message"]

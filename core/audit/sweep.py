@@ -118,6 +118,7 @@ def get_rule_role(rule_path: str) -> str:
 # detection/verification split, which governs whether a MATCH may
 # promote; this marker governs what a NON-match means.
 _CONFIRM_ONLY_MARKER = "# raptor: confirm-only"
+_COCCINELLE_CONFIRM_ONLY_MARKER = "// raptor: confirm-only"
 
 # Per-rule decomp-safe marker, same anchored-header convention: a
 # CURATED rule that also tolerates decompiler output (synthetic
@@ -141,16 +142,20 @@ _CURATED_SEMGREP_RULES_DIR = (
     Path(__file__).resolve().parents[2] / "engine" / "semgrep" / "rules"
 )
 
+_CURATED_COCCINELLE_RULES_DIR = (
+    Path(__file__).resolve().parents[2] / "engine" / "coccinelle" / "rules"
+)
+
 # Per-(path, marker) memo — curated rule files are read once per
 # process per marker, not per sweep. Bounded: only curated paths are
-# ever cached and the marker vocabulary is the two module constants.
+# ever cached and the marker vocabulary is the module constants.
 _RULE_MARKER_CACHE: dict[tuple[str, str], bool] = {}
 
 
 def _parse_header_marker(text: str, marker: str) -> bool:
     """Anchored marker parse: the exact marker line must appear in
     the file's LEADING comment block (before the first line that is
-    neither blank nor a ``#`` comment). Marker-shaped text anywhere
+    neither blank nor a matching ``#``/``//`` comment). Marker-shaped text anywhere
     else — inside a YAML ``message:`` block, a trailing comment, a
     pattern string — never activates the role. A UTF-8 BOM on the
     first line is tolerated; near-miss spellings (extra spaces,
@@ -160,11 +165,12 @@ def _parse_header_marker(text: str, marker: str) -> bool:
     refutation semantics (confirm-only) or silently dropping it from
     the decomp-tree sweep (decomp-safe).
     """
+    prefix = "//" if marker.startswith("//") else "#"
     for line in text.splitlines():
         stripped = line.lstrip("\ufeff").strip()
         if not stripped:
             continue
-        if not stripped.startswith("#"):
+        if not stripped.startswith(prefix):
             return False
         if stripped == marker:
             return True
@@ -176,10 +182,12 @@ def _parse_confirm_only_header(text: str) -> bool:
     return _parse_header_marker(text, _CONFIRM_ONLY_MARKER)
 
 
-def _curated_rule_has_marker(rule_path: str, marker: str) -> bool:
+def _curated_rule_has_marker(
+    rule_path: str, marker: str, *, curated_root: Path | None = None,
+) -> bool:
     """True when a CURATED rule file declares *marker* in its header.
 
-    Curated paths only (under ``engine/semgrep/rules``): dynamic
+    Curated paths only (Semgrep by default, or the supplied library): dynamic
     per-hypothesis tempfile rules and on-demand synthesized checkers
     return False regardless of content — their author is the LLM, and
     an author-controlled role declaration is either refutation
@@ -192,7 +200,8 @@ def _curated_rule_has_marker(rule_path: str, marker: str) -> bool:
         return False
     try:
         resolved = Path(rule_path).resolve()
-        if not resolved.is_relative_to(_CURATED_SEMGREP_RULES_DIR):
+        root = _CURATED_SEMGREP_RULES_DIR if curated_root is None else curated_root
+        if not resolved.is_relative_to(root):
             return False
     except OSError:
         return False
@@ -215,6 +224,14 @@ def is_confirm_only_rule(rule_path: str) -> bool:
     """True when a CURATED rule file declares the confirm-only marker
     (see :func:`_curated_rule_has_marker` for the scoping rules)."""
     return _curated_rule_has_marker(rule_path, _CONFIRM_ONLY_MARKER)
+
+
+def is_confirm_only_coccinelle_rule(rule_path: str) -> bool:
+    """Only trusted curated headers may opt a Coccinelle rule out of refutation."""
+    return _curated_rule_has_marker(
+        rule_path, _COCCINELLE_CONFIRM_ONLY_MARKER,
+        curated_root=_CURATED_COCCINELLE_RULES_DIR,
+    )
 
 
 def is_decomp_safe_rule(rule_path: str) -> bool:
@@ -2019,13 +2036,20 @@ def run_coccinelle_file_sweep(
             else:
                 matches.append({"raw": str(f)})
 
+        confirm_only = is_confirm_only_coccinelle_rule(cocci_rule)
+        details: dict[str, Any] | None = None
+        if confirm_only:
+            details = {"confirm_only": True}
+            if not matches:
+                details["reason"] = "curated confirm-only rule: no match does not refute the hypothesis"
         return SweepResult(
             tool="coccinelle",
             file_path=file_path,
             function_name="",
-            outcome="confirmed" if matches else "refuted",
+            outcome="confirmed" if matches else ("inconclusive" if confirm_only else "refuted"),
             matches=matches,
             rule_id=cocci_rule,
+            details=details,
         )
     except Exception as exc:  # noqa: BLE001
         return SweepResult(
@@ -2101,7 +2125,15 @@ def scope_coccinelle_result(
             if _match_in_range(m, line_start, effective_end)
         ]
     scoped.matches = matches
-    scoped.outcome = "confirmed" if matches else "refuted"
+    # Carry the execution-time policy through memoization and function scoping.
+    # A hit in another function cannot turn a confirm-only check into refutation.
+    confirm_only = bool((scoped.details or {}).get("confirm_only"))
+    scoped.outcome = "confirmed" if matches else ("inconclusive" if confirm_only else "refuted")
+    if confirm_only and not matches:
+        scoped.details = {
+            **(scoped.details or {}),
+            "reason": "curated confirm-only rule: no match does not refute the hypothesis",
+        }
 
     # Recompute the substrate license instead of carrying it in the
     # file result: file_substrate_coverage is deterministic and

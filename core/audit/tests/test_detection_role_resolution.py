@@ -139,8 +139,9 @@ class TestDetectionRoleResolution:
         assert _is_detection_only("coccinelle:division_by_zero") is True
 
 
-    @pytest.mark.parametrize("rule_name", ["popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close"])
+    @pytest.mark.parametrize("rule_name", ["popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free"])
     def test_stream_patterns_require_lifetime_and_ownership_review(self, monkeypatch, tmp_path, rule_name):
+        from core.audit.evidence_grade import is_verification_evidence
         from core.audit.sweep import get_rule_role
 
         monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
@@ -148,3 +149,4 @@ class TestDetectionRoleResolution:
         rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
         assert get_rule_role(str(rule)) == "detection"
         assert _is_detection_only(f"coccinelle:{rule_name}") is True
+        assert not is_verification_evidence(f"coccinelle:{rule_name}")

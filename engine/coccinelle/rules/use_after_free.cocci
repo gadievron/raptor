@@ -1,122 +1,361 @@
-// use_after_free.cocci — Find pointer dereferences after the pointer
-// has been freed.
-//
-// The pattern: kfree/free/vfree is called on a pointer, then the
-// pointer is dereferenced (->field) without being reassigned in
-// between. Classic CWE-416: use-after-free.
-//
-// Complements use_after_unlock.cocci (which catches race-window UAF
-// via lock release) — this rule catches direct sequential UAF where
-// the free and use are in the same execution path.
-//
-// The `when != E = E2` clause prevents false positives where the
-// pointer is reassigned after the free (common in cleanup loops):
-// ANY reassignment kills the path, not just allocator calls / NULL —
-// the canonical safe list-free loop (`nxt = cur->next; free(cur);
-// cur = nxt;`) reassigns from a plain expression via the loop back
-// edge, and `p = q;` after a free is equally a fresh value.
-//
-// The `when != <iterator>_safe(...) { ... }` clauses exclude paths
-// through the _safe iterator family: those macros reassign the cursor
-// from the prefetched next pointer at every step, but the reassignment
-// is hidden inside the macro body, so the loop back edge from
-// `kfree(e)` to the next iteration's `e->fld` read looks like a UAF
-// to `when != E = E2` while being the canonical CORRECT deletion
-// idiom. Deleting through a NON-safe iterator (no prefetch, cursor
-// advance reads the freed node) still fires.
-// @role: verification
+// use_after_free.cocci — Review dereferences and opaque calls after release.
+// Track stable locals, direct fields, pointer slots and constant/direct-variable
+// array slots. Writes, address-taking and receiver/index changes end a path.
+// Computed/nested receivers, aliases, allocation validity and ownership require
+// separate review. Opaque calls are candidates, not proof of a callee dereference.
+// Preserve safe-iterator exclusions while retaining within-iteration bad uses.
+// CWE-416: Use After Free
+// @role: detection
+// raptor: confirm-only
 
-// kfree variant — field dereference after free
-@kfree_then_deref@
-expression E, E2;
-identifier fld;
+@heap_uaf_sizeof@
+expression EXPR;
+position p;
+@@
+sizeof(<+... EXPR@p ...+>)
+
+@heap_uaf_sizeof_member@
+expression EXPR;
+identifier MEMBER;
+position p;
+@@
+sizeof(<+... EXPR->MEMBER@p ...+>)
+
+@heap_uaf_null@
+constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";
+position p;
+@@
+(
+// @vocab: deallocators
+\(free\|kfree\|kvfree\|vfree\|kfree_sensitive\)(\(NULL@p\|nullptr@p\|ZERO@p\))
+|
+\(kfree\|kvfree\)(ZERO_SIZE_PTR@p)
+)
+
+@heap_uaf_value_deref exists@
+expression VALUE;
+identifier BASE, FIELD;
+constant SLOT_INDEX;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier MEMBER;
+expression ELEMENT, DEREF;
 iterator name list_for_each_entry_safe, list_for_each_safe, list_for_each_entry_safe_reverse, hlist_for_each_entry_safe;
-position p_use;
 @@
-
 // @vocab: deallocators
-\(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
-... when != E = E2
+\(free\|kfree\|kvfree\|vfree\|kfree_sensitive\)(\(BASE@VALUE@p1\|BASE->FIELD@VALUE@p1\|BASE.FIELD@VALUE@p1\|BASE[SLOT_INDEX]@VALUE@p1\));
+... when any
+    when != VALUE op ...
+    when != &VALUE
+    when != VALUE++
+    when != ++VALUE
+    when != VALUE--
+    when != --VALUE
+    when != BASE op ...
+    when != &BASE
+    when != BASE++
+    when != ++BASE
+    when != BASE--
+    when != --BASE
     when != list_for_each_entry_safe(...) { ... }
     when != list_for_each_safe(...) { ... }
     when != list_for_each_entry_safe_reverse(...) { ... }
     when != hlist_for_each_entry_safe(...) { ... }
-* E->fld@p_use
+(
+  VALUE->MEMBER@p
+|
+  (VALUE)->MEMBER@p
+|
+  *VALUE@p
+|
+  VALUE[ELEMENT]@DEREF@p
+)
 
-@script:python@
-p_use << kfree_then_deref.p_use;
-E << kfree_then_deref.E;
-fld << kfree_then_deref.fld;
+@script:python heap_uaf_value_deref_report depends on heap_uaf_value_deref@
+p << heap_uaf_value_deref.p;
 @@
+import json
+msg = {
+    "rule": "use_after_free",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
+    "message": "Candidate: pointer dereferenced after release without recognized replacement; review allocation validity, lifetime and aliases (CWE-416)",
+}
+print("COCCIRESULT:" + json.dumps(msg))
 
-import json, sys
-for _pu in p_use:
-    _m = {"file": _pu.file, "line": int(_pu.line), "col": int(_pu.column),
-          "line_end": int(_pu.line_end), "col_end": int(_pu.column_end),
-          "rule": "use_after_free",
-          "message": "'%s->%s' dereferenced after kfree" % (E, fld)}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
-
-// kfree variant — passed as argument after free (may deref internally)
-@kfree_then_arg@
-expression E, E2;
-identifier fn;
-position p_use;
+@heap_uaf_slot_deref exists@
+identifier SLOT;
+expression FN;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier MEMBER;
+expression ELEMENT, DEREF;
 @@
-
 // @vocab: deallocators
-\(kfree\|kvfree\|vfree\|kfree_sensitive\)(E);
-... when != E = E2
+\(free\|kfree\|kvfree\|vfree\|kfree_sensitive\)(*SLOT@p1);
+... when any
+    when != SLOT op ...
+    when != &SLOT
+    when != SLOT++
+    when != ++SLOT
+    when != SLOT--
+    when != --SLOT
+    when != (*SLOT) op ...
+    when != &(*SLOT)
+    when != (*SLOT)++
+    when != ++(*SLOT)
+    when != (*SLOT)--
+    when != --(*SLOT)
+    when != FN(..., SLOT, ...)
     when != list_for_each_entry_safe(...) { ... }
     when != list_for_each_safe(...) { ... }
     when != list_for_each_entry_safe_reverse(...) { ... }
     when != hlist_for_each_entry_safe(...) { ... }
-* fn(E@p_use, ...)
+(
+  (*SLOT)->MEMBER@p
+|
+  ((*SLOT))->MEMBER@p
+|
+  **SLOT@p
+|
+  (*SLOT)[ELEMENT]@DEREF@p
+)
 
-@script:python@
-p_use << kfree_then_arg.p_use;
-E << kfree_then_arg.E;
-fn << kfree_then_arg.fn;
+@script:python heap_uaf_slot_deref_report depends on heap_uaf_slot_deref@
+p << heap_uaf_slot_deref.p;
 @@
+import json
+msg = {
+    "rule": "use_after_free",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
+    "message": "Candidate: pointer dereferenced after release without recognized replacement; review allocation validity, lifetime and aliases (CWE-416)",
+}
+print("COCCIRESULT:" + json.dumps(msg))
 
-import json, sys
+@heap_uaf_index_deref exists@
+identifier ARRAY, INDEX;
+expression VALUE, FN;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier MEMBER;
+expression ELEMENT, DEREF;
+@@
 // @vocab: deallocators
-_safe = {"kfree", "kvfree", "vfree", "kfree_sensitive", "kfree_rcu",
+\(free\|kfree\|kvfree\|vfree\|kfree_sensitive\)(ARRAY[INDEX]@VALUE@p1);
+... when any
+    when != ARRAY op ...
+    when != &ARRAY
+    when != ARRAY++
+    when != ++ARRAY
+    when != ARRAY--
+    when != --ARRAY
+    when != INDEX op ...
+    when != &INDEX
+    when != INDEX++
+    when != ++INDEX
+    when != INDEX--
+    when != --INDEX
+    when != ARRAY[INDEX] op ...
+    when != &ARRAY[INDEX]
+    when != ARRAY[INDEX]++
+    when != ++ARRAY[INDEX]
+    when != ARRAY[INDEX]--
+    when != --ARRAY[INDEX]
+    when != FN(..., ARRAY, ...)
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
+(
+  VALUE->MEMBER@p
+|
+  (VALUE)->MEMBER@p
+|
+  *VALUE@p
+|
+  VALUE[ELEMENT]@DEREF@p
+)
+
+@script:python heap_uaf_index_deref_report depends on heap_uaf_index_deref@
+p << heap_uaf_index_deref.p;
+@@
+import json
+msg = {
+    "rule": "use_after_free",
+    "file": p[0].file,
+    "line": int(p[0].line),
+    "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
+    "message": "Candidate: pointer dereferenced after release without recognized replacement; review allocation validity, lifetime and aliases (CWE-416)",
+}
+print("COCCIRESULT:" + json.dumps(msg))
+
+@heap_uaf_value_arg exists@
+expression VALUE;
+identifier BASE, FIELD;
+constant SLOT_INDEX;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier CONSUMER;
+@@
+// @vocab: deallocators
+\(kfree\|kvfree\|vfree\|kfree_sensitive\)(\(BASE@VALUE@p1\|BASE->FIELD@VALUE@p1\|BASE.FIELD@VALUE@p1\|BASE[SLOT_INDEX]@VALUE@p1\));
+... when any
+    when != VALUE op ...
+    when != &VALUE
+    when != VALUE++
+    when != ++VALUE
+    when != VALUE--
+    when != --VALUE
+    when != BASE op ...
+    when != &BASE
+    when != BASE++
+    when != ++BASE
+    when != BASE--
+    when != --BASE
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
+CONSUMER(VALUE@p, ...)
+
+@script:python heap_uaf_value_arg_report depends on heap_uaf_value_arg@
+p << heap_uaf_value_arg.p;
+fn << heap_uaf_value_arg.CONSUMER;
+@@
+import json
+// @vocab: deallocators
+_safe = {"free", "kfree", "kvfree", "vfree", "kfree_sensitive", "kfree_rcu",
          "pr_debug", "pr_info", "pr_err", "pr_warn", "printk",
          "trace_kfree", "WARN", "BUG"}
 if str(fn) not in _safe:
-    for _pu in p_use:
-        _m = {"file": _pu.file, "line": int(_pu.line), "col": int(_pu.column),
-              "line_end": int(_pu.line_end), "col_end": int(_pu.column_end),
-              "rule": "use_after_free",
-              "message": "'%s' passed to %s() after kfree" % (E, fn)}
-        sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+    msg = {
+        "rule": "use_after_free",
+        "file": p[0].file,
+        "line": int(p[0].line),
+        "col": int(p[0].column),
+        "line_end": int(p[0].line_end),
+        "col_end": int(p[0].column_end),
+        "message": "Candidate: pointer passed to %s() after release; review callee behavior, lifetime and aliases (CWE-416)" % fn,
+    }
+    print("COCCIRESULT:" + json.dumps(msg))
 
-// Userspace free variant — field dereference after free
-@free_then_deref@
-expression E, E2;
-identifier fld;
-position p_use;
+@heap_uaf_slot_arg exists@
+identifier SLOT;
+expression FN;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier CONSUMER;
 @@
-
-free(E);
-... when != E = E2
+// @vocab: deallocators
+\(kfree\|kvfree\|vfree\|kfree_sensitive\)(*SLOT@p1);
+... when any
+    when != SLOT op ...
+    when != &SLOT
+    when != SLOT++
+    when != ++SLOT
+    when != SLOT--
+    when != --SLOT
+    when != (*SLOT) op ...
+    when != &(*SLOT)
+    when != (*SLOT)++
+    when != ++(*SLOT)
+    when != (*SLOT)--
+    when != --(*SLOT)
+    when != FN(..., SLOT, ...)
     when != list_for_each_entry_safe(...) { ... }
     when != list_for_each_safe(...) { ... }
     when != list_for_each_entry_safe_reverse(...) { ... }
     when != hlist_for_each_entry_safe(...) { ... }
-* E->fld@p_use
+CONSUMER(*SLOT@p, ...)
 
-@script:python@
-p_use << free_then_deref.p_use;
-E << free_then_deref.E;
-fld << free_then_deref.fld;
+@script:python heap_uaf_slot_arg_report depends on heap_uaf_slot_arg@
+p << heap_uaf_slot_arg.p;
+fn << heap_uaf_slot_arg.CONSUMER;
 @@
+import json
+// @vocab: deallocators
+_safe = {"free", "kfree", "kvfree", "vfree", "kfree_sensitive", "kfree_rcu",
+         "pr_debug", "pr_info", "pr_err", "pr_warn", "printk",
+         "trace_kfree", "WARN", "BUG"}
+if str(fn) not in _safe:
+    msg = {
+        "rule": "use_after_free",
+        "file": p[0].file,
+        "line": int(p[0].line),
+        "col": int(p[0].column),
+        "line_end": int(p[0].line_end),
+        "col_end": int(p[0].column_end),
+        "message": "Candidate: pointer passed to %s() after release; review callee behavior, lifetime and aliases (CWE-416)" % fn,
+    }
+    print("COCCIRESULT:" + json.dumps(msg))
 
-import json, sys
-for _pu in p_use:
-    _m = {"file": _pu.file, "line": int(_pu.line), "col": int(_pu.column),
-          "line_end": int(_pu.line_end), "col_end": int(_pu.column_end),
-          "rule": "use_after_free",
-          "message": "'%s->%s' dereferenced after free" % (E, fld)}
-    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+@heap_uaf_index_arg exists@
+identifier ARRAY, INDEX;
+expression VALUE, FN;
+assignment operator op;
+position p1 != heap_uaf_null.p;
+position p != {heap_uaf_sizeof.p, heap_uaf_sizeof_member.p};
+identifier CONSUMER;
+@@
+// @vocab: deallocators
+\(kfree\|kvfree\|vfree\|kfree_sensitive\)(ARRAY[INDEX]@VALUE@p1);
+... when any
+    when != ARRAY op ...
+    when != &ARRAY
+    when != ARRAY++
+    when != ++ARRAY
+    when != ARRAY--
+    when != --ARRAY
+    when != INDEX op ...
+    when != &INDEX
+    when != INDEX++
+    when != ++INDEX
+    when != INDEX--
+    when != --INDEX
+    when != ARRAY[INDEX] op ...
+    when != &ARRAY[INDEX]
+    when != ARRAY[INDEX]++
+    when != ++ARRAY[INDEX]
+    when != ARRAY[INDEX]--
+    when != --ARRAY[INDEX]
+    when != FN(..., ARRAY, ...)
+    when != list_for_each_entry_safe(...) { ... }
+    when != list_for_each_safe(...) { ... }
+    when != list_for_each_entry_safe_reverse(...) { ... }
+    when != hlist_for_each_entry_safe(...) { ... }
+CONSUMER(VALUE@p, ...)
+
+@script:python heap_uaf_index_arg_report depends on heap_uaf_index_arg@
+p << heap_uaf_index_arg.p;
+fn << heap_uaf_index_arg.CONSUMER;
+@@
+import json
+// @vocab: deallocators
+_safe = {"free", "kfree", "kvfree", "vfree", "kfree_sensitive", "kfree_rcu",
+         "pr_debug", "pr_info", "pr_err", "pr_warn", "printk",
+         "trace_kfree", "WARN", "BUG"}
+if str(fn) not in _safe:
+    msg = {
+        "rule": "use_after_free",
+        "file": p[0].file,
+        "line": int(p[0].line),
+        "col": int(p[0].column),
+        "line_end": int(p[0].line_end),
+        "col_end": int(p[0].column_end),
+        "message": "Candidate: pointer passed to %s() after release; review callee behavior, lifetime and aliases (CWE-416)" % fn,
+    }
+    print("COCCIRESULT:" + json.dumps(msg))

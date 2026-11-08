@@ -452,9 +452,18 @@ accepting a warning; these can cause false alarms.
 
 ### Double-free checks
 
-`double_free` looks for connected free sites without an intervening pointer
-assignment. It does not fully track aliases or repeated execution of one free
-site in a loop. An empty result does not establish freedom from double frees.
+`double_free` reports repeated releases as review candidates. Check allocation
+validity, ownership and aliases before confirming a bug. Recognized pointer or
+receiver changes end local tracking; a missing report does not establish safety.
+Repeated execution of one free site in a loop remains outside this check.
+
+`use_after_free` also covers plain pointer dereferences and array reads after
+release. Ordinary `sizeof` references are excluded; variably modified types and
+other type-query expressions need separate review. Calls passing a released
+pointer to an opaque kernel helper remain candidates: review what the callee
+actually does before claiming a dereference. Custom ownership and iterator
+wrappers can require manual review. In `/audit`, a no-match from either rule
+remains inconclusive.
 
 
 ### Prerequisites
