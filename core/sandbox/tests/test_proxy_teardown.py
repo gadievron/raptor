@@ -40,6 +40,15 @@ import pytest
 
 from core.sandbox import proxy as proxy_mod
 from core.sandbox.tests.socket_server import SocketServer
+
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
 from core.testing.proxy_scope import isolated_proxy_scope
 
 # Far below the proxy's 300s idle timeout (the pre-fix teardown time)

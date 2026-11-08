@@ -4,10 +4,21 @@ import os
 import socket
 import threading
 
+import pytest
+
 from core.testing.module_bindings import patch_module_attribute
 
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
+
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
 
 
 def test_small_buffer_cap_preserves_large_roundtrip(short_sock_dir, monkeypatch):
@@ -48,9 +59,10 @@ def test_small_buffer_cap_preserves_large_roundtrip(short_sock_dir, monkeypatch)
 
     monkeypatch.setattr(bridge, "_MAX_PENDING_BYTES", cap)
     patch_module_attribute(monkeypatch, bridge, 'os', "read", tracked_read)
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+    thread = None
     try:
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
         assert ready.wait(5), errors
         payload = bytes(range(256)) * 16
         with socket.create_connection(("127.0.0.1", ports[0]), timeout=5) as client:
@@ -65,7 +77,9 @@ def test_small_buffer_cap_preserves_large_roundtrip(short_sock_dir, monkeypatch)
         assert max(read_sizes) <= cap
     finally:
         os.close(death_w)
-        thread.join(5)
+        if thread is not None and thread.ident is not None:
+            thread.join(5)
+            assert not thread.is_alive(), "bridge worker survived cleanup"
         os.close(death_r)
         server.close()
     assert not thread.is_alive()
