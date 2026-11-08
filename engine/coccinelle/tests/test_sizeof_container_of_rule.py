@@ -88,3 +88,43 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("declaration", [False, True], ids=["assigned", "declared"])
+def test_allocation_origins_and_pointer_changes(tmp_path, declaration):
+    changes = [("", True), ("p = other;", False), ("p += 1;", False),
+               ("p++;", False), ("++p;", False), ("replace(&p);", False),
+               ("p->x = 1;", True), ("if (choose) p = other;", True)]
+    lines = ["struct inner { int x; };", "struct outer { long prefix; struct inner node; };"]
+    expected = set()
+    for api in ("kmalloc", "kzalloc"):
+        for size in ("sizeof(*p)", "sizeof(struct inner)"):
+            for change, candidate in changes:
+                lines.append(f"void origin_{len(lines)}(struct inner *other, int choose) {{")
+                if not declaration:
+                    lines.append("  struct inner *p;")
+                prefix = "struct inner *p" if declaration else "p"
+                lines.append(f"  {prefix} = {api}({size}, 0);")
+                if candidate:
+                    expected.add(len(lines))
+                if change:
+                    lines.append(f"  {change}")
+                lines += ["  consume(container_of(p, struct outer, node));", "}"]
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {row["line"] for row in rows} == expected
+    assert len(rows) == len(expected)
+
+
+class TestDocumentedLimits:
+    def test_whole_first_member_container_can_be_intentional(self, tmp_path):
+        rows = _run_rule(tmp_path, """\
+            struct inner { int x; };
+            struct outer { struct inner first; };
+            void f(void) {
+                struct inner *p;
+                p = kmalloc(sizeof(struct outer), 0);
+                consume(container_of(p, struct outer, first));
+            }
+        """)
+        assert len(rows) == 1
+        assert "Candidate:" in rows[0]["message"]

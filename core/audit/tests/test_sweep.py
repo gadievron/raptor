@@ -1945,7 +1945,7 @@ class TestRefutedHypothesisDispatch:
 class TestSweepValidateDetectionFilter:
     """Detection-role tools must not stamp evidence in _sweep_validate."""
 
-    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err", "mmap_free", "free_nonbase_ptr_inc", "double_fclose", "malloc_strlen_strcpy", "sizeof_array_param", "sizeof_array_param_unsized"])
+    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err", "mmap_free", "free_nonbase_ptr_inc", "double_fclose", "malloc_strlen_strcpy", "sizeof_array_param", "sizeof_array_param_unsized", "double_sizeof", "pointer_scaling_double", "sizeof_container_of"])
     def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch, rule_name):
         from core.audit.orchestrator import (
             OrchestratorConfig,
