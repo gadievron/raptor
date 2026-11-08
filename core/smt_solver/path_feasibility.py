@@ -354,6 +354,18 @@ def _parse_expr(text: str, vars_: dict[str, Any], *, profile: BVProfile) -> Any 
 def _parse_typed_expr(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
 ) -> _TypedExpression | Rejection:
+    """Publish scalar bindings only after the complete expression parses."""
+    _validate_var_registry(vars_, profile)
+    pending_vars = dict(vars_)
+    result = _parse_typed_expr_in_frame(text, pending_vars, profile=profile)
+    if not isinstance(result, Rejection):
+        vars_.update(pending_vars)
+    return result
+
+
+def _parse_typed_expr_in_frame(
+    text: str, vars_: dict[str, Any], *, profile: BVProfile,
+) -> _TypedExpression | Rejection:
     """Parse an arithmetic expression into a Z3 bitvector at the given profile.
 
     Handles: identifier, NULL, hex literal, decimal literal, parenthesised
@@ -896,9 +908,11 @@ def _summarise_call(
     arguments = split_call_arguments(args_text)
     if arguments is None or len(arguments) != arity:
         return None
-    expr = builder(var, args_text, vars_, profile)
+    pending_vars = dict(vars_)
+    expr = builder(var, args_text, pending_vars, profile)
     if expr is None:
         return None
+    vars_.update(pending_vars)
     return f"summary: {call_text}", expr
 
 
@@ -989,6 +1003,35 @@ def _substitute_calls(
 
 
 def _parse_condition(
+    text: str, vars_: dict[str, Any], *, profile: BVProfile,
+    anon_map: dict[str, str] | None = None,
+    axiom_sink: list[tuple[str, Any]] | None = None,
+    reserved_native_names: set[str] | None = None,
+) -> Any | Rejection:
+    """Commit bindings, call occurrences and axioms for one complete guard.
+
+    Rejected syntax and raised errors leave the caller's frame unchanged.
+    A name seen only in an unsuccessful parse cannot disambiguate a later
+    cast as scalar arithmetic or become an optional witness objective.
+    """
+    _validate_var_registry(vars_, profile)
+    pending_vars = dict(vars_)
+    pending_calls = {} if anon_map is not None else None
+    pending_axioms = [] if axiom_sink is not None else None
+    result = _parse_condition_in_frame(
+        text, pending_vars, profile=profile, anon_map=pending_calls,
+        axiom_sink=pending_axioms, reserved_native_names=reserved_native_names,
+    )
+    if not isinstance(result, Rejection):
+        vars_.update(pending_vars)
+        if anon_map is not None:
+            anon_map.update(pending_calls)
+        if axiom_sink is not None:
+            axiom_sink.extend(pending_axioms)
+    return result
+
+
+def _parse_condition_in_frame(
     text: str, vars_: dict[str, Any], *, profile: BVProfile,
     anon_map: dict[str, str] | None = None,
     axiom_sink: list[tuple[str, Any]] | None = None,
@@ -1654,8 +1697,11 @@ def make_call_operand(
         raise ValueError("call operand must be one balanced function call")
     head = _CALL_HEAD_RE.match(text)
     assert head is not None
-    variable = make_anon_call_var(vars_, profile=profile)
-    summary = _summarise_call(head.group(), text[head.end() + 1:-1], text, variable, vars_, profile=profile)
+    _validate_var_registry(vars_, profile)
+    pending_vars = dict(vars_)
+    variable = make_anon_call_var(pending_vars, profile=profile)
+    summary = _summarise_call(head.group(), text[head.end() + 1:-1], text, variable, pending_vars, profile=profile)
+    vars_.update(pending_vars)
     model.anon_var_map[str(variable.decl().name())] = text
     if summary is not None:
         model.axioms.append(summary)
