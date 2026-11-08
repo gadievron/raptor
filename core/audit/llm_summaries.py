@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 _SUMMARY_LINES_IMPL = split_lines
 _SUMMARY_TYPE_IMPL = type
 _SUMMARY_STR_IMPL = str
+_SUMMARY_SET_IMPL = set
 _SUMMARY_LEN_IMPL = len
 _SUMMARY_MIN_IMPL = min
 _SUMMARY_MAX_IMPL = max
@@ -473,6 +474,34 @@ _SUMMARY_RESPONSE_KEYS = frozenset({
 
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SUMMARY_IDENT_IMPL = _IDENT_RE
+
+
+def _summary_identifiers(source: str) -> set[str]:
+    """Bound temporary matches at LF boundaries for the native identifier regex."""
+    if (_SUMMARY_TYPE_IMPL(source) is not _SUMMARY_STR_IMPL
+            or _SUMMARY_STR_IMPL.__len__(source) < 64 * 1024
+            or _IDENT_RE is not _SUMMARY_IDENT_IMPL
+            or set is not _SUMMARY_SET_IMPL
+            or len is not _SUMMARY_LEN_IMPL or min is not _SUMMARY_MIN_IMPL):
+        return set(_IDENT_RE.findall(source))
+    result: set[str] = set()
+    start = 0
+    while start < len(source):
+        limit = min(start + 32 * 1024, len(source))
+        if limit < len(source):
+            end = source.rfind("\n", start, limit)
+            if end < start:
+                end = source.find("\n", limit)
+                if end < 0:
+                    end = len(source)
+        else:
+            end = limit
+        # LF cannot belong to a match of this regex. Pos/endpos avoid copying
+        # source windows, and a single long line retains its complete tokens.
+        result.update(_IDENT_RE.findall(source, start, end))
+        start = end + 1
+    return result
 
 
 def _ground_summary(
@@ -505,7 +534,7 @@ def _ground_summary(
     which pass through here by design (free prose, descriptive
     context only, same render defence).
     """
-    idents = set(_IDENT_RE.findall(source))
+    idents = _summary_identifiers(source)
 
     def _known_name(raw: str) -> bool:
         # Accept "file.c:function", "function", "function(...)" forms.
