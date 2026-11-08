@@ -515,6 +515,10 @@ on the same worker or from files shared by other workers.
   exchange signed artifacts, explicitly share a test-owned signing directory
   for the required lifetime, including module-scoped setup. Exercise rejection
   of stale inherited state without weakening production guards.
+  When changing startup contracts, audit shared subprocess helpers and every
+  caller they serve, including parametrised CLI suites. Exercise each affected
+  matrix with deliberately stale inherited launch state. Run those matrices
+  and the standalone-helper suite in shuffled serial and xdist modes.
 - **Finish background work.** Stop and join owned threads, shut down
   executors and servers, and terminate and reap owned children in teardown.
   A daemon flag does not provide test cleanup. Use events or a readiness
