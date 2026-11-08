@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, replace
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_non_refuting_smt_rule
 
-SOURCE_CHANGED_REASON = "source changed or became unavailable before tool-chain completion"
+SOURCE_CHANGED_REASON = "source changed or became unavailable after the captured verification snapshot"
 SOURCE_VALIDATION_TOOL = "source_binding"
 SOURCE_INPUT_RULE = "source-input-unbound"
 SOURCE_INPUT_REASON = "reviewed input could not be bound to the identifiable target source file"
@@ -17,6 +17,32 @@ class ProbeOutcome:
     verdict: str
     rule_id: str
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class VerificationScope:
+    """The exact claim occurrence and source snapshot submitted to a check.
+
+    Missing source identity remains unknown. This record binds evidence;
+    it does not certify the checker model or its conclusion.
+    """
+
+    file: str
+    function: str
+    line_start: int
+    hypothesis: str
+    source_identity: SourceIdentity | None = None
+
+    @property
+    def scope(self) -> tuple[str, str, int, str]:
+        return self.file, self.function, self.line_start, self.hypothesis
+
+    @property
+    def has_claim(self) -> bool:
+        return bool(self.file and self.function and self.hypothesis)
+
+    def matches_claim(self, *, file, function, line_start, hypothesis) -> bool:
+        return self.scope == (file, function, line_start or 0, hypothesis)
 
 
 @dataclass(frozen=True)
@@ -71,9 +97,20 @@ class ToolChainResult(list[str]):
 
     def __init__(self, receipts=(), *, file="", function="", line_start=0, hypothesis="", source_identity=None):
         super().__init__(receipts)
-        self.scope = (file, function, line_start or 0, hypothesis)
-        self.source_identity = source_identity
+        self._binding = VerificationScope(file, function, line_start or 0, hypothesis, source_identity)
         self.outcomes: list[ProbeOutcome] = []
+
+    @property
+    def binding(self) -> VerificationScope:
+        return self._binding
+
+    @property
+    def scope(self) -> tuple[str, str, int, str]:
+        return self._binding.scope
+
+    @property
+    def source_identity(self) -> SourceIdentity | None:
+        return self._binding.source_identity
 
     def observe(self, tool: str, verdict: str, rule_id: str, reason: str = "") -> None:
         self.outcomes.append(ProbeOutcome(tool, verdict, rule_id, reason))
