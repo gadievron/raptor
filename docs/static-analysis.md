@@ -459,6 +459,19 @@ A no-match from these checks, or from the `popen_fclose` shutdown check, remains
 inconclusive. They cover specific release patterns rather than every ownership
 or resource-shutdown defect.
 
+### Division-derived allocation counts
+
+A division-derived unsigned-int count feeding an allocation is a lead for
+review, rather than proof of overflow. Check the helper's return width, operand
+bounds and the capacity needed by later writes. The detector stops tracking
+an origin after a direct reassignment or address escape; aliases, indirect
+updates and calculations through further assignments still need inspection.
+An increment retains the division-derived lead, as does a conditional update
+with a surviving unchanged path.
+
+The candidate cannot independently confirm or promote a finding, and a scan
+with no match is inconclusive.
+
 ### Allocation units and container layout
 
 Repeated `sizeof` factors and explicit pointer strides are review candidates:
