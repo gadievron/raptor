@@ -241,8 +241,9 @@ def record_mechanical_refutation(
     verdict → ``tool_evidence``/``incorrect``. Callers own the grade
     gate: only refuters that are mechanically true regardless of
     hypothesis interpretation (proof-grade refutation gates, Z3 UNSAT,
-    guarded-sink Joern receipts, executed witnesses with no retained
-    deterministic stamp) may call this. Never raises."""
+    executed witnesses with no retained deterministic stamp) may call
+    this. Generic structural guard observations do not refute a claim.
+    Never raises."""
     try:
         from core.llm.scorecard import EventType
 

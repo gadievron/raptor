@@ -10087,19 +10087,17 @@ def _run_audit_body(
                         result.suspicious += 1
                         new_outcomes.append(demoted)
                         # Grade by what the reason actually proves:
-                        # guarded-sink (Joern dominator receipt) and
-                        # SMT UNSAT refute the hypothesis itself →
-                        # tool_evidence; safety-self-contradiction is
+                        # SMT UNSAT follows the existing refutation
+                        # contract; safety-self-contradiction is
                         # the model contradicting its own finding
                         # body → consistency axis; reachability
                         # reasons (entry/sink-unreachability) are
-                        # triage facts about the call graph — the bug
-                        # may be real — and grade nothing.
+                        # triage facts about the call graph. Generic
+                        # guarded-sink observations are also context,
+                        # not claim-specific refutations; neither grades
+                        # the model's claim as incorrect.
                         _r = str(reason)
-                        if _r.startswith((
-                            "[guarded-sink:",
-                            "[smt-disproof:",
-                        )):
+                        if _r.startswith("[smt-disproof:"):
                             _sc_record_refutation(
                                 result.scorecard_events, demoted,
                                 gate="post-deepen-sweep", reason=_r,

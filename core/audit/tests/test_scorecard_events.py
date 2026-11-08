@@ -734,9 +734,10 @@ class TestInlineSitePins:
         from core.audit import orchestrator as orch
 
         src = inspect.getsource(orch._run_audit_body)
-        idx = src.index('"[guarded-sink:"')
+        idx = src.index('_r.startswith("[smt-disproof:")')
         segment = src[idx:idx + 1200]
         assert "_sc_record_refutation" in segment
+        assert '"[guarded-sink:"' not in segment
         assert '"[self-contradiction:"' in segment
         assert "_sc_record_self_consistency" in segment
         # Reachability reasons must not reach either grading branch:
@@ -943,6 +944,64 @@ class TestOrchestratedRunBinding:
         # … but the disabled client config suppresses the sidecar
         # write entirely — no default-path fallback.
         assert not Path(os.environ["RAPTOR_SCORECARD_PATH"]).exists()
+
+    def _post_deepen_demotion(self, tmp_path, monkeypatch, reason):
+        from core.audit import orchestrator as orch
+        from core.audit import checker_synthesis
+
+        target, out = self._setup_target(tmp_path)
+        (out / "context-map.json").write_text(json.dumps({
+            "entry_points": [{"file": "src/one.c", "name": "quux_step"}],
+        }))
+        consulted = []
+
+        def demotion(function, *args, **kwargs):
+            consulted.append(function)
+            return reason
+
+        def review(ctx, config):
+            # Controlled pipeline receipt satisfies the ordinary finding
+            # gate; this fixture tests later feedback, not detector accuracy.
+            return orch.ReviewOutcome(file=ctx["file"], function=ctx["function"], status="finding",
+                body="Owned unresolved concern", hypothesis="the frobnicator misaligns the quux lattice",
+                model="test-model", evidence_tool="semgrep:explicit-error-discard",
+                review_result={"cwe_class": "CWE-000"})
+
+        monkeypatch.setattr(orch, "_has_mechanical_corroboration", lambda *a, **kw: False)
+        monkeypatch.setattr(orch, "_check_preconditions", lambda outcome, *a, **kw: outcome)
+        monkeypatch.setattr(orch, "compute_demotion_verdict", demotion)
+        monkeypatch.setattr(checker_synthesis, "synthesize_and_sweep", lambda *a, **kw: None)
+        result = orch.run_orchestrator(self._config(target, out, deepen_suspicious=True,
+            sweep_validate_findings=False, immediate_verify=False, max_refinements=0), review)
+        assert consulted == ["quux_step"]
+        assert any(reason in o.body for o in result.outcomes)
+        return result
+
+    def test_guarded_sink_demotion_does_not_grade_model_as_refuted(self, tmp_path, monkeypatch) -> None:
+        from core.llm.scorecard import ModelScorecard
+
+        result = self._post_deepen_demotion(tmp_path, monkeypatch,
+            "[guarded-sink: tested sinks are dominated by conditionals]")
+        assert not [e for e in result.scorecard_events
+                    if e["event_type"] == "tool_evidence" and e["outcome"] == "incorrect"]
+        sidecar = Path(os.environ["RAPTOR_SCORECARD_PATH"])
+        if sidecar.exists():
+            assert not [cell for cell in ModelScorecard(sidecar).get_stats()
+                        if cell.model == "test-model" and cell.events.get("tool_evidence")
+                        and cell.events["tool_evidence"].incorrect]
+
+    def test_smt_disproof_demotion_retains_refutation_feedback(self, tmp_path, monkeypatch) -> None:
+        from core.llm.scorecard import ModelScorecard
+
+        result = self._post_deepen_demotion(tmp_path, monkeypatch,
+            "[smt-disproof: controlled UNSAT result]")
+        events = [e for e in result.scorecard_events
+                  if e["event_type"] == "tool_evidence" and e["outcome"] == "incorrect"]
+        assert len(events) == 1 and events[0]["model"] == "test-model"
+        sidecar = Path(os.environ["RAPTOR_SCORECARD_PATH"])
+        assert sidecar.exists()
+        cell = next(cell for cell in ModelScorecard(sidecar).get_stats() if cell.model == "test-model")
+        assert cell.events["tool_evidence"].incorrect == 1
 
 
 class TestCrossFlushDedup:
