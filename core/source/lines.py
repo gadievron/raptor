@@ -19,10 +19,11 @@ from itertools import chain
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
     from pathlib import Path
 
 __all__ = [
+    "SourceLineSnapshot",
     "iter_source_lines",
     "iter_splitlines",
     "join_lf_slice",
@@ -139,6 +140,35 @@ def split_lines(text: str) -> list[str]:
 
 
 _SOURCE_SPLIT_IMPL = split_lines
+
+
+class SourceLineSnapshot:
+    """Operation-local rows, materialised on first use for large native text.
+
+    Capture the splitter at the former eager preparation point. Foreign
+    sources and splitters remain eager. Cache their exact return value,
+    including malformed values, rather than treating None as a cache miss.
+    The snapshot belongs to one consumer operation; it is not a shared cache.
+    """
+
+    __slots__ = ("_source", "_splitter", "_pending", "_lines")
+
+    def __init__(self, source: str, splitter: Callable[[str], list[str]] = split_lines) -> None:
+        self._pending = (type(source) is str and str.__len__(source) >= 16 * 1024
+                         and splitter is _SOURCE_SPLIT_IMPL)
+        self._source = source if self._pending else ""
+        self._splitter: Callable[[str], list[str]] | None = splitter if self._pending else None
+        self._lines: list[str] = [] if self._pending else splitter(source)
+
+    def get(self) -> list[str]:
+        if self._pending:
+            splitter = self._splitter
+            assert splitter is not None
+            self._lines = splitter(self._source)
+            self._pending = False
+            self._source = ""
+            self._splitter = None
+        return self._lines
 
 
 def iter_source_lines(text: str) -> Iterator[str]:
