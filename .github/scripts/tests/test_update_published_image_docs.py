@@ -9,13 +9,22 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 SCRIPTS = Path(__file__).resolve().parents[1]
-with patch.object(sys, "path", sys.path.copy()), patch.dict(sys.modules):
+with patch.object(sys, "path", sys.path.copy()), module_registry_scope("update_published_image_docs") as modules:
     sys.path.insert(0, str(SCRIPTS))
     spec = importlib.util.spec_from_file_location("update_published_image_docs", SCRIPTS / "update_published_image_docs.py")
     module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
+    modules[spec.name] = module
     spec.loader.exec_module(module)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope(spec.name) as modules:
+        modules[spec.name] = module
+        yield
 
 
 def publication(**changes):

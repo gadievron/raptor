@@ -9,10 +9,11 @@ constraints, exclusions) is pinned here against fixture snapshot lines.
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
+
+from core.testing.module_registry import module_registry_scope
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "contact_gate.py"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -20,13 +21,14 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.fixture(scope="module")
 def cg():
-    spec = importlib.util.spec_from_file_location("contact_gate", _SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    # dataclass field-annotation resolution looks the module up in
-    # sys.modules on 3.14+, so register before exec.
-    sys.modules["contact_gate"] = mod
-    spec.loader.exec_module(mod)
-    return mod
+    with module_registry_scope("contact_gate") as modules:
+        spec = importlib.util.spec_from_file_location("contact_gate", _SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        # dataclass field-annotation resolution looks the module up in
+        # sys.modules on 3.14+, so register before exec.
+        modules["contact_gate"] = mod
+        spec.loader.exec_module(mod)
+        yield mod
 
 
 # ---------------------------------------------------------------------------

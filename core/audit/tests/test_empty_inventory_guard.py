@@ -20,6 +20,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 from core.audit.orchestrator import (
     OrchestratorConfig,
     ReviewOutcome,
@@ -313,28 +315,21 @@ class TestFullCoverageZeroGapsStillCompletes:
 @pytest.fixture(scope="module")
 def audit_cli():
     """Import the raptor-audit script as a module (trust marker set)."""
-    import os
 
-    prior = os.environ.get("_RAPTOR_TRUSTED")
-    os.environ["_RAPTOR_TRUSTED"] = "1"
-    try:
-        spec = importlib.util.spec_from_loader(
-            "raptor_audit_cli_empty_inv",
-            importlib.machinery.SourceFileLoader(
-                "raptor_audit_cli_empty_inv", str(_SCRIPT),
-            ),
-        )
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules["raptor_audit_cli_empty_inv"] = mod
-        with patch.object(sys, "path", sys.path.copy()):
-            spec.loader.exec_module(mod)
-        yield mod
-    finally:
-        sys.modules.pop("raptor_audit_cli_empty_inv", None)
-        if prior is None:
-            os.environ.pop("_RAPTOR_TRUSTED", None)
-        else:
-            os.environ["_RAPTOR_TRUSTED"] = prior
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("_RAPTOR_TRUSTED", "1")
+        with module_registry_scope("raptor_audit_cli_empty_inv") as modules:
+            spec = importlib.util.spec_from_loader(
+                "raptor_audit_cli_empty_inv",
+                importlib.machinery.SourceFileLoader(
+                    "raptor_audit_cli_empty_inv", str(_SCRIPT),
+                ),
+            )
+            mod = importlib.util.module_from_spec(spec)
+            modules["raptor_audit_cli_empty_inv"] = mod
+            with patch.object(sys, "path", sys.path.copy()):
+                spec.loader.exec_module(mod)
+            yield mod
 
 
 class TestCliRefusalPresentation:

@@ -7,11 +7,21 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 from core.testing.gitrepo import git_run, init_scratch_repo
 
 SCRIPTS = Path(__file__).resolve().parents[1]
-with patch.object(sys, 'path', [str(SCRIPTS), *sys.path]), patch.dict(sys.modules):
+with patch.object(sys, 'path', [str(SCRIPTS), *sys.path]), module_registry_scope('repo_invariant_scope') as modules:
+    modules.pop('repo_invariant_scope', None)
     import repo_invariant_scope as scope
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope('repo_invariant_scope') as modules:
+        modules['repo_invariant_scope'] = scope
+        yield
 
 
 def write(repo, name):

@@ -9,16 +9,19 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 
 @pytest.fixture(scope="module")
 def census():
-    path = Path(__file__).with_name("test_redos_idiom_census.py")
-    spec = importlib.util.spec_from_file_location("scan_identity_census", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    with patch.object(sys, "path", sys.path.copy()):
-        spec.loader.exec_module(module)
-    return module
+    with module_registry_scope("scan_identity_census") as modules:
+        path = Path(__file__).with_name("test_redos_idiom_census.py")
+        spec = importlib.util.spec_from_file_location("scan_identity_census", path)
+        module = importlib.util.module_from_spec(spec)
+        modules[spec.name] = module
+        with patch.object(sys, "path", sys.path.copy()):
+            spec.loader.exec_module(module)
+        yield module
 
 
 def _members(census, tmp_path, monkeypatch, entries, prefix=""):

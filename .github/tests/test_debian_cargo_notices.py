@@ -3,16 +3,25 @@ import hashlib
 import importlib.util
 import io
 from pathlib import Path
-import sys
 import tarfile
 
 import pytest
 
+from core.testing.module_registry import module_registry_scope
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('debian_cargo_notices', ROOT / '.devcontainer/debian_cargo_notices.py')
-tool = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = tool
-SPEC.loader.exec_module(tool)
+with module_registry_scope(SPEC.name) as modules:
+    tool = importlib.util.module_from_spec(SPEC)
+    modules[SPEC.name] = tool
+    SPEC.loader.exec_module(tool)
+
+@pytest.fixture(scope="module", autouse=True)
+def _registered_helpers():
+    with module_registry_scope(SPEC.name) as modules:
+        modules[SPEC.name] = tool
+        yield
+
 
 
 def archive(files, mode='w:gz'):
