@@ -364,6 +364,7 @@ class TestMechDetectorPromotion:
     UAF_HYP = "use after free: object written after early free"
     ROLE_CASES = [
         pytest.param("use_after_free", UAF_HYP, "CWE-416", False, id="detection-uaf"),
+        pytest.param("mmap_leak_err", "mapping memory leak at return", "CWE-401", False, id="detection-mapping-leak"),
         pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
     ]
 

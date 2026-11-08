@@ -503,7 +503,7 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
     # Resource management
     "CWE-401": {
         "smt": "check-resource-leak",
-        "cocci": ["resource_leak_err.cocci", "realloc_losing_ptr.cocci"],
+        "cocci": ["resource_leak_err.cocci", "realloc_losing_ptr.cocci", "mmap_leak_err.cocci"],
         "joern": False,
         "codeql": "cpp/resource-not-released-in-destructor",
         "sinks": [],
@@ -900,11 +900,11 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "sinks": [],
     },
     # Improper cleanup on error/exception path — the error-path leak
-    # shape CWE-401's rule already encodes (goto-err / early return
-    # with the resource still live); same verifiers.
+    # shapes encoded by the allocation and mapping rules (early return
+    # with the resource still live); both remain detection candidates.
     "CWE-460": {
         "smt": "check-resource-leak",
-        "cocci": "resource_leak_err.cocci",
+        "cocci": ["resource_leak_err.cocci", "mmap_leak_err.cocci"],
         "joern": False,
         "codeql": None,
         "sinks": [],

@@ -410,7 +410,7 @@ class TestSeedingChannelCannotOverturnRefutation:
         assert result.outcomes[0].status == "suspicious"
 
 
-    @pytest.mark.parametrize("rule_name", ["double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err"])
+    @pytest.mark.parametrize("rule_name", ["double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err"])
     def test_heap_candidate_cannot_overturn_refutation(self, tmp_path, monkeypatch, rule_name):
         monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
         result = self._run(tmp_path, monkeypatch, [f"coccinelle:{rule_name}"])
