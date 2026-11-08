@@ -4472,7 +4472,7 @@ def run_sandboxed(
             # Finalise the evidence file — the inode verification
             # inside close() fires its loud warning here too, so a
             # tamper attempt isn't masked by an unrelated failure.
-            _evidence_file.close()
+            _evidence_mod.finalize_capture(_evidence_file)
             _evidence_file = None
         _close_leftover()
         _cleanup_stub(_root_dir)
@@ -4714,7 +4714,7 @@ def run_sandboxed(
         # path still names the inode created at sandbox start (loud
         # warning on a swap), then close the held fd.
         if _evidence_file is not None:
-            _evidence_file.close()
+            _evidence_mod.finalize_capture(_evidence_file)
         _cleanup_stub(_root_dir)
 
     if os.WIFEXITED(status):

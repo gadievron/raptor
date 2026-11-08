@@ -1001,7 +1001,7 @@ def run_landlock_audit(
         # ``getattr(result, "evidence_verified", True)`` rather than
         # having to scrape the process log for the tamper warning.
         # The finally-block close below becomes an idempotent no-op.
-        evidence_ok = evidence_file.close()
+        evidence_ok = _evidence_mod.finalize_capture(evidence_file)
         result = subprocess.CompletedProcess(
             args=list(cmd),
             returncode=target_rc,
@@ -1026,4 +1026,4 @@ def run_landlock_audit(
         # Finalise the evidence file (idempotent — the normal-return
         # path already closed with verification; this covers
         # exception paths, where verify() still logs loudly).
-        evidence_file.close()
+        _evidence_mod.finalize_capture(evidence_file)
