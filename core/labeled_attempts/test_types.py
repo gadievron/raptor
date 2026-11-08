@@ -10,7 +10,8 @@ import pytest
 
 # parents[3] = repo root
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from core.labeled_attempts.types import (  # noqa: E402
     CodeQLEvidence,

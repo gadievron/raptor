@@ -513,8 +513,11 @@ on the same worker or from files shared by other workers.
   `core.testing.standalone_cli` to own that state. Tests of session inheritance
   must instead construct a valid owned launch context. When parent and child
   exchange signed artifacts, explicitly share a test-owned signing directory
-  for the required lifetime, including module-scoped setup. Exercise rejection
-  of stale inherited state without weakening production guards.
+  for the required lifetime, including module-scoped setup. Module setup
+  precedes function-scoped key fixtures. Pin the shared directory during
+  setup, and re-pin it after any per-test default key fixture when later
+  tests authenticate those artifacts. Exercise rejection of stale inherited
+  state without weakening production guards.
   When changing startup contracts, audit shared subprocess helpers and every
   caller they serve, including parametrised CLI suites. Exercise each affected
   matrix with deliberately stale inherited launch state. Run those matrices

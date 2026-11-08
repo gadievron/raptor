@@ -19,8 +19,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+if __name__ == "__main__":
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
 
 _PKG_DIR = Path(__file__).resolve().parents[1]
 _DATA = Path(__file__).parent / "data"

@@ -26,8 +26,9 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-if str(REPO) not in sys.path:
-    sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    if str(REPO) not in sys.path:
+        sys.path.insert(0, str(REPO))
 
 from core.sandbox import landlock as ll  # noqa: E402
 from core.sandbox import state  # noqa: E402

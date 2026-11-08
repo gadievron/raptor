@@ -20,8 +20,9 @@ import pytest
 
 # parents[3]: tests/ → static-analysis/ → packages/ → repo root
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+if __name__ == "__main__":
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
 
 _SCANNER_PATH = Path(_REPO_ROOT) / "packages/static-analysis/scanner.py"
 _spec = importlib.util.spec_from_file_location(

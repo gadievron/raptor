@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO))
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO))
 
 from core.labeled_attempts import (  # noqa: E402
     CodeQLEvidence,

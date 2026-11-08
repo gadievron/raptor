@@ -11,19 +11,27 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 _WORKTREE_ROOT = Path(__file__).resolve().parents[3]
-_MAIN_REPO = Path(os.environ.get("RAPTOR_DIR", str(_WORKTREE_ROOT)))
-# Hard-SET (never setdefault; same value — _MAIN_REPO already resolves
-# the deliberate ambient-first choice above, falling back to this tree).
-os.environ["RAPTOR_DIR"] = str(_MAIN_REPO)
-for _p in (str(_MAIN_REPO), str(_WORKTREE_ROOT)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+if __name__ == "__main__":
+    _MAIN_REPO = Path(os.environ.get("RAPTOR_DIR", str(_WORKTREE_ROOT)))
+    # Hard-SET (never setdefault; same value — _MAIN_REPO already resolves
+    # the deliberate ambient-first choice above, falling back to this tree).
+    os.environ["RAPTOR_DIR"] = str(_MAIN_REPO)
+    for _p in (str(_MAIN_REPO), str(_WORKTREE_ROOT)):
+        if _p not in sys.path:
+            sys.path.insert(0, _p)
 
 from packages.checker_synthesis.library import (  # noqa: E402
     RuleLibrary,
     TargetRecord,
 )
+
+
+@pytest.fixture(autouse=True)
+def _owned_install_dir(monkeypatch):
+    monkeypatch.setenv("RAPTOR_DIR", str(_WORKTREE_ROOT))
 
 
 def _add_rule(lib, rule_id="r1", engine="semgrep", cwe="CWE-89", **kw):

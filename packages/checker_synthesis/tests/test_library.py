@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
-if str(RAPTOR_DIR) not in sys.path:
-    sys.path.insert(0, str(RAPTOR_DIR))
+if __name__ == "__main__":
+    if str(RAPTOR_DIR) not in sys.path:
+        sys.path.insert(0, str(RAPTOR_DIR))
 
 from packages.checker_synthesis.cwe_families import (  # noqa: E402  (import after sys.path setup)
     cwe_family,

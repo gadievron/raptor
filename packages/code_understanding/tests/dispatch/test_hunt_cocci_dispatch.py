@@ -35,8 +35,9 @@ import pytest
 #   [3] packages/
 #   [4] <repo root>
 _REPO_ROOT = str(Path(__file__).resolve().parents[4])
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
+if __name__ == "__main__":
+    if _REPO_ROOT not in sys.path:
+        sys.path.insert(0, _REPO_ROOT)
 
 
 from packages.code_understanding.dispatch import hunt_cocci_dispatch as mod  # noqa: E402

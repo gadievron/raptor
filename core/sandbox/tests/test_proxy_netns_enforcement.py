@@ -25,9 +25,16 @@ from core.testing.processes import reap_on_exit
 RAPTOR_DIR = Path(__file__).resolve().parents[3]
 # Hard-SET (never setdefault): the code under test derives paths from
 # RAPTOR_DIR; an ambient value for another checkout must not win.
-os.environ["RAPTOR_DIR"] = str(RAPTOR_DIR)
-if str(RAPTOR_DIR) not in sys.path:
-    sys.path.insert(0, str(RAPTOR_DIR))
+if __name__ == "__main__":
+    os.environ["RAPTOR_DIR"] = str(RAPTOR_DIR)
+    if str(RAPTOR_DIR) not in sys.path:
+        sys.path.insert(0, str(RAPTOR_DIR))
+
+
+@pytest.fixture(autouse=True)
+def _owned_install_dir(monkeypatch):
+    monkeypatch.setenv("RAPTOR_DIR", str(RAPTOR_DIR))
+
 
 
 # ---------------------------------------------------------------------------
