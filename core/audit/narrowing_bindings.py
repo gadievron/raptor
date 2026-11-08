@@ -39,7 +39,7 @@ def callable_declarator(node):
 
 def _declarator_names(declarator, source):
     while declarator is not None:
-        if declarator.type == "identifier":
+        if declarator.type in {"identifier", "type_identifier"}:
             return [_node_source(declarator, source)]
         if declarator.type == "structured_binding_declarator":
             return [_node_source(item, source) for item in declarator.named_children
@@ -56,6 +56,8 @@ def _enum_declarations(node, source, *, before=None, language="c"):
     """
     if language != "c":
         node = node if node.type == "enum_specifier" else node.child_by_field_name("type")
+        while node is not None and node.type == "type_descriptor":
+            node = node.child_by_field_name("type")
         if node is None or node.type != "enum_specifier":
             return {}
     result, pending = {}, [node]
@@ -79,8 +81,38 @@ def _enum_declarations(node, source, *, before=None, language="c"):
     return result
 
 
+def _type_bindings(node, source, *, before=None, language="c"):
+    """Mask hidden values without inventing storage layouts for type names."""
+    names = []
+    if node.type == "type_definition":
+        for declarator in node.children_by_field_name("declarator"):
+            if before is None or declarator.end_byte <= before:
+                names.extend(_declarator_names(declarator, source))
+    elif node.type == "alias_declaration":
+        name = node.child_by_field_name("name")
+        target = node.child_by_field_name("type")
+        if name is not None and (before is None or target is not None and target.end_byte <= before):
+            names.append(_node_source(name, source))
+    if language == "cpp":
+        kinds = {"struct_specifier", "union_specifier", "class_specifier", "enum_specifier"}
+        kind = node if node.type in kinds else node.child_by_field_name("type")
+        while kind is not None and kind.type == "type_descriptor":
+            kind = kind.child_by_field_name("type")
+        if kind is not None and kind.type in kinds:
+            name = kind.child_by_field_name("name")
+            if name is not None and (before is None or name.end_byte <= before):
+                names.append(_node_source(name, source))
+        if node.type == "using_declaration" and not any(child.type in {"namespace", "enum"} for child in node.children):
+            for item in node.named_children:
+                name = item.child_by_field_name("name") if item.type == "qualified_identifier" else None
+                if name is not None and name.type in {"identifier", "type_identifier"} and (before is None or node.end_byte <= before):
+                    names.append(_node_source(name, source))
+    return {name: (None, node) for name in names}
+
+
 def _declarations(node, source, *, before=None, language="c"):
     result = {}
+    result.update(_type_bindings(node, source, before=before, language=language))
     type_node = (
         node if node.type == "enum_specifier" else node.child_by_field_name("type")
     )
@@ -88,6 +120,8 @@ def _declarations(node, source, *, before=None, language="c"):
     if any(child.type.startswith(("attribute", "ms_", "declspec")) for child in node.named_children):
         type_name = None  # modifiers can change storage width or value type
     result.update(_enum_declarations(node, source, before=before, language=language))
+    if node.type == "type_definition":
+        return result  # typedef names begin after their complete declarators
     for declarator in node.children_by_field_name("declarator"):
         if before is not None and declarator.start_byte > before:
             continue
@@ -109,7 +143,10 @@ def _preceding_declarations(node, source, before, language):
             break
         if child.end_byte <= before:
             result.update(_enum_declarations(child, source, before=before, language=language))
-        if child.end_byte <= before and child.type in {"declaration", "enum_specifier"}:
+        if child.end_byte <= before and child.type in {
+            "declaration", "enum_specifier", "type_definition", "alias_declaration", "using_declaration",
+            "struct_specifier", "union_specifier", "class_specifier",
+        }:
             result.update(_declarations(child, source, language=language))
         elif child.type in {"labeled_statement", "case_statement"}:
             # Labels do not introduce a C scope; braces do.
@@ -176,7 +213,7 @@ def visible_declarations(target, source: bytes, *, language="c"):
                 body = node.child_by_field_name("body")
                 if body is not None and body.start_byte <= target.start_byte < body.end_byte:
                     result.update(_declarations(node, source, language=language))
-        elif node.type == "declaration":
+        elif node.type in {"declaration", "type_definition", "alias_declaration"}:
             result.update(_declarations(node, source, before=target.start_byte, language=language))
     return result
 

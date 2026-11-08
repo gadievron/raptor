@@ -43,7 +43,7 @@ def test_safe_prefix_arithmetic_reaches_the_real_source_verifier(language, prefi
                                      source=source(prefix, extra), hypothesis='integer overflow in `Value + Step`',
                                      integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v22'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v23'
 
 
 @pytest.mark.parametrize('prefix,extra', [

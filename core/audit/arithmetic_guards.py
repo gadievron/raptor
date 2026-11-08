@@ -50,7 +50,7 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
         while stack:
             item = stack.pop()
             yield item
-            if not unevaluated_context(item, data, language):
+            if not unevaluated_context(item, data, language) and item.type != "using_declaration":
                 stack.extend(reversed(item.named_children))
 
     prefix = PrefixIntegerModel(data, language, abi)
@@ -109,6 +109,8 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                 continue  # the selected atomic operation/access is bound separately
             if unevaluated_context(item, data, language):
                 continue
+            if item.type == "using_declaration" and any(child.type == "enum" for child in item.children):
+                return True  # imported enumerators require name/value resolution
             if item.type in {"lambda_expression", "co_await_expression", "co_yield_expression",
                              "typeid_expression", "compound_literal_expression", "conditional_expression",
                              "comma_expression", "user_defined_literal", "gnu_asm_expression"}:
