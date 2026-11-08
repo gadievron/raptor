@@ -159,6 +159,12 @@ jobs:
   # delivers them atomically.
   analyze:
     needs: [changes]
+    if: >-
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' ||
+       needs.changes.outputs.force_full == 'true' ||
+       needs.changes.outputs.codeql_python == 'true' ||
+       needs.changes.outputs.codeql_cpp == 'true' ||
+       needs.changes.outputs.codeql_actions == 'true')
     name: Analyze (${{ matrix.language }})
     runs-on: ${{ (matrix.language == 'swift' && 'macos-latest') || 'ubuntu-latest' }}
     timeout-minutes: 30
