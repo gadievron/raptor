@@ -26043,7 +26043,7 @@ def _proactive_validate(
             elif xf_result.verified:
                 confirmed_tools.append(f"joern:xf:{xf_result.verifier_name}")
                 if _is_detection_only(f"joern:xf:{xf_result.verifier_name}"):
-                    inconclusive.add("cross_function")
+                    _book_inconclusive("cross_function")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "joern_xf", xf_effective)
                 if discovered_evidence:
@@ -26055,7 +26055,7 @@ def _proactive_validate(
                         xf_result.evidence,
                     )
             else:
-                inconclusive.add("cross_function")
+                _book_inconclusive("cross_function")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "joern_xf", "inconclusive")
         except Exception:
