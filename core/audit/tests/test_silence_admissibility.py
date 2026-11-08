@@ -670,8 +670,27 @@ def _is_tier_inconclusive_call(node) -> bool:
 
 
 def _is_book_call(node) -> bool:
-    return (isinstance(node, ast.Call)
-            and getattr(node.func, "id", "") == "_book_inconclusive")
+    if not isinstance(node, ast.Call):
+        return False
+    return (getattr(node.func, "id", "") == "_book_inconclusive"
+            or (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "inconclusive"))
+
+
+@pytest.mark.parametrize("source,expected", [
+    ('_book_inconclusive("smt")', True),
+    ('inconclusive.add("cross_function")', True),
+    ('skipped.add("cross_function")', False),
+    ('ran.add("cross_function")', False),
+    ('inconclusive.discard("cross_function")', False),
+    ('other.inconclusive.add("cross_function")', False),
+    ('other._book_inconclusive("smt")', False),
+    ('_book_inconclusive', False),
+])
+def test_booking_tripwire_recognizes_only_inconclusive_writes(source, expected):
+    assert _is_book_call(ast.parse(source, mode="eval").body) is expected
 
 
 def _guard_only(test) -> bool:
@@ -692,7 +711,7 @@ class TestInconclusiveBookingTripwire:
     ], ids=["_run_tool_chain", "_proactive_validate"])
     def test_every_inconclusive_increment_books_the_channel(self, fn):
         """AST tripwire: every inconclusive tier increment sits in a
-        branch that also calls _book_inconclusive (with a minimum
+        branch that also records the inconclusive channel (with a minimum
         site count, so it cannot pass vacuously)."""
         tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
         parents = {}
