@@ -10,6 +10,15 @@ import pytest
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
 
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
+
 
 @pytest.mark.skipif(sys.platform != "linux", reason="Linux AF_UNIX backlog semantics")
 def test_full_upstream_queue_does_not_block_other_bridge(short_sock_dir):
@@ -47,9 +56,10 @@ def test_full_upstream_queue_does_not_block_other_bridge(short_sock_dir):
         except BaseException as exc:
             errors.append(exc)
 
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+    thread = None
     try:
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
         assert ready.wait(5), errors
         with socket.create_connection(("127.0.0.1", ports[0]), timeout=2) as client:
             assert client.recv(1) == b""
@@ -74,6 +84,8 @@ def test_full_upstream_queue_does_not_block_other_bridge(short_sock_dir):
             pass
         queued.close()
         stalled.close()
-        thread.join(5)
+        if thread is not None and thread.ident is not None:
+            thread.join(5)
+            assert not thread.is_alive(), "bridge worker survived cleanup"
         os.close(death_r)
         server.close()

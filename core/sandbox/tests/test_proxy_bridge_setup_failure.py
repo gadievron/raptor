@@ -5,10 +5,21 @@ import os
 import socket
 import threading
 
+import pytest
+
 from core.testing.module_bindings import patch_module_attribute
 
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
+
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
 
 
 def test_upstream_socket_exhaustion_allows_later_connection(
@@ -50,9 +61,10 @@ def test_upstream_socket_exhaustion_allows_later_connection(
             errors.append(exc)
 
     patch_module_attribute(monkeypatch, bridge, 'socket', "socket", socket_with_one_failure)
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+    thread = None
     try:
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
         assert ready.wait(5), errors
         with socket.create_connection(("127.0.0.1", ports[0]), timeout=5) as first:
             assert first.recv(1) == b""
@@ -63,7 +75,9 @@ def test_upstream_socket_exhaustion_allows_later_connection(
         assert len(attempts) == 2
     finally:
         os.close(death_w)
-        thread.join(5)
+        if thread is not None and thread.ident is not None:
+            thread.join(5)
+            assert not thread.is_alive(), "bridge worker survived cleanup"
         os.close(death_r)
         server.close()
     assert not thread.is_alive()

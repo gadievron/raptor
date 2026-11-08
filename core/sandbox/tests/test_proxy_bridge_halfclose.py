@@ -13,6 +13,15 @@ from core.testing.module_bindings import patch_module_attribute
 from core.sandbox import _proxy_bridge as bridge
 from core.sandbox.tests.socket_server import SocketServer
 
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
+
 
 def receive_all(conn):
     data = bytearray()
@@ -42,14 +51,17 @@ def running_bridge(short_sock_dir, handler):
         except BaseException as exc:
             errors.append(exc)
 
-    thread = threading.Thread(target=run, daemon=True)
-    thread.start()
+    thread = None
     try:
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
         assert ready.wait(5), errors
         yield ports[0], thread
     finally:
         os.close(death_w)
-        thread.join(5)
+        if thread is not None and thread.ident is not None:
+            thread.join(5)
+            assert not thread.is_alive(), "bridge worker survived cleanup"
         os.close(death_r)
         server.close()
     assert not thread.is_alive()
