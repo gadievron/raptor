@@ -94,6 +94,8 @@ from __future__ import annotations
 
 from collections.abc import Buffer, Iterable
 
+import errno
+import hashlib
 import logging
 import os
 import secrets
@@ -173,7 +175,7 @@ def _close_write_fd(fd: int, *, write_failed: bool) -> None:
     """Keep the operation's failure authoritative if closing also fails."""
     try:
         os.close(fd)
-    except OSError:
+    except BaseException:
         if not write_failed:
             raise
         logging.getLogger(__name__).warning(
@@ -208,6 +210,33 @@ def write_text_atomically(
         replace=replace,
         root=root,
     )
+
+
+def _atomic_temporary_name(name: str, prefix: str, nonce: str, parent: Path | int) -> str:
+    """Retain short staging names and bound long ones to the destination FS."""
+    if "\x00" in name or "\x00" in prefix:
+        raise ValueError("NUL in atomic staging name")
+    conventional = f"{prefix}{name}.{os.getpid()}.{threading.get_ident()}.{nonce}.tmp"
+    # Preserve normal component validation even when the fallback discards an
+    # overlong prefix. It must never turn a path-bearing prefix into a name.
+    Path(name).with_name(conventional)
+    try:
+        limit = (os.fpathconf(parent, 'PC_NAME_MAX') if isinstance(parent, int)
+                 else os.pathconf(parent, 'PC_NAME_MAX'))
+    except (AttributeError, OSError, ValueError):
+        limit = 255
+    if limit <= 0:
+        limit = 255
+    if len(os.fsencode(conventional)) <= limit:
+        return conventional
+    digest = hashlib.sha256(os.fsencode(name)).hexdigest()[:16]
+    temporary = f"{prefix}{digest}.{nonce}.tmp"
+    if len(os.fsencode(temporary)) > limit:
+        temporary = f".atomic-{digest}.{nonce}.tmp"
+    if len(os.fsencode(temporary)) > limit:
+        raise OSError(errno.ENAMETOOLONG,
+                      'Filesystem name limit cannot accommodate an atomic staging file', name)
+    return temporary
 
 
 def write_bytes_atomically(
@@ -270,11 +299,9 @@ def write_bytes_atomically(
     #     still can't predict the full path to pre-create a squat
     #     file. Combined with O_EXCL + O_NOFOLLOW below, symlink-
     #     through and pre-created-file attacks fail loud.
-    tid = threading.get_ident()
-    rand = secrets.token_hex(4)
-    tmp = path.with_name(
-        f"{tmp_prefix}{path.name}.{os.getpid()}.{tid}.{rand}.tmp",
-    )
+    tmp = path.with_name(_atomic_temporary_name(
+        path.name, tmp_prefix, secrets.token_hex(4), parent,
+    ))
 
     # O_EXCL: refuse if tempfile already exists (attacker squat, or
     # stale from a crashed prior invocation — either way the operator
@@ -378,10 +405,13 @@ def _write_bytes_beneath(path: Path, content: Buffer | Iterable[Buffer], *, root
     if not relative.name or "/" in tmp_prefix or "\x00" in tmp_prefix:
         raise ValueError("Unsafe anchored atomic destination")
     parent_fd = open_dir_beneath(root, relative.parent, create=True)
-    temporary = f"{tmp_prefix}{relative.name}.{os.getpid()}.{threading.get_ident()}.{secrets.token_hex(8)}.tmp"
+    temporary = ''
     created = False
     operation_failed = False
     try:
+        temporary = _atomic_temporary_name(
+            relative.name, tmp_prefix, secrets.token_hex(8), parent_fd,
+        )
         effective_mode = mode if mode is not None else 0o644
         if mode is None:
             try:
