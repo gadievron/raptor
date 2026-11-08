@@ -39,6 +39,8 @@ import stat as _stat_mod
 from io import BufferedReader
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 __all__ = [
     "ReadBudgetExceededError",
     "open_regular_gated",
@@ -92,8 +94,8 @@ def _open_gated(
         if fd >= 0:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except BaseException:
+                pass  # A failed open/validation already owns the primary error.
 
 
 def open_regular_gated(
@@ -166,7 +168,7 @@ def read_bytes_gated(
     when ``follow_symlinks=False`` meets a link).
     """
     fh, st = _open_gated(p, follow_symlinks=follow_symlinks)
-    with fh:
+    with preserving_stream_error(fh):
         if max_bytes is not None and st.st_size > max_bytes:
             msg = (
                 f"file size {st.st_size} bytes exceeds "

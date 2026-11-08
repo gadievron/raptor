@@ -9,6 +9,7 @@ from core.atomic_fs import publish_new_directory, rename_without_replace, rmtree
 from core.logging import get_logger
 from core.run.scratch import scratch_dir
 from core.source.gated import open_regular_gated
+from core.source.streams import preserving_stream_error
 from .import_transaction import _identity, _pin_entry
 
 logger = get_logger()
@@ -158,7 +159,7 @@ def _regular_copier():
     """
     links = {}
     def copy(source, destination):
-        with open_regular_gated(source, follow_symlinks=False) as reader:
+        with preserving_stream_error(open_regular_gated(source, follow_symlinks=False)) as reader:
             info = os.fstat(reader.fileno())
             key = (info.st_dev, info.st_ino)
             signature = _copy_signature(info)
@@ -175,7 +176,7 @@ def _regular_copier():
                     if exc.errno not in _LINK_UNSUPPORTED:
                         raise
             if not linked:
-                with open(destination, 'xb') as writer:
+                with preserving_stream_error(open(destination, 'xb')) as writer:
                     _copy_sparse_contents(reader, writer, info.st_size)
             if _copy_signature(os.fstat(reader.fileno())) != signature:
                 raise OSError('source file changed during copy')

@@ -18,6 +18,7 @@ from core.logging import get_logger
 from core.project.registry_home import refuse_registry_overlap
 from core.run.scratch import scratch_dir
 from core.source.gated import open_regular_gated
+from core.source.streams import preserving_stream_error
 from core.zip import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 
 logger = get_logger()
@@ -184,7 +185,7 @@ def validate_zip_contents(zip_path: Path) -> tuple[bool, list[str]]:
         return False, [str(e)]
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        with preserving_stream_error(zipfile.ZipFile(zip_path, "r")) as zf:
             try:
                 entries = _collect_bounded_infolist(zf)
             except _ZipBombShapeError as e:
@@ -287,7 +288,7 @@ def export_project(project_output_dir: Path, dest_path: Path,
 def _write_zip_regular(zf: zipfile.ZipFile, path: Path, arcname: str,
                        remaining: int) -> int:
     """Stream one opened regular inode, enforcing the importer's byte limit."""
-    with open_regular_gated(path, follow_symlinks=False) as source:
+    with preserving_stream_error(open_regular_gated(path, follow_symlinks=False)) as source:
         info = os.fstat(source.fileno())
         if info.st_size > remaining:
             raise ValueError('Project export exceeds the importable archive byte limit')
@@ -304,7 +305,7 @@ def _write_zip_regular(zf: zipfile.ZipFile, path: Path, arcname: str,
         entry.external_attr = info.st_mode << 16
         entry.file_size = info.st_size
         written = 0
-        with zf.open(entry, 'w', force_zip64=True) as destination:
+        with preserving_stream_error(zf.open(entry, 'w', force_zip64=True)) as destination:
             while True:
                 chunk = source.read(min(1024 * 1024, remaining - written + 1))
                 if not chunk:
@@ -320,7 +321,7 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
                        project_json_path: Path | None,
                        destination: Path) -> None:
     """Build the archive, excluding its own output and private staging."""
-    with zipfile.ZipFile(staged_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    with preserving_stream_error(zipfile.ZipFile(staged_path, "w", zipfile.ZIP_DEFLATED)) as zf:
         written = entries = 0
 
         def add(path, arcname, limit=None):
@@ -832,7 +833,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
     embedded_meta = None
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        with preserving_stream_error(zipfile.ZipFile(zip_path, "r")) as zf:
             # --- Security validation ---
             # Use the same entry-count cap that `validate_zip_contents`
             # applies (F029: pre-fix `import_project` re-implemented the
@@ -899,7 +900,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                     f"{meta_info.file_size} bytes — exceeds the "
                     f"{_MAX_PROJECT_META_BYTES}-byte metadata cap"
                 )
-            with zf.open(meta_path) as meta_fh:  # raw-open: ZIP metadata read capped at _MAX_PROJECT_META_BYTES + 1 below
+            with preserving_stream_error(zf.open(meta_path)) as meta_fh:  # raw-open: ZIP metadata read capped at _MAX_PROJECT_META_BYTES + 1 below
                 raw_meta = meta_fh.read(_MAX_PROJECT_META_BYTES + 1)
             if len(raw_meta) > _MAX_PROJECT_META_BYTES:
                 raise ValueError(
@@ -1070,7 +1071,7 @@ def _import_project(zip_path: Path, projects_dir: Path, force: bool,
                     raise ValueError(msg) from None
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 actual_size = 0
-                with zf.open(info, "r") as src, open(target_path, "wb") as dst:
+                with preserving_stream_error(zf.open(info, "r")) as src, preserving_stream_error(open(target_path, "wb")) as dst:
                     while True:
                         buf = src.read(chunk)
                         if not buf:

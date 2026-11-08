@@ -56,6 +56,7 @@ from typing import IO, TypeVar
 
 from core.paths import confine
 from core.source.beneath import open_regular_beneath
+from core.source.streams import preserving_stream_error
 
 __all__ = [
     "DEFAULT_MAX_SOURCE_CHARS",
@@ -172,7 +173,7 @@ def _read_probe_parts(f: IO[_Chunk], cap: int) -> list[_Chunk]:
 def _text_capped_from(f: IO, max_chars: int) -> tuple[str, bool] | None:
     """Capped read + truncation shaping on an already-vetted stream."""
     try:
-        with f:
+        with preserving_stream_error(f):
             content = "".join(_read_probe_parts(f, max_chars))
     except OSError:
         return None
@@ -208,7 +209,7 @@ def read_bytes_capped(
 
 def _bytes_capped_from(f: IO, max_bytes: int) -> tuple[bytes, bool] | None:
     try:
-        with f:
+        with preserving_stream_error(f):
             data = b"".join(_read_probe_parts(f, max_bytes))
     except OSError:
         return None
