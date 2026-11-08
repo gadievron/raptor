@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import re
 
+from .call_arguments import non_code_spans
+
 # (pattern, replacement) pairs.  Replacements include surrounding spaces
 # because the english phrases don't always sit next to whitespace; the
 # trailing collapse-whitespace pass tidies up.
@@ -168,27 +170,13 @@ def canonicalise(text: str) -> str:
                 code = pat.sub(repl, code)
         return _WHITESPACE_RUN.sub(' ', code)
 
-    # Preserve quoted source bytes. Rewriting English or collapsing spaces
-    # inside a call's literal arguments can merge distinct calls into one
-    # symbolic value and manufacture a contradiction.
+    # Keep literals and comments byte-for-byte. Their punctuation and
+    # English text do not belong to the condition grammar.
     pieces = []
-    start = index = 0
-    while index < len(out):
-        if out[index] not in {"'", '"'}:
-            index += 1
-            continue
-        pieces.append(rewrite_code(out[start:index]))
-        quote_start = index
-        quote = out[index]
-        index += 1
-        while index < len(out):
-            char = out[index]
-            index += 1
-            if char == "\\":
-                index += 1
-            elif char == quote:
-                break
-        pieces.append(out[quote_start:index])
-        start = index
+    start = 0
+    for span in non_code_spans(out):
+        pieces.append(rewrite_code(out[start:span.start]))
+        pieces.append(out[span.start:span.end])
+        start = span.end
     pieces.append(rewrite_code(out[start:]))
     return ''.join(pieces).strip()

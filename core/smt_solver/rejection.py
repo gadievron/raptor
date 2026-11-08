@@ -152,8 +152,9 @@ class RejectionKind(str, Enum):
     Call occurrences are always fresh, regardless of mutation markers."""
 
     UNMODELED_STATE_EFFECT = "unmodeled_state_effect"
-    """Call-shaped input may expose mutable state through address arguments.
-    Opaque argument syntax cannot establish purity or preserve scalar value
+    """Input may expose mutable state or contain uninspected lexical structure.
+    Opaque arguments, incomplete literals/comments and untranslated source tokens
+    cannot establish purity or preserve scalar value
     identity across the call. As with rejected assignments, native core
     provenance must confine a refutation to one mutation-free segment."""
 
