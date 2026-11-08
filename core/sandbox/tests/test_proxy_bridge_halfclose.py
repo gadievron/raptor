@@ -1,6 +1,6 @@
 """Relay EOF in one direction must leave the reverse direction usable."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import errno
 import os
 import socket
@@ -32,40 +32,49 @@ def receive_all(conn):
 
 @contextmanager
 def running_bridge(short_sock_dir, handler):
-    path = str(short_sock_dir / "upstream.sock")
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    listener.bind(path)
-    listener.listen()
-    server = SocketServer(listener, handler)
-    ready = threading.Event()
-    ports, errors = [], []
-    death_r, death_w = os.pipe()
+    with ExitStack() as cleanup:
+        path = str(short_sock_dir / "upstream.sock")
+        listener = cleanup.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_STREAM))
+        listener.bind(path)
+        listener.listen()
+        server = SocketServer(listener, handler)
+        cleanup.callback(server.close)
+        ready = threading.Event()
+        ports, errors = [], []
+        death_r, death_w = os.pipe()
+        cleanup.callback(os.close, death_r)
+        writer_cleanup = ExitStack()
+        writer_cleanup.callback(os.close, death_w)
 
-    def on_ready(bound):
-        ports.append(bound[0][0])
-        ready.set()
+        thread = None
 
-    def run():
-        try:
-            bridge._run_bridges([(0, path)], death_r, on_ready)
-        except BaseException as exc:
-            errors.append(exc)
+        def retire_relay():
+            if thread is not None and thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive(), "bridge worker survived cleanup"
 
-    thread = None
-    try:
+        cleanup.callback(retire_relay)
+        cleanup.callback(writer_cleanup.close)
+
+        def on_ready(bound):
+            ports.append(bound[0][0])
+            ready.set()
+
+        def run():
+            try:
+                bridge._run_bridges([(0, path)], death_r, on_ready)
+            except BaseException as exc:
+                errors.append(exc)
+
         thread = threading.Thread(target=run, daemon=True)
         thread.start()
         assert ready.wait(5), errors
         yield ports[0], thread
-    finally:
-        os.close(death_w)
-        if thread is not None and thread.ident is not None:
-            thread.join(5)
-            assert not thread.is_alive(), "bridge worker survived cleanup"
-        os.close(death_r)
-        server.close()
-    assert not thread.is_alive()
-    assert not errors
+        cleanup.close()
+
+        assert not thread.is_alive()
+        assert not errors
+
 
 
 @pytest.mark.parametrize("force_pending", [None, "request", "reply"])
