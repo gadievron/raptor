@@ -306,6 +306,10 @@ def test_next_pin_is_fresh():
     assert project.ProjectManager().list_projects() == []
 ''')
     env = dict(os.environ)
+    # Exercise only the explicitly loaded fixture owners and request guard.
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env.pop("PYTEST_PLUGINS", None)
+    env.pop("PYTEST_ADDOPTS", None)
     env.pop("RAPTOR_RANDOMISE_TESTS", None)
     env.pop("RAPTOR_TEST_LIVE_LLM", None)
     for key, leaf in (("HOME", "home"), ("TMPDIR", "tmp"), ("XDG_DATA_HOME", "data"),
