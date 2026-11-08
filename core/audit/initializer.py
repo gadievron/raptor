@@ -25,7 +25,7 @@ def initializer_text(text: str) -> str:
 def _builtin_scalar_value(node, source, depth=0):
     """Recognise builtin C++ results before excluding Boolean operators.
 
-    Unresolved calls, aliases, references and class operands may select an
+    Unresolved calls, aliases and class operands may select an
     overloaded operator whose result is not Boolean. No widths are inferred.
     """
     if node is None or depth > 64:
@@ -41,7 +41,7 @@ def _builtin_scalar_value(node, source, depth=0):
 
         name = source[node.start_byte:node.end_byte].decode("utf-8")
         record = visible_declarations(node, source, language="cpp").get(name)
-        if record is None or record[0] is None:
+        if record is None or record[1].type not in {"declaration", "parameter_declaration", "optional_parameter_declaration"}:
             return False
         owner = node.parent
         while owner is not None and owner.type not in {"function_definition", "lambda_expression"}:
@@ -54,6 +54,9 @@ def _builtin_scalar_value(node, source, depth=0):
             if not pending:
                 break
             item = pending.pop()
+            if (declaration.start_byte <= item.start_byte < declaration.end_byte
+                    and item.type.startswith(("attribute", "ms_", "declspec"))):
+                return False
             if item.type == "using_declaration" and any(child.type == "enum" for child in item.children):
                 return False  # imported enumerators need name/type resolution
             if item != owner and item.type in {"function_definition", "lambda_expression"}:
@@ -84,6 +87,14 @@ def _builtin_scalar_value(node, source, depth=0):
             types = [child for child in arguments.named_children if child.type != "comment"] if arguments is not None else []
             return len(types) == 1 and _builtin_scalar_value(types[0], source, depth + 1)
         return False
+    if kind == "subscript_expression":
+        index = node.child_by_field_name("index")
+        indices = node.child_by_field_name("indices")
+        if indices is not None:
+            items = [child for child in indices.named_children if child.type != "comment"]
+            index = items[0] if len(items) == 1 else None
+        return (_builtin_scalar_value(node.child_by_field_name("argument"), source, depth + 1)
+                and _builtin_scalar_value(index, source, depth + 1))
     if kind == "assignment_expression":
         return _builtin_scalar_value(node.child_by_field_name("left"), source, depth + 1)
     if kind in {"parenthesized_expression", "expression_statement", "unary_expression",
@@ -109,8 +120,8 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
     Boolean results (including C++ requirements), indices and conditional
     selectors do not themselves supply the wide integer being converted.
     This is candidate extraction, not callee-return typing or a proof of
-    the expression's range. Unresolved C++ predicate and address operators
-    retain possible leads.
+    the expression's range. Unresolved C++ operator results retain possible
+    leads, including assignment, comma and subscript overloads.
     """
     if value is None:
         return True
@@ -184,14 +195,19 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
             right = node.child_by_field_name("right")
             if operator is None or right is None:
                 return True
-            if source[operator.start_byte : operator.end_byte] != b"=":
-                # Compound assignment reads its left operand and returns the
-                # updated value; ordinary assignment only returns the RHS.
-                left = node.child_by_field_name("left")
-                if left is None:
-                    return True
+            left = node.child_by_field_name("left")
+            if left is None:
+                return True
+            if (source[operator.start_byte : operator.end_byte] != b"="
+                    or language == "cpp" and not _builtin_scalar_value(left, source)):
+                # Compound assignments and unresolved C++ assignment overloads
+                # may supply a result from their left operand.
                 stack.append(left)
             stack.append(right)
+            continue
+        if (language == "cpp" and kind in {"comma_expression", "subscript_expression"}
+                and not _builtin_scalar_value(node, source)):
+            stack.extend(node.named_children)
             continue
         if kind in {
             "cast_expression",
