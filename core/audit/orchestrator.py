@@ -12311,6 +12311,16 @@ def _compile_eager_invariants(
     reused_successes = 0
     fresh_attempts = 0
 
+    def _rule_digest(path):
+        from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
+
+        if not path:
+            return None
+        read = read_contained_bytes(config.out_dir or Path("."), path, DEFAULT_MAX_SOURCE_CHARS)
+        if read is None or read[1]:
+            return None
+        return hashlib.sha256(read[0]).hexdigest()
+
     def _compile(inv, engine, entry):
         nonlocal reused_rejections, reused_successes, fresh_attempts
         key = dumps_canonical({
@@ -12324,12 +12334,10 @@ def _compile_eager_invariants(
         cached = shared.eager_compile_successes.get(key)
         if cached is not None:
             prior, digest = cached
-            try:
-                if prior.rule_path and hashlib.sha256(prior.rule_path.read_bytes()).hexdigest() == digest:
-                    reused_successes += 1
-                    return prior
-            except OSError:
-                pass
+            current_digest = _rule_digest(prior.rule_path)
+            if current_digest is not None and current_digest == digest:
+                reused_successes += 1
+                return prior
             shared.eager_compile_successes.pop(key, None)
         if _deadline_reached():
             return None
@@ -12337,12 +12345,10 @@ def _compile_eager_invariants(
         result = compile_invariant(inv, engine, _llm, config.out_dir or Path("."))
         if not result.success and getattr(result, "control_rejected", False):
             shared.eager_compile_rejections.add(key)
-        if result.success and result.rule_path:
-            try:
-                digest = hashlib.sha256(result.rule_path.read_bytes()).hexdigest()
+        if result.success:
+            digest = _rule_digest(result.rule_path)
+            if digest is not None:
                 shared.eager_compile_successes[key] = (result, digest)
-            except OSError:
-                pass
         return result
 
     for entry in uncompiled:

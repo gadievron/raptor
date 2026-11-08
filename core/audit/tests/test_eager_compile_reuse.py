@@ -212,7 +212,7 @@ def test_successful_compilation_survives_unchanged_model_reload(eager_run, monke
     assert shared.domain_model['invariants'][0]['mechanical_rule'] == rule
 
 
-@pytest.mark.parametrize('change', ['rule_bytes', 'missing_rule', 'knowledge', 'model'])
+@pytest.mark.parametrize('change', ['rule_bytes', 'missing_rule', 'oversized_rule', 'outside_rule', 'knowledge', 'model'])
 def test_success_cache_rejects_changed_inputs(eager_run, monkeypatch, change):
     cfg, shared, entry, calls, _mode, client = eager_run
     _successful_engine(monkeypatch)
@@ -223,6 +223,13 @@ def test_success_cache_rejects_changed_inputs(eager_run, monkeypatch, change):
         prior.rule_path.write_text('changed rule')
     elif change == 'missing_rule':
         prior.rule_path.unlink()
+    elif change == 'oversized_rule':
+        from core.source import DEFAULT_MAX_SOURCE_CHARS
+        prior.rule_path.write_bytes(b'x' * (DEFAULT_MAX_SOURCE_CHARS + 1))
+    elif change == 'outside_rule':
+        outside = cfg.out_dir.parent / 'outside-rule.yaml'
+        outside.write_bytes(prior.rule_path.read_bytes())
+        prior.rule_path = outside
     elif change == 'knowledge':
         entry['source_hash'] = 'changed-source'
     else:
@@ -252,4 +259,37 @@ def test_expiry_during_proposal_prevents_fallback_and_retries(eager_run):
     mode['errors'] = ['scanner timed out']
     _compile_eager_invariants(cfg, shared, {})
     assert len(calls) == 1
+    assert not shared.eager_compile_successes
+
+
+@pytest.mark.parametrize('kind', ['missing', 'directory', 'oversized', 'outside'])
+def test_successful_rules_without_a_complete_contained_read_are_not_cached(eager_run, monkeypatch, kind):
+    from core.concepts.compiler import CompilationResult
+    from core.source import DEFAULT_MAX_SOURCE_CHARS
+
+    cfg, shared, entry, _calls, _mode, _client = eager_run
+    cfg.out_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg.out_dir / 'rule.yaml'
+    if kind == 'directory':
+        path.mkdir()
+    elif kind == 'oversized':
+        path.write_bytes(b'x' * (DEFAULT_MAX_SOURCE_CHARS + 1))
+    elif kind == 'outside':
+        path = cfg.out_dir.parent / 'outside-rule.yaml'
+        path.write_text(_RESPONSE['rule_body'])
+    result = CompilationResult(invariant_id='inv', rule_id='test',
+                               rule_body=_RESPONSE['rule_body'], dual_control=True, rule_path=path)
+    compiled = []
+
+    def compile_rule(*args):
+        compiled.append(args)
+        return result
+
+    monkeypatch.setattr('core.concepts.compiler.compile_invariant', compile_rule)
+    _compile_eager_invariants(cfg, shared, {})
+    assert shared.domain_model['invariants'][0]['mechanical_rule'] == 'test'
+    assert not shared.eager_compile_successes
+    shared.domain_model = {'invariants': [deepcopy(entry)]}
+    _compile_eager_invariants(cfg, shared, {})
+    assert len(compiled) == 2
     assert not shared.eager_compile_successes
