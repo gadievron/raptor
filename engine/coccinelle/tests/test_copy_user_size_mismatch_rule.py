@@ -206,3 +206,32 @@ def test_local_array_shadow_is_not_parameter_pointer_size(tmp_path, initializer)
     """
     rows = _run_rule(tmp_path, source.replace("char src[32];", f"char src[32]{initializer};"))
     assert rows == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = 'struct foo { int a[8]; };\n'
+    source = prefix + 'int partial(struct foo *user, unsigned long length) { char local[4]; return copy_from_user(local, user, length); }' + "\n"
+    partial_line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'int other(struct foo *user) { struct foo local; return copy_from_user(&local, user, sizeof(user)); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["rule"] == 'copy_from_user_sizeof_ptr'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=partial_line, line_end=partial_line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches
+    assert len(result.matches) == int(other_hit)

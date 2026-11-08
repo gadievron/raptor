@@ -11,6 +11,7 @@
 // A match is not independent proof of a reachable security defect.
 // CWE-682: Incorrect Calculation
 // @role: detection
+// raptor: confirm-only
 
 // Select literal-shaped counts before crossing into Python. Keep the
 // optional sign branch separate so whitespace runs have no ambiguous split.

@@ -5,6 +5,7 @@
 // conventions are deliberately excluded. Only explicit size_t counts fire.
 // Covers CWE-195 / CWE-681.
 // @role: detection
+// raptor: confirm-only
 @negative_errno@
 type T;
 identifier fn;

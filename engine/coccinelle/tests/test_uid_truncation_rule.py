@@ -187,3 +187,28 @@ def test_uid_casts_keep_production_batching(tmp_path, monkeypatch):
     assert all(match.rule == "uid_truncation" and match.message.startswith("Candidate:") for match in results["uid_truncation"].matches)
     assert len(results["integer_overflow_alloc"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_integer_rule_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    source = ("typedef unsigned int uid_t;\n"
+              "unsigned short partial(uid_t uid) { return uid; }\n")
+    if other_hit:
+        source += "unsigned short other(uid_t uid) { return (unsigned short)uid; }\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=2, line_end=2, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches

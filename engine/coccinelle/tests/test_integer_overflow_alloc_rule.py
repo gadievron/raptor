@@ -213,3 +213,32 @@ def test_overflow_branch_allocation_is_not_protected(tmp_path, condition, value)
     """)
     assert len(rows) == 1
     assert rows[0]["rule"] == "integer_overflow_alloc"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = 'typedef unsigned long size_t;\n'
+    source = prefix + 'void *partial(size_t count) { return malloc(count * sizeof(int)); }' + "\n"
+    partial_line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'void *other(size_t rows, size_t cols) { return malloc(rows * cols); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["rule"] == 'integer_overflow_alloc'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=partial_line, line_end=partial_line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches
+    assert len(result.matches) == int(other_hit)

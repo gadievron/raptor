@@ -12,6 +12,7 @@
 // include/uapi/asm-generic/posix_types.h and the architecture overrides.
 // CWE-681: Incorrect Conversion between Numeric Types
 // @role: detection
+// raptor: confirm-only
 
 @uid_cast@
 typedef __old_uid_t, __old_gid_t, __kernel_old_uid_t, __kernel_old_gid_t;

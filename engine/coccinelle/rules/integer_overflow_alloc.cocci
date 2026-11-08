@@ -34,6 +34,7 @@
 // by the caller, so a hit is a lead for taint/reachability analysis,
 // not a self-standing confirmed verdict.
 // @role: detection
+// raptor: confirm-only
 
 // --- Find all allocations with a multiplicative size argument ---
 

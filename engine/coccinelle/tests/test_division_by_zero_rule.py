@@ -259,3 +259,85 @@ def test_divisor_candidates_keep_production_batching(tmp_path, monkeypatch):
     assert all(match.message.startswith("Candidate:") for match in results["division_by_zero"].matches)
     assert len(results["integer_overflow_alloc"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = ''
+    source = prefix + 'int partial(int total, int count) { return total / count; }' + "\n"
+    partial_line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'int other(int total, int count) { int value = total / count; if (count == 0) return 0; return value; }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["rule"] == 'division_by_zero_param'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=partial_line, line_end=partial_line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches
+    assert len(result.matches) == int(other_hit)
+
+
+
+@pytest.mark.integration
+def test_partial_cwe_arithmetic_chain_keeps_silence_uncertain(tmp_path, monkeypatch):
+    from core.audit.cwe_dispatch import resolve_cocci_rules_for_cwe
+    from core.audit.orchestrator import OrchestratorConfig, _run_tool_chain
+    from packages.coccinelle import runner
+
+    source = "unsigned int partial(int count, int divisor) { return (1U << count) / divisor; }\n"
+    (tmp_path / "partial.c").write_text(source)
+    out = tmp_path / "out"
+    out.mkdir()
+    config = OrchestratorConfig(
+        target_path=tmp_path, out_dir=out,
+        inventory={"files": [{"path": "partial.c", "language": "c",
+                             "items": [{"name": "partial", "line": 1, "line_end": 1}]}]},
+    )
+    names = {"shift_overflow", "division_by_zero"}
+    rules = [rule for rule in resolve_cocci_rules_for_cwe("CWE-682") if Path(rule).stem in names]
+    assert {Path(rule).stem for rule in rules} == names
+    chain = [{"type": "coccinelle", "config": {"rule": rule}} for rule in rules]
+    original = runner._confined_default_runner
+    calls = []
+
+    def observe(*args, **kwargs):
+        execute = original(*args, **kwargs)
+
+        def invoke(argv, **options):
+            calls.append(tuple(argv))
+            return execute(argv, **options)
+
+        return invoke
+
+    monkeypatch.setattr(runner, "_confined_default_runner", observe)
+    hypothesis = "an invalid shift or zero divisor may reach this calculation"
+    for _ in range(2):
+        inconclusive, errors, skipped = set(), set(), set()
+        result = _run_tool_chain(
+            chain, config=config, file_path="partial.c", function_name="partial",
+            source=source, hypothesis=hypothesis, cwe="CWE-682", line_start=1,
+            inconclusive_types=inconclusive, errored_types=errors, skipped_types=skipped,
+        )
+        assert result.source_identity is not None
+        assert not errors and not skipped
+        assert len(result.outcomes) == 2
+        assert {Path(probe.rule_id).stem for probe in result.outcomes} == names
+        assert result.refutation(file="partial.c", function="partial", line_start=1,
+                                 hypothesis=hypothesis) is None, result.outcomes
+        assert all(probe.verdict == "inconclusive" for probe in result.outcomes)
+        assert inconclusive == {"coccinelle"}
+        assert not result
+        assert len(calls) == 2, "the second dispatch must reuse both file sweeps"

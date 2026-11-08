@@ -237,6 +237,18 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
 
 
 @pytest.mark.parametrize("owner,reported", [
+    ("uid_truncation", "uid_truncation"),
+    ("shift_overflow", "shift_overflow"),
+    ("shift_overflow", "shift_overflow_int"),
+    ("shift_overflow", "shift_overflow_long"),
+    ("shift_overflow", "shift_overflow_negative"),
+    ("division_by_zero", "division_by_zero"),
+    ("division_by_zero", "division_by_zero_param"),
+    ("division_by_zero", "modulo_by_zero_param"),
+    ("copy_user_size_mismatch", "copy_user_size_mismatch"),
+    ("copy_user_size_mismatch", "copy_from_user_sizeof_ptr"),
+    ("integer_overflow_alloc", "integer_overflow_alloc"),
+    ("negative_errno_unsigned_return", "negative_errno_unsigned_return"),
     ("alloc_narrow_count", "alloc_narrow_count"),
     ("double_sizeof", "double_sizeof"),
     ("double_sizeof", "pointer_scaling_double"),
@@ -245,7 +257,7 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
     ("sizeof_array_param", "sizeof_array_param"),
     ("sizeof_array_param", "sizeof_array_param_unsized"),
 ])
-def test_sizing_patterns_require_independent_capacity_evidence(monkeypatch, owner, reported):
+def test_partial_patterns_require_independent_evidence(monkeypatch, owner, reported):
     from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
     from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
 
