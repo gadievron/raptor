@@ -238,14 +238,16 @@ calls that mix correct and incorrect flag types. Similarly named identifiers
 and flags that are masked out do not trigger these reports. Numeric flag
 values and indirect flag definitions need source review.
 
-The directory-ownership check detects closing both an `fdopendir` stream and
-its underlying descriptor in either order. It stops following an ownership
-chain when the relevant pointer or descriptor is replaced or passed by address,
-and excludes explicit descriptor rebinding between releases. Arithmetic and
-bitwise assignments end tracking too. Direct self-duplication, such as
-`dup2(fd, fd)`, does not repair a closed descriptor or suppress the report.
-Only the destination argument of `dup2`/`dup3` counts as rebinding. The check
-follows direct uses rather than aliases.
+The directory-ownership check flags cleanup paths that close both a directory
+stream created by `fdopendir` and its descriptor, in either order. After a
+successful ownership transfer, normal cleanup uses `closedir` alone. Review
+creation and release results, ownership, and possible descriptor reuse before
+confirming a bug. Preserve legitimate failure-path cleanup when fixing a report.
+
+The check follows local names, direct fields and constant-index array elements.
+Replacements and address-taking can end tracking; aliases, pointer slots,
+variable indices and computed expressions need separate review. A missing
+report does not establish that those cleanup paths are correct.
 
 The mapping-release check covers `mmap`, `mmap64` and `mremap`. It reports
 `free` on a mapping-derived pointer, including through C-style pointer casts
