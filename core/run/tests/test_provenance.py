@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -393,18 +392,25 @@ class TestTargetSnapshot(unittest.TestCase):
 class TestDetectEngines(unittest.TestCase):
 
     def test_empty_dir(self):
-        with TemporaryDirectory() as d:
+        with TemporaryDirectory() as d, mock.patch(
+            "core.run.provenance.tool_version",
+        ) as versions:
             self.assertEqual(detect_engines(Path(d)), {})
+            versions.assert_not_called()
 
     def test_detects_from_canonical_output_files(self):
-        with TemporaryDirectory() as d:
+        expected = {"semgrep": "fixture-semgrep", "coccinelle": None}
+        with TemporaryDirectory() as d, mock.patch(
+            "core.run.provenance.tool_version", side_effect=expected.__getitem__,
+        ) as versions:
             out = Path(d)
             (out / "semgrep_owasp.sarif").write_text("{}")
             (out / "cocci.sarif").write_text("{}")
             eng = detect_engines(out)
-            self.assertIn("semgrep", eng)
-            self.assertIn("coccinelle", eng)
-            self.assertNotIn("codeql", eng)
+            self.assertEqual(eng, expected)
+            self.assertCountEqual(versions.call_args_list, [
+                mock.call("semgrep"), mock.call("coccinelle"),
+            ])
 
 
 class TestBuildStartManifestTarget(unittest.TestCase):
@@ -502,11 +508,15 @@ class TestToolVersion(unittest.TestCase):
             self.assertIsNone(tool_version("semgrep"))
 
     def test_absent_tool_returns_none(self):
-        # 'coccinelle' probes `spatch`; if it isn't installed the probe must
-        # degrade to None rather than raise.
-        if shutil.which("spatch"):
-            self.skipTest("spatch installed — can't exercise the absent path")
-        self.assertIsNone(tool_version("coccinelle"))
+        import core.run.provenance as prov
+        import core.run.toolprobe as toolprobe
+
+        with mock_module_attribute(
+            toolprobe, 'shutil', "which", return_value=None,
+        ) as lookup, mock_module_attribute(prov, 'subprocess', "run") as execute:
+            self.assertIsNone(tool_version("coccinelle"))
+        lookup.assert_called_once_with("spatch")
+        execute.assert_not_called()
 
 
 class TestStandardCompletionProvenance(unittest.TestCase):
@@ -526,7 +536,11 @@ class TestStandardCompletionProvenance(unittest.TestCase):
 
     def test_engines_detected_for_any_command(self):
         from core.run.provenance import standard_completion_provenance
-        with TemporaryDirectory() as d:
+        expected = {"semgrep": "fixture-semgrep", "codeql": None,
+                    "coccinelle": "fixture-spatch"}
+        with TemporaryDirectory() as d, mock.patch(
+            "core.run.provenance.tool_version", side_effect=expected.__getitem__,
+        ) as versions:
             out = Path(d)
             # Real output filenames: semgrep_*.sarif, codeql_*.sarif, cocci.sarif.
             (out / "semgrep_semgrep_injection.sarif").write_text("{}")
@@ -535,9 +549,10 @@ class TestStandardCompletionProvenance(unittest.TestCase):
             # Even a non-scan command captures engines now (uniform coverage);
             # only the reproducibility verdict differs by command.
             m = standard_completion_provenance(out, "validate")
-            self.assertIn("semgrep", m["engines"])
-            self.assertIn("codeql", m["engines"])
-            self.assertIn("coccinelle", m["engines"])
+            self.assertEqual(m["engines"], expected)
+            self.assertCountEqual(versions.call_args_list, [
+                mock.call("semgrep"), mock.call("codeql"), mock.call("coccinelle"),
+            ])
             self.assertFalse(m["deterministically_reproducible"])
 
     def test_scan_reproducible_with_no_output(self):
@@ -828,13 +843,16 @@ class TestUniformCompletionEnrichment(unittest.TestCase):
         # manifest=. They must still get engines + reproducibility — this is
         # the uneven-coverage gap closed.
         from core.run import complete_run, load_run_metadata, start_run
-        with TemporaryDirectory() as d:
+        with TemporaryDirectory() as d, mock.patch(
+            "core.run.provenance.tool_version", return_value="fixture-semgrep",
+        ) as versions:
             out = Path(d) / "validate-run"
             start_run(out, "validate", target=str(Path(d)))
             (out / "semgrep_x.sarif").write_text("{}")
             complete_run(out)  # no manifest — the stub path
             m = load_run_metadata(out)["manifest"]
-            self.assertIn("semgrep", m["engines"])
+            self.assertEqual(m["engines"], {"semgrep": "fixture-semgrep"})
+            versions.assert_called_once_with("semgrep")
             self.assertFalse(m["deterministically_reproducible"])
 
     def test_caller_supplied_key_is_not_clobbered(self):
