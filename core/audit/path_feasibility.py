@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 _PREDICATE_JOIN_RE = re.compile(r"(?:and|or)\b", re.IGNORECASE)
 
 
+def _require_condition_text(text: Any) -> str:
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("path-condition text must be a non-empty string")
+    return text
+
+
 @dataclass
 class PathCondition:
     text: str
@@ -46,6 +52,7 @@ class PathCondition:
 
     def to_smt_condition(self) -> str | dict[str, Any]:
         require_bool(self.negated, argument="negated")
+        _require_condition_text(self.text)
         if self.negated:
             return {"text": self.text, "negated": True}
         return self.text
@@ -59,6 +66,26 @@ class FeasibilityResult:
     error: str = ""
 
 
+def _trace_conditions(raw: Any, source: str) -> list[PathCondition]:
+    """Admit a complete condition collection without dropping malformed cells."""
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        raise ValueError("path_conditions must be a string or a list")
+    conditions = []
+    for value in raw:
+        if isinstance(value, str):
+            conditions.append(PathCondition(_require_condition_text(value), source=source))
+        elif isinstance(value, dict):
+            conditions.append(PathCondition(
+                _require_condition_text(value.get("text")),
+                negated=value.get("negated", False), source=source,
+            ))
+        else:
+            raise ValueError("each path condition must be a string or a text record")
+    return conditions
+
+
 def extract_conditions_from_flow_trace(
     trace: dict[str, Any],
 ) -> list[PathCondition]:
@@ -69,9 +96,12 @@ def extract_conditions_from_flow_trace(
     - List of strings: ["size > 0", "buf != NULL"]
     - List of dicts: [{"text": "size > 0", "negated": false}]
 
-    A present negated flag must be a Boolean. Invalid polarity raises
-    ValueError so the enclosing check can decline the entire trace.
+    Condition collections and cells must be complete, with nonempty text
+    and Boolean polarity. Invalid metadata raises ValueError so the enclosing
+    check can decline the entire trace rather than solve a shortened subset.
     """
+    if not isinstance(trace, dict):
+        raise ValueError("flow trace must be a dictionary")
     conditions = []
 
     raw_steps = trace.get("steps", trace.get("hops", []))
@@ -83,41 +113,12 @@ def extract_conditions_from_flow_trace(
         if not isinstance(step, dict):
             # LLM-authored traces can carry malformed steps.
             continue
-        raw_conditions = step.get("path_conditions", [])
-        if isinstance(raw_conditions, str):
-            # A bare string char-iterates into one-character
-            # conditions handed to the SMT verb — treat it as a
-            # single condition.
-            raw_conditions = [raw_conditions]
-        elif not isinstance(raw_conditions, list):
-            raw_conditions = []
-        for cond in raw_conditions:
-            if isinstance(cond, str):
-                conditions.append(PathCondition(
-                    text=cond,
-                    source=step.get("definition", step.get("file", "")) or "",
-                ))
-            elif isinstance(cond, dict):
-                conditions.append(PathCondition(
-                    text=cond.get("text", ""),
-                    negated=cond.get("negated", False),
-                    source=step.get("definition", step.get("file", "")) or "",
-                ))
+        conditions.extend(_trace_conditions(
+            step.get("path_conditions", []),
+            step.get("definition", step.get("file", "")) or "",
+        ))
 
-    top_level = trace.get("path_conditions", [])
-    if isinstance(top_level, str):
-        top_level = [top_level]
-    elif not isinstance(top_level, list):
-        top_level = []
-    for cond in top_level:
-        if isinstance(cond, str):
-            conditions.append(PathCondition(text=cond, source="trace"))
-        elif isinstance(cond, dict):
-            conditions.append(PathCondition(
-                text=cond.get("text", ""),
-                negated=cond.get("negated", False),
-                source="trace",
-            ))
+    conditions.extend(_trace_conditions(trace.get("path_conditions", []), "trace"))
 
     return conditions
 
@@ -263,12 +264,7 @@ def check_path_feasibility(
         )
 
     try:
-        smt_conditions = [c.to_smt_condition() for c in conditions if c.text]
-        if not smt_conditions:
-            return FeasibilityResult(
-                feasible=None,
-                reasoning="all conditions were empty after filtering",
-            )
+        smt_conditions = [c.to_smt_condition() for c in conditions]
 
         from .sweep import run_smt_sweep
 
@@ -286,18 +282,31 @@ def check_path_feasibility(
         # The sweep's outcome is about claim admission; these explicit
         # details answer only the mathematical question about our inputs.
         details = result.details or {}
-        if details.get("oracle_scope") == "supplied-predicates" and not result.errors:
+        if result.errors:
+            return FeasibilityResult(
+                conditions=list(conditions),
+                reasoning=result.raw_output or "SMT path-condition query failed",
+                error="; ".join(result.errors),
+            )
+        if details.get("smt_available") is False:
+            return FeasibilityResult(
+                conditions=list(conditions), reasoning="SMT solver unavailable",
+            )
+        partial = bool(details.get("unknown") or details.get("unknown_reasons"))
+        if details.get("oracle_scope") == "supplied-predicates":
             feasible = details.get("feasible")
             return FeasibilityResult(
-                feasible=feasible if isinstance(feasible, bool) else None,
+                feasible=feasible if isinstance(feasible, bool) and not (feasible and partial) else None,
                 conditions=list(conditions),
-                reasoning=result.raw_output or "predicate feasibility observation",
+                reasoning=("encoded predicate subset is satisfiable; complete conjunction unavailable"
+                           if feasible is True and partial else result.raw_output or "predicate feasibility observation"),
             )
         if result.outcome == "confirmed":
             return FeasibilityResult(
-                feasible=True,
+                feasible=None if partial else True,
                 conditions=list(conditions),
-                reasoning=result.raw_output or "conditions are satisfiable",
+                reasoning=("encoded predicate subset is satisfiable; complete conjunction unavailable"
+                           if partial else result.raw_output or "conditions are satisfiable"),
             )
         if result.outcome == "refuted":
             return FeasibilityResult(
@@ -316,6 +325,7 @@ def check_path_feasibility(
         return FeasibilityResult(
             feasible=None,
             conditions=list(conditions),
+            reasoning="path-condition query incomplete: " + str(exc),
             error=str(exc),
         )
 
