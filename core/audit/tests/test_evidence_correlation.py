@@ -359,39 +359,57 @@ class TestRecordUncorrelatedHits:
 
 
 class TestMechDetectorPromotion:
-    """Prep-phase mechanical detector hits join the promotion pass."""
+    """Only correlated verification-grade prep hits can promote a verdict."""
 
     UAF_HYP = "use after free: object written after early free"
+    ROLE_CASES = [
+        pytest.param("use_after_free", UAF_HYP, "CWE-416", False, id="detection-uaf"),
+        pytest.param("free_stack_array", "stack array passed to free", "CWE-590", True, id="verified-stack-release"),
+    ]
 
-    def _mech(self, detector, func="handler"):
+    @pytest.fixture(autouse=True)
+    def _owned_rule_library(self, monkeypatch):
+        monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
+
+    def _mech(self, detector, func="handler", description="freed then used"):
         return {
             f"src/a.c:{func}": [{
                 "file": "src/a.c",
                 "function": func,
                 "detector": detector,
                 "line": 11,
-                "description": "freed then used",
+                "description": description,
             }],
         }
 
-    def test_correlated_cocci_hit_returns_tool_id(self):
+    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", ROLE_CASES)
+    def test_correlated_cocci_hit_requires_verification_role(self, rule, hypothesis, cwe, promotes):
+        from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import _correlated_mech_detector_tool
 
-        outcome = _mk_outcome(self.UAF_HYP)
+        receipt = f"coccinelle:{rule}"
+        # An unknown dynamic-rule fallback is not a valid positive control.
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert is_verification_evidence(receipt) is promotes
+        outcome = _mk_outcome(hypothesis, cwe)
         tool = _correlated_mech_detector_tool(
-            outcome, self.UAF_HYP, "CWE-416",
-            self._mech("cocci:use_after_free"),
+            outcome, hypothesis, cwe,
+            self._mech(f"cocci:{rule}", description=hypothesis),
         )
-        assert tool == "coccinelle:use_after_free"
+        assert tool == (receipt if promotes else None)
 
     def test_uncorrelated_cocci_hit_returns_none(self):
+        from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import _correlated_mech_detector_tool
 
+        # Exercise correlation independently of the detection-role veto.
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules/free_stack_array.cocci").is_file()
+        assert is_verification_evidence("coccinelle:free_stack_array")
         outcome = _mk_outcome("SQL injection via string concat")
         tool = _correlated_mech_detector_tool(
             outcome,
             "SQL injection via string concat", "CWE-89",
-            self._mech("cocci:use_after_free"),
+            self._mech("cocci:free_stack_array", description="stack array passed to free"),
         )
         assert tool is None
 
@@ -415,13 +433,20 @@ class TestMechDetectorPromotion:
         )
         assert tool is None
 
-    def test_promote_suspicious_uses_mech_hit(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("rule,hypothesis,cwe,promotes", ROLE_CASES)
+    def test_promote_suspicious_requires_verification_grade_mech_hit(
+        self, tmp_path, monkeypatch, rule, hypothesis, cwe, promotes,
+    ):
+        from core.audit.evidence_grade import is_verification_evidence
         from core.audit.orchestrator import (
             OrchestratorResult,
             _promote_suspicious,
         )
 
-        outcome = _mk_outcome(self.UAF_HYP)
+        receipt = f"coccinelle:{rule}"
+        assert (Path(__file__).resolve().parents[3] / "engine/coccinelle/rules" / f"{rule}.cocci").is_file()
+        assert is_verification_evidence(receipt) is promotes
+        outcome = _mk_outcome(hypothesis, cwe)
         outcome.status = "suspicious"
         result = OrchestratorResult()
         result.outcomes = [outcome]
@@ -430,11 +455,13 @@ class TestMechDetectorPromotion:
         _patch_common(monkeypatch, hits=[], chain_confirms=[])
         _promote_suspicious(
             result, _mk_config(tmp_path),
-            mechanical_findings=self._mech("cocci:use_after_free"),
+            mechanical_findings=self._mech(f"cocci:{rule}", description=hypothesis),
         )
-        assert result.outcomes[0].status == "finding"
-        assert result.outcomes[0].evidence_tool == "coccinelle:use_after_free"
-        assert result.sweep_promoted == 1
+        assert result.outcomes[0].status == ("finding" if promotes else "suspicious")
+        assert result.outcomes[0].evidence_tool == (receipt if promotes else "")
+        assert result.sweep_promoted == int(promotes)
+        assert result.findings == int(promotes)
+        assert result.suspicious == int(not promotes)
 
     def test_corroboration_sees_mech_hits(self, tmp_path, monkeypatch):
         from core.audit.orchestrator import _has_mechanical_corroboration
@@ -450,6 +477,8 @@ class TestMechDetectorPromotion:
             lambda **kw: _PF(),
         )
         outcome = _mk_outcome(self.UAF_HYP)
+        # A detection hit remains review context. This helper's presence
+        # check must not be confused with promotion-grade correlation.
         assert _has_mechanical_corroboration(
             outcome, _mk_config(tmp_path), None, None,
             mechanical_findings=self._mech("cocci:use_after_free"),
