@@ -25,6 +25,7 @@ import re
 from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass
+from itertools import chain, islice
 from typing import Any
 from core.source.lines import iter_source_lines, split_lines
 from core.source.line_index import LineSpanIndex
@@ -34,11 +35,20 @@ from .run_memo import BoundedMemo
 logger = logging.getLogger(__name__)
 
 _SENTINEL_LINES_IMPL = split_lines
+_FORWARD_TYPE_IMPL = type
+_FORWARD_LEN_IMPL = len
+_FORWARD_MIN_IMPL = min
+_FORWARD_RANGE_IMPL = range
+_FORWARD_ENUM_IMPL = enumerate
+_FORWARD_RE_SEARCH_IMPL = re.search
+_FORWARD_RE_ESCAPE_IMPL = re.escape
 
 _SENTINEL_PY_DEF_RE = re.compile(r"\s*(?:async\s+)?def\s+(\w+)\s*\(")
 _SENTINEL_GO_DEF_RE = re.compile(r"\s*func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(")
 _SENTINEL_GO_NIL_PAIR_RE = re.compile(r"return\s+nil\s*,\s*nil\b")
 _SENTINEL_PY_INDENT_DEF_RE = re.compile(r"(\s*)(?:async\s+)?def\s+(\w+)\s*\(")
+_FORWARD_PY_HEADER_IMPL = _SENTINEL_PY_INDENT_DEF_RE
+_FORWARD_GO_HEADER_IMPL = _SENTINEL_GO_DEF_RE
 
 
 @dataclass
@@ -293,6 +303,24 @@ _GO_NIL_COERCE = re.compile(
 )
 
 
+_FORWARD_GO_MAP_IMPL = _GO_MAP_NO_OK
+_FORWARD_GO_COERCE_IMPL = _GO_NIL_COERCE
+
+
+def _lines_with_pending(lines, pending):
+    """Replay prefetched native rows before advancing the source iterator."""
+    for line in lines:
+        yield line
+        while pending:
+            yield pending.popleft()
+
+
+def _forward_window(line, lines, pending):
+    """Prepare five rows only when a candidate needs forward context."""
+    pending.extend(islice(lines, 4 - len(pending)))
+    return chain((line,), pending)
+
+
 def _detect_go_sentinel(
     path: str,
     source: str,
@@ -319,10 +347,24 @@ def _detect_go_sentinel(
                 ) for fr in ts_returns if fr.sentinel_ambiguous)
 
     # --- regex path for map-without-comma-ok (no tree-sitter equivalent) ---
-    lines = split_lines(source)
+    streaming = (ts_returns is not None and _FORWARD_TYPE_IMPL(source) is str
+                 and split_lines is _SENTINEL_LINES_IMPL
+                 and len is _FORWARD_LEN_IMPL and min is _FORWARD_MIN_IMPL
+                 and enumerate is _FORWARD_ENUM_IMPL
+                 and _SENTINEL_GO_DEF_RE is _FORWARD_GO_HEADER_IMPL
+                 and _GO_MAP_NO_OK is _FORWARD_GO_MAP_IMPL
+                 and _GO_NIL_COERCE is _FORWARD_GO_COERCE_IMPL)
+    # The native map/coercion regexes require both literals. Parser
+    # findings above are already complete; no line work can add a witness.
+    if streaming and ("[" not in source or "nil" not in source):
+        return results
+    lines = [] if streaming else split_lines(source)
+    source_lines = iter_source_lines(source) if streaming else None
+    pending = deque()
+    rows = _lines_with_pending(source_lines, pending) if streaming else lines
     current_func = "<module>"
 
-    for lineno_0, line in enumerate(lines):
+    for lineno_0, line in enumerate(rows):
         lineno = lineno_0 + 1
         fm = _SENTINEL_GO_DEF_RE.match(line)
         if fm:
@@ -336,8 +378,11 @@ def _detect_go_sentinel(
             bracket_idx = len(line)
         if m and "," not in line[:bracket_idx]:
             var_name = m.group(1)
-            window_end = min(lineno_0 + 5, len(lines))
-            window = "\n".join(lines[lineno_0:window_end])
+            if streaming:
+                window = "\n".join(_forward_window(line, source_lines, pending))
+            else:
+                window_end = min(lineno_0 + 5, len(lines))
+                window = "\n".join(lines[lineno_0:window_end])
             if _GO_NIL_COERCE.search(window):
                 results.append(SentinelCollapse(
                     file=path,
@@ -885,11 +930,27 @@ def _find_coercion_of_call(
     callee_name: str,
 ) -> int | None:
     """Find a line where the caller coerces the callee's return value."""
-    lines = split_lines(source)
+    streaming = (_FORWARD_TYPE_IMPL(source) is str
+                 and _FORWARD_TYPE_IMPL(caller_name) is str
+                 and _FORWARD_TYPE_IMPL(callee_name) is str
+                 and split_lines is _SENTINEL_LINES_IMPL
+                 and len is _FORWARD_LEN_IMPL and min is _FORWARD_MIN_IMPL
+                 and range is _FORWARD_RANGE_IMPL and enumerate is _FORWARD_ENUM_IMPL
+                 and _SENTINEL_PY_INDENT_DEF_RE is _FORWARD_PY_HEADER_IMPL
+                 and re.search is _FORWARD_RE_SEARCH_IMPL
+                 and re.escape is _FORWARD_RE_ESCAPE_IMPL)
+    # Exact native identifiers must occur verbatim in any header/call
+    # witness. A negative probe cannot hide a matching source line.
+    if streaming and (caller_name not in source or callee_name not in source):
+        return None
+    lines = [] if streaming else split_lines(source)
+    source_lines = iter_source_lines(source) if streaming else None
+    pending = deque()
+    rows = _lines_with_pending(source_lines, pending) if streaming else lines
     in_caller = False
     caller_indent = 0
 
-    for lineno_0, line in enumerate(lines):
+    for lineno_0, line in enumerate(rows):
         fm = _SENTINEL_PY_INDENT_DEF_RE.match(line)
         if fm:
             if fm.group(2) == caller_name:
@@ -912,9 +973,12 @@ def _find_coercion_of_call(
         )
         if call_pat:
             var = call_pat.group(1)
-            window_end = min(lineno_0 + 5, len(lines))
-            for check_line_0 in range(lineno_0, window_end):
-                check_line = lines[check_line_0]
+            if streaming:
+                checks = enumerate(_forward_window(line, source_lines, pending), lineno_0)
+            else:
+                window_end = min(lineno_0 + 5, len(lines))
+                checks = ((i, lines[i]) for i in range(lineno_0, window_end))
+            for check_line_0, check_line in checks:
                 coerce = re.search(
                     rf"\b{re.escape(var)}\s+(?:or|if\s+{re.escape(var)}\s+else)\s+"
                     r"(?:\[\]|\{\})",
