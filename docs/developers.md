@@ -27,6 +27,7 @@ The tree, docstrings, and `--help` output own API and CLI details;
 
 **On this page:**
 
+- [Before changing a contract](#before-changing-a-contract)
 - [Documentation audiences](#documentation-audiences)
 - [Working on the development version](#working-on-the-development-version)
 - [The two-layer split](#the-two-layer-split)
@@ -38,7 +39,39 @@ The tree, docstrings, and `--help` output own API and CLI details;
 - [Running tests](#running-tests)
 - [Sandbox wrapper tests](#sandbox-wrapper-tests)
 - [Writing hermetic tests](#writing-hermetic-tests)
+- [Choosing existing helpers](#choosing-existing-helpers)
+- [Selecting checks and reporting results](#selecting-checks-and-reporting-results)
 - [Mechanical gates you will hit](#mechanical-gates-you-will-hit)
+
+## Before changing a contract
+
+Start from the current review base and reread CONTRIBUTING and the affected
+sections of this guide; previous tasks may have used older guidance. Use UK
+English in new prose. Resolve apparent conflicts by checking the scope and
+linked reference before copying an older pattern.
+
+Before editing an interface, default, admission rule or result shape:
+
+1. Identify the producer and the exact contract being changed: arguments,
+   defaults, ownership, source identity, evidence role, or disclosure of loss.
+2. Search its name and affected fields with `rg` across runtime code, tests,
+   wrappers and `.github/`. Include direct fixture callers, test doubles,
+   shared helpers, structural censuses and downstream readers. Search aliases
+   and stored callables when the symbol is re-exported or kept in a registry.
+3. Choose the existing helper and a current example below. Inspect their
+   signatures and lifetime requirements; nearby tests can encode an older
+   contract. Update affected callers and companion expectations in the same
+   patch, preserving the intended security and evidence boundaries.
+4. Select checks from the existing scope tools and companion table. Include
+   a successful admitted case and the relevant refusal or failure case.
+   Confirm that each reaches the boundary it claims to test.
+5. After rebasing or merging related changes, review the final diff and
+   reconsider the impacted callers and checks before reporting completion.
+
+If a mistake recurs, check whether a narrow existing census can detect it.
+Any new mechanical rule needs passing controls for legitimate uses and a
+reviewed exception mechanism where appropriate. Do not ban every subprocess
+or mock, add blanket resets, or maintain a second competing scope registry.
 
 ## Documentation audiences
 
@@ -114,6 +147,13 @@ round.
 - `core/llm/` is the only place provider APIs are touched. It gives
   every caller cost tracking, retries, caching, and the per-model
   reliability scorecard for free.
+
+Direct script entry points may add their trusted checkout root, derived
+from `Path(__file__).resolve()`, for imports. The parent depth depends on the
+script's location. Imported libraries must leave the caller's path object
+and contents unchanged; `RAPTOR_DIR` is configuration, not permission to load
+code from an arbitrary environment-supplied directory. Scope script loading
+in tests as described under [hermetic tests](#writing-hermetic-tests).
 
 ## Package map
 
@@ -586,6 +626,72 @@ including object identity or live resources where relevant. Do not hide
 leaks with a blanket teardown reset: clean up at the owning fixture or fix
 the shared helper or library import that causes them.
 
+### Choosing existing helpers
+
+These are decision aids; the linked implementation and current tests own the
+API details. Use the smallest scope that owns the state being changed.
+
+| Need | Existing helper or contract | Current example |
+| --- | --- | --- |
+| Standalone CLI startup | `run_standalone_cli`; use `standalone_cli_env` when a custom runner must own the launch lifetime | [helper tests](../core/testing/tests/test_standalone_cli.py) |
+| Actual inherited launcher/session behaviour | Construct valid owned launch credentials; the standalone helper deliberately removes inherited session state | [launch-scratch tests](../core/security/tests/test_launch_scratch.py) |
+| Parent/child signed artefacts | Pass a test-owned `data_home` explicitly; pin it in the parent for every writer/reader's lifetime | [shared-key example](../core/testing/tests/test_standalone_cli.py) |
+| Confined Python interpreter | `python_runtime_tool_paths()` in `tool_paths`, keeping read restrictions | [native dispatch test](../core/sandbox/tests/test_teardown_first_dispatch.py) |
+| Target-derived file read | `core.source.read_contained` / `read_contained_bytes`; reject truncation when a complete file is required | [source reader](../core/source/contained.py) |
+| Borrowed module attribute mock | `patch_module_attribute` / `mock_module_attribute`; function-local imports use `scoped_function_imports` | [module-binding tests](../core/testing/tests/test_nested_module_bindings.py) |
+| Shared cache or module state | `isolated_module_state`, with the owner's lock where required | [state helper](../core/testing/module_state.py) |
+| Compiler result or audit state | Real `CompilationResult` and `SharedState`, with explicit fields at the mocked boundary | [compilation fixtures](../core/audit/tests/test_eager_compile.py) |
+| Process/thread/descriptor lifecycle | Model running, completed and consumed states explicitly; register cleanup with `ExitStack` before setup can fail | [lifecycle tests](../core/sandbox/tests/test_teardown_first_lifecycle.py) |
+
+Use real data containers for defaults, caches and result fields. Reserve
+mocks for observed calls or injected behaviour; an unrestricted `MagicMock`
+can invent a cache hit, a truthy flag or a missing attribute. For example:
+
+```python
+from core.audit.shared_state import SharedState
+from core.concepts.compiler import CompilationResult
+
+shared = SharedState(domain_model={"invariants": []})
+failed = CompilationResult(invariant_id="owned-invariant", errors=["compiler failed"])
+assert shared.eager_compile_successes == {}
+assert failed.rule_path is None
+assert not failed.success
+```
+
+A successful result must satisfy its real predicate too: `CompilationResult`
+requires a rule body and passed dual controls. A supplied success at the
+compiler seam does not test those controls; the compiler suite does. Likewise,
+a fixture representing a completed worker needs a completed worker state,
+not an unstarted `Thread` that merely looks inactive.
+
+### Prove the intended boundary was exercised
+
+Admission can stop a request before the checker, language gate or injected
+fault under test. Create the actual subject file and derive the supplied
+source excerpt and line scope from that file. Keep subject identity distinct
+from a cross-file checker target; do not use C text to stand in for PHP.
+
+In the positive case, assert the expected dispatch occurred and inspect its
+result, receipt or authenticated output. In the negative case, assert the
+specific refusal and absence of dispatch. A zero call count or empty result
+alone can mean either the intended gate worked or an earlier prerequisite
+failed. Fault-injection tests must prove the injected seam was reached.
+Keep stale-source refusal tests alongside admitted-source tests; do not
+bypass admission or weaken confinement to reach a downstream assertion.
+
+### Reader disclosure is part of the contract
+
+Before changing a shared reader, identify consumers of both its records and
+its quality information. Filtering malformed rows, applying a size cap or
+returning a partial collection must retain structured rejected-row counts,
+completeness or exclusion reasons for consumers that report them. A warning
+is not a replacement for machine-readable harvest or coverage accounting.
+Use the existing disclosure API where available; otherwise design the
+producer/consumer change together. Check mixed valid and invalid input
+end to end, preserving valid records and accounting for excluded records
+without double counting. Do not remove a meaningful accounting assertion
+merely because filtering moved into a lower layer.
+
 ### Detecting accidental LLM calls
 
 The fast CI unit-test job loads `core.testing.llm_tripwire`. Every worker
@@ -665,6 +771,51 @@ remove entries according to whether their rationale still applies. Run the
 relevant tree-wide gates alongside functional tests after the refactor or
 rebase. A new finding paired with a stale entry can indicate that an audit
 record was separated from its code. Gate commands live in [CI controls](ci-controls.md).
+
+## Selecting checks and reporting results
+
+Use the maintained CI selectors for a starting plan. From the checkout root,
+the following previews dispatch for uncommitted work, including new files:
+
+```bash
+task_base=$(git rev-parse HEAD)
+task_checks_dir=$(mktemp -d /tmp/raptor-check-plan.XXXXXX)
+git -c core.quotePath=false diff --name-only "$task_base" -- > "$task_checks_dir/changed-files"
+git -c core.quotePath=false ls-files --others --exclude-standard >> "$task_checks_dir/changed-files"
+python3 .github/scripts/test_scope.py --repo . --changed-files "$task_checks_dir/changed-files"
+python3 .github/scripts/preflight_scope.py --repo . --changed-files "$task_checks_dir/changed-files"
+```
+
+For an already committed branch, set `task_base` to its immutable review-base
+SHA instead of HEAD. The selectors' changed-file input is newline-delimited;
+if a filename itself contains a newline, use full selection rather than
+silently splitting it. Use `--help` on these scripts for current options.
+`test_scope.py` reports CI tiers; `preflight_scope.py` lists changed test
+files and can execute them with `--run`. Neither infers every semantic
+companion or proves that a platform backend ran. Add the checks identified
+by the [companion table](#companion-checks-for-test-changes) and caller search.
+
+For sandbox wrappers, preview the existing reviewed contract plan with:
+
+```bash
+python3 .github/scripts/run_sandbox_wrapper_tests.py --lane contracts --report-dir "$task_checks_dir/wrappers" --list
+```
+
+Run relevant focused tests and companion checks in the project environment,
+then the shared-state serial/randomised/xdist checks where applicable. Use
+[CI controls](ci-controls.md) for invariant commands and the workflow's
+actual dependency profile for optional-dependency or pytest-only checks.
+A grammar-capable environment cannot establish behaviour with grammars absent;
+Linux, Darwin emulation and native macOS are distinct validation claims.
+
+At handover, record the tested commit and describe any uncommitted patch,
+the commands and seeds, results, and relevant dependency/platform conditions.
+Separate executed checks from skips or checks not run, and give the reason
+and remaining risk for each material gap. Include the companion inventories
+or baselines reviewed. Following a rebase, state which affected checks were
+rerun; an earlier successful run is evidence for the earlier revision only.
+Do not report a live-network failure as a confirmed code regression without
+evidence tying it to the change.
 
 ## Mechanical gates you will hit
 
