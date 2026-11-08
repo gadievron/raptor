@@ -73,7 +73,7 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
     abi = resolve_integer_abi(integer_abi)
     if abi is None:
         return ArithmeticModel("unavailable")
-    declarations = visible_declarations(target, data)
+    declarations = visible_declarations(target, data, language=language)
     names = set()
     literals = []
     for atom in operands:

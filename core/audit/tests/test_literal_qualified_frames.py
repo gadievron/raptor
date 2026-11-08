@@ -49,7 +49,7 @@ def test_supported_cpp_qualifiers_retain_a_complete_literal_tuple(location, spec
     assert reply['status'] == 'checked' and len(reply['calls']) == 1, reply
     assert reply['calls'][0]['arguments'] == {'Value': 65536, 'Step': 65536}
     assert reply['calls'][0]['verdict'] == 'violation'
-    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v7'
+    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v8'
 
 
 @pytest.mark.parametrize('void', [False, True])
@@ -166,5 +166,5 @@ def test_native_qualified_literal_caller_receipt(tmp_path, arguments, action):
     result = evaluate_caller_gate(tmp_path, 'record.cpp', 'Read', 'check-overflow', CLAIM,
                                   source=text, def_span=(1, 1), integer_abi='ilp32')
     assert result.action == action, result.reason
-    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v7'
+    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v8'
     assert result.details['proof_scope'] == 'caller-entry-source-model'

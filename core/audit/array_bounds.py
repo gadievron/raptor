@@ -173,7 +173,7 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
     if _unwrap(children[0]) != target:
         return ArrayAccess("unavailable", "array read is embedded in another operation")
 
-    declarations = visible_declarations(target, data)
+    declarations = visible_declarations(target, data, language=language)
     record = declarations.get(claim[0])
     declaration = record[1] if record is not None else None
     if declaration is None or declaration.type != "declaration" or declaration.parent.type != "compound_statement":

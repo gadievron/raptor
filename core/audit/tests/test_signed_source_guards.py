@@ -122,7 +122,7 @@ def test_confined_overflow_worker_checks_negative_counterexample():
     assert result.outcome == "confirmed", result.errors
     assert result.details["witness_validated"] is True
     assert result.details["mathematical_result"] < -2147483648
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v21"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v22"
 
 
 @pytest.mark.slow
@@ -135,4 +135,4 @@ def test_confined_literal_caller_checks_the_same_negative_guard(tmp_path, argume
     decision = evaluate_caller_gate(tmp_path, "record.c", "Read", "check-array-bounds", "Data[Index]",
                                     source=source, def_span=(1, 1), integer_abi="ilp32")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v7"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v8"

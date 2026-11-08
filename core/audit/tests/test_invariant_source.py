@@ -227,7 +227,7 @@ def test_assembly_is_not_vacuous_source_preservation():
 
 
 @pytest.mark.parametrize("mode", ["site", "batch"])
-@pytest.mark.parametrize("version", [2, 3, 4, 5, 6, 7, 8])
+@pytest.mark.parametrize("version", [2, 3, 4, 5, 6, 7, 8, 9])
 def test_pre_source_admission_receipts_are_not_reused(monkeypatch, mode, version):
     from core.audit import condition_smt
 
