@@ -151,7 +151,7 @@ from core.smt_solver import (
 )
 from core.smt_solver.bitvec import ge, gt, le, lt
 from core.smt_solver.assertion_frames import track_frames
-from core.smt_solver.call_arguments import find_call_end, mask_quoted_text, split_call_arguments
+from core.smt_solver.call_arguments import find_call_end, mask_non_code, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
 from core.smt_solver._validation import require_bool
 from core.smt_solver.witness import format_witness as _format_witness
@@ -929,6 +929,9 @@ def _substitute_calls(
 
     Unbalanced parentheses are left for the condition parser to reject.
     """
+    visible, complete = mask_non_code(text)
+    if not complete:
+        return text
     reserve_anon_names([text], vars_)
     reserved = _native_constant_names(vars_.values()) | (reserved_native_names or set())
     counter = _next_anon_index(vars_, reserved)
@@ -936,7 +939,7 @@ def _substitute_calls(
     i = 0
     n = len(text)
     while i < n:
-        m = _CALL_HEAD_RE.match(text, i)
+        m = _CALL_HEAD_RE.match(visible, i)
         if m and m.end() < n and text[m.end()] == '(':
             j = find_call_end(text, m.end())
             if j is not None:
@@ -1027,7 +1030,13 @@ def _parse_condition(
             ),
         )
     canonicalised = _canonicalise(text)
-    effect_text = mask_quoted_text(canonicalised)
+    effect_text, lexical_complete = mask_non_code(canonicalised)
+    if not lexical_complete:
+        return Rejection(
+            text, RejectionKind.UNMODELED_STATE_EFFECT,
+            "unadmitted literals/comments or untranslated source tokens may hide state effects",
+            hint="provide complete C literals/comments and normalise source line splices and trigraphs",
+        )
     # Reject program-statement shapes (assignment, compound assignment,
     # increment/decrement) BEFORE call substitution — they aren't
     # Boolean guards and routing them to ASSIGNMENT_SHAPED lets
@@ -1638,11 +1647,11 @@ def make_call_operand(
     text = text.strip()
     if len(text) > _MAX_CONDITION_CHARS:
         raise ValueError("call operand exceeds the condition character limit")
+    effect_text, lexical_complete = mask_non_code(text)
+    if not lexical_complete or _ASSIGNMENT_SHAPED_RE.search(effect_text) or _call_may_expose_state(effect_text):
+        raise ValueError("call operand has unmodeled scalar state effects")
     if not is_balanced_call(text):
         raise ValueError("call operand must be one balanced function call")
-    effect_text = mask_quoted_text(text)
-    if _ASSIGNMENT_SHAPED_RE.search(effect_text) or _call_may_expose_state(effect_text):
-        raise ValueError("call operand has unmodeled scalar state effects")
     head = _CALL_HEAD_RE.match(text)
     assert head is not None
     variable = make_anon_call_var(vars_, profile=profile)
