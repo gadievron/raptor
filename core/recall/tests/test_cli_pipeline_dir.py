@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -66,11 +67,16 @@ class TestPipelineDirFlag:
         with patch("core.recall.cli.verify_pinned_clone",
                    return_value=tmp_path / "target"), \
              patch("core.recall.cli.run_pipeline", fake_run_pipeline), \
-             patch("core.recall.cli.collect_findings", return_value=[]):
+             patch("core.recall.cli.collect_findings", return_value=[]), \
+             patch("core.recall.cli.collect_toolchain",
+                   return_value={"semgrep": "fixture-version"}) as versions:
             rc = main(["run", "--manifest", str(m),
                        "--out", str(tmp_path / "out"),
                        "--pipeline-dir", str(ext)])
         assert rc == 0
+        versions.assert_called_once_with()
+        report = json.loads((tmp_path / "out" / "report.json").read_text())
+        assert report["toolchain"] == {"semgrep": "fixture-version"}
         assert seen["repo_root"] == ext.resolve()
 
     def test_default_is_harness_tree(self, tmp_path):
@@ -88,10 +94,15 @@ class TestPipelineDirFlag:
         with patch("core.recall.cli.verify_pinned_clone",
                    return_value=tmp_path / "target"), \
              patch("core.recall.cli.run_pipeline", fake_run_pipeline), \
-             patch("core.recall.cli.collect_findings", return_value=[]):
+             patch("core.recall.cli.collect_findings", return_value=[]), \
+             patch("core.recall.cli.collect_toolchain",
+                   return_value={"semgrep": "fixture-version"}) as versions:
             rc = main(["run", "--manifest", str(m),
                        "--out", str(tmp_path / "out")])
         assert rc == 0
+        versions.assert_called_once_with()
+        report = json.loads((tmp_path / "out" / "report.json").read_text())
+        assert report["toolchain"] == {"semgrep": "fixture-version"}
         assert (seen["repo_root"] / "core" / "recall").is_dir()
 
 
