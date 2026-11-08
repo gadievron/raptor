@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+from unittest.mock import Mock
 
 from core.audit.checker_synthesis import (
     _KNOWN_IMPACT_PRIMITIVES,
@@ -207,7 +208,15 @@ class TestPlaceholderCwe:
         assert _effective_cwe(o) == "CWE-269"
         assert "cwe_placeholder" not in o.review_result
 
-    def test_observed_prose_reclassifies_to_real_chain(self):
+    def test_observed_prose_reclassifies_to_real_chain(self, monkeypatch):
+        # Classification must not discover locally installed CodeQL packs.
+        unresolved = Mock(return_value=None)
+        monkeypatch.setattr(
+            "core.audit.codeql_query_resolver.resolve_query_id", unresolved,
+        )
+        monkeypatch.setattr(
+            "core.audit.orchestrator._CODEQL_UNSUPPORTED_IDS_LOGGED", set(),
+        )
         # The run's inverted-promotion prose keyword-matches CWE-476
         # ("deref...null") — placeholder normalization hands it to the
         # real null-propagation chain instead of checker synthesis.
@@ -216,7 +225,10 @@ class TestPlaceholderCwe:
         assert _effective_cwe(o) == "CWE-778"
         o2 = _outcome(hypothesis=_OBSERVED_RUN_PROSE, cwe="CWE-NOINFO")
         assert _effective_cwe(o2) == "CWE-476"
-        assert _cwe_fallback_chain("CWE-476")
+        chain = _cwe_fallback_chain("CWE-476")
+        assert any(entry["type"] == "coccinelle" for entry in chain)
+        assert all(entry["type"] != "codeql" for entry in chain)
+        unresolved.assert_called_once_with("cpp/missing-null-test")
 
 
 class TestSynthesisHarmGate:
