@@ -125,7 +125,8 @@ class RejectionKind(str, Enum):
     length is unboundedly large (e.g. a 1 MB string of operators).  The
     cap lives in the encoder (``smt_path_validator._MAX_CONDITION_CHARS``)
     so it can be tuned per call site if a real-target condition ever
-    legitimately exceeds it."""
+    legitimately exceeds it. Because its contents are not inspected, this
+    rejection cannot establish unchanged scalar state between guards."""
 
     TOO_MANY_CONDITIONS = "too_many_conditions"
     """The caller passed more conditions to ``check_path_feasibility``

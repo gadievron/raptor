@@ -688,7 +688,13 @@ _ASSIGNMENT_SHAPED_RE = re.compile(
     r'|\+\+|--'                  # post/pre-increment, decrement
 )
 
-_STATE_EFFECT_KINDS = frozenset({RejectionKind.ASSIGNMENT_SHAPED, RejectionKind.UNMODELED_STATE_EFFECT})
+# Oversized inputs are not inspected even for effects. Their rejection
+# cannot establish that scalar values remain unchanged across the gap.
+_STATE_EFFECT_KINDS = frozenset({
+    RejectionKind.ASSIGNMENT_SHAPED,
+    RejectionKind.UNMODELED_STATE_EFFECT,
+    RejectionKind.INPUT_TOO_LONG,
+})
 _ADDRESS_ARGUMENT_RE = re.compile(r"(?<!&)&(?!&)")
 
 
@@ -1213,9 +1219,9 @@ def _classify_conditions(
 ) -> _ConditionBatch:
     """Parse a complete guard frame without dropping its background theory.
 
-    Reserve source names before allocating fresh call occurrences. An
-    state-effect rejection advances the scalar value-flow segment
-    without erasing labels or axioms. Every rejection remains visible.
+    Reserve source names before allocating fresh call occurrences. A
+    state-effect or uninspected-input rejection advances the scalar value-flow
+    segment without erasing labels or axioms. Every rejection remains visible.
     Each predicate and axiom retains its mutation-free segment so a native
     unsat core can establish an independent contradiction. A None solver
     disables only optional tautology queries. Disabling call summaries
@@ -1528,7 +1534,7 @@ def _solve_pending(
         if unmodeled_mutation:
             reasoning = (
                 f"indeterminate ({mode}): encoded constraints are unsatisfiable, "
-                "but rejected state effects have unmodeled scalar value flow; "
+                "but rejected input has unmodeled scalar value flow; "
                 "refusing the refutation"
             )
         else:
