@@ -3154,9 +3154,15 @@ _TYPE_WIDTHS: dict[str, int] = {
     "uintptr_t": 64, "ptrdiff_t": 64,
 }
 
+# C permits reordered builtin specifiers and an optional explicit int.
+# Four tokens cover unsigned long long int without unbounded word scanning.
+_NARROWING_BUILTIN_TYPE = (
+    r"(?:(?:signed|unsigned|char|short|int|long)\s+){0,3}"
+    r"(?:signed|unsigned|char|short|int|long)"
+)
 _NARROWING_ASSIGN_RE = re.compile(
     r"(?:^|\s)"
-    r"((?:unsigned\s+)?(?:char|short|int|long(?:\s+long)?)"
+    r"(" + _NARROWING_BUILTIN_TYPE +
     r"|u8|u16|u32|u64|s8|s16|s32|s64"
     r"|__u8|__u16|__u32|__u64|__s8|__s16|__s32|__s64"
     r"|uint8_t|uint16_t|uint32_t|uint64_t"
@@ -3324,8 +3330,18 @@ def check_integer_narrowing(
 
 def _type_to_width(type_str: str) -> int | None:
     """Map a C type string to its width in bits."""
-    normalized = type_str.strip()
-    return _TYPE_WIDTHS.get(normalized)
+    normalized = " ".join(type_str.split())
+    width = _TYPE_WIDTHS.get(normalized)
+    if width is not None:
+        return width
+    if not set(normalized.split()) <= {"signed", "unsigned", "char", "short", "int", "long"}:
+        return None
+    from core.smt_solver.integer_types import integer_type
+
+    # Retain this diagnostic checker's existing LP64 assumptions; the formal
+    # source arithmetic model requires its own explicit target ABI.
+    kind = integer_type(normalized, "lp64")
+    return kind.width if kind is not None else None
 
 
 _GO_TYPE_WIDTHS: dict[str, int] = {
