@@ -106,7 +106,7 @@ _SOURCE_CONFIDENCE: dict[EvidenceSource, Confidence] = {
 }
 
 VALID_EVIDENCE_TOOLS: frozenset = frozenset({
-    "semgrep", "coccinelle", "codeql", "smt", "joern",
+    "semgrep", "coccinelle", "codeql", "joern",
     "compiler",
     "compilation", "dynamic:sanitizer", "dynamic:crash", "frida:runtime",
     "dark_verify:sanitizer-violation",
@@ -131,6 +131,8 @@ VALID_EVIDENCE_TOOLS: frozenset = frozenset({
 # 500-token batch glance blessed as tool evidence used to short-circuit
 # refutation gates, the G2 finding gate, and the promotion alarm.
 _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
+    # Qualified SMT receipts retain their channel classification.
+    "smt",
     "prefilter", "critique", "sweep", "sarif_cache",
     "dynamic", "frida", "dark_verify", "differential", "precondition",
     "fail_open", "consistency", "ptr_lifecycle", "lock_region",
@@ -529,7 +531,9 @@ _PROVENANCE_WRAPPERS = ("clean-refuted:",)
 
 def _is_single_tool_evidence(part: str) -> bool:
     """Check one atomic stamp (no ``+`` separator)."""
-    if not part or part == "none":
+    # The legacy bare SMT stamp also covered unbound predicate models.
+    # Verification requires a qualified receipt identifying the check.
+    if not part or part in {"none", "smt"}:
         return False
     for wrapper in _PROVENANCE_WRAPPERS:
         if part.startswith(wrapper):

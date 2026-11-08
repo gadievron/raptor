@@ -77,7 +77,7 @@ class FakeOperatorClient:
         return True
 
 
-def _stored_row(memory_id, verdict, src="abc123def456", note="", tool="smt"):
+def _stored_row(memory_id, verdict, src="abc123def456", note="", tool="codeql:dataflow"):
     """Build a verdict row byte-identical to what the store hook
     writes (content grammar + MAC over the decision fields).
     ``tool`` mirrors the store's ``evidence_tool`` receipt (default a
