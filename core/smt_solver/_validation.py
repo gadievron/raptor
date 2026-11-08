@@ -2,11 +2,18 @@
 
 from typing import Any
 
+# Z3's sort widths, extraction indices and extension counts cross unsigned
+# 32-bit native arguments. ctypes otherwise reduces larger Python integers
+# modulo 2**32, changing the requested formula without reporting an error.
+_MAX_NATIVE_WIDTH = (1 << 32) - 1
+
 
 def require_width(width: Any, *, argument: str = "width") -> int:
-    """Booleans, floats, and numeric strings are not bit widths."""
+    """Require an exact positive width representable by the native API."""
     if type(width) is not int or width <= 0:
         raise ValueError(f"{argument} must be positive and an integer, got {width!r}")
+    if width > _MAX_NATIVE_WIDTH:
+        raise ValueError(f"{argument} exceeds the native unsigned 32-bit width limit")
     return width
 
 
