@@ -8,7 +8,7 @@ import sys
 
 from core.json import loads
 from core.project import registry_home, sessions
-from core.project.session_titles import context_title, request_title
+from core.project.session_titles import context_title, request_title, state_directory
 
 
 def _context() -> tuple[str | None, str | None] | None:
@@ -65,8 +65,8 @@ def hook_output(payload) -> dict:
     if context is None:
         return {}
     desired = context_title(*context)
-    requested = request_title(registry_home.sessions_dir() / '.titles', 'claude',
-                              identity, desired, current)
+    requested = request_title(state_directory(), 'claude', identity, desired, current,
+                              legacy_directory=registry_home.sessions_dir() / '.titles')
     if requested is None:
         return {}
     return {'hookSpecificOutput': {'hookEventName': event, 'sessionTitle': requested}}

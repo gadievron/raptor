@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -38,7 +39,7 @@ def emitted(payload):
 
 def states():
     return [load_json(path, strict=True) for path in
-            (registry_home.sessions_dir() / '.titles').glob('*.json')]
+            policy.state_directory().glob('*.json')]
 
 
 def test_start_acknowledge_and_project_target_changes(titles):
@@ -54,6 +55,77 @@ def test_start_acknowledge_and_project_target_changes(titles):
     assert emitted(event(title=second, source='resume')) is None
     titles[:] = ['beta', '/targets/third']
     assert emitted(event(title=second, turn=True)) == 'raptor · beta · third'
+
+
+@pytest.mark.skipif(not hasattr(os, 'O_PATH'), reason='Linux protected-launch metadata')
+def test_protected_resume_retains_managed_title_ownership(titles, tmp_path, monkeypatch):
+    from core.startup.install_guard import prepare_session_registry
+    original = os.environ['RAPTOR_REGISTRY_HOME']
+    prepare_session_registry('claude', owned_root=tmp_path / 'launch-one')
+    first_registry = os.environ['RAPTOR_REGISTRY_HOME']
+    first = emitted(event())
+    assert emitted(event(title=first, turn=True)) is None
+    shutil.rmtree(tmp_path / 'launch-one')
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', original)
+    prepare_session_registry('claude', owned_root=tmp_path / 'launch-two')
+    assert os.environ['RAPTOR_REGISTRY_HOME'] != first_registry
+    titles[:] = ['beta', '/targets/second']
+    assert emitted(event(title=first, source='resume')) == 'raptor · beta · second'
+
+
+def test_legacy_title_state_is_migrated_without_losing_manual_preference(titles):
+    legacy = registry_home.sessions_dir() / '.titles'
+    first = policy.request_title(legacy, 'claude', 'session-one', 'raptor · alpha · first', None)
+    policy.request_title(legacy, 'claude', 'session-one', first, 'My investigation')
+    assert emitted(event(title='My investigation', source='resume')) is None
+    assert states()[0]['manual'] is True
+    assert next(legacy.glob('*.json')).exists()
+
+
+def test_legacy_managed_title_remains_automatic_after_migration(titles):
+    legacy = registry_home.sessions_dir() / '.titles'
+    first = policy.request_title(legacy, 'claude', 'session-one', 'raptor · alpha · first', None)
+    policy.request_title(legacy, 'claude', 'session-one', first, first)
+    titles[:] = ['beta', '/targets/second']
+    assert emitted(event(title=first, source='resume')) == 'raptor · beta · second'
+    assert states()[0]['confirmed'] == first
+
+
+def test_bad_legacy_state_is_not_reset_as_a_new_session(titles):
+    legacy = registry_home.sessions_dir() / '.titles'
+    policy.request_title(legacy, 'claude', 'session-one', 'raptor · alpha · first', None)
+    next(legacy.glob('*.json')).write_text('null')
+    with pytest.raises(ValueError):
+        emitted(event())
+    assert states() == []
+
+
+def test_migration_preserves_exhausted_retry_budget(titles):
+    legacy = registry_home.sessions_dir() / '.titles'
+    for _ in range(3):
+        policy.request_title(legacy, 'claude', 'session-one', 'raptor · alpha · first', None)
+    assert emitted(event(source='resume')) is None
+    assert states()[0]['attempts'] == 3
+    assert states()[0]['manual'] is False
+
+
+@pytest.mark.parametrize('kind', ['symlink', 'fifo'])
+def test_legacy_state_cannot_follow_a_link_or_read_a_pipe(titles, tmp_path, kind):
+    if kind == 'fifo' and not hasattr(os, 'mkfifo'):
+        pytest.skip('POSIX FIFO test')
+    legacy = registry_home.sessions_dir() / '.titles'
+    policy.request_title(legacy, 'claude', 'session-one', 'raptor · alpha · first', None)
+    path = next(legacy.glob('*.json'))
+    source = tmp_path / 'source.json'
+    source.write_bytes(path.read_bytes())
+    path.unlink()
+    if kind == 'symlink':
+        path.symlink_to(source)
+    else:
+        os.mkfifo(path, 0o600)
+    with pytest.raises((OSError, ValueError)):
+        emitted(event())
+    assert states() == []
 
 
 def test_custom_title_before_start_and_manual_rename_are_preserved(titles):
@@ -124,7 +196,7 @@ def test_same_session_parallel_requests_do_not_lose_retry_budget(tmp_path):
 def test_unusable_identity_cannot_select_another_state_file(titles, identity):
     with pytest.raises(ValueError):
         hook.hook_output(event(identity))
-    assert not (registry_home.sessions_dir() / '.titles').exists()
+    assert not policy.state_directory().exists()
 
 
 @pytest.mark.parametrize('failure', [errno.ENOSPC, errno.EROFS, errno.EACCES])
@@ -216,7 +288,7 @@ def test_unsupported_payloads_do_not_change_state(titles, payload):
 
 def test_corrupt_state_cannot_be_replaced_as_a_fresh_automatic_session(titles, monkeypatch, capsys):
     emitted(event())
-    path = next((registry_home.sessions_dir() / '.titles').glob('*.json'))
+    path = next(policy.state_directory().glob('*.json'))
     path.write_text('{bad json')
     patch_module_attribute(monkeypatch, hook, 'sys', 'stdin', io.TextIOWrapper(io.BytesIO(json.dumps(event()).encode())))
     assert hook.main() == 0
@@ -227,8 +299,8 @@ def test_corrupt_state_cannot_be_replaced_as_a_fresh_automatic_session(titles, m
 def test_title_directory_symlink_is_not_followed(titles, tmp_path):
     foreign = tmp_path / 'foreign'
     foreign.mkdir()
-    registry_home.sessions_dir().mkdir(parents=True)
-    (registry_home.sessions_dir() / '.titles').symlink_to(foreign, target_is_directory=True)
+    policy.state_directory().parent.mkdir(parents=True)
+    policy.state_directory().symlink_to(foreign, target_is_directory=True)
     with pytest.raises(PermissionError):
         emitted(event())
     assert list(foreign.iterdir()) == []
