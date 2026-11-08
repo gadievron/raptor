@@ -317,6 +317,13 @@ grants. Validate affected execution with an interpreter and standard library
 outside the system directories, and retain an unrelated-file read-denial
 control.
 
+For live-network failures, retain the client exit code, bounded output,
+connection/TLS/response timings and relevant proxy events in the assertion.
+An accepted tunnel does not prove a complete HTTP response. Compare direct
+and sandboxed requests under the same network configuration before assigning
+a regression to sandbox code. Keep deterministic relay tests alongside live
+canaries; a retry or a larger deadline alone does not establish correctness.
+
 ### Sandbox wrapper tests
 
 Every policy-owning sandbox wrapper must have an executable test case. The

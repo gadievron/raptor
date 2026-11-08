@@ -898,21 +898,27 @@ class TestE2EEgressProxy(unittest.TestCase):
         the upstream proxy has its own allowlist — github.com is on
         it everywhere RAPTOR runs (the framework's own tooling needs
         it); example.com generally is not."""
-        import shutil
         if not shutil.which("curl"):
             self.skipTest("curl not installed")
         r = sandbox_run(
-            ["curl", "-sI", "--max-time", "15", "https://github.com"],
+            ["curl", "-sSI", "--max-time", "15", "--write-out",
+             "%{stderr}\ncurl timings: dns=%{time_namelookup} connect=%{time_connect} "
+             "tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total} "
+             "http=%{http_code} proxy_connect=%{http_connect}\n",
+             "https://github.com"],
             target="/tmp", output="/tmp",
             use_egress_proxy=True, proxy_hosts=["github.com"],
             capture_output=True, text=True, timeout=20,
         )
-        self.assertEqual(r.returncode, 0,
-                         f"curl failed: stderr={r.stderr[:200]!r}")
         events = r.sandbox_info.get("proxy_events", [])
+        diagnostic = (
+            f"curl exit={r.returncode}; stdout={r.stdout[:2000]!r}; "
+            f"stderr={r.stderr[:2000]!r}; proxy_events={events[-8:]!r}"
+        )
+        self.assertEqual(r.returncode, 0, diagnostic)
         allowed = [e for e in events if e["result"] == "allowed"]
         self.assertGreaterEqual(len(allowed), 1,
-                                f"expected at least 1 allowed event, got {events}")
+                                f"expected at least 1 allowed event; {diagnostic}")
 
     def test_jvm_proxy_sysprops_injected(self):
         """JVM tools (Maven/Gradle) ignore HTTP(S)_PROXY env — the
