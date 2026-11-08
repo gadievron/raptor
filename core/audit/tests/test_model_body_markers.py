@@ -1618,13 +1618,13 @@ class TestReviewKeyScannerWrites:
             [Site("core/audit/fx.py", 2, "f", "value-expression",
                   _digest("m"))], [])
 
-    @pytest.mark.parametrize("rel,qualname,shape,old,new", [
-        ("core/audit/calibrated_merge.py", "calibrated_decision", "dict-from-expression",
+    @pytest.mark.parametrize("rel,qualname,shape,binding,old,new", [
+        ("core/audit/calibrated_merge.py", "calibrated_decision", "dict-from-expression", "primary",
          "dict(primary_entry[0])", "dict(primary_entry[-1])"),
-        ("core/audit/orchestrator.py", "_synthesize_unmapped_suspicious", "value-expression",
+        ("core/audit/orchestrator.py", "_synthesize_unmapped_suspicious", "value-expression", "review",
          "deepcopy(outcome.review_result or {})", "deepcopy(outcome.review_result)"),
     ], ids=["panel-copy", "late-synthesis-copy"])
-    def test_edited_pinned_expression_fails_its_pin(self, tmp_path, rel, qualname, shape, old, new):
+    def test_edited_pinned_expression_fails_its_pin(self, tmp_path, rel, qualname, shape, binding, old, new):
         """A pin binds the written expression's content. Editing a pinned write
         turns it into an unpinned site and makes its old pin stale."""
         # The pin binds the expression's content: an edit to a pinned
@@ -1640,8 +1640,9 @@ class TestReviewKeyScannerWrites:
         dst.write_text(src)
         _, _, unresolved = scan_full(tmp_path)
         assert pin_violations(unresolved, pins) == ([], [])
-        assert src.count(old) == 1
-        dst.write_text(src.replace(old, new))
+        statement = f"{binding} = {old}"
+        assert src.count(statement) == 1
+        dst.write_text(src.replace(statement, f"{binding} = {new}"))
         _, _, unresolved = scan_full(tmp_path)
         unpinned, stale = pin_violations(unresolved, pins)
         assert [(s.file, s.qualname, s.shape, s.digest) for s in unpinned] \
