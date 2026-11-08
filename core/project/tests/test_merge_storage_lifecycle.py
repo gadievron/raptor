@@ -182,13 +182,13 @@ def test_replaced_sources_survive_cleanup(merge_case, monkeypatch, capsys, timin
             return result
         monkeypatch.setattr(merge, "merge_runs", copy)
     else:
-        original = clean._run_dir_size
+        original = clean._run_inventory
         def size(path):
             result = original(path)
             if path == victim:
                 replace()
             return result
-        monkeypatch.setattr(clean, "_run_dir_size", size)
+        monkeypatch.setattr(clean, "_run_inventory", size)
     cli._do_merge(project, "all", yes=timing != "confirm")
     assert (victim / "borrowed").read_text() == "replacement"
     assert not runs[1].exists()
@@ -231,13 +231,13 @@ def test_missing_merged_output_preserves_sources(merge_case, monkeypatch, capsys
             final.rename(retired)
         monkeypatch.setattr(pin, "freeze_run_pin", freeze)
     else:
-        original = clean._run_dir_size
+        original = clean._run_inventory
         def size(path):
             result = original(path)
             if final.exists():
                 final.rename(retired)
             return result
-        monkeypatch.setattr(clean, "_run_dir_size", size)
+        monkeypatch.setattr(clean, "_run_inventory", size)
     cli._do_merge(project, "all", yes=True)
     assert all(run.exists() for run in runs)
     assert "source runs preserved" in capsys.readouterr().out

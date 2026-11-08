@@ -2648,6 +2648,21 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
         print(f"  - {item}")
 
 
+def _print_disk_usage(project):
+    from .disk_usage import scan_usage
+    try:
+        root = Path(project.output_dir).resolve()
+    except (OSError, RuntimeError, ValueError):
+        print('\nDisk usage: unavailable')
+        return
+    usage = scan_usage(root)
+    total = usage.allocated_bytes
+    amount = (f'{total / 1024 / 1024:.1f}MB' if total >= 1024 * 1024
+              else f'{total / 1024:.1f}KB' if total >= 1024 else f'{total}B')
+    note = 'partial estimate' if usage.incomplete else 'estimate'
+    print(f'\nDisk usage: {amount} ({note})')
+
+
 def _print_status(project) -> None:
     """Print project status."""
     from core.run import load_run_metadata
@@ -2758,35 +2773,6 @@ def _print_status(project) -> None:
                 parked = None
             if parked:
                 print(f"    ⚠ {parked}")
-        # Disk usage — use os.walk(followlinks=False) so we stay inside
-        # the run dir even if a stray symlink points outside (or back into
-        # the run, creating a loop). Path.rglob follows symlinked dirs
-        # only via 3.13's recurse_symlinks=True opt-in (glob.glob's
-        # recursive mode is what followed them by default); the explicit
-        # os.walk idiom keeps the no-follow guarantee obvious — a
-        # followed symlink loop would hang status indefinitely.
-        total_size = 0
-        for d in runs:
-            for root, _dirs, files in os.walk(d, followlinks=False):
-                for fname in files:
-                    fpath = os.path.join(root, fname)
-                    try:
-                        st = os.lstat(fpath)
-                    except OSError:
-                        continue
-                    # Skip symlinks (S_IFLNK) — count only real files.
-                    import stat as _stat
-                    if _stat.S_ISLNK(st.st_mode):
-                        continue
-                    if _stat.S_ISREG(st.st_mode):
-                        total_size += st.st_size
-        if total_size >= 1024 * 1024:
-            print(f"\nDisk usage: {total_size / 1024 / 1024:.1f}MB")
-        elif total_size >= 1024:
-            print(f"\nDisk usage: {total_size / 1024:.1f}KB")
-        else:
-            print(f"\nDisk usage: {total_size}B")
-
         # Graph store summary — best-effort, never breaks status
         import sqlite3 as _graph_sqlite3
         try:
@@ -2819,6 +2805,9 @@ def _print_status(project) -> None:
 
     else:
         print("\nNo runs.")
+
+    _print_disk_usage(project)
+
 
 
 def _print_provenance(project) -> None:
@@ -3527,6 +3516,15 @@ def _do_correlate(project, json_out: bool=False) -> None:
         print(f"\n  Coverage: {', '.join(cov_parts)} files")
 
 
+def _print_interrupted_clean(plan):
+    for name in plan.get('deleted', []):
+        print(f"  Deleted before stopping: {sanitise_for_terminal(name)}")
+    for name in plan.get('partially_removed', []):
+        print(f"  Partially removed: {sanitise_for_terminal(name)}")
+    if plan.get('deleted') or plan.get('partially_removed'):
+        print('Cleanup stopped. Inspect the remaining directories before retrying.')
+
+
 def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
     """Clean old runs from a project. With ``dedup``, the deletion set is the
     coverage-aware lossless subset (runs fully subsumed by a survivor) rather
@@ -3580,6 +3578,9 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
         for name in sources_plan["deleted"]:
             print(f"    {sanitise_for_terminal(name, max_len=120)}")
 
+    if plan.get('size_incomplete') or sources_plan.get('size_incomplete'):
+        print('  Size estimate is incomplete: some paths could not be inspected.')
+
     # Coverage-aware: classify what each removal costs (read-only).
     consequences = _classify_clean_coverage(project, plan)
     if consequences:
@@ -3611,8 +3612,15 @@ def _do_clean(project, keep, dry_run, yes, dedup: bool=False) -> None:
         current = _classify_clean_coverage(project, selected)
         _apply_clean_coverage(project, selected, current)
 
-    execute_clean(plan, output_path=project.output_path,
-                  eligible_dirs=allowed, before_delete=snapshot)
+    try:
+        execute_clean(plan, output_path=project.output_path,
+                      eligible_dirs=allowed, before_delete=snapshot)
+    except BaseException:
+        try:
+            _print_interrupted_clean(plan)
+        except BaseException:
+            pass  # Progress reporting must never replace the cleanup error.
+        raise
     freed_mb = plan["freed_bytes"] / 1024 / 1024
     for name in plan.get("skipped_live", []):
         if name not in reported_live:

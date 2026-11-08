@@ -12,26 +12,23 @@ from core.atomic_fs import rmtree_hardened
 from core.project.registry_home import refuse_registry_overlap
 
 
+def _run_inventory(d: Path):
+    from .disk_usage import scan_usage
+    return scan_usage(d)
+
+
 def _run_dir_size(d: Path) -> int:
-    # Directory-symlink recursion stays off explicitly: `Path.rglob`
-    # follows dir symlinks only via 3.13's `recurse_symlinks=True`
-    # opt-in (`glob.glob(recursive=True)` is what followed them by
-    # default), and a malicious or accidental symlink under the run dir
-    # (e.g. `out/run-X/incoming -> /var/log`) walked into would
-    # stat-sum unrelated trees, double-counting bytes. Use
-    # os.walk(followlinks=False) so we stay inside the run dir tree on
-    # every supported Python version.
-    size = 0
-    for root, _dirs, files in os.walk(d, followlinks=False):
-        for fname in files:
-            fp = Path(root) / fname
-            try:
-                st = fp.lstat()
-            except OSError:
-                continue
-            if stat.S_ISREG(st.st_mode):
-                size += st.st_size
-    return size
+    return _run_inventory(d).reclaimable_bytes
+
+
+def _estimate_plan(plan):
+    from .disk_usage import estimate_removals
+    sizes, incomplete = estimate_removals(plan['delete_dirs'])
+    plan['freed_bytes'] = sum(sizes.values())
+    plan['size_incomplete'] = incomplete
+    for command, paths in plan.get('_type_dirs', {}).items():
+        plan['by_type'][command]['freed_bytes'] = sum(sizes.get(path, 0) for path in set(paths))
+    return plan
 
 
 def run_is_live(d: Path) -> bool:
@@ -124,7 +121,7 @@ def _finish_clean(plan, candidates, deleted, sizes) -> None:
     removed = set(deleted)
     plan["delete_dirs"] = list(deleted)
     plan["deleted"] = [path.name for path in deleted]
-    plan["freed_bytes"] = sum(sizes.values())
+    plan["freed_bytes"] = sum(sizes.values()) + plan.get("partial_freed_bytes", 0)
     typed = plan.get("_type_dirs", {})
     if typed:
         kept: list[str] = []
@@ -136,7 +133,9 @@ def _finish_clean(plan, candidates, deleted, sizes) -> None:
             plan["by_type"][command] = {
                 "total": len(survivors) + len(victims),
                 "keep": len(survivors), "delete": len(victims),
-                "freed_bytes": sum(sizes[path] for path in victims),
+                "freed_bytes": (sum(sizes[path] for path in victims)
+                                + sum(plan.get('_partial_sizes', {}).get(str(path), 0)
+                                      for path in survivors)),
             }
         plan["kept"] = list(dict.fromkeys(kept))
     else:
@@ -206,15 +205,11 @@ def plan_clean(project, keep: int=1) -> dict[str, Any]:
         if not to_keep and dirs:
             to_keep, to_delete = dirs[:1], dirs[1:]
         to_delete = [d for d in to_delete if _remember_delete(stats, d)]
-        type_freed = 0
 
         for d in to_keep:
             stats["kept"].append(d.name)
 
         for d in to_delete:
-            size = _run_dir_size(d)
-            stats["freed_bytes"] += size
-            type_freed += size
             stats["delete_dirs"].append(d)
             stats["deleted"].append(d.name)
 
@@ -222,10 +217,10 @@ def plan_clean(project, keep: int=1) -> dict[str, Any]:
             "total": len(dirs),
             "keep": len(to_keep),
             "delete": len(to_delete),
-            "freed_bytes": type_freed,
+            "freed_bytes": 0,
         }
 
-    return stats
+    return _estimate_plan(stats)
 
 
 def plan_dedup(project) -> dict[str, Any]:
@@ -256,12 +251,8 @@ def plan_dedup(project) -> dict[str, Any]:
             stats["kept"].append(d.name)
         droppable, _ = dedup_runs(dirs)
         drop_set = {d for d in droppable if _remember_delete(stats, d)}
-        type_freed = 0
         for d in dirs:
             if d in drop_set:
-                size = _run_dir_size(d)
-                stats["freed_bytes"] += size
-                type_freed += size
                 stats["delete_dirs"].append(d)
                 stats["deleted"].append(d.name)
             else:
@@ -270,9 +261,9 @@ def plan_dedup(project) -> dict[str, Any]:
             "total": len(dirs),
             "keep": len(dirs) - len(drop_set),
             "delete": len(drop_set),
-            "freed_bytes": type_freed,
+            "freed_bytes": 0,
         }
-    return stats
+    return _estimate_plan(stats)
 
 
 def execute_clean(
@@ -292,6 +283,8 @@ def execute_clean(
     candidates = list(dict.fromkeys(Path(path) for path in plan["delete_dirs"]))
     deleted: list[Path] = []
     sizes: dict[Path, int] = {}
+    for field in ('partially_removed', 'partial_freed_bytes', '_partial_sizes'):
+        plan.pop(field, None)
     if not candidates:
         _finish_clean(plan, candidates, deleted, sizes)
         return
@@ -344,17 +337,41 @@ def execute_clean(
                 identity = _directory_identity(path)
             if identity is None or not accepted(path, identity):
                 continue
-            size = _run_dir_size(path)
+            inventory = _run_inventory(path)
+            if inventory.incomplete:
+                plan['size_incomplete'] = True
             if not accepted(path, identity):
                 continue
             if before_delete is not None:
                 before_delete(path)
                 if not accepted(path, identity):
                     continue
-            if not rmtree_hardened(path):
-                raise OSError(f"could not remove run directory {path}")
+            try:
+                if not rmtree_hardened(path):
+                    raise OSError(f"could not remove run directory {path}")
+                if os.path.lexists(path):
+                    raise OSError(f"run directory still present after removal: {path}")
+            except BaseException:
+                # A remover can fail after mutation. Record the proven effect
+                # while preserving the original error or cancellation.
+                try:
+                    if not os.path.lexists(path):
+                        deleted.append(path)
+                        sizes[path] = inventory.reclaimable_bytes
+                    elif _directory_identity(path) == identity:
+                        remaining = _run_inventory(path)
+                        if inventory.has_removals(remaining):
+                            partial = inventory.removed_bytes(remaining)
+                            plan['partial_freed_bytes'] = plan.get('partial_freed_bytes', 0) + partial
+                            plan.setdefault('_partial_sizes', {})[str(path)] = partial
+                            plan.setdefault('partially_removed', []).append(path.name)
+                        plan['size_incomplete'] = (plan.get('size_incomplete', False)
+                                                   or inventory.incomplete or remaining.incomplete)
+                except BaseException:
+                    plan['size_incomplete'] = True
+                raise
             deleted.append(path)
-            sizes[path] = size
+            sizes[path] = inventory.reclaimable_bytes
     finally:
         _finish_clean(plan, candidates, deleted, sizes)
 
@@ -443,7 +460,7 @@ def plan_sources_sweep(project, delete_dirs=()) -> dict[str, Any]:
     try:
         entries = sorted(p for p in sources_root.iterdir())
     except OSError:
-        return stats
+        return _estimate_plan(stats)
     referenced: set[str] | None = None
     now = time.time()
     for entry in entries:
@@ -464,11 +481,9 @@ def plan_sources_sweep(project, delete_dirs=()) -> dict[str, Any]:
             continue
         if not _remember_delete(stats, entry):
             continue
-        size = _run_dir_size(entry)
-        stats["freed_bytes"] += size
         stats["delete_dirs"].append(entry)
         stats["deleted"].append(entry.name)
-    return stats
+    return _estimate_plan(stats)
 
 
 def refresh_sources_plan(project, plan: dict[str, Any],
@@ -505,10 +520,9 @@ def refresh_sources_plan(project, plan: dict[str, Any],
                 continue
             out["delete_dirs"].append(d)
             out["deleted"].append(name)
-            out["freed_bytes"] += _run_dir_size(Path(d))
         else:
             out["skipped_referenced"].append(name)
-    return out
+    return _estimate_plan(out)
 
 
 def execute_sources_sweep(project, plan: dict[str, Any], delete_dirs=(),
