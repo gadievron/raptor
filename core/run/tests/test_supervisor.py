@@ -109,16 +109,19 @@ class TestCapAndBound(unittest.TestCase):
 class TestCliFlagSurface(unittest.TestCase):
 
     def test_run_and_resume_expose_opt_out(self):
-        import subprocess
+        from core.testing.standalone_cli import run_standalone_cli
         import sys
         from pathlib import Path
 
         raptor_dir = Path(supervisor.__file__).resolve().parents[2]
         import os
+        # Standalone help must not adopt stale credentials from the test runner.
         env = dict(os.environ, CLAUDECODE="1",
-                   PYTHONPATH=str(raptor_dir))
+                   PYTHONPATH=str(raptor_dir),
+                   _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+                   RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
         for sub in ("run", "resume"):
-            r = subprocess.run(
+            r = run_standalone_cli(
                 [sys.executable,
                  str(raptor_dir / "libexec" / "raptor-audit"),
                  sub, "--help"],
