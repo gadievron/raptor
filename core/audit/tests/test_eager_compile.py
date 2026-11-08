@@ -11,6 +11,7 @@ from core.audit.orchestrator import (
     _compile_eager_invariants,
 )
 from core.audit.shared_state import SharedState
+from core.concepts.compiler import CompilationResult
 
 
 def _config(tmp_path: Path) -> OrchestratorConfig:
@@ -79,16 +80,15 @@ class TestCompileEagerInvariants:
         shared = SharedState(mechanical_findings={})
         shared.domain_model = _domain_model()
 
-        class _FakeResult:
-            success = True
-            rule_id = "test-rule-1"
-            rule_body = "rule body"
-            errors: list = []
+        compiled = CompilationResult(
+            invariant_id="inv-test-1", rule_id="test-rule-1",
+            rule_body="rule body", dual_control=True,
+        )
 
         with (
             patch(
                 "core.concepts.compiler.compile_invariant",
-                return_value=_FakeResult(),
+                return_value=compiled,
             ) as mock_compile,
             patch(
                 "core.audit.orchestrator._run_invariant_prescreening",
@@ -113,17 +113,11 @@ class TestCompileEagerInvariants:
         shared = SharedState(mechanical_findings={})
         shared.domain_model = _domain_model()
 
-        class _FailResult:
-            success = False
-            rule_id = None
-            rule_body = ""
-            errors = ["failed"]
-
-        class _OkResult:
-            success = True
-            rule_id = "fallback-rule"
-            rule_body = "rule body"
-            errors: list = []
+        failed = CompilationResult(invariant_id="inv-test-1", errors=["failed"])
+        compiled = CompilationResult(
+            invariant_id="inv-test-1", rule_id="fallback-rule",
+            rule_body="rule body", dual_control=True,
+        )
 
         call_count = 0
 
@@ -131,8 +125,8 @@ class TestCompileEagerInvariants:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return _FailResult()
-            return _OkResult()
+                return failed
+            return compiled
 
         with (
             patch(
@@ -165,11 +159,9 @@ class TestCompileEagerInvariants:
         shared = SharedState(mechanical_findings={})
         shared.domain_model = _domain_model()
 
-        class _FakeResult:
-            success = True
-            rule_id = "r1"
-            rule_body = ""
-            errors: list = []
+        compiled = CompilationResult(
+            invariant_id="inv-test-1", rule_id="r1", rule_body="rule body", dual_control=True,
+        )
 
         captured_gaps = []
 
@@ -180,7 +172,7 @@ class TestCompileEagerInvariants:
         with (
             patch(
                 "core.concepts.compiler.compile_invariant",
-                return_value=_FakeResult(),
+                return_value=compiled,
             ),
             patch(
                 "core.audit.orchestrator._run_invariant_prescreening",
