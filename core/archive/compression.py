@@ -11,6 +11,8 @@ import lzma
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
+
 from .errors import ArchiveError, DecompressionLimitExceeded, UnsupportedArchive
 
 # Cap on decompressed output for a single compressed file (also the budget for
@@ -26,10 +28,10 @@ def _zstd_open(path, mode="rb"):
     # third-party `zstandard` package on older interpreters.
     try:
         from compression import zstd
-        return zstd.open(path, mode)
-    except Exception:
+    except ImportError:
         import zstandard
         return zstandard.open(path, mode)
+    return zstd.open(path, mode)
 
 
 _OPENERS: dict[str, Any] = {
@@ -53,31 +55,47 @@ def iter_decompressed(path, fmt: str,
 
     Incremental budget accounting: raises ``DecompressionLimitExceeded``
     as soon as the running decompressed total passes ``max_bytes`` — at
-    most one chunk (1 MiB) is ever read beyond the cap, and nothing is
+    most one byte is requested beyond the remaining allowance. Nothing is
     retained here, so consumers can stream a capped decompression to
     disk without the output ever being resident in memory. Raises
     ``UnsupportedArchive`` for an unknown ``fmt`` and ``ArchiveError``
     for a corrupt/truncated stream (possibly mid-iteration — corruption
-    may only surface after valid leading chunks).
+    may only surface after valid leading chunks). A negative or non-integer
+    budget raises ``ValueError`` before opening the input. Consumers that stop
+    early must close the iterator to release its decoder and input file.
     """
     opener = _OPENERS.get(fmt)
     if opener is None:
         msg = f"no single-file decompressor for {fmt!r}"
         raise UnsupportedArchive(msg)
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+        raise ValueError('max_bytes must be a non-negative integer')
     total = 0
+    early_exit = None
     try:
-        with opener(Path(path), "rb") as fh:
-            while True:
-                chunk = fh.read(_CHUNK_BYTES)
-                if not chunk:
-                    return
-                total += len(chunk)
-                if total > max_bytes:
-                    raise DecompressionLimitExceeded(
-                        f"{fmt} stream exceeds {max_bytes} bytes "
-                        f"decompressed — refusing as bomb",
-                        cap="total_bytes")
-                yield chunk
+        with preserving_stream_error(opener(Path(path), "rb")) as fh:
+            try:
+                while True:
+                    chunk = fh.read(min(_CHUNK_BYTES, max_bytes - total + 1))
+                    if not chunk:
+                        return
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise DecompressionLimitExceeded(
+                            f"{fmt} stream exceeds {max_bytes} bytes "
+                            f"decompressed — refusing as bomb",
+                            cap="total_bytes")
+                    yield chunk
+            except GeneratorExit as exc:
+                # An explicit iterator close is normal stream teardown. Let a
+                # decoder close failure surface; the consumer's owner retains
+                # any primary extraction error through its own context.
+                early_exit = exc
+        if early_exit is not None:
+            try:
+                raise early_exit
+            finally:
+                early_exit = None  # Do not retain a generator/traceback cycle.
     except (DecompressionLimitExceeded, UnsupportedArchive):
         raise
     except Exception as e:  # malformed/truncated stream, decompress error
