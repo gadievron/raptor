@@ -115,7 +115,7 @@ def test_actual_function_parameters_supply_the_source_overflow_frame(language, a
     result = sweep._run_smt_verb_inner(file_path="unit." + language, function_name="Read", verb="check-overflow",
                                      source=source, hypothesis="integer overflow in `Value + Step`", integer_abi="ilp32")
     assert result.outcome == outcome, result.details
-    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v21"
+    assert result.details["source_scope"]["query_contract"] == "common-width-integer-operands-v22"
 
 
 def test_array_model_does_not_mistake_a_returned_function_pointer_for_an_integer():

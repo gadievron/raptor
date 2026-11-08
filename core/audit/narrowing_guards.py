@@ -110,7 +110,7 @@ class NarrowingGuardContext:
         if node.type == "identifier":
             from .narrowing_bindings import visible_declarations
 
-            if text in visible_declarations(node, self.data):
+            if text in visible_declarations(node, self.data, language=self.language):
                 return None  # a source declaration is not a standard limit macro
             if re.search(
                 rf"^[^\S\r\n]*#[^\S\r\n]*(?:define|undef)[^\S\r\n]+{re.escape(text)}\b",
@@ -337,7 +337,7 @@ class NarrowingGuardContext:
             return None
         from .narrowing_bindings import visible_types
 
-        return visible_types(target, self.data)
+        return visible_types(target, self.data, language=self.language)
 
     def may_use_value(self, variable, line, column):
         target = self._initializer_at(line, column)
@@ -349,6 +349,7 @@ class NarrowingGuardContext:
             target.child_by_field_name("value"),
             self.data,
             variable,
+            language=self.language,
         )
 
     def protects(self, variable, line, column, source_range, dest_range, source_type):

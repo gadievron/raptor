@@ -179,6 +179,11 @@ def source_mutations(source, variables=None):
                for item in descendants(target)):
             return (), "source call requires a bound callee transition model"
         target_declarations = visible_declarations(target, data)
+        if variables is not None and any(
+            name in target_declarations and target_declarations[name][1].type == "enum_specifier"
+            for name in variables
+        ):
+            return (), "invariant enum values require constant evaluation"
         current = target
         while (
             current.parent is not None
@@ -225,12 +230,14 @@ def source_mutations(source, variables=None):
                     declaration = declarations.get(name)
                     if declaration != target_declarations.get(name):
                         return (), "guard name is rebound before the mutation"
+                    if declaration is not None and declaration[1].type == "enum_specifier":
+                        return (), "enum guard values require constant evaluation"
                     if (
                         variables is not None
                         and declaration is not None
-                        and declaration[1].type == "declaration"
+                        and declaration[1].type != "parameter_declaration"
                     ):
-                        return (), "guard local values require a value-flow model"
+                        return (), "guard declarations require a value-flow model"
                     if (
                         variables is not None
                         and name not in variables

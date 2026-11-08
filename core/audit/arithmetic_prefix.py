@@ -57,7 +57,7 @@ class PrefixIntegerModel:
         return base
 
     def kind_for_name(self, node, *, read=True):
-        record = visible_declarations(node, self.data).get(self.text(node))
+        record = visible_declarations(node, self.data, language=self.language).get(self.text(node))
         if record is None or record[0] is None:
             return None
         spelling, declaration = record
@@ -113,7 +113,7 @@ class PrefixIntegerModel:
             left, right = (_unwrap(argument.child_by_field_name(field)) for field in ("left", "right"))
             if left is not None and right is not None:
                 atoms = [self.text(item) if item.type == "identifier" else source_integer_atom(item, self.data) for item in (left, right)]
-                declarations = visible_declarations(argument, self.data)
+                declarations = visible_declarations(argument, self.data, language=self.language)
                 if (all(atom is not None for atom in atoms)
                         and all(item.type != "identifier" or self.kind_for_name(item, read=False) is not None
                                 for item in (left, right))):

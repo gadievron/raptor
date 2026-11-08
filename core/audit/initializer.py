@@ -21,7 +21,7 @@ def initializer_text(text: str) -> str:
     return text
 
 
-def initializer_may_use_value(value, source: bytes, variable: str) -> bool:
+def initializer_may_use_value(value, source: bytes, variable: str, *, language="c") -> bool:
     """Whether a C initializer may convert this variable's integer value.
 
     Grouping and casts preserve value uses. Call arguments, scalar sizeof,
@@ -35,7 +35,20 @@ def initializer_may_use_value(value, source: bytes, variable: str) -> bool:
     while stack:
         node = stack.pop()
         kind = node.type
-        if kind in {"call_expression", "alignof_expression", "type_descriptor"}:
+        if kind == "call_expression":
+            function = node.child_by_field_name("function")
+            named_cast = function.child_by_field_name("name") if function is not None and function.type == "template_function" else None
+            cast_name = source[named_cast.start_byte:named_cast.end_byte].decode("utf-8") if named_cast is not None else ""
+            if language == "cpp" and function is not None and (
+                function.type in {"primitive_type", "sized_type_specifier"}
+                or cast_name in {"static_cast", "const_cast", "reinterpret_cast", "dynamic_cast"}
+            ):
+                arguments = node.child_by_field_name("arguments")
+                if arguments is None:
+                    return True  # grammar drift must not erase a conversion
+                stack.extend(arguments.named_children)
+            continue
+        if kind in {"alignof_expression", "type_descriptor"}:
             continue
         if kind == "identifier":
             if source[node.start_byte : node.end_byte].decode("utf-8") == variable:

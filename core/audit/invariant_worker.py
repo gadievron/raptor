@@ -83,7 +83,7 @@ def _request(
 
 def _binding(request):
     return {
-        "query_contract": "mathematical-invariant-worker-v9",
+        "query_contract": "mathematical-invariant-worker-v10",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8")
         ).hexdigest(),

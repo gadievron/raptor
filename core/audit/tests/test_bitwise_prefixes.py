@@ -139,7 +139,7 @@ def test_bitwise_prefix_reaches_overflow_verification_and_auxiliary_disproof(
     assert reply.outcome == "refuted", reply.details
     assert (
         reply.details["source_scope"]["query_contract"]
-        == "common-width-integer-operands-v21"
+        == "common-width-integer-operands-v22"
     )
     from core.audit.condition_smt import disprove_integer_overflow
 
@@ -234,7 +234,7 @@ def test_literal_caller_consumes_bitwise_prefix_obligations(verb):
     call = reply["calls"][0]
     assert call["verdict"] == "violation"
     assert literal_call_witness_valid(reply, call, verb, hypothesis, abi)
-    assert reply["binding"]["query_contract"] == "common-width-literal-frame-v7"
+    assert reply["binding"]["query_contract"] == "common-width-literal-frame-v8"
 
 
 @pytest.mark.parametrize(

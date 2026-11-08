@@ -48,7 +48,38 @@ def _declarator_names(declarator, source):
     return []
 
 
-def _declarations(node, source, *, before=None):
+def _enum_declarations(node, source, *, before=None, language="c"):
+    """C records introduce no scope for their enumeration constants.
+
+    Stop at actual block and prototype scopes. C++ records own their
+    members, so only the declaration's direct unscoped enum is visible.
+    """
+    if language != "c":
+        node = node if node.type == "enum_specifier" else node.child_by_field_name("type")
+        if node is None or node.type != "enum_specifier":
+            return {}
+    result, pending = {}, [node]
+    scopes = {"compound_statement", "function_definition", "function_declarator",
+              "abstract_function_declarator", "parameter_list", "if_statement",
+              "switch_statement", "for_statement", "while_statement", "do_statement"}
+    while pending:
+        item = pending.pop()
+        if before is not None and item.start_byte >= before:
+            continue
+        if item.type in scopes or item.type.startswith("preproc_"):
+            continue
+        if item.type == "enum_specifier":
+            body = item.child_by_field_name("body")
+            if body is not None and not any(child.type in {"class", "struct"} for child in item.children):
+                for enumerator in body.named_children:
+                    name = enumerator.child_by_field_name("name")
+                    if name is not None and (before is None or enumerator.end_byte <= before):
+                        result[_node_source(name, source)] = (None, item)
+        pending.extend(reversed(item.named_children))
+    return result
+
+
+def _declarations(node, source, *, before=None, language="c"):
     result = {}
     type_node = (
         node if node.type == "enum_specifier" else node.child_by_field_name("type")
@@ -56,14 +87,7 @@ def _declarations(node, source, *, before=None):
     type_name = _node_source(type_node, source)
     if any(child.type.startswith(("attribute", "ms_", "declspec")) for child in node.named_children):
         type_name = None  # modifiers can change storage width or value type
-    if (type_node is not None and type_node.type == "enum_specifier"
-            and not any(child.type in {"class", "struct"} for child in type_node.children)):
-        body = type_node.child_by_field_name("body")
-        if body is not None:
-            for item in body.named_children:
-                name = item.child_by_field_name("name")
-                if name is not None:
-                    result[_node_source(name, source)] = (None, node)
+    result.update(_enum_declarations(node, source, before=before, language=language))
     for declarator in node.children_by_field_name("declarator"):
         if before is not None and declarator.start_byte > before:
             continue
@@ -78,25 +102,29 @@ def _declarations(node, source, *, before=None):
     return result
 
 
-def _preceding_declarations(node, source, before):
+def _preceding_declarations(node, source, before, language):
     result = {}
     for child in node.named_children:
         if child.start_byte >= before:
             break
+        if child.end_byte <= before:
+            result.update(_enum_declarations(child, source, before=before, language=language))
         if child.end_byte <= before and child.type in {"declaration", "enum_specifier"}:
-            result.update(_declarations(child, source))
+            result.update(_declarations(child, source, language=language))
         elif child.type in {"labeled_statement", "case_statement"}:
             # Labels do not introduce a C scope; braces do.
-            result.update(_preceding_declarations(child, source, before))
+            result.update(_preceding_declarations(child, source, before, language))
     return result
 
 
-def visible_declarations(target, source: bytes):
+def visible_declarations(target, source: bytes, *, language="c"):
     """Collect only declarations in scopes containing this source use.
 
     Unknown types and non-scalar declarators mask outer names. No type is
     borrowed from another function, a sibling block, or a later declaration.
     """
+    if language is None:
+        language = "c"
     chain = []
     node = target
     while node is not None:
@@ -110,7 +138,7 @@ def visible_declarations(target, source: bytes):
             "labeled_statement",
             "case_statement",
         }:
-            result.update(_preceding_declarations(node, source, target.start_byte))
+            result.update(_preceding_declarations(node, source, target.start_byte, language))
         elif node.type in {"function_definition", "lambda_expression", "catch_clause"}:
             if node.type == "lambda_expression":
                 body = node.child_by_field_name("body")
@@ -127,10 +155,15 @@ def visible_declarations(target, source: bytes):
             if params is not None:
                 for param in params.named_children:
                     if param.type in {"parameter_declaration", "optional_parameter_declaration"}:
-                        result.update(_declarations(param, source))
+                        result.update(_declarations(param, source, before=target.start_byte, language=language))
         elif node.type in {"if_statement", "switch_statement", "while_statement", "for_statement", "for_range_loop"}:
             condition = node.child_by_field_name("condition")
             initial = node.child_by_field_name("initializer")
+            if language == "c":
+                for field in ("initializer", "condition", "update"):
+                    header = node.child_by_field_name(field)
+                    if header is not None:
+                        result.update(_enum_declarations(header, source, before=target.start_byte, language=language))
             if condition is not None and condition.type == "condition_clause":
                 initial = condition.child_by_field_name("initializer") or initial
                 condition = condition.child_by_field_name("value")
@@ -138,16 +171,16 @@ def visible_declarations(target, source: bytes):
                 if declaration is not None and declaration.type == "init_statement":
                     declaration = next((item for item in declaration.named_children if item.type == "declaration"), None)
                 if declaration is not None and declaration.type == "declaration":
-                    result.update(_declarations(declaration, source, before=target.start_byte))
+                    result.update(_declarations(declaration, source, before=target.start_byte, language=language))
             if node.type == "for_range_loop":
                 body = node.child_by_field_name("body")
                 if body is not None and body.start_byte <= target.start_byte < body.end_byte:
-                    result.update(_declarations(node, source))
+                    result.update(_declarations(node, source, language=language))
         elif node.type == "declaration":
-            result.update(_declarations(node, source, before=target.start_byte))
+            result.update(_declarations(node, source, before=target.start_byte, language=language))
     return result
 
 
-def visible_types(target, source: bytes) -> dict[str, str | None]:
+def visible_types(target, source: bytes, *, language="c") -> dict[str, str | None]:
     """Type-only view of the shared, lexically visible declaration records."""
-    return {name: record[0] for name, record in visible_declarations(target, source).items()}
+    return {name: record[0] for name, record in visible_declarations(target, source, language=language).items()}

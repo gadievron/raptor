@@ -63,7 +63,7 @@ def _request(invariant, sites, timeout_ms, deadline, integer_abi=None):
 
 def _binding(request):
     return {
-        "query_contract": "mathematical-invariant-site-batch-v9",
+        "query_contract": "mathematical-invariant-site-batch-v10",
         "request_sha256": _digest(request),
     }
 
