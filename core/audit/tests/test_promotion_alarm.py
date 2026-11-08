@@ -119,18 +119,28 @@ class TestBuildAlarmRecord:
             assert rec is None
 
     def test_clean_refuted_receipt_is_tool_evidence(self):
-        # ``clean-refuted:<tool>`` is _promote_clean_refuted's
-        # provenance-wrapped receipt for a policy-sanctioned,
-        # SMT-confirmed promotion.  It fired the alarm on every such
-        # promotion in a corpus run (6 CRITICALs, all legitimate)
-        # because the wrapper namespace was unknown to the evidence
-        # grader — the wrapped stamp is the receipt.
-        for tool in ("clean-refuted:smt", "clean-refuted:smt:check-uaf"):
+        # Provenance wrapping preserves a qualified verification receipt.
+        # The wrapper itself does not establish SMT authority.
+        for tool in ("clean-refuted:smt:check-overflow", "clean-refuted:smt:check-array-bounds"):
             rec = build_alarm_record(
                 stage="journal-write", file="a.c", function="f",
                 verdict="finding", evidence_tool=tool,
             )
             assert rec is None, f"alarm fired on {tool!r}"
+
+    @pytest.mark.parametrize("tool", [
+        "clean-refuted:smt", "clean-refuted:clean-refuted:smt",
+        "clean-refuted:smt:check-toctou", "clean-refuted:smt:check-integer-narrowing",
+        "clean-refuted:smt:validate-path:witness",
+    ])
+    def test_clean_refuted_wrapper_cannot_upgrade_smt_authority(self, tool):
+        rec = build_alarm_record(
+            stage="journal-write", file="a.c", function="f",
+            verdict="finding", evidence_tool=tool,
+        )
+        assert rec is not None
+        assert rec["event"] == "promotion_without_tool_evidence"
+        assert rec["evidence_tool"] == tool
 
     def test_clean_refuted_wrapper_around_nothing_still_fires(self):
         # The wrapper alone (or wrapping a non-tool) is not evidence.
