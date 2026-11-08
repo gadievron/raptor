@@ -85,6 +85,7 @@ class NarrowingGuardContext:
                 "while_statement",
                 "do_statement",
                 "switch_statement",
+                "gnu_asm_expression",
             }:
                 return True
             if self._declares(item, variable):
@@ -95,11 +96,9 @@ class NarrowingGuardContext:
                         "left" if item.type == "assignment_expression" else "argument"
                     )
                 )
-                if (
-                    operand is not None
-                    and operand.type == "identifier"
-                    and self._node_source(operand) == variable
-                ):
+                if operand is None or operand.type != "identifier":
+                    return True  # unknown lvalues can select or alias this storage
+                if self._node_source(operand) == variable:
                     return True
         return False
 
@@ -109,6 +108,10 @@ class NarrowingGuardContext:
         if not text:
             return None
         if node.type == "identifier":
+            from .narrowing_bindings import visible_declarations
+
+            if text in visible_declarations(node, self.data):
+                return None  # a source declaration is not a standard limit macro
             if re.search(
                 rf"^[^\S\r\n]*#[^\S\r\n]*(?:define|undef)[^\S\r\n]+{re.escape(text)}\b",
                 self.source,
@@ -370,6 +373,9 @@ class NarrowingGuardContext:
         bindings = [item for item in items if self._declares(item, variable)]
         if len(bindings) != 1:
             return False  # globals, pointers, or shadowing require another model
+        if any(item.type == "type_qualifier" and self._node_source(item) != "const"
+               for item in bindings[0].named_children):
+            return False  # volatile/atomic reads need not retain a checked value
         if " ".join(
             self._node_source(bindings[0].child_by_field_name("type")).split()
         ) != " ".join(source_type.split()):
