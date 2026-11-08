@@ -18,6 +18,25 @@ from core.inventory.lexical_view import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _owned_lexical_state(monkeypatch):
+    """Own validation, memo and mode tables together with the held test alias."""
+    from collections import OrderedDict
+    from core.testing.module_state import isolated_module_state
+
+    modes = {language: dict(table) for language, table in lexical_view.NONCODE_NODE_MODES.items()}
+    with isolated_module_state(
+        lexical_view,
+        {"_VALIDATED": {}, "_memo": OrderedDict(), "NONCODE_NODE_MODES": modes},
+        lock=lexical_view._memo_lock,
+    ):
+        try:
+            monkeypatch.setitem(globals(), "NONCODE_NODE_MODES", modes)
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _grammar_available(language: str) -> bool:
     return lexical_view._language_for(language) is not None
 

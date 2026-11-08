@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import pytest
+
 from core.audit.refutation import (
     _classify_lifecycle,
     _extract_all_cwes,
@@ -28,6 +30,21 @@ from core.audit.refutation import (
 # ---------------------------------------------------------------------------
 # Minimal ReviewOutcome stand-in (avoids importing orchestrator)
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _owned_threading_cache():
+    """Keep this test's cache writes separate from borrowed process state."""
+    from core.audit import refutation
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        refutation,
+        {
+            "_threading_seen_cache": {},
+        },
+    ):
+        yield
 
 
 @dataclass

@@ -28,6 +28,28 @@ from core.audit.orchestrator import (
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_review_caches():
+    """Keep this test's cache writes separate from borrowed process state."""
+    from collections import OrderedDict
+    from core.audit import orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        orchestrator,
+        {
+            "_sink_guard_cache": {},
+            "_parse_wrapper_cache": {},
+            "_line_end_cache": {},
+            "_file_lines_cache": OrderedDict(),
+            "_file_lines_cache_bytes": 0,
+        },
+        lock=orchestrator._file_lines_cache_lock,
+    ):
+        yield
+
+
 def _setup_target(tmp_path: Path):
     """Create a minimal target + output dir with a checklist."""
     target = tmp_path / "target"
