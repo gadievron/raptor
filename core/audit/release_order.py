@@ -54,9 +54,12 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
-from core.source.lines import split_lines
+from core.source.lines import slice_source_lines, split_lines
 
 logger = logging.getLogger(__name__)
+
+_RELEASE_LINES_IMPL = split_lines
+_RELEASE_TYPE_IMPL = type
 
 _RELEASE_DEST_ARG_RE = re.compile(r"[&*(]*\s*([A-Za-z_]\w*)")
 _RELEASE_HEADER_PARAM_RE = re.compile(r"[\w\*\s]\b([A-Za-z_]\w*)\s*[,)]")
@@ -330,6 +333,12 @@ def _function_segment(
         span = c_function_span(source, function_name, language=language)
     except ImportError:
         span = None
+    if (_RELEASE_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+            and split_lines is _RELEASE_LINES_IMPL and _RELEASE_TYPE_IMPL(span) is tuple
+            and tuple.__len__(span) == 2
+            and _RELEASE_TYPE_IMPL(span[0]) is int and _RELEASE_TYPE_IMPL(span[1]) is int
+            and span[0] > 0 and span[1] >= span[0]):
+        return slice_source_lines(source, span[0], span[1]), span[0]
     lines = split_lines(source)
     if span:
         return lines[span[0] - 1:span[1]], span[0]
