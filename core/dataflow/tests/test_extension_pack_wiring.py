@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.dataflow.extension_pack import ModelRow
+from core.testing.standalone_cli import run_standalone_cli
 
 
 def _row(**kw) -> ModelRow:
@@ -92,14 +92,18 @@ _SHIM = (Path(__file__).resolve().parents[3] / "core" / "iris"
 def _run_shim(*args):
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(_SHIM), *args],
         capture_output=True, text=True, timeout=60, env=env, check=False,
     )
 
 
 class TestShim:
-    def test_specs_to_pack(self, tmp_path: Path):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_specs_to_pack(self, tmp_path: Path, monkeypatch, stale_launch):
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "stale-parent-authorisation")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "missing-scratch"))
         specs = [{
             "role": "sink",
             "function": "proj::db::run_q",
