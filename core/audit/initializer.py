@@ -21,14 +21,96 @@ def initializer_text(text: str) -> str:
     return text
 
 
+
+def _builtin_scalar_value(node, source, depth=0):
+    """Recognise builtin C++ results before excluding Boolean operators.
+
+    Unresolved calls, aliases, references and class operands may select an
+    overloaded operator whose result is not Boolean. No widths are inferred.
+    """
+    if node is None or depth > 64:
+        return False
+    children = [child for child in node.named_children if child.type != "comment"]
+    kind = node.type
+    if kind in {"number_literal", "char_literal", "string_literal", "concatenated_string",
+                "true", "false", "sizeof_expression", "alignof_expression",
+                "requires_expression", "noexcept_expression"}:
+        return True
+    if kind == "identifier":
+        from .narrowing_bindings import visible_declarations
+
+        name = source[node.start_byte:node.end_byte].decode("utf-8")
+        record = visible_declarations(node, source, language="cpp").get(name)
+        if record is None or record[0] is None:
+            return False
+        owner = node.parent
+        while owner is not None and owner.type not in {"function_definition", "lambda_expression"}:
+            owner = owner.parent
+        declaration = record[1]
+        if owner is None or not owner.start_byte <= declaration.start_byte < declaration.end_byte <= owner.end_byte:
+            return False  # globals may be hidden by unresolved C++ member/namespace lookup
+        pending = [owner]
+        for _ in range(2048):
+            if not pending:
+                break
+            item = pending.pop()
+            if item.type == "using_declaration" and any(child.type == "enum" for child in item.children):
+                return False  # imported enumerators need name/type resolution
+            if item != owner and item.type in {"function_definition", "lambda_expression"}:
+                continue
+            pending.extend(item.named_children)
+        else:
+            return False  # incomplete lookup cannot establish builtin operands
+        base = declaration.child_by_field_name("type")
+        return base is not None and base.type in {"primitive_type", "sized_type_specifier"}
+    if kind == "type_descriptor":
+        base = node.child_by_field_name("type")
+        return (base is not None and base.type in {"primitive_type", "sized_type_specifier"}
+                and all(child == base or child.type == "type_qualifier" for child in children))
+    if kind == "cast_expression":
+        return _builtin_scalar_value(node.child_by_field_name("type"), source, depth + 1)
+    if kind == "call_expression":
+        function = node.child_by_field_name("function")
+        if function is None:
+            return False
+        if function.type in {"primitive_type", "sized_type_specifier"}:
+            return True
+        name = function.child_by_field_name("name") if function.type == "template_function" else function
+        spelling = source[name.start_byte:name.end_byte] if name is not None else b""
+        if spelling == b"noexcept":
+            return True
+        if spelling in {b"static_cast", b"const_cast", b"reinterpret_cast", b"dynamic_cast"}:
+            arguments = function.child_by_field_name("arguments")
+            types = [child for child in arguments.named_children if child.type != "comment"] if arguments is not None else []
+            return len(types) == 1 and _builtin_scalar_value(types[0], source, depth + 1)
+        return False
+    if kind == "assignment_expression":
+        return _builtin_scalar_value(node.child_by_field_name("left"), source, depth + 1)
+    if kind in {"parenthesized_expression", "expression_statement", "unary_expression",
+                "pointer_expression", "update_expression"}:
+        return len(children) == 1 and _builtin_scalar_value(children[0], source, depth + 1)
+    if kind in {"binary_expression", "comma_expression"}:
+        return all(_builtin_scalar_value(node.child_by_field_name(field), source, depth + 1)
+                   for field in ("left", "right"))
+    if kind == "conditional_expression":
+        return all(_builtin_scalar_value(child, source, depth + 1) for child in (
+            node.child_by_field_name("consequence") or node.child_by_field_name("condition"),
+            node.child_by_field_name("alternative"),
+        ))
+    if kind == "compound_statement":
+        return bool(children) and children[-1].type == "expression_statement" and _builtin_scalar_value(children[-1], source, depth + 1)
+    return False
+
+
 def initializer_may_use_value(value, source: bytes, variable: str, *, language="c") -> bool:
     """Whether a C initializer may convert this variable's integer value.
 
     Grouping and casts preserve value uses. Call arguments, scalar sizeof,
     Boolean results (including C++ requirements), indices and conditional
     selectors do not themselves supply the wide integer being converted.
-    This is candidate extraction,
-    not callee-return typing or a proof of the expression's range.
+    This is candidate extraction, not callee-return typing or a proof of
+    the expression's range. Unresolved C++ predicate and address operators
+    retain possible leads.
     """
     if value is None:
         return True
@@ -48,6 +130,15 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
                 if arguments is None:
                     return True  # grammar drift must not erase a conversion
                 stack.extend(arguments.named_children)
+            continue
+        if kind == "compound_statement":
+            # A GNU statement expression supplies its final expression's
+            # value. Earlier evaluated statements do not supply that value.
+            children = [child for child in node.named_children if child.type != "comment"]
+            if children and children[-1].type == "expression_statement":
+                stack.append(children[-1])
+            else:
+                stack.extend(children)  # unknown result syntax retains leads
             continue
         if kind in {"alignof_expression", "type_descriptor", "requires_expression"}:
             continue
@@ -74,14 +165,19 @@ def initializer_may_use_value(value, source: bytes, variable: str, *, language="
                 if operator is not None
                 else ""
             )
-            if (
+            if language == "cpp":
+                op = {"and": "&&", "or": "||", "not": "!", "not_eq": "!="}.get(op, op)
+            boolean_operator = (
                 (
                     kind == "binary_expression"
                     and op in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}
                 )
                 or (kind == "unary_expression" and op == "!")
-                or (kind == "pointer_expression" and op == "&")
-            ):
+            )
+            if boolean_operator and (language != "cpp" or _builtin_scalar_value(node, source)):
+                continue
+            if (kind == "pointer_expression" and op == "&"
+                    and (language != "cpp" or _builtin_scalar_value(node, source))):
                 continue
         if kind == "assignment_expression":
             operator = node.child_by_field_name("operator")
