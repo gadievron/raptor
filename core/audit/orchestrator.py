@@ -25126,6 +25126,41 @@ def _record_ihv_scope_rejection(verification, outcome, config, *, hypothesis, re
         logger.warning("could not record verification scope rejection", exc_info=True)
 
 
+def _admit_ihv_synth_receipts(support, outcome, config):
+    """Apply the existing synthesis policy to each independent receipt."""
+    from .evidence_grade import iter_verification_receipts
+
+    claim = support.verification.hypothesis
+    review = outcome.review_result or {}
+    cwe = claim.get("cwe") or review.get("cwe_class") or review.get("cwe") or ""
+    admitted, excluded = [], []
+    for receipt in support.receipts:
+        if ":synth-" not in receipt:
+            admitted.append(receipt)
+            continue
+        for part in iter_verification_receipts(receipt):
+            reason = _synth_receipt_promotion_block_reason(part, outcome, cwe, config)
+            if reason:
+                excluded.append({"receipt": part, "reason": reason})
+            else:
+                admitted.append(part)
+    if excluded:
+        try:
+            from .check_trace import record_synthesis_exclusion
+
+            record_synthesis_exclusion(
+                config.out_dir, support.verification.binding,
+                attempted_scope={"file": outcome.file, "function": outcome.function,
+                                 "line_start": outcome.line, "hypothesis": claim["mechanism"]},
+                excluded_receipts=excluded,
+            )
+        except Exception:
+            logger.warning("could not record synthesis receipt exclusion", exc_info=True)
+        if not admitted:
+            outcome.review_result["ihv_gate_blocked"] = "synth-receipt-excluded: " + excluded[0]["reason"]
+    return replace(support, receipts=tuple(dict.fromkeys(admitted))) if admitted else None
+
+
 def _aggregate_ihv_verdicts(
     outcome: ReviewOutcome,
     result: OrchestratorResult,
@@ -25173,7 +25208,9 @@ def _aggregate_ihv_verdicts(
                 verification, outcome, config, hypothesis=mechanism, reason=reason, current_source=current_source,
             )
         else:
-            supports.append(support)
+            admitted = _admit_ihv_synth_receipts(support, outcome, config)
+            if admitted is not None:
+                supports.append(admitted)
     if tools:
         outcome.review_result["ihv_tools"] = tools
         outcome.review_result["ihv_hypotheses_confirmed"] = len(supports)
