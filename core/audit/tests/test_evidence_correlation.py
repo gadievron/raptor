@@ -369,6 +369,7 @@ class TestMechDetectorPromotion:
         pytest.param("free_nonbase_ptr_inc", "free_nonbase_ptr", "invalid free of an offset pointer", "CWE-761", False, id="detection-offset-alias"),
         pytest.param("double_fclose", "double_close", "double close of a stream", "CWE-415", False, id="detection-stream-alias"),
         pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", True, id="verified-stack-alias"),
+        pytest.param("alloc_narrow_count", "alloc_narrow_count", "division-derived count contributes to allocation size", "CWE-190", False, id="detection-narrow-count"),
         pytest.param("double_sizeof", "double_sizeof", "repeated sizeof allocation factors", "CWE-468", False, id="detection-repeated-width"),
         pytest.param("pointer_scaling_double", "double_sizeof", "explicit sizeof pointer stride", "CWE-468", False, id="detection-pointer-stride"),
         pytest.param("sizeof_container_of", "sizeof_container_of", "allocation capacity for enclosing object", "CWE-131", False, id="detection-container-capacity"),

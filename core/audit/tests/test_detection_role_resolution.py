@@ -237,6 +237,7 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
 
 
 @pytest.mark.parametrize("owner,reported", [
+    ("alloc_narrow_count", "alloc_narrow_count"),
     ("double_sizeof", "double_sizeof"),
     ("double_sizeof", "pointer_scaling_double"),
     ("sizeof_container_of", "sizeof_container_of"),
