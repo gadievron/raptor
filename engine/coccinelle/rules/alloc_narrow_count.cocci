@@ -1,6 +1,7 @@
 // alloc_narrow_count.cocci — Review division-derived allocation sizes.
 // An unsigned-int count may truncate a wider helper result, but helper names
 // alone establish neither operand widths nor an undersized allocation.
+// Inspect allocation values in any expression and both kcalloc size factors.
 // Track direct count/size origins until assignment or address escape.
 // Aliases, indirect writes, helper contracts and capacity still need review.
 // @role: detection
@@ -11,7 +12,7 @@ unsigned int C;
 identifier div =~ "div";
 identifier B;
 identifier alloc = {vmalloc, kmalloc, kzalloc, kvmalloc, kvzalloc, vzalloc, kcalloc};
-expression E;
+expression COUNT, FLAGS;
 position p;
 @@
 
@@ -23,7 +24,11 @@ B = <+... C ...+>;
 ... when any
     when != B = ...
     when != &B
-E = alloc@p(<+... B ...+>, ...);
+(
+  alloc@p(<+... B ...+>, ...)
+|
+  kcalloc@p(COUNT, <+... B ...+>, FLAGS)
+)
 
 @script:python@
 p << narrowdiv.p;
