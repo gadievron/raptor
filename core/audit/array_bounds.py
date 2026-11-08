@@ -23,7 +23,7 @@ from .condition_extraction import _get_parser
 from .function_execution_frame import ordinary_function_frame
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_witness import source_model_scope, validate_integer_witness
-from .narrowing_bindings import visible_declarations
+from .narrowing_bindings import callable_declarator, visible_declarations
 
 logger = logging.getLogger(__name__)
 _MAX_SOURCE_CHARS = 65536
@@ -125,7 +125,8 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
     function = functions[0]
     body = function.child_by_field_name("body")
     function_declarator = function.child_by_field_name("declarator")
-    if function_declarator is None or function_declarator.type != "function_declarator":
+    if (function_declarator is None or function_declarator.type != "function_declarator"
+            or callable_declarator(function) != function_declarator):
         return ArrayAccess("unavailable", "plain function declaration required")
     if not ordinary_function_frame(function, data, language):
         return ArrayAccess("unavailable", "function execution frame is unsupported")
@@ -134,10 +135,7 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
         return ArrayAccess("unavailable", "function body unavailable")
     if any(node.type not in _FRAME_NODES for node in body_nodes):
         return ArrayAccess("unavailable", "frame syntax or effects are unsupported")
-    parameters = function.child_by_field_name("declarator")
-    while parameters is not None and parameters.type != "function_declarator":
-        parameters = parameters.child_by_field_name("declarator")
-    parameters = parameters.child_by_field_name("parameters") if parameters is not None else None
+    parameters = function_declarator.child_by_field_name("parameters")
     if parameters is None:
         return ArrayAccess("unavailable", "parameter declarations unavailable")
     parameter_names, parameter_types = [], []

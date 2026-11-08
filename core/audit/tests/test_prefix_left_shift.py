@@ -41,7 +41,7 @@ def test_defined_left_shift_prefix_reaches_real_source_verification(prefix, extr
                                      source=source(prefix, extra), hypothesis='integer overflow in `Value + Step`',
                                      integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v20'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v21'
 
 
 @pytest.mark.parametrize('language', ['c', 'cpp'])

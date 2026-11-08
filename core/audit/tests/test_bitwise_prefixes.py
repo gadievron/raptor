@@ -139,7 +139,7 @@ def test_bitwise_prefix_reaches_overflow_verification_and_auxiliary_disproof(
     assert reply.outcome == "refuted", reply.details
     assert (
         reply.details["source_scope"]["query_contract"]
-        == "common-width-integer-operands-v20"
+        == "common-width-integer-operands-v21"
     )
     from core.audit.condition_smt import disprove_integer_overflow
 
