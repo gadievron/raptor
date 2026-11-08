@@ -9,11 +9,12 @@ import re
 
 
 def integer_range(type_name: str, width: int) -> tuple[int, int] | None:
-    name = type_name.strip()
+    name = " ".join(type_name.split())
     if name == "char":  # implementation-defined signedness
         return None
     unsigned = (
-        name.startswith(("unsigned", "uint", "__u"))
+        "unsigned" in name.split()
+        or name.startswith(("uint", "__u"))
         or bool(re.fullmatch(r"u\d+", name))
         or name in {"size_t", "uintptr_t"}
     )
