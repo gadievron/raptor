@@ -10,10 +10,29 @@ mid-run primers never migrate into the cached prefix (correctness).
 
 from __future__ import annotations
 
+import pytest
+
 from core.audit.context import (
     format_context_for_prompt,
     render_pattern_library,
 )
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_kernel_memo():
+    """Restore borrowed caches after this test's mutations."""
+    from core.audit.run_memo import BoundedMemo
+    from core.audit import context
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        context,
+        {
+            "_kernel_file_cache": BoundedMemo(2048),
+        },
+    ):
+        yield
 
 
 def _ctx(**over):

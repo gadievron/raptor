@@ -125,6 +125,22 @@ int parse_records(struct hdr *hdr, char *dst)
 """
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_pack_memo():
+    """Restore borrowed caches after this test's mutations."""
+    from core.audit import resource_bounds
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        resource_bounds,
+        {
+            "_pack_collection_cache": {},
+        },
+    ):
+        yield
+
+
 def _write(tmp_path, rel, text):
     p = tmp_path / rel
     p.parent.mkdir(parents=True, exist_ok=True)

@@ -2,10 +2,31 @@
 
 from __future__ import annotations
 
+import pytest
+
 import json
 from types import SimpleNamespace
 
 from core.audit.orchestrator import _update_run_progress
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_source_lines():
+    """Restore borrowed caches after this test's mutations."""
+    from collections import OrderedDict
+    from core.audit import orchestrator
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(
+        orchestrator,
+        {
+            "_file_lines_cache": OrderedDict(),
+            "_file_lines_cache_bytes": 0,
+        },
+        lock=orchestrator._file_lines_cache_lock,
+    ):
+        yield
 
 
 class TestUpdateRunProgress:

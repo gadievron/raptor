@@ -1,0 +1,54 @@
+[
+  {
+    "file": "core/audit/tests/test_prompt_cache_alignment.py",
+    "fixture": "_owned_kernel_memo",
+    "module": "core.audit.context",
+    "owner": "context",
+    "fields": [
+      "_kernel_file_cache"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/audit/tests/test_resource_bounds.py",
+    "fixture": "_owned_pack_memo",
+    "module": "core.audit.resource_bounds",
+    "owner": "resource_bounds",
+    "fields": [
+      "_pack_collection_cache"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/audit/tests/test_cwe_inference.py",
+    "fixture": "_owned_unmapped_cwes",
+    "module": "core.audit.orchestrator",
+    "owner": "orchestrator",
+    "fields": [
+      "_UNMAPPED_CWES_LOGGED"
+    ],
+    "lock": null
+  },
+  {
+    "file": "core/audit/tests/test_synth_self_match.py",
+    "fixture": "_owned_trust_boundary_memo",
+    "module": "core.audit.orchestrator",
+    "owner": "orchestrator",
+    "fields": [
+      "_TRUST_BOUNDARY_KEYS_CACHE"
+    ],
+    "lock": null,
+    "alias": "_TRUST_BOUNDARY_KEYS_CACHE"
+  },
+  {
+    "file": "core/audit/tests/test_run_progress.py",
+    "fixture": "_owned_source_lines",
+    "module": "core.audit.orchestrator",
+    "owner": "orchestrator",
+    "fields": [
+      "_file_lines_cache",
+      "_file_lines_cache_bytes"
+    ],
+    "lock": "_file_lines_cache_lock"
+  }
+]
