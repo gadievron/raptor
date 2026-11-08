@@ -283,3 +283,154 @@ def test_close_defers_private_output_cleanup_until_worker_exit(setup_tracker, mo
     finally:
         release.set()
         threading.Thread.join(host._thread, timeout=2)
+
+
+@pytest.mark.parametrize('startup_error', [host_mod.HostRPCError, KeyboardInterrupt])
+@pytest.mark.parametrize('cleanup_error', [OSError, KeyboardInterrupt])
+def test_startup_failure_keeps_its_cause_when_close_also_fails(setup_tracker, monkeypatch, startup_error, cleanup_error):
+    import core.sandbox
+    tracker = setup_tracker
+    entered, release = threading.Event(), threading.Event()
+    hosts = []
+    original = startup_error('owned startup failure')
+    cleanup = cleanup_error('owned startup cleanup failure')
+    def backend(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(returncode=97, stderr=b'controlled startup failure')
+    class Host(host_mod.SandboxHost):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            hosts.append(self)
+        def _rpc(self, payload, *, timeout):
+            if payload['cmd'] == 'ping':
+                assert entered.wait(5)
+                raise original
+            release.set()
+            return {'ok': True}
+        def close(self):
+            super().close()
+            raise cleanup
+    monkeypatch.setattr(core.sandbox, 'run', backend)
+    try:
+        with pytest.raises(BaseException) as caught:
+            Host.start(target=tracker.target)
+        assert isinstance(caught.value, startup_error)
+        if startup_error is KeyboardInterrupt:
+            assert caught.value is original
+        else:
+            assert caught.value.__cause__ is original
+        assert 'host startup cleanup: ' + cleanup_error.__name__ in original.__notes__
+        assert_cleaned(tracker, None)
+    finally:
+        release.set()
+        for host in hosts:
+            host_mod.SandboxHost.close(host)
+            threading.Thread.join(host._thread, timeout=5)
+            assert not host._thread.is_alive()
+
+
+@pytest.mark.parametrize('error', [OSError, KeyboardInterrupt])
+def test_post_ping_diagnostic_failure_retires_the_unreturned_host(setup_tracker, monkeypatch, error):
+    import core.sandbox
+    tracker = setup_tracker
+    entered, release = threading.Event(), threading.Event()
+    hosts = []
+    failure = error('owned acknowledgement diagnostic failure')
+    def backend(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(returncode=0, stderr=b'')
+    class Host(host_mod.SandboxHost):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            hosts.append(self)
+        def _rpc(self, payload, *, timeout):
+            if payload['cmd'] == 'ping':
+                assert entered.wait(5)
+            else:
+                release.set()
+            return {'ok': True, 'pid': 12345}
+    def fail(*args, **kwargs):
+        raise failure
+    monkeypatch.setattr(core.sandbox, 'run', backend)
+    monkeypatch.setitem(vars(host_mod.log), 'info', fail)
+    try:
+        with pytest.raises(error) as caught:
+            Host.start(target=tracker.target)
+        assert caught.value is failure
+        assert_cleaned(tracker, None)
+        assert all(not host._thread.is_alive() for host in hosts)
+    finally:
+        release.set()
+        for host in hosts:
+            host_mod.SandboxHost.close(host)
+            threading.Thread.join(host._thread, timeout=5)
+            assert not host._thread.is_alive()
+
+
+@pytest.mark.parametrize('endpoint', [0, 1], ids=['request-reader', 'reply-writer'])
+@pytest.mark.parametrize('error', [OSError, KeyboardInterrupt])
+def test_acknowledgement_attempts_both_daemon_endpoint_closes(setup_tracker, monkeypatch, endpoint, error):
+    import core.sandbox
+    tracker = setup_tracker
+    entered, release = threading.Event(), threading.Event()
+    hosts, failed = [], []
+    real_close = os.close
+    failure = error('owned daemon endpoint close failure')
+    def backend(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return SimpleNamespace(returncode=0, stderr=b'')
+    class Host(host_mod.SandboxHost):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            hosts.append(self)
+            self.observed_daemon_fds = tuple(self._daemon_fds)
+            self.physical_pipes = {
+                fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+                for fd in (self._write_fd, self._read_fd, *self.observed_daemon_fds)
+            }
+        def _rpc(self, payload, *, timeout):
+            if payload['cmd'] == 'ping':
+                assert entered.wait(5)
+            else:
+                release.set()
+            return {'ok': True}
+    def close(fd):
+        real_close(fd)
+        if hosts and fd == hosts[0].observed_daemon_fds[endpoint] and not failed:
+            failed.append(fd)
+            raise failure
+    monkeypatch.setattr(core.sandbox, 'run', backend)
+    patch_module_attribute(monkeypatch, host_mod, 'os', 'close', close)
+    try:
+        if error is KeyboardInterrupt:
+            with pytest.raises(KeyboardInterrupt) as caught:
+                Host.start(target=tracker.target)
+            assert caught.value is failure
+        else:
+            Host.start(target=tracker.target).close()
+        assert len(failed) == 1
+        assert_cleaned(tracker, None)
+    finally:
+        release.set()
+        try:
+            for host in hosts:
+                host_mod.SandboxHost.close(host)
+                threading.Thread.join(host._thread, timeout=5)
+                assert not host._thread.is_alive()
+        finally:
+            # A broken implementation may forget a daemon endpoint after
+            # an interrupted close. Independently retire only still-owned
+            # physical pipes; never close a reused numeric descriptor.
+            for host in hosts:
+                for fd, identity in host.physical_pipes.items():
+                    try:
+                        info = os.fstat(fd)
+                    except OSError as exc:
+                        if exc.errno == errno.EBADF:
+                            continue
+                        raise
+                    if (info.st_dev, info.st_ino) == identity:
+                        real_close(fd)
