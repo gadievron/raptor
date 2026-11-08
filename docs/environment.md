@@ -788,41 +788,6 @@ direct-network fallback. Broker routes are opt-in and do not change default
 model selection. See the [registry guide](model-brokers.md) for configuration
 and the JSON-only contribution path.
 
-For cheapaimodel, set `CHEAPAIMODEL_API_KEY` to a key created in the console at
-https://cheapaimodel.ai. Dispatcher requests to
-`/cheapaimodel/v1/chat/completions` are forwarded to
-`https://api.cheapaimodel.ai/v1/chat/completions` with Bearer authentication.
-Use a model ID from cheapaimodel's `/v1/models` catalog (for example
-`deepseek-v4-1-flash`). This route is opt-in and does not change the default
-provider or model selection.
-
-For CloudGPU, set `CLOUDGPU_API_KEY` to a key created at https://cloudgpu.app.
-Dispatcher requests to `/cloudgpu/v1/chat/completions` are forwarded to
-`https://cloudgpu.app/v1/chat/completions` with Bearer authentication.
-Use a model ID from CloudGPU's `/v1/models` catalog (for example
-`deepseek-v4-flash`). This route is opt-in and does not change the default
-provider or model selection.
-
-For Opper, set `OPPER_API_KEY` to a key from https://platform.opper.ai.
-Dispatcher requests to `/opper/v3/compat/chat/completions` are forwarded to
-`https://api.opper.ai/v3/compat/chat/completions` with Bearer authentication.
-Use a model ID from Opper's `/v3/compat/models` catalog. This route is opt-in
-and does not change the default provider or model selection.
-
-For Runcrate, set `RUNCRATE_API_KEY` to a key from https://runcrate.ai/dashboard/api-keys.
-Dispatcher requests to `/runcrate/v1/chat/completions` are forwarded to
-`https://api.runcrate.ai/v1/chat/completions` with Bearer authentication.
-Use an open-weight model ID from Runcrate's `/v1/models` catalog (for example
-`deepseek-ai/DeepSeek-V4.1-Flash`). This route is opt-in and does not change
-the default provider or model selection.
-
-For Y-API, set `YAPI_API_KEY` to your own key. Dispatcher requests to
-`/yapi/v1/chat/completions` are forwarded to
-`https://api.y-api.bestvirtualgoods.com/v1/chat/completions` with Bearer
-authentication. Its `/v1/models` catalog addresses models vendor-qualified
-(`deepseek/deepseek-v4-flash`, `anthropic/claude-sonnet-5`), and that inner
-segment is the part the relay looks up, so pass it through unchanged. This
-route is opt-in and does not change the default provider or model selection.
 
 **Cloud gateways** — AWS Bedrock, Azure OpenAI, and GCP Vertex when
 used as LLM backends.
