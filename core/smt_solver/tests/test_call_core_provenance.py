@@ -29,11 +29,13 @@ def test_conditional_call_width_refutations_retain_their_dependency(entry, signe
 
 
 @pytest.mark.parametrize("entry", [paths.check_path_feasibility, paths.check_path_feasibility_dual])
-@pytest.mark.parametrize("call", ["fetch_width() >= 0", "fetch_width() / 2 == 7"])
-def test_calls_outside_native_scalar_core_do_not_taint_its_provenance(entry, call):
+@pytest.mark.parametrize("call,admitted", [("fetch_width() >= 0", True), ("fetch_width() / 2 == 7", False)])
+def test_calls_outside_native_scalar_core_do_not_taint_its_provenance(entry, call, admitted):
     result = entry(conditions(call, "Value == 0", "Value == 1"),
                    profile=BVProfile(width=32, signed=False), use_call_summaries=False)
-    assert result.feasible is False and result.anon_var_map
+    assert result.feasible is False
+    assert bool(result.anon_var_map) is admitted
+    assert result.unknown == ([] if admitted else [call])
     assert result.refutation_uses_call_terms is False
     assert set(result.unsatisfied) == {"Value == 0", "Value == 1"}
 
