@@ -246,14 +246,26 @@ class TestRecordGatesVerified:
         self, tmp_path: Path, capsys,
     ):
         """Sweep rows carry ALREADY-NAMESPACED rule_ids
-        (smt:check-toctou, joern:flow-encoding) — the grade check must
-        classify them as-is; a re-prefixed smt:smt:* stamp matches no
-        classifier and every detection receipt graded verification."""
+        (symbolic:symbolic-reach, joern:flow-encoding) — the grade
+        check must classify them as-is; a repeated namespace matches
+        no detection classifier and would grant verification authority."""
+        rc = self._record_finding_with_receipt(
+            tmp_path, "symbolic:symbolic-reach", "symbolic:symbolic-reach",
+        )
+        assert rc == 1
+        assert "detection-grade" in capsys.readouterr().err
+
+    def test_bare_smt_receipt_is_rejected_before_classification(
+        self, tmp_path: Path, capsys,
+    ):
         rc = self._record_finding_with_receipt(
             tmp_path, "smt", "smt:check-toctou",
         )
         assert rc == 1
-        assert "detection-grade" in capsys.readouterr().err
+        error = capsys.readouterr().err
+        assert "G2 TOOL-GROUNDED" in error
+        assert "not a recognised tool" in error
+        assert "detection-grade" not in error
 
     def test_flow_encoding_receipt_cannot_ground_finding(
         self, tmp_path: Path, capsys,

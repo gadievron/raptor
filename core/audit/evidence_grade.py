@@ -680,6 +680,8 @@ MACHINE_BODY_MARKERS: tuple[str, ...] = (
     "[sink-unreachability:",
     "[smt-disproof:",
     "[smt-infeasible:",
+    # Exact saved Tier 4 migration diagnostic, not a general SMT prefix.
+    "[smt] inconclusive → refuted: unsat path conditions",
     "[suspicious-demotion:",
     "[suspicious-resolution:",
     "[sweep promoted via ",

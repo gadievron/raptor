@@ -178,3 +178,24 @@ def test_independent_source_receipts_still_qualify_with_diagnostic_models():
                             "dataflow_validation": {"verdict": "confirmed", "method": "codeql-iris"}}}
     assert derive_verification_tier(finding) == "tool_backed"
     assert mechanical_receipt(finding, "exploitable") == "codeql:dataflow"
+
+
+def test_model_text_cannot_mimic_saved_smt_refutation_marker():
+    from core.audit.evidence_grade import defang_model_fields
+    from packages.llm_analysis.verification_tier import unbound_smt_refutation
+
+    legacy = {"verdict": "refuted", "method": "codeql-iris",
+              "reasoning": "source note\n[smt] inconclusive → refuted: unsat path conditions"}
+    assert unbound_smt_refutation(legacy)
+    assert mechanical_receipt({"analysis": {"dataflow_validation": legacy}}, "false_positive") == ""
+
+    cleaned = defang_model_fields(legacy)
+    assert "[llm-claimed:smt]" in cleaned["reasoning"]
+    assert not unbound_smt_refutation(cleaned)
+    assert defang_model_fields(cleaned) == cleaned
+    finding = {"analysis": {"dataflow_validation": cleaned}}
+    assert mechanical_receipt(finding, "false_positive") == "codeql:dataflow"
+
+    source = {"verdict": "refuted", "method": "codeql-iris", "reasoning": "owned source query"}
+    assert not unbound_smt_refutation(source)
+    assert mechanical_receipt({"analysis": {"dataflow_validation": source}}, "false_positive") == "codeql:dataflow"
