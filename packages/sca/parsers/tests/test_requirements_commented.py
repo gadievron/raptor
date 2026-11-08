@@ -13,7 +13,8 @@ from packages.sca.parsers.requirements import parse
 @pytest.fixture(autouse=True)
 def _reset_toggle(monkeypatch):
     """Start with commented requirements off and restore the caller's toggle."""
-    monkeypatch.setattr(req_parser, "_INCLUDE_COMMENTED", False)
+    from contextvars import ContextVar
+    monkeypatch.setattr(req_parser, "_INCLUDE_COMMENTED", ContextVar("test_include_commented", default=False))
 
 
 def _write(tmp_path: Path, body: str, name: str = "requirements.txt") -> Path:

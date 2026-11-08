@@ -134,7 +134,11 @@ def main(argv: Sequence[str]) -> int:
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
-        passed, fails = eval_thresholds(all_rows, cfg)
+        try:
+            passed, fails = eval_thresholds(all_rows, cfg)
+        except ValueError as error:
+            print("raptor-sca render: " + _sft(str(error)), file=sys.stderr)
+            return 2
         print_result(passed, fails, prog="raptor-sca render")
         return 0 if passed and not result.errors and not sarif_errors else 1
 

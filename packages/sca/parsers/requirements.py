@@ -29,6 +29,8 @@ Recursion safety:
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import logging
 import re
 from pathlib import Path
@@ -107,15 +109,13 @@ _COMMENT_LINE_RE = re.compile(r"^\s*#")
 # parser also yields ``# pkg==X`` lines as ``Dependency`` rows tagged
 # ``commented_out=True``; the findings layer downgrades severity to
 # ``info`` and the rewriter preserves the leading ``#``.
-_INCLUDE_COMMENTED = False
+_INCLUDE_COMMENTED: ContextVar[bool] = ContextVar("sca_include_commented", default=False)
 
 
 def set_include_commented(value: bool) -> None:
     """Toggle commented-line scanning. The pipeline calls this once at
-    run start; not safe to flip mid-run (no thread-local — we only
-    drive a single pipeline at a time)."""
-    global _INCLUDE_COMMENTED
-    _INCLUDE_COMMENTED = bool(value)
+    run start; not safe to flip mid-run (isolated by the pipeline context)."""
+    _INCLUDE_COMMENTED.set(bool(value))
 
 # URL schemes treated as GIT for pin classification.
 _GIT_URL_PREFIXES = ("git+", "git:", "git@")
@@ -207,7 +207,7 @@ def _parse_file(
         commented = False
         stripped = raw_line.strip()
         if _COMMENT_LINE_RE.match(stripped):
-            if not _INCLUDE_COMMENTED:
+            if not _INCLUDE_COMMENTED.get():
                 continue
             # Try parsing the body of the comment as a requirement. Strip
             # one or more leading ``#`` and following whitespace; if

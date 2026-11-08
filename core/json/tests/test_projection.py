@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from core.json.projection import project_object
+from core.json.projection import iter_array, project_object
 
 
 class Chunks(io.BytesIO):
@@ -73,3 +73,9 @@ def test_projected_array_invalid_values_fail_even_when_discarded(raw):
     from core.json.projection import project_array
     with pytest.raises(ValueError):
         project_array(io.BytesIO(raw), max_bytes=len(raw), project=lambda row: None)
+
+
+@pytest.mark.parametrize("raw", (b'[{}] trailing', b'[{"x":1,"x":2}]', b'[NaN]', b'[{}', b'[[[[0]]]]'))
+def test_streaming_reader_validates_discarded_or_trailing_content(raw):
+    with pytest.raises(ValueError):
+        list(iter_array(io.BytesIO(raw), max_bytes=100, max_depth=3))

@@ -3381,5 +3381,20 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-10-31"
+  },
+  "packages/sca/_scan_args.py::effective_scan_plan": {
+    "count": 14,
+    "kind": "literal",
+    "note": "Fixed version-1 scan-plan output fields. Producer effective_scan_plan; consumers both CLI entry points and offline JSON automation. Flags describe configured stage capabilities; no package-name seed vocabulary."
+  },
+  "packages/sca/resolvers/_cache.py::_resolution_context": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed internal resolver-cache fingerprint schema, producer manifest_hash and consumers cached_dry_run/cached_dry_run_batch. Contains runtime, policy and file identity hashes; no learned symbol vocabulary. Review with cache identity changes."
+  },
+  "packages/sca/scan_observability.py::completion_summary": {
+    "count": 15,
+    "kind": "literal",
+    "note": "Fixed version-1 scan-summary persistence fields. Producer pipeline.run_sca; consumers RunResult.scan_summary and CLI completion summary, with query coverage and process telemetry. Not a function-name seed list."
   }
 }

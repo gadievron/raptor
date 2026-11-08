@@ -73,6 +73,15 @@ class Inventory:
     schema_version: int = 1
     format: str = FORMAT
 
+    @property
+    def notice_verification(self) -> str:
+        """Transient readback state; keep format-1 snapshot fields unchanged."""
+        return getattr(self, "_notice_verification", "not_recorded")
+
+    @notice_verification.setter
+    def notice_verification(self, value: str) -> None:
+        self._notice_verification = value
+
     def to_dict(self):
         return asdict(self)
 
@@ -115,6 +124,8 @@ def validate(inventory):
         raise ValueError("invalid file inventory count")
     if not isinstance(inventory.diagnostics, list) or any(not isinstance(v, str) for v in inventory.diagnostics):
         raise ValueError("invalid inventory diagnostics")
+    if inventory.notice_verification not in {"not_recorded", "verified", "not_verified", "failed"}:
+        raise ValueError("invalid notice verification scope")
     if inventory.coverage is not None:
         if not isinstance(inventory.coverage, dict):
             raise ValueError("invalid recorded coverage")

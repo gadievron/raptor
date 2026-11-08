@@ -479,6 +479,7 @@ def _run_cascades_parallel(
     for every input work item. Call sites match by key.
     """
     from concurrent.futures import ThreadPoolExecutor
+    from contextvars import copy_context
 
     out: dict[tuple[str, Path], tuple[list[Dependency] | None, str | None]] = {}
     if not cascade_work:
@@ -492,7 +493,7 @@ def _run_cascades_parallel(
         thread_name_prefix="sca-cascade",
     ) as pool:
         futs = {
-            pool.submit(_try_cascade_batch, eco, items, cache): eco
+            pool.submit(copy_context().run, _try_cascade_batch, eco, items, cache): eco
             for eco, items in cascade_work.items()
         }
         for fut, eco in futs.items():

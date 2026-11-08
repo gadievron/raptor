@@ -123,6 +123,7 @@ class RunOptions:
                                            # compliance docs opt in.
     report_options: ReportOptions = field(default_factory=ReportOptions)
     enable_reachability: bool = True
+    sbom_source_root: Path | None = None
     enable_supply_chain: bool = True
     enable_suppressions: bool = True
     trust_repo: bool = False             # honour repo-shipped config
@@ -274,6 +275,7 @@ class RunResult:
     # mistake an empty result for a clean project. Empty when no
     # parser failed.
     parse_failures: list = field(default_factory=list)
+    scan_summary: dict = field(default_factory=dict)
     # Per-finding-ecosystem distribution of the vuln findings
     # (suppressed included — it partitions the same list
     # ``vuln_findings`` counts, so the values always sum to it).
@@ -314,6 +316,8 @@ def run_sca(
     from .cache_budget import cache_session
 
     options = options or RunOptions()
+    if options.sbom_source_root is not None and (options.sbom_input is None or not options.sbom_source_root.is_dir()):
+        raise ValueError("SBOM source association requires an SBOM and an existing directory")
     default_root = sca_cache_root()
     # Persistent reachability inventories currently use the default root
     # even when metadata is redirected with --cache-root. Pin both stores.
@@ -324,7 +328,18 @@ def run_sca(
                 root, maintain=cache is None and not options.offline,
             ))
         # Explicit injected caches remain caller-managed (no pruning).
-        return _run_sca(target, output_dir, options, http=http, cache=cache)
+        from contextvars import copy_context
+        try:
+            return copy_context().run(_run_sca, target, output_dir, options, http=http, cache=cache, resource_stack=stack)
+        except Exception as error:
+            from .scan_observability import failure_summary
+            try:
+                from core.json import save_json
+                save_json(output_dir / "scan-summary.json", failure_summary(error), stream=True)
+            except Exception:
+                # A secondary artifact failure must preserve the analysis error.
+                logger.warning("SCA failure summary could not be saved", exc_info=True)
+            raise
 
 
 def _run_sca(
@@ -334,6 +349,7 @@ def _run_sca(
     *,
     http: HttpClient | None = None,
     cache: JsonCache | None = None,
+    resource_stack=None,
 ) -> RunResult:
     """Execute the mechanical SCA pipeline end-to-end.
 
@@ -372,14 +388,13 @@ def _run_sca(
     # Multi-stage TTY progress display. Auto-disables on non-TTY
     # stderr (pipes / CI logs / file redirect); ``--no-progress``
     # forces off explicitly.
-    progress = HackerProgressBar(
-        target=str(target),
-        disabled=(None if options.enable_progress else True),
-    )
+    from .scan_observability import MeasuredProgress
+    progress = MeasuredProgress(HackerProgressBar(
+        target=str(target), disabled=(None if options.enable_progress else True),
+    ))
 
-    # 1. Discover + parse + join. Per-parser opts are toggled via
-    #    module-level setters before walking — the dispatch table
-    #    doesn't thread per-call options through itself.
+    # 1. Discover + parse + join. Compatibility setters are context-local;
+    # run_sca owns an isolated context and worker dispatch copies it.
     progress.stage("discovery")
     from .parsers import requirements as _req_parser
     _req_parser.set_include_commented(options.include_commented)
@@ -400,6 +415,7 @@ def _run_sca(
     from .registries.maven import MavenClient as _MvnC
     _maven_for_pom = _registry_metadata_client(
         _MvnC, http=http, cache=cache, options=options)
+    previous_pom_resolver = _pom_inh.get_inheritance_resolver()
     _pom_inh.set_inheritance_resolver(
         _pom_inh.PomInheritanceResolver(
             _maven_for_pom, offline=options.offline,
@@ -461,7 +477,7 @@ def _run_sca(
         # Clear the resolver so test runs of subsequent scans (or
         # libraries that import pom.parse directly after pipeline)
         # don't carry the previous run's cache + client.
-        _pom_inh.set_inheritance_resolver(None)
+        _pom_inh.set_inheritance_resolver(previous_pom_resolver)
     if options.sbom_input is not None:
         progress.done(
             f"imported {len(raw_deps)} deps from "
@@ -518,7 +534,7 @@ def _run_sca(
     # 1b. LLM inline-install review — ask the LLM to find deps the
     #     mechanical parser missed in Dockerfiles, shell scripts, GHA
     #     workflows. Opt-in via ``--llm-inline-installs``.
-    if options.enable_llm_inline_installs and not options.offline:
+    if options.enable_llm_inline_installs and not options.offline and options.sbom_input is None:
         llm_inline_deps = _run_llm_inline_review(
             manifests=manifests, raw_deps=raw_deps, target=target,
         )
@@ -537,7 +553,7 @@ def _run_sca(
     #     Alpine / Red Hat package rows feed into the same OSV
     #     pipeline as the rest. Skipped under ``--offline`` because
     #     it requires network access to the registry.
-    if options.enable_dockerfile_from and not options.offline:
+    if options.enable_dockerfile_from and not options.offline and options.sbom_input is None:
         from core.oci.client import OciRegistryClient
 
         from .dockerfile_from import scan_image_sources
@@ -632,7 +648,8 @@ def _run_sca(
         sc_gha = _registry_metadata_client(
             GitHubActionsClient, http=http, cache=cache, options=options)
         supply_chain_findings = evaluate_supply_chain(
-            target, manifests, joined,
+            options.sbom_source_root or target, manifests, joined,
+            source_checks=options.sbom_input is None or options.sbom_source_root is not None,
             pypi_client=sc_pypi,
             npm_client=sc_npm,
             github_actions_client=sc_gha,
@@ -774,6 +791,8 @@ def _run_sca(
         else:
             db_path = sca_cache_root() / "osv.sqlite"
         offline_db = OsvOfflineDB(db_path, http=http)
+        if resource_stack is not None:
+            resource_stack.callback(offline_db.close)
         # Refresh per-ecosystem zips for the ecosystems we discovered.
         # Warn-and-degrade on refresh failure: the DB is shared across
         # processes, and an unguarded crash here (e.g. a concurrent
@@ -842,6 +861,26 @@ def _run_sca(
                 "failed_dep_keys_sample": list(osv_client.failed_dep_keys),
             },
         })
+    from .scan_observability import query_accounting
+    query_coverage = query_accounting(canonical, osv_client, osv_results)
+    incomplete_transitives = [status for status in transitive_statuses if status.method in {"skipped_no_method_succeeded", "metadata_walk"}]
+    if incomplete_transitives:
+        scan_health.append({"kind": "transitive_coverage_incomplete", "detail":
+                            "Native dependency coverage is unavailable or approximate: " + "; ".join(
+                                f"{status.ecosystem}: {status.reason or status.method}" for status in incomplete_transitives)})
+    if query_coverage["unavailable"]:
+        scan_health.append({"kind": "advisory_coverage_incomplete",
+                            "detail": f"{query_coverage['unavailable']} of {query_coverage['total']} packages lack positive advisory-query coverage.",
+                            "evidence": query_coverage})
+    from .sbom_inventory.advisory_coverage import MAX_QUERY_RECORDS
+    if len(canonical) > MAX_QUERY_RECORDS:
+        scan_health.append({"kind": "advisory_receipt_truncated", "detail": "Advisory-query receipt exceeds its record budget; some checks cannot be independently verified."})
+    if parse_failures:
+        scan_health.append({"kind": "manifest_parse_failed", "detail": f"{len(parse_failures)} manifest(s) could not be parsed."})
+    if imported_bom is not None:
+        external_gaps = [gap for gap in imported_bom.coverage_gaps if "external" in gap.lower()]
+        if external_gaps:
+            scan_health.append({"kind": "sbom_projection_incomplete", "detail": "; ".join(external_gaps)})
     progress.done(
         f"{affected}/{len(canonical)} deps with advisories"
         + (f" · {osv_client.failed_lookups} lookup(s) failed"
@@ -886,13 +925,14 @@ def _run_sca(
     #    heuristic — but only for the specific deps that have an
     #    advisory matched against them.
     reachability_map = None
-    if options.enable_reachability and any(r.advisories for r in osv_results):
+    if (options.enable_reachability and (options.sbom_input is None or options.sbom_source_root is not None)
+            and any(r.advisories for r in osv_results)):
         progress.stage("reach")
         cve_dep_keys = {
             r.dep_key for r in osv_results if r.advisories
         }
         reachability_map = scan_reachability(
-            target, canonical,
+            options.sbom_source_root or target, canonical,
             http=http, cache=cache, cve_dep_keys=cve_dep_keys,
             osv_results=osv_results,
         )
@@ -900,7 +940,7 @@ def _run_sca(
         # ``imported`` to ``likely_called`` for deps imported at sink
         # sites and bumps confidence on entry-point / boundary matches.
         from .understand_bridge import annotate_all, load_context_map
-        ctx = load_context_map(target, run_dir=output_dir)
+        ctx = load_context_map(options.sbom_source_root or target, run_dir=output_dir)
         if ctx is not None:
             reachability_map = annotate_all(reachability_map, ctx)
             logger.info("sca.pipeline: /understand context-map "
@@ -909,7 +949,7 @@ def _run_sca(
         try:
             from .understand_bridge import annotate_graph_reachability
             reachability_map = annotate_graph_reachability(
-                reachability_map, canonical, target, output_dir)
+                reachability_map, canonical, options.sbom_source_root or target, output_dir)
         except Exception:  # noqa: BLE001 — optional memory must not break SCA
             logger.warning("SCA graph context unavailable", exc_info=True)
         progress.done(f"{len(reachability_map)} verdicts")
@@ -1134,7 +1174,7 @@ def _run_sca(
     # component and the report header — never on dep rows (those get
     # registry-enriched licenses or stay None).
     from .license import detect_project_license
-    project_license = detect_project_license(target)
+    project_license = detect_project_license(options.sbom_source_root or target) if options.sbom_input is None or options.sbom_source_root is not None else None
     findings_path = output_dir / "findings.json"
     report_path = output_dir / "report.md"
     write_findings_json(
@@ -1189,26 +1229,14 @@ def _run_sca(
     coverage_artifacts = {"findings.json": findings_path, "sbom.cdx.json": sbom_path}
     if options.emit_spdx_sbom or spdx_source is not None:
         coverage_artifacts["sbom.spdx.json"] = output_dir / "sbom.spdx.json"
-    write_coverage(output_dir / "advisory-coverage.json", canonical, osv_client,
+    receipt = write_coverage(output_dir / "advisory-coverage.json", canonical, osv_client,
                    osv_results, coverage_artifacts)
 
-    # Re-read the rows we just wrote — SARIF emission consumes the
-    # canonical row shape, including the suppression overlay.
-    from core.json import load_json as _load_json
-
-    # Self-produced budget, NOT the steered-path one: this re-reads
-    # the findings.json THIS call wrote a few lines up, so its size
-    # is the pipeline's own legitimate output — the 64 MiB steered
-    # budget refused real 75-202 MB big-target output here, failing
-    # the whole completed scan at its final step.
-    from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
-    rows = _load_json(
-        findings_path, strict=True, max_bytes=_MAX_SELF_FINDINGS,
-    )
-    if rows is None:
-        # Strict load_json soft-returns None only for a MISSING file —
-        # our own just-written findings vanishing is a hard error.
-        raise FileNotFoundError(findings_path)
+    # Iterate persisted, suppression-overlaid rows without buffering JSON text
+    # or the complete findings array alongside the in-memory domain models.
+    from .finding_stream import FindingsFile
+    from .kinds import MAX_SELF_FINDINGS_BYTES
+    rows = FindingsFile(findings_path, max_bytes=MAX_SELF_FINDINGS_BYTES)
     sarif_path = output_dir / "findings.sarif"
     write_sarif(sarif_path, target=target, rows=rows)
 
@@ -1249,8 +1277,15 @@ def _run_sca(
                   f"· {total} findings total "
                   f"· cache {cache.hits} hit/{cache.misses} miss")
 
-    if offline_db is not None:
+    if offline_db is not None and resource_stack is None:
         offline_db.close()
+
+    from .scan_observability import completion_summary
+    from core.json import save_json
+    scan_summary = completion_summary(coverage=query_coverage, parse_failures=parse_failures,
+                                      health=scan_health, progress=progress, receipt=receipt)
+    scan_summary["scope_exclusions"] = imported_bom.coverage_gaps if imported_bom else []
+    save_json(output_dir / "scan-summary.json", scan_summary, stream=True)
 
     eco_breakdown: dict[str, int] = {}
     for f in vuln_findings:
@@ -1282,6 +1317,7 @@ def _run_sca(
         triage_run=triage_run,
         llm_cost=llm_cost,
         parse_failures=list(parse_failures),
+        scan_summary=scan_summary,
         report_outputs=reporting.publication.outputs if reporting and reporting.publication else {},
     )
 

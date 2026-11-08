@@ -15,21 +15,49 @@ from core.security.markdown_render import md_inline
 from core.security.log_sanitisation import escape_nonprintable
 
 
-def csv_inventory(records):
+def csv_chunks(records):
+    """Yield bounded rows; spreadsheet formula protection applies to every cell."""
     out = io.StringIO(newline="")
     writer = csv.writer(out)
     writer.writerow(("id", "scope", "name", "version", "kind", "purl", "declarations", "notice_status", "notice_sha256"))
+    yield out.getvalue()
     for row in records:
+        out.seek(0)
+        out.truncate()
         values = (row.id, row.scope, row.name, row.version, row.kind, row.purl,
                   "; ".join(row.declarations), row.notice_status, "; ".join(n.sha256 for n in row.notices))
-        # Quoting CSV syntax does not prevent spreadsheet formula execution.
         values = tuple(escape_nonprintable(v) for v in values)
         writer.writerow("'" + v if v.lstrip().startswith(("=", "+", "-", "@")) or v.startswith(("\t", "\r", "\n"))
                         else v for v in values)
-    return out.getvalue()
+        yield out.getvalue()
 
 
-def markdown(inventory, records, *, limit=50):
+def csv_inventory(records):
+    """Compatibility string renderer; CLI and file exports use csv_chunks."""
+    return "".join(csv_chunks(records))
+
+
+def record_chunks(inventory, records, *, jsonl=False):
+    """Selected records only: an explicit export, never a full audit snapshot."""
+    import json
+    from dataclasses import asdict
+    if not jsonl:
+        yield '{"format":"raptor-sbom-selected-records","schema_version":1,"source_sha256":' + json.dumps(inventory.source_sha256) + ',"selection_only":true,"records":['
+    for index, row in enumerate(records):
+        value = asdict(row)
+        if jsonl:
+            value = {"format": "raptor-sbom-selected-record", "schema_version": 1,
+                     "source_sha256": inventory.source_sha256, "selection_only": True, "record": value}
+        elif index:
+            yield ','
+        yield json.dumps(value, ensure_ascii=True, allow_nan=False)
+        if jsonl:
+            yield '\n'
+    if not jsonl:
+        yield ']}\n'
+
+
+def markdown(inventory, records, *, limit=50, offset=0):
     lines = ["# SBOM inventory and evidence", "", "Source: " + md_inline(inventory.source_format),
              "Subject: " + md_inline(inventory.subject or "not declared"), "", "| Check | Count |", "|---|---:|"]
     for key, value in inventory.summary().items():
@@ -43,11 +71,11 @@ def markdown(inventory, records, *, limit=50):
         lines.append("Source/build assessments with warnings: " + md_inline(metrics.get("source_gap_packages", "not assessed")) + ".")
     lines.extend(["", "## Selected inventory", "", "| Scope | Package | Version | Licence declarations | Notice evidence |",
                   "|---|---|---|---|---|"])
-    for row in records[:limit]:
+    for row in records[offset:offset + limit]:
         lines.append("| " + " | ".join(md_inline(v) for v in (row.scope, row.name, row.version,
                                                                   "; ".join(row.declarations) or "not declared", row.notice_status)) + " |")
-    if len(records) > limit:
-        lines.append("\nShowing " + str(limit) + " of " + str(len(records)) + " selected records; CSV/JSON contain the full selection.")
+    if len(records) > limit or offset:
+        lines.append("\nShowing rows " + str(min(offset + 1, len(records))) + "–" + str(min(offset + limit, len(records))) + " of " + str(len(records)) + " selected records; CSV/JSONL and selected-record JSON contain the full selection. Inventory JSON retains all records plus selection references.")
     if inventory.diagnostics:
         lines.extend(["", "## Coverage notes", ""])
         lines.extend("- " + md_inline(note, max_chars=1500) for note in inventory.diagnostics[:50])
@@ -61,11 +89,40 @@ def inventory_document(inventory, records):
     return result
 
 
+def inventory_chunks(inventory, records):
+    """Stream the full portable snapshot with one copied record at a time."""
+    from dataclasses import asdict, fields
+    from core.json import dumps_artifact
+
+    def array(values):
+        yield '['
+        for index, value in enumerate(values):
+            if index:
+                yield ','
+            yield dumps_artifact(value, indent=None, ensure_ascii=True)
+        yield ']'
+
+    yield '{'
+    for index, field in enumerate(fields(inventory)):
+        if index:
+            yield ','
+        yield dumps_artifact(field.name, ensure_ascii=True) + ':'
+        value = getattr(inventory, field.name)
+        if field.name in {"records", "notice_files"}:
+            yield from array(asdict(row) for row in value)
+        else:
+            yield dumps_artifact(value, indent=None, ensure_ascii=True)
+    yield ',"summary":' + dumps_artifact(inventory.summary(), indent=None, ensure_ascii=True)
+    yield ',"selection":'
+    yield from array({"scope": row.scope, "id": row.id} for row in records)
+    yield '}\n'
+
+
 def write_inventory(out, inventory, records):
     """Write portable audit data and views only after input validation succeeds."""
     out.mkdir(parents=True, exist_ok=True)
-    save_json(out / "inventory.json", inventory_document(inventory, records), stream=True)
-    write_text_atomically(out / "inventory.csv", csv_inventory(records))
+    write_bytes_atomically(out / "inventory.json", (part.encode("utf-8") for part in inventory_chunks(inventory, records)))
+    write_bytes_atomically(out / "inventory.csv", (part.encode("utf-8") for part in csv_chunks(records)))
     write_text_atomically(out / "summary.md", markdown(inventory, records))
 
 

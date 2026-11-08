@@ -41,13 +41,13 @@ logger = logging.getLogger(__name__)
 _SCAN_HELP_EPILOG = """\
 Common invocations:
 
-  Run a scan with the default mechanical pipeline:
+  Run a scan with the default pipeline (including LLM review/triage):
     raptor-sca <path>
 
   CI gate — exit 1 on any high-severity or KEV-listed CVE:
     raptor-sca <path> --fail-on-severity high --fail-on-kev
 
-  Steady-state CI — only NEW findings since last week's baseline:
+  Write a baseline delta and a PR-comment artifact:
     raptor-sca <path> --baseline last-week.json --pr-comment
 
   Mechanical-only (no LLM, no API keys needed):
@@ -91,6 +91,10 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
         # invocation block above renders as written.
         parser.formatter_class = argparse.RawDescriptionHelpFormatter
 
+    parser.add_argument("--profile", choices=("full", "mechanical", "fast", "offline"), default="full",
+                        help="full preserves defaults; mechanical disables LLM; fast also skips native resolution and image scanning; offline uses local evidence (default: full)")
+    parser.add_argument("--explain-plan", action="store_true", help="print effective scan settings as JSON without starting a scan")
+    parser.add_argument("--sbom-source-root", type=Path, help="explicit corresponding source tree for SBOM reachability; omitted means not evaluated")
     parser.add_argument(
         "--out",
         help="output directory (default: ./out/sca-<UTC timestamp>/)",
@@ -314,6 +318,14 @@ def add_scan_args(parser: argparse.ArgumentParser) -> None:
 def apply_no_llm_umbrella(args: argparse.Namespace) -> None:
     """Translate the ``--no-llm`` umbrella flag into the underlying
     per-stage switches. Called by both consumers after parsing."""
+    profile = getattr(args, "profile", "full")
+    if profile in {"mechanical", "fast", "offline"}:
+        args.no_llm = True
+    if profile == "fast":
+        args.no_resolve_transitive = True
+        args.no_dockerfile_from = True
+    if profile == "offline":
+        args.offline = True
     if getattr(args, "no_llm", False):
         args.skip_review = True
         args.skip_triage = True
@@ -402,6 +414,7 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         enable_kev=not args.no_kev,
         enable_epss=not args.no_epss,
         enable_reachability=not args.no_reachability,
+        sbom_source_root=getattr(args, "sbom_source_root", None),
         enable_supply_chain=not args.no_supply_chain,
         enable_license_policy=not args.no_license_policy,
         emit_html_report=args.html,
@@ -426,3 +439,27 @@ def options_from_args(args: argparse.Namespace) -> RunOptions:
         trust_repo=bool(getattr(args, "trust_repo", False)),
         report_options=report_options,
     )
+
+
+def effective_scan_plan(args, target):
+    """Explain selected work without resolving trust, opening caches or calling tools."""
+    apply_no_llm_umbrella(args)
+    source = getattr(args, "sbom_source_root", None)
+    if source is not None and (not getattr(args, "sbom", None) or not source.is_dir()):
+        raise ValueError("--sbom-source-root requires --sbom and an existing source directory")
+    return {"format": "raptor-sca-scan-plan", "schema_version": 1, "target": str(target),
+            "profile": getattr(args, "profile", "full"), "input": "sbom" if args.sbom else "source",
+            "network_enabled": not args.offline,
+            "native_resolution": not args.offline and not args.no_resolve_transitive and not args.sbom,
+            "image_scanning": not args.offline and not args.no_dockerfile_from and not args.sbom,
+            "reachability": not args.no_reachability and (not args.sbom or source is not None),
+            "llm_review": not args.offline and not args.skip_review,
+            "llm_triage": not args.offline and not args.skip_triage,
+            "optional_llm": not args.offline and any(getattr(args, flag, False) for flag in
+                ("review_maintainers", "review_slopsquats", "llm_inline_installs", "impact_analysis")),
+            "repo_config": "disabled" if getattr(args, "no_trust_repo", False) else
+                "explicitly trusted" if getattr(args, "trust_repo", False) else "resolved from operator project trust at scan start",
+            "limitations": ["Network-enabled stages may send package coordinates to advisory/registry services.",
+                            "Enabled LLM stages may send source or finding excerpts and incur model costs.",
+                            "Native resolution runs package managers in containment; this is not a build-safety guarantee.",
+                            "Source association is operator supplied; reachability is heuristic."]}

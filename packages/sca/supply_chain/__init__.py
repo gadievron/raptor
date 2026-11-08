@@ -84,11 +84,13 @@ def evaluate(
     npm_client=None,
     github_actions_client=None,
     cache=None,
+    source_checks: bool = True,
 ) -> list[SupplyChainFinding]:
     """Run every mechanical supply-chain check.
 
     Args:
         target: project root (used by artefact / source walks).
+        source_checks: disable tree checks for an SBOM without associated source.
         manifests: the discovery output (manifests + lockfiles).
         deps: the joined dep list — typically post-``join.join``.
         pypi_client: optional PyPI registry client used by detectors
@@ -128,19 +130,21 @@ def evaluate(
         )
     )
 
-    out.extend(
-        _rubygems_lifecycle_to_finding(rlh)
-        for rlh in _rubygems_lifecycle_hooks.scan_target(
-            target, manifests_list, deps_list,
+    if source_checks:
+        out.extend(
+            _rubygems_lifecycle_to_finding(rlh)
+            for rlh in _rubygems_lifecycle_hooks.scan_target(
+                target, manifests_list, deps_list,
+            )
         )
-    )
 
-    out.extend(
-        _commit_provenance_to_finding(cpf)
-        for cpf in _commit_provenance.scan_target(
-            target, manifests_list, deps_list,
+    if source_checks:
+        out.extend(
+            _commit_provenance_to_finding(cpf)
+            for cpf in _commit_provenance.scan_target(
+                target, manifests_list, deps_list,
+            )
         )
-    )
 
     out.extend(
         _orphan_commit_to_finding(och)
@@ -179,41 +183,47 @@ def evaluate(
         for ss in _slopsquat.scan_deps(deps_list)
     )
 
-    out.extend(
-        _artefact_to_finding(art)
-        for art in _artefacts.scan_target(target, manifests_list)
-    )
-
-    out.extend(
-        _binary_in_package_to_finding(bip)
-        for bip in _binary_in_package.scan_target(
-            target, manifests_list, deps_list,
+    if source_checks:
+        out.extend(
+            _artefact_to_finding(art)
+            for art in _artefacts.scan_target(target, manifests_list)
         )
-    )
 
-    out.extend(
-        _python_import_to_finding(it)
-        for it in _python_imports.scan_target(
-            target, manifests_list, cache=cache,
+    if source_checks:
+        out.extend(
+            _binary_in_package_to_finding(bip)
+            for bip in _binary_in_package.scan_target(
+                target, manifests_list, deps_list,
+            )
         )
-    )
 
-    out.extend(
-        _exfil_to_finding(ex)
-        for ex in _exfil.scan_target(target, manifests_list)
-    )
-
-    out.extend(
-        _gha_drift_to_finding(gha)
-        for gha in _gha_drift.scan_target(target)
-    )
-
-    out.extend(
-        _gha_secret_flow_to_finding(sf)
-        for sf in _gha_secret_flow.scan_target(
-            target, manifests_list, deps_list,
+    if source_checks:
+        out.extend(
+            _python_import_to_finding(it)
+            for it in _python_imports.scan_target(
+                target, manifests_list, cache=cache,
+            )
         )
-    )
+
+    if source_checks:
+        out.extend(
+            _exfil_to_finding(ex)
+            for ex in _exfil.scan_target(target, manifests_list)
+        )
+
+    if source_checks:
+        out.extend(
+            _gha_drift_to_finding(gha)
+            for gha in _gha_drift.scan_target(target)
+        )
+
+    if source_checks:
+        out.extend(
+            _gha_secret_flow_to_finding(sf)
+            for sf in _gha_secret_flow.scan_target(
+                target, manifests_list, deps_list,
+            )
+        )
 
     # Sunset detector consumes the Dependency rows already emitted
     # by ``parsers.inline_installs.parse_gha_workflow`` (ecosystem
@@ -233,23 +243,26 @@ def evaluate(
         for gd in _git_drift.scan_deps(deps_list)
     )
 
-    out.extend(
-        _typosquat_domain_to_finding(td)
-        for td in _typosquat_domain.scan_target(target, manifests_list)
-    )
-
-    out.extend(
-        _workflow_signing_to_finding(ws)
-        for ws in _workflow_signing.scan_target(target, manifests_list)
-    )
-
-    if github_actions_client is not None:
+    if source_checks:
         out.extend(
-            _branch_protection_to_finding(bp)
-            for bp in _branch_protection.scan_target(
-                target, manifests_list, client=github_actions_client,
-            )
+            _typosquat_domain_to_finding(td)
+            for td in _typosquat_domain.scan_target(target, manifests_list)
         )
+
+    if source_checks:
+        out.extend(
+            _workflow_signing_to_finding(ws)
+            for ws in _workflow_signing.scan_target(target, manifests_list)
+        )
+
+    if source_checks:
+        if github_actions_client is not None:
+            out.extend(
+                _branch_protection_to_finding(bp)
+                for bp in _branch_protection.scan_target(
+                    target, manifests_list, client=github_actions_client,
+                )
+            )
 
     if pypi_client is not None or npm_client is not None:
         out.extend(

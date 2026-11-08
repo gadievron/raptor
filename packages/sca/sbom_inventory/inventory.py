@@ -191,6 +191,7 @@ def read_inventory(source, *, verify_notices=True, require_scan_document=False):
     if source.bundle and source.contains("inventory.json"):
         document, _ = source.read_json("inventory.json")
         inventory = from_snapshot(document)
+        inventory.notice_verification = "not_verified"
         inventory.diagnostics.append("Inventory snapshot contains recorded evidence metadata; original notice bytes were not re-verified.")
         return inventory, {}
     if source.bundle and source.contains("notice-index.json"):
@@ -208,11 +209,15 @@ def read_inventory(source, *, verify_notices=True, require_scan_document=False):
             if require_scan_document:
                 raise ValueError("verification requires the original emitted CycloneDX or SPDX document, not an inventory snapshot")
             inventory = from_snapshot(document)
+            inventory.notice_verification = "not_verified"
             inventory.diagnostics.append("Inventory snapshot contains recorded evidence metadata; original notice bytes were not re-verified.")
             return inventory, {}
         inventory, embedded = _document_inventory(document, sha, str(source.path), known_refs=projection.refs)
     validate(inventory)
+    if not verify_notices:
+        inventory.notice_verification = "not_verified"
     if verify_notices:
+        inventory.notice_verification = "verified"
         failures = {}
         refs = inventory.notice_files + [n for p in inventory.records for n in p.notices]
         for sha in dict.fromkeys(n.sha256 for n in refs):
@@ -227,6 +232,8 @@ def read_inventory(source, *, verify_notices=True, require_scan_document=False):
                 row.notice_status = "invalid"
         for sha, message in failures.items():
             inventory.diagnostics.append("Notice " + sha + ": " + message)
+        if failures:
+            inventory.notice_verification = "failed"
         if failures and inventory.coverage is not None:
             inventory.coverage["status"] = "gaps"
             inventory.coverage["notice_verification_errors"] = failures

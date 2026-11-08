@@ -19,7 +19,8 @@ from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
-from ._safe_io import copy_regular_file, read_regular_text
+from ._proxy_hosts import _POETRY_ENV_KEYS
+from ._safe_io import copy_regular_file, read_regular_bytes, read_regular_text
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,8 @@ class PoetryResolver:
     """``poetry lock`` wrapper."""
 
     ecosystem = "PyPI"
+    CACHE_ENV_KEYS = _POETRY_ENV_KEYS
+    CACHE_TOOLS = ("poetry",)
     MANIFEST_FILES = ("pyproject.toml", "poetry.lock")
     @property
     def proxy_hosts(self) -> list:
@@ -108,17 +111,15 @@ class PoetryResolver:
             lockfile = _read_if_exists(tmp_path / "poetry.lock")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=True, available=True,
+                success=lockfile is not None, available=True,
+                error=None if lockfile is not None else "resolver produced no readable regular lockfile within the byte budget",
                 proposed_lockfile=lockfile,
                 raw_output=raw,
             )
 
 
 def _read_if_exists(p: Path) -> bytes | None:
-    try:
-        return p.read_bytes()
-    except OSError:
-        return None
+    return read_regular_bytes(p)
 
 
 __all__ = ["PoetryResolver"]

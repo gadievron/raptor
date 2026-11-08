@@ -28,7 +28,8 @@ from core.run.scratch import scratch_dir
 from pathlib import Path
 
 from . import ResolverResult, _check_tool, _run
-from ._safe_io import copy_regular_file
+from ._proxy_hosts import _NUGET_ENV_KEYS
+from ._safe_io import copy_regular_file, read_regular_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +38,14 @@ class NugetResolver:
     """``dotnet restore`` wrapper."""
 
     ecosystem = "NuGet"
-    # ``.csproj`` / ``.fsproj`` filenames vary per project and
-    # aren't a fixed glob — operators with project-file changes
-    # may need to wait out the 24h TTL or flush manually. The
-    # ``packages.lock.json`` lock IS a fixed name and dominates the
-    # resolution-input shape.
+    CACHE_ENV_KEYS = _NUGET_ENV_KEYS
+    CACHE_TOOLS = ("dotnet",)
     MANIFEST_FILES = ("packages.lock.json",)
+
+    def input_files(self, project_dir: Path) -> tuple[str, ...]:
+        return (*self.MANIFEST_FILES, *(p.name for pattern in ("*.csproj", "*.fsproj", "*.sln")
+                                       for p in sorted(project_dir.glob(pattern))))
+
     @property
     def proxy_hosts(self) -> list:
         """Egress-proxy hostname allowlist for nuget.
@@ -88,11 +91,8 @@ class NugetResolver:
             # lstat-gated, size-bounded copies — a symlinked or
             # special-file project file in the scanned (hostile)
             # tree is refused instead of followed / opened.
-            for pattern in ("*.csproj", "*.fsproj", "*.sln"):
-                for src in project_dir.glob(pattern):
-                    copy_regular_file(src, tmp_path / src.name)
-            lock_src = project_dir / "packages.lock.json"
-            copy_regular_file(lock_src, tmp_path / lock_src.name)
+            for name in self.input_files(project_dir):
+                copy_regular_file(project_dir / name, tmp_path / name)
 
             try:
                 proc = _run(
@@ -122,17 +122,15 @@ class NugetResolver:
             lockfile = _read_if_exists(tmp_path / "packages.lock.json")
             return ResolverResult(
                 ecosystem=self.ecosystem,
-                success=True, available=True,
+                success=lockfile is not None, available=True,
+                error=None if lockfile is not None else "resolver produced no readable regular lockfile within the byte budget",
                 proposed_lockfile=lockfile,
                 raw_output=raw,
             )
 
 
 def _read_if_exists(p: Path) -> bytes | None:
-    try:
-        return p.read_bytes()
-    except OSError:
-        return None
+    return read_regular_bytes(p)
 
 
 __all__ = ["NugetResolver"]

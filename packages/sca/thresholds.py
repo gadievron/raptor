@@ -38,6 +38,7 @@ class ThresholdConfig:
     """
     fail_on_severity: str | None = None
     fail_on_kev: bool = False
+    fail_on_incomplete: bool = False
     fail_on_supply_chain: str | None = None
     fail_on_hygiene: str | None = None
     fail_on_license: str | None = None
@@ -49,6 +50,7 @@ class ThresholdConfig:
     def is_active(self) -> bool:
         return (self.fail_on_severity is not None
                 or self.fail_on_kev
+                or self.fail_on_incomplete
                 or self.fail_on_supply_chain is not None
                 or self.fail_on_hygiene is not None
                 or self.fail_on_license is not None
@@ -78,11 +80,22 @@ def evaluate(
                  if cfg.fail_on_license else None)
 
     fails: list[str] = []
-    for row in rows:
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise ValueError(f"finding {index}: expected an object")
+        if "suppressed" in row and type(row["suppressed"]) is not bool:
+            raise ValueError(f"finding {index}: suppression status must be a boolean")
+        if row.get("severity", "info") not in (*_SEVERITY_CHOICES, "none"):
+            raise ValueError(f"finding {index}: invalid severity")
+        if not isinstance(row.get("vuln_type"), str) or not row["vuln_type"]:
+            raise ValueError(f"finding {index}: missing finding type")
         fr = FindingRow.from_row(row)
         if fr is None:
             # Hand-edited or third-party-tool findings.json may contain
             # non-dict elements; skip rather than crash.
+            continue
+        if fr.is_scan_health and cfg.fail_on_incomplete:
+            fails.append("[incomplete] " + _sft(fr.description or fr.id or "scan coverage unavailable"))
             continue
         if fr.suppressed and not cfg.include_suppressed:
             continue
@@ -162,6 +175,8 @@ def add_threshold_args(parser) -> None:
         help="exit 1 if any vulnerable_dependency finding meets-or-exceeds "
              "this severity (CI gate)",
     )
+    parser.add_argument("--fail-on-incomplete", action="store_true",
+                        help="exit 1 when recorded scan-health gaps make coverage incomplete")
     parser.add_argument(
         "--fail-on-kev", action="store_true",
         help="exit 1 if any vulnerable_dependency is on CISA's KEV list, "
@@ -212,6 +227,7 @@ def cfg_from_args(args) -> ThresholdConfig:
     return ThresholdConfig(
         fail_on_severity=getattr(args, "fail_on_severity", None),
         fail_on_kev=getattr(args, "fail_on_kev", False),
+        fail_on_incomplete=getattr(args, "fail_on_incomplete", False),
         fail_on_supply_chain=getattr(args, "fail_on_supply_chain", None),
         fail_on_hygiene=getattr(args, "fail_on_hygiene", None),
         fail_on_license=getattr(args, "fail_on_license", None),

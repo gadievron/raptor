@@ -75,6 +75,8 @@ shape), behaviour is unchanged from the pre-resolver baseline.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
+
 import logging
 import re
 from pathlib import Path
@@ -148,7 +150,7 @@ class InheritanceView:
 
 # Module-level resolver — injected by the scan pipeline. ``None`` =
 # inheritance resolution disabled (default, no behaviour change).
-_RESOLVER: PomInheritanceResolver | None = None
+_RESOLVER: ContextVar[PomInheritanceResolver | None] = ContextVar("sca_pom_resolver", default=None)
 
 
 def set_inheritance_resolver(
@@ -161,13 +163,12 @@ def set_inheritance_resolver(
     Passing ``None`` clears the resolver, restoring local-only
     behaviour — useful for tests and ``--offline`` mode.
     """
-    global _RESOLVER
-    _RESOLVER = resolver
+    _RESOLVER.set(resolver)
 
 
 def get_inheritance_resolver() -> PomInheritanceResolver | None:
     """Public accessor — used by :mod:`pom` to consult the resolver."""
-    return _RESOLVER
+    return _RESOLVER.get()
 
 
 class PomInheritanceResolver:

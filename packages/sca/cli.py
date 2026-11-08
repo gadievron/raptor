@@ -17,7 +17,7 @@ Utilities:
     raptor-sca health                            Registry reachability check
     raptor-sca purl <eco> <name> <version>       Print canonical Package URL
     raptor-sca render <findings.json>            Re-emit report.md / SARIF
-    raptor-sca sbom <inspect|diff|notices>          Offline SBOM evidence workflows
+    raptor-sca sbom <command>                    SBOM inventory, notices and upgrade workflows
 
 The default (no subcommand) is ``scan`` — the full analyse pipeline.
 
@@ -158,9 +158,12 @@ def _dispatch_fix(argv: list[str]) -> int:
 
     if has_cve_only or has_findings:
         from . import update
-        return update.main(_positional_to_target_flag(
-            [a for a in argv if a != "--cve-only"],
-        ))
+        try:
+            translated = _positional_to_target_flag([a for a in argv if a != "--cve-only"])
+        except ValueError as error:
+            print("raptor-sca fix: " + _sft(str(error)), file=sys.stderr)
+            return 2
+        return update.main(translated)
     if has_harden:
         from . import harden
         return harden.main([a for a in argv if a != "--harden"])
@@ -175,8 +178,7 @@ def _positional_to_target_flag(argv: list[str]) -> list[str]:
     instead of a positional argument, so ``fix /path --cve-only`` needs the
     positional translated.
 
-    When ``--findings`` is already present, any bare positional is silently
-    dropped (``--findings`` takes precedence).
+    A positional target together with ``--findings`` is an input error.
     """
     if "--target" in argv:
         return argv
@@ -201,7 +203,7 @@ def _positional_to_target_flag(argv: list[str]) -> list[str]:
             continue
         if not arg.startswith("-") and "--target" not in out:
             if has_findings:
-                continue
+                raise ValueError("choose a positional target or --findings, not both")
             out.extend(["--target", arg])
         else:
             out.append(arg)
@@ -228,6 +230,16 @@ def _run_analyse(argv: list[str]) -> int:
         logger.error("raptor-sca: target is not a directory: %s", target)
         return 2
 
+    from ._scan_args import effective_scan_plan
+    try:
+        plan = effective_scan_plan(args, target)
+    except ValueError as error:
+        logger.error("raptor-sca: %s", error)
+        return 2
+    if args.explain_plan:
+        from core.json import dumps_artifact
+        print(dumps_artifact(plan, ensure_ascii=True))
+        return 0
     output_dir = _resolve_output_dir(args.out, prefix="sca")
     output_dir.mkdir(parents=True, exist_ok=True)
     _configure_logging(args.verbose, log_dir=output_dir)
@@ -290,29 +302,13 @@ def _run_analyse(argv: list[str]) -> int:
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
-        from core.json import load_json as _load_json
-
-        # Self-produced budget, NOT the steered-path one: this reads
-        # the findings.json the in-process run_sca above just wrote.
-        # --out names the DIRECTORY, but the read is only reachable
-        # after run_sca succeeded, so the file's CONTENT is this
-        # run's own output — the same provenance class as run_sca's
-        # SARIF re-read (rationale on both budgets in kinds.py). At
-        # the 64 MiB steered budget, a completed big-target
-        # --fail-on-* scan exited 3 here ("cannot read findings for
-        # threshold check").
-        from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
+        from .finding_stream import FindingsFile
+        from .kinds import MAX_SELF_FINDINGS_BYTES
         try:
-            rows = _load_json(output_dir / "findings.json", strict=True,
-                              max_bytes=_MAX_SELF_FINDINGS)
-        except (OSError, ValueError) as e:
-            logger.error("raptor-sca: cannot read findings for "
-                         "threshold check: %s", e)
+            passed, fails = eval_thresholds(FindingsFile(output_dir / "findings.json", max_bytes=MAX_SELF_FINDINGS_BYTES), cfg)
+        except (OSError, ValueError) as error:
+            logger.error("raptor-sca: invalid findings for threshold evaluation: %s", error)
             return 3
-        if not isinstance(rows, list):
-            logger.error("raptor-sca: findings.json is not a list")
-            return 3
-        passed, fails = eval_thresholds(rows, cfg)
         print_result(passed, fails)
         return 0 if passed else 1
 
@@ -354,31 +350,16 @@ def _emit_baseline_delta(
         return
 
     try:
-        from core.json import load_json as _load_json
-
-        from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
-        from .kinds import MAX_SELF_FINDINGS_BYTES as _MAX_SELF_FINDINGS
-        # Steered budget: --baseline points wherever the operator says.
-        baseline_rows = _load_json(baseline_path, strict=True,
-                                   max_bytes=_MAX_FINDINGS)
-        # Self-produced budget: current_findings is the findings.json
-        # the in-process run_sca just wrote (the only caller passes
-        # output_dir/"findings.json" straight after the run), so its
-        # size is this run's own legitimate output (kinds.py). At the
-        # steered budget, big-target --baseline runs silently lost
-        # baseline-delta.json / pr-comment.md here.
-        current_rows = _load_json(current_findings, strict=True,
-                                  max_bytes=_MAX_SELF_FINDINGS)
+        from .finding_stream import FindingsFile
+        from .kinds import MAX_FINDINGS_BYTES, MAX_SELF_FINDINGS_BYTES
+        # Keep distinct limits for operator input and this run's own output.
+        # The comparison retains indexed rows, but not whole JSON text buffers.
+        delta = compute_delta(FindingsFile(baseline_path, max_bytes=MAX_FINDINGS_BYTES),
+                              FindingsFile(current_findings, max_bytes=MAX_SELF_FINDINGS_BYTES))
     except (ValueError, OSError) as exc:
         logger.warning("raptor-sca: cannot read baseline/findings: %s", exc)
         return
-    if not isinstance(baseline_rows, list) or not isinstance(current_rows, list):
-        logger.warning("raptor-sca: baseline/current findings.json not a list; "
-                       "skipping delta")
-        return
-
-    delta = compute_delta(baseline_rows, current_rows)
-    save_json(output_dir / "baseline-delta.json", _delta_to_dict(delta))
+    save_json(output_dir / "baseline-delta.json", _delta_to_dict(delta), stream=True)
     (output_dir / "baseline-delta.md").write_text(
         _render_markdown(str(baseline_path), str(current_findings), delta),
         encoding="utf-8",
@@ -478,6 +459,15 @@ def _print_summary(result) -> None:
         f"raptor-sca: output            {result.output_dir}",
         f"raptor-sca: dependencies      {result.deps_analysed}",
     ]
+    from core.json import load_json
+    summary = getattr(result, "scan_summary", None) or load_json(result.output_dir / "scan-summary.json", strict=True, max_bytes=1024 * 1024)
+    if summary:
+        queries = summary["advisory_queries"]
+        lines.extend([f"raptor-sca: coverage          {sanitise_for_terminal(str(summary['status']))}",
+                      f"raptor-sca: advisory queries  {queries['checked']} checked / {queries['unavailable']} unavailable / {queries['total']} total",
+                      f"raptor-sca: parse failures    {summary['parse_failures']}",
+                      f"raptor-sca: checked at        {summary['receipt_generated_at']}",
+                      "raptor-sca: coverage details  " + str(result.output_dir / "scan-summary.json")])
     transitive_line = _format_transitive_line(result)
     if transitive_line is not None:
         lines.append(transitive_line)

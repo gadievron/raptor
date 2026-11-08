@@ -237,6 +237,12 @@ class OsvOfflineDB:
         """)
         self._conn.commit()
 
+    def snapshot_metadata(self) -> dict:
+        """Local ingest timestamps, not authenticated upstream snapshot identities."""
+        self._init_db()
+        return {eco: stamp for eco, stamp in self._conn.execute(
+            "SELECT ecosystem, ingested_at FROM ingest_meta ORDER BY ecosystem")}
+
     def _is_fresh(self, ecosystem: str) -> bool:
         assert self._conn is not None
         cur = self._conn.execute(

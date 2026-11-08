@@ -51,7 +51,6 @@ from pathlib import Path  # noqa: E402
 _REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import load_json  # noqa: E402
 from core.run.metadata import (  # noqa: E402
     complete_run,
     fail_run,
@@ -62,9 +61,6 @@ from core.run.output import get_output_dir  # noqa: E402
 from packages.sca import cli as sca_cli  # noqa: E402
 from packages.sca.cli import SUBCOMMANDS as _SUBCOMMANDS  # noqa: E402
 from packages.sca.cli import _configure_logging, _print_summary  # noqa: E402
-
-# findings.json is a RAPTOR-written run artifact.
-_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
 
 _HELP = """\
 raptor-sca — dependency security scanner
@@ -92,7 +88,7 @@ Utilities:
   raptor-sca health                              Registry reachability check
   raptor-sca purl PyPI django 4.2.10             Print canonical Package URL
   raptor-sca render <findings.json>              Re-emit report.md / SARIF
-  raptor-sca sbom <inspect|diff|notices>          Offline SBOM inventory and notices
+  raptor-sca sbom <command>                    SBOM inventory, notices and upgrade workflows
   raptor-sca clean-cache --max-age 30            Reclaim disk from stale cache
 
 Run 'raptor-sca <command> --help' for command-specific options.
@@ -198,6 +194,17 @@ def _run_analyse(argv):
         print(f"raptor-sca: target is not a directory: {target}", file=sys.stderr)
         return 2
 
+    from packages.sca._scan_args import effective_scan_plan
+    try:
+        plan = effective_scan_plan(args, target)
+    except ValueError as error:
+        print("raptor-sca: " + str(error), file=sys.stderr)
+        return 2
+    if args.explain_plan:
+        from core.json import dumps_artifact
+        print(dumps_artifact(plan, ensure_ascii=True))
+        return 0
+
     try:
         output_dir = get_output_dir(
             command="sca",
@@ -271,30 +278,21 @@ def _run_analyse(argv):
         evaluate as eval_thresholds,
     )
     cfg = cfg_from_args(args)
-    rows = None
     if cfg.is_active:
-        error = None
+        from packages.sca.finding_stream import FindingsFile
+        from packages.sca.kinds import MAX_SELF_FINDINGS_BYTES
         try:
-            rows = load_json(
-                output_dir / "findings.json", strict=True,
-                max_bytes=_MAX_FINDINGS_BYTES,
-            )
-        except (OSError, ValueError) as e:
-            error = f"cannot read findings for threshold check: {e}"
-        if error is None and rows is None:
-            error = "findings.json not found for threshold check"
-        if error is None and not isinstance(rows, list):
-            error = "findings.json is not a list"
-        if error is not None:
-            fail_run(output_dir, error)
-            print(f"raptor-sca: {error}", file=sys.stderr)
+            passed, fails = eval_thresholds(FindingsFile(output_dir / "findings.json", max_bytes=MAX_SELF_FINDINGS_BYTES), cfg)
+        except (OSError, ValueError) as error:
+            fail_run(output_dir, "invalid findings for threshold check")
+            from core.security.log_sanitisation import sanitise_for_terminal
+            print("raptor-sca: " + sanitise_for_terminal(str(error)), file=sys.stderr)
             return 3
 
     complete_run(output_dir)
     _print_summary(result)
 
     if cfg.is_active:
-        passed, fails = eval_thresholds(rows, cfg)
         print_result(passed, fails)
         return 0 if passed else 1
 
