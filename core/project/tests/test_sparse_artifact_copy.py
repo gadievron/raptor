@@ -12,7 +12,7 @@ from core.testing.module_bindings import patch_module_attribute
 
 SIZE = 8 * 1024 * 1024 + 17
 LAYOUTS = ['empty', 'hole', 'leading', 'trailing', 'islands']
-MODES = ['native', 'portable', 'unsupported-data', 'unsupported-hole']
+MODES = ['native', 'portable', 'unsupported-data', 'unsupported-hole', 'conservative']
 
 
 def make_sparse(path, layout):
@@ -39,6 +39,11 @@ class ExtentReader:
         self.bytes_read = 0
 
     def seek(self, offset, whence=os.SEEK_SET):
+        if self.mode == 'conservative':
+            if whence == getattr(os, 'SEEK_DATA', None):
+                return self.reader.seek(offset)
+            if whence == getattr(os, 'SEEK_HOLE', None):
+                return self.reader.seek(0, os.SEEK_END)
         if ((self.mode == 'unsupported-data' and whence == getattr(os, 'SEEK_DATA', None))
                 or (self.mode == 'unsupported-hole' and whence == getattr(os, 'SEEK_HOLE', None))):
             raise OSError(errno.EINVAL, 'test filesystem has no extent support')
