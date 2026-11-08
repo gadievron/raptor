@@ -330,3 +330,119 @@ def test_clean_hypothesis_links_fail_closed_on_ambiguity_or_export_error(tmp_pat
             assert link["references"] == []
             assert link["status"] == ("export_error" if fail_export else "ambiguous_scope")
         assert trace["hypothesis_reviews"][0]["support_status"] == "not_assessed"
+
+
+def test_replayed_event_is_linked_and_counted_once(tmp_path):
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    _record(tmp_path, FIXTURES[0])
+    row = load_verified_audit_log(tmp_path)[0]
+    # Re-signing and key order do not turn one event into a new observation.
+    append_audit_log(tmp_path, dict(reversed(list(row.items()))))
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious",
+                            body="Fixture", hypothesis="Fixture assertion")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    sidecar = json.loads((tmp_path / "verification-checks.json").read_text())
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    assert sidecar["checks"] == [{k: v for k, v in row.items() if k != "integrity"}]
+    assert sidecar["quarantined_checks"] == []
+    assert sidecar["event_admission"] == {
+        "input_records": 2, "accepted_records": 1, "duplicate_records": 1,
+        "invalid_records": 0, "conflicting_ids": 0, "quarantined_records": 0,
+    }
+    assert graded["verification_summary"]["event_admission"] == sidecar["event_admission"]
+    assert graded["verification_summary"]["observations"]["retained"]["records"] == 1
+    assert graded["findings"][0]["verification_trace"]["check_results"]["references"] == [
+        {"id": row["id"], "matches_final_claim": True},
+    ]
+    assert graded["findings"][0]["status"] == "suspicious"
+    assert graded["findings"][0]["discovery"]["confirmed_by"] == []
+
+
+@pytest.mark.parametrize("order", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)])
+def test_conflicting_event_id_quarantines_all_variants_regardless_of_delivery_order(tmp_path, order):
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _record(seed, FIXTURES[0])
+    original = load_verified_audit_log(seed)[0]
+    conflict = {**original, "outcome": "refuted"}
+    rows = [original, original, conflict]
+    out = tmp_path / "out"
+    out.mkdir()
+    for index in order:
+        append_audit_log(out, rows[index])
+    # A separate event describing the same check is retained, without claiming
+    # it is an independent execution or additional corroboration.
+    independent = {**original, "id": "different-event"}
+    append_audit_log(out, independent)
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious",
+                            body="Fixture", hypothesis="Fixture assertion")
+    write_graded_findings(export_findings([finding]), out)
+    sidecar = json.loads((out / "verification-checks.json").read_text())
+    graded = json.loads((out / "findings-graded.json").read_text())
+    assert [check["id"] for check in sidecar["checks"]] == ["different-event"]
+    assert {check["outcome"] for check in sidecar["quarantined_checks"]} == {"confirmed", "refuted"}
+    assert {check["id"] for check in sidecar["quarantined_checks"]} == {original["id"]}
+    assert sidecar["event_admission"] == {
+        "input_records": 4, "accepted_records": 1, "duplicate_records": 1,
+        "invalid_records": 0, "conflicting_ids": 1, "quarantined_records": 2,
+    }
+    refs = graded["findings"][0]["verification_trace"]["check_results"]["references"]
+    assert refs == [{"id": "different-event", "matches_final_claim": True}]
+    assert graded["verification_summary"]["event_admission"] == sidecar["event_admission"]
+    assert graded["verification_summary"]["observations"]["retained"]["records"] == 1
+    assert finding.status == graded["findings"][0]["status"] == "suspicious"
+    assert graded["findings"][0]["discovery"]["confirmed_by"] == []
+    assert len(load_verified_audit_log(out)) == 4  # append-only history is intact
+
+
+@pytest.mark.parametrize("change", [
+    {"scope": {"file": "other.c"}},
+    {"scope": None},
+    {"reason": "changed interpretation"},
+    {"result": {"complete": False, "reason": "missing payload"}},
+])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_event_conflicts_include_scope_reason_and_payload(change, reverse):
+    row = {"action": "verification_check", "schema_version": 1, "id": "event", "scope": {},
+           "reason": "original", "result": {"complete": True}}
+    rows = [row, {**row, **change}]
+    checks, quarantined, admission = check_trace._admit_check_events(rows[::-1] if reverse else rows)
+    assert checks == []
+    assert len(quarantined) == 2
+    assert admission["conflicting_ids"] == 1
+    assert row["reason"] == "original"
+
+
+@pytest.mark.parametrize("event_id", [None, "", "  ", 9])
+def test_invalid_event_identity_is_disclosed_without_linking(event_id):
+    row = {"action": "verification_check", "schema_version": 1, "id": event_id, "scope": {}}
+    checks, quarantined, admission = check_trace._admit_check_events([row])
+    assert checks == quarantined == []
+    assert admission["invalid_records"] == admission["input_records"] == 1
+
+
+@pytest.mark.parametrize("status", ["clean", "suspicious"])
+def test_conflicting_ids_do_not_link_reviews_or_individual_hypothesis_traces(tmp_path, status):
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    _record(tmp_path, FIXTURES[0])
+    original = load_verified_audit_log(tmp_path)[0]
+    append_audit_log(tmp_path, {**original, "reason": "different explanation"})
+    outcome = ReviewOutcome(file="a.c", function="f", line=1, status=status,
+                            body="Fixture", hypothesis="Fixture assertion",
+                            hypotheses=[{"mechanism": "Fixture assertion"}])
+    write_graded_findings(export_findings([outcome]), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    trace = (graded["clean_review_traces"][0] if status == "clean"
+             else graded["findings"][0]["verification_trace"])
+    assert trace["hypothesis_reviews"]
+    assert trace["check_results"]["references"] == []
+    assert all(review["check_results"]["references"] == [] for review in trace["hypothesis_reviews"])
+    kind = "clean_reviews" if status == "clean" else "findings"
+    assert graded["verification_summary"][kind]["with_matching_observations"] == 0
+    assert graded["verification_summary"][kind]["without_matching_observations"] == 1
+    assert graded["verification_summary"]["event_admission"]["conflicting_ids"] == 1
+    assert outcome.status == status

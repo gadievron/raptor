@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from collections import Counter, defaultdict
 from dataclasses import asdict
+from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from core.json import dumps_artifact, loads, save_json
+from core.json import dumps_artifact, dumps_canonical, loads, save_json
 
 from .record import append_audit_log, load_verified_audit_log
 
@@ -103,6 +104,56 @@ def _summarize_observations(checks: list[dict]) -> dict:
     }
 
 
+def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
+    """Deduplicate deliveries and quarantine every variant of a reused ID.
+
+    Authentication is the caller's responsibility. This admission concerns
+    event identity only, never applicability, analysis completeness or proof.
+    Compare the entire signed payload, excluding its transport integrity token;
+    even a change in scope or limitations is a conflicting event, not an update.
+    Keep first-delivery order for display, without using it to choose a winner.
+    The append-only log retains all deliveries, including rejected records.
+    """
+    events = {}
+    input_records = duplicate_records = invalid_records = 0
+    for row in rows:
+        if row.get("action") != "verification_check" or row.get("schema_version") != 1:
+            continue
+        input_records += 1
+        event_id = row.get("id")
+        if not isinstance(event_id, str) or not event_id.strip():
+            invalid_records += 1
+            continue
+        if not isinstance(row.get("scope"), dict):
+            invalid_records += 1
+            # Keep its identity: a malformed variant must also quarantine a
+            # well-formed event carrying the same ID, in either arrival order.
+        payload = {k: v for k, v in row.items() if k != "integrity"}
+        fingerprint = sha256(dumps_canonical(payload).encode("utf-8")).digest()
+        variants = events.setdefault(event_id, {})
+        if fingerprint in variants:
+            duplicate_records += 1
+        else:
+            variants[fingerprint] = payload
+    checks = []
+    quarantined = []
+    conflicting_ids = 0
+    for variants in events.values():
+        if len(variants) == 1:
+            payload = next(iter(variants.values()))
+            if isinstance(payload.get("scope"), dict):
+                checks.append(payload)
+        else:
+            conflicting_ids += 1
+            quarantined.extend(variants.values())
+    admission = {
+        "input_records": input_records, "accepted_records": len(checks),
+        "duplicate_records": duplicate_records, "invalid_records": invalid_records,
+        "conflicting_ids": conflicting_ids, "quarantined_records": len(quarantined),
+    }
+    return checks, quarantined, admission
+
+
 def write_check_results(export: dict, out_dir: Path) -> None:
     """Export run-bound checks and link them to findings and clean reviews.
 
@@ -115,19 +166,17 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     checks = []
     artifact = None
     retained_summary = _summarize_observations([])
+    admission = None
     try:
-        for row in load_verified_audit_log(out_dir):
-            if row.get("action") != "verification_check" or row.get("schema_version") != 1:
-                continue
-            if not isinstance(row.get("scope"), dict) or not isinstance(row.get("id"), str):
-                continue
-            checks.append({k: v for k, v in row.items() if k != "integrity"})
+        checks, quarantined, admission = _admit_check_events(load_verified_audit_log(out_dir))
         retained_summary = _summarize_observations(checks)
         save_json(out_dir / CHECK_RESULTS_FILENAME, {
             "schema_version": 1, "history_complete": False, "checks": checks,
+            "quarantined_checks": quarantined, "event_admission": admission,
             "summary": retained_summary,
             "limitations": [
                 "Only retained tool-chain observations are included; missing checks are unavailable.",
+                "Repeated event IDs count once; conflicting payloads are quarantined without claim links.",
                 "Source identities are captured at dispatch, not revalidated at export.",
                 "A checker outcome does not establish that the final finding is correct.",
                 "Payload completeness concerns serialization, not proof or analysis completeness.",
@@ -213,6 +262,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     )
     export["verification_summary"] = {
         "schema_version": 1, "history_complete": False, "artifact": artifact, "export_status": status,
+        "event_admission": admission,
         "findings": {"total": len(findings), "with_matching_observations": findings_with_matches,
                      "without_matching_observations": len(findings) - findings_with_matches,
                      "trace_statuses": dict(trace_statuses)},
