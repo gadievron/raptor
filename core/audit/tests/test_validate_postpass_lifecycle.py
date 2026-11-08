@@ -25,6 +25,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.state_isolation import pin_user_state_dirs
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 # The dispatch transport is faked (run_untrusted_networked patched) —
@@ -63,6 +65,9 @@ def seam(tmp_path, monkeypatch):
     and a live parent audit run pinned to the right one."""
     home = tmp_path / "home"
     home.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    registry_home = home / ".raptor"
     out_base = tmp_path / "out"
     code = tmp_path / "code"
     code.mkdir()
@@ -70,26 +75,27 @@ def seam(tmp_path, monkeypatch):
     other_target = tmp_path / "other"
     other_target.mkdir()
 
-    # Environment the child lifecycle subprocess resolves through.
+    # Pin before HOME changes so the helper can check the actual operator home.
+    # Both parent bindings and lifecycle children must resolve the same base.
+    pin_user_state_dirs(monkeypatch, registry_home)
     monkeypatch.setenv("HOME", str(home))
+    for key in ("TMPDIR", "TEMP", "TMP"):
+        monkeypatch.setenv(key, str(scratch))
     monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_base))
     monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
     monkeypatch.setenv("RAPTOR_DIR", str(_REPO_ROOT))
     # A live session's credential must not leak into the child — the
     # seam under test is exactly the sessionless/detached shape.
+    monkeypatch.delenv("_RAPTOR_SCRATCH_AUTH", raising=False)
     monkeypatch.delenv("RAPTOR_SESSION_PID", raising=False)
     monkeypatch.delenv("RAPTOR_SESSION_TOKEN", raising=False)
     # Env-credential dispatch mode: the proxy mode would try to stand
     # up a real credential dispatcher.
     monkeypatch.delenv("RAPTOR_CC_CREDENTIAL_MODE", raising=False)
 
-    # In-process module constants frozen at import time.
-    projects_dir = home / ".raptor" / "projects"
-    monkeypatch.setattr("core.project.project.PROJECTS_DIR", projects_dir)
+    projects_dir = registry_home / "projects"
     monkeypatch.setattr("core.project.project.DEFAULT_OUTPUT_BASE",
                         out_base / "projects")
-    monkeypatch.setattr("core.project.sessions.SESSIONS_DIR",
-                        home / ".local" / "share" / "raptor" / "sessions.d")
     # No process-scoped --project override in this process.
     monkeypatch.setattr("core.run.pin._process_project", None)
     monkeypatch.setattr("core.run.pin._process_project_set", False)
