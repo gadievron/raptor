@@ -295,7 +295,8 @@ def test_heap_rules_keep_production_batching(tmp_path, monkeypatch):
         "void d(struct node *p) { kfree(p); record_address(p); }\n"
         "void e(void) { free(NULL); free(NULL); }\n"
         "void f(void *p, int branch) { if (branch) free(p); else free(p); free(p); }\n"
-        "void g(void *p) { free(p); observe(p); free(p); }\n",
+        "void g(void *p) { free(p); observe(p); free(p); }\n"
+        "void h(char *p, unsigned long n) { p = reallocarray(p, n, sizeof(char)); }\n",
     )
     original = runner._confined_default_runner
     calls = []
@@ -311,17 +312,18 @@ def test_heap_rules_keep_production_batching(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_confined_default_runner", observe)
     results = runner.run_rules_batched(
-        source, [_RULE, _RULE.with_name("use_after_free.cocci")],
+        source, [_RULE, _RULE.with_name("use_after_free.cocci"), _RULE.with_name("realloc_losing_ptr.cocci")],
         allow_scripting=True, no_includes=True, timeout=60,
     )
-    assert set(results) == {"double_free", "use_after_free"}
+    assert set(results) == {"double_free", "use_after_free", "realloc_losing_ptr"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
     assert len(results["double_free"].matches) == 3
     assert len(results["use_after_free"].matches) == 3
+    assert len(results["realloc_losing_ptr"].matches) == 1
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("rule_name", ["double_free", "use_after_free"])
+@pytest.mark.parametrize("rule_name", ["double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err"])
 def test_heap_silence_stays_inconclusive_after_file_memo_and_function_scoping(tmp_path, rule_name):
     from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
     from core.audit.sweep_memo import SweepMemo
@@ -335,8 +337,13 @@ def test_heap_silence_stays_inconclusive_after_file_memo_and_function_scoping(tm
     assert empty.details["confirm_only"] is True
     assert empty.to_log_entry()["outcome"] == "inconclusive"
 
-    lines = ["struct node { int value; };", "void bad(struct node *p) {", "free(p);",
-             "free(p);" if rule_name == "double_free" else "inspect(p->value);", "}",
+    body = {
+        "double_free": ["free(p);", "free(p);"],
+        "use_after_free": ["free(p);", "inspect(p->value);"],
+        "realloc_losing_ptr": ["p = realloc(p, sizeof(*p));"],
+        "resource_leak_err": ["p = kmalloc(sizeof(*p), 0);", "if (p && failure()) { return -1; }"],
+    }[rule_name]
+    lines = ["struct node { int value; };", "int bad(struct node *p) {", *body, "return 0;", "}",
              "void quiet(void) {", "return;", "}"]
     source.write_text("\n".join(lines) + "\n")
     full = run_coccinelle_file_sweep(target_path=tmp_path, file_path=source.name, cocci_rule=rule)
@@ -351,7 +358,7 @@ def test_heap_silence_stays_inconclusive_after_file_memo_and_function_scoping(tm
                                     line_start=clean_start, line_end=len(lines))
     assert clean.outcome == "inconclusive" and not clean.matches
     bad = scope_coccinelle_result(cached, target_path=tmp_path, function_name="bad",
-                                  line_start=lines.index("void bad(struct node *p) {") + 1,
+                                  line_start=lines.index("int bad(struct node *p) {") + 1,
                                   line_end=lines.index("}") + 1)
     assert bad.outcome == "confirmed" and bad.matches
     assert cached.matches == full.matches and cached.outcome == "confirmed"

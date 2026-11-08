@@ -465,6 +465,22 @@ actually does before claiming a dereference. Custom ownership and iterator
 wrappers can require manual review. In `/audit`, a no-match from either rule
 remains inconclusive.
 
+### Reallocation checks
+
+`realloc_losing_ptr` flags assignments that replace a pointer with the result
+of `realloc`, `reallocarray`, `krealloc` or `krealloc_array` on that pointer,
+including explicit result casts. Review these as possible allocation-loss
+bugs: another alias may retain the original allocation, and repeated computed
+expressions may refer to different storage. A checked temporary lets you keep
+the original pointer when allocation fails.
+
+Literal zero-size kernel requests are excluded because they release the old
+allocation. Libc zero-size calls remain candidates for review against the
+target's allocator and language standard. In `/audit`, CWE-401 checks include
+both this pattern and the separate error-path allocation-leak check. A no-match
+from either is inconclusive; custom wrappers and more complex pointer flows can
+need manual review.
+
 
 ### Prerequisites
 
