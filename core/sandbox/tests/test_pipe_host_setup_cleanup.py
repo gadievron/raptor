@@ -23,7 +23,7 @@ def _owned(fd, identity):
     return (stat.st_dev, stat.st_ino) == identity
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="owned Linux pipe-host fixtures")
+@pytest.mark.skipif(os.name != "posix", reason="owned POSIX pipe-host fixtures")
 @pytest.mark.parametrize("kind", ["response", "ceiling"])
 @pytest.mark.parametrize(
     "fault", ["second-pipe", "construction", "lock", "host", "start", "after-start"]
@@ -182,7 +182,7 @@ def test_high_descriptor_fixture_restores_limits_after_close_failure(
     assert hosts and all(not instance._thread.is_alive() for instance in hosts)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="owned EOF fixture pipes")
+@pytest.mark.skipif(os.name != "posix", reason="owned POSIX EOF fixture pipes")
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 def test_eof_fixture_setup_releases_pipes(error, monkeypatch):
     from core.sandbox.tests import test_host_response_reliability as module
@@ -217,7 +217,7 @@ def test_eof_fixture_setup_releases_pipes(error, monkeypatch):
                 os.close(fd)
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="owned pipe-host protocol")
+@pytest.mark.skipif(os.name != "posix", reason="owned POSIX pipe-host protocol")
 @pytest.mark.parametrize("prefix", [b"", bytes([0, 0]), bytes([0, 0, 0, 10]) + b"{}"])
 def test_pipe_host_stops_at_first_request_eof(prefix, monkeypatch):
     from core.sandbox.tests import pipe_host
@@ -240,8 +240,10 @@ def test_pipe_host_stops_at_first_request_eof(prefix, monkeypatch):
         try:
             if prefix:
                 os.write(host._write_fd, prefix)
-            os.close(host._write_fd)
-            host._write_fd = -1  # the test released this endpoint explicitly
+            with host._lock:
+                request_fd, host._write_fd = host._write_fd, None
+                host._broken = True  # no close RPC may use this retired channel
+                os.close(request_fd)
             thread.join(timeout=2)
             assert not thread.is_alive()
             assert len(eof_reads) == 1
@@ -250,7 +252,7 @@ def test_pipe_host_stops_at_first_request_eof(prefix, monkeypatch):
             host.close()
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="owned pipe-host protocol")
+@pytest.mark.skipif(os.name != "posix", reason="owned POSIX pipe-host protocol")
 def test_pipe_host_completes_fragmented_response_writes(monkeypatch):
     from core.sandbox.tests import pipe_host
 

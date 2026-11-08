@@ -11,6 +11,7 @@ pass while a TypeError propagates.
 """
 from __future__ import annotations
 
+import errno
 import os
 import threading
 
@@ -50,15 +51,31 @@ def test_miswired_close_rpc_propagates_typeerror():
         raise TypeError("miswired call shape")
 
     host._rpc = _boom
-    with pytest.raises(TypeError, match="miswired call shape"):
-        host.close()
-    # close() still released the pipe fds before the RPC — clean up
-    # whatever the failed close left open.
-    for fd in (host._read_fd, host._write_fd):
-        try:
-            os.close(fd)
-        except OSError:
-            pass
+    owned = {
+        fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+        for fd in (host._read_fd, host._write_fd)
+    }
+    try:
+        with pytest.raises(TypeError, match="miswired call shape"):
+            host.close()
+        assert host._read_fd is None and host._write_fd is None
+        assert not host._thread.is_alive()
+        for fd in owned:
+            with pytest.raises(OSError) as caught:
+                os.fstat(fd)
+            assert caught.value.errno == errno.EBADF
+    finally:
+        # Independently reclaim a regressed implementation's still-owned
+        # pipes; consumed or reused descriptor numbers are never closed again.
+        for fd, identity in owned.items():
+            try:
+                info = os.fstat(fd)
+            except OSError as exc:
+                if exc.errno == errno.EBADF:
+                    continue
+                raise
+            if (info.st_dev, info.st_ino) == identity:
+                os.close(fd)
 
 
 @pytest.mark.parametrize(
