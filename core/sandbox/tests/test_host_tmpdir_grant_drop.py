@@ -9,6 +9,8 @@ where consumers reading a tool's diagnostics (PoC-compile evidence,
 build-failure summaries) misattributed it as the tool failing.
 """
 
+from contextlib import contextmanager
+import errno
 import os
 import sys
 import tempfile
@@ -21,6 +23,7 @@ from core.sandbox._spawn import _drop_host_tmpdir_grants
 
 from core.sandbox import _spawn
 from core.testing.module_bindings import mock_module_attribute
+from core.testing.state_isolation import pin_user_state_dirs
 
 
 pytestmark = pytest.mark.skipif(
@@ -28,15 +31,33 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path):
+    with pytest.MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, tmp_path / "state")
+        yield
+
+
+@contextmanager
+def _outside_tmp_workspace():
+    # These contracts specifically need a host path outside /tmp: that
+    # baseline grant would otherwise mask an incorrectly revoked grant.
+    # Probe by acquiring owned state, not by trusting access/mode checks.
+    try:
+        owned = tempfile.TemporaryDirectory(prefix="raptor-host-tmp-", dir="/var/tmp")
+    except OSError as exc:
+        if exc.errno not in (errno.EROFS, errno.EACCES, errno.EPERM, errno.ENOENT):
+            raise
+        pytest.skip(f"requires writable host scratch outside /tmp: {exc}")
+    with owned as workspace:
+        yield workspace
+
+
 class TestDropHostTmpdirGrants(unittest.TestCase):
     def setUp(self):
         self._saved_tempdir = tempfile.tempdir
-        self.scratch = tempfile.mkdtemp(prefix="custom-tmp-")
-
-    def tearDown(self):
-        tempfile.tempdir = self._saved_tempdir
-        import shutil
-        shutil.rmtree(self.scratch, ignore_errors=True)
+        self.addCleanup(setattr, tempfile, "tempdir", self._saved_tempdir)
+        self.scratch = self.enterContext(tempfile.TemporaryDirectory(prefix="custom-tmp-"))
 
     def test_custom_tmpdir_baseline_entry_dropped(self):
         tempfile.tempdir = self.scratch
@@ -96,15 +117,11 @@ class TestMountNsChildStderrClean(unittest.TestCase):
             self.skipTest("Landlock unavailable — grant semantics "
                           "unobservable")
         self._saved_tempdir = tempfile.tempdir
+        self.addCleanup(setattr, tempfile, "tempdir", self._saved_tempdir)
         # A real host dir so gettempdir() resolves; it will not exist
         # inside the child's fresh /tmp tmpfs.
-        self.scratch = tempfile.mkdtemp(prefix="custom-tmp-")
+        self.scratch = self.enterContext(tempfile.TemporaryDirectory(prefix="custom-tmp-"))
         tempfile.tempdir = self.scratch
-
-    def tearDown(self):
-        tempfile.tempdir = self._saved_tempdir
-        import shutil
-        shutil.rmtree(self.scratch, ignore_errors=True)
 
     def test_no_grant_open_failure_and_writes_work(self):
         from tempfile import TemporaryDirectory
@@ -113,8 +130,9 @@ class TestMountNsChildStderrClean(unittest.TestCase):
         # Outside /tmp: the per-sandbox tmpfs masks host /tmp, so a
         # /tmp-resident output would prove nothing about bind-mounted
         # write delivery.
-        with TemporaryDirectory(dir="/var/tmp") as target, \
-                TemporaryDirectory(dir="/var/tmp") as output:
+        with _outside_tmp_workspace() as workspace, \
+                TemporaryDirectory(dir=workspace) as target, \
+                TemporaryDirectory(dir=workspace) as output:
             with sandbox(target=target, output=output,
                          block_network=True) as run:
                 result = run(
@@ -144,10 +162,8 @@ class TestSymlinkedHostTmp(unittest.TestCase):
 
     def setUp(self):
         self._saved_tempdir = tempfile.tempdir
+        self.addCleanup(setattr, tempfile, "tempdir", self._saved_tempdir)
         tempfile.tempdir = "/tmp"
-
-    def tearDown(self):
-        tempfile.tempdir = self._saved_tempdir
 
     def test_literal_tmp_entry_survives_symlinked_tmp(self):
 
@@ -177,23 +193,21 @@ class TestMountlessLaneKeepsHostTmpdirGrant(unittest.TestCase):
             self.skipTest("Landlock unavailable — grant semantics "
                           "unobservable")
         self._saved_tempdir = tempfile.tempdir
+        self.addCleanup(setattr, tempfile, "tempdir", self._saved_tempdir)
         # Outside /tmp so no other baseline grant masks a revocation.
-        self.scratch = tempfile.mkdtemp(prefix="custom-tmp-",
-                                        dir="/var/tmp")
+        self._workspace = self.enterContext(_outside_tmp_workspace())
+        self.scratch = self.enterContext(tempfile.TemporaryDirectory(
+            prefix="custom-tmp-", dir=self._workspace))
         tempfile.tempdir = self.scratch
-
-    def tearDown(self):
-        tempfile.tempdir = self._saved_tempdir
-        import shutil
-        shutil.rmtree(self.scratch, ignore_errors=True)
 
     def test_skip_mount_ns_child_writes_host_tmpdir(self):
         from tempfile import TemporaryDirectory
 
         from core.sandbox import sandbox
         probe = os.path.join(self.scratch, "probe")
-        with TemporaryDirectory(dir="/var/tmp") as target, \
-                TemporaryDirectory(dir="/var/tmp") as output:
+        with _outside_tmp_workspace() as workspace, \
+                TemporaryDirectory(dir=workspace) as target, \
+                TemporaryDirectory(dir=workspace) as output:
             with sandbox(target=target, output=output,
                          block_network=True) as run:
                 result = run(
@@ -224,8 +238,9 @@ class TestGrantOpenFailureNamesPath(unittest.TestCase):
         from core.sandbox.landlock import check_landlock_available
         if not check_landlock_available():
             self.skipTest("Landlock unavailable")
-        with TemporaryDirectory(dir="/var/tmp") as target, \
-                TemporaryDirectory(dir="/var/tmp") as output:
+        with _outside_tmp_workspace() as workspace, \
+                TemporaryDirectory(dir=workspace) as target, \
+                TemporaryDirectory(dir=workspace) as output:
             # Under the OUTPUT bind (an in-view tree), but
             # nonexistent: passes spawn assembly, fails the child's
             # post-pivot rule open — which must name it.
