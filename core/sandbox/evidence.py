@@ -458,6 +458,42 @@ class EvidenceFile:
             return self._close_result
 
 
+
+def finalize_capture(evidence_file: EvidenceFile) -> bool:
+    """Close a tracer's evidence handle and retain parent-known capture loss.
+
+    Call in the parent, outside the summary writer's lock. The summary
+    writer already records verification failures for its own handle; Linux
+    tracer backends own separate handles and must publish their verdict too.
+    """
+    active_error = sys.exc_info()[1]
+    try:
+        return _close_and_publish_capture(evidence_file)
+    except BaseException as cleanup_error:
+        if active_error is not None and cleanup_error is not active_error:
+            raise active_error from cleanup_error
+        raise
+
+
+def _close_and_publish_capture(evidence_file: EvidenceFile) -> bool:
+    """Release one capture and publish its verification verdict."""
+    try:
+        verified = evidence_file.close()
+    except BaseException as primary:
+        # close() releases ownership even if verification is interrupted.
+        # Record the failed capture without replacing that primary error.
+        try:
+            from .summary import _record_evidence_write_failure
+            _record_evidence_write_failure(evidence_file.path.parent.parent)
+        except BaseException as secondary:
+            raise primary from secondary
+        raise
+    if not verified:
+        from .summary import _record_evidence_write_failure
+        _record_evidence_write_failure(evidence_file.path.parent.parent)
+    return verified
+
+
 # ---------------------------------------------------------------------------
 # Anonymous config delivery (F31)
 # ---------------------------------------------------------------------------
