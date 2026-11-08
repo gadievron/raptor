@@ -6,7 +6,9 @@ the structured lane either."""
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import importlib.util
+import logging
 import json
 import os
 import sys
@@ -16,39 +18,34 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.logging_state import isolated_cli_logging
+from core.testing.module_views import scoped_function_imports
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-llm-ask"
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_process_state(monkeypatch):
-    """The script mutates process-global state at import (RAPTOR_DIR
-    env pin) and in main() (quiet mode drops the root/raptor/httpx
-    logger levels to CRITICAL). Snapshot and restore both so later
-    tests keep their logging and env expectations."""
-    import logging
+def _isolate_scorecard(tmp_path):
+    """Only fake clients run here; own the path without importing real SDKs."""
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("RAPTOR_SCORECARD_PATH", str(tmp_path / "scorecard.json"))
+        yield
 
-    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
-    # main() exports RAPTOR_LLM_QUIET=1 (quiet mode) and the script's
-    # import pins RAPTOR_DIR — both outlive the call unless restored.
-    saved_env = {k: os.environ.get(k)
-                 for k in ("RAPTOR_DIR", "RAPTOR_LLM_QUIET")}
-    names = ("", "raptor", "httpx", "httpcore")
-    saved_levels = []
-    for n in names:
-        lg = logging.getLogger(n)
-        saved_levels.append((lg, lg.level,
-                             [(h, h.level) for h in lg.handlers]))
-    yield
-    for k, v in saved_env.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
-    for lg, lvl, handlers in saved_levels:
-        lg.setLevel(lvl)
-        for h, hl in handlers:
-            h.setLevel(hl)
+
+@pytest.fixture(autouse=True)
+def _hermetic_process_state():
+    """Own direct CLI environment writes independently of body undo."""
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("_RAPTOR_TRUSTED", "1")
+        for key in ("RAPTOR_DIR", "RAPTOR_LLM_QUIET"):
+            # Register absent keys before the CLI can write them directly.
+            present = key in os.environ
+            state.setenv(key, os.environ.get(key, ""))
+            if not present:
+                state.delenv(key)
+        yield
 
 HOSTILE = "evil\x9b2J\x9d0;pwn\x07‮end"
 
@@ -98,15 +95,23 @@ class _StubClient:
 
 
 def _run_main(mod, argv, monkeypatch, tmp_path):
-    import core.llm.client as client_mod
-    import core.llm.dispatcher.lifecycle as lifecycle_mod
-    monkeypatch.setattr(client_mod, "LLMClient", _StubClient)
-    monkeypatch.setattr(
-        lifecycle_mod, "ensure_route_for_model_configs",
-        lambda *a, **k: None,
-    )
+    client_mod = types.ModuleType("core.llm.client")
+    client_mod.LLMClient = _StubClient
+    lifecycle_mod = types.ModuleType("core.llm.dispatcher.lifecycle")
+    lifecycle_mod.ensure_route_for_model_configs = lambda *a, **k: None
     monkeypatch.setattr(sys, "argv", ["raptor-llm-ask", *argv])
-    return mod.main()
+    names = ("raptor", "httpx", "httpcore")
+    with ExitStack() as cleanup:
+        cleanup.enter_context(isolated_cli_logging(logger_names=names))
+        # The CLI also adjusts handlers attached directly to named loggers.
+        for name in names:
+            for handler in logging.getLogger(name).handlers:
+                cleanup.callback(handler.setLevel, handler.level)
+        cleanup.enter_context(scoped_function_imports(mod, ("main",), {
+            "core.llm.client": client_mod,
+            "core.llm.dispatcher.lifecycle": lifecycle_mod,
+        }))
+        return mod.main()
 
 
 def test_json_schema_lane_escapes_c1(monkeypatch, tmp_path, capsys):
@@ -134,5 +139,36 @@ def test_free_text_lane_still_escaped(monkeypatch, tmp_path, capsys):
                    monkeypatch, tmp_path)
     out = capsys.readouterr().out
     assert rc == 0
+    assert out.startswith("evil") and out.endswith("end\n")
     for raw in ("\x9b", "\x9d", "\x07", "‮"):
         assert raw not in out
+
+
+def test_output_lanes_do_not_load_real_sdk_clients(tmp_path):
+    program = '''
+import io, json, sys
+from types import SimpleNamespace
+from contextlib import closing, redirect_stdout
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import pytest
+from core.llm.tests import test_llm_ask_json_lane_scrub as cases
+target = Path(sys.argv[2])
+schema = target / "schema.json"
+schema.write_text(json.dumps({"type": "object"}))
+with closing(cases._hermetic_process_state.__wrapped__()) as state:
+    next(state)
+    script = cases._load_module()
+    for extra in ([], ["--json-schema", str(schema)], ["--json-schema", str(schema), "--raw"]):
+        with pytest.MonkeyPatch.context() as scope, redirect_stdout(io.StringIO()) as output:
+            scope.setattr(cases._StubConfig, "primary_model", SimpleNamespace(provider="stub", model_name="stub-model"))
+            assert cases._run_main(script, [*extra, "hi"], scope, target) == 0
+        assert "evil" in output.getvalue()
+        for name in ("core.llm.client", "core.llm.providers", "core.llm.dispatcher.lifecycle", "openai", "anthropic", "google.genai"):
+            assert name not in sys.modules, "unexpected SDK/dispatcher startup: " + name
+'''
+    result = run_standalone_cli(
+        [sys.executable, "-I", "-c", program, str(REPO_ROOT), str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

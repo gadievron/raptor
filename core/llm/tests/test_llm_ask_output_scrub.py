@@ -20,8 +20,18 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 LLM_ASK = REPO_ROOT / "libexec" / "raptor-llm-ask"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_scorecard(tmp_path):
+    """AST-only tests need an owned path, not an imported LLM client."""
+    with pytest.MonkeyPatch.context() as state:
+        state.setenv("RAPTOR_SCORECARD_PATH", str(tmp_path / "scorecard.json"))
+        yield
 
 
 def _print_calls(tree: ast.AST):
