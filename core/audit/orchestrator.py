@@ -25074,27 +25074,23 @@ def _try_ihv_synthesis(
             source_snippet=source or "",
             synthesis_count=result.ondemand_synthesized,
         )
-        if synth is not None and synth.confirmed and synth.stamp:
+        if synth is None:
+            return None
+        with result._lock:
+            result.ondemand_synthesized += 1
+        if synth.cost_usd:
+            result.cost_tracker.record_call(
+                "checker_synthesis_ihv", cost_usd=synth.cost_usd,
+            )
             with result._lock:
-                result.ondemand_synthesized += 1
-            if synth.cost_usd:
-                result.cost_tracker.record_call(
-                    "checker_synthesis_ihv", cost_usd=synth.cost_usd,
-                )
-                with result._lock:
-                    result.total_cost_usd += synth.cost_usd
+                result.total_cost_usd += synth.cost_usd
+        if synth.confirmed and synth.stamp:
             logger.info(
                 "ihv: %s:%s — synthesis confirmed '%s' via %s",
                 outcome.file, outcome.function,
                 hyp.get("mechanism", "")[:60], synth.stamp,
             )
             return synth.stamp
-        elif synth is not None and synth.cost_usd:
-            result.cost_tracker.record_call(
-                "checker_synthesis_ihv", cost_usd=synth.cost_usd,
-            )
-            with result._lock:
-                result.total_cost_usd += synth.cost_usd
     except Exception:
         logger.debug(
             "ihv: synthesis failed for %s:%s",
