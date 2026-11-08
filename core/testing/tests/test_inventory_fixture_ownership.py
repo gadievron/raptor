@@ -15,7 +15,7 @@ import pytest
 
 CASES = [
     ("core/analysis/tests/test_reach_verdict_log.py", "_isolated_sidecar", "reach", 3),
-    ("core/concepts/tests/test_slice_memo.py", "_clean_caches", "slice", 3),
+    ("core/concepts/tests/test_slice_memo.py", "_clean_caches", "slice", 13),
     ("core/inventory/tests/test_checklist_frame_mac.py", "_hermetic", "frame", 5),
     (
         "packages/exploitability_validation/tests/test_parent_checklist_pointer.py",
@@ -53,7 +53,7 @@ class _Owner(SimpleNamespace):
         super().__setattr__(name, value)
 
 
-def _prepare(case, fail_at=None):
+def _prepare(case, fail_at=None, failure_type=RuntimeError):
     path, fixture_name, kind, _ = case
     reach = _Owner(_IN_MEMORY={"borrowed": object()}, lock=_Lock())
     reach._LOCK = reach.lock
@@ -68,7 +68,9 @@ def _prepare(case, fail_at=None):
     header.guarded = ("_cache",)
     model = _Owner(_slice_memos=OrderedDict(borrowed=object()), lock=_Lock())
     model._slice_memo_lock = model.lock
-    model.guarded = ("_slice_memos", "_load_cached")
+    derivations = ("_name_variants", "_pp_parts", "_grep_hint_compilable",
+                   "_grep_hint_pattern", "_word_boundary_pattern")
+    model.guarded = ("_slice_memos", "_load_cached", *derivations)
 
     @lru_cache(maxsize=3, typed=True)
     def cached(key):
@@ -76,6 +78,16 @@ def _prepare(case, fail_at=None):
 
     cached("borrowed")
     model.__dict__["_load_cached"] = cached
+    derivation_stats = {}
+    derivation_aliases = {}
+    for name in derivations:
+        private = lru_cache(maxsize=3, typed=True)(lambda key: (key,))
+        private("borrowed")
+        model.__dict__[name] = private
+        derivation_stats[name] = private.cache_info()
+        held = lru_cache(maxsize=2)(lambda key: key)
+        held("held")
+        derivation_aliases[name] = (held, held.cache_info())
     owners = {
         "reach": reach,
         "slice": model,
@@ -101,7 +113,7 @@ def _prepare(case, fail_at=None):
         def _after(self):
             steps.append(None)
             if len(steps) == fail_at:
-                raise RuntimeError("injected setup failure")
+                raise failure_type("injected setup failure")
 
         def setattr(self, *args, **kwargs):
             super().setattr(*args, **kwargs)
@@ -148,6 +160,9 @@ def _prepare(case, fail_at=None):
         "_rust_table_cache": macro._rust_table_cache,
         "_cache": header._cache,
     }
+    namespace.update({name: value[0] for name, value in derivation_aliases.items()})
+    namespace["_borrowed_derivation_stats"] = derivation_stats
+    namespace["_borrowed_derivation_aliases"] = derivation_aliases
     namespace["__builtins__"] = dict(
         vars(__import__("builtins")), __import__=fixture_import
     )
@@ -220,6 +235,12 @@ def _restored(
     assert cached.cache_info() == infos[0]
     assert alias.cache_info() == infos[1]
     assert namespace["_load_cached"] is alias
+    for name, info in namespace["_borrowed_derivation_stats"].items():
+        if hasattr(owner, name):
+            assert getattr(owner, name).cache_info() == info
+    for name, (held, info) in namespace["_borrowed_derivation_aliases"].items():
+        assert namespace[name] is held
+        assert held.cache_info() == info
 
 
 @pytest.mark.parametrize("case", CASES)
@@ -257,6 +278,12 @@ def test_inventory_fixture_preserves_borrowed_state(case, mode, tmp_path):
             assert owner._load_cached is not cached
             assert owner._load_cached.cache_parameters() == cached.cache_parameters()
             assert owner._load_cached("local") == ("local",)
+            for name, info in namespace["_borrowed_derivation_stats"].items():
+                private = getattr(owner, name)
+                assert namespace[name] is private
+                assert private is not snapshots[name]
+                assert private.cache_parameters() == snapshots[name].cache_parameters()
+                assert private("local") == ("local",)
         if case[2] == "reach":
             assert value == tmp_path / "reach_verdict_log.json"
         if case[2] == "private_frame":
@@ -275,9 +302,10 @@ def test_inventory_fixture_preserves_borrowed_state(case, mode, tmp_path):
 
 
 @pytest.mark.parametrize(
-    "case,fail_at", [(case, step) for case in CASES for step in sorted({1, case[3]})]
+    "case,fail_at", [(case, step) for case in CASES for step in range(1, case[3] + 1)]
 )
-def test_inventory_fixture_unwinds_partial_setup(case, fail_at, tmp_path):
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt])
+def test_inventory_fixture_unwinds_partial_setup(case, fail_at, tmp_path, failure_type):
     (
         function,
         patch_type,
@@ -289,11 +317,11 @@ def test_inventory_fixture_unwinds_partial_setup(case, fail_at, tmp_path):
         before,
         cached,
         alias,
-    ) = _prepare(case, fail_at)
+    ) = _prepare(case, fail_at, failure_type)
     infos = cached.cache_info(), alias.cache_info()
     patch = patch_type()
     try:
-        with pytest.raises(RuntimeError, match="injected setup failure"):
+        with pytest.raises(failure_type, match="injected setup failure"):
             _start(function, patch, tmp_path)
     finally:
         patch.undo()

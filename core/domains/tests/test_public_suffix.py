@@ -1,5 +1,7 @@
 """Offline boundary and snapshot refresh regression tests."""
 import io
+
+import pytest
 import runpy
 import sys
 import unittest
@@ -18,6 +20,24 @@ from core.domains.public_suffix import (
     registrable_domain,
     same_registrable_domain,
 )
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_suffix_rules(monkeypatch):
+    """Preserve the borrowed suffix-rule loader and held test alias."""
+    from functools import lru_cache
+    from core.domains import public_suffix
+    from core.testing.module_state import isolated_module_state
+
+    original = public_suffix.load_suffix_rules
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(public_suffix, {"load_suffix_rules": private}):
+        try:
+            monkeypatch.setitem(globals(), "load_suffix_rules", private)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 class TestPublicSuffix(unittest.TestCase):

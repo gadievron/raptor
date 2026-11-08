@@ -14,6 +14,8 @@ Pins the consumer contract from the design:
 from __future__ import annotations
 
 import json
+
+import pytest
 import shutil
 from pathlib import Path
 
@@ -34,6 +36,27 @@ MODEL = {
          "provenance": "mechanical"},
     ],
 }
+
+
+
+@pytest.fixture(autouse=True)
+def _owned_token_memos(monkeypatch):
+    """Scope token-map and model memo wrappers, including held aliases."""
+    from functools import lru_cache
+    from core.concepts import audit_bridge
+    from core.testing.module_state import isolated_module_state
+
+    replacements = {}
+    for name in ("_token_map_for_run", "_load_cached"):
+        original = getattr(audit_bridge, name)
+        replacements[name] = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(audit_bridge, replacements):
+        try:
+            for name, value in replacements.items():
+                monkeypatch.setitem(globals(), name, value)
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _map_payload() -> dict:
