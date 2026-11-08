@@ -1643,6 +1643,10 @@ def _tier4_smt_refine(
     whole validation pass.
     """
     try:
+        # This record belongs to the current query. An unavailable, failed
+        # or skipped recheck cannot leave a previous model in its place.
+        if isinstance(analysis, dict):
+            analysis.pop("smt_witness", None)
         return _tier4_smt_refine_inner(result, finding, analysis, metrics=metrics)
     except Exception as e:  # noqa: BLE001 — never-raises contract (see docstring)
         logger.warning("Tier 4 SMT refinement errored: %s", e)
@@ -1731,7 +1735,7 @@ def _tier4_smt_refine_inner(
             kind = (r.get("kind") if isinstance(r, dict) else "") or "UNKNOWN"
             rej_kinds[kind] = rej_kinds.get(kind, 0) + 1
 
-    if not smt.get("smt_available"):
+    if smt.get("smt_available") is not True:
         return result, "smt_unavailable"
 
     # Build a one-line evidence record describing the SMT outcome.
@@ -1802,18 +1806,11 @@ def _tier4_smt_refine_inner(
             "witness",
             f"SMT witness for path conditions: {model_str or '(no model)'}",
         )
-        # Attach a structured witness record so downstream consumers
-        # (/exploit's prompt builder) can read it without parsing the
-        # reasoning string. The same model is also in `evidence` for
-        # report rendering, but a typed field is much easier to use
-        # as a PoC seed: the LLM gets concrete values that already
-        # satisfy the dangerous-path conditions and can amplify them
-        # rather than guess from scratch. Pre-fix the witness model
-        # was buried in a free-text evidence summary that /exploit's
-        # prompt builder dumped verbatim — useful for audit but not
-        # for steering exploit generation.
+        # Attach the encoded model as structured diagnostic evidence.
+        # Downstream readers must retain its profile and background theory;
+        # satisfiability alone does not establish a controllable source path.
         if model:
-            analysis.setdefault("smt_witness", {}).update({
+            analysis["smt_witness"] = {
                 "model": dict(model),
                 "path_conditions": list(conditions),
                 "path_profile": profile_name,
@@ -1825,17 +1822,14 @@ def _tier4_smt_refine_inner(
                 # anything actionable. Empty dict when no
                 # substitution happened (named-locals conditions).
                 "anon_var_map": dict(smt.get("anon_var_map") or {}),
-                # Phase 9: the weakest-precondition predicate (Phase 8).
-                # `model` is one concrete solution; `wp_predicate` is the
-                # full constraint every valid trigger must satisfy. The
-                # /exploit prompt renders it as a HARD constraint so the
-                # LLM can generalise the seed (e.g. fuzz around it) while
-                # staying on the dangerous path. `None`/absent when the
-                # substrate didn't compute one (older substrate, no z3).
+                # Retain the conditional summary and its background theory.
+                # A scalar model does not establish source reachability or
+                # controllable program inputs; absent evidence stays unknown.
+                "summary_axioms": list(smt.get("summary_axioms") or []),
                 "wp_predicate": smt.get("wp_predicate"),
                 "wp_conjuncts": list(smt.get("wp_conjuncts") or []),
-                "wp_complete": smt.get("wp_complete", True),
-            })
+                "wp_complete": smt.get("wp_complete", False) is True,
+            }
         refined = ValidationResult(
             verdict=result.verdict,
             evidence=list(result.evidence) + [ev],

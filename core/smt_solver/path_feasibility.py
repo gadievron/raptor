@@ -252,7 +252,7 @@ class PathSMTResult:
     wp_conjuncts: list[str] = field(default_factory=list)
     # For a present summary, False also covers undecided redundancy checks
     # and original inputs that could not be encoded.
-    wp_complete: bool = True
+    wp_complete: bool = False
     # Deterministic reduction order, retained for wire compatibility.
     wp_ordering: str = WP_ORDERING
     # Native core dependency, not a source type or reachability proof.
@@ -263,10 +263,15 @@ class PathSMTResult:
 
 
     def __post_init__(self):
-        if self.feasible is None:
-            # An undecided or unavailable solve cannot certify a complete
-            # constraint summary, regardless of the requested reduction mode.
-            self.wp_complete = False
+        # Completeness is evidence, not the requested reduction mode. Missing
+        # or malformed markers, unavailable solves and unencoded inputs must
+        # not certify a complete summary, even when a subset refutes the path.
+        self.wp_complete = (
+            self.wp_complete is True
+            and type(self.feasible) is bool
+            and self.smt_available is True
+            and not self.unknown
+        )
 
 
 # ---------------------------------------------------------------------------
