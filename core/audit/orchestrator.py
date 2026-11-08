@@ -25080,6 +25080,21 @@ def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesi
     """
     if synthesis_counter is None:
         return None
+    bound = _bind_synthesis_request(outcome, config, hyp, source)
+    if bound is None:
+        return None
+    request, snippet = bound
+    if not synthesis_counter.try_reserve():
+        return None
+    snapshot = ClaimVerification(hyp, binding=request.binding)
+    stamp = _try_ihv_synthesis(outcome, config, result, snapshot.hypothesis, cwe, snippet)
+    if stamp:
+        return ClaimVerification(snapshot.hypothesis, (stamp,), binding=request.binding)
+    return None
+
+
+def _bind_synthesis_request(outcome, config, hyp, source):
+    """Bind the exact synthesis input without spending an attempt."""
     snippet = source or (outcome.review_result or {}).get("source_snippet", "")
     if snippet is None:
         snippet = ""
@@ -25107,13 +25122,7 @@ def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesi
             except Exception:
                 logger.warning("could not record synthesis source input rejection", exc_info=True)
             return None
-    if not synthesis_counter.try_reserve():
-        return None
-    snapshot = ClaimVerification(hyp, binding=request.binding)
-    stamp = _try_ihv_synthesis(outcome, config, result, snapshot.hypothesis, cwe, snippet)
-    if stamp:
-        return ClaimVerification(snapshot.hypothesis, (stamp,), binding=request.binding)
-    return None
+    return request, snippet
 
 
 def _try_ihv_synthesis(
@@ -29605,13 +29614,20 @@ def _synthesize_unmapped_suspicious(
     """
     if not getattr(config, "on_demand_synthesis", True):
         return
+    from copy import deepcopy
+
+    review = deepcopy(outcome.review_result or {})
+    review["hypothesis"] = hypothesis
+    review["cwe"] = review["cwe_class"] = cwe
+    candidate = replace(outcome, hypothesis=hypothesis, review_result=review,
+                        hypotheses=deepcopy(outcome.hypotheses))
     try:
         from .checker_synthesis import ondemand_synthesis_refusal_reason
     except ImportError:
         pass
     else:
         refusal = ondemand_synthesis_refusal_reason(
-            cwe, hypothesis, outcome.review_result,
+            cwe, hypothesis, candidate.review_result,
         )
         if refusal:
             # Policy parking, never silent: the durable surface is a
@@ -29626,7 +29642,7 @@ def _synthesize_unmapped_suspicious(
             # this refusal.
             if outcome.review_result is not None:
                 outcome.review_result["synthesis_refused"] = refusal
-            _record_synthesis_refusal(config, outcome, cwe, refusal)
+            _record_synthesis_refusal(config, candidate, cwe, refusal)
             _increment_tier_dict(
                 result.tier_counters, "synthesis_on_demand", "skipped",
             )
@@ -29636,14 +29652,21 @@ def _synthesize_unmapped_suspicious(
                 outcome.file, outcome.function, refusal, outcome.status,
             )
             return
+    bound = _bind_synthesis_request(candidate, config, {"mechanism": hypothesis}, source)
+    if bound is None:
+        outcome.tools_skipped = (outcome.tools_skipped or set()) | (candidate.tools_skipped or set())
+        _increment_tier_dict(result.tier_counters, "synthesis_on_demand", "skipped")
+        return
+    request, snippet = bound
+    verification = ClaimVerification({"mechanism": hypothesis, "cwe": cwe}, binding=request.binding)
     try:
         from .checker_synthesis import synthesize_verification_rule
 
         synth = synthesize_verification_rule(
-            outcome,
+            candidate,
             config,
             cwe=cwe,
-            source_snippet=source,
+            source_snippet=snippet,
             synthesis_count=result.ondemand_synthesized,
         )
     except Exception:
@@ -29682,6 +29705,7 @@ def _synthesize_unmapped_suspicious(
         )
         if outcome.review_result is not None:
             outcome.review_result["ondemand_synth_receipt"] = synth.stamp
+            outcome.review_result["ondemand_synth_hypothesis"] = hypothesis
             outcome.review_result["ondemand_synth_blocked"] = _block
         logger.info(
             "on-demand synthesis promotion blocked %s:%s via %s — %s",
@@ -29713,10 +29737,27 @@ def _synthesize_unmapped_suspicious(
         )
         return
 
+    current_source = capture_source_identity(config.target_path, candidate.file) if request.source_identity else None
+    reason = verification.scope_rejection(
+        file=candidate.file, function=candidate.function, line_start=candidate.line,
+        hypothesis=candidate.hypothesis, source_identity=current_source,
+    )
+    candidate_review = candidate.review_result or {}
+    if reason is None and (candidate_review.get("hypothesis") != hypothesis
+            or candidate_review.get("cwe") != cwe or candidate_review.get("cwe_class") != cwe):
+        reason = "claim-revised"
+    if reason:
+        _record_ihv_scope_rejection(
+            ClaimVerification(verification.hypothesis, (synth.stamp,), binding=request.binding),
+            candidate, config, hypothesis=candidate.hypothesis, reason=reason, current_source=current_source,
+        )
+        _increment_tier_dict(result.tier_counters, "synthesis_on_demand", "inconclusive")
+        return
+
     _increment_tier_dict(
         result.tier_counters, "synthesis_on_demand", "confirmed",
     )
-    result.outcomes[i] = _promote_outcome(outcome, synth.stamp)
+    result.outcomes[i] = _promote_outcome(candidate, synth.stamp)
     result.sweep_promoted += 1
     result.suspicious -= 1
     result.findings += 1
