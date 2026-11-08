@@ -138,6 +138,8 @@ class NarrowingGuardContext:
                 return None
             kind, edge = match.groups()
             unsigned = kind.startswith("U")
+            if unsigned and edge == "MIN":
+                return None  # standard C defines unsigned maxima, not minima
             if unsigned and source_range[0] < 0:
                 return None  # do not guess C's usual arithmetic conversions
             width = widths.get(kind) or int(re.search(r"\d+", kind).group())
@@ -166,9 +168,16 @@ class NarrowingGuardContext:
                 else 10
             )
             try:
-                value = int(digits, base) * (-1 if sign else 1)
+                magnitude = int(digits, base)
             except ValueError:
                 return None
+            # Non-decimal literals can select an unsigned type before unary
+            # minus is applied. Do not treat modular negation as a signed bound.
+            if sign and base != 10:
+                signed_width = 64 if "l" in suffix.lower() else 32
+                if magnitude >= 1 << (signed_width - 1):
+                    return None
+            value = magnitude * (-1 if sign else 1)
         return value if source_range[0] <= value <= source_range[1] else None
 
     def _constrain(self, condition, truth, interval, variable, source_range):

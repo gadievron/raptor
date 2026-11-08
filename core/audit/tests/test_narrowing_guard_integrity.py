@@ -84,3 +84,27 @@ def test_a_declared_lower_bound_does_not_borrow_the_standard_signed_minimum():
 def test_a_declared_limit_does_not_hide_narrowing_to_an_unsigned_destination():
     source = "int Read(uint32_t wide, uint32_t UINT8_MAX){\nif(wide>UINT8_MAX)return 0;\nuint8_t small=wide;\nreturn small;\n}"
     assert check(source).narrowing_found
+
+
+@pytest.mark.parametrize("bound", [
+    "-0x80000000", "-020000000000", "-0b10000000000000000000000000000000",
+    "-0x80000000U", "-0x80000000UL", "-0x80000000ULL",
+])
+def test_unsigned_negation_does_not_hide_an_out_of_range_value(bound):
+    source = f"int Read(int64_t wide){{\nif(wide<INT_MIN || wide>{bound})return 0;\nint small=wide;\nreturn small;\n}}"
+    assert check(source).narrowing_found
+
+
+@pytest.mark.parametrize("bound", [
+    "-2147483648", "-0x80000000L", "-0x80000000LL", "-020000000000L",
+    "-0x7fffffff", "-017777777777",
+])
+def test_signed_negative_literals_retain_guard_credit(bound):
+    source = f"int Read(int64_t wide){{\nif(wide<INT_MIN || wide>{bound})return 0;\nint small=wide;\nreturn small;\n}}"
+    assert not check(source).narrowing_found
+
+
+@pytest.mark.parametrize("bound", ["UINT_MIN", "UCHAR_MIN", "UINT8_MIN", "ULONG_MIN"])
+def test_nonstandard_unsigned_minimum_names_do_not_supply_zero(bound):
+    source = f"int Read(uint64_t wide){{\nif(wide>{bound})return 0;\nuint8_t small=wide;\nreturn small;\n}}"
+    assert check(source).narrowing_found
