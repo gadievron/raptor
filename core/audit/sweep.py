@@ -67,8 +67,6 @@ except ImportError:  # pragma: no cover — core.sandbox ships in-repo
 
 logger = logging.getLogger(__name__)
 
-_ROLE_RE = _re.compile(r"^//\s*@role:\s*(\w+)", _re.MULTILINE)
-
 
 def get_rule_role(rule_path: str) -> str:
     """Parse ``// @role: detection|verification`` from a rule file.
@@ -76,9 +74,8 @@ def get_rule_role(rule_path: str) -> str:
     Returns ``"detection"`` (default for stock rules without an
     annotation) or ``"verification"``.  Detection rules surface
     candidates; only verification rules may promote status directly.
-    Dynamic per-hypothesis rules (not on disk) bypass this check
-    entirely — the orchestrator's ``_is_detection_only`` returns
-    False for files not in the stock library.
+    The orchestrator resolves stock emitted IDs to their owning files;
+    this reader also serves callers that already hold a rule path.
 
     The read is bounded by the header GRAMMAR, never a byte count:
     role directives live in the rule's leading comment block, so the
@@ -91,22 +88,13 @@ def get_rule_role(rule_path: str) -> str:
     directive this reader cannot see fails CI instead of silently
     defaulting.
     """
-    header_lines: list[str] = []
+    from core.analysis.coccinelle_metadata import role_from_header
+
     try:
-        with Path(rule_path).open() as f:  # raw-open: RAPTOR-owned cocci rule file (shipped or run-dir synthesized)
-            for line in f:
-                stripped = line.strip()
-                if stripped and not stripped.startswith("//"):
-                    break
-                header_lines.append(line)
+        with Path(rule_path).open() as stream:  # raw-open: RAPTOR-owned cocci rule file (shipped or run-dir synthesized)
+            return role_from_header(stream)
     except OSError:
         return "detection"
-    m = _ROLE_RE.search("".join(header_lines))
-    if m:
-        role = m.group(1).lower()
-        if role in ("detection", "verification"):
-            return role
-    return "detection"
 
 
 # Per-rule confirm-only role marker: the exact comment line

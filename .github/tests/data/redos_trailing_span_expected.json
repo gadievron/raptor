@@ -716,16 +716,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/sweep.py\u001f_ROLE_RE": {
-   "digests": [
-    "330fbc5dff9d"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "R"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/transform_sequence.py\u001f_FUNC_HEADER_BRACE_RE": {
    "digests": [
     "900e5e8a5b05"

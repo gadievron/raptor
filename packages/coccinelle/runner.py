@@ -30,6 +30,10 @@ from itertools import chain, groupby
 from pathlib import Path
 from typing import Any
 
+from core.analysis.coccinelle_metadata import (
+    RULE_MAX_BYTES as _RULE_MAX_BYTES,
+    emitted_rule_ids as _emitted_rule_ids,
+)
 from core.analysis.rule_versions import VersionProbeCache, rule_version_refusal, version_tuple as _release_version
 from core.config import RaptorConfig
 from core.run.scratch import scratch_dir
@@ -137,13 +141,6 @@ _SCRIPT_BLOCK_RE = re.compile(
 # Lifecycle blocks export interpreter state across script rules. Separate
 # rule files must not acquire a shared initialization/finalization scope.
 _LIFECYCLE_BLOCK_RE = re.compile(r"\b(?:initialize|finalize)\s*:", re.IGNORECASE)
-
-# Size cap on a .cocci rule body, shared by run_rule and the batched
-# loop. Operator-supplied today, but the cocci_utilization arc
-# proposes deriving rules from scanned-repo content — this prevents a
-# hostile rule from OOMing the runner via a multi-GiB file. Real
-# coccinelle rules are <100 KiB; 1 MiB is generous.
-_RULE_MAX_BYTES = 1 * 1024 * 1024
 
 # Longest span a single quote may open as a char literal in
 # _lexical_scan before the gate refuses to classify it. Real C/SmPL
@@ -1427,21 +1424,6 @@ def run_rules_batched(
         }
         out.update(refused)
         return out
-
-
-# Emitted-rule-id extraction for the batch demux. Matches the JSON /
-# Python-dict literal shape every shipped rule's scripting block uses
-# to stamp its COCCIRESULT payload: `"rule": "<id>"` (single or double
-# quotes, arbitrary spacing).
-_EMITTED_RULE_ID_RE = re.compile(
-    r"""["']rule["']\s*:\s*["']([A-Za-z0-9_.:-]+)["']""",
-)
-
-
-def _emitted_rule_ids(rule_text: str) -> set[str]:
-    """Rule ids a .cocci file's scripting blocks stamp into their
-    COCCIRESULT payloads. Used to build the batch demux alias map."""
-    return set(_EMITTED_RULE_ID_RE.findall(rule_text))
 
 
 def _demux_batch_matches(

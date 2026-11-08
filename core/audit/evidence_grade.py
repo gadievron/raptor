@@ -184,6 +184,9 @@ _TOOL_NAMESPACES = frozenset(VALID_EVIDENCE_TOOLS | {
 # ``-naming`` stamps passed as full tool evidence for exactly that
 # reason).
 _DETECTION_CLASSIFIER_MODULES: dict[str, str] = {
+    # Stock emitted variants inherit their owner role; export and promotion
+    # must agree even when the report ID differs from the rule filename.
+    "coccinelle": "core.analysis.coccinelle_metadata",
     "compiler": "core.detectors.compiler_families",
     "consistency": "core.audit.peer_evidence",
     "fail_open": "core.audit.fail_open_verify",

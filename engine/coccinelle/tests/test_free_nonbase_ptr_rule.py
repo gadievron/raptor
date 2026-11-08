@@ -105,13 +105,17 @@ def test_argument_values_across_allocator_families(tmp_path):
 
 @pytest.mark.integration
 def test_zero_filter_keeps_production_batching(tmp_path, monkeypatch):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
     from packages.coccinelle import runner
 
+    monkeypatch.setenv("RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
     source = tmp_path / "batch.c"
     source.write_text(
         "void free(void *);\n"
         "void candidates(char *p) { free(p + 1); free(p++); free(p + 0U); free(++p); }\n"
-        "void invalid_stack_free(void) { char a[8]; free(a); }\n",
+        "void invalid_stack_free(void) { char a[8]; free(a); }\n"
+        "char first_char(int count, ...) { va_list ap; char c;\n"
+        "  va_start(ap, count); c = va_arg(ap, char); va_end(ap); return c; }\n",
     )
     original = runner._confined_default_runner
     invocations = []
@@ -127,11 +131,21 @@ def test_zero_filter_keeps_production_batching(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "_confined_default_runner", observe)
     results = runner.run_rules_batched(
-        source, [_RULE, _RULE.with_name("free_stack_array.cocci")],
+        source, [_RULE, _RULE.with_name("free_stack_array.cocci"),
+                 _RULE.with_name("va_arg_mismatch.cocci")],
         allow_scripting=True, no_includes=True, timeout=60,
     )
-    assert set(results) == {"free_nonbase_ptr", "free_stack_array"}
+    assert set(results) == {"free_nonbase_ptr", "free_stack_array", "va_arg_mismatch"}
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
     assert len(results["free_nonbase_ptr"].matches) == 2
     assert len(results["free_stack_array"].matches) == 1
+    assert len(results["va_arg_mismatch"].matches) == 1
+    weak_ids = {match.rule for match in results["free_nonbase_ptr"].matches}
+    strong_ids = {match.rule for match in results["va_arg_mismatch"].matches}
+    assert weak_ids == {"free_nonbase_ptr", "free_nonbase_ptr_inc"}
+    assert strong_ids == {"va_arg_promoted_type"}
+    assert all(not is_verification_evidence(f"coccinelle:{name}") for name in weak_ids)
+    assert all(is_verification_evidence(f"coccinelle:{name}") for name in strong_ids)
+    assert all(not is_tool_evidence(f"coccinelle:{name}") for name in weak_ids)
+    assert all(is_tool_evidence(f"coccinelle:{name}") for name in strong_ids)
     assert len(invocations) == 1, invocations
