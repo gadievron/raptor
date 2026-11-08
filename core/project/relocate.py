@@ -88,15 +88,21 @@ _LINK_UNSUPPORTED = {errno.EPERM, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP,
 
 
 def _copy_exact(reader, writer, size):
-    """Copy a bounded interval, seeking over wholly zero chunks."""
+    """Copy a bounded interval without writing zero-filled chunk edges."""
     while size:
         block = reader.read(min(size, _COPY_CHUNK_BYTES))
         if not block:
             raise OSError('source file shortened during copy')
-        if block.count(0) == len(block):
-            writer.seek(len(block), os.SEEK_CUR)
-        elif writer.write(block) != len(block):
+        content = block.lstrip(b'\x00')
+        leading = len(block) - len(content)
+        if leading:
+            writer.seek(leading, os.SEEK_CUR)
+        content = content.rstrip(b'\x00')
+        if content and writer.write(content) != len(content):
             raise OSError('incomplete destination write during copy')
+        trailing = len(block) - leading - len(content)
+        if trailing:
+            writer.seek(trailing, os.SEEK_CUR)
         size -= len(block)
 
 

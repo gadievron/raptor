@@ -296,6 +296,14 @@ Add `-m ""` to select all tiers; optional tools and service credentials are
 still required for their respective tests. Tests should gate missing
 prerequisites explicitly while keeping product failures visible.
 
+Filesystem tests need separate capability controls. For sparse copies,
+create a sparse reference on the destination filesystem and check logical
+contents and allocated blocks separately. Exercise leading and trailing holes
+when extent probes conservatively report the whole file as data. Keep allocation
+assertions when the reference demonstrates sparse support. Linux results or
+mocked extent probes do not establish native APFS allocation behaviour; record
+the native result or the remaining validation gap.
+
 Give payload-heavy parametrizations explicit, short scenario IDs with
 `ids=[...]` or `pytest.param(..., id="...")`. The root pytest configuration
 also gives unsafe automatic IDs compact labels with stable suffixes: source
