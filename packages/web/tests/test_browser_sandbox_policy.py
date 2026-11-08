@@ -16,6 +16,26 @@ from core.testing.module_bindings import patch_module_attribute
 import packages.web._browser_sandbox as _tempfile_owner
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_nested_probe_state(monkeypatch):
+    """Own probe memoization and thread-local recursion state."""
+    from functools import lru_cache
+    import threading
+    from core.testing.module_state import isolated_module_state
+
+    original = boundary.macos_nested_seatbelt_available
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(
+        boundary,
+        {"macos_nested_seatbelt_available": private, "_INNER_PROBE_STATE": threading.local()},
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 @pytest.fixture(autouse=True)
 def _owned_tempfile_namespace(monkeypatch):
     """Share temporary-root faults only among this file's consumers."""

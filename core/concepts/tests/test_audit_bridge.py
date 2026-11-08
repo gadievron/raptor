@@ -28,6 +28,26 @@ from core.testing.module_state import isolated_module_state
 
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_model_memos(monkeypatch):
+    """Own model loading and slice memo writes for this test."""
+    from collections import OrderedDict
+    from functools import lru_cache
+    from core.concepts import audit_bridge
+
+    original = audit_bridge._load_cached
+    private = lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(
+        audit_bridge, {"_load_cached": private, "_slice_memos": OrderedDict()},
+        lock=audit_bridge._slice_memo_lock,
+    ):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _best_cpu_until_below(run, limit, *, clock):
     """Keep the best-of-three verdict, stopping once it cannot change."""
     best = float("inf")
