@@ -204,6 +204,16 @@ class TestCodeqlUnsupportedQueryId:
     def test_announced_once_per_query_id(self, tmp_path, monkeypatch):
         import core.audit.orchestrator as _orch
 
+        # Banner behaviour must not discover installed packs or invoke CodeQL.
+        queries = []
+
+        def unresolved(query):
+            queries.append(query)
+            return None
+
+        monkeypatch.setattr(
+            "core.audit.codeql_query_resolver.resolve_query_id", unresolved,
+        )
         monkeypatch.setattr(_orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
         infos: list[str] = []
 
@@ -217,20 +227,28 @@ class TestCodeqlUnsupportedQueryId:
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=None, codeql_db_path=str(db),
         )
-        for _ in range(3):
-            _run_tool_chain(
-                [{"type": "codeql", "config": {"query": "cpp/x"}}],
+        requested = ["cpp/x", "cpp/x", "cpp/x", "cpp/y", "cpp/y"]
+        for query in requested:
+            counters = _counters()
+            confirmed = _run_tool_chain(
+                [{"type": "codeql", "config": {"query": query}}],
                 config=config,
                 file_path="a.c",
                 function_name="f",
                 source="",
                 hypothesis="h",
-                tier_counters=_counters(),
+                tier_counters=counters,
             )
+            assert confirmed == []
+            assert counters["codeql"].skipped == 1
+            assert counters["codeql"].errors == 0
+        assert queries == requested
         loud = [m for m in infos if "unsupported" in m]
-        assert len(loud) == 1, (
+        assert len(loud) == 2, (
             f"unsupported-id skip must announce once per id, got {loud}"
         )
+        assert sum("cpp/x" in message for message in loud) == 1
+        assert sum("cpp/y" in message for message in loud) == 1
 
 
 class TestProactiveCodeqlLegSkips:
