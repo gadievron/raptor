@@ -60,5 +60,6 @@
   "core/labeled_attempts/test_store.py",
   "core/labeled_attempts/test_types.py",
   "core/llm/tests/test_dispatcher_startup_loud.py",
-  "core/audit/tests/test_checker_library.py"
+  "core/audit/tests/test_checker_library.py",
+  "packages/sca/tests/test_raptor_sca_run.py"
 ]

@@ -18,13 +18,23 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 if __name__ == "__main__":
     if _REPO_ROOT not in sys.path:
         sys.path.insert(0, _REPO_ROOT)
 
+from core.testing.module_registry import fresh_module_tree
+
 _PKG_DIR = Path(__file__).resolve().parents[1]
 _DATA = Path(__file__).parent / "data"
+
+
+@pytest.fixture(autouse=True)
+def _golden_module_scope():
+    with fresh_module_tree("compiler_scan_golden_test"), fresh_module_tree("scanner_golden_test"):
+        yield
 
 
 def _load(name: str, filename: str):

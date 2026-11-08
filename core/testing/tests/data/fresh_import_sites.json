@@ -1,0 +1,45 @@
+{
+  "windows": [
+    {
+      "file": "core/json/tests/test_f046_lazy_reexports.py",
+      "function": "_fresh_core_json_window"
+    },
+    {
+      "file": "core/sentinels/tests/test_missing.py",
+      "function": "_purged_core_json_window"
+    },
+    {
+      "file": "core/cve/tests/test_kev.py",
+      "function": "test_legacy_envelope_pin_survives_module_purge",
+      "inline": true
+    }
+  ],
+  "probes": [
+    {
+      "function": "test_writable_shadow_module_is_not_executed",
+      "root": "_raptor_import_path_probe"
+    },
+    {
+      "function": "test_zip_imports_keep_protected_archive_and_reject_data_archive",
+      "root": "_raptor_zip_path_probe"
+    },
+    {
+      "function": "test_namespace_package_uses_only_protected_portion",
+      "root": "_raptor_namespace_path_probe"
+    }
+  ],
+  "cli_methods": [
+    "test_no_args_no_caller_dir_shows_help",
+    "test_help_flag_shows_help",
+    "test_short_help_flag_shows_help",
+    "test_unknown_subcommand_returns_2",
+    "test_nonexistent_target_returns_2",
+    "test_target_is_file_not_dir_returns_2",
+    "test_subcommand_dispatches_to_cli",
+    "test_purl_subcommand_works",
+    "test_help_scan_shows_full_scan_help",
+    "test_marker_check_refuses_without_trust_marker",
+    "test_marker_check_accepts_claudecode",
+    "test_marker_check_rejects_raptor_dir"
+  ]
+}

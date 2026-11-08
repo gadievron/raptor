@@ -83,6 +83,7 @@ def test_runner_finds_cli_bindings_for_explicit_attach(tmp_path, monkeypatch):
 @pytest.mark.parametrize('error', ['ImportError', 'RuntimeError'])
 def test_runner_cleans_failed_binding_path(tmp_path, monkeypatch, error):
     from packages.frida import runner
+    monkeypatch.setattr(sys, 'path_importer_cache', dict(sys.path_importer_cache))
     site = tmp_path/'broken-bindings'
     site.mkdir()
     (site/'frida.py').write_text(f'raise {error}("broken fixture bindings")\n')

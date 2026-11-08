@@ -1,7 +1,6 @@
 """Tests for the libexec/raptor-sca-run wrapper."""
 
 import os
-import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -24,6 +23,8 @@ def _run(*args, env_extra=None, trusted=True, **kwargs):
     so it passes the libexec marker check. Pass ``trusted=False`` to
     test the refusal path.
     """
+    from core.testing.standalone_cli import run_standalone_cli
+
     env = os.environ.copy()
     # Strip RAPTOR_CALLER_DIR so default-target resolution doesn't
     # silently scan the test runner's cwd.
@@ -37,7 +38,7 @@ def _run(*args, env_extra=None, trusted=True, **kwargs):
         env["_RAPTOR_TRUSTED"] = "1"
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(
+    return run_standalone_cli(
         ["python3", str(WRAPPER), *args],
         capture_output=True, text=True, timeout=30,
         env=env, **kwargs,
@@ -169,6 +170,7 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
     unittest.main()
 
 
@@ -181,7 +183,6 @@ class OpLockContentionTests(unittest.TestCase):
         import importlib.machinery
         import importlib.util
         import io
-        import sys as _sys
         from contextlib import redirect_stderr
         from unittest.mock import patch
 
@@ -214,4 +215,3 @@ class OpLockContentionTests(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 1)
             self.assertIn("ERROR: project busy", err.getvalue())
             self.assertNotIn("Traceback", err.getvalue())
-        _sys.modules.pop("raptor_sca_run_contention", None)
