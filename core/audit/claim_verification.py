@@ -1,7 +1,8 @@
 """Claim-bound evidence selection; orchestration owns dispatch and mutation."""
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -23,17 +24,30 @@ def unverified_critique(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class ClaimVerification:
-    hypothesis: dict[str, Any]
+    """A fixed claim snapshot paired with the receipts that tested it.
+
+    Readers receive ordinary dictionaries so existing context gates retain
+    their input contract. Mutating those dictionaries, or the original
+    producer's nested data, cannot revise a claim under existing receipts.
+    A changed claim requires a new verification record.
+    """
+
+    _hypothesis: dict[str, Any] = field(repr=False)
     receipts: tuple[str, ...] = ()
     refuted: bool = False
 
-    def __post_init__(self):
-        object.__setattr__(self, "hypothesis", dict(self.hypothesis))
-        object.__setattr__(self, "receipts", tuple(self.receipts))
+    def __init__(self, hypothesis: dict[str, Any], receipts: tuple[str, ...] = (), refuted: bool = False):
+        object.__setattr__(self, "_hypothesis", deepcopy(dict(hypothesis)))
+        object.__setattr__(self, "receipts", tuple(receipts))
+        object.__setattr__(self, "refuted", refuted)
         if self.refuted and self.receipts:
             raise ValueError("a refuted claim cannot also carry confirming receipts")
+
+    @property
+    def hypothesis(self) -> dict[str, Any]:
+        return deepcopy(self._hypothesis)
 
 
 @dataclass(frozen=True)
