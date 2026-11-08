@@ -234,3 +234,24 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
     assert is_tool_evidence(stamp)
     assert is_verification_evidence(stamp)
     assert _promotion_grade_receipt(stamp)
+
+
+@pytest.mark.parametrize("owner,reported", [
+    ("malloc_strlen_strcpy", "malloc_strlen_strcpy"),
+    ("sizeof_array_param", "sizeof_array_param"),
+    ("sizeof_array_param", "sizeof_array_param_unsized"),
+])
+def test_sizing_patterns_require_independent_capacity_evidence(monkeypatch, owner, reported):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{owner}.cocci"
+    assert rule.is_file()
+    assert get_rule_role(str(rule)) == "detection"
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    receipt = f"coccinelle:{reported}"
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
+    assert is_verification_evidence(receipt + "+coccinelle:free_stack_array")

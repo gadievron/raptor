@@ -1,24 +1,26 @@
-// sizeof_array_param.cocci — Detect sizeof() on a function parameter
-// that decays from array to pointer.
-//
-// void f(char buf[256]) { memcpy(dst, buf, sizeof(buf)); }
-// sizeof(buf) is sizeof(char*), not 256. The array notation in the
-// parameter is misleading — C always decays it to a pointer.
-//
+// sizeof_array_param.cocci — Review sizeof on array-notation parameters.
+// C adjusts array parameters to pointers, including variable-length bounds.
+// The pointer width can be intentional; a match is not a verified copy defect.
+// Recognised local redeclarations end the parameter binding. After nested
+// shadowing, this conservative rule may also omit a later parameter use.
 // CWE-467: Use of sizeof() on a Pointer Type (array-decay variant)
-// 0xdea catches sizeof-on-pointer but not this specific array-decay case.
-// @role: verification
+// @role: detection
+// raptor: confirm-only
 
 @sizeof_param_array@
 identifier FUNC, PARAM;
-type T;
-constant C;
+type T, LOCAL;
+expression C;
 position p;
 @@
 
   FUNC(..., T PARAM[C], ...)
   {
     ... when any
+        when != LOCAL PARAM[...];
+        when != LOCAL PARAM[...] = ...;
+        when != LOCAL PARAM;
+        when != LOCAL PARAM = ...;
     sizeof(PARAM)@p
     ... when any
   }
@@ -32,19 +34,23 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "sizeof() on array parameter — parameter decays to pointer, sizeof returns pointer size not array size (CWE-467)"
+  "message":   "Candidate: sizeof on an array-notation parameter returns pointer width; review the intended extent (CWE-467)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
 @sizeof_param_unsized@
 identifier FUNC, PARAM;
-type T;
+type T, LOCAL;
 position p;
 @@
 
   FUNC(..., T PARAM[], ...)
   {
     ... when any
+        when != LOCAL PARAM[...];
+        when != LOCAL PARAM[...] = ...;
+        when != LOCAL PARAM;
+        when != LOCAL PARAM = ...;
     sizeof(PARAM)@p
     ... when any
   }
@@ -58,6 +64,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "sizeof() on unsized array parameter — parameter is a pointer, sizeof returns pointer size (CWE-467)"
+  "message":   "Candidate: sizeof on an unsized array parameter returns pointer width; review the intended extent (CWE-467)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
