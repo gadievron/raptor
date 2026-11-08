@@ -44,7 +44,7 @@ def commit(repo):
 @pytest.fixture
 def repo(tmp_path):
     git(tmp_path, 'init', '-q')
-    for name in image.BUILD_INPUTS:
+    for name in image.BUILD_INPUTS + [image.SCOPE_SCRIPT]:
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         if name != ".github/actions/enable-userns":
@@ -65,6 +65,7 @@ def repo(tmp_path):
 @pytest.mark.parametrize('name,expected', [
     ('README.md', False), ('docs/installation.md', False),
     ('.github/published-image.json', False),
+    ('.github/scripts/dockerhub_scope.py', False),
     ('.devcontainer/README.md', False), ('.devcontainer/test_helper.py', False),
     ('.github/scripts/report_sbom_licenses.py', False), ('core/oci/tests/test_ownership.py', False),
     ('.gitattributes', True), ('.devcontainer/.gitattributes', True),
@@ -100,6 +101,48 @@ def test_removed_renamed_and_mode_changed_copy_inputs_build(repo, operation):
         path.chmod(0o755)
     commit(repo)
     assert image.should_build(repo, 'push', base)
+
+
+def test_selector_copied_into_image_is_still_an_image_input(repo):
+    selector = repo / image.SCOPE_SCRIPT
+    selector.write_text('selector version one\n')
+    dockerfile = repo / image.DOCKERFILE
+    dockerfile.write_text(dockerfile.read_text() + f'COPY {image.SCOPE_SCRIPT} /selector\n')
+    commit(repo)
+    published = image.fingerprint(repo, 'HEAD')
+    selector.write_text('selector version two\n')
+    commit(repo)
+    assert image.should_build(repo, 'push', published)
+
+
+def test_selector_comparison_errors_refuse_publication(repo, monkeypatch):
+    git(repo, 'branch', '-M', 'main')
+    git(repo, 'remote', 'add', 'origin', str(repo))
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv('IMAGE_INPUTS', image.fingerprint(repo, 'HEAD'))
+    real_run = image.subprocess.run
+
+    def unavailable(command, *args, **kwargs):
+        if command[:3] == ['git', 'diff', '--quiet']:
+            raise subprocess.CalledProcessError(128, command)
+        return real_run(command, *args, **kwargs)
+
+    patch_module_attribute(monkeypatch, image, 'subprocess', 'run', unavailable)
+    with pytest.raises(SystemExit) as error:
+        image.main(['--check-main'])
+    assert error.value.code == 2
+
+
+def test_missing_selector_source_refuses_publication(repo, monkeypatch):
+    (repo / image.SCOPE_SCRIPT).unlink()
+    commit(repo)
+    git(repo, 'branch', '-M', 'main')
+    git(repo, 'remote', 'add', 'origin', str(repo))
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv('IMAGE_INPUTS', image.fingerprint(repo, 'HEAD'))
+    with pytest.raises(SystemExit) as error:
+        image.main(['--check-main'])
+    assert error.value.code == 2
 
 
 def test_full_push_range_and_rename_keep_both_paths(repo):
@@ -231,10 +274,12 @@ def test_every_actual_image_input_can_wake_the_publish_workflow():
         return any(source == p or p == '**/.gitattributes' and source.endswith('/.gitattributes') or p.endswith('/**') and
                    (source == p[:-3] or source.startswith(p[:-3] + '/')) for p in patterns)
     assert all(covered(source) for source in sources), [source for source in sources if not covered(source)]
+    assert covered(image.SCOPE_SCRIPT)  # selector changes must still wake the scope job
     assert 'schedule:' in workflow  # mutable external image/package inputs need refreshing
 
 
-@pytest.mark.parametrize('change,expected', [('README.md', True), ('.devcontainer/helper.py', False)])
+@pytest.mark.parametrize('change,expected', [('README.md', True), ('.devcontainer/helper.py', False),
+                                                     ('.github/scripts/dockerhub_scope.py', False)])
 def test_main_movement_only_supersedes_changed_image_inputs(repo, change, expected):
     built_sha = git(repo, 'rev-parse', 'HEAD')
     built_inputs = image.fingerprint(repo, 'HEAD')
