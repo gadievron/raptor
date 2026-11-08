@@ -26,6 +26,23 @@ from core.inventory.call_graph import (
 # ── helpers ──────────────────────────────────────────────────────
 
 
+
+@pytest.fixture(autouse=True)
+def _owned_function_span_memo(monkeypatch):
+    """Keep structural-validation span extraction private to this test."""
+    import functools
+    from core.dataflow import structural_validator
+    from core.testing.module_state import isolated_module_state
+
+    original = structural_validator._extract_functions_cached
+    private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(structural_validator, {"_extract_functions_cached": private}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 def _make_step(file: str, line: int, label: str = "") -> dict:
     return {"file": file, "line": line, "label": label, "snippet": ""}
 

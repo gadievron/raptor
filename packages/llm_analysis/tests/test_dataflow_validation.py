@@ -44,6 +44,27 @@ from packages.llm_analysis.dataflow_validation import (
 
 # Test doubles ----------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def _owned_database_memos(monkeypatch):
+    """Keep database cache contents and source-size accounting test-owned."""
+    import functools
+    from packages.llm_analysis import dataflow_validation
+    from core.testing.module_state import isolated_module_state
+
+    replacements = {"_db_source_cache": {}, "_db_source_cache_chars": 0}
+    for name in ("_db_indexed_files", "_db_callable_inventory"):
+        original = getattr(dataflow_validation, name)
+        replacements[name] = functools.lru_cache(**original.cache_parameters())(
+            original.__wrapped__,
+        )
+    with isolated_module_state(dataflow_validation, replacements):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
+
+
 class FakeCostTracker:
     def __init__(self, total: float = 0.0, budget: float = 100.0):
         self.total_cost = total
