@@ -1182,15 +1182,7 @@ class TestStartupAttribution:
         discards. Keep this test alive on every platform the suite
         runs on: it is the first responder for "the worker dies on
         platform X and nobody knows why"."""
-        from core.config import RaptorConfig
-
-        env = RaptorConfig.get_safe_env()
-        env["PYTHONPATH"] = parser_jail._raptor_dir()
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
-        child_argv = [sys.executable]
-        if sys.version_info >= (3, 11):
-            child_argv.append("-P")
-        child_argv += ["-m", "core.sandbox._parser_jail_child"]
+        child_argv, env = parser_jail._worker_launch(parser_jail._raptor_dir())
 
         parent_sock, child_sock = socket.socketpair()
         try:

@@ -7,10 +7,11 @@ import subprocess
 
 import pytest
 
+from core.config import RaptorConfig
 from core.sandbox import parser_jail as parser
 from core.testing.module_bindings import patch_module_attribute
 from core.testing.processes import reap_on_exit
-from core.testing.standalone_cli import standalone_cli_env
+from core.testing.standalone_cli import standalone_cli_env, run_standalone_cli
 from core.testing.state_isolation import pin_user_state_dirs
 
 
@@ -31,11 +32,12 @@ def owned_worker(tmp_path, monkeypatch):
         def popen(*args, **kwargs):
             # Keep the production import root and confinement, while owning
             # launcher state and writable directories for the child's lifetime.
+            requested = {**kwargs, 'env': dict(kwargs['env'])}
             kwargs['env'] = owner.enter_context(standalone_cli_env(env=kwargs['env']))
             proc = original_popen(*args, **kwargs)
             owner.enter_context(reap_on_exit(proc))
             processes.append(proc)
-            launches.append((args, kwargs))
+            launches.append((args, requested))
             return proc
         patch_module_attribute(monkeypatch, parser, 'socket', 'socketpair', pair)
         patch_module_attribute(monkeypatch, parser, 'subprocess', 'Popen', popen)
@@ -221,3 +223,47 @@ raise SystemExit(child.main(['worker', sys.argv[1]]))
     jail.start()
     assert jail._landlocked is True
     assert jail.parse(b'CONNECT owned.invalid:443 HTTP/1.1') == parser.ParsedRequestLine('owned.invalid', 443)
+
+
+@pytest.mark.parametrize('marker', sorted(RaptorConfig.TARGET_ENV_STRIP_SET))
+def test_worker_launch_removes_dispatch_markers_without_mutating_safe_env(monkeypatch, marker):
+    from core.config import RaptorConfig
+    root = str(Path(parser.__file__).resolve().parents[2])
+    safe = {'PATH': '/usr/bin:/bin', 'LANG': 'C', marker: 'test-only-marker'}
+    before = dict(safe)
+    monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: safe))
+    argv, env = parser._worker_launch(root)
+    assert safe == before
+    assert marker not in env or (marker == 'RAPTOR_DIR' and env[marker] == root)
+    assert env['PATH'] == '/usr/bin:/bin'
+    assert env['LANG'] == 'C'
+    assert env['PYTHONPATH'] == env['RAPTOR_DIR'] == root
+    assert '-s' in argv[:argv.index('-m')]
+
+
+@pytest.mark.slow
+def test_confined_worker_launch_has_no_dispatch_authority(owned_worker, monkeypatch):
+    from core.config import RaptorConfig
+    jail, _, _, launches = owned_worker
+    safe = RaptorConfig.get_safe_env()
+    safe.update({name: 'test-only-marker' for name in RaptorConfig.TARGET_ENV_STRIP_SET})
+    monkeypatch.setattr(RaptorConfig, 'get_safe_env', staticmethod(lambda: dict(safe)))
+    jail.start()
+    assert jail.parse(b'CONNECT owned.invalid:443 HTTP/1.1') == parser.ParsedRequestLine('owned.invalid', 443)
+    args, options = launches[0]
+    assert (set(options['env']) & RaptorConfig.TARGET_ENV_STRIP_SET) == {'RAPTOR_DIR'}
+    assert '-s' in args[0][:args[0].index('-m')]
+
+
+@pytest.mark.slow
+def test_worker_interpreter_disables_user_site(tmp_path):
+    import json
+    root = str(Path(parser.__file__).resolve().parents[2])
+    argv, env = parser._worker_launch(root)
+    probe = "import json, site, sys; print(json.dumps([sys.flags.no_user_site, site.ENABLE_USER_SITE, sys.flags.safe_path]))"
+    result = run_standalone_cli(
+        [*argv[:argv.index('-m')], '-c', probe], env=env, cwd=tmp_path,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == [1, False, True]
