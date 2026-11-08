@@ -595,6 +595,14 @@ def _target_ready(readers, writers, remaining):
     for fd in writers:
         masks[fd] = masks.get(fd, 0) | select.POLLOUT
     for fd in _REQUEST_CHANNEL_FDS:
+        # Zero-interest polling need not report a closed local descriptor.
+        # Validate it before relying on terminal events from a live endpoint.
+        try:
+            os.fstat(fd)
+        except OSError as exc:
+            if exc.errno == errno.EBADF:
+                raise _RequestAbandoned("RPC channel descriptor closed") from exc
+            raise
         # Watch only terminal state. Readable queued request bytes are not
         # cancellation and must remain untouched for the next dispatch.
         masks.setdefault(fd, 0)
