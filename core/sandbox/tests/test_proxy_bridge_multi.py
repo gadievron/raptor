@@ -17,13 +17,33 @@ import pytest
 from core.sandbox._proxy_bridge import _run_bridges, _run_forwarder
 from core.sandbox.tests.socket_server import SocketServer
 
+from core.testing.threads import retiring_threads
+
+
+@pytest.fixture(autouse=True)
+def _owned_backends(monkeypatch):
+    import sys
+    from core.testing.sockets import isolated_socket_servers
+
+    with isolated_socket_servers(sys.modules[__name__], monkeypatch):
+        yield
+
+
+def _unix_listener(path, backlog=4):
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        listener.bind(path)
+        listener.listen(backlog)
+    except BaseException:
+        listener.close()
+        raise
+    return listener
+
 
 def _unix_echo_server(path: str, tag: bytes) -> SocketServer:
     """Echo server on a unix socket that prefixes replies with *tag*
     so tests can prove WHICH upstream a bridge port maps to."""
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen(4)
+    srv = _unix_listener(path)
 
     def _serve(conn):
         with conn:
@@ -84,18 +104,17 @@ class TestRunBridges:
             args=(((port_a, path_a), (port_b, path_b)), death_r),
             daemon=True,
         )
-        t.start()
         try:
-            _wait_listening(port_a)
-            _wait_listening(port_b)
-            assert _roundtrip(port_a, b"hello") == b"A:hello"
-            assert _roundtrip(port_b, b"world") == b"B:world"
-            # A second connection on the same bridge still works
-            # (the loop keeps accepting).
-            assert _roundtrip(port_a, b"again") == b"A:again"
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                _wait_listening(port_a)
+                _wait_listening(port_b)
+                assert _roundtrip(port_a, b"hello") == b"A:hello"
+                assert _roundtrip(port_b, b"world") == b"B:world"
+                # A second connection on the same bridge still works
+                # (the loop keeps accepting).
+                assert _roundtrip(port_a, b"again") == b"A:again"
         finally:
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             srv_a.close()
             srv_b.close()
@@ -110,13 +129,12 @@ class TestRunBridges:
             target=_run_forwarder, args=(port, path, death_r),
             daemon=True,
         )
-        t.start()
         try:
-            _wait_listening(port)
-            assert _roundtrip(port, b"ping") == b"X:ping"
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                _wait_listening(port)
+                assert _roundtrip(port, b"ping") == b"X:ping"
         finally:
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             srv.close()
 
@@ -141,23 +159,22 @@ class TestRunBridges:
             kwargs={"ready_cb": on_ready},
             daemon=True,
         )
-        t.start()
         try:
-            assert ready.wait(5), "bridge listeners did not become ready"
-            (port_dead, _), (port_live, _) = bound
-            assert port_dead != port_live
-            # Dead upstream: connection is accepted then immediately
-            # closed — the client reads EOF, no hang.
-            with socket.create_connection(
-                ("127.0.0.1", port_dead), timeout=5,
-            ) as c:
-                c.settimeout(5)
-                assert c.recv(4096) == b""
-            # Live bridge unaffected.
-            assert _roundtrip(port_live, b"ok") == b"L:ok"
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                assert ready.wait(5), "bridge listeners did not become ready"
+                (port_dead, _), (port_live, _) = bound
+                assert port_dead != port_live
+                # Dead upstream: connection is accepted then immediately
+                # closed — the client reads EOF, no hang.
+                with socket.create_connection(
+                    ("127.0.0.1", port_dead), timeout=5,
+                ) as c:
+                    c.settimeout(5)
+                    assert c.recv(4096) == b""
+                # Live bridge unaffected.
+                assert _roundtrip(port_live, b"ok") == b"L:ok"
         finally:
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             srv.close()
 
@@ -166,9 +183,7 @@ def _unix_hold_echo_server(path: str) -> SocketServer:
     """Echo server that HOLDS each connection open (echoes every
     chunk, closes only on client EOF) — for tests that need live
     long-lived pairs."""
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen(16)
+    srv = _unix_listener(path, 16)
 
     def _serve_conn(conn):
         with conn:
@@ -188,9 +203,7 @@ def _unix_hold_echo_server(path: str) -> SocketServer:
 def _unix_flood_server(path: str, nbytes: int) -> SocketServer:
     """Server that blasts *nbytes* at every connection as soon as it
     is accepted — for tests that need a peer's write side saturated."""
-    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    srv.bind(path)
-    srv.listen(16)
+    srv = _unix_listener(path, 16)
 
     def _blast(conn):
         with conn:
@@ -226,47 +239,46 @@ class TestForwarderBounds:
             target=_run_bridges, args=(((0, path),), death_r),
             kwargs={"ready_cb": on_ready},
             daemon=True)
-        t.start()
         held = []
         try:
             # A connect-and-close readiness probe can temporarily consume
             # one of the two slots whose admission this test is measuring.
-            assert ready.wait(5), "bridge listener did not become ready"
-            (port, _), = bound
-            for i in range(2):
-                c = socket.create_connection(("127.0.0.1", port),
-                                             timeout=5)
-                held.append(c)
-                c.settimeout(5)
-                c.sendall(b"hi%d" % i)
-                assert c.recv(4096) == b"hi%d" % i
-            # Third pair is over the cap: accepted then immediately
-            # closed — the client reads EOF, no hang, no relay.
-            with socket.create_connection(("127.0.0.1", port),
-                                          timeout=5) as c3:
-                c3.settimeout(5)
-                assert c3.recv(4096) == b""
-            # Freeing a slot re-opens admission.
-            held.pop().close()
-            deadline = _time.monotonic() + 5
-            admitted = False
-            while _time.monotonic() < deadline and not admitted:
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                assert ready.wait(5), "bridge listener did not become ready"
+                (port, _), = bound
+                for i in range(2):
+                    c = socket.create_connection(("127.0.0.1", port),
+                                                 timeout=5)
+                    held.append(c)
+                    c.settimeout(5)
+                    c.sendall(b"hi%d" % i)
+                    assert c.recv(4096) == b"hi%d" % i
+                # Third pair is over the cap: accepted then immediately
+                # closed — the client reads EOF, no hang, no relay.
                 with socket.create_connection(("127.0.0.1", port),
-                                              timeout=5) as c4:
-                    c4.settimeout(1)
-                    try:
-                        c4.sendall(b"again")
-                        admitted = (c4.recv(4096) == b"again")
-                    except OSError:
-                        admitted = False
-                if not admitted:
-                    _time.sleep(0.1)
-            assert admitted, "slot freed by a closed pair never reopened"
+                                              timeout=5) as c3:
+                    c3.settimeout(5)
+                    assert c3.recv(4096) == b""
+                # Freeing a slot re-opens admission.
+                held.pop().close()
+                deadline = _time.monotonic() + 5
+                admitted = False
+                while _time.monotonic() < deadline and not admitted:
+                    with socket.create_connection(("127.0.0.1", port),
+                                                  timeout=5) as c4:
+                        c4.settimeout(1)
+                        try:
+                            c4.sendall(b"again")
+                            admitted = (c4.recv(4096) == b"again")
+                        except OSError:
+                            admitted = False
+                    if not admitted:
+                        _time.sleep(0.1)
+                assert admitted, "slot freed by a closed pair never reopened"
         finally:
             for c in held:
                 c.close()
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             srv.close()
 
@@ -281,23 +293,22 @@ class TestForwarderBounds:
         t = threading.Thread(
             target=_run_bridges, args=(((port, path),), death_r),
             daemon=True)
-        t.start()
         try:
-            _wait_listening(port)
-            c = socket.create_connection(("127.0.0.1", port), timeout=5)
-            c.settimeout(5)
-            c.sendall(b"warm")
-            assert c.recv(4096) == b"warm"
-            # Go idle past the (shrunk) idle timeout; sweep granularity
-            # is one _SELECT_TIMEOUT (1s), so allow a couple of seconds.
-            t0 = _time.monotonic()
-            got = c.recv(4096)  # blocks until the sweep closes the pair
-            assert got == b"", "idle pair not swept (data instead of EOF)"
-            assert _time.monotonic() - t0 < 4.0, "idle sweep too late"
-            c.close()
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                _wait_listening(port)
+                c = socket.create_connection(("127.0.0.1", port), timeout=5)
+                c.settimeout(5)
+                c.sendall(b"warm")
+                assert c.recv(4096) == b"warm"
+                # Go idle past the (shrunk) idle timeout; sweep granularity
+                # is one _SELECT_TIMEOUT (1s), so allow a couple of seconds.
+                t0 = _time.monotonic()
+                got = c.recv(4096)  # blocks until the sweep closes the pair
+                assert got == b"", "idle pair not swept (data instead of EOF)"
+                assert _time.monotonic() - t0 < 4.0, "idle sweep too late"
+                c.close()
         finally:
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             srv.close()
 
@@ -338,47 +349,46 @@ class TestForwarderBounds:
             args=(((0, flood_path), (0, echo_path)), death_r),
             kwargs={"ready_cb": on_ready},
             daemon=True)
-        t.start()
         stalled = None
         try:
-            assert ready.wait(5), "forwarder never became ready"
-            flood_port, echo_port = bound
-            # The stalling peer: tiny receive buffer, never reads.
-            stalled = socket.socket()
-            stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
-            stalled.connect(("127.0.0.1", flood_port))
-            assert backpressured.wait(5), "flood never reached write backpressure"
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                assert ready.wait(5), "forwarder never became ready"
+                flood_port, echo_port = bound
+                # The stalling peer: tiny receive buffer, never reads.
+                stalled = socket.socket()
+                stalled.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+                stalled.connect(("127.0.0.1", flood_port))
+                assert backpressured.wait(5), "flood never reached write backpressure"
 
-            # Unrelated pair on the same forwarder must be unaffected.
-            with socket.create_connection(("127.0.0.1", echo_port),
-                                          timeout=5) as b:
-                b.settimeout(4)
-                # The socket deadline bounds progress and detects the old
-                # 60s blocking write. A tighter stopwatch duplicates it and
-                # confuses host scheduling delays with forwarder blocking.
-                b.sendall(b"ping")
-                assert b.recv(4096) == b"ping", (
-                    "roundtrip failed while a sibling pair was stalled"
-                )
+                # Unrelated pair on the same forwarder must be unaffected.
+                with socket.create_connection(("127.0.0.1", echo_port),
+                                              timeout=5) as b:
+                    b.settimeout(4)
+                    # The socket deadline bounds progress and detects the old
+                    # 60s blocking write. A tighter stopwatch duplicates it and
+                    # confuses host scheduling delays with forwarder blocking.
+                    b.sendall(b"ping")
+                    assert b.recv(4096) == b"ping", (
+                        "roundtrip failed while a sibling pair was stalled"
+                    )
 
-            # And the stalled pair itself is dropped at the stall
-            # deadline (1s + sweep granularity), not held forever.
-            stalled.settimeout(6)
-            deadline = _time.monotonic() + 6
-            dropped = False
-            try:
-                while _time.monotonic() < deadline:
-                    if not stalled.recv(65536):
-                        dropped = True
-                        break
-            except OSError:
-                dropped = True  # reset by the forwarder — also a drop
-            assert dropped, "stalled pair was never dropped"
+                # And the stalled pair itself is dropped at the stall
+                # deadline (1s + sweep granularity), not held forever.
+                stalled.settimeout(6)
+                deadline = _time.monotonic() + 6
+                dropped = False
+                try:
+                    while _time.monotonic() < deadline:
+                        if not stalled.recv(65536):
+                            dropped = True
+                            break
+                except OSError:
+                    dropped = True  # reset by the forwarder — also a drop
+                assert dropped, "stalled pair was never dropped"
         finally:
             if stalled is not None:
                 stalled.close()
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             flood_srv.close()
             echo_srv.close()
@@ -393,9 +403,7 @@ class TestForwarderBounds:
         # Burst server: to EVERY connection (including the
         # _wait_listening probe), send 2 MiB then close — the EOF
         # chases the data through the relay.
-        srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        srv.bind(path)
-        srv.listen(4)
+        srv = _unix_listener(path)
         payload = os.urandom(2 * 1024 * 1024)
 
         def _burst(conn):
@@ -412,25 +420,24 @@ class TestForwarderBounds:
         t = threading.Thread(
             target=_run_bridges, args=(((port, path),), death_r),
             daemon=True)
-        t.start()
         try:
-            _wait_listening(port)
-            with socket.create_connection(("127.0.0.1", port),
-                                          timeout=5) as c:
-                c.settimeout(10)
-                got = bytearray()
-                while True:
-                    chunk = c.recv(65536)
-                    if not chunk:
-                        break
-                    got += chunk
-                assert bytes(got) == payload, (
-                    f"tail lost: received {len(got)} of "
-                    f"{len(payload)} bytes"
-                )
+            with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
+                t.start()
+                _wait_listening(port)
+                with socket.create_connection(("127.0.0.1", port),
+                                              timeout=5) as c:
+                    c.settimeout(10)
+                    got = bytearray()
+                    while True:
+                        chunk = c.recv(65536)
+                        if not chunk:
+                            break
+                        got += chunk
+                    assert bytes(got) == payload, (
+                        f"tail lost: received {len(got)} of "
+                        f"{len(payload)} bytes"
+                    )
         finally:
-            os.close(death_w)
-            t.join(timeout=5)
             os.close(death_r)
             server.close()
 
