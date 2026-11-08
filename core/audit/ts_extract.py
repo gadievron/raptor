@@ -384,6 +384,11 @@ def _get_func_name(func_node, _lang: str, src: bytes) -> str:
                             return _node_text(psub, src)
         if child.type == "field_identifier":
             return _node_text(child, src)
+    if (type(_lang) is str and _lang in ("javascript", "typescript", "tsx")
+            and getattr(func_node, "type", None) == "method_definition"):
+        for child in func_node.children:
+            if child.type in ("property_identifier", "private_property_identifier"):
+                return _node_text(child, src)
     return "<unknown>"
 
 

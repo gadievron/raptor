@@ -27,6 +27,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any
 from core.source.lines import iter_source_lines, split_lines
+from core.source.line_index import LineSpanIndex
 
 from .run_memo import BoundedMemo
 
@@ -414,6 +415,13 @@ _JS_FUNC_RE = re.compile(
 
 
 _JS_COERCION_IMPLS = tuple(_JS_FALSY_COERCION)
+_JS_HEADER_IMPL = _JS_FUNC_RE
+_JS_LINE_RANGE_IMPL = range
+_JS_LINE_ENUM_IMPL = enumerate
+# As with inventory's regex extractor, bare control-flow words are not
+# claimed as method names. Keyword-named shorthand methods need the parser;
+# explicit `if: function(...)` properties remain unambiguous in fallback.
+_JS_CONTROL_HEADERS = frozenset({"if", "for", "while", "switch", "catch", "with"})
 
 
 def _detect_js_sentinel(
@@ -424,6 +432,12 @@ def _detect_js_sentinel(
 
     # Use tree-sitter for function name attribution when available
     func_name_at_line: dict[int, str] = {}
+    function_spans: list[tuple[int, int, str]] = []
+    # Tiny and single-line sources do not repay span indexing.
+    compact_names = (
+        range is _JS_LINE_RANGE_IMPL and type(source) is str
+        and len(source) >= LineSpanIndex.MIN_COMPACT_LINES and "\n" in source
+    )
     try:
         from .ts_extract import _parse_file, _iter_functions
         parsed = _parse_file(path, source)
@@ -432,15 +446,37 @@ def _detect_js_sentinel(
             for func_node, fname, _body in _iter_functions(tree, lang, src_bytes, path):
                 start = func_node.start_point[0] + 1
                 end = func_node.end_point[0] + 1
+                if (compact_names and range is _JS_LINE_RANGE_IMPL
+                        and type(start) is int and type(end) is int and type(fname) is str):
+                    function_spans.append((start, end, fname))
+                    continue
+                if compact_names:
+                    # Prior native assignments were pure; preserve their
+                    # insertion order before resuming adapter operations.
+                    for lo, hi, name in function_spans:
+                        for ln in _JS_LINE_RANGE_IMPL(lo, hi + 1):
+                            func_name_at_line[ln] = name
+                    function_spans.clear()
+                    compact_names = False
                 for ln in range(start, end + 1):
                     func_name_at_line[ln] = fname
     except ImportError:
         pass
+    name_index = None
+    if function_spans:
+        if LineSpanIndex.worthwhile(function_spans):
+            name_index = LineSpanIndex(function_spans)
+        else:
+            for lo, hi, name in function_spans:
+                for ln in _JS_LINE_RANGE_IMPL(lo, hi + 1):
+                    func_name_at_line[ln] = name
+        function_spans.clear()
 
     streaming = type(source) is str and split_lines is _SENTINEL_LINES_IMPL
     lines = iter_source_lines(source) if streaming else split_lines(source)
     recent = deque(maxlen=4) if streaming else None
     current_func = "<module>"
+    delayed_names = name_index is not None and enumerate is _JS_LINE_ENUM_IMPL
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
@@ -448,11 +484,17 @@ def _detect_js_sentinel(
             recent.append(line)
 
         # Function name: prefer tree-sitter map, fall back to regex
-        if func_name_at_line:
+        if name_index is not None:
+            # Only the built-in monotone enumeration can defer lookups.
+            # Adapters retain per-row updates and their gap-carry behavior.
+            if not delayed_names:
+                current_func = name_index.get(lineno, current_func)
+        elif func_name_at_line:
             current_func = func_name_at_line.get(lineno, current_func)
         else:
+            native_header = type(line) is str and _JS_FUNC_RE is _JS_HEADER_IMPL
             fm = _JS_FUNC_RE.match(line)
-            if fm:
+            if fm and not (native_header and fm.group(3) in _JS_CONTROL_HEADERS):
                 current_func = (
                     fm.group(1) or fm.group(2) or fm.group(3)
                     or fm.group(4) or "<module>"
@@ -483,6 +525,8 @@ def _detect_js_sentinel(
                 window,
             ):
                 break
+            if delayed_names and name_index is not None:
+                current_func = name_index.preceding(lineno, "<module>")
             results.append(SentinelCollapse(
                 file=path,
                 function=current_func,

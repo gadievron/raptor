@@ -78,6 +78,7 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from core.source.line_index import LineSpanIndex
 from core.source.lines import iter_source_lines, split_lines
 
 if TYPE_CHECKING:
@@ -390,7 +391,9 @@ def _collect_calls(nodes: list[ast.stmt]) -> list[str]:
     return calls
 
 
-def _enclosing_function_names(tree: ast.Module) -> dict[int, str]:
+def _enclosing_function_names(
+    tree: ast.Module, *, compact: bool = False,
+) -> dict[int, str] | LineSpanIndex:
     """Map statement-line → enclosing function name (dotted for
     methods), for attributing handlers to reviewed functions."""
     spans: list[tuple[int, int, str]] = []
@@ -415,11 +418,20 @@ def _enclosing_function_names(tree: ast.Module) -> dict[int, str]:
                 stack.append((child, prefix))
     # Innermost span wins: sort by size, smallest last.
     spans.sort(key=lambda s: s[1] - s[0], reverse=True)
+    if (compact and range is _ENCLOSING_RANGE_IMPL
+            and all(type(lo) is int and type(hi) is int and type(name) is str
+                    for lo, hi, name in spans)
+            and LineSpanIndex.worthwhile(spans)):
+        return LineSpanIndex(spans)
     result: dict[int, str] = {}
     for start, end, name in spans:
         for ln in range(start, end + 1):
             result[ln] = name
     return result
+
+
+_ENCLOSING_RANGE_IMPL = range
+_ENCLOSING_NAMES_IMPL = _enclosing_function_names
 
 
 def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
@@ -440,7 +452,11 @@ def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
     from .source_view import sanitized_view
     lines = split_lines(source)
     view_lines = split_lines(sanitized_view(source, language="python"))
-    enclosing = _enclosing_function_names(tree)
+    enclosing = (
+        _enclosing_function_names(tree, compact=True)
+        if _enclosing_function_names is _ENCLOSING_NAMES_IMPL
+        else _enclosing_function_names(tree)
+    )
     out: list[HandlerOutcome] = []
 
     for node in ast.walk(tree):
