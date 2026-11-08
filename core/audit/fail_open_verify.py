@@ -114,7 +114,7 @@ from .fail_open_roles import (
     RoleEvidence,
     bind_role,
 )
-from core.source.lines import slice_source_lines, split_lines
+from core.source.lines import slice_source_lines, slice_text, split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +409,10 @@ def _python_function_segment(source: str, function_name: str) -> str:
     except SyntaxError:
         return ""
     tail = _function_tail(function_name)
-    lines = split_lines(source)
+    line_split = split_lines
+    deferred = (_SEGMENT_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
+                and line_split is _SEGMENT_LINES_IMPL)
+    lines = [] if deferred else split_lines(source)
     for node in _ast.walk(tree):
         if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) \
                 and node.name == tail:
@@ -417,6 +420,13 @@ def _python_function_segment(source: str, function_name: str) -> str:
             if node.decorator_list:
                 start = min(d.lineno for d in node.decorator_list)
             end = node.end_lineno or node.lineno
+            if deferred:
+                if (_SEGMENT_TYPE_IMPL(start) is int and _SEGMENT_TYPE_IMPL(end) is int
+                        and start > 0 and end >= start):
+                    return slice_text(source, start, end)
+                # Adapter coordinates retain Python's original slice behavior,
+                # using the pure splitter captured before AST callbacks.
+                lines = line_split(source)
             return "\n".join(lines[start - 1:end])
     return ""
 
