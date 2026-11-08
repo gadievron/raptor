@@ -305,7 +305,7 @@ class TestAdversarialReviewer:
         assert result[0]["adversarial_review"]["refuted"] is False
         assert "adversarial_downgrade" not in result[0]
 
-    def test_review_refuted_downgrades(self):
+    def test_review_objection_preserves_assessment(self):
         def refuting_fn(_x):
             return {"refuted": True, "reason": "bounds check missed"}
 
@@ -313,8 +313,10 @@ class TestAdversarialReviewer:
         items = [{"file": "a.c", "function": "f", "status": "finding",
                   "body": "overflow"}]
         result = reviewer.review(items)
-        assert result[0]["status"] == "clean"
-        assert result[0]["adversarial_downgrade"] is True
+        assert result[0]["status"] == "finding"
+        assert result[0]["adversarial_review"]["proposed_refutation"] is True
+        assert result[0]["adversarial_review"]["refuted"] is False
+        assert "adversarial_downgrade" not in result[0]
 
     def test_review_exception_doesnt_crash(self):
         def exploding_refute(_item):
@@ -441,8 +443,8 @@ class TestRunAuditMultiReview:
             review_fn=_review_finding,
             refute_fn=refute_fn,
         )
-        assert result.items[0]["status"] == "clean"
-        assert result.items[0]["adversarial_downgrade"] is True
+        assert result.items[0]["status"] == "finding"
+        assert result.items[0]["adversarial_review"]["adjudication"] == "unverified"
 
     def test_adversarial_confirms(self):
         def refute_fn(_item):
@@ -579,7 +581,7 @@ class TestRunSelfConsistency:
             review_fn=_review_finding,
             refute_fn=refute_fn,
         )
-        assert result.items[0].get("adversarial_downgrade") is True
+        assert result.items[0]["adversarial_review"]["proposed_refutation"] is True
 
 
 class TestComputeReasoningDivergence:

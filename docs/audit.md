@@ -91,6 +91,11 @@ incomplete, unsupported, or inconclusive checks leave the claim unresolved.
 A `clean` result records the outcome of that review, not a guarantee that the
 function is safe. Changes and newly available evidence can require re-review.
 
+Adversarial review records objections and missing evidence. A second model's
+disagreement, including a proposed guard or caller guarantee, does not itself
+confirm or refute a concern. The audit retains the assessment until applicable
+evidence supports a change.
+
 Some checks execute test witnesses and require explicit repository trust.
 See the [project trust controls](commands.md#project) before enabling execution
 of target code. Binary reviews also compare relevant decompiler claims with

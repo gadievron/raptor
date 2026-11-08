@@ -6,7 +6,7 @@ by no prompt builder, and "refuted" meant the second sample happened to
 say clean — a coin-flip demotion channel biased against borderline-but-
 real findings.
 
-This module makes the refutation real: a SEPARATE LLM call with a
+This module collects a critique: a SEPARATE LLM call with a
 purpose-built prompt that attacks the specific hypothesis. The refuter
 must name the concrete guard, contract, or precondition that defeats
 the claim (with line references), or concede it stands, or name the
@@ -16,6 +16,10 @@ concrete mechanical evidence that would settle it. Structured output:
     counter_argument      — the refuter's concrete argument
     defeating_mechanism   — the named guard/contract/precondition
     settling_evidence     — the mechanical check that would settle it
+
+These are model judgments and proposed checks, not scoped checker
+refutations. Consumers retain the objection without changing a verdict;
+the evidence-resolution path separately owns any supported refutation.
 
 Envelope discipline: the system prompt is interpolation-free; the
 hypothesis, prior review detail, and function source arrive as
@@ -161,14 +165,10 @@ def parse_refutation(raw: Any) -> RefutationResult | None:
     the caller treats the refutation attempt as a no-op — an errored
     refuter must never demote anything.
 
-    Acceptance contract vs the prompt's quality bar: the prompt
-    DEMANDS a named defeating mechanism for ``refuted``, but a
-    counter-argument-only refutation is still accepted here BY DESIGN
-    — the consumer treats it as the textual-only demotion tier
-    (documented at the orchestrator's refutation-application site):
-    one level, argument recorded, never below suspicious for
-    tool-backed outcomes. Only an argument-free, mechanism-free
-    ``refuted`` is rejected outright.
+    A counter-argument-only objection is retained for review, even though
+    the prompt asks for a named defeating mechanism. Neither form grants
+    refutation authority. An argument-free, mechanism-free ``refuted``
+    response is unusable and rejected.
     """
     if not isinstance(raw, dict):
         return None

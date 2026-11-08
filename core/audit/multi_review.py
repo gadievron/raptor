@@ -252,23 +252,15 @@ class AdversarialReviewer:
                 )
                 refutation = {"refuted": False, "reason": f"error: {exc}"}
 
+            from .claim_verification import unverified_critique
+
+            refutation = unverified_critique(refutation)
             annotated = {**item, "adversarial_review": refutation}
             if refutation.get("needs_evidence"):
                 # Route to dark verification: the refuter says the
                 # question cannot be settled by reading — the dark
                 # pass executes a concrete witness later.
                 annotated["adversarial_needs_evidence"] = True
-            if refutation.get("refuted"):
-                # An LLM refutation may not erase tool-confirmed
-                # evidence: with mechanical evidence present, downgrade
-                # one level to suspicious (queued for re-review /
-                # validate) instead of clean.
-                from core.audit.evidence_grade import is_tool_evidence
-                if is_tool_evidence(item.get("evidence_tool", "")):
-                    annotated["status"] = "suspicious"
-                else:
-                    annotated["status"] = "clean"
-                annotated["adversarial_downgrade"] = True
             results.append(annotated)
         return results
 

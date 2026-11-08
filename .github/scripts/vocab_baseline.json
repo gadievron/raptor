@@ -899,6 +899,11 @@
     "kind": "literal",
     "note": "audit-log refutation-gate record field names (framework record keys, not target API names)"
   },
+  "core/audit/orchestrator.py::log_entry": {
+    "count": 10,
+    "kind": "literal",
+    "note": "adversarial critique audit-event schema: identity, proposed verdict, unverified adjudication, retained critique and unchanged status; fixed persistence keys, not target function/API names or a detection vocabulary. The payload records model judgment and grants no refutation authority."
+  },
   "core/audit/orchestrator.py::study_consumer_thread": {
     "count": 14,
     "kind": "literal"

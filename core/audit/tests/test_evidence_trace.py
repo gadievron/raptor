@@ -15,6 +15,27 @@ from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
 from core.json import load_json
 
 
+def test_normal_export_retains_critique_without_granting_authority(tmp_path):
+    critique = {"verdict": "refuted", "refuted": True,
+                "adjudication": "verified", "counter_argument": "Caller bounds the value",
+                "settling_evidence": "Inspect the caller", "refuter_model": "review-model"}
+    outcome = ReviewOutcome(file="a.c", function="f", line=12, status="suspicious",
+                            body="Unresolved concern", hypothesis="Claim",
+                            review_result={"adversarial_review": critique})
+    write_graded_findings(export_findings([outcome]), tmp_path)
+    saved = load_json(tmp_path / "findings-graded.json")
+    finding = saved["findings"][0]
+    note = finding["adversarial_review"]
+    assert finding["status"] == outcome.status == "suspicious"
+    assert note["counter_argument"] == critique["counter_argument"]
+    assert note["settling_evidence"] == critique["settling_evidence"]
+    assert note["adjudication"] == "unverified"
+    assert note["refuted"] is False
+    assert note["proposed_refutation"] is True
+    assert finding["verification_trace"]["confirming_markers"] == []
+    assert critique["adjudication"] == "verified"  # no input mutation
+
+
 def test_normal_json_export_retains_channel_states_without_confirming_them(tmp_path):
     outcome = ReviewOutcome(
         file="a.c", function="f", function_qualified="Owner.f", line=12,
