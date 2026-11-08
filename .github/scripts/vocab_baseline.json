@@ -674,9 +674,16 @@
     "note": "registry of evidence-channel keys -> classifier module paths (code registry, not a target-API name vocabulary; grows one entry per new evidence channel); Coccinelle uses shared installed-rule ownership so emitted variants retain the owner role"
   },
   "core/audit/evidence_grade.py::_TOOL_NAMESPACES": {
-    "count": 27,
+    "count": 28,
     "kind": "literal",
-    "note": "framework-internal enum/namespace vocabulary (not target API names); grew to 13 with the five-channel programme's resource_bounds/release_order/protocol_state namespaces"
+    "note": "framework-internal enum/namespace vocabulary (not target API names); grew to 13 with the five-channel programme's resource_bounds/release_order/protocol_state namespaces; reviewed explicit smt namespace for qualified receipt classification after removing the bare smt verification stamp; namespace membership does not admit a bare stamp or bypass the receipt-role classifier",
+    "reviewed": "2026-11-08"
+  },
+  "core/audit/evidence_trace.py::build_verification_trace": {
+    "count": 15,
+    "kind": "literal",
+    "note": "verification_trace JSON serializer field names (claim, scope, channel bookkeeping, receipt markers and limitations), not target function names or detection vocabulary; the normal findings-graded.json export tests consume these schema keys Includes hypothesis_reviews for explicitly unassessed model judgments and candidate claim-check references.",
+    "reviewed": "2026-11-07"
   },
   "core/audit/executor.py::_process_glance_batch_inner": {
     "count": 10,
@@ -708,12 +715,6 @@
     "kind": "literal",
     "note": "English stopword list for hypothesis-text parsing (not API vocabulary)"
   },
-  "core/audit/evidence_trace.py::build_verification_trace": {
-    "count": 15,
-    "kind": "literal",
-    "note": "verification_trace JSON serializer field names (claim, scope, channel bookkeeping, receipt markers and limitations), not target function names or detection vocabulary; the normal findings-graded.json export tests consume these schema keys Includes hypothesis_reviews for explicitly unassessed model judgments and candidate claim-check references.",
-    "reviewed": "2026-11-07"
-  },
   "core/audit/findings_export.py::_MECHANISM_STOPWORDS": {
     "count": 23,
     "kind": "literal",
@@ -727,15 +728,15 @@
     "count": 19,
     "kind": "literal"
   },
-  "core/audit/forecast.py::result": {
-    "count": 12,
-    "kind": "literal",
-    "note": "forecast result-document field names (an artifact schema forecast.json persists and the report embeds), not a learned name vocabulary"
-  },
   "core/audit/forecast.py::predicted": {
     "count": 11,
     "kind": "literal",
     "note": "calibration-entry projection of the forecast result-document schema (which predicted fields each forecast-calibration.jsonl record carries), not a learned name vocabulary"
+  },
+  "core/audit/forecast.py::result": {
+    "count": 12,
+    "kind": "literal",
+    "note": "forecast result-document field names (an artifact schema forecast.json persists and the report embeds), not a learned name vocabulary"
   },
   "core/audit/goconc.py::_GO_BUILTIN_TYPES": {
     "count": 21,
@@ -746,6 +747,12 @@
     "count": 11,
     "kind": "literal",
     "note": "deviation-record serializer field keys consumed verbatim by the prepass fold and the adjudication detour \u2014 a serialization schema like consistency_dimensions.py::d, not a learned name vocabulary"
+  },
+  "core/audit/initializer.py::_builtin_scalar_value": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed tree-sitter C++ node types for builtin scalar literals and language operators. Producer node.type; consumer initializer_may_use_value uses the builtin-result check when retaining unresolved overloaded operands. Grammar tags, not target function names or learned API vocabulary.",
+    "reviewed": "2026-11-08"
   },
   "core/audit/integer_truncation_checker.py::_WIDE_TYPES": {
     "count": 17,
@@ -2959,6 +2966,12 @@
     "count": 15,
     "kind": "literal"
   },
+  "packages/llm_analysis/dataflow_validation.py::_tier4_smt_refine_inner": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Fixed smt_diagnostics JSON fields written into the analysis record by the tier-4 predicate refinement path and consumed as diagnostic output. Records model feasibility, scope, conditions and limitations; does not establish source-path proof or change the finding verdict. Persistence schema keys, not target function names or learned API vocabulary.",
+    "reviewed": "2026-11-08"
+  },
   "packages/llm_analysis/orchestrator.py::orchestrate": {
     "count": 38,
     "kind": "literal"
@@ -3001,6 +3014,11 @@
   "packages/sca/__init__.py::SCA_ALLOWED_HOSTS": {
     "count": 21,
     "kind": "literal"
+  },
+  "packages/sca/_scan_args.py::effective_scan_plan": {
+    "count": 14,
+    "kind": "literal",
+    "note": "Fixed version-1 scan-plan output fields. Producer effective_scan_plan; consumers both CLI entry points and offline JSON automation. Flags describe configured stage capabilities; no package-name seed vocabulary."
   },
   "packages/sca/api.py::_summarise": {
     "count": 12,
@@ -3136,6 +3154,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "packages/sca/resolvers/_cache.py::_resolution_context": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed internal resolver-cache fingerprint schema, producer manifest_hash and consumers cached_dry_run/cached_dry_run_batch. Contains runtime, policy and file identity hashes; no learned symbol vocabulary. Review with cache identity changes."
+  },
   "packages/sca/risk.py::CONSTANT_BOUNDS": {
     "count": 16,
     "kind": "literal"
@@ -3152,6 +3175,11 @@
     "count": 10,
     "kind": "literal",
     "note": "serialization schema fields for the recovered distribution-license evidence record (expression, publisher declaration, metadata identity, image-layer provenance and original catalogue claims), consumed by SBOM preparation and publication checks; fixed record keys, not a learned function-name vocabulary. This entry does not approve any license or suppress unresolved evidence."
+  },
+  "packages/sca/scan_observability.py::completion_summary": {
+    "count": 15,
+    "kind": "literal",
+    "note": "Fixed version-1 scan-summary persistence fields. Producer pipeline.run_sca; consumers RunResult.scan_summary and CLI completion summary, with query coverage and process telemetry. Not a function-name seed list."
   },
   "packages/sca/scripts/raptor-sca-compromise-check::_FIXTURE_ALLOWED_FILENAMES": {
     "count": 30,
@@ -3396,20 +3424,5 @@
     "kind": "literal",
     "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
     "reviewed": "2026-10-31"
-  },
-  "packages/sca/_scan_args.py::effective_scan_plan": {
-    "count": 14,
-    "kind": "literal",
-    "note": "Fixed version-1 scan-plan output fields. Producer effective_scan_plan; consumers both CLI entry points and offline JSON automation. Flags describe configured stage capabilities; no package-name seed vocabulary."
-  },
-  "packages/sca/resolvers/_cache.py::_resolution_context": {
-    "count": 10,
-    "kind": "literal",
-    "note": "Fixed internal resolver-cache fingerprint schema, producer manifest_hash and consumers cached_dry_run/cached_dry_run_batch. Contains runtime, policy and file identity hashes; no learned symbol vocabulary. Review with cache identity changes."
-  },
-  "packages/sca/scan_observability.py::completion_summary": {
-    "count": 15,
-    "kind": "literal",
-    "note": "Fixed version-1 scan-summary persistence fields. Producer pipeline.run_sca; consumers RunResult.scan_summary and CLI completion summary, with query coverage and process telemetry. Not a function-name seed list."
   }
 }
