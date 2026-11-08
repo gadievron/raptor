@@ -20,8 +20,18 @@ CASES = ['core/audit/tests/test_guess_target_corroboration.py', 'core/audit/test
 def test_infile_registry_lifetime_without_conftests(file, mode, tmp_path):
     """Run the native fixture definitions with actual pytest and MonkeyPatch."""
     tree = ast.parse((ROOT / file).read_text())
-    owners = [n for n in tree.body if isinstance(n, ast.FunctionDef)
-              and n.name in ("_user_state_in_tmp", "monkeypatch")]
+    functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    selected = {"_user_state_in_tmp", "monkeypatch"} & functions.keys()
+    # File-owned monkeypatch fixtures can depend on additional lifetime owners.
+    # Keep the transitive local closure when conftests are deliberately absent.
+    pending = list(selected)
+    while pending:
+        node = functions[pending.pop()]
+        for argument in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs):
+            if argument.arg in functions and argument.arg not in selected:
+                selected.add(argument.arg)
+                pending.append(argument.arg)
+    owners = [node for name, node in functions.items() if name in selected]
     assert any(n.name == "_user_state_in_tmp" for n in owners)
     definitions = "\n\n".join(ast.unparse(n) for n in owners)
     job = tmp_path / "archive-session"
