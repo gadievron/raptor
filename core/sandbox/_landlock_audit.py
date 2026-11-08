@@ -55,10 +55,10 @@ import sys
 import time
 import warnings
 from collections.abc import Iterable
-from pathlib import Path
 
 from . import evidence as _evidence_mod
 from ._pipe_poll import readable_fds as _readable_fds
+from ._tracer_launch import prepare_tracer_launch
 from ._fd_sweep import close_fds_except as _close_fds_except
 
 logger = logging.getLogger(__name__)
@@ -769,29 +769,11 @@ def run_landlock_audit(
             err_w = -1
 
         # ----- Fork the tracer -----
-        # Resolve the tracer's import root PRE-FORK, in the parent,
-        # where logging works. PYTHONPATH-to-child is sys.path-
-        # equivalent injection, so the path-safety doctrine applies:
-        # RAPTOR_DIR is authoritative. The Path(__file__) fallback is
-        # a BLESSED doctrine exception, decided here rather than left
-        # implicit: this lane must stay usable as a library (bare
-        # callers without the launcher), and converting a missing env
-        # var into a hard KeyError would kill runs the fallback
-        # serves correctly on single-checkout hosts — but on a
-        # multi-checkout host it silently steers the tracer to
-        # whichever tree this module file sits in, so the ambiguity
-        # is surfaced loudly instead of guessed silently.
-        tracer_raptor_dir = os.environ.get("RAPTOR_DIR")
-        if tracer_raptor_dir is None:
-            tracer_raptor_dir = str(
-                Path(__file__).resolve().parent.parent.parent
-            )
-            logger.warning(
-                "landlock-audit: RAPTOR_DIR unset — tracer will "
-                "import from the tree containing this module (%s); "
-                "on multi-checkout hosts export RAPTOR_DIR to pin "
-                "the intended tree", tracer_raptor_dir,
-            )
+        # Resolve imports and prepare argv before fork; the child only
+        # adjusts descriptors and execs the captured launch specification.
+        tracer_argv, tracer_env = prepare_tracer_launch(
+            sys.executable, target_pid, audit_run_dir, t_ready_w, config_arg,
+        )
         tracer_pid = os.fork()
 
         if tracer_pid == 0:
@@ -806,22 +788,11 @@ def run_landlock_audit(
                 if config_fd >= 0:
                     os.set_inheritable(config_fd, True)
                 os.set_inheritable(evidence_file.fd, True)
-                # Resolved pre-fork in the parent (see the comment at
-                # the fork site) — the child only closes over it.
-                tracer_env = {
-                    "PYTHONPATH": tracer_raptor_dir,
-                    "PATH": "/usr/bin:/bin",
-                }
-                tracer_argv = [
-                    sys.executable, "-m", "core.sandbox.tracer",
-                    str(target_pid), str(audit_run_dir),
-                    str(t_ready_w), config_arg,
-                ]
                 # tracer_env is a hand-crafted dict with 2 keys only
                 # (PYTHONPATH + PATH). No inheritance — strictly
                 # safer than the default os.environ-copy path.
                 # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
-                os.execvpe(sys.executable, tracer_argv, tracer_env)
+                os.execvpe(tracer_argv[0], tracer_argv, tracer_env)
             except FileNotFoundError:
                 os._exit(127)
             except PermissionError:

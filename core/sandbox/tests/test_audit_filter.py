@@ -540,22 +540,23 @@ class TestTracerArgvContract:
         import inspect
         import re
 
-        from core.sandbox import _spawn, tracer
+        from core.sandbox import tracer
+        from core.sandbox._tracer_launch import prepare_tracer_launch
 
-        # Extract spawn's argv literal.
-        spawn_src = inspect.getsource(_spawn.run_sandboxed)
+        # Both spawn backends use the parent-side launch builder.
+        spawn_src = inspect.getsource(prepare_tracer_launch)
         argv_block = re.search(
-            r"tracer_argv\s*=\s*\[(.*?)\]",
+            r"argv\s*=\s*\[(.*?)\]",
             spawn_src, re.DOTALL,
         )
-        assert argv_block, "tracer_argv literal not found in _spawn"
+        assert argv_block, "argv literal not found in tracer launch builder"
         # Pull the variable names that follow `str(...)`.
         spawn_args = re.findall(
             r"str\((\w+)\)", argv_block.group(1),
         )
         # Plus the optional appended config_path.
-        if "tracer_argv.append" in spawn_src:
-            spawn_args.append("_audit_config_path")
+        if "argv.append" in spawn_src:
+            spawn_args.append("config_arg")
 
         # Extract _cli_main's positional parse.
         cli_src = inspect.getsource(tracer._cli_main)

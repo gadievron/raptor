@@ -81,6 +81,7 @@ from typing import TYPE_CHECKING
 
 from . import _pathpin, state
 from ._pipe_poll import readable_fds as _readable_fds
+from ._tracer_launch import prepare_tracer_launch
 from ._pathpin import canonical_bind_path as _canonical_bind_path
 from ._pathpin import is_per_process_procfs as _is_per_process_procfs
 from ._fd_sweep import close_fds_except as _close_fds_except
@@ -4169,28 +4170,12 @@ def run_sandboxed(
             # module level for exactly this branch). Same fork-safety
             # contract as the main child fork above.
             #
-            # Resolve the tracer's import root PRE-FORK, in the
-            # parent, where logging works. PYTHONPATH-to-child is
-            # sys.path-equivalent injection, so the path-safety
-            # doctrine applies: RAPTOR_DIR is authoritative. The
-            # Path(__file__) fallback is a BLESSED doctrine
-            # exception, decided here rather than left implicit —
-            # this lane must stay usable as a library (bare callers
-            # without the launcher), and a hard KeyError would kill
-            # runs the fallback serves correctly on single-checkout
-            # hosts; the multi-checkout ambiguity is surfaced loudly
-            # instead of guessed silently.
-            _tracer_raptor_dir = os.environ.get("RAPTOR_DIR")
-            if _tracer_raptor_dir is None:
-                _tracer_raptor_dir = str(
-                    Path(__file__).resolve().parent.parent.parent
-                )
-                logger.warning(
-                    "spawn audit: RAPTOR_DIR unset — tracer will "
-                    "import from the tree containing this module "
-                    "(%s); on multi-checkout hosts export RAPTOR_DIR "
-                    "to pin the intended tree", _tracer_raptor_dir,
-                )
+            # Resolve imports and prepare argv before fork. The helper
+            # performs filesystem work only in this parent-side branch.
+            tracer_argv, tracer_env = prepare_tracer_launch(
+                sys.executable, child_pid, audit_run_dir, t_ready_w,
+                _audit_config_arg,
+            )
             tracer_pid = os.fork()
             if tracer_pid == 0:
                 # ===== TRACER SUBPROCESS =====
@@ -4240,47 +4225,13 @@ def run_sandboxed(
                 # complicated state. Pass the target_pid, audit_run_dir,
                 # and the write end of t_ready as the sync_fd argument.
                 #
-                # Use the current Python interpreter for module loading
-                # consistency. Interpreter lockdown comes from the
-                # hand-crafted 2-key env below, not from `-I` — see
-                # the note ahead of tracer_env for why isolated mode
-                # is deliberately not used here (unlike the isolated
-                # `python3 -I` seatbelt shim, which can afford it).
                 try:
-                    # Resolved pre-fork in the parent (see the fork
-                    # site) — the child only closes over it.
-                    raptor_dir = _tracer_raptor_dir
-                    # Tightly-controlled env: PYTHONPATH for module
-                    # resolution, minimal PATH, nothing inherited.
-                    # We do NOT use `-I` (isolated mode) because that
-                    # ignores PYTHONPATH, leaving the tracer unable
-                    # to import core.sandbox. The lockdown -I would
-                    # provide is already covered: env is hand-crafted
-                    # (no PYTHONHOME, PYTHONSTARTUP), no user site,
-                    # no inherited dotfiles via fake_home elsewhere.
-                    tracer_env = {
-                        "PYTHONPATH": raptor_dir,
-                        "PATH": "/usr/bin:/bin",
-                    }
-                    # Build tracer argv: pid, run_dir, sync_fd,
-                    # optional config arg. The config arg is the
-                    # /proc/self/fd/N spelling of the anonymous
-                    # config fd — "self" resolves in the TRACER when
-                    # it opens the path, so the argv value (visible
-                    # in /proc/<pid>/cmdline) discloses nothing.
-                    tracer_argv = [
-                        sys.executable, "-m", "core.sandbox.tracer",
-                        str(child_pid), str(audit_run_dir),
-                        str(t_ready_w),
-                    ]
-                    if _audit_config_arg is not None:
-                        tracer_argv.append(_audit_config_arg)
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
                     # tracer_env is hand-crafted: 2 keys
                     # (PYTHONPATH + PATH), no inheritance. Explicitly
                     # safer than os.environ-copy.
                     os.execvpe(
-                        sys.executable, tracer_argv, tracer_env,
+                        tracer_argv[0], tracer_argv, tracer_env,
                     )
                 except FileNotFoundError:
                     # sys.executable doesn't exist or PATH lookup
