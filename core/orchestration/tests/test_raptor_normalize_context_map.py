@@ -2,10 +2,11 @@
 
 import json
 import os
-import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+from core.testing.standalone_cli import run_standalone_cli
 
 
 # parents[3] climbs: [0] tests/ -> [1] orchestration/ -> [2] core/ -> [3] repo root.
@@ -26,8 +27,12 @@ def _run(*args, **kwargs):
     when the import chain was thinner; ran flaky as RAPTOR's
     inventory substrate grew. 60s leaves comfortable headroom
     without masking a genuine wedge."""
-    return subprocess.run(
-        [str(WRAPPER), *args],
+    provided_env = kwargs.pop("env", None)
+    env = dict(os.environ if provided_env is None else provided_env)
+    env.update(_RAPTOR_TRUSTED="1", _RAPTOR_SCRATCH_AUTH="stale-test-authorization",
+               RAPTOR_SESSION_PID="invalid", RAPTOR_SESSION_TOKEN="stale")
+    return run_standalone_cli(
+        [str(WRAPPER), *args], env=env,
         capture_output=True, text=True, timeout=60, **kwargs,
     )
 
