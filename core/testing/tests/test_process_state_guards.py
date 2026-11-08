@@ -451,6 +451,10 @@ def test_next_scope_is_private():
     assert all(handle._closed for handle in caller_seed.OWNED)
 ''')
     env = dict(os.environ)
+    # Exercise only the explicitly loaded fixture owners and request guard.
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env.pop("PYTEST_PLUGINS", None)
+    env.pop("PYTEST_ADDOPTS", None)
     env.pop("RAPTOR_RANDOMISE_TESTS", None)
     env.pop("RAPTOR_TEST_LIVE_LLM", None)
     for key, leaf in (("HOME", "home"), ("TMPDIR", "tmp"), ("XDG_DATA_HOME", "data"),
