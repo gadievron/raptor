@@ -172,6 +172,15 @@ _DEATH_W_LOCK = threading.Lock()
 _LIVE_DEATH_W: set[int] = set()
 
 
+def _close_setup_fds(*fds: int | None) -> None:
+    """Attempt every unadopted pipe end without replacing an active error."""
+    def close_one(fd: int) -> None:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+
+    _retire_parent_resources(*(partial(close_one, fd) for fd in fds if fd is not None))
+
+
 def _open_capture_pipes() -> tuple[int, int, int, int]:
     """(out_r, out_w, err_r, err_w) for output capture.
 
@@ -185,10 +194,7 @@ def _open_capture_pipes() -> tuple[int, int, int, int]:
         err_r, err_w = os.pipe()
         return out_r, out_w, err_r, err_w
     except BaseException:
-        for fd in (out_r, out_w, err_r, err_w):
-            if fd is not None:
-                with contextlib.suppress(OSError):
-                    os.close(fd)
+        _close_setup_fds(out_r, out_w, err_r, err_w)
         raise
 
 
@@ -208,9 +214,7 @@ def open_death_pipe() -> tuple[int, int]:
             # Roll back under the same lock used by sibling forks:
             # no closed descriptor number may remain registered.
             _LIVE_DEATH_W.discard(death_w)
-            for fd in (death_r, death_w):
-                with contextlib.suppress(OSError):
-                    os.close(fd)
+            _close_setup_fds(death_r, death_w)
             raise
 
 
