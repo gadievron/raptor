@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.threads import retiring_threads
+
 import core.audit.heartbeat as hb_mod
 from core.audit.heartbeat import (
     HEARTBEAT_FILENAME,
@@ -125,7 +127,10 @@ def test_concurrent_beats_never_tear(tmp_path: Path) -> None:
     torn: list[str] = []
 
     def _writer(i: int) -> None:
-        barrier.wait()
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            return
         for j in range(50):
             hb.beat(done=i * 50 + j, total=n * 50)
 
@@ -140,16 +145,23 @@ def test_concurrent_beats_never_tear(tmp_path: Path) -> None:
                 torn.append("torn read")
                 return
 
+    def release():
+        stop.set()
+        barrier.abort()
+
     reader = threading.Thread(target=_reader)
-    reader.start()
-    writers = [
-        threading.Thread(target=_writer, args=(i,)) for i in range(n)
-    ]
-    for t in writers:
-        t.start()
-    for t in writers:
-        t.join()
-    stop.set()
-    reader.join()
+    workers = [reader]
+    with retiring_threads(workers, release=release, timeout=5):
+        reader.start()
+        writers = [
+            threading.Thread(target=_writer, args=(i,)) for i in range(n)
+        ]
+        workers.extend(writers)
+        for t in writers:
+            t.start()
+        for t in writers:
+            t.join()
+        stop.set()
+        reader.join()
     assert torn == []
     json.loads((tmp_path / HEARTBEAT_FILENAME).read_text())

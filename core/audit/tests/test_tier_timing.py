@@ -14,6 +14,8 @@ import threading
 import time
 import types
 
+from core.testing.threads import retiring_threads
+
 from core.audit.orchestrator import (
     OrchestratorConfig,
     _make_tier_counters,
@@ -149,7 +151,10 @@ class TestIncrementTierThreadSafety:
         start = threading.Barrier(n_threads)
 
         def worker() -> None:
-            start.wait()
+            try:
+                start.wait()
+            except threading.BrokenBarrierError:
+                return
             for _ in range(n_iter):
                 increment_tier(result, "semgrep", "confirmed")
                 increment_tier(result, "semgrep", "refuted")
@@ -162,10 +167,11 @@ class TestIncrementTierThreadSafety:
             threads = [
                 threading.Thread(target=worker) for _ in range(n_threads)
             ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            with retiring_threads(threads, release=start.abort, timeout=5):
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
         finally:
             sys.setswitchinterval(old)
 
