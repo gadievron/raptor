@@ -1,8 +1,9 @@
 """Conservative value domains for evaluated integer prefixes.
 
 This validates primitive reads and conversions before a selected operation.
-It does not infer values for locals, execute user conversions, or guess
-implementation-defined signed narrowing behavior.
+Plain automatic const locals retain representable literal initialisers.
+Other local values, user conversions and implementation-defined signed
+narrowing remain outside this model.
 """
 
 from core.smt_solver.sizeof_model import builtin_integer_sizeof
@@ -37,10 +38,18 @@ class PrefixIntegerModel:
         self.abi = abi
         self._domains = {}
         self._kinds = {}
+        self._bindings = {}
         self.proofs = PrefixProofBudget()
 
     def text(self, node):
         return self.data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
+
+    def _binding_for_name(self, node):
+        """Share source records without caching read/type-query eligibility."""
+        key = node.start_byte, node.end_byte
+        if key not in self._bindings:
+            self._bindings[key] = visible_declarations(node, self.data, language=self.language).get(self.text(node))
+        return self._bindings[key]
 
     def plain_declaration(self, declaration, *, read=True):
         type_node = declaration.child_by_field_name("type")
@@ -69,7 +78,7 @@ class PrefixIntegerModel:
         return base
 
     def kind_for_name(self, node, *, read=True):
-        record = visible_declarations(node, self.data, language=self.language).get(self.text(node))
+        record = self._binding_for_name(node)
         if record is None or record[0] is None:
             return None
         spelling, declaration = record
@@ -135,6 +144,39 @@ class PrefixIntegerModel:
             return (1, size)
         return (size, size) if size is not None else (0, None)
 
+    def _local_literal_domain(self, node, kind, depth):
+        """Read one visible automatic const literal without general value flow."""
+        record = self._binding_for_name(node)
+        if record is None or record[1].type != "declaration":
+            return None
+        declaration = record[1]
+        owner = declaration.parent
+        while owner is not None and owner.type not in {"function_definition", "lambda_expression"}:
+            owner = owner.parent
+        if owner is None:
+            return None
+        if any(child.type == "storage_class_specifier" for child in declaration.named_children):
+            return None
+        if not any(child.type == "type_qualifier" and self.text(child) == "const"
+                   for child in declaration.named_children):
+            return None
+        matches = []
+        for declarator in declaration.children_by_field_name("declarator"):
+            name = declarator.child_by_field_name("declarator") if declarator.type == "init_declarator" else declarator
+            if name is not None and name.type == "identifier" and self.text(name) == self.text(node):
+                matches.append(declarator)
+        if len(matches) != 1:
+            return None
+        value = matches[0].child_by_field_name("value")
+        if value is None or source_integer_atom(value, self.data) is None:
+            return None
+        domain = self.value_domain(value, depth + 1)
+        minimum = -(1 << (kind.width - 1)) if kind.signed else 0
+        maximum = (1 << (kind.width - (1 if kind.signed else 0))) - 1
+        if domain is not None and minimum <= domain[0] == domain[1] <= maximum:
+            return domain
+        return None
+
     def value_domain(self, node, depth=0):
         node = _unwrap(node)
         if node is None or self.abi is None or depth > _MAX_DEPTH:
@@ -149,6 +191,9 @@ class PrefixIntegerModel:
             kind = self.kind_for_name(node)
             if kind is not None:
                 result = (-(1 << (kind.width - 1)), (1 << (kind.width - 1)) - 1) if kind.signed else (0, (1 << kind.width) - 1)
+                literal = self._local_literal_domain(node, kind, depth)
+                if literal is not None:
+                    result = literal
         elif node.type in {"sizeof_expression", "alignof_expression"}:
             result = self.size_domain(node)
         elif unevaluated_context(node, self.data, self.language) and node.type in {"noexcept_expression", "call_expression"}:
