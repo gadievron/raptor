@@ -30,6 +30,18 @@ from core.dataflow.injection_prescreen import (
 # Fixture helpers
 # ---------------------------------------------------------------------------
 
+def test_prescreen_declines_charset_after_shared_budget_expiry():
+    from core.smt_solver.session import query_budget
+
+    spec = ValidatorSpec(kind="charset", var_name="name", charset="A-Za-z0-9")
+    classes = frozenset({"pathtrav", "sqli"})
+    with query_budget(0):
+        sound, reason, _elapsed = ip._spec_neutralizes_all(spec, classes)
+    assert sound is False
+    assert "budget" in reason
+    assert ip._spec_neutralizes_all(spec, classes)[0] is True
+
+
 # Line numbers (1-based) are load-bearing for the AST dominance checks.
 # The refuting charset is DOTLESS: '.' is a pathtrav danger char ('.'
 # builds '..' segments), so dot-admitting charsets must decline.

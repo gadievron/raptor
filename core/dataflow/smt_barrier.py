@@ -78,6 +78,7 @@ from core.paths import confine
 from core.smt_solver import z3
 from core.smt_solver._validation import require_bool
 from core.smt_solver import z3_available as _z3_available
+from core.smt_solver.session import check_solver, new_solver, solver_reason_unknown
 from core.source import read_text_capped
 
 # --------------------------------------------------------------------------
@@ -2895,15 +2896,9 @@ def _prove_charset(
         # source accepts that suffix even though it is outside the class.
         validator_re = z3.Union(validator_re, z3.Concat(validator_re, z3.Re("\n")))
         language_label += " with an optional final newline"
-    s = z3.Solver()
-    if timeout_ms:
-        # Hard per-query bound for callers on a latency budget (the
-        # live-finding prescreen). Timeout surfaces as z3 `unknown`,
-        # which the caller below already treats as "declining" — a
-        # timed-out proof can never read as SOUND.
-        s.set("timeout", timeout_ms)
+    s = new_solver() if timeout_ms is None else new_solver(timeout_ms)
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
-    r = s.check()
+    r = check_solver(s)
     if r == z3.unsat:
         return _ProofVerdict(
             True, None,
@@ -2924,7 +2919,7 @@ def _prove_charset(
             f"carries a {sink_class} danger char (counterexample: {ce!r})",
         )
     return _ProofVerdict(False, None,
-                         f"z3 returned {r}; declining at Tier 0")
+                         f"z3 returned {r}: {solver_reason_unknown(s)}; declining at Tier 0")
 
 
 def _prove_charset_sub(
@@ -2981,8 +2976,8 @@ def prove_neutralizes(
     concrete counterexample input.
 
     ``timeout_ms`` bounds the Z3 query (charset kind only —
-    finite-set inclusion is constant-time); ``None`` keeps the
-    unbounded patch-verification behaviour.
+    finite-set inclusion is constant-time); ``None`` uses the shared
+    solver default. All Z3 checks respect an enclosing query budget.
     """
     danger = _DANGER_CHARS.get(sink_class)
     if danger is None:

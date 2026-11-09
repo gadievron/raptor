@@ -280,6 +280,22 @@ def test_guard_dominance_requires_call_in_test():
 # ---------------------------------------------------------------------------
 
 @_requires_z3
+@pytest.mark.parametrize("timeout_ms", [None, 2000])
+def test_charset_proof_respects_exhausted_shared_budget(timeout_ms):
+    from core.smt_solver.session import query_budget
+
+    spec = sb.ValidatorSpec("charset", "name", "A-Za-z0-9", "+...", 0)
+    with query_budget(0):
+        verdict = sb.prove_neutralizes(spec, "pathtrav", timeout_ms=timeout_ms)
+    assert verdict.sound is False
+    assert verdict.counterexample is None
+    assert "budget" in verdict.reasoning
+
+    # Leaving the budget restores the ordinary, admitted proof path.
+    assert sb.prove_neutralizes(spec, "pathtrav").sound is True
+
+
+@_requires_z3
 def test_prove_unsat_for_whoogle_charset_vs_pathtrav():
     # Soundness: '.' is now in the pathtrav danger model ('..' segments
     # escape via multi-component joins the charset model cannot see),
