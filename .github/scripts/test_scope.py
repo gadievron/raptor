@@ -51,6 +51,35 @@ from codeql_scope import (
 )
 
 
+# These cases require their driver's isolated pytest process. They remain
+# graph/test inputs, but must never be passed directly to a shared pytest run.
+PRIVATE_TEST_DRIVERS = {
+    Path("packages/ghidra/tests/worker_server_cases.py"):
+        Path("packages/ghidra/tests/test_server.py"),
+}
+
+
+def resolve_test_drivers(files, repo: Path) -> list[Path]:
+    """Select each private case file's driver once, retaining ordinary tests."""
+    selected = set()
+    for path in files:
+        driver = PRIVATE_TEST_DRIVERS.get(path, path)
+        if driver != path and not (repo / driver).is_file():
+            raise ValueError(f"private test cases {path} require driver {driver}")
+        selected.add(driver)
+    return sorted(selected)
+
+
+def with_private_test_drivers(reverse_graph, repo: Path):
+    """Add execution dependencies without mutating a cached import graph."""
+    graph = dict(reverse_graph)
+    for cases, driver in PRIVATE_TEST_DRIVERS.items():
+        if (repo / cases).is_file():
+            resolve_test_drivers([cases], repo)  # refuse a missing owner
+            graph[cases] = set(reverse_graph.get(cases, ())) | {driver}
+    return graph
+
+
 TIERS: dict[str, dict] = {
     "sandbox": {
         "test_dirs": ["core/sandbox/tests"],
@@ -759,13 +788,13 @@ def _discover_tier_files(tier_config: dict, repo: Path) -> list[Path]:
         fp = Path(f)
         if (repo / fp).is_file() and is_test_file(fp):
             files.append(fp)
-    return files
+    return resolve_test_drivers(files, repo)
 
 
 def _discover_fast_tier_files(repo: Path) -> list[Path]:
     """Discover all fast-tier test files from disk."""
     all_py = discover_py_files(repo)
-    return [f for f in all_py if file_in_fast_tier(f)]
+    return resolve_test_drivers([f for f in all_py if file_in_fast_tier(f)], repo)
 
 
 def compute_tier_dispatch(
@@ -920,6 +949,7 @@ def compute_tier_dispatch(
         # Metadata and tier-owned data have no graph seeds. Tier-specific extra
         # triggers below still run (for example workflow lint checks).
         reverse_graph, parse_failures = {}, 0
+    reverse_graph = with_private_test_drivers(reverse_graph, repo)
     if parse_failures:
         print(f"  Parse failures: {parse_failures}")
 
@@ -1037,6 +1067,7 @@ def compute_tier_dispatch(
                 affected = sorted(
                     set(affected) | set(_discover_tier_files(tier_config, repo))
                 )
+            affected = resolve_test_drivers(affected, repo)
             result[tier_name] = {"run": bool(affected), "files": affected}
 
     # Fast tier: tests in core/ and packages/ that aren't carved out.
@@ -1054,6 +1085,7 @@ def compute_tier_dispatch(
     )
     if infra_changed and not fast_files:
         fast_files = _discover_fast_tier_files(repo)
+    fast_files = resolve_test_drivers(fast_files, repo)
     result["python"] = {
         "run": bool(fast_files),
         "files": fast_files,

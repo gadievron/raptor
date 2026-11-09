@@ -7,7 +7,9 @@ question: "which test files does this PR ITSELF touch?" — those are the
 files re-run under the CI-reality simulations (hidden optional deps,
 duration guard, shuffled order, tree hygiene), and bounding the run to
 them keeps PR latency flat. Reuses ``test_scope.is_test_file`` so the
-two scopers cannot disagree about what counts as a test file.
+two scopers cannot disagree about what counts as a test file. Private
+case-file changes select their isolated driver instead of executing the
+cases directly.
 
 Deliberately excluded:
   * conftest.py — not directly runnable; its blast radius is covered
@@ -43,7 +45,7 @@ _caller_path = sys.path
 try:
     sys.path = [str(Path(__file__).resolve().parent), *_caller_path]
     from ci_change_scope import changed_paths
-    from test_scope import is_test_file
+    from test_scope import is_test_file, resolve_test_drivers
 finally:
     sys.path = _caller_path
 
@@ -59,8 +61,8 @@ def changed_test_files(changed: list[str], repo: Path) -> list[str]:
             continue
         if not (repo / path).is_file():
             continue
-        keep.add(str(path))
-    return sorted(keep)
+        keep.add(path)
+    return sorted(str(path) for path in resolve_test_drivers(keep, repo))
 
 
 def run_tests(files: list[str], repo: Path) -> int:

@@ -76,6 +76,19 @@ class TestChangedTestFiles:
         ]
 
 
+    def test_private_cases_select_the_driver_once(self, ps, tmp_path):
+        worker = "packages/ghidra/tests/worker_server_cases.py"
+        driver = "packages/ghidra/tests/test_server.py"
+        fixture_repo = _tree(tmp_path, [worker, driver])
+        assert ps.changed_test_files([worker, driver, worker], fixture_repo) == [driver]
+
+    def test_private_cases_without_driver_refuse(self, ps, tmp_path):
+        worker = "packages/ghidra/tests/worker_server_cases.py"
+        fixture_repo = _tree(tmp_path, [worker])
+        with pytest.raises(ValueError, match="private.*driver"):
+            ps.changed_test_files([worker], fixture_repo)
+
+
 class TestMain:
     def _run(self, ps, tmp_path, monkeypatch, changed_lines=None,
              changed_arg=True):
