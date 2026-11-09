@@ -1029,13 +1029,13 @@ class UrllibClient:
                         f"failed: {_safe_error(e)}"
                     )
                     raise HttpError(msg, status=resp.status) from None
-                reason = resp.reason or "?"
                 from core.security.redaction import redact_secrets
+                reason_safe = redact_secrets(resp.reason or "?", reveal_secrets=False)
                 snippet_text = snippet.decode("utf-8", errors="replace")
                 snippet_safe = redact_secrets(snippet_text, reveal_secrets=False)
                 raise HttpError(
                     f"HTTP {resp.status} from {_safe_url_for_log(url)}: "
-                    f"{reason} {snippet_safe!r}"[:200],
+                    f"{reason_safe!r} {snippet_safe!r}"[:200],
                     status=resp.status,
                 )
             total = 0
@@ -1461,7 +1461,6 @@ class UrllibClient:
             if resp.status >= 400 and raise_on_status:
                 # Drain enough body for the error message — bounded.
                 snippet = b"" if is_head else (resp.read(min(512, max_bytes), decode_content=decode) or b"")
-                reason = resp.reason or "?"
                 # Pre-fix the snippet was interpolated into the
                 # exception message via `repr()` only — no secret
                 # redaction. 4xx responses commonly echo the
@@ -1475,11 +1474,14 @@ class UrllibClient:
                 # a non-UTF-8 body (rare but possible for binary
                 # error responses) doesn't itself crash here.
                 from core.security.redaction import redact_secrets
+                # The status reason is peer-controlled too; redact before
+                # repr escapes terminal controls and directional markers.
+                reason_safe = redact_secrets(resp.reason or "?", reveal_secrets=False)
                 snippet_text = snippet.decode("utf-8", errors="replace")
                 snippet_safe = redact_secrets(snippet_text, reveal_secrets=False)
                 raise HttpError(
                     f"HTTP {resp.status} from {_safe_url_for_log(url)}: "
-                    f"{reason} {snippet_safe!r}"[:200],
+                    f"{reason_safe!r} {snippet_safe!r}"[:200],
                     status=resp.status,
                 )
 

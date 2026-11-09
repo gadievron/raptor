@@ -351,6 +351,45 @@ def test_latin1_request_header_values_reach_transport_unchanged(stream):
     assert supplied == {"X-Fixture": "caf\u00e9"}
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("kind", ["credential", "terminal", "bidi"])
+def test_error_reason_is_redacted_and_escaped(stream, kind):
+    token = "ghp_" + "r" * 36
+    reasons = {
+        "credential": "Invalid token " + token,
+        "terminal": "Denied\x1b[31m",
+        "bidi": "Denied\u202e",
+    }
+    client, pool, actual = reader(b"fixture", status=403)
+    actual.reason = reasons[kind]
+    with pytest.raises(HttpError) as error:
+        if stream:
+            list(client.stream_bytes("https://fixture.example/a"))
+        else:
+            client.get_bytes("https://fixture.example/a")
+    message = str(error.value)
+    assert token not in message
+    assert "\x1b" not in message
+    assert "\u202e" not in message
+    assert error.value.status == 403
+    pool.request.assert_called_once()
+    assert actual.closed
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_plain_error_reason_and_body_remain_readable(stream):
+    client, _, actual = reader(b"fixture body", status=403)
+    actual.reason = "Fixture forbidden"
+    with pytest.raises(HttpError) as error:
+        if stream:
+            list(client.stream_bytes("https://fixture.example/a"))
+        else:
+            client.get_bytes("https://fixture.example/a")
+    assert "Fixture forbidden" in str(error.value)
+    assert "fixture body" in str(error.value)
+    assert error.value.status == 403
+
+
 @pytest.mark.parametrize("method", ["", "GET\n", "GET bad", None])
 def test_invalid_methods_are_refused_before_transport(method):
     client, pool, _ = reader()
