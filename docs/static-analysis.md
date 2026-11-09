@@ -303,6 +303,8 @@ precision bounds within a literal copy count are excluded. Dynamic formats,
 unsupported syntax and unknown precision values remain candidates for review.
 Reports remain review candidates: source length, existing NUL bytes, aliases and
 smaller read bounds can determine whether a read is safe.
+A no-match from these partial string checks remains inconclusive in an audit;
+helper calls and unsupported data flows still need independent review.
 
 The RCU checks report missing recognized local read-side protection as review
 candidates. A caller may already hold RCU or use another valid protection
@@ -410,6 +412,8 @@ results, initial validity, aliases, and possible descriptor reuse: a call on
 an invalid descriptor may simply fail with `EBADF`, rather than demonstrate
 undefined behavior or a security impact. Repeated stream-release candidates
 likewise require ownership and lifetime review.
+A no-match result from these partial checks remains inconclusive in an audit.
+Calculated indices and untracked handles still need independent analysis.
 
 ### Rule Inventory
 

@@ -28,6 +28,7 @@
 // Covers CWE-120 (Buffer Copy without Checking Size of Input) /
 // CWE-787 (Out-of-bounds Write).
 // @role: detection
+// raptor: confirm-only
 
 // Explicit null destinations are length-only or invalid-call cases, not
 // an identified buffer window. Use positions to share this exclusion across

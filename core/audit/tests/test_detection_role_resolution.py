@@ -249,6 +249,11 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
     ("copy_user_size_mismatch", "copy_from_user_sizeof_ptr"),
     ("integer_overflow_alloc", "integer_overflow_alloc"),
     ("negative_errno_unsigned_return", "negative_errno_unsigned_return"),
+    ("double_close", "double_close"),
+    ("double_close", "double_fclose"),
+    ("fdopendir_double_close", "fdopendir_double_close"),
+    ("use_after_close", "use_after_close"),
+    ("use_after_fclose", "use_after_fclose"),
     ("alloc_narrow_count", "alloc_narrow_count"),
     ("double_sizeof", "double_sizeof"),
     ("double_sizeof", "pointer_scaling_double"),
@@ -271,3 +276,29 @@ def test_partial_patterns_require_independent_evidence(monkeypatch, owner, repor
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
     assert is_verification_evidence(receipt + "+coccinelle:free_stack_array")
+
+
+@pytest.mark.parametrize("rule_name", ["packet_length_inverted_guard", "scatterlist_frag_undersize", "rcu_no_lock", "rcu_dereference_outside_rcu"])
+def test_partial_kernel_patterns_require_independent_verification(monkeypatch, tmp_path, rule_name):
+    from core.audit.evidence_grade import is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
+    assert get_rule_role(str(rule)) == "detection"
+    assert _is_detection_only(f"coccinelle:{rule_name}")
+    assert not is_verification_evidence(f"coccinelle:{rule_name}")
+
+
+@pytest.mark.parametrize("rule_name", ["missing_bounds_check", "missing_null_check", "unchecked_return", "strncpy_no_nul", "snprintf_truncation_boundary", "snprintf_advance"])
+def test_partial_buffer_patterns_need_independent_verification(monkeypatch, tmp_path, rule_name):
+    from core.audit.evidence_grade import is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules" / f"{rule_name}.cocci"
+    assert get_rule_role(str(rule)) == "detection"
+    assert _is_detection_only(f"coccinelle:{rule_name}")
+    assert not is_verification_evidence(f"coccinelle:{rule_name}")

@@ -307,3 +307,29 @@ def test_termination_exclusions_require_stable_bytes_and_path_coverage(tmp_path,
     actual = {row["line"] for row in rows}
     assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
     assert len(rows) == len(expected)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_buffer_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    helper = 'int string_length(const char *s) { return strlen(s); }\n'
+    source = helper + 'int partial(char *dst, char *src, int count) { strncpy(dst, src, count); return string_length(dst); }' + "\n"
+    line = 1 + helper.count("\n")
+    if other_hit:
+        source += 'int other(char *dst, char *src, int count) { strncpy(dst, src, count); return strlen(dst); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'strncpy_no_nul'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="partial", line_start=line, line_end=line, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)

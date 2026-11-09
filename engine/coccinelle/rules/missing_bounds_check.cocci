@@ -20,6 +20,7 @@
 // guard list cannot recognise, and reporting them floods every
 // array-walking helper.
 // @role: detection
+// raptor: confirm-only
 
 // Signed (or unknown signedness) indexes require both bounds.
 @checked@

@@ -6,6 +6,7 @@
 // complex nesting, wrappers and post-dereference lifetime are not proved.
 // https://www.kernel.org/doc/html/latest/RCU/lockdep.html
 // @role: detection
+// raptor: confirm-only
 
 // A release known to have at least two mandatory local acquisitions before
 // it does not end the outer section. Conditional nesting is not assumed.

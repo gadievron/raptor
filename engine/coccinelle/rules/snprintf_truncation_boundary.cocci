@@ -6,6 +6,7 @@
 // ends tracking. Aliases, wrappers and arbitrary compound guards are not proved.
 // Contract: https://man7.org/linux/man-pages/man3/snprintf.3.html
 // @role: detection
+// raptor: confirm-only
 
 // Keep the default all-path match: a return reached only under another
 // condition must not hide an unhandled path to the strict comparison.

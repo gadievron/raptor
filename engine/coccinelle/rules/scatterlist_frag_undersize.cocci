@@ -72,6 +72,7 @@
 //
 // Covers CWE-787: scatterlist table overrun on fragmented skbs.
 // @role: detection
+// raptor: confirm-only
 
 @initialize:python@
 @@

@@ -283,3 +283,84 @@ def test_boolean_use_alone_does_not_imply_required_return(tmp_path):
     """)
     assert rc == 0
     assert results == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_buffer_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    helper = 'int important(void) { return -1; }\n'
+    source = helper + 'void partial(void) { important(); }' + "\n"
+    line = 1 + helper.count("\n")
+    if other_hit:
+        source += 'int checked(void) { int rc = known(); if (rc < 0) return -1; return rc; }\nvoid other(void) { known(); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'unchecked_return'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="partial", line_start=line, line_end=line, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)
+
+
+@pytest.mark.integration
+def test_targeted_consistency_silence_does_not_prove_error_handling(tmp_path):
+    from core.audit.sweep import run_consistency_check
+    rule = _RULE
+    subject = tmp_path / "subject"
+    control = tmp_path / "control"
+    subject.mkdir()
+    control.mkdir()
+    declaration = "int important(void) { return -1; }\n"
+    (subject / "calls.c").write_text(declaration + "int caller(void) { int rc = important(); if (rc > 0) return rc; return 0; }\n")
+    (control / "calls.c").write_text(declaration + "void caller(void) { important(); }\n")
+    result = run_consistency_check(target_path=subject, function_name="important", cocci_rule=str(rule), tree_languages=frozenset({"c"}))
+    positive = run_consistency_check(target_path=control, function_name="important", cocci_rule=str(rule), tree_languages=frozenset({"c"}))
+    assert not result.errors and not positive.errors, (result.errors, positive.errors)
+    assert positive.outcome == "confirmed" and len(positive.matches) == 1
+    assert positive.matches[0]["rule"] == "unchecked_return"
+    assert result.matches == []
+    assert result.outcome == "inconclusive", (result.outcome, result.details)
+    assert result.details["confirm_only"]
+    assert positive.details["confirm_only"]
+
+
+@pytest.mark.integration
+def test_cross_file_dispatch_cannot_refute_unmodelled_error_handling(tmp_path):
+    from core.audit.orchestrator import OrchestratorConfig, _run_tool_chain
+
+    source = "int important(void) { return -1; }\nint caller(void) { int rc = important(); if (rc > 0) return rc; return 0; }\n"
+    (tmp_path / "calls.c").write_text(source)
+    out = tmp_path / "out"
+    out.mkdir()
+    config = OrchestratorConfig(
+        target_path=tmp_path, out_dir=out,
+        inventory={"files": [{"path": "calls.c", "language": "c", "items": [
+            {"name": "important", "line": 1, "line_end": 1},
+            {"name": "caller", "line": 2, "line_end": 2},
+        ]}]},
+    )
+    inconclusive, errors, skipped = set(), set(), set()
+    hypothesis = "important failure return is not checked correctly by its callers"
+    result = _run_tool_chain(
+        [{"type": "coccinelle", "config": {"rule": str(_RULE), "cross_file": True}}],
+        config=config, file_path="calls.c", function_name="important", source=source,
+        hypothesis=hypothesis, cwe="CWE-252", line_start=1,
+        inconclusive_types=inconclusive, errored_types=errors, skipped_types=skipped,
+    )
+    assert result.source_identity is not None
+    assert not errors and not skipped
+    assert len(result.outcomes) == 1
+    assert result.outcomes[0].verdict == "inconclusive"
+    assert result.refutation(file="calls.c", function="important", line_start=1,
+                             hypothesis=hypothesis) is None
+    assert inconclusive == {"coccinelle"}
+    assert not result

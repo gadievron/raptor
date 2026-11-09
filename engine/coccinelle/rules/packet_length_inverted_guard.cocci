@@ -13,6 +13,7 @@
 // (net/rxrpc/rxgk_common.h); this is an explicit API contract model.
 // Covers CWE-20 / CWE-125.
 // @role: detection
+// raptor: confirm-only
 
 @initialize:python@
 @@

@@ -5,6 +5,7 @@
 // decl_alloc for `T E = malloc(...)` (declaration-init). The * context
 // markers are required by spatch for context-mode matching.
 // @role: detection
+// raptor: confirm-only
 
 @assign_alloc@
 expression E;

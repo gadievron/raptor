@@ -176,3 +176,28 @@ def test_unrelated_shadowing_does_not_suppress_candidate(tmp_path):
 def test_later_shadowing_does_not_suppress_candidate(tmp_path):
     text = _source().replace("return ret;", "{ unsigned int n = 0; }\n return ret;")
     assert len(_run(tmp_path, text)) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_kernel_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    source = "static unsigned int decode_length(unsigned int wire) { return ntohl(wire); }\n" + _source(decode="decode_length(wire)")
+    boundary = len(source.splitlines())
+    if other_hit:
+        source += _source().replace("int parse(", "int other(")
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > boundary
+        assert result.matches[0]["rule"] == "packet_length_inverted_guard"
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="parse", line_start=2, line_end=boundary, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)

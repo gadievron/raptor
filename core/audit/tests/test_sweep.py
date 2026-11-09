@@ -1959,7 +1959,7 @@ class TestRefutedHypothesisDispatch:
 class TestSweepValidateDetectionFilter:
     """Detection-role tools must not stamp evidence in _sweep_validate."""
 
-    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err", "mmap_free", "free_nonbase_ptr_inc", "double_fclose", "malloc_strlen_strcpy", "sizeof_array_param", "sizeof_array_param_unsized", "double_sizeof", "pointer_scaling_double", "sizeof_container_of", "alloc_narrow_count", "shift_overflow_int", "shift_overflow_long", "shift_overflow_negative", "division_by_zero_param", "modulo_by_zero_param", "copy_from_user_sizeof_ptr", "integer_overflow_alloc", "negative_errno_unsigned_return"])
+    @pytest.mark.parametrize("rule_name", ["missing_bounds_check", "is_err_not_ptr_err", "snprintf_truncation_boundary", "strncpy_no_nul", "rcu_no_lock", "rcu_dereference_outside_rcu", "sensitive_data_leak", "dead_memset_free", "copy_user_size_mismatch", "uid_truncation", "shift_overflow", "division_by_zero", "popen_fclose", "use_after_fclose", "double_close", "use_after_close", "fdopendir_double_close", "double_free", "use_after_free", "realloc_losing_ptr", "resource_leak_err", "mmap_leak_err", "mmap_free", "free_nonbase_ptr_inc", "double_fclose", "malloc_strlen_strcpy", "sizeof_array_param", "sizeof_array_param_unsized", "double_sizeof", "pointer_scaling_double", "sizeof_container_of", "alloc_narrow_count", "shift_overflow_int", "shift_overflow_long", "shift_overflow_negative", "division_by_zero_param", "modulo_by_zero_param", "copy_from_user_sizeof_ptr", "integer_overflow_alloc", "negative_errno_unsigned_return", "packet_length_inverted_guard", "scatterlist_frag_undersize", 'missing_null_check', 'unchecked_return', 'snprintf_advance'])
     def test_detection_only_tools_not_stamped(self, tmp_path, monkeypatch, rule_name):
         from core.audit.orchestrator import (
             OrchestratorConfig,
@@ -2925,3 +2925,38 @@ class TestCoccinelleConfirmOnlyHeaders:
         monkeypatch.setattr(sweep, "_RULE_MARKER_CACHE", {})
         assert not sweep.is_confirm_only_coccinelle_rule(str(dynamic))
         assert not sweep.is_confirm_only_coccinelle_rule(str(link))
+
+
+@pytest.mark.parametrize("curated", [False, True], ids=["untrusted-header", "curated-header"])
+def test_consistency_refutation_policy_uses_only_curated_headers(tmp_path, monkeypatch, curated):
+    from core.audit import sweep
+    from core.testing.module_views import scoped_function_imports
+    from packages.coccinelle import runner
+    from packages.coccinelle.models import SpatchResult
+
+    if curated:
+        rule = Path(__file__).resolve().parents[3] / "engine/coccinelle/rules/unchecked_return.cocci"
+    else:
+        rule = tmp_path / "dynamic.cocci"
+        rule.write_text("// raptor: confirm-only\n@r@\nidentifier virtual.func;\n@@\nfunc(...)\n")
+    (tmp_path / "calls.c").write_text("void do_io(void) {}\n")
+    calls = []
+
+    def execute(target, path, **options):
+        calls.append(options)
+        return SpatchResult(rule="unchecked_return")
+
+    with scoped_function_imports(
+        sweep, ("run_consistency_check",), {"packages.coccinelle.runner": runner},
+    ) as imports:
+        private_runner = getattr(imports, "packages.coccinelle.runner")
+        monkeypatch.setattr(private_runner, "is_available", lambda: True)
+        monkeypatch.setattr(private_runner, "run_rule", execute)
+        result = sweep.run_consistency_check(
+            target_path=tmp_path, function_name="do_io", cocci_rule=str(rule),
+            tree_languages=frozenset({"c"}),
+        )
+    assert result.outcome == ("inconclusive" if curated else "refuted")
+    assert bool((result.details or {}).get("confirm_only")) is curated
+    assert len(calls) == 1
+    assert calls[0]["defines"] == {"func": "do_io"}

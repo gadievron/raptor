@@ -3,6 +3,8 @@
 // sentinels must be reviewed at its callers rather than called an overflow.
 // Numeric -1 / SIZE_MAX sentinels and unsigned-long syscall return
 // conventions are deliberately excluded. Only explicit size_t counts fire.
+// Direct and conditional return arms are matched syntactically; reachability
+// and the caller contract still require independent review.
 // Covers CWE-195 / CWE-681.
 // @role: detection
 // raptor: confirm-only
@@ -12,12 +14,19 @@ identifier fn;
 // Constrain the complete normalized expression: parentheses do not change
 // unary negation, but casts, arithmetic and double negation do. Errno names
 // can start with a digit after E (for example, E2BIG).
+expression CONDITION, OTHER;
 expression error =~ "^[ (]*-[ (]*E[A-Z0-9][A-Z0-9_]*[ )]*$";
 position p;
 @@
 T fn(...) {
 <...
-return error@p;
+(
+return@p error;
+|
+return@p (CONDITION ? error : OTHER);
+|
+return@p (CONDITION ? OTHER : error);
+)
 ...>
 }
 
