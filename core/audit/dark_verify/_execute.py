@@ -2272,6 +2272,7 @@ def _execute_go(
 
     token = secrets.token_hex(8)
     harness_src = generate_go_harness(spec, target_root, witness_token=token)
+    phase = "compilation"
     try:
         with scratch_dir("raptor_dark_go_", dir=exec_workdir()) as work_dir:
             harness_file = work_dir / "harness_main.go"
@@ -2323,18 +2324,19 @@ def _execute_go(
                     match_detail=f"go build failed: {stderr}",
                 )
 
+            phase = "execution"
             return _run_native_binary(
                 spec, binary, target_root, timeout_s, "go",
                 expected_token=token)
 
     except subprocess.TimeoutExpired as te:
         logger.warning(
-            "Go witness %s timed out (timeout=%ss): %s",
-            spec.finding_key, timeout_s, te,
+            "Go witness %s %s timed out (timeout=%ss): %s",
+            spec.finding_key, phase, te.timeout, te,
         )
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive", language="go",
-            match_detail=f"go execution timed out ({timeout_s}s)",
+            match_detail=f"go {phase} timed out ({te.timeout}s)",
         )
     except Exception as exc:
         logger.debug("Go witness failed: %s", exc, exc_info=True)

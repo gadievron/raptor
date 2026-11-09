@@ -1612,6 +1612,34 @@ class TestExecuteWitnessGo:
         assert "go compiler not found" in r.match_detail
 
 
+    @pytest.mark.parametrize("phase", ["compile", "runtime"])
+    def test_go_timeout_keeps_production_deadlines(self, tmp_path, monkeypatch, caplog, phase):
+        (tmp_path / "main.go").write_text(
+            "package main\nfunc Add(a int) int { return a }\n", encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="main.go", function="Add", language="go",
+            expected_return="1", lang_config={
+                "package": "main", "arg_expressions": ["1"], "return_type": "int"},
+        )
+        calls = []
+        def timeout_at_boundary(cmd, **kwargs):
+            calls.append(kwargs)
+            if phase == "compile" or len(calls) == 2:
+                raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+            return _completed()
+        patch_module_attribute(monkeypatch, _tool_lookup_consumer, "shutil", "which",
+                               lambda name: "/usr/bin/go" if name == "go" else None)
+        monkeypatch.setattr(ex, "_import_sandbox_run", lambda: timeout_at_boundary)
+        result = execute_witness(spec, tmp_path)
+        assert result.verdict == "inconclusive"
+        assert [call["timeout"] for call in calls] == (
+            [30] if phase == "compile" else [30, 10])
+        assert all(call["block_network"] and call["restrict_reads"] for call in calls)
+        label, budget = ("compilation", 30) if phase == "compile" else ("execution", 10)
+        assert result.match_detail == f"go {label} timed out ({budget}s)"
+        assert f"Go witness f1 {label} timed out (timeout={budget}s)" in caplog.text
+
+
 # -- generate_lua_harness ------------------------------------------------------
 
 
@@ -2590,6 +2618,13 @@ class TestTargetCopyReadRefusal:
 @pytest.mark.slow
 @pytest.mark.skipif(not shutil.which("go"), reason="Go not available")
 class TestRealExecutionGo:
+    @pytest.fixture(autouse=True)
+    def _cold_go_compile_budget(self, monkeypatch):
+        # Each native witness starts with a private, cold GOCACHE. Give its
+        # compiler headroom without changing the target execution deadline
+        # or the production compile budget used by timeout controls.
+        monkeypatch.setattr(ex, "_COMPILE_TIMEOUT_S", 120)
+
     def test_confirms_panic(self, tmp_path):
         src = tmp_path / "main.go"
         src.write_text(textwrap.dedent("""\
@@ -2610,7 +2645,7 @@ class TestRealExecutionGo:
             },
         )
         r = execute_witness(spec, tmp_path)
-        assert r.verdict == "confirmed"
+        assert r.verdict == "confirmed", r.match_detail
         assert r.language == "go"
 
     def test_confirms_return_value(self, tmp_path):
@@ -2633,7 +2668,7 @@ class TestRealExecutionGo:
             },
         )
         r = execute_witness(spec, tmp_path)
-        assert r.verdict == "confirmed"
+        assert r.verdict == "confirmed", r.match_detail
 
 
 @pytest.mark.slow
