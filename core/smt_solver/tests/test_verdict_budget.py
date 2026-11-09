@@ -103,6 +103,94 @@ def test_dual_keeps_required_contradiction_probes(no_reduction, monkeypatch):
     assert len(calls) >= 4 and not any(calls)
 
 
+def test_dual_public_result_preserves_sibling_timeout_and_deduplicates_rejections(monkeypatch):
+    from core.smt_solver.rejection import RejectionKind
+    from core.smt_solver.session import query_budget
+    from packages.exploit_feasibility.smt_path import validate_path
+
+    original = paths.check_path_feasibility
+    legs = []
+
+    def observe(*args, **kwargs):
+        if legs:
+            with query_budget(0):
+                result = original(*args, **kwargs)
+        else:
+            result = original(*args, **kwargs)
+        legs.append(result)
+        return result
+
+    monkeypatch.setattr(paths, 'check_path_feasibility', observe)
+    for extra in [[], ['unrecognized @ syntax']]:
+        legs.clear()
+        result = validate_path(['Value < 0', *extra], reduce_constraints=False)
+        assert len(legs) == 2
+        assert legs[0].feasible is False and legs[1].feasible is None
+        assert any(reason.kind is RejectionKind.SOLVER_TIMEOUT for reason in legs[1].unknown_reasons)
+        assert result['feasible'] is None and result['model'] == {}
+        assert result['wp_complete'] is False
+        assert result['unknown'] == [*extra, 'Value < 0']
+        reasons = result['unknown_reasons']
+        assert len(reasons) == 1 + len(extra)
+        assert sum(reason['kind'] == 'solver_timeout' for reason in reasons) == 1
+
+
+def test_dual_rejection_disclosure_keeps_successful_fallback_and_primary_unknown(monkeypatch):
+    from core.smt_solver.session import query_budget
+
+    fallback = paths.check_path_feasibility_dual(conditions('Value < 0'), profile=BV_C_UINT8,
+                                                reduce_constraints=False)
+    assert fallback.feasible is True and fallback.model['Value'] < 0
+    assert fallback.unknown == [] and fallback.unknown_reasons == []
+    original = paths.check_path_feasibility
+    calls = []
+
+    def expired(*args, **kwargs):
+        calls.append(kwargs['profile'])
+        with query_budget(0):
+            return original(*args, **kwargs)
+
+    monkeypatch.setattr(paths, 'check_path_feasibility', expired)
+    result = paths.check_path_feasibility_dual(conditions('Value < 0'), profile=BV_C_UINT8,
+                                              reduce_constraints=False)
+    assert len(calls) == 1 and result.feasible is None
+    assert result.unknown == ['Value < 0'] and len(result.unknown_reasons) == 1
+
+
+def test_dual_ambiguous_unsat_keeps_shared_parser_rejection_once():
+    result = paths.check_path_feasibility_dual(
+        conditions('Low < 0', 'High > 127', 'unrecognized @ syntax'),
+        profile=BV_C_UINT8, reduce_constraints=False)
+    assert result.feasible is None and result.model == {}
+    assert result.unknown == ['unrecognized @ syntax']
+    assert len(result.unknown_reasons) == 1
+
+
+def test_dual_public_result_preserves_contradiction_probe_timeout(monkeypatch):
+    from core.smt_solver.session import query_budget
+    from packages.exploit_feasibility.smt_path import validate_path
+
+    original = paths.check_path_feasibility
+    queries = []
+
+    def observe(*args, **kwargs):
+        if len(queries) >= 2:
+            with query_budget(0):
+                result = original(*args, **kwargs)
+        else:
+            result = original(*args, **kwargs)
+        queries.append(result)
+        return result
+
+    monkeypatch.setattr(paths, 'check_path_feasibility', observe)
+    result = validate_path(['Value == 1', 'Value == 2'], reduce_constraints=False)
+    assert [query.feasible for query in queries] == [False, False, None]
+    assert result['feasible'] is None and result['model'] == {} and result['wp_complete'] is False
+    assert result['unknown'] == ['Value == 1', 'Value == 2']
+    assert len(result['unknown_reasons']) == 2
+    assert all(reason['kind'] == 'solver_timeout' for reason in result['unknown_reasons'])
+
+
 @pytest.mark.parametrize("entry", [paths.check_path_feasibility, paths.check_path_feasibility_dual])
 @pytest.mark.parametrize("bad", [None, 0, 1, "false"])
 def test_strict_option_before_native_work(monkeypatch, entry, bad):

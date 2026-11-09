@@ -2032,11 +2032,13 @@ def _robust_contradiction_result(
     timeout_ms: int | None,
     *, use_call_summaries: bool = True,
     mutation_texts: frozenset[str] = frozenset(),
+    observations: list[PathSMTResult] | None = None,
 ) -> PathSMTResult | None:
     """Return a subset proof independent of the signedness guess.
 
     Preserve the native-core dependencies of both re-solves. A caller must
     report this exhibited proof rather than a different original core.
+    Optional observations retain query losses when no proof is established.
 
     ``candidate`` holds display texts from a leg's ``unsatisfied``
     list; they are matched back to the original conditions by the same
@@ -2089,6 +2091,8 @@ def _robust_contradiction_result(
             subset, profile=profile, timeout_ms=timeout_ms, reduce_constraints=False,
             use_call_summaries=use_call_summaries,
         )
+        if observations is not None:
+            observations.append(proof)
         if proof.feasible is not False:
             return None
         proofs.append(proof)
@@ -2176,6 +2180,11 @@ def check_path_feasibility_dual(
         timeout_ms=timeout_ms, prefer_witness=prefer_witness, reduce_constraints=reduce_constraints,
         use_call_summaries=use_call_summaries,
     )
+    # A refused cross-profile verdict must disclose losses in either leg.
+    # In particular, the primary UNSAT leg cannot describe a sibling timeout.
+    # Preserve first-seen order without double-counting shared parser failures.
+    combined_unknown = list(dict.fromkeys([*primary.unknown, *sibling.unknown]))
+    combined_rejections = list(dict.fromkeys([*primary.unknown_reasons, *sibling.unknown_reasons]))
     if sibling.feasible is False:
         # Both legs unsat is NOT signedness agreement by itself: each
         # shared profile forces EVERY variable to one signedness, so a
@@ -2216,6 +2225,7 @@ def check_path_feasibility_dual(
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
         exhibited: frozenset[str] | None = None
+        probes: list[PathSMTResult] = []
         for candidate in candidates:
             proof = _robust_contradiction_result(
                 candidate, conditions, (profile, sibling_profile),
@@ -2224,6 +2234,7 @@ def check_path_feasibility_dual(
                     reason.text for reason in primary.unknown_reasons
                     if reason.kind in _STATE_EFFECT_KINDS
                 ),
+                observations=probes,
             )
             if proof is not None:
                 primary.unsatisfied = proof.unsatisfied
@@ -2238,12 +2249,15 @@ def check_path_feasibility_dual(
                 f"contradiction: {', '.join(sorted(exhibited)[:3])}]"
             )
             return primary
+        for probe in probes:
+            combined_unknown.extend(probe.unknown)
+            combined_rejections.extend(probe.unknown_reasons)
         return PathSMTResult(
             wp_complete=reduce_constraints,
             feasible=None,
             satisfied=primary.satisfied,
             unsatisfied=[],
-            unknown=primary.unknown,
+            unknown=list(dict.fromkeys(combined_unknown)),
             model={},
             smt_available=primary.smt_available,
             reasoning=(
@@ -2256,7 +2270,7 @@ def check_path_feasibility_dual(
                 f"shape a per-variable encoding could satisfy — "
                 f"refusing the refutation"
             ),
-            unknown_reasons=primary.unknown_reasons,
+            unknown_reasons=list(dict.fromkeys(combined_rejections)),
             anon_var_map=primary.anon_var_map,
             summary_axioms=primary.summary_axioms,
         )
@@ -2272,7 +2286,7 @@ def check_path_feasibility_dual(
         feasible=None,
         satisfied=primary.satisfied,
         unsatisfied=primary.unsatisfied,
-        unknown=primary.unknown,
+        unknown=combined_unknown,
         model={},
         smt_available=primary.smt_available,
         reasoning=(
@@ -2282,7 +2296,7 @@ def check_path_feasibility_dual(
             f"the profiles disagree and the signedness was not "
             f"caller-asserted"
         ),
-        unknown_reasons=primary.unknown_reasons,
+        unknown_reasons=combined_rejections,
         anon_var_map=primary.anon_var_map,
         summary_axioms=primary.summary_axioms,
     )
