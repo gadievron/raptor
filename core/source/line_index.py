@@ -1,11 +1,9 @@
 """Compact lookup for inclusive source-line spans with overwrite priority."""
 
 from bisect import bisect_right
+from collections.abc import Iterable
 from heapq import heappop, heappush
-from typing import TYPE_CHECKING, TypeVar, overload
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
+from typing import TypeVar, overload
 
 
 _Default = TypeVar("_Default")
