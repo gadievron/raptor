@@ -128,7 +128,12 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument(
         "-v", "--verbose", action="count", default=0,
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args(argv)
+    args._report_options = options_from_args(args, parser)
+    if args.report_format and args.report_output is None:
+        parser.error("--report-format requires --report-output for this command")
 
     from ..cli import _configure_logging
     _configure_logging(args.verbose)
@@ -223,6 +228,9 @@ def main(argv: Sequence[str]) -> int:
     except Exception as e:
         logger.exception("raptor-sca bump: unrecoverable error")
         print(f"raptor-sca bump: {e}", file=sys.stderr)
+        if args._report_options.enabled and args._report_options.output is not None:
+            from .reporting import complete_bump_failure
+            complete_bump_failure(args, target, e)
         return 3
 
     if args.emit_json:
@@ -236,6 +244,9 @@ def main(argv: Sequence[str]) -> int:
         sys.stdout.write(_render_pr(report, repo_label=args.repo_label))
     else:
         sys.stdout.write(render_report(report))
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .reporting import complete_bump_report
+        complete_bump_report(args, report, trust_repo=trust_repo)
     return 0
 
 

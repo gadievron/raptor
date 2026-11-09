@@ -1232,6 +1232,13 @@ unavailable. A promoted candidate is a planner decision, not proof that a
 change was applied. The report records self-test/apply status without running
 either operation again.
 
+`bump` also accepts an explicit report destination while retaining its table,
+`--json` or PR-comment stdout. Reports include recorded new-advisory evidence,
+full result/verdict totals and actual rewrite outcomes. A Clean verdict and
+an applied rewrite remain separate facts. Detail is limited to 100 records per
+category, with omitted records disclosed; report failures leave native output
+and command status intact.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml

@@ -33,6 +33,7 @@ CAPABILITIES = (
     CommandCapability("sca fix", "sca-fix", "explicit destination required", "existing stdout; report summary on stderr", "standard plan/proposed/apply modes; native change artifacts retained"),
     CommandCapability("sca fix --harden", "sca-harden", "explicit destination required", "existing stdout; report summary on stderr", "planner decisions, check gates, self-test and apply phases retained"),
     CommandCapability("sca fix --cve-only", "sca-fix-cve", "explicit destination required", "existing stdout; report summary on stderr", "native patch, compatibility and auxiliary resolver/hash-pin results retained"),
+    CommandCapability("sca bump", "sca-bump", "explicit destination required", "existing stdout; report summary on stderr", "native JSON/PR output retained; verdicts separate from actual rewrites"),
     CommandCapability("sca sbom inspect", "sbom-inspect", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom stats", "sbom-stats", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom diff", "sbom-diff", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
