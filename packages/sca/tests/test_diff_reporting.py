@@ -102,3 +102,19 @@ def test_snapshot_identity_binds_displayed_rows_with_equal_category_counts():
     assert first_document.snapshot_id == first.snapshot_id
     assert second_document.snapshot_id == second.snapshot_id
     assert first.extensions["raptor.result_sections"] != second.extensions["raptor.result_sections"]
+
+
+def test_nullable_advisory_metadata_preserves_display_fallbacks_and_gate_selection():
+    rows = [{"vuln_type": "nullable-advisory", "severity": "high", "sca": {"name": "owned", "advisory": None}},
+            {"vuln_type": "nullable-sca", "sca": None},
+            {"vuln_type": "scalar-advisory", "sca": {"advisory": "invalid"}},
+            {"sca": {"advisory": {"id": "CVE-2099-12345"}}}]
+    delta = diff.DeltaResult(new=rows, resolved=[], suppression_added=[], suppression_lifted=[])
+    context, document = build_diff_document(delta, baseline="before", current="after", threshold="high",
+                                            include_suppressed=False, show_persistent=False, exit_code=1)
+    table = next(block for block in document.blocks if block.title == "New")
+    assert [row[3] for row in table.rows] == ["nullable-advisory", "nullable-sca", "scalar-advisory", "CVE-2099-12345"]
+    assert table.rows[0][0:3] == ["unknown", "owned", "unknown"]
+    assert table.rows[1][0:3] == ["unknown", "unknown", "unknown"]
+    assert document.summary["new"] == 4 and context.extensions["raptor.selection"]["gate_exit_code"] == 1
+    assert context.extensions["raptor.metrics"]["new"] == 4
