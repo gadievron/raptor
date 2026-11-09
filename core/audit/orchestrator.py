@@ -34805,6 +34805,52 @@ def _re_review_study_enriched(
                         f"[gate violation: {'; '.join(gate_violations)}]",
                     )
 
+        withdrawing = (
+            prior_outcome.status == "finding" and outcome.status != "finding"
+            or prior_outcome.status == "suspicious" and outcome.status not in ("finding", "suspicious")
+        )
+        if withdrawing:
+            # Source explanations can change an assessment, but cannot erase
+            # an earlier claim by agreement or by omitting it from the reply.
+            # Judge the PRIOR selected claims, including its secondaries.
+            prior_claims = [h["mechanism"] for h in _extract_all_hypotheses(prior_outcome)]
+            if prior_outcome.hypothesis and prior_outcome.hypothesis not in prior_claims:
+                prior_claims.append(prior_outcome.hypothesis)
+            current_source = capture_source_identity(config.target_path, prior_outcome.file)
+            same_occurrence = (outcome.file, outcome.function, outcome.line or 0) == (
+                prior_outcome.file, prior_outcome.function, prior_outcome.line or 0)
+            refuted_prior = same_occurrence and claims_refuted(outcome, prior_claims, source_identity=current_source)
+            conflicting_support = refuted_prior and _is_verification_evidence_for_gate(prior_outcome)
+            if not refuted_prior or conflicting_support:
+                # Keep the canonical object and all of its evidence. This row
+                # records a counter-assessment, never a completed clean review.
+                if config.out_dir is not None:
+                    try:
+                        append_audit_log(config.out_dir, {
+                            "action": "study_reassessment", "key": f"{gap['file']}:{gap['name']}:{outcome.line}",
+                            "file": gap["file"], "function": gap["name"], "line_start": outcome.line,
+                            "prior_status": prior_outcome.status, "proposed_status": outcome.status,
+                            "adjudication": "unverified", "prior_retained": True,
+                            "reason": ("conflicting_verification_evidence" if conflicting_support
+                                       else "prior_claims_lack_scoped_refutation"),
+                            "prior_claims": prior_claims, "prior_evidence_tool": prior_outcome.evidence_tool,
+                            "claim_refutations": [r.to_record() for r in outcome.claim_refutations
+                                                  if isinstance(r, ClaimRefutation)],
+                            "body": (outcome.body or "")[:4000],
+                            "body_omitted_chars": max(0, len(outcome.body or "") - 4000),
+                            "study_receipts": (outcome.review_result or {}).get("study_receipts", []),
+                            "source_hash": current_source.sha256 if current_source is not None else None,
+                            "model": outcome.model, "cost_usd": outcome.cost_usd,
+                        })
+                    except Exception:
+                        logger.warning("study reassessment event could not be written for %s:%s",
+                                       gap["file"], gap["name"], exc_info=True)
+                # The phase ledger was booked above. Retaining a prior verdict
+                # must still add this completed call to the run's spend total.
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                continue
+
         if outcome.status != prior_outcome.status:
             # Guarded like the sibling passes (_re_review_joern_enriched,
             # _callee_contract_requeue): the prior outcome may no longer
