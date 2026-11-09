@@ -229,9 +229,11 @@ class ValidatorSpec:
     source_line: str = ""           # the literal diff `+` line for diagnostics
     forbidden: str = ""             # kind=="charset_sub": stripped-out chars
     accepts_trailing_newline: bool = False  # Python re.match with $ anchoring
+    allows_empty: bool = False  # source character-class quantifier is *
 
     def __post_init__(self):
         require_bool(self.accepts_trailing_newline, argument="accepts_trailing_newline")
+        require_bool(self.allows_empty, argument="allows_empty")
 
 
 # --------------------------------------------------------------------------
@@ -330,11 +332,11 @@ _RE_MATCH_CALL = _re.compile(
 # fix-author conventions like ``[\!\@\#\$\;\]\[…]+`` would have my
 # regex stop at the first ``\]`` and silently truncate the captured
 # body, dropping chars from the forbidden set.
-_ANCHORED_CHARSET = _re.compile(r"^\^\[((?:[^\]\\]|\\.)+)\][+*]\$$")
+_ANCHORED_CHARSET = _re.compile(r"^\^\[((?:[^\]\\]|\\.)+)\](?P<quantifier>[+*])\$$")
 
 # `re.fullmatch` uses fullmatch semantics so anchors are implicit.  Allow
 # unanchored `[chars]+` / `[chars]*` only when the call is fullmatch.
-_FULLMATCH_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]$")
+_FULLMATCH_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\](?P<quantifier>[+*])$")
 
 
 # Substitution rebind: ``x = re.sub('[forbidden]+', '', x)``.
@@ -406,14 +408,14 @@ _SUB_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]?$")
 # the rest of the line — quadratic. Real allowlist classes are tens
 # of chars; 1000 is generous (a longer class declines the spec-lift).
 _JS_GUARD_TEST = _re.compile(
-    r"if\s*\(\s*!\s*/\^\[(?P<chars>[^\]]{1,1000})\][+*]\$/\s*\.test\s*\(\s*"
+    r"if\s*\(\s*!\s*/\^\[(?P<chars>[^\]]{1,1000})\](?P<quantifier>[+*])\$/\s*\.test\s*\(\s*"
     r"(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\)\s*\)\s*"
     r"(?:\{\s*)?(?:return|throw)\b"
 )
 # JS/TS — `if (!<var>.match(/^[chars]+$/)) return|throw …`
 _JS_GUARD_MATCH = _re.compile(
     r"if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.match\s*\(\s*"
-    r"/\^\[(?P<chars>[^\]]{1,1000})\][+*]\$/\s*\)\s*\)\s*"
+    r"/\^\[(?P<chars>[^\]]{1,1000})\](?P<quantifier>[+*])\$/\s*\)\s*\)\s*"
     r"(?:\{\s*)?(?:return|throw)\b"
 )
 
@@ -423,7 +425,7 @@ _JS_GUARD_MATCH = _re.compile(
 # permitted (no-op) but not required.
 _JAVA_GUARD = _re.compile(
     r'if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.matches\s*\(\s*'
-    r'"\^?\[(?P<chars>[^\]]{1,1000})\][+*]\$?"\s*\)\s*\)\s*'
+    r'"\^?\[(?P<chars>[^\]]{1,1000})\](?P<quantifier>[+*])\$?"\s*\)\s*\)\s*'
     r'(?:\{\s*)?(?:return|throw)\b'
 )
 
@@ -450,12 +452,12 @@ _JAVA_GUARD = _re.compile(
 _RUBY_STMT_HEAD_RE = _re.compile(r"\b(?:return|raise)\b")
 _RUBY_GUARD_UNLESS_TAIL = _re.compile(
     r"(?<=\s)unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
-    r"/\\A\[(?P<chars>[^\]]{1,200})\][+*]\\z/(?![a-zA-Z])"
+    r"/\\A\[(?P<chars>[^\]]{1,200})\](?P<quantifier>[+*])\\z/(?![a-zA-Z])"
 )
 # Ruby — `return|raise … if <var> !~ /\A[chars]+\z/`
 _RUBY_GUARD_IF_NOT_TAIL = _re.compile(
     r"(?<=\s)if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
-    r"/\\A\[(?P<chars>[^\]]{1,200})\][+*]\\z/(?![a-zA-Z])"
+    r"/\\A\[(?P<chars>[^\]]{1,200})\](?P<quantifier>[+*])\\z/(?![a-zA-Z])"
 )
 
 
@@ -639,6 +641,7 @@ def _try_charset_validator(
     return ValidatorSpec(
         kind="charset", var_name=var_name, charset=cs.group(1),
         source_line=line.strip(), accepts_trailing_newline=(call_kind == "match"),
+        allows_empty=(cs.group("quantifier") == "*"),
     )
 
 
@@ -679,7 +682,7 @@ def _try_jsts_validator(
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(),
+        source_line=line.strip(), allows_empty=(m.group("quantifier") == "*"),
     )
 
 
@@ -703,7 +706,7 @@ def _try_java_validator(
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=chars,
-        source_line=line.strip(),
+        source_line=line.strip(), allows_empty=(m.group("quantifier") == "*"),
     )
 
 
@@ -726,7 +729,7 @@ def _try_ruby_validator(
         return None
     return ValidatorSpec(
         kind="charset", var_name=m.group("var"), charset=m.group("chars"),
-        source_line=line.strip(),
+        source_line=line.strip(), allows_empty=(m.group("quantifier") == "*"),
     )
 
 
@@ -2922,28 +2925,40 @@ def _expand_charset_body(body: str) -> set:
     return out
 
 
+
+def _charset_language(spec: ValidatorSpec):
+    """Exact admitted repetition and final-newline language for a charset."""
+    require_bool(spec.accepts_trailing_newline, argument="accepts_trailing_newline")
+    require_bool(spec.allows_empty, argument="allows_empty")
+    char_re = _charclass_to_re(spec.charset)
+    if char_re is None:
+        return None
+    language = z3.Star(char_re) if spec.allows_empty else z3.Plus(char_re)
+    if spec.accepts_trailing_newline:
+        language = z3.Union(language, z3.Concat(language, z3.Re("\n")))
+    return language
+
+
 def _prove_charset(
     spec: ValidatorSpec, sink_class: str, danger: list[str],
     timeout_ms: int | None = None,
 ) -> _ProofVerdict:
     """Z3 regex-intersection emptiness, including admitted anchor suffixes."""
     require_bool(spec.accepts_trailing_newline, argument="accepts_trailing_newline")
+    require_bool(spec.allows_empty, argument="allows_empty")
     name = z3.String("name")
     try:
-        char_re = _charclass_to_re(spec.charset)
+        validator_re = _charset_language(spec)
     except ValueError as exc:
         return _ProofVerdict(False, None, f"invalid character class: {exc}")
-    if char_re is None:
+    if validator_re is None:
         return _ProofVerdict(
             True, None,
             "empty charset — validator rejects all input",
         )
-    validator_re = z3.Plus(char_re)
-    language_label = f"[{spec.charset}]+"
+    quantifier = "*" if spec.allows_empty else "+"
+    language_label = f"[{spec.charset}]{quantifier}"
     if spec.accepts_trailing_newline:
-        # Python's $ may stop immediately before one final newline. The
-        # source accepts that suffix even though it is outside the class.
-        validator_re = z3.Union(validator_re, z3.Concat(validator_re, z3.Re("\n")))
         language_label += " with an optional final newline"
     s = new_solver() if timeout_ms is None else new_solver(timeout_ms)
     s.add(z3.InRe(name, z3.Intersect(validator_re, _danger_re(danger))))
@@ -3239,7 +3254,8 @@ def try_tier0(
                 f"smt:charset_sub:[{spec.forbidden}]@{sink_uri}:{line}"
             )
         else:
-            artifact = f"smt:charset:[{spec.charset}]+@{sink_uri}:{line}"
+            quantifier = "*" if spec.allows_empty else "+"
+            artifact = f"smt:charset:[{spec.charset}]{quantifier}@{sink_uri}:{line}"
         return Tier0Result(
             Tier0Status.SOUND, verdict.reasoning, spec=spec,
             artifact=artifact,
