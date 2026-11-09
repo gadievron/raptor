@@ -1255,8 +1255,15 @@ sys.stdout.write("\n".join(rendered))
         # looked at is never stamped authorized.
         local reviewer="$RAPTOR_DIR/core/sage/boot_payload_review.py"
         local tmp_capture display_payload has_tools=0 tools_deferred=0
-        tmp_capture=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp_capture")
-        printf '%s\n' "$payload" > "$tmp_capture"
+        if ! tmp_capture=$(mktemp); then
+            echo "raptor-sage-setup: could not create the payload review file; refusing authorization." >&2
+            return 1
+        fi
+        _RAPTOR_TMP_FILES+=("$tmp_capture")
+        if ! printf '%s\n' "$payload" > "$tmp_capture"; then
+            echo "raptor-sage-setup: could not write the payload review file; refusing authorization." >&2
+            return 1
+        fi
         display_payload="$payload"
         # Probe the temp file, not a printf pipeline: grep -q exits on
         # the first match and a large payload still mid-write would
@@ -1326,9 +1333,13 @@ sys.stdout.write("\n".join(rendered))
         fi
     fi
     # Same-fs mktemp + atomic mv — see enable_sage_env for the rationale.
-    mkdir -p "$(dirname "$AUTHORIZED_PAYLOAD")"
+    mkdir -p "$(dirname "$AUTHORIZED_PAYLOAD")" || return 1
     local tmp
-    tmp=$(mktemp "$(dirname "$AUTHORIZED_PAYLOAD")/.tmp.payload.XXXXXX"); _RAPTOR_TMP_FILES+=("$tmp")
+    if ! tmp=$(mktemp "$(dirname "$AUTHORIZED_PAYLOAD")/.tmp.payload.XXXXXX"); then
+        echo "raptor-sage-setup: could not create the payload stamp; existing authorization is unchanged." >&2
+        return 1
+    fi
+    _RAPTOR_TMP_FILES+=("$tmp")
     trap 'rm -f "$tmp"' RETURN
     {
         echo "# SAGE boot payload — operator-authorized"
@@ -1341,8 +1352,8 @@ sys.stdout.write("\n".join(rendered))
         echo "# Trust semantics: core/sage/CLAUDE.md."
         echo "# ---"
         printf '%s\n' "$payload"
-    } > "$tmp"
-    mv "$tmp" "$AUTHORIZED_PAYLOAD"
+    } > "$tmp" || return 1
+    mv "$tmp" "$AUTHORIZED_PAYLOAD" || return 1
     trap - RETURN
     # Report tools.list only when the capture actually recorded it —
     # a tools-less capture leaves the section out (see

@@ -74,6 +74,7 @@ class _AuthorizeBootPayloadCase(unittest.TestCase):
              running_digest: str):
         import os
         env = dict(os.environ)
+        env["TMPDIR"] = str(self.dir)
         env["TEST_RAPTOR_DIR"] = str(REPO_ROOT)
         env["TEST_AUTHORIZED"] = str(self.authorized)
         if len(payload) > 100_000:
@@ -511,6 +512,49 @@ class TestFirstCaptureToolsLane(_AuthorizeBootPayloadCase):
     explicit confirm before anything is stamped; a non-TTY first
     install records the boot surfaces only, leaving tools.list
     unbaselined for the interactive review lane."""
+
+    def test_capture_tempfile_failure_records_nothing(self):
+        self.driver = (
+            'mktemp() { if [ "$#" -eq 0 ]; then return 1; fi; '
+            'command mktemp "$@"; }\n' + self.driver
+        )
+        proc = self._run(_tools_payload())
+        self.assertNotEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.authorized.exists())
+
+    def test_capture_tempfile_write_failure_records_nothing(self):
+        self.driver = (
+            'mktemp() { if [ "$#" -eq 0 ]; then '
+            'printf "%s\\n" "$TEST_RAPTOR_DIR"; return 0; fi; '
+            'command mktemp "$@"; }\n' + self.driver
+        )
+        proc = self._run(_tools_payload())
+        self.assertNotEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.authorized.exists())
+
+    def test_retired_parent_tmpdir_does_not_own_capture(self):
+        import os
+        from unittest.mock import patch
+
+        retired = str(self.dir / "retired-parent")
+        with patch.dict(os.environ, {"TMPDIR": retired}):
+            proc = self._run(_tools_payload())
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertNotIn("### tools.list", self.authorized.read_text())
+            self.assertEqual(os.environ["TMPDIR"], retired)
+
+    def test_stamp_tempfile_failure_preserves_existing_authorization(self):
+        payload = "### initialize.instructions\noriginal"
+        first = self._run(payload)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        original = self.authorized.read_bytes()
+        self.driver = (
+            'mktemp() { if [ "$#" -gt 0 ]; then return 1; fi; '
+            'command mktemp "$@"; }\n' + self.driver
+        )
+        proc = self._run(payload)
+        self.assertNotEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.authorized.read_bytes(), original)
 
     def test_non_tty_first_install_defers_the_tools_surface(self):
         proc = self._run(_tools_payload())
