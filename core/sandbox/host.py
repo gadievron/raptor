@@ -757,6 +757,7 @@ def one_shot_call(
     daemon = _resolve_daemon_script()
     target_path = Path(target).resolve()
     output_dir, owned_output = _resolve_output(target_path, output)
+    failure = None
     try:
         readable = list(readable_paths or [])
         readable.append(str(daemon))
@@ -795,38 +796,46 @@ def one_shot_call(
         except Exception as e:
             msg = f"one-shot daemon spawn failed: {type(e).__name__}: {e}"
             raise HostRPCError(msg) from e
+        if not r.stdout:
+            stderr_tail = (r.stderr or b"").decode(
+                "utf-8", errors="replace",
+            )[-800:]
+            msg = (
+                f"one-shot daemon produced no stdout (rc={r.returncode}, "
+                f"stderr={stderr_tail!r})"
+            )
+            raise HostRPCError(msg)
+        if len(r.stdout) < 4:
+            msg = f"one-shot response too short: {len(r.stdout)} bytes"
+            raise HostRPCError(msg)
+        (length,) = struct.unpack("!I", r.stdout[:4])
+        if length > _MAX_REPLY_FRAME_BYTES:
+            raise HostRPCError(f"one-shot daemon frame too large: {length}")
+        if length > len(r.stdout) - 4:
+            msg = (
+                f"one-shot response truncated: header={length} "
+                f"body_bytes={len(r.stdout) - 4}"
+            )
+            raise HostRPCError(msg)
+        if length != len(r.stdout) - 4:
+            raise HostRPCError("trailing bytes after one-shot response frame")
+        response = _decode_response(r.stdout[4:], source="one-shot")
+        if response.get("rid") != rid:
+            raise HostRPCError(
+                f"one-shot reply not bound to request: expected rid={rid} "
+                f"got rid={response.get('rid')!r}"
+            )
+        response.pop("rid", None)
+        return response
+    except BaseException as error:
+        failure = error
+        raise
     finally:
         if owned_output:
-            _remove_owned_output(owned_output)
-
-    if not r.stdout:
-        stderr_tail = (r.stderr or b"").decode(
-            "utf-8", errors="replace",
-        )[-800:]
-        msg = (
-            f"one-shot daemon produced no stdout (rc={r.returncode}, "
-            f"stderr={stderr_tail!r})"
-        )
-        raise HostRPCError(msg)
-    if len(r.stdout) < 4:
-        msg = f"one-shot response too short: {len(r.stdout)} bytes"
-        raise HostRPCError(msg)
-    (length,) = struct.unpack("!I", r.stdout[:4])
-    if length > _MAX_REPLY_FRAME_BYTES:
-        raise HostRPCError(f"one-shot daemon frame too large: {length}")
-    if length > len(r.stdout) - 4:
-        msg = (
-            f"one-shot response truncated: header={length} "
-            f"body_bytes={len(r.stdout) - 4}"
-        )
-        raise HostRPCError(msg)
-    if length != len(r.stdout) - 4:
-        raise HostRPCError("trailing bytes after one-shot response frame")
-    response = _decode_response(r.stdout[4:], source="one-shot")
-    if response.get("rid") != rid:
-        raise HostRPCError(
-            f"one-shot reply not bound to request: expected rid={rid} "
-            f"got rid={response.get('rid')!r}"
-        )
-    response.pop("rid", None)
-    return response
+            try:
+                _remove_owned_output(owned_output)
+            except BaseException as cleanup_error:
+                if failure is None:
+                    raise
+                failure.add_note(
+                    "one-shot output cleanup: " + type(cleanup_error).__name__)
