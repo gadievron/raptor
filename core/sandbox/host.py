@@ -439,8 +439,8 @@ class SandboxHost:
                 errors.append(exc)
         if errors:
             primary = errors.pop(0)
-            for exc in errors:
-                primary.add_note("daemon endpoint cleanup: " + type(exc).__name__)
+            for cleanup_error in errors:
+                primary.add_note("daemon endpoint cleanup: " + type(cleanup_error).__name__)
             raise primary
 
     def _cleanup_owned_output(self) -> None:
@@ -465,8 +465,8 @@ class SandboxHost:
                     errors.append(exc)
         if errors:
             primary = failure if failure is not None else errors.pop(0)
-            for exc in errors:
-                primary.add_note("RPC endpoint cleanup: " + type(exc).__name__)
+            for cleanup_error in errors:
+                primary.add_note("RPC endpoint cleanup: " + type(cleanup_error).__name__)
             if failure is None:
                 raise primary
 

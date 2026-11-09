@@ -114,7 +114,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Protocol, TypedDict, cast
 
 from core.security.log_sanitisation import sanitise_for_terminal
 
@@ -1609,6 +1609,20 @@ def _submit_to_loop(coroutine, loop):
         raise
 
 
+class _UnixServerOptions(TypedDict, total=False):
+    cleanup_socket: bool
+
+
+class _ProxyIdleOptions(TypedDict, total=False):
+    idle_timeout: float
+
+
+class _ExecutorShutdown(Protocol):
+    # Supported Python >=3.12 loops accept the bounded shutdown timeout;
+    # typeshed's AbstractEventLoop still exposes only the older signature.
+    async def shutdown_default_executor(self, timeout: float | None = None) -> None: ...
+
+
 @dataclass(eq=False)
 class _LaneBinding:
     """Retain a listener through cross-thread activation and rollback."""
@@ -2203,6 +2217,7 @@ class EgressProxy:
             label=label, allowed_hosts=_normalise_lane_hosts(allowed_hosts),
             allowed_ports=_normalise_lane_ports(allowed_ports)))
         self._bind_lane(binding)
+        assert binding.port is not None
         return binding.port
 
     def _bind_lane(self, binding: _LaneBinding) -> None:
@@ -2247,7 +2262,9 @@ class EgressProxy:
         def finished(task):
             if not task.cancelled():
                 task.exception()
-        asyncio.current_task().add_done_callback(finished)
+        task = asyncio.current_task()
+        assert task is not None
+        task.add_done_callback(finished)
         committed = False
         binding.creating = True
         try:
@@ -2264,7 +2281,8 @@ class EgressProxy:
                 st = os.lstat(binding.path)
                 binding.inode = (st.st_dev, st.st_ino)
                 os.chmod(binding.path, 0o600)
-                kwargs = {"cleanup_socket": False} if sys.version_info >= (3, 13) else {}
+                kwargs: _UnixServerOptions = (
+                    {"cleanup_socket": False} if sys.version_info >= (3, 13) else {})
                 binding.server = await asyncio.start_unix_server(
                     handler, sock=sock, start_serving=False, **kwargs)
             else:
@@ -2279,6 +2297,7 @@ class EgressProxy:
                 if binding.abandoned or self._stopping:
                     raise RuntimeError("proxy stopped during listener creation")
                 if binding.path is None:
+                    assert binding.port is not None
                     self._tcp_lanes[binding.port] = binding.lane
                     self._tcp_lane_servers[binding.port] = binding.server
                 else:
@@ -2315,9 +2334,10 @@ class EgressProxy:
         binding.unlink()
         with self._lanes_lock:
             if binding.path is None:
-                if self._tcp_lane_servers.get(binding.port) is binding.server:
-                    self._tcp_lane_servers.pop(binding.port, None)
-                    self._tcp_lanes.pop(binding.port, None)
+                port = binding.port
+                if port is not None and self._tcp_lane_servers.get(port) is binding.server:
+                    self._tcp_lane_servers.pop(port, None)
+                    self._tcp_lanes.pop(port, None)
             else:
                 with self._unix_lock:
                     if self._unix_servers.get(binding.path) is binding.server:
@@ -3298,7 +3318,9 @@ class EgressProxy:
                 await asyncio.wait(handlers, timeout=timeout)
         finally:
             if not self._loop_exiting:
-                self._loop.stop()
+                loop = self._loop
+                assert loop is not None
+                loop.stop()
 
     async def _retire_loop_work(self) -> bool:
         """Retire all work on this private loop before closing it.
@@ -3339,7 +3361,9 @@ class EgressProxy:
         # a loop only requests executor shutdown; join idle workers here so
         # they cannot outlive a completed proxy stop. Busy workers retain
         # asyncio's bounded timeout warning rather than blocking forever.
-        await self._loop.shutdown_default_executor(timeout=1.0)
+        loop = self._loop
+        assert loop is not None
+        await cast(_ExecutorShutdown, loop).shutdown_default_executor(timeout=1.0)
         return not pending and not self._upstream_writers
 
     def _stop_thread_best_effort(self) -> None:
@@ -4842,7 +4866,8 @@ def get_proxy(
                 "RAPTOR_PROXY_AUDIT_ENFORCE", "",
             ).strip().lower()
             audit_enforce = _enforce_raw in ("1", "true", "yes", "on")
-            kwargs = {"idle_timeout": idle_timeout} if idle_timeout is not None else {}
+            kwargs: _ProxyIdleOptions = (
+                {"idle_timeout": idle_timeout} if idle_timeout is not None else {})
             candidate = EgressProxy(hosts, upstream_proxy=upstream,
                                     no_proxy=no_proxy, audit_enforce=audit_enforce,
                                     **kwargs)
