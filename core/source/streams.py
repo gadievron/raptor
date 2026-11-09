@@ -115,12 +115,7 @@ def adopt_fd(fd: int, mode: str, close_fd: Callable[[int], None] | None = None, 
         # fdopen ignores an opener when its file argument is a descriptor.
         kwargs.pop('opener', None)
         stream = io.open('<owned-descriptor>', mode, opener=take_descriptor, **kwargs)
-        raw = stream.buffer if isinstance(stream, io.TextIOWrapper) else stream
-        if isinstance(raw, (io.BufferedReader, io.BufferedWriter, io.BufferedRandom)):
-            raw = raw.raw
-        if not isinstance(raw, io.FileIO):
-            raise TypeError("native stream has no FileIO owner")
-        raw.name = fd
+        _fileio_owner(stream).name = fd
         return stream
     except BaseException:
         if stream is not None:
@@ -134,3 +129,27 @@ def adopt_fd(fd: int, mode: str, close_fd: Callable[[int], None] | None = None, 
             except BaseException:
                 pass
         raise
+
+
+def _fileio_owner(stream: IO) -> io.FileIO:
+    raw = stream.buffer if isinstance(stream, io.TextIOWrapper) else stream
+    if isinstance(raw, (io.BufferedReader, io.BufferedWriter, io.BufferedRandom)):
+        raw = raw.raw
+    if not isinstance(raw, io.FileIO):
+        raise TypeError("native stream has no FileIO owner")
+    return raw
+
+
+def retire_unreturned_stream(stream: IO, close_fd: Callable[[int], None] | None = None) -> None:
+    """Retire a native stream that could not be delivered to its caller.
+
+    Explicit borrowed closing applies only after a successful return. Until
+    then the caller cannot reclaim the descriptor, so retire it independently.
+    Read the native FileIO ownership flag rather than re-evaluating options.
+    """
+    raw = _fileio_owner(stream)
+    if raw.closefd:
+        stream.close()
+    else:
+        with owned_fd(raw.fileno(), close_fd=close_fd):
+            stream.close()
