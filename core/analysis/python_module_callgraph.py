@@ -359,6 +359,22 @@ def _collect_functions(tree: ast.AST) -> list[_FunctionRecord]:
 # ---------------------------------------------------------------------------
 
 
+def _definition_header_expressions(node: ast.AST) -> Iterable[ast.AST]:
+    """Expressions evaluated outside a definition's body scope.
+
+    Annotations are deliberately excluded: their evaluation depends on the
+    Python version and future imports, unlike decorators and defaults.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        yield from node.decorator_list
+    if isinstance(node, ast.ClassDef):
+        yield from node.bases
+        yield from (keyword.value for keyword in node.keywords)
+    elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        yield from node.args.defaults
+        yield from (value for value in node.args.kw_defaults if value is not None)
+
+
 def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
     """Every name the function's OWN scope binds, flow-insensitively.
 
@@ -410,59 +426,50 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
         # Attribute / Subscript targets bind no bare name.
 
     def _walk(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            if not isinstance(node, ast.Lambda):
+                out.add(node.name)
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                _add_target(t)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            _add_target(node.target)
+        elif isinstance(node, ast.NamedExpr):
+            _add_target(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            _add_target(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    _add_target(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                out.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.asname:
+                    out.add(alias.asname)
+                elif alias.name != "*":
+                    out.add(alias.name.split(".", 1)[0])
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            if node.name:
+                out.add(node.name)
+        elif isinstance(node, ast.MatchMapping):
+            if node.rest:
+                out.add(node.rest)
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                out.add(child.name)
-                # Decorators and defaults evaluate in THIS scope.
-                for expr in (*child.decorator_list,
-                             *child.args.defaults,
-                             *(d for d in child.args.kw_defaults
-                               if d is not None)):
-                    _walk(expr)
-                continue
-            if isinstance(child, ast.ClassDef):
-                out.add(child.name)
-                for expr in (*child.decorator_list, *child.bases,
-                             *(kw.value for kw in child.keywords)):
-                    _walk(expr)
-                continue
-            if isinstance(child, ast.Lambda):
-                for expr in (*child.args.defaults,
-                             *(d for d in child.args.kw_defaults
-                               if d is not None)):
-                    _walk(expr)
-                continue
-            if isinstance(child, ast.Assign):
-                for t in child.targets:
-                    _add_target(t)
-            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
-                _add_target(child.target)
-            elif isinstance(child, ast.NamedExpr):
-                _add_target(child.target)
-            elif isinstance(child, (ast.For, ast.AsyncFor)):
-                _add_target(child.target)
-            elif isinstance(child, (ast.With, ast.AsyncWith)):
-                for item in child.items:
-                    if item.optional_vars is not None:
-                        _add_target(item.optional_vars)
-            elif isinstance(child, ast.ExceptHandler):
-                if child.name:
-                    out.add(child.name)
-            elif isinstance(child, (ast.Import, ast.ImportFrom)):
-                for alias in child.names:
-                    if alias.asname:
-                        out.add(alias.asname)
-                    elif alias.name != "*":
-                        out.add(alias.name.split(".", 1)[0])
-            elif isinstance(child, (ast.MatchAs, ast.MatchStar)):
-                if child.name:
-                    out.add(child.name)
-            elif isinstance(child, ast.MatchMapping):
-                if child.rest:
-                    out.add(child.rest)
             _walk(child)
 
-    _walk(fn_ast)
+    if isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        for statement in fn_ast.body:
+            _walk(statement)
+    elif isinstance(fn_ast, ast.Lambda):
+        _walk(fn_ast.body)
+    else:
+        _walk(fn_ast)
     return frozenset(out)
 
 
@@ -507,45 +514,53 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
                 _add_target(e)
 
     def _walk(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            def_names.add(node.name)
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.ClassDef):
+            class_names.add(node.name)
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.Lambda):
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.Assign):
+            if (len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Lambda)):
+                # The lambda-def shape — a function record, not a
+                # rebind of one (but it IS a def name for the
+                # class-collision check).
+                def_names.add(node.targets[0].id)
+                for expr in _definition_header_expressions(node.value):
+                    _walk(expr)
+                return
+            for t in node.targets:
+                _add_target(t)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            _add_target(node.target)
+        elif isinstance(node, ast.NamedExpr):
+            _add_target(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            _add_target(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    _add_target(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                nondef.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.asname:
+                    nondef.add(alias.asname)
+                elif alias.name != "*":
+                    nondef.add(alias.name.split(".", 1)[0])
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                def_names.add(child.name)
-                continue
-            if isinstance(child, ast.ClassDef):
-                class_names.add(child.name)
-                continue
-            if isinstance(child, ast.Lambda):
-                continue
-            if isinstance(child, ast.Assign):
-                if (len(child.targets) == 1
-                        and isinstance(child.targets[0], ast.Name)
-                        and isinstance(child.value, ast.Lambda)):
-                    # The lambda-def shape — a function record, not a
-                    # rebind of one (but it IS a def name for the
-                    # class-collision check).
-                    def_names.add(child.targets[0].id)
-                    continue
-                for t in child.targets:
-                    _add_target(t)
-            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
-                _add_target(child.target)
-            elif isinstance(child, ast.NamedExpr):
-                _add_target(child.target)
-            elif isinstance(child, (ast.For, ast.AsyncFor)):
-                _add_target(child.target)
-            elif isinstance(child, (ast.With, ast.AsyncWith)):
-                for item in child.items:
-                    if item.optional_vars is not None:
-                        _add_target(item.optional_vars)
-            elif isinstance(child, ast.ExceptHandler):
-                if child.name:
-                    nondef.add(child.name)
-            elif isinstance(child, (ast.Import, ast.ImportFrom)):
-                for alias in child.names:
-                    if alias.asname:
-                        nondef.add(alias.asname)
-                    elif alias.name != "*":
-                        nondef.add(alias.name.split(".", 1)[0])
             _walk(child)
 
     _walk(tree)
@@ -633,29 +648,33 @@ def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
                 _add_target(e)
 
     def _walk(node: ast.AST) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                              ast.ClassDef)):
+            out.add(node.name)
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.Lambda):
+            for expr in _definition_header_expressions(node):
+                _walk(expr)
+            return
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                _add_target(t)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            _add_target(node.target)
+        elif isinstance(node, ast.NamedExpr):
+            _add_target(node.target)
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            _add_target(node.target)
+        elif isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                if item.optional_vars is not None:
+                    _add_target(item.optional_vars)
+        elif isinstance(node, ast.ExceptHandler):
+            if node.name:
+                out.add(node.name)
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef)):
-                out.add(child.name)
-                continue
-            if isinstance(child, ast.Lambda):
-                continue
-            if isinstance(child, ast.Assign):
-                for t in child.targets:
-                    _add_target(t)
-            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
-                _add_target(child.target)
-            elif isinstance(child, ast.NamedExpr):
-                _add_target(child.target)
-            elif isinstance(child, (ast.For, ast.AsyncFor)):
-                _add_target(child.target)
-            elif isinstance(child, (ast.With, ast.AsyncWith)):
-                for item in child.items:
-                    if item.optional_vars is not None:
-                        _add_target(item.optional_vars)
-            elif isinstance(child, ast.ExceptHandler):
-                if child.name:
-                    out.add(child.name)
             _walk(child)
 
     _walk(tree)
