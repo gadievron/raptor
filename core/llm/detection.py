@@ -34,7 +34,7 @@ _SDK_IMPORTS = {
     # Bedrock signing requires botocore, not boto3.
     "BOTOCORE_SDK_AVAILABLE": "botocore",
 }
-_SDK_AVAILABILITY = {}
+_SDK_AVAILABILITY: dict[str, bool] = {}
 
 
 def _sdk_available(name):
