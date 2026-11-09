@@ -12,16 +12,11 @@ Integration:
 
 This converts ungrounded LLM opinions into tool-verified dataflow.
 
-SMT path pruning: before a synthesized query's SARIF matches count as
-confirmation, each match's thread-flow path is run through the SMT
-path-feasibility machinery (same substrate /agentic's Tier 4 uses —
-``packages.exploit_feasibility.smt_path.validate_path`` over
-``core.smt_solver.path_feasibility``). Branch conditions are harvested
-mechanically from the guards enclosing each path step; a match whose
-every conditioned path is UNSAT is an incidental (vacuous-checker)
-match and is pruned with a receipt. Complements condition_smt.py:
-that checks hypothesis conditions, this checks per-dataflow-path
-satisfiability.
+SMT guard-model diagnostics retain CodeQL's match counts. Harvested guards
+lack target widths, per-variable conversions and value-flow identities.
+Even agreement between signed and unsigned uniform-width models cannot
+refute those source paths. Model-UNSAT receipts therefore remain conditional
+diagnostics, separate from CodeQL's dataflow result.
 """
 
 from __future__ import annotations
@@ -62,6 +57,7 @@ class ValidationResult:
     reasoning: str = ""
     error: str = ""
     query_text: str = ""
+    # Compatibility field: untyped guard-model diagnostics never prune.
     smt_pruned: int = 0
     smt_receipts: list[dict[str, Any]] = field(default_factory=list)
 
@@ -246,21 +242,15 @@ def validate_dataflow_claim(
                         )
                     except Exception:
                         logger.debug(
-                            "smt prune pass failed", exc_info=True,
+                            "SMT guard-model diagnostic pass failed", exc_info=True,
                         )
                 if match_count > 0:
                     reasoning = f"CodeQL found {match_count} dataflow path(s)"
-                    if smt_pruned:
+                    if smt_receipts:
                         reasoning += (
-                            f" ({smt_pruned} match(es) pruned:"
-                            " path conditions unsatisfiable)"
+                            "; conditional SMT guard model is infeasible"
+                            " without establishing source-path infeasibility"
                         )
-                elif smt_pruned:
-                    reasoning = (
-                        f"CodeQL matched but SMT proved all {smt_pruned}"
-                        " match path(s) infeasible — vacuous checker"
-                        " match"
-                    )
                 else:
                     reasoning = "CodeQL found no dataflow paths"
                 return ValidationResult(
@@ -303,11 +293,11 @@ def _count_codeflow_results(sarif: dict[str, Any]) -> int:
     return count
 
 
-# ── SMT path pruning ─────────────────────────────────────────────────
+# ── Conditional SMT guard-model diagnostics ──────────────────────────
 # Bounded like /agentic's Tier 4: few paths per match, few steps per
 # path, few conditions per solver call, short per-call timeout. The
 # solver wrapper degrades to feasible=None when z3 is absent — unknown
-# never prunes.
+# contributes no diagnostic. No untyped result prunes a CodeQL match.
 _MAX_SMT_PATHS_PER_RESULT = 3
 _MAX_SMT_PATH_STEPS = 20
 _MAX_SMT_CONDITIONS = 16
@@ -829,13 +819,12 @@ def _smt_prune_sarif_matches(
     sarif: dict[str, Any],
     target_path: Path,
 ) -> tuple:
-    """SMT-check each match's path conditions; prune UNSAT-only matches.
+    """Retain every CodeQL match and collect conditional model diagnostics.
 
-    Returns ``(surviving_count, pruned_count, receipts)``. A match is
-    pruned only when every thread-flow path yielded conditions AND the
-    solver proved every one of them jointly unsatisfiable — an
-    incidental match of a vacuous checker. Unknown/unavailable/
-    condition-free paths always keep the match (fail-open).
+    The legacy tuple shape is ``(match_count, 0, diagnostics)``. All
+    conditioned thread flows must be model-UNSAT to emit a diagnostic;
+    source integer types, conversions and mutation epochs remain unbound.
+    Neither that result nor unknown/unavailable inputs can remove a match.
     """
     try:
         from packages.exploit_feasibility.smt_path import validate_path
@@ -843,7 +832,6 @@ def _smt_prune_sarif_matches(
         return _count_codeflow_results(sarif), 0, []
 
     kept = 0
-    pruned = 0
     receipts: list[dict[str, Any]] = []
     cache: dict[str, list[str] | None] = {}
 
@@ -863,12 +851,10 @@ def _smt_prune_sarif_matches(
                     # profile=None: the guards are raw source text
                     # harvested with no type information, so their
                     # signedness is a GUESS — validate_path then
-                    # reports infeasible only when BOTH signedness
-                    # profiles agree. A pinned "uint64" asserted
-                    # knowledge this harvester doesn't have: the
-                    # ubiquitous C signed error check (ret < 0)
-                    # encodes as ULT(ret, 0), unsat, and pruned a
-                    # live dataflow match outright.
+                    # diagnoses its model only when BOTH signedness
+                    # profiles agree. This still fixes the width at 64
+                    # and shares values across repeated spellings:
+                    # neither assumption establishes source semantics.
                     res = validate_path(
                         conditions,
                         profile=None,
@@ -888,7 +874,6 @@ def _smt_prune_sarif_matches(
                     all_unsat = False
 
             if all_unsat and path_receipts:
-                pruned += 1
                 loc = (
                     result.get("locations", [{}])[0]
                     .get("physicalLocation", {})
@@ -899,13 +884,14 @@ def _smt_prune_sarif_matches(
                     ),
                     "line": loc.get("region", {}).get("startLine", 0),
                     "rule_id": result.get("ruleId", ""),
-                    "verdict": "smt_path_infeasible",
+                    "verdict": "smt_model_infeasible",
+                    "proof_scope": "conditional-untyped-guard-model",
+                    "source_bound": False,
                     "paths": path_receipts,
                 })
-            else:
-                kept += 1
+            kept += 1
 
-    return kept, pruned, receipts
+    return kept, 0, receipts
 
 
 def extract_claims_from_review(
