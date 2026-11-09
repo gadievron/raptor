@@ -76,7 +76,7 @@ import re
 def handler(request):
     name = request.args.get('name')
     name = re.sub(r'[/\\\\.]+', '', name)
-    open('/etc/app/' + name)
+    open(name)
 """
 SUB_SOURCE_LINE = 6
 SUB_VALIDATOR_LINE = 7
@@ -288,7 +288,7 @@ class TestLiftabilityConservatism:
             "def handler(request)\n"
             "  name = params[:name]\n"
             "  return nil unless name =~ /^[A-Za-z0-9_+-]+$/\n"
-            "  File.open('/etc/app/' + name)\n"
+            "  File.open(name)\n"
             "end\n"
         )
         repo = _write_app(tmp_path, app, name="app.rb")
@@ -511,7 +511,7 @@ def handler(request):
     name = request.args.get('name')
     if request.clean:
         name = re.sub(r'[/\\\\.]+', '', name)
-    open('/etc/app/' + name)
+    open(name)
 """
 BRANCH_SUB_VALIDATOR_LINE = 8
 BRANCH_SUB_SINK_LINE = 9
@@ -585,7 +585,7 @@ class TestDecoyValidatorsNeverRefute:
             "def handler(request):\n"
             "    name = request.args.get('name')\n"
             "    p = str(name)  # name = re.sub(r'[/\\\\.]+', '', name)\n"
-            "    open('/etc/app/' + name)\n"
+            "    open(name)\n"
         )
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
@@ -607,7 +607,7 @@ class TestDecoyValidatorsNeverRefute:
             "    doc = '''example:\n"
             "    if not re.match(r'^[A-Za-z0-9_+-]+$', name): return\n"
             "    '''\n"
-            "    open('/etc/app/' + name)\n"
+            "    open(name)\n"
         )
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
@@ -690,7 +690,7 @@ class TestNestedScopeRebindKill:
             "        nonlocal y\n"
             "        y = request.environ['EVIL']\n"
             "    taint()\n"
-            "    os.system('ls ' + y)\n"
+            "    os.system(y)\n"
         )
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
@@ -713,7 +713,7 @@ class TestNestedScopeRebindKill:
             "        global g\n"
             "        g = 'evil; rm -rf /'\n"
             "    taint()\n"
-            "    os.system('ls ' + g)\n"
+            "    os.system(g)\n"
         )
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
@@ -735,7 +735,7 @@ class TestNestedScopeRebindKill:
             "        return None\n"
             "    y = raw\n"
             "    y = request.environ['EVIL']\n"
-            "    os.system('ls ' + y)\n"
+            "    os.system(y)\n"
         )
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
@@ -760,7 +760,7 @@ class TestNestedScopeRebindKill:
             "        y = 'local-only'\n"
             "        return y\n"
             "    helper()\n"
-            "    os.system('ls ' + y)\n"
+            "    os.system(y)\n"
         )
         repo = _write_app(tmp_path, app)
         verdict = prescreen_finding(

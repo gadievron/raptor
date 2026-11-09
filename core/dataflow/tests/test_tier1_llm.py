@@ -888,7 +888,7 @@ def test_charset_branch_wrapped_declines_python_tier1b(tmp_path: Path):
         "    if request.strict:\n"                                     # 3
         "        if not re.fullmatch(r'[A-Za-z0-9_]+', name):\n"       # 4 — wrapped guard
         "            raise ValueError()\n"                             # 5
-        "    return open('/data/' + name)\n"                           # 6 — sink
+        "    return open(name)\n"                           # 6 — sink
     )
     diff = "+        if not re.fullmatch(r'[A-Za-z0-9_]+', name):\n"
     reply = json.dumps({
