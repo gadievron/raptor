@@ -489,8 +489,8 @@ class TestReadingListLanguageGate:
     """The reading_list gate is lifted per-language as resolution
     support lands: the schema and system prompt must name every
     study-supported language, keep the omit instruction for the rest,
-    and keep the 'most functions reference at least one external
-    contract' guidance."""
+    and keep source study separate from language-reference topics. Empty
+    request lists must remain valid."""
 
     def test_supported_language_registry(self) -> None:
         from core.audit.llm_review import STUDY_SUPPORTED_LANGUAGES
@@ -511,10 +511,13 @@ class TestReadingListLanguageGate:
         desc = REVIEW_SCHEMA["properties"]["reading_list"]["description"]
         assert "omit for other languages" in desc
 
-    def test_schema_keeps_external_contract_guidance(self) -> None:
+    def test_schema_requests_subjects_without_forcing_assumptions(self) -> None:
         from core.audit.llm_review import REVIEW_SCHEMA
         desc = REVIEW_SCHEMA["properties"]["reading_list"]["description"]
-        assert "at least one external contract" in desc
+        assert "Empty is valid" in desc
+        assert "at least one external contract" not in desc
+        item = REVIEW_SCHEMA["properties"]["reading_list"]["items"]
+        assert "subject" in item["properties"] and "question" not in item["properties"]
 
     def test_blind_schema_shares_gate(self) -> None:
         from core.audit.llm_review import REVIEW_SCHEMA_BLIND
@@ -524,13 +527,13 @@ class TestReadingListLanguageGate:
         assert "C/C++ targets only" not in desc
         assert "Python" in desc
 
-    def test_prompt_assumed_knowledge_lists_languages(self) -> None:
+    def test_prompt_missing_knowledge_lists_languages(self) -> None:
         from core.audit.llm_review import (
             _DEFAULT_SYSTEM_PROMPT,
             _QUALITY_SYSTEM_PROMPT,
         )
         for prompt in (_DEFAULT_SYSTEM_PROMPT, _QUALITY_SYSTEM_PROMPT):
-            assert "ASSUMED KNOWLEDGE (C/C++, Python, Go, Java, " \
+            assert "MISSING KNOWLEDGE (C/C++, Python, Go, Java, " \
                    "JavaScript/TypeScript, Rust, PHP, " \
                    "Kotlin, C#, and Swift)" in prompt
             assert "C/C++ only" not in prompt
@@ -538,7 +541,9 @@ class TestReadingListLanguageGate:
                    not in prompt
             # omit rule retained for languages without a resolver
             assert "For other languages, omit reading_list" in prompt
-            assert "at least one external contract" in prompt
+            assert "at least one external contract" not in prompt
+            assert "Empty request lists are valid" in prompt
+            assert "language_reference_requests" in prompt
 
 
 class _CannedResponseClient:

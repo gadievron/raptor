@@ -761,6 +761,7 @@ MODEL_AUTHORED_REVIEW_KEYS: frozenset[str] = frozenset({
     "dangerous_callees", "edge_verdicts", "entry_point",
     "evasion_mechanism", "evidence_tool", "hypotheses", "hypothesis",
     "impact", "inferred_spec", "intent_trace", "mechanism",
+    "language_reference_requests",
     "observations", "preconditions", "reading_list", "relies_on",
     "sanitizer_callees", "source_snippet", "spec_deviation", "status",
     "tool_query_suggestion", "typestate_violation", "verdict_rationale",

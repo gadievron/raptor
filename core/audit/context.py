@@ -1200,8 +1200,28 @@ def format_context_for_prompt(
     # or budget-0 re-entry cannot carry a stale stamp forward.
     ctx.pop("prompt_budget_event", None)
     ctx.pop("cross_entry_rendered", None)
+    ctx.pop("language_reference_delivery", None)
+    ctx.pop("source_study_delivery", None)
+
+    from .knowledge_context import (
+        context_answers, context_explanations, context_subjects,
+        reference_delivery, reference_sections, study_delivery, study_sections,
+    )
+
+    reference_answers = context_answers(ctx.get("language_reference_answers"))
+    study_requests = context_subjects(ctx.get("knowledge_requests"))
+    study_explanations = context_explanations(ctx.get("study_explanations"))
+    study_scope = (ctx.get("file", ""), ctx.get("function", ""), ctx.get("line_start", 0))
 
     if ctx.get("triage_bucket") == "glance":
+        if reference_answers:
+            ctx["language_reference_delivery"] = reference_delivery(
+                reference_answers, [], omission_reason="glance_packet",
+            )
+        if study_requests:
+            ctx["source_study_delivery"] = study_delivery(
+                study_requests, study_explanations, [], scope=study_scope, omission_reason="glance_packet",
+            )
         return _format_glance_prompt(ctx)
 
     from core.llm.prompt_budget import PromptSection, fit_to_budget_report
@@ -2645,6 +2665,9 @@ def format_context_for_prompt(
             1,
         ))
 
+    sections.extend(reference_sections(reference_answers))
+    sections.extend(study_sections(study_requests, study_explanations, scope=study_scope))
+
     prior_hyp_text = _format_prior_hypotheses(ctx.get("prior_hypotheses"))
     if prior_hyp_text:
         sections.append(PromptSection("prior_hypotheses", prior_hyp_text, 1))
@@ -2936,10 +2959,18 @@ def format_context_for_prompt(
             }
         if ctx.get("cross_entry_analysis"):
             ctx["cross_entry_rendered"] = any(s.label == "cross_entry_analysis" for s in kept)
+        if reference_answers:
+            ctx["language_reference_delivery"] = reference_delivery(reference_answers, kept)
+        if study_requests:
+            ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, kept, scope=study_scope)
         return "\n".join(s.text for s in kept)
 
     if ctx.get("cross_entry_analysis"):
         ctx["cross_entry_rendered"] = True
+    if reference_answers:
+        ctx["language_reference_delivery"] = reference_delivery(reference_answers, sections)
+    if study_requests:
+        ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, sections, scope=study_scope)
     return "\n".join(s.text for s in sections)
 
 

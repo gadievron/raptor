@@ -264,6 +264,7 @@ def run_executor_sync(
     budget_check: Callable[[], bool] | None = None,
     review_one_fn: Callable | None = None,
     on_tick: Callable[[dict[str, Any]], None] | None = None,
+    on_idle: Callable[[], float | None] | None = None,
     reviewed_outcomes: dict[str, Any] | None = None,
     throttle: Any | None = None,
     study_queue: Any | None = None,
@@ -281,6 +282,11 @@ def run_executor_sync(
     *on_tick* is called once per iteration with the current gap, before
     the review function runs.  The orchestrator uses it for Joern
     future draining and ``reviewed_before_joern`` bookkeeping.
+
+    *on_idle* drives information delivery on the parallel coordinator thread
+    while reviews are in flight. It returns a positive interval for the next
+    wake-up only while such work is pending; ``None`` preserves the ordinary
+    completion wait. It must obey the same run admission and stop rails.
 
     *quiescer* (``core.audit.journal_quiesce``) adds mid-pass journal
     checkpoint quiesce points: the trigger is polled at dispatch
@@ -325,6 +331,7 @@ def run_executor_sync(
                     budget_check=budget_check,
                     review_one_fn=review_one_fn,
                     on_tick=on_tick,
+                    on_idle=on_idle,
                     reviewed_outcomes=reviewed_outcomes,
                     throttle=throttle,
                     study_queue=study_queue,
@@ -361,23 +368,24 @@ def run_executor_sync(
                 return True
         committed: set = set()
         try:
-            _process_glance_batch(
-                glance_batch, batch_review_fn, shared, config,
-                result, review_one_fn, review_fn,
-                joern_server=joern_server,
-                audit_log=audit_log,
-                workqueue=workqueue,
-                reviewed_set=reviewed_set,
-                start_time=start_time,
-                layer_disagreements=layer_disagreements,
-                on_progress=on_progress,
-                review_idx=review_idx,
-                total=total,
-                collector=collector,
-                graph=graph,
-                reviewed_outcomes=reviewed_outcomes,
-                committed_keys=committed,
-            )
+            with throttle.acquire_sync() if throttle is not None else contextlib.nullcontext():
+                _process_glance_batch(
+                    glance_batch, batch_review_fn, shared, config,
+                    result, review_one_fn, review_fn,
+                    joern_server=joern_server,
+                    audit_log=audit_log,
+                    workqueue=workqueue,
+                    reviewed_set=reviewed_set,
+                    start_time=start_time,
+                    layer_disagreements=layer_disagreements,
+                    on_progress=on_progress,
+                    review_idx=review_idx,
+                    total=total,
+                    collector=collector,
+                    graph=graph,
+                    reviewed_outcomes=reviewed_outcomes,
+                    committed_keys=committed,
+                )
         except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
             if _is_budget_stop(exc):
                 stats.budget_stopped = True
@@ -415,6 +423,8 @@ def run_executor_sync(
     last_checkpoint = time.monotonic()
 
     while graph.pending > 0:
+        if on_idle is not None:
+            on_idle()
         if budget_check and budget_check():
             # Stop path: do NOT dispatch a fresh glance LLM batch
             # after the budget stop — queued glance tasks are dropped
@@ -488,21 +498,22 @@ def run_executor_sync(
                 break
 
         try:
-            review_one_fn(
-                task.gap, shared, config, review_fn, result,
-                joern_server=joern_server,
-                audit_log=audit_log,
-                workqueue=workqueue,
-                reviewed_set=reviewed_set,
-                start_time=start_time,
-                layer_disagreements=layer_disagreements,
-                on_progress=on_progress,
-                review_idx=review_idx,
-                total=total,
-                collector=collector,
-                graph=graph,
-                reviewed_outcomes=reviewed_outcomes,
-            )
+            with throttle.acquire_sync() if throttle is not None else contextlib.nullcontext():
+                review_one_fn(
+                    task.gap, shared, config, review_fn, result,
+                    joern_server=joern_server,
+                    audit_log=audit_log,
+                    workqueue=workqueue,
+                    reviewed_set=reviewed_set,
+                    start_time=start_time,
+                    layer_disagreements=layer_disagreements,
+                    on_progress=on_progress,
+                    review_idx=review_idx,
+                    total=total,
+                    collector=collector,
+                    graph=graph,
+                    reviewed_outcomes=reviewed_outcomes,
+                )
         except Exception as exc:  # noqa: BLE001 — budget stop or per-task error record
             if _is_budget_stop(exc):
                 stats.budget_stopped = True
@@ -552,21 +563,22 @@ def run_executor_sync(
                     stats.budget_stopped = True
                     break
             try:
-                review_one_fn(
-                    task.gap, shared, config, review_fn, result,
-                    joern_server=joern_server,
-                    audit_log=audit_log,
-                    workqueue=workqueue,
-                    reviewed_set=reviewed_set,
-                    start_time=start_time,
-                    layer_disagreements=layer_disagreements,
-                    on_progress=on_progress,
-                    review_idx=review_idx,
-                    total=total,
-                    collector=collector,
-                    graph=graph,
-                    reviewed_outcomes=reviewed_outcomes,
-                )
+                with throttle.acquire_sync() if throttle is not None else contextlib.nullcontext():
+                    review_one_fn(
+                        task.gap, shared, config, review_fn, result,
+                        joern_server=joern_server,
+                        audit_log=audit_log,
+                        workqueue=workqueue,
+                        reviewed_set=reviewed_set,
+                        start_time=start_time,
+                        layer_disagreements=layer_disagreements,
+                        on_progress=on_progress,
+                        review_idx=review_idx,
+                        total=total,
+                        collector=collector,
+                        graph=graph,
+                        reviewed_outcomes=reviewed_outcomes,
+                    )
             except Exception as exc:  # noqa: BLE001 — budget stop or logged per-task failure
                 if _is_budget_stop(exc):
                     stats.budget_stopped = True
@@ -609,6 +621,7 @@ async def _run_async(
     budget_check: Callable[[], bool] | None = None,
     review_one_fn: Callable | None = None,
     on_tick: Callable[[dict[str, Any]], None] | None = None,
+    on_idle: Callable[[], float | None] | None = None,
     reviewed_outcomes: dict[str, Any] | None = None,
     throttle: Any | None = None,
     study_queue: Any | None = None,
@@ -650,6 +663,7 @@ async def _run_async(
             budget_check=budget_check,
             review_one_fn=review_one_fn,
             on_tick=on_tick,
+            on_idle=on_idle,
             reviewed_outcomes=reviewed_outcomes,
             study_queue=study_queue,
             concept_index_ref=concept_index_ref,
@@ -686,6 +700,7 @@ async def _run_async_body(
     budget_check: Callable[[], bool] | None = None,
     review_one_fn: Callable | None = None,
     on_tick: Callable[[dict[str, Any]], None] | None = None,
+    on_idle: Callable[[], float | None] | None = None,
     reviewed_outcomes: dict[str, Any] | None = None,
     study_queue: Any | None = None,
     concept_index_ref: list | None = None,
@@ -1077,6 +1092,19 @@ async def _run_async_body(
         finally:
             quiesce_state["draining"] = False
 
+    def _idle_timeout() -> float | None:
+        # The owner drives ready information on this existing coordinator
+        # thread. None keeps the ordinary completion wait unchanged; only
+        # outstanding knowledge work requests another bounded wake-up.
+        if on_idle is None or _should_stop():
+            return None
+        timeout = on_idle()
+        if timeout is None:
+            return None
+        if type(timeout) not in (int, float) or not 0 < timeout < float("inf"):
+            raise ValueError("idle callback must return a finite positive timeout")
+        return max(0.05, timeout)
+
     initial = graph.pop_ready(ec.max_workers)
     _dispatch_ready(initial)
 
@@ -1090,6 +1118,15 @@ async def _run_async_body(
                 # graph.
                 _dispatch_ready(graph.pop_ready(ec.max_workers))
 
+        idle_timeout = _idle_timeout()
+        if on_idle is not None and not _should_stop():
+            # The owner callback may inject a newly useful continuation while
+            # unrelated reviews are still running. Dispatch into free slots
+            # here instead of waiting for an unrelated completion to drain it.
+            # Calls still acquire the existing async throttle in _run_task.
+            available = max(0, ec.max_workers - sum(not task.done() for task in inflight))
+            if available:
+                _dispatch_ready(graph.pop_ready(available))
         if _should_stop():
             # Stop requested: drop queued glance batches and held
             # tasks — they stay unreviewed gaps.  Without this the
@@ -1134,7 +1171,10 @@ async def _run_async_body(
                 study_event.clear()
                 try:
                     await asyncio.wait_for(
-                        study_event.wait(), timeout=_ALL_HELD_WAIT_S,
+                        study_event.wait(), timeout=(
+                            min(_ALL_HELD_WAIT_S, idle_timeout)
+                            if idle_timeout is not None else _ALL_HELD_WAIT_S
+                        ),
                     )
                 except asyncio.TimeoutError:
                     pass
@@ -1142,7 +1182,7 @@ async def _run_async_body(
             break
 
         done, _pending = await asyncio.wait(
-            inflight, return_when=asyncio.FIRST_COMPLETED,
+            inflight, return_when=asyncio.FIRST_COMPLETED, timeout=idle_timeout,
         )
         inflight -= done
         for t in done:
@@ -1224,6 +1264,7 @@ async def _run_async_body(
         while repass_inflight:
             done, _rp = await asyncio.wait(
                 repass_inflight, return_when=asyncio.FIRST_COMPLETED,
+                timeout=_idle_timeout(),
             )
             repass_inflight -= done
             for t in done:
