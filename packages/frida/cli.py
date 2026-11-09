@@ -83,6 +83,8 @@ def _build_parser() -> argparse.ArgumentParser:
                               "events.jsonl."))
     parser.add_argument("--list-templates", action="store_true",
                         help="Print bundled template names and exit.")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     return parser
 
 
@@ -105,6 +107,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     args = parser.parse_args(argv)
+    from core.reporting.options import options_from_args
+    args._report_options = options_from_args(args, parser)
 
     try:
         target = parse_target(args.target)
@@ -183,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         result = run(cfg)
     except FridaUnavailable as e:
         print(f"frida: {_sft(str(e))}", file=sys.stderr)
+        _complete_report(args, cfg, None, 3)
         return 3
 
     if not result.ok:
@@ -194,13 +199,21 @@ def main(argv: list[str] | None = None) -> int:
         print("frida: run failed: "
               f"{sanitise_for_terminal(str(result.error), max_len=500)}",
               file=sys.stderr)
+        _complete_report(args, cfg, result, 1)
         return 1
 
     print(f"frida: ok - {result.events_captured} events captured in "
           f"{result.duration_actual_sec:.1f}s → {args.out}")
     _maybe_harvest_seeds(Path(args.out))
     _maybe_correlate_io(Path(args.out))
+    _complete_report(args, cfg, result, 0)
     return 0
+
+
+def _complete_report(args, cfg, result, status):
+    if args._report_options.enabled and (args.report_format or args.report_output):
+        from .reporting import complete_frida_report
+        complete_frida_report(args, cfg, result, status)
 
 
 def _maybe_correlate_io(out_dir: Path) -> None:

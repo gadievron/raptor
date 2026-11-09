@@ -620,6 +620,16 @@ Contents:
 
 ---
 
+To save a portable capture receipt, add `--report-format markdown`, `json` or
+`xml`. It defaults to the run output directory; `--report-output` can select
+another destination permitted by the existing sandbox. The receipt adds a
+short summary on stderr and keeps `frida-report.md` and native exit codes.
+It records capture counts, timing, host/target metadata and failures. It does
+not copy raw events, executed hook code or seed bytes, and does not attach,
+spawn, harvest or correlate anything again. Zero events do not establish
+that a suspected sink is unreachable or safe. `--list-templates` remains a
+simple query without report output.
+
 ## Common Failure Modes
 
 | Symptom | Likely cause |
