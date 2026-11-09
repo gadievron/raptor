@@ -941,6 +941,10 @@ class TestEndToEndCredentialIsolationThroughProviders:
             d = _wired_dispatcher(fake_creds, tmp_path, "anthropic", upstream)
             cleanup.callback(d.shutdown)
             from core.llm.dispatcher.spawn import spawn_worker
+            from core.testing.streams import pipe_streams
+            import selectors
+
+            ready_reader, ready_writer = cleanup.enter_context(pipe_streams())
 
             # Worker imports core.llm.providers.AnthropicProvider, builds
             # a ModelConfig, calls .generate() — exactly the production
@@ -956,7 +960,10 @@ class TestEndToEndCredentialIsolationThroughProviders:
                 "cfg = ModelConfig(provider='anthropic', model_name='claude-3-haiku-20240307')\n"
                 "cfg.api_key = 'dummy-not-used'\n"
                 "p = AnthropicProvider(cfg)\n"
-                "msg = p.client.messages.create(\n"
+                "with p.client:\n"
+                "    os.write(int(sys.argv[1]), b'R')\n"
+                "    os.close(int(sys.argv[1]))\n"
+                "    msg = p.client.messages.create(\n"
                 "    model='claude-3-haiku-20240307',\n"
                 "    max_tokens=64,\n"
                 "    messages=[{'role':'user','content':'hi'}],\n"
@@ -972,7 +979,8 @@ class TestEndToEndCredentialIsolationThroughProviders:
             )))
             proc = spawn_worker(
                 d,
-                cmd=[sys.executable, str(worker_src)],
+                cmd=[sys.executable, str(worker_src), str(ready_writer.fileno())],
+                pass_fds=(ready_writer.fileno(),),
                 label="phase-b-e2e",
                 env={
                     "PATH": os.environ.get("PATH", ""),
@@ -983,6 +991,13 @@ class TestEndToEndCredentialIsolationThroughProviders:
                 start_new_session=True,
             )
             cleanup.enter_context(reap_on_exit(proc, process_group=True))
+            ready_writer.close()
+            # Cold provider imports have their own startup deadline. The
+            # original request/exit deadline starts once the client is ready.
+            selector = cleanup.enter_context(selectors.DefaultSelector())
+            selector.register(ready_reader, selectors.EVENT_READ)
+            assert selector.select(timeout=60), "provider startup exceeded 60 seconds"
+            assert os.read(ready_reader.fileno(), 1) == b"R", "worker exited before client readiness"
             stdout, stderr = proc.communicate(timeout=15)
             assert proc.returncode == 0, (
                 f"worker failed: rc={proc.returncode} "
