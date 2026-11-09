@@ -696,3 +696,33 @@ def configure(arg=(escape := replacement), *, other=(html := replacement)):
         assert 'escape' in graph.rebound_names
         assert 'html' in module_distrusted_roots(ast.parse(source))
         assert 'ignored' not in module_distrusted_roots(ast.parse(source))
+
+
+class TestDefinitionHeaderDynamicNamespace:
+    def test_import_time_headers_invalidate_module_identity(self):
+        from core.analysis.python_module_callgraph import module_dynamic_namespace
+
+        headers = (
+            'def configure(value=exec("int = replacement")):\n    pass\n',
+            'async def configure(*, value=eval("replacement")):\n    pass\n',
+            '@eval("replacement")\ndef configure():\n    pass\n',
+            'configure = lambda value=exec("int = replacement"): value\n',
+            'class Config:\n    def configure(value=exec("int = replacement")):\n        pass\n',
+            'def configure(value=locals()):\n    pass\n',
+        )
+        for source in headers:
+            whole, names = module_dynamic_namespace(ast.parse(source))
+            assert whole, (source, names)
+
+    def test_deferred_bodies_do_not_gain_module_authority(self):
+        from core.analysis.python_module_callgraph import module_dynamic_namespace
+
+        deferred = (
+            'def configure():\n    exec("local = replacement")\n',
+            'configure = lambda: exec("local = replacement")\n',
+            'def outer():\n    def configure(value=exec("local = replacement")):\n        pass\n',
+            'def configure(value=lambda: exec("local = replacement")):\n    pass\n',
+        )
+        for source in deferred:
+            whole, names = module_dynamic_namespace(ast.parse(source))
+            assert not whole and not names, (source, whole, names)
