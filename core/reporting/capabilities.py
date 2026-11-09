@@ -55,6 +55,7 @@ CAPABILITIES = (
     CommandCapability("audit report", "audit", "automatic detailed reports", "existing terminal summary and summary.md", "canonical domain JSON retained; rendered JSON uses companion filename"),
     CommandCapability("engagement report", "engagement", "automatic detailed reports", "existing terminal summary and summary.md", "canonical domain JSON retained; rendered JSON uses companion filename"),
     CommandCapability("describe", "describe", "explicit destination required", "existing stdout and captured summary", "no default file writes"),
+    CommandCapability("frida", "frida", "explicit export; lifecycle directory default", "existing stdout; report summary on stderr", "capture metadata only; no raw events, hook source, seed data or instrumentation replay"),
     CommandCapability("binary report", "binary", "explicit export", "existing report display or export summary", "no analysis is run"),
 )
 
