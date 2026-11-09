@@ -1389,6 +1389,11 @@ def _select_diff_snapshots(conn, target_path: Optional[str], *, base_snapshot: O
     producer = "understand"
     if explicit is not None and "producer" in explicit.keys():
         producer = explicit["producer"] or "understand"
+    if not target_path and explicit is not None:
+        target_path = explicit["target_path"]
+        if not target_path:
+            # Unknown target identity cannot anchor an automatic comparison.
+            return base, head
     clauses = ["producer=?"]
     params: list[str] = [producer]
     if target_path:
@@ -1402,6 +1407,14 @@ def _select_diff_snapshots(conn, target_path: Optional[str], *, base_snapshot: O
     if not head and rows:
         head = rows[0]
     if not base and head is not None:
+        if not target_path:
+            # With neither endpoint explicit, the newest head chooses the
+            # target; the default base must not come from another project.
+            target_path = head["target_path"]
+            if not target_path:
+                return base, head
+            clauses.append("(target_path=? OR target_path=?)")
+            params += [str(target_path), str(Path(target_path).resolve())]
         # The defaulted base is the newest snapshot NOT NEWER than the
         # head (and never the head itself): defaulting to the global
         # newest against an explicitly older head produced a
