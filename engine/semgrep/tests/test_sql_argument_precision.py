@@ -37,6 +37,10 @@ _MATRICES = {
     ]),
     "go-format": ("go/go-security.yaml", "raptor.go.sql-sprintf-query", [
         ('db.Query(fmt.Sprintf("SELECT %s", r.FormValue("sql")), 1)', True),
+        ('db.Query(fmt.Sprintf(`SELECT %s`, r.FormValue("sql")), 1)', True),
+        ('db.Query(fmt.Sprintf(`  select %s`, r.FormValue("sql")), 1)', True),
+        ('db.Query(fmt.Sprintf(`SELECT %s`, "1"), r.FormValue("id"))', False),
+        ('search.Query(fmt.Sprintf(`selected items: %s`, r.FormValue("key")))', False),
         ('db.Query(fmt.Sprintf("SELECT %s", "1"), r.FormValue("id"))', False),
         ('ctx = context.WithValue(ctx, "trace", r.FormValue("trace"))\ndb.QueryContext(ctx, fmt.Sprintf("SELECT %s", "1"), 1)', False),
         ('db.QueryRow(r.FormValue("sql"), 1)', True),
