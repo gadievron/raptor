@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import textwrap
-import time
+
+from core.testing.wallclock import cpu_budget
 
 from core.audit.mechanical_gates import (
     _classify_entry_points,
@@ -685,9 +686,9 @@ class TestTypeConstraintPatternFloodPerformance:
     whitespace floods catastrophic), unanchored scans over long word
     runs, and unbounded parameter/generics/receiver classes were each
     quadratic or worse — tens of seconds to unbounded at 64KB. The
-    anchored, token-bounded patterns run in milliseconds; the budget
-    is generous for slow machines yet an order of magnitude below the
-    broken variants at this input size."""
+    anchored, token-bounded patterns run in milliseconds. The CPU
+    budget pins in-process complexity independently of scheduler stalls,
+    while remaining below the broken variants at this input size."""
 
     def test_c_and_java_patterns_on_hostile_floods(self):
         from core.audit.mechanical_gates import _C_FUNC_PAT, _JAVA_METHOD_PAT
@@ -703,9 +704,8 @@ class TestTypeConstraintPatternFloodPerformance:
         ]
         for pat in (_C_FUNC_PAT, _JAVA_METHOD_PAT):
             for flood in floods:
-                start = time.monotonic()
-                assert pat.findall(flood) == []
-                assert time.monotonic() - start < 2.0
+                with cpu_budget(2.0, f"C/Java declaration flood ({len(flood)} chars)"):
+                    assert pat.findall(flood) == []
 
     def test_rust_and_go_patterns_on_hostile_floods(self):
         from core.audit.mechanical_gates import _GO_FUNC_PAT, _RUST_FUNC_PAT
@@ -721,9 +721,8 @@ class TestTypeConstraintPatternFloodPerformance:
             (_GO_FUNC_PAT, "func (" * (256 * 1024 // 6)),
         ]
         for pat, flood in cases:
-            start = time.monotonic()
-            assert pat.findall(flood) == []
-            assert time.monotonic() - start < 2.0
+            with cpu_budget(2.0, f"Rust/Go declaration flood ({len(flood)} chars)"):
+                assert pat.findall(flood) == []
 
     def test_real_declarations_still_enriched(self):
         # Direction checks across all four arms, including the
