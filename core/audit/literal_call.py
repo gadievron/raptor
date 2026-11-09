@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "common-width-literal-frame-v9",
+        "query_contract": "common-width-literal-frame-v10",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -186,6 +186,10 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
         values = [child for child in statements[0].named_children if child.type != "comment"]
         call = _unwrap(values[0]) if len(values) == 1 else None
         if call is None or call.type != "call_expression" or call.start_point[0] + 1 not in site_lines:
+            continue
+        # This closed frame admits definitions, not standalone prototypes.
+        # A later definition cannot establish the signature visible here.
+        if call.start_byte < callee.end_byte:
             continue
         name, args = call.child_by_field_name("function"), call.child_by_field_name("arguments")
         if name is None or name.type != "identifier" or text(name) != function_name or args is None:
