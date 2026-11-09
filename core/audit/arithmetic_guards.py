@@ -133,6 +133,12 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                     return True
             if item.type == "call_expression":
                 return True  # aliases and globals are not summarized here
+            if item.type == "return_statement" and language == "cpp":
+                values = [child for child in item.named_children if child.type != "comment"]
+                return_type = body.parent.child_by_field_name("type")
+                kind = integer_type(text(return_type), abi)
+                if any(not prefix.list_initialization_allowed(value, kind) for value in values):
+                    return True
             if item != target and item.type in {"subscript_expression", "pointer_expression", "field_expression"}:
                 return True  # a preceding read may itself require a safety obligation
             if item.type == "binary_expression" and item != target and text(item.child_by_field_name("operator")) in {
@@ -157,6 +163,8 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                     if decl.type == "init_declarator":
                         value = decl.child_by_field_name("value")
                         declarator = decl.child_by_field_name("declarator")
+                        if value is not None and not prefix.list_initialization_allowed(value, integer_type(text(type_node), abi)):
+                            return True
                         if value is not None and not contains(value):
                             pointer_literal = (declarator is not None and declarator.type == "pointer_declarator"
                                                and (value.type in {"string_literal", "concatenated_string"}
