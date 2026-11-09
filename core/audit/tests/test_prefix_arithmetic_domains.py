@@ -15,6 +15,15 @@ def dependencies():
     pytest.importorskip('tree_sitter_c')
 
 
+@pytest.fixture
+def semantic_prefix_budget(monkeypatch):
+    from core.audit import arithmetic_prefix_obligations
+
+    # Proof semantics are independent of the production soft deadline.
+    # Deadline, query-cap and non-proof controls keep their default budget.
+    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
+
+
 def source(prefix, extra='unsigned Extra'):
     return ('unsigned Read(unsigned Value,unsigned Step,' + extra + '){' + prefix
             + 'if(Value<10 && Step<10){return Value+Step;}return 0;}')
@@ -33,6 +42,7 @@ def source(prefix, extra='unsigned Extra'):
     ('int Local=Extra+1;', 'unsigned short Extra'),
     ('int Local=Extra-1;', 'unsigned char Extra'),
 ])
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_mechanically_defined_arithmetic_reaches_audit_verification(prefix, extra, language):
     if language == 'cpp':
         pytest.importorskip('tree_sitter_cpp')

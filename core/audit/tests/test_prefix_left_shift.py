@@ -18,6 +18,15 @@ def dependencies():
     pytest.importorskip('tree_sitter_c')
 
 
+@pytest.fixture
+def semantic_prefix_budget(monkeypatch):
+    from core.audit import arithmetic_prefix_obligations
+
+    # Proof semantics are independent of the production soft deadline.
+    # Deadline, query-cap and non-proof controls keep their default budget.
+    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
+
+
 def source(prefix, extra='unsigned Extra'):
     return ('unsigned Read(unsigned Value,unsigned Step,' + extra + '){' + prefix
             + 'if(Value<10 && Step<10){return Value+Step;}return 0;}')
@@ -34,6 +43,7 @@ def source(prefix, extra='unsigned Extra'):
     ('short Local=Extra<<1;', 'unsigned char Extra'),
     ('int Local=1<<3;', 'unsigned Extra'),
 ])
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_defined_left_shift_prefix_reaches_real_source_verification(prefix, extra, language):
     if language == 'cpp':
         pytest.importorskip('tree_sitter_cpp')
@@ -63,6 +73,7 @@ def test_invalid_or_unmodeled_left_shift_does_not_get_verification_credit(prefix
     assert result.outcome == 'inconclusive' and result.matches == []
 
 
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_left_shift_uses_the_explicit_abi_promotions():
     text = source('int Local=Extra<<8;', 'unsigned char Extra')
     narrow = bind_arithmetic_operation(text, ['Value', 'Step'], '+', language='c', integer_abi='i16')
@@ -71,6 +82,7 @@ def test_left_shift_uses_the_explicit_abi_promotions():
     assert wide.guard_status == wide.type_status == 'bound'
 
 
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_auxiliary_disproof_uses_the_same_left_shift_prefix_proof():
     from core.audit.condition_smt import disprove_integer_overflow
     result = disprove_integer_overflow('integer overflow in `Value + Step`', source('unsigned Local=Extra<<1;'),

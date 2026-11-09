@@ -18,6 +18,15 @@ def dependencies():
     pytest.importorskip('tree_sitter_c')
 
 
+@pytest.fixture
+def semantic_prefix_budget(monkeypatch):
+    from core.audit import arithmetic_prefix_obligations
+
+    # Proof semantics are independent of the production soft deadline.
+    # Deadline, query-cap and non-proof controls keep their default budget.
+    monkeypatch.setattr(arithmetic_prefix_obligations, '_BUDGET_MS', 5000)
+
+
 def source(prefix, extra='unsigned Extra'):
     return ('unsigned Read(unsigned Value,unsigned Step,' + extra + '){' + prefix
             + 'if(Value<10 && Step<10){return Value+Step;}return 0;}')
@@ -34,6 +43,7 @@ def source(prefix, extra='unsigned Extra'):
     ('int Ignored=Extra>>3;', 'unsigned char Extra'),
     ('unsigned Ignored=Extra>>Count;', 'unsigned Extra,bool Count'),
 ])
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_safe_prefix_arithmetic_reaches_the_real_source_verifier(language, prefix, extra):
     if language == 'cpp':
         pytest.importorskip('tree_sitter_cpp')
@@ -129,6 +139,7 @@ def test_a_self_initializer_does_not_get_a_defined_value_from_its_storage_type(p
     assert result.guard_status == result.type_status == 'unavailable'
 
 
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_sizeof_a_local_in_its_initializer_does_not_read_an_indeterminate_value():
     result = sweep._run_smt_verb_inner(file_path='record.c', function_name='Read', verb='check-overflow',
                                      source=source('unsigned Local=sizeof(Local);'),
@@ -136,6 +147,7 @@ def test_sizeof_a_local_in_its_initializer_does_not_read_an_indeterminate_value(
     assert result.outcome == 'refuted', result.details
 
 
+@pytest.mark.usefixtures("semantic_prefix_budget")
 def test_auxiliary_disproof_consumes_the_same_defined_prefix_model():
     from core.audit.condition_smt import disprove_integer_overflow
     text = source('int Local=Extra/2;', extra='int Extra')
