@@ -4203,6 +4203,8 @@ def run_sandboxed(
             #
             # Resolve imports and prepare argv before fork. The helper
             # performs filesystem work only in this parent-side branch.
+            assert audit_run_dir is not None
+            assert t_ready_w is not None
             tracer_argv, tracer_env = prepare_tracer_launch(
                 sys.executable, child_pid, audit_run_dir, t_ready_w,
                 _audit_config_arg,

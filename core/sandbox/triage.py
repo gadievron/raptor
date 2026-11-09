@@ -1017,7 +1017,8 @@ def _check_volume_anomaly(summary: dict | None,
         evidence.append(
             f"total_denials={total} near/at cap ({MAX_DENIALS_PER_RUN})"
         )
-    marker_types = sorted({m.get("type") for m in budget_markers  # type: ignore[type-var]
+    # The caller classifies these records by their required marker type.
+    marker_types = sorted({m["type"] for m in budget_markers
                             if m.get("type") != "audit_summary"})
     capture = (summary or {}).get("audit_capture")
     if capture:

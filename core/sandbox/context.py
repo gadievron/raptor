@@ -363,7 +363,7 @@ def _run_teardown_first_timeout(
         _close_teardown_streams(proc)
     result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
     if bounded is not None:
-        result._capture_limit_snapshot = (bounded.cap, out, err)
+        setattr(result, "_capture_limit_snapshot", (bounded.cap, out, err))
     if check:
         result.check_returncode()
     return result
@@ -471,12 +471,13 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
             confirmed = True
             break
     pending_pipes = _close_teardown_streams(proc)
-    failure.sandbox_cleanup_pending = death_close_pending or not confirmed or bool(pending_pipes)
+    setattr(failure, "sandbox_cleanup_pending",
+            death_close_pending or not confirmed or bool(pending_pipes))
     if not confirmed:
-        failure.sandbox_process = proc
+        setattr(failure, "sandbox_process", proc)
         issues.append("sweeper exit unconfirmed; retry sandbox_process.wait()")
     if pending_pipes:
-        failure.sandbox_pipes = pending_pipes
+        setattr(failure, "sandbox_pipes", pending_pipes)
         issues.append("owned pipes remain open; retry sandbox_pipes close")
     for issue in issues:
         failure.add_note("sandbox cleanup: " + issue)
