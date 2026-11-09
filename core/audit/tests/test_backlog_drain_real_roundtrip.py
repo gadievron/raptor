@@ -63,18 +63,27 @@ _TEST_NEGATIVE = (
 
 
 def _probe_or_skip_semgrep(tmp_path: Path) -> None:
-    """Skip when the sandboxed adapter cannot run semgrep at all —
-    this file verifies the drain round-trip, not sandbox
-    availability (same pattern as the substrate's engine-truth
-    tests)."""
+    """Require the known-matching adapter probe; skip only narrowly
+    classified transport failures, retaining product errors as failures."""
     from packages.checker_synthesis.synthesise import _run_semgrep
     rule = tmp_path / "probe.yaml"
     rule.write_text(_MATCHING_RULE, encoding="utf-8")
     target = tmp_path / "probe.py"
     target.write_text("import os\nos.system('x')\n", encoding="utf-8")
     matches, errors = _run_semgrep(rule, target)
+    # The adapter retains runner errors and prefixes product-owned scan
+    # failures. Preserve that partition rather than treating no-match as
+    # an unavailable host prerequisite.
+    from core.audit.sweep import SweepResult
+    from core.audit.tests._live_transport import skip_if_semgrep_transport_degraded
+
+    skip_if_semgrep_transport_degraded(SweepResult(
+        tool="semgrep", file_path="probe.py", function_name="probe",
+        outcome="error" if errors else "confirmed" if matches else "refuted",
+        rule_id=str(rule), errors=errors,
+    ))
     if errors or not matches:
-        pytest.skip(f"semgrep adapter probe failed on this host: {errors}")
+        pytest.fail(f"semgrep adapter probe failed: matches={len(matches)} errors={errors}")
 
 
 def _fixtures(tmp_path: Path) -> tuple[Path, Path]:
@@ -216,3 +225,42 @@ class TestRealRoundTrip:
         row = next(r for r in report_data["rows"]
                    if r.get("action") == "attempted")
         assert "still dark" in row["reason"]
+
+
+class TestAdapterProbePartition:
+    @pytest.mark.parametrize("errors", [
+        [],
+        ["invalid rule schema"],
+        ["semgrep failed to scan probe.py: parse error"],
+        ["Timeout after 45s", "invalid rule schema"],
+    ])
+    def test_product_failure_is_hard(self, monkeypatch, tmp_path, errors):
+        monkeypatch.setattr(
+            "packages.checker_synthesis.synthesise._run_semgrep",
+            lambda rule, target: ([], errors),
+        )
+        try:
+            with pytest.raises(pytest.fail.Exception, match="adapter probe"):
+                _probe_or_skip_semgrep(tmp_path)
+        except pytest.skip.Exception as exc:
+            pytest.fail(f"product failure incorrectly skipped: {exc}")
+
+    def test_healthy_adapter_returns(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            "packages.checker_synthesis.synthesise._run_semgrep",
+            lambda rule, target: ([SimpleNamespace(file="probe.py", line=2)], []),
+        )
+        _probe_or_skip_semgrep(tmp_path)
+
+    @pytest.mark.parametrize("reason", [
+        "Timeout after 45s",
+        "[Errno 11] Resource temporarily unavailable",
+        "semgrep is not installed (semgrep binary not found on PATH)",
+    ])
+    def test_transport_failure_still_skips(self, monkeypatch, tmp_path, reason):
+        monkeypatch.setattr(
+            "packages.checker_synthesis.synthesise._run_semgrep",
+            lambda rule, target: ([], [reason]),
+        )
+        with pytest.raises(pytest.skip.Exception, match="transport degraded"):
+            _probe_or_skip_semgrep(tmp_path)
