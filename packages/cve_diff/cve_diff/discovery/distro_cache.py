@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import functools
 import re
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,43 +55,17 @@ _REDHAT_URL = "https://access.redhat.com/hydra/rest/securitydata/cve/{cve_id}.js
 _HREF_RE = re.compile(r'href="([^"]{1,4096})"', re.IGNORECASE)
 
 
-# In-memory LRU cap for `_mem`. Pre-cap the dict grew without
-# bound for the lifetime of the process — bench runs that process
-# thousands of CVEs accumulated one entry per (distro, CVE) tuple,
-# each 10-100 KiB. OrderedDict + move_to_end gives true LRU; cap
-# at 10000 entries (≈1 GiB worst case, typically much less).
-_MEM_CACHE_MAX = 10000
-
-
 @dataclass
 class DistroFetcher:
     cache_enabled: bool = True
     cache_dir: Path = field(default_factory=lambda: DEFAULT_CACHE_DIR)
-    # OrderedDict for LRU semantics. Pre-fix this was a plain dict
-    # with monotonic growth.
-    _mem: OrderedDict[tuple[str, str], dict[str, Any]] = field(
-        default_factory=OrderedDict
-    )
+    # JsonCache already owns the bounded parsed memo, file-generation checks
+    # and expiry. A second response cache would bypass those contracts.
     _disk: JsonCache | None = field(default=None, repr=False)
-    # `_mem_lock` serialises access to the in-memory cache. Pre-fix
-    # the `if key in self._mem ... self._mem[key] = result` sequence
-    # had a TOCTOU window: two parallel fetch_all callers (the bench
-    # runner uses ProcessPoolExecutor for cves but the per-CVE
-    # fetch_all spawns its own ThreadPoolExecutor for the 3 distros,
-    # and a shared DistroFetcher across operator-driven repeats can
-    # see two threads land on the same key at the same time) each
-    # passed the `not in` check, each fetched independently, each
-    # wrote to `self._mem[key]`. Result: wasted upstream traffic
-    # AND, on dict resize, a non-atomic write that crashed in
-    # CPython >=3.12's hardened dict implementation.
-    _mem_lock: Any = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.cache_enabled and self._disk is None:
             self._disk = JsonCache(self.cache_dir)
-        if self._mem_lock is None:
-            import threading
-            self._mem_lock = threading.Lock()
 
     def fetch_all(self, cve_id: str) -> dict[str, dict[str, Any]]:
         """Fan out to 3 distros in parallel, return per-distro results."""
@@ -107,25 +80,9 @@ class DistroFetcher:
             return {name: fut.result() for name, fut in futures.items()}
 
     def _cached(self, distro: str, cve_id: str, fetcher) -> dict[str, Any]:
-        key = (distro, cve_id)
-        # Fast-path read under lock. We don't hold the lock across the
-        # network fetch — that would serialise the parallel-distro
-        # fan-out for nothing. Two parallel callers MAY duplicate the
-        # fetch in the worst case, but only one of their writes
-        # survives (last-writer-wins) and `_mem` mutation is now
-        # atomic. The duplication is acceptable cost for not
-        # serialising the network round-trips.
-        with self._mem_lock:
-            if key in self._mem:
-                # LRU touch: move-to-end on read marks this key
-                # as most-recently-used so eviction picks colder
-                # entries.
-                self._mem.move_to_end(key, last=True)
-                return self._mem[key]
         if self.cache_enabled and self._disk is not None:
             hit = self._disk.get(f"{distro}/{cve_id}", ttl_seconds=_CACHE_TTL)
             if isinstance(hit, dict):
-                self._mem_put(key, hit)
                 return hit
         result = fetcher(cve_id)
         err = result.get("error", "")
@@ -141,24 +98,7 @@ class DistroFetcher:
         )
         if cacheable and self.cache_enabled and self._disk is not None:
             self._disk.put(f"{distro}/{cve_id}", result, ttl_seconds=_CACHE_TTL)
-        self._mem_put(key, result)
         return result
-
-    def _mem_put(
-        self, key: tuple[str, str], value: dict[str, Any],
-    ) -> None:
-        """Insert into ``_mem`` under lock with LRU eviction at the
-        ``_MEM_CACHE_MAX`` ceiling. Pre-fix the dict grew without
-        bound; bench runs that processed thousands of CVEs
-        accumulated one entry per (distro, CVE) tuple, each
-        10-100 KiB.
-        """
-        with self._mem_lock:
-            if key in self._mem:
-                self._mem.move_to_end(key, last=True)
-            self._mem[key] = value
-            while len(self._mem) > _MEM_CACHE_MAX:
-                self._mem.popitem(last=False)
 
 
 @functools.lru_cache(maxsize=1)
