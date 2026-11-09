@@ -29,6 +29,57 @@ def source(prefix, extra='unsigned Extra'):
             + 'if(Value<10 && Step<10){return Value+Step;}return 0;}')
 
 
+@pytest.mark.usefixtures('semantic_prefix_budget')
+def test_known_boolean_divisors_preserve_native_overflow_witnesses():
+    for language, boolean in [('c', '_Bool'), ('cpp', 'bool')]:
+        if language == 'cpp':
+            pytest.importorskip('tree_sitter_cpp')
+        divisors = [f'({boolean})2', '!0', '!!2', '!!-2']
+        if language == 'cpp':
+            # The pinned C grammar parses these _Bool casts as subtraction
+            # or calls; those ambiguous forms retain their existing refusal.
+            divisors += [f'({boolean})-2', f'({boolean})(Extra+1)']
+        for divisor in divisors:
+            text = ('unsigned Read(unsigned Value,unsigned Step,unsigned char Extra){int Local=10/(' + divisor
+                    + ');if(Value>0 && Step>0)return Value*Step;return 0;}')
+            result = sweep._run_smt_verb_inner(
+                file_path='record.' + language, function_name='Read', verb='check-overflow',
+                source=text, hypothesis='integer overflow in `Value * Step`', integer_abi='ilp32')
+            assert result.outcome == 'confirmed', (divisor, result.details)
+            assert result.details['witness_validated'] is True
+            assert result.details['mathematical_result'] > 4294967295
+
+
+def test_boolean_divisors_that_may_be_zero_never_get_prefix_credit():
+    for language, boolean in [('c', '_Bool'), ('cpp', 'bool')]:
+        if language == 'cpp':
+            pytest.importorskip('tree_sitter_cpp')
+        for divisor in [f'({boolean})0', f'({boolean})Extra', '!2', '!Extra', '(unsigned char)256',
+                        f'({boolean})(1/0)', '!(-Extra)']:
+            result = sweep._run_smt_verb_inner(
+                file_path='record.' + language, function_name='Read', verb='check-overflow',
+                source=source('int Local=10/(' + divisor + ');', extra='int Extra'),
+                hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
+            assert result.outcome == 'inconclusive', (divisor, result.details)
+            assert result.matches == []
+
+
+@pytest.mark.usefixtures('semantic_prefix_budget')
+def test_boolean_prefix_domains_preserve_array_witness_admission():
+    from core.audit.array_bounds import check_array_bounds
+
+    # Array access frames admit logical negation, but deliberately exclude casts.
+    for divisor, expected in [('!0', True), ('!!2', True), ('!2', None), ('!!0', None)]:
+        text = ('int Read(unsigned Index){int Data[4]={0};int Local=10/(' + divisor
+                + ');return Data[Index];}')
+        result = check_array_bounds(text, 'Data[Index]', language='c', integer_abi='ilp32')
+        assert result['violation'] is expected, result
+        if expected is True:
+            assert result['witness_index'] >= 4
+        else:
+            assert result['array_bounds_status'] == 'unavailable'
+
+
 @pytest.mark.parametrize('language', ['c', 'cpp'])
 @pytest.mark.parametrize('prefix,extra', [
     ('unsigned Local=Extra+1;', 'unsigned Extra'),

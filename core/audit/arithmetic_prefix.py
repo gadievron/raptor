@@ -16,6 +16,18 @@ from .integer_literals import source_integer_atom, integer_literal_value
 from .narrowing_bindings import visible_declarations
 
 
+def _truth_domain(domain):
+    """C/C++ integer truth values compare with zero, rather than truncate."""
+    if domain is None:
+        return None
+    low, high = domain
+    if low == high == 0:
+        return 0, 0
+    if (low is not None and low > 0) or (high is not None and high < 0):
+        return 1, 1
+    return 0, 1
+
+
 class PrefixIntegerModel:
     """Per-source type/domain checks without shared mutable parser state."""
 
@@ -155,15 +167,18 @@ class PrefixIntegerModel:
                 low, high = domain
                 minimum = -(1 << (kind.width - 1)) if kind.signed else 0
                 maximum = (1 << (kind.width - (1 if kind.signed else 0))) - 1
-                if low is not None and high is not None and minimum <= low <= high <= maximum:
+                if kind.width == 1 and not kind.signed:
+                    result = _truth_domain(domain)
+                elif low is not None and high is not None and minimum <= low <= high <= maximum:
                     result = domain
                 elif not kind.signed:
                     result = (minimum, maximum)
         elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) in {"+", "-", "~"}:
             result = unary_domain(self, node, depth)
         elif node.type == "unary_expression" and self.text(node.child_by_field_name("operator")) == "!":
-            if self.value_domain(node.child_by_field_name("argument"), depth + 1) is not None:
-                result = (0, 1)
+            truth = _truth_domain(self.value_domain(node.child_by_field_name("argument"), depth + 1))
+            if truth is not None:
+                result = 1 - truth[1], 1 - truth[0]
         elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"+", "-", "*", "/", "%", "<<", ">>", "&", "|", "^"}:
             result = binary_domain(self, node, depth)
         elif node.type == "binary_expression" and self.text(node.child_by_field_name("operator")) in {"<", "<=", ">", ">=", "==", "!=", "&&", "||"}:
