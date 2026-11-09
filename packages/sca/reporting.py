@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable
 import json
 from pathlib import Path
 
@@ -10,12 +11,14 @@ from core.reporting.builders import build_document
 from core.reporting.document import Block, Inline, MAX_FINDINGS, ReportContext, StageEnvelope
 
 
-def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps_analysed: int | None,
+def build_sca_document(*, rows: Iterable[dict], target: Path, output_dir: Path, deps_analysed: int | None,
                        parse_failures=(), project_license: str | None = None,
                        cache_hits: int | None = 0, cache_misses: int | None = 0, cache_evictions: int | None = None, rerender: bool = False,
                        artifacts: list[dict] | None = None, selection: dict | None = None, limitations=()):
     diagnostics = [*limitations, *(f"Manifest parser failed: {f.path}: {f.reason}" for f in parse_failures)]
-    captured, counts, health = [], Counter(), []
+    captured: list[dict] = []
+    counts: Counter[str] = Counter()
+    health: list[dict] = []
     recorded = invalid = kev = 0
     for row in rows:
         if not isinstance(row, dict):
@@ -32,7 +35,6 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
                     and row["sca"].get("in_kev") is True and row.get("suppressed") is not True)
     if invalid:
         diagnostics.append(f"{invalid} non-object row(s) omitted from reporting; original input retained")
-    rows = captured
     if rerender:
         diagnostics.append("Regenerated from recorded findings; no dependency analysis or network queries ran. Original inventory completeness and cache statistics are unknown.")
         if selection:
@@ -40,7 +42,6 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
     diagnostics.extend(str(r.get("description") or r.get("title") or "Scan health limitation") for r in health)
     if recorded > MAX_FINDINGS:
         diagnostics.append(f"Report details and overview truncated: showing {MAX_FINDINGS} of {recorded} recorded SCA rows; finding-class and KEV counts include all rows. Full evidence remains in findings.json")
-    captured = rows[:MAX_FINDINGS]
     findings = native_findings(captured, run_id=output_dir.name, producer="sca", triage=True)
     for row, f in zip(captured, findings):
         f["status"] = "Advisory match" if row.get("vuln_type") == "sca:vulnerable_dependency" else "Recorded signal"
@@ -65,7 +66,7 @@ def build_sca_document(*, rows: list[dict], target: Path, output_dir: Path, deps
     blocks = [Block("paragraph", inline=[Inline("strong", "KEV"), Inline("text", f": {kev} unsuppressed known-exploited advisory matches.")]),
               Block("paragraph", text="Advisory matches and supply-chain signals do not by themselves establish exploitability. Reachability, suppression, and evidence retain their recorded meanings."),
               Block("table", title="Finding classes", columns=["Class", "Recorded rows"], rows=[[k, v] for k, v in sorted(counts.items())])]
-    blocks.extend(_overview_blocks(rows))
+    blocks.extend(_overview_blocks(captured))
     details = []
     for index, row in enumerate(captured, 1):
         raw_sca = row.get("sca")

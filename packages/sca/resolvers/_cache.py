@@ -151,7 +151,8 @@ def _resolution_context(resolver: Resolver) -> bytes | None:
         except OSError:
             tools.append((None,))
     module = sys.modules.get(type(resolver).__module__)
-    code = read_regular_bytes(Path(module.__file__)) if module and getattr(module, "__file__", None) else None
+    module_file: str | None = getattr(module, "__file__", None) if module else None
+    code = read_regular_bytes(Path(module_file)) if module_file else None
     return dumps_canonical({"schema": 2, "raptor_version": RaptorConfig.VERSION, "runtime": sys.version, "platform": platform.system() + "/" + platform.machine(),
                        "executable": sys.executable, "environment": env, "tools": tools,
                        "resolver": hashlib.sha256(code or b"").hexdigest(),

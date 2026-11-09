@@ -240,6 +240,7 @@ class OsvOfflineDB:
     def snapshot_metadata(self) -> dict:
         """Local ingest timestamps, not authenticated upstream snapshot identities."""
         self._init_db()
+        assert self._conn is not None
         return {eco: stamp for eco, stamp in self._conn.execute(
             "SELECT ecosystem, ingested_at FROM ingest_meta ORDER BY ecosystem")}
 

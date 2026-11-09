@@ -46,7 +46,7 @@ def _copy_go_sources(project_dir: Path, tmp_path: Path | None) -> tuple[str, ...
     ``_SKIP_DIRS`` apply to TRAVERSAL, not just to copied paths. Same
     shape as ``verify._copy_target``.
     """
-    selected = []
+    selected: list[str] = []
     copied = 0
     walk_root = project_dir.resolve()
     for dirpath, dirnames, filenames in os.walk(
