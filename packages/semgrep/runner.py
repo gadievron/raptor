@@ -30,11 +30,10 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
 
 from core.atomic_fs import rmtree_hardened
-from core.run.scratch import keepalive_register, keepalive_unregister
+from core.run.scratch import keepalive_register, keepalive_unregister, write_temp_text
 from core.run.toolprobe import probe
 
 if TYPE_CHECKING:
@@ -701,12 +700,12 @@ def run_rule(
     cleanup_json = False
     json_path = None if sandbox_output is not None else json_output_path
     # Protect sidecar setup too: allocating the invocation directory
-    # precedes NamedTemporaryFile, whose constructor can itself fail.
+    # precedes sidecar allocation, whose setup can itself fail.
     try:
         if json_path is None:
-            with NamedTemporaryFile(prefix="semgrep_", suffix=".json",
-                                    dir=sandbox_output, delete=False) as tmp:
-                json_path = Path(tmp.name)
+            json_path = write_temp_text(
+                "", prefix="semgrep_", suffix=".json", dir=sandbox_output,
+            )
             cleanup_json = True
 
         cmd = build_cmd(
