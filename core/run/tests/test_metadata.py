@@ -292,9 +292,11 @@ def _dead_pid() -> int:
     reap it. Reuse in the microseconds before the check is possible in
     principle but not observed in practice."""
     import subprocess
+    from core.testing.processes import reap_on_exit
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
+    with reap_on_exit(proc):
+        proc.wait()
+        return proc.pid
 
 
 class TestFindClaudeAncestor(unittest.TestCase):
