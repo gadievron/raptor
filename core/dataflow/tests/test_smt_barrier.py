@@ -3957,3 +3957,33 @@ def test_public_substitution_proof_rejects_negated_model():
     assert "unsupported character class" in verdict.reasoning
     control = sb.ValidatorSpec(kind="charset_sub", var_name="x", forbidden=body[1:])
     assert sb.prove_neutralizes(control, "pathtrav").sound
+
+
+@_requires_z3
+@pytest.mark.parametrize("condition", [
+    're.fullmatch(r"[a-z]+", name) or allow',
+    'not (re.fullmatch(r"[a-z]+", name) or allow)',
+    'accept(re.fullmatch(r"[a-z]+", name))',
+], ids=["or-success", "negated-or-failure", "wrapped-result"])
+def test_charset_guard_requires_direct_match_result(tmp_path: Path, condition):
+    guard = "    if " + condition + ":"
+    negative = condition.startswith("not ")
+    source = (
+        "import re\ndef handle(name, allow):\n" + guard + "\n"
+        + ("        return\n    else:\n        pass\n" if negative else
+           "        pass\n    else:\n        return\n")
+        + "    return open(name)\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    direct = 'not re.fullmatch(r"[a-z]+", name)' if negative else 're.fullmatch(r"[a-z]+", name)'
+    (tmp_path / "app.py").write_text(source.replace(condition, direct))
+    control = sb.try_tier0(
+        fix_diff="+" + guard.replace(condition, direct) + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND

@@ -1063,9 +1063,13 @@ def _validator_block_exits_on_failure(
         if isinstance(node, ast.If) and node.lineno == validator_line:
             test = node.test
             if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+                if not isinstance(test.operand, ast.Call):
+                    return False
                 failure_body = node.body
-            else:
+            elif isinstance(test, ast.Call):
                 failure_body = node.orelse
+            else:
+                return False
             if not _block_always_exits(failure_body):
                 return False
             # If the exit is `raise` and we're inside a try with a
@@ -1983,19 +1987,24 @@ def validator_dominates_sink(
 
 
 def _if_test_contains_call(tree: ast.AST, line: int) -> bool:
-    """True when the :class:`ast.If` at ``line`` tests a CALL result.
+    """Require the supported regex call itself to control the guard.
 
-    Node-anchor for the guard kind: the certified charset always comes
-    from a validation call (``re.match``/``fullmatch``/method guard),
-    so the ``if`` at the validator line must actually test one.  A
-    decoy sharing a line with an unrelated exiting guard (``if not
-    flag: raise  # if not re.match(...): raise``) has a call-free
-    test — prose next to code must not certify.
+    A nested match inside a Boolean expression or wrapper does not
+    establish that a successful guard implies successful validation.
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and node.lineno == line:
-            return any(
-                isinstance(sub, ast.Call) for sub in ast.walk(node.test)
+            test = node.test
+            if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+                test = test.operand
+            if not isinstance(test, ast.Call):
+                return False
+            func = test.func
+            return (
+                isinstance(func, ast.Attribute)
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "re"
+                and func.attr in {"match", "fullmatch"}
             )
     return False
 
