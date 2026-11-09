@@ -659,7 +659,7 @@ class CodeQLAgent:
             finally:
                 # Release scratch as soon as database creation finishes.
                 # The outer finally covers failures in build detection too.
-                cleanup_build_paths(build_cleanup_paths)
+                cleanup_build_paths(build_cleanup_paths, preserve_error=sys.exc_info()[0] is not None)
 
             # Check for failures
             successful_dbs = {
@@ -887,7 +887,7 @@ class CodeQLAgent:
             # Acquired builds belong to this invocation, even if a later
             # language fails before database creation or cancellation escapes.
             # Only failed removals remain after the earlier sweep.
-            cleanup_build_paths(build_cleanup_paths)
+            cleanup_build_paths(build_cleanup_paths, preserve_error=sys.exc_info()[0] is not None)
 
     def _run_source_summaries_pass(self, successful_dbs) -> dict | None:
         """Derive Java source-wrapper summaries and stage their
