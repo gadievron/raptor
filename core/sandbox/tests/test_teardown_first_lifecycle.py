@@ -333,6 +333,9 @@ def test_caller_owned_output_files_remain_open(owned, tmp_path, field):
 
 
 def test_failed_kill_and_wait_keep_the_owned_process_available_for_retry(owned, monkeypatch):
+    # Startup is acknowledged before this parked child can enter cleanup.
+    # A denied kill cannot release it, so use a short real expiry here.
+    monkeypatch.setattr(ctx, "_TEARDOWN_KILL_GRACE_S", 0.02)
     owned.mode[0] = "park"
     primary = RuntimeError("owned initial failure")
     fault_once(owned, monkeypatch, primary)
@@ -347,6 +350,7 @@ def test_failed_kill_and_wait_keep_the_owned_process_available_for_retry(owned, 
     assert owned.holder == [None] and owned.processes[0][0].kill.call_count == 1
     assert primary.sandbox_cleanup_pending
     assert primary.sandbox_process is owned.processes[0][0]
+    assert primary.sandbox_process.poll() is None
     assert any("killing sweeper" in note for note in primary.__notes__)
 
 
