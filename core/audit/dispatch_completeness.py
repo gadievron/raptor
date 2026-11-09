@@ -401,6 +401,49 @@ def _site_prefixes(
     return same, other
 
 
+def _table_affix_index(table: DispatchTable, native_sites: bool):
+    """Build a table-local lookup only across closed native callback seams."""
+    if (native_sites
+            and type is _AFFIX_TYPE_IMPL and str is _AFFIX_STR_IMPL
+            and int is _AFFIX_INT_IMPL and len is _AFFIX_LEN_IMPL
+            and all is _AFFIX_ALL_IMPL and set is _AFFIX_SET_IMPL
+            and min is _AFFIX_MIN_IMPL
+            and type(table) is _AFFIX_TABLE_IMPL
+            and _AFFIX_TABLE_IMPL.__bases__ is _AFFIX_TABLE_BASES
+            and _AFFIX_TABLE_IMPL.__dict__.get('__getattribute__') is None
+            and _AFFIX_TABLE_IMPL.__dict__.get('__getattr__') is None
+            and _AFFIX_TABLE_IMPL.__dict__.get('file') is None
+            and _AFFIX_TABLE_IMPL.__dict__.get('keys') is None
+            and type(table.file) is str and type(table.keys) is set
+            and len(table.keys) >= 32
+            and _shares_affix is _AFFIX_CHECK_IMPL
+            and _shares_affix.__defaults__ is _AFFIX_DEFAULTS
+            and _shares_affix.__code__ is _AFFIX_CHECK_CODE
+            and _site_prefixes is _AFFIX_SITES_IMPL
+            and _site_prefixes.__code__ is _AFFIX_SITES_CODE
+            and bisect_left is _AFFIX_BISECT_LEFT
+            and bisect_right is _AFFIX_BISECT_RIGHT
+            and DispatchGap is _AFFIX_GAP_IMPL
+            and DispatchGap.__bases__ is _AFFIX_GAP_BASES
+            and DispatchGap.__dict__.get('__init__') is _AFFIX_GAP_INIT
+            and _AFFIX_GAP_INIT.__code__ is _AFFIX_GAP_INIT_CODE
+            and DispatchGap.__dict__.get('__new__') is _AFFIX_GAP_NEW
+            and DispatchGap.__dict__.get('__setattr__') is _AFFIX_GAP_SETATTR
+            and all(DispatchGap.__dict__.get(name) is None for name in (
+                '__getattribute__', '__getattr__', '__del__',
+                'table', 'missing_key', 'produced_by', 'confidence',
+            ))
+            and all(type(key) is str for key in table.keys)):
+        prefixes: set[str] = set()
+        suffixes: set[str] = set()
+        for key in table.keys:
+            if len(key) >= 3:
+                prefixes.add(key[:3])
+                suffixes.add(key[-3:])
+        return prefixes, suffixes
+    return None
+
+
 def find_dispatch_gaps(
     call_graphs: dict[str, object],
     source_texts: dict[str, str] | None = None,
@@ -469,8 +512,18 @@ def find_dispatch_gaps(
     # producer in the codebase yields a key the table doesn't handle.
     gaps: list[DispatchGap] = []
     all_produced: dict[str, list[tuple[str, int]]] = {}
+    native_affix_sites = (
+        _AFFIX_TYPE_IMPL(native_paths) is _AFFIX_BOOL_IMPL and native_paths
+        and _AFFIX_TYPE_IMPL(files) is _AFFIX_SET_IMPL
+        and _AFFIX_ALL_IMPL(_AFFIX_TYPE_IMPL(path) is _AFFIX_STR_IMPL for path in files)
+    )
     for fpath, prods in all_producers.items():
         for val, lineno in prods:
+            if native_affix_sites and (
+                _AFFIX_TYPE_IMPL(val) is not _AFFIX_STR_IMPL
+                or _AFFIX_TYPE_IMPL(lineno) is not _AFFIX_INT_IMPL
+            ):
+                native_affix_sites = False
             all_produced.setdefault(val, []).append((fpath, lineno))
 
     # Pre-index produced keys by shape for fast intersection.
@@ -500,10 +553,17 @@ def find_dispatch_gaps(
                 if min_len <= len(key) <= max_len:
                     candidates.add(key)
 
+        # Fully handled tables never need an affix index.
+        affix_index = None
+        affix_pending = True
+
         table_gaps: list[DispatchGap] = []
         for produced_key in candidates:
             if produced_key in table.keys:
                 continue
+            if affix_pending:
+                affix_index = _table_affix_index(table, native_affix_sites)
+                affix_pending = False
             sites = all_produced[produced_key]
             # Prefer same-file sites (high confidence), cap total sites
             # to avoid combinatorial explosion on repetitive codebases.
@@ -520,12 +580,24 @@ def find_dispatch_gaps(
             # at least one existing table key.  This filters unrelated
             # strings from different modules (e.g. 'mysql_query' from
             # cwe_dispatch.py against attacker_synthesis.py:to_dict).
-            if not same_file and not _shares_affix(produced_key, table.keys):
+            has_affix = None
+            if affix_index is not None:
+                has_affix = len(produced_key) >= 3 and (
+                    produced_key[:3] in affix_index[0]
+                    or produced_key[-3:] in affix_index[1]
+                )
+            if not same_file and not (
+                has_affix if has_affix is not None
+                else _shares_affix(produced_key, table.keys)
+            ):
                 continue
 
             # For cross-file sites, also require the affix check.
             selected_same = same_file[:3] if same_file else []
-            selected_other = other[:2] if _shares_affix(produced_key, table.keys) else []
+            selected_other = other[:2] if (
+                has_affix if has_affix is not None
+                else _shares_affix(produced_key, table.keys)
+            ) else []
             selected = selected_same + selected_other
             if not selected:
                 continue
@@ -597,6 +669,31 @@ def _shares_affix(candidate: str, existing_keys: set[str], min_affix: int = 3) -
         if suffix_len >= min_affix:
             return True
     return False
+
+
+_AFFIX_CHECK_IMPL = _shares_affix
+_AFFIX_DEFAULTS = _shares_affix.__defaults__
+_AFFIX_CHECK_CODE = _shares_affix.__code__
+_AFFIX_SITES_IMPL = _site_prefixes
+_AFFIX_SITES_CODE = _site_prefixes.__code__
+_AFFIX_BISECT_LEFT = bisect_left
+_AFFIX_BISECT_RIGHT = bisect_right
+_AFFIX_TYPE_IMPL = type
+_AFFIX_BOOL_IMPL = bool
+_AFFIX_STR_IMPL = str
+_AFFIX_INT_IMPL = int
+_AFFIX_LEN_IMPL = len
+_AFFIX_ALL_IMPL = all
+_AFFIX_SET_IMPL = set
+_AFFIX_MIN_IMPL = min
+_AFFIX_TABLE_IMPL = DispatchTable
+_AFFIX_TABLE_BASES = DispatchTable.__bases__
+_AFFIX_GAP_IMPL = DispatchGap
+_AFFIX_GAP_BASES = DispatchGap.__bases__
+_AFFIX_GAP_INIT = DispatchGap.__dict__.get('__init__')
+_AFFIX_GAP_INIT_CODE = _AFFIX_GAP_INIT.__code__
+_AFFIX_GAP_NEW = DispatchGap.__dict__.get('__new__')
+_AFFIX_GAP_SETATTR = DispatchGap.__dict__.get('__setattr__')
 
 
 def _key_shape(key: str) -> str:
