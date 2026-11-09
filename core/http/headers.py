@@ -22,7 +22,8 @@ def request_headers(
 
     Invalid values are refused before networking without echoing credentials.
     Caller mappings remain unchanged; duplicate caller names with different
-    casing are refused rather than sending ambiguous fields.
+    casing are refused rather than sending ambiguous fields. Values must fit
+    the HTTP/1 transport's Latin-1 encoding; no implicit encoding is applied.
     """
     if supplied is not None and not isinstance(supplied, Mapping):
         raise HttpError("request headers must be a mapping")
@@ -33,7 +34,9 @@ def request_headers(
         for name, value in group.items():
             if not isinstance(name, str) or not _HEADER_NAME.fullmatch(name):
                 raise HttpError("invalid request header name")
-            if not isinstance(value, str) or any(ord(c) < 32 or ord(c) == 127 for c in value):
+            if not isinstance(value, str) or any(
+                ord(c) < 32 or ord(c) == 127 or ord(c) > 255 for c in value
+            ):
                 raise HttpError("invalid request header value")
             key = name.lower()
             if key in seen:
