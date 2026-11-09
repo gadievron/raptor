@@ -1,7 +1,8 @@
-"""Keep an IO failure primary when a file or archive context also fails to close."""
+"""Ownership and error precedence for file and archive streams."""
 from collections.abc import Iterator
-from contextlib import contextmanager
-from typing import ContextManager, TypeVar
+from contextlib import closing, contextmanager
+import os
+from typing import IO, ContextManager, TypeVar
 
 _T = TypeVar('_T')
 
@@ -44,3 +45,30 @@ def preserving_stream_error(resource: ContextManager[_T]) -> Iterator[_T]:
         raise
     else:
         exit_stream(None, None, None)
+
+
+@contextmanager
+def open_owned_fd(fd: int, mode: str, **kwargs) -> Iterator[IO]:
+    """Consume an open descriptor through stream adoption and teardown.
+
+    The wrapper borrows the descriptor internally, so a partially failed
+    adoption cannot close it before this owner does. Stream and descriptor
+    closure are independent; an active operation error keeps precedence.
+    ``closefd`` is managed here and cannot be supplied by callers.
+    """
+    failed = False
+    try:
+        if "closefd" in kwargs:
+            raise TypeError("open_owned_fd manages descriptor closure")
+        stream = os.fdopen(fd, mode, closefd=False, **kwargs)
+        with preserving_stream_error(closing(stream)) as owned:
+            yield owned
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            os.close(fd)
+        except BaseException:
+            if not failed:
+                raise
