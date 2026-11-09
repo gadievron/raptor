@@ -19,20 +19,23 @@ from unittest.mock import patch
 
 import pytest
 
-try:
+if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:                                      # pragma: no cover
-    pass
 
 from core.security.codeql_trust import set_trust_override
 from packages.codeql.database_manager import DatabaseManager
 
 
 @pytest.fixture(autouse=True)
-def _clear_trust_state():
-    set_trust_override(False)
-    yield
-    set_trust_override(False)
+def _clear_trust_state(monkeypatch):
+    from core.security import codeql_trust as trust
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(trust, {"_trust_override_set": False}):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _unsafe_target(tmp_path: Path) -> Path:

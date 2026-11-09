@@ -14,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 CASES = [
+    ("packages/codeql/tests/test_codeql_trust_integration.py", "_clear_trust_state", "ql", 1),
     ("core/security/tests/test_cc_trust.py", "_reset_trust_override", "cc", 1),
     ("core/security/tests/test_cc_trust_self_worktree.py", "_reset_trust_override", "cc", 1),
     ("core/security/tests/test_codeql_trust.py", "_reset_trust_override", "ql", 1),
