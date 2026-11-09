@@ -90,22 +90,36 @@ def main(argv: Sequence[str]) -> int:
         help="path to findings.json from a recent scan",
     )
 
+    from core.reporting.options import add_report_arguments, options_from_args
+    for leaf in (p_list, p_check):
+        add_report_arguments(leaf)
     args = parser.parse_args(argv)
+    options = options_from_args(args, parser)
+    if args.report_format and args.report_output is None:
+        parser.error("--report-format requires --report-output for this command")
+    capture: dict[str, object] | None = {} if options.enabled and options.output is not None else None
 
     if args.action == "list":
-        return _cmd_list(Path(args.target).resolve(),
-                          emit_json=args.emit_json)
+        status = _cmd_list(Path(args.target).resolve(), emit_json=args.emit_json, capture=capture)
+        if capture is not None:
+            from .suppression_reporting import complete_suppression_report
+            complete_suppression_report(args, options, capture, status)
+        return status
     if args.action == "check":
-        return _cmd_check(
+        status = _cmd_check(
             target=Path(args.target).resolve(),
-            findings_path=Path(args.findings).resolve(),
+            findings_path=Path(args.findings).resolve(), capture=capture,
         )
+        if capture is not None:
+            from .suppression_reporting import complete_suppression_report
+            complete_suppression_report(args, options, capture, status)
+        return status
     # argparse ``choices`` makes an unknown action unreachable;
     # parser.error raises SystemExit if that invariant ever breaks.
     parser.error(f"unknown action {args.action!r}")
 
 
-def _cmd_list(target: Path, *, emit_json: bool) -> int:
+def _cmd_list(target: Path, *, emit_json: bool, capture: dict | None = None) -> int:
     suppress_path = target / SUPPRESS_FILENAME
     if not suppress_path.exists():
         print(f"raptor-sca suppress: no {SUPPRESS_FILENAME} in "
@@ -115,6 +129,8 @@ def _cmd_list(target: Path, *, emit_json: bool) -> int:
     # target is honoured (monorepo shared-config); escapes refused.
     with scan_root_context(target):
         entries = load(suppress_path)
+    if capture is not None:
+        capture["entries"] = entries
     if emit_json:
         # The entries come from the SCANNED target's suppress file —
         # hostile bytes in reasons/ids must not reach the terminal as
@@ -144,7 +160,7 @@ def _cmd_list(target: Path, *, emit_json: bool) -> int:
     return 0
 
 
-def _cmd_check(*, target: Path, findings_path: Path) -> int:
+def _cmd_check(*, target: Path, findings_path: Path, capture: dict | None = None) -> int:
     suppress_path = target / SUPPRESS_FILENAME
     if not suppress_path.exists():
         print(f"raptor-sca suppress: no {SUPPRESS_FILENAME} in "
@@ -156,6 +172,8 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
         return 2
     with scan_root_context(target):
         entries = load(suppress_path)
+    if capture is not None:
+        capture["entries"] = entries
     if not entries:
         print(f"raptor-sca suppress: {suppress_path} has no entries.")
         return 0
@@ -196,6 +214,9 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
         else:
             orphan.append(e)
 
+    if capture is not None:
+        capture.update(matched=matched, orphan=orphan, expired=expired,
+                       finding_count=len(rows), evaluated_on=today.isoformat())
     print(f"raptor-sca suppress: checked {len(entries)} entry(ies) "
           f"against {len(rows)} finding(s)")
     print(f"  · {len(matched)} active (entry matches a current finding)")
