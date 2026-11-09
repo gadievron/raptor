@@ -6,6 +6,8 @@ hash-mismatch rejection, tolerant load on malformed manifests.
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 import json
 import os
 
@@ -368,7 +370,10 @@ def test_concurrent_same_hash_writes_do_not_race(tmp_path):
 
     def worker(tid):
         try:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             w = Witness(
                 bytes_hash=shared_hash,
                 bytes_len=len(shared_bytes),
@@ -383,10 +388,11 @@ def test_concurrent_same_hash_writes_do_not_race(tmp_path):
     threads = [
         threading.Thread(target=worker, args=(i,)) for i in range(N)
     ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert errors == [], f"concurrent put() raised on {len(errors)}/{N} threads"
     # End state: one blob, one manifest (last-write-wins on outcome_detail)
@@ -414,7 +420,10 @@ def test_concurrent_distinct_hash_writes_succeed(tmp_path):
 
     def worker(tid):
         try:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             for i in range(PER):
                 data = f"thread-{tid}-write-{i}".encode()
                 w = Witness(
@@ -431,10 +440,11 @@ def test_concurrent_distinct_hash_writes_succeed(tmp_path):
     threads = [
         threading.Thread(target=worker, args=(i,)) for i in range(N)
     ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert errors == []
     blobs = list((tmp_path / "witnesses" / "blobs").glob("*"))

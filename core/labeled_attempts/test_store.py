@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 import sys
 from pathlib import Path
 
@@ -504,7 +506,10 @@ def test_concurrent_writes_do_not_overwrite(project_dir):
                 finding_signature=SAME_SIG,
                 timestamp=SAME_TS,
             )
-            barrier.wait()  # release all 20 simultaneously
+            try:
+                barrier.wait()  # release all 20 simultaneously
+            except threading.BrokenBarrierError:
+                return
             write(a, project_dir=project_dir)
         except Exception as e:  # noqa: BLE001
             errors.append(f"{i}: {e}")
@@ -512,10 +517,11 @@ def test_concurrent_writes_do_not_overwrite(project_dir):
     threads = [
         threading.Thread(target=writer, args=(i,)) for i in range(20)
     ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert errors == [], f"some writers failed: {errors}"
     records = list(read_all(project_dir=project_dir, include_bundled=False))
