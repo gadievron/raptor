@@ -223,3 +223,77 @@ def test_zero_byte_transfers_and_initializers_preserve_copy_extent(tmp_path):
     assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
     assert len(rows) == len(expected), "each nonzero uninitialised copy should report once"
     assert all(row["rule"] == "copy_to_user_uninit" for row in rows)
+
+
+def test_immediate_byte_array_decay_has_bounded_source_contract(tmp_path):
+    cases = []
+    for ctype in ("char", "signed char", "unsigned char"):
+        for length in ("1", "16", "020", "0x10UL", "0b10000U"):
+            cases.append((f"{ctype} out[{length}];\ncopy_to_user(up, out, sizeof(out));", True))
+    cases += [
+        ("unsigned char out[16];\nreturn copy_to_user(up, out, sizeof(out));", True),
+        ("unsigned char out[16] = {0};\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16] = {[2] = 1};\ncopy_to_user(up, out, sizeof(out));", False),
+        ("static unsigned char out[16];\ncopy_to_user(up, out, sizeof(out));", False),
+        ("extern unsigned char out[16];\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16];\nmemset(out, 0, sizeof(out));\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16];\nunsigned char *alias = out; memset(alias, 0, 16);\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16];\nmemset(out, 0, sizeof(out)), copy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16];\ncopy_to_user(initialize(out), out, sizeof(out));", False),
+        ("unsigned char out[16];\ncopy_to_user(out, out, sizeof(out));", False),
+        ("unsigned char out[0];\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[count];\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16], *alias = memset(out, 0, sizeof(out));\ncopy_to_user(up, out, sizeof(out));", False),
+        ("unsigned char out[16];\nreturn (memset(out, 0, sizeof(out)), copy_to_user(up, out, sizeof(out)));", False),
+        ("unsigned char out[16];\nif (0) copy_to_user(up, out, sizeof(out));", False),
+    ]
+    # These unsupported flows can contain bugs; silence is not a safe verdict.
+    cases += [
+        ("unsigned char out[16];\ncopy_to_user(up, out, count);", False),
+        ("int out[16];\ncopy_to_user(up, out, sizeof(out));", False),
+    ]
+    lines, expected = [], set()
+    for index, (body, reports) in enumerate(cases):
+        lines += [f"int array_copy_{index}(void *up, unsigned long count) {{", *body.splitlines(), "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    # Array-spelled parameters describe caller-owned storage, not a new local.
+    lines += ["void parameter(void *up, unsigned char out[16]) {", "copy_to_user(up, out, sizeof(out));", "}"]
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected), "array/object matching must not duplicate a copy site"
+    assert all(row["rule"] == "copy_to_user_uninit" for row in rows)
+
+
+@pytest.mark.integration
+def test_array_decay_receipt_is_detection_only_and_scopes_to_its_function(tmp_path):
+    from core.analysis.coccinelle_metadata import curated_rule_role
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    source = (
+        "void raw(void *up) { unsigned char out[16]; copy_to_user(up, out, sizeof(out)); }\n"
+        "void initialized(void *up) { unsigned char out[16] = {0}; copy_to_user(up, out, sizeof(out)); }\n"
+    )
+    (tmp_path / "arrays.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="arrays.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert not result.errors, result.errors
+    assert result.outcome == "confirmed"
+    assert len(result.matches) == 1
+    assert result.matches[0]["rule"] == "copy_to_user_uninit"
+    assert curated_rule_role(result.matches[0]["rule"], _RULE.parent) == "detection"
+    raw = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="raw", line_start=1, line_end=1, language="c",
+    )
+    assert raw.outcome == "confirmed" and len(raw.matches) == 1
+    initialized_line = 1 + source[:source.index("void initialized")].count("\n")
+    initialized = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="initialized",
+        line_start=initialized_line, line_end=initialized_line, language="c",
+    )
+    assert initialized.outcome == "inconclusive"
+    assert not initialized.matches
+    assert initialized.details["confirm_only"]
+    assert len(result.matches) == 1
