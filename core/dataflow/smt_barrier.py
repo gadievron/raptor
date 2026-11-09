@@ -2621,7 +2621,15 @@ def _python_chain_reaches_sink(
     chain -= _nested_scope_escaping_rebinds(scope_root)
     if not chain:
         return False
-    return any(_re.search(rf"\b{_re.escape(var)}\b", sink_line_text) for var in chain)
+    # Sink spelling is diagnostic text, not value provenance: comments
+    # and string literals can mention a validated name without reading it.
+    return any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in chain
+        and node.lineno == sink_line
+        for node in _walk_same_scope(scope_root)
+    )
 
 
 def _lexical_var_reaches_sink(

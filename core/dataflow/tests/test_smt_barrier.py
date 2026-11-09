@@ -3987,3 +3987,29 @@ def test_charset_guard_requires_direct_match_result(tmp_path: Path, condition):
         sink_uri="app.py", sink_line=7, sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("sink", [
+    "return open(raw)  # name",
+    'return open(raw + "name")',
+], ids=["comment-decoy", "literal-decoy"])
+def test_charset_chain_requires_executable_sink_read(tmp_path: Path, sink):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\ndef handle(name, raw):\n" + guard
+        + "\n        return\n    " + sink + "\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace(sink, "return open(name)"))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
