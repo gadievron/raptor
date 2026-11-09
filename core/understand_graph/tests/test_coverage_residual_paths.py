@@ -11,6 +11,26 @@ from core.understand_graph.store import graph_write_txn
 from core.understand_graph.tests.test_validates_join import _write_two_flow_run
 
 
+from core.testing.state_isolation import pin_user_state_dirs
+
+
+@pytest.fixture(autouse=True)
+def _user_state_in_tmp(tmp_path):
+    with pytest.MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, tmp_path / "user")
+        patch.setenv("HOME", str(tmp_path / "home"))
+        patch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+        patch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+        patch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
+        yield
+
+
+@pytest.fixture
+def monkeypatch(_user_state_in_tmp):
+    with pytest.MonkeyPatch.context() as patch:
+        yield patch
+
+
 def _shared_sink_graph(tmp_path, section="entry_points"):
     target, run = tmp_path / "target", tmp_path / "run"
     graph = _write_two_flow_run(run, target)
