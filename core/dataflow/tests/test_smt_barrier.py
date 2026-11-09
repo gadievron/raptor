@@ -1121,10 +1121,10 @@ def test_chain_kills_rebound_variable():
         "        return 'bad'\n"
         "    y = name\n"
         "    y = request.args.get('raw')\n"
-        "    return open(os.path.join('/data', y))\n"
+        "    return open(y)\n"
     )
     assert sb._python_chain_reaches_sink(
-        tree, "name", 3, 7, "    return open(os.path.join('/data', y))",
+        tree, "name", 3, 7, "    return open(y)",
     ) is False
 
 
@@ -1138,10 +1138,10 @@ def test_chain_kills_start_var_on_rebind():
         "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
         "        return 'bad'\n"
         "    name = request.args.get('raw')\n"
-        "    return open(os.path.join('/data', name))\n"
+        "    return open(name)\n"
     )
     assert sb._python_chain_reaches_sink(
-        tree, "name", 3, 6, "    return open(os.path.join('/data', name))",
+        tree, "name", 3, 6, "    return open(name)",
     ) is False
 
 
@@ -1155,10 +1155,10 @@ def test_chain_augassign_with_taint_kills():
         "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
         "        return 'bad'\n"
         "    name += request.args.get('suffix')\n"
-        "    return open(os.path.join('/data', name))\n"
+        "    return open(name)\n"
     )
     assert sb._python_chain_reaches_sink(
-        tree, "name", 3, 6, "    return open(os.path.join('/data', name))",
+        tree, "name", 3, 6, "    return open(name)",
     ) is False
 
 
@@ -1172,10 +1172,10 @@ def test_chain_rebind_from_unknown_method_declines():
         "        return 'bad'\n"
         "    y = name\n"
         "    y = y.lower()\n"
-        "    return open(os.path.join('/data', y))\n"
+        "    return open(y)\n"
     )
     assert sb._python_chain_reaches_sink(
-        tree, "name", 3, 7, "    return open(os.path.join('/data', y))",
+        tree, "name", 3, 7, "    return open(y)",
     ) is False
 
 
@@ -1551,13 +1551,12 @@ _WHOOGLE_DIFF = (
     "     name = os.path.normpath(request.args.get('name'))\n"
     '+    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'
     "+        return error()\n"
-    "     return open(os.path.join(CONFIG_PATH, name))\n"
+    "     return open(name)\n"
 )
 
 
 def _write_post_fix_repo(tmp_path: Path) -> Path:
-    """Materialise the whoogle archetype: validator before sink, in the
-    same function, with an exit-on-fail body."""
+    """Materialise a direct guarded-value control with an exiting failure arm."""
     src = tmp_path / "app" / "routes.py"
     src.parent.mkdir(parents=True)
     src.write_text(
@@ -1565,13 +1564,13 @@ def _write_post_fix_repo(tmp_path: Path) -> Path:
         "    name = os.path.normpath(request.args.get('name'))\n"              # line 2
         '    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'                  # line 3
         "        return error()\n"                                             # line 4
-        "    return open(os.path.join(CONFIG_PATH, name))\n"                   # line 5
+        "    return open(name)\n"                   # line 5
     )
     return tmp_path
 
 
 @_requires_z3
-def test_try_tier0_sound_on_whoogle_archetype(tmp_path: Path):
+def test_try_tier0_sound_on_direct_guarded_value(tmp_path: Path):
     """End-to-end: validator extracted, dominance proven via AST source-
     order + exit-on-fail, Z3 proves the language intersection empty."""
     repo = _write_post_fix_repo(tmp_path)
@@ -3422,10 +3421,10 @@ def test_chain_container_literal_all_members_still_grows():
         "    if not re.match(r'^[a-z]+$', x):\n"            # line 3
         "        return 'bad'\n"
         "    p = [x, 'suffix']\n"                            # line 5
-        "    return open(''.join(p))\n"                      # line 6
+        "    return sink(p)\n"                      # line 6
     )
     assert sb._python_chain_reaches_sink(
-        tree, "x", 3, 6, "    return open(''.join(p))",
+        tree, "x", 3, 6, "    return sink(p)",
     ) is True
 
 
@@ -3460,10 +3459,10 @@ def test_chain_class_body_global_rebind_kills():
         "class C:\n"                                 # line 4
         "    global x\n"
         "    x = request.args.get('raw')\n"          # line 6
-        "print(open(x))\n"                           # line 7
+        "open(x)\n"                           # line 7
     )
     assert sb._python_chain_reaches_sink(
-        tree, "x", 2, 7, "print(open(x))",
+        tree, "x", 2, 7, "open(x)",
     ) is False
 
 
@@ -3477,10 +3476,10 @@ def test_chain_class_body_plain_binding_stays_class_scoped():
         "    raise ValueError\n"
         "class C:\n"                                 # line 4
         "    x = request.args.get('raw')\n"          # line 5
-        "print(open(x))\n"                           # line 6
+        "open(x)\n"                           # line 6
     )
     assert sb._python_chain_reaches_sink(
-        tree, "x", 2, 6, "print(open(x))",
+        tree, "x", 2, 6, "open(x)",
     ) is True
 
 
@@ -4067,6 +4066,34 @@ def test_charset_chain_declines_unknown_call_returns(tmp_path: Path, expression,
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
     assert "no chain member reaches" in result.reasoning
     (tmp_path / "app.py").write_text(source.replace(target + " = " + expression, target + " = name"))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("value", [
+    "transform(name)", "choose(raw, name)", "os.path.join(name, raw)",
+    "os.path.join('/trusted', name)",
+], ids=["arbitrary-return", "ignored-argument", "raw-join-component", "uncontracted-join"])
+def test_charset_chain_declines_nested_sink_transform(tmp_path: Path, value):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        'import re\nimport os\ndef transform(ignored):\n    return "../raw"\n'
+        "def choose(raw, ignored):\n    return raw\ndef handle(name, raw):\n"
+        + guard + "\n        return\n    return open(" + value + ")\n"
+    )
+    sink_line = len(source.splitlines())
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace("open(" + value + ")", "open(name)"))
     control = sb.try_tier0(
         fix_diff="+" + guard + "\n", repo_root=tmp_path,
         sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",

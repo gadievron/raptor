@@ -311,7 +311,7 @@ def test_find_best_validator_line_picks_same_function_match(tmp_path: Path):
         "from werkzeug.security import safe_join\n"                     # line 1
         "def other_handler(path):\n"                                    # line 2
         "    abs_path = safe_join(BASE, path)\n"                        # line 3 — first occurrence
-        "    return open(abs_path).read()\n"                            # line 4
+        "    return open(abs_path)\n"                            # line 4
         "def main_handler(path):\n"                                     # line 5
         "    abs_path = safe_join(BASE, path)\n"                        # line 6 — second occurrence
         "    return open(abs_path)\n"                                   # line 7 = sink

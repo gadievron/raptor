@@ -2436,6 +2436,39 @@ def _bind_chain_target(
     kills |= names
 
 
+
+def _sink_reads_chain_without_nested_calls(
+    scope_root: ast.AST, chain: set, sink_line: int,
+) -> bool:
+    """Require executable chain reads without an intervening call result.
+
+    The outer sink call may consume a validated value. An inner call
+    returning the sink argument needs a separate transfer contract.
+    Callee/receiver use is not evidence that an argument is validated.
+    """
+    nodes = list(_walk_same_scope(scope_root))
+    parents = {
+        child: parent for parent in nodes for child in ast.iter_child_nodes(parent)
+    }
+    for node in nodes:
+        if not (
+            isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+            and node.id in chain and node.lineno == sink_line
+        ):
+            continue
+        current, calls = node, 0
+        while current in parents:
+            parent = parents[current]
+            if isinstance(parent, ast.Call):
+                calls += 1
+                if current is parent.func or calls > 1:
+                    break
+            if isinstance(parent, ast.stmt):
+                return True
+            current = parent
+    return False
+
+
 def _python_chain_reaches_sink(
     tree: ast.AST, start_var: str, validator_line: int,
     sink_line: int, sink_line_text: str,
@@ -2612,15 +2645,7 @@ def _python_chain_reaches_sink(
     chain -= _nested_scope_escaping_rebinds(scope_root)
     if not chain:
         return False
-    # Sink spelling is diagnostic text, not value provenance: comments
-    # and string literals can mention a validated name without reading it.
-    return any(
-        isinstance(node, ast.Name)
-        and isinstance(node.ctx, ast.Load)
-        and node.id in chain
-        and node.lineno == sink_line
-        for node in _walk_same_scope(scope_root)
-    )
+    return _sink_reads_chain_without_nested_calls(scope_root, chain, sink_line)
 
 
 def _lexical_var_reaches_sink(
