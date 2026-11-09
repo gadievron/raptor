@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -19,6 +20,7 @@ from core.run.metadata import (
     STATUS_FAILED,
     STATUS_RUNNING,
 )
+from core.testing.processes import cleanup_on_startup_error, reap_on_exit
 from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # core/run/tests/ → raptor/
@@ -69,8 +71,11 @@ RAPTOR_BASH_FAILURE = json.dumps({
 })
 
 
+@contextmanager
 def _stdin(payload: str):
-    return patch.object(sys, "stdin", io.StringIO(payload))
+    with patch.object(sys, "stdin", io.StringIO(payload)) as stream, \
+            patch.object(sys, "argv", list(sys.argv)):
+        yield stream
 
 
 class TestToolFailureMarker(unittest.TestCase):
@@ -297,8 +302,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_fails_when_marker_present(self):
@@ -310,8 +315,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_FAILED)
             meta = load_json(run / RUN_METADATA_FILE)
             self.assertIn("tool exited with error", meta["extra"]["error"])
@@ -325,8 +330,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
 
     def test_no_marker_no_complete(self):
@@ -338,8 +343,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_multi_turn_validate(self):
@@ -351,8 +356,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_multi_turn_understand(self):
@@ -364,8 +369,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_alive_tool_pid(self):
@@ -377,8 +382,8 @@ class TestStopHook(unittest.TestCase):
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._tool_pid_alive",
                        return_value=True):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_different_session(self):
@@ -390,8 +395,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_already_completed(self):
@@ -405,8 +410,8 @@ class TestStopHook(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_COMPLETED)
 
     def test_handles_no_tool_pid_stays_running(self):
@@ -426,8 +431,8 @@ class TestStopHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(d), STATUS_RUNNING)
 
 
@@ -442,8 +447,8 @@ class TestSessionEndHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "session-end"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "session-end"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run1), STATUS_FAILED)
             self.assertEqual(_status(run2), STATUS_FAILED)
 
@@ -455,8 +460,8 @@ class TestSessionEndHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "session-end"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "session-end"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_FAILED)
             meta = load_json(run / RUN_METADATA_FILE)
             self.assertIn("session ended", meta["extra"]["error"])
@@ -469,8 +474,8 @@ class TestSessionEndHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "session-end"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "session-end"]):
+                    _hook_mod.main()
             self.assertFalse((run / FAILURE_MARKER).exists())
 
     def test_skips_non_running(self):
@@ -483,8 +488,8 @@ class TestSessionEndHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "session-end"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "session-end"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_COMPLETED)
 
     def test_skips_different_session(self):
@@ -495,8 +500,8 @@ class TestSessionEndHook(unittest.TestCase):
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID):
-                sys.argv = ["hook", "session-end"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "session-end"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
 
@@ -518,8 +523,8 @@ class TestLLMOverride(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_COMPLETED)
 
     def test_llm_fail_prevents_hook_action(self):
@@ -534,8 +539,8 @@ class TestLLMOverride(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_FAILED)
             meta = load_json(run / RUN_METADATA_FILE)
             self.assertEqual(meta["extra"]["error"], "analysis found nothing")
@@ -574,8 +579,8 @@ class TestProjectDirScan(unittest.TestCase):
                        return_value=False):
                 sessions.record_session("myapp", pid=SESSION_PID)
                 sessions.ledger_record_start(run, pid=SESSION_PID)
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_FAILED)
 
     def test_scans_out_dir(self):
@@ -588,8 +593,8 @@ class TestProjectDirScan(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
     def test_skips_hidden_dirs(self):
@@ -601,8 +606,8 @@ class TestProjectDirScan(unittest.TestCase):
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  patch("core.run.metadata._pid_alive", return_value=False):
-                sys.argv = ["hook", "stop"]
-                _hook_mod.main()
+                with patch.object(sys, "argv", ["hook", "stop"]):
+                    _hook_mod.main()
             self.assertEqual(_status(run), STATUS_RUNNING)
 
 
@@ -627,8 +632,8 @@ class TestMultiTurnGuard(unittest.TestCase):
                            return_value=SESSION_PID), \
                      patch("core.run.metadata._pid_alive",
                            return_value=False):
-                    sys.argv = ["hook", "stop"]
-                    _hook_mod.main()
+                    with patch.object(sys, "argv", ["hook", "stop"]):
+                        _hook_mod.main()
                 self.assertEqual(
                     _status(run), STATUS_RUNNING,
                     f"Stop should skip multi-turn command '{cmd}'")
@@ -642,8 +647,8 @@ class TestMultiTurnGuard(unittest.TestCase):
                 with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                      patch("core.run.metadata._get_session_pid",
                            return_value=SESSION_PID):
-                    sys.argv = ["hook", "session-end"]
-                    _hook_mod.main()
+                    with patch.object(sys, "argv", ["hook", "session-end"]):
+                        _hook_mod.main()
                 self.assertEqual(
                     _status(run), STATUS_FAILED,
                     f"SessionEnd should catch multi-turn command '{cmd}'")
@@ -798,7 +803,6 @@ class TestSessionEndLivenessProof(unittest.TestCase):
              "import time; print('ready', flush=True); time.sleep(300)"],
             stdout=subprocess.PIPE, text=True,
         )
-        from core.testing.processes import cleanup_on_startup_error
         with cleanup_on_startup_error(proc):
             assert proc.stdout is not None
             assert proc.stdout.readline().strip() == "ready"
@@ -806,9 +810,8 @@ class TestSessionEndLivenessProof(unittest.TestCase):
 
     @staticmethod
     def _reap_stub(proc: subprocess.Popen) -> None:
-        if proc.poll() is None:
-            proc.kill()
-        proc.wait(timeout=10)
+        with reap_on_exit(proc, wait_timeout=10):
+            pass
 
     @staticmethod
     def _stamp_meta(run: Path, **fields) -> None:

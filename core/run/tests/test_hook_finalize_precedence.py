@@ -75,6 +75,10 @@ def _user_state_in_tmp(tmp_path: Path):
     from core.testing.state_isolation import pin_user_state_dirs
     with pytest.MonkeyPatch.context() as patch:
         pin_user_state_dirs(patch, tmp_path)
+        data_home = tmp_path / "data"
+        data_home.mkdir(exist_ok=True)
+        patch.setenv("XDG_DATA_HOME", str(data_home))
+        patch.delenv("_RAPTOR_SCRATCH_AUTH", raising=False)
         yield
 
 
@@ -126,8 +130,8 @@ def _run_stop_hook(tmp: Path) -> None:
     with patch.object(_hook_mod, "REPO_ROOT", tmp), \
          patch("core.run.metadata._get_session_pid",
                return_value=SESSION_PID):
-        sys.argv = ["hook", "stop"]
-        _hook_mod.main()
+        with patch.object(sys, "argv", ["hook", "stop"]):
+            _hook_mod.main()
 
 
 # Subprocess B: performs a REAL start_run, recording its parent (A) as
@@ -136,8 +140,11 @@ _STARTER_CHILD = """\
 import sys
 sys.path.insert(0, sys.argv[1])
 from pathlib import Path
+from unittest.mock import patch
 from core.run.metadata import start_run
-start_run(Path(sys.argv[2]), "scan")
+# The fixture exercises the parent fallback, never the host's ancestors.
+with patch("core.project.sessions._walk_session_pid", return_value=None):
+    start_run(Path(sys.argv[2]), "scan")
 """
 
 # Subprocess A: spawns B, waits for B's start_run to finish, then
@@ -169,26 +176,23 @@ class TestForcedDeadWorkerWindow(unittest.TestCase):
     def _start_run_with_dead_worker(self, tmp: Path) -> Path:
         """REAL ``start_run`` whose recorded worker credential is dead
         by the time this returns."""
+        from core.testing.processes import reap_on_exit
+        from core.testing.standalone_cli import standalone_cli_env
+
         run = tmp / "out" / "scan-001"
-        env = dict(os.environ)
-        # Hermetic session posture for the subprocess: a fresh HOME
-        # (no registered sessions.d entry → no ledger writes) and no
-        # inherited env credential; CLAUDECODE keeps the session-bound
-        # worker-stamp lane via the getppid fallback when no claude
-        # ancestor is walkable (CI).
-        home = tmp / "home"
-        home.mkdir()
-        env["HOME"] = str(home)
-        env["CLAUDECODE"] = "1"
-        env.pop("RAPTOR_SESSION_PID", None)
-        env.pop("RAPTOR_SESSION_TOKEN", None)
-        proc = subprocess.Popen(
-            [sys.executable, "-c", _TRANSIENT_PARENT,
-             str(REPO_ROOT), str(run)],
-            env=env, cwd=str(tmp),
-        )
-        proc.wait(timeout=120)
-        self.assertEqual(proc.returncode, 0)
+        env = dict(os.environ, CLAUDECODE="1", RAPTOR_CALLER_DIR=str(tmp))
+        env.pop("RAPTOR_LAUNCH_TARGET", None)
+        # Parent and child retain the file fixture's data directory after
+        # the child's standalone HOME and launch context have gone away.
+        with standalone_cli_env(env=env, data_home=os.environ["XDG_DATA_HOME"]) as child_env:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", _TRANSIENT_PARENT,
+                 str(REPO_ROOT), str(run)],
+                env=child_env, cwd=str(tmp), process_group=0,
+            )
+            with reap_on_exit(proc, process_group=True):
+                proc.wait(timeout=120)
+                self.assertEqual(proc.returncode, 0)
 
         meta = _meta(run)
         # The window is REAL: the recorded worker (the transient
@@ -408,8 +412,8 @@ class TestStopFreshnessFloor(unittest.TestCase):
              patch("core.run.metadata._get_session_pid",
                    return_value=SESSION_PID), \
              patch("core.run.metadata._pid_alive", return_value=False):
-            sys.argv = ["hook", "stop"]
-            _hook_mod.main()
+            with patch.object(sys, "argv", ["hook", "stop"]):
+                _hook_mod.main()
 
     def test_young_run_is_left_alone(self):
         with TemporaryDirectory() as tmp:

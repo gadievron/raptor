@@ -20,6 +20,8 @@ from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import os
 import subprocess
@@ -63,6 +65,10 @@ def _user_state_in_tmp(tmp_path: Path):
     from core.testing.state_isolation import pin_user_state_dirs
     with pytest.MonkeyPatch.context() as patch:
         pin_user_state_dirs(patch, tmp_path)
+        data_home = tmp_path / "data"
+        data_home.mkdir(exist_ok=True)
+        patch.setenv("XDG_DATA_HOME", str(data_home))
+        patch.delenv("_RAPTOR_SCRATCH_AUTH", raising=False)
         yield
 
 
@@ -90,42 +96,40 @@ def _fake_starttime(table):
 
 class TestWorkerStampRecorder(unittest.TestCase):
 
-    def _distinct_live_parent(self) -> int:
+    @contextmanager
+    def _distinct_live_parent(self) -> Iterator[int]:
         """A live, never-init pid DISTINCT from this process, for
         pinning ``os.getppid``: pinning our OWN pid would let a
         recorder that mistakenly stamps ``os.getpid()`` pass the
         equality assertions vacuously. A sleeper child is real and
-        live for the test's duration; cleanup kills/waits only the
+        live for the caller's scope; cleanup kills/waits only the
         Popen handle we spawned, and nothing else ever signals it.
         """
+        from core.testing.processes import reap_on_exit
+
         sleeper = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(120)"])
-
-        def _reap() -> None:
-            sleeper.kill()
-            sleeper.wait(timeout=10)
-
-        self.addCleanup(_reap)
-        return sleeper.pid
+        with reap_on_exit(sleeper, wait_timeout=10):
+            yield sleeper.pid
 
     def test_session_bound_start_records_parent_with_starttime(self):
         # Pin the live-parent launch shape the same way the detached
         # tests below pin theirs: under a harness whose own parent IS
         # init (pytest as a pid-namespace init), the real getppid() is
         # 1 and the recorder's detached arm engages instead.
-        live_parent = self._distinct_live_parent()
-        table = {live_parent: "424242"}
-        with TemporaryDirectory() as d, \
-                mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
-                mock.patch("core.run.metadata._get_session_pid",
-                           return_value=11111), \
-                mock.patch.object(sessions, "proc_starttime",
-                                  _fake_starttime(table)):
-            out = Path(d) / "run"
-            start_run(out, "scan")
-            meta = load_json(out / RUN_METADATA_FILE)
-        self.assertEqual(meta["tool_pid"], live_parent)
-        self.assertEqual(meta["tool_pid_start"], "424242")
+        with self._distinct_live_parent() as live_parent:
+            table = {live_parent: "424242"}
+            with TemporaryDirectory() as d, \
+                    mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
+                    mock.patch("core.run.metadata._get_session_pid",
+                               return_value=11111), \
+                    mock.patch.object(sessions, "proc_starttime",
+                                      _fake_starttime(table)):
+                out = Path(d) / "run"
+                start_run(out, "scan")
+                meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["tool_pid"], live_parent)
+            self.assertEqual(meta["tool_pid_start"], "424242")
 
     def test_detached_start_records_own_pid_not_init(self):
         # setsid/nohup shape: the parent exited, getppid() is 1. The
@@ -159,13 +163,13 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # Live-parent shape pinned as in the session-bound test above
         # (a harness that is itself init-parented would otherwise land
         # in the detached arm).
-        live_parent = self._distinct_live_parent()
-        with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
-                mock.patch.object(sessions, "proc_starttime",
-                                  lambda pid: None):
-            stamp = _worker_stamp(session_bound=True)
-        self.assertNotIn("tool_pid_start", stamp)
-        self.assertEqual(stamp["tool_pid"], live_parent)
+        with self._distinct_live_parent() as live_parent:
+            with mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid', return_value=live_parent), \
+                    mock.patch.object(sessions, "proc_starttime",
+                                      lambda pid: None):
+                stamp = _worker_stamp(session_bound=True)
+            self.assertNotIn("tool_pid_start", stamp)
+            self.assertEqual(stamp["tool_pid"], live_parent)
 
     def test_sessionless_interactive_start_records_no_worker(self):
         # Bare-shell run with a live interactive parent: recording
@@ -175,9 +179,9 @@ class TestWorkerStampRecorder(unittest.TestCase):
         # Live-parent shape pinned as in the session-bound test above
         # (a harness that is itself init-parented would otherwise land
         # in the detached arm, which DOES record a worker).
-        with TemporaryDirectory() as d, \
+        with self._distinct_live_parent() as live_parent, TemporaryDirectory() as d, \
                 mock_module_attribute(_mock_owner('core.run.metadata'), 'os', 'getppid',
-                           return_value=self._distinct_live_parent()), \
+                           return_value=live_parent), \
                 mock.patch("core.run.metadata._get_session_pid",
                            return_value=None):
             out = Path(d) / "run"
