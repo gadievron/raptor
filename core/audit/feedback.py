@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.json import load_json
 
@@ -502,9 +502,9 @@ def import_validation_results(
         if bound_source:
             from .context import fallback_span_end
 
-            line_start = prior_entry.line_start or 0
+            line_start = cast(ReviewJournalEntry, prior_entry).line_start or 0
             hashes, digest = hash_source_spans(Path(target_path_arg), file_path,
-                [(line_start, fallback_span_end(line_start, prior_entry.line_end))])
+                [(line_start, fallback_span_end(line_start, cast(ReviewJournalEntry, prior_entry).line_end))])
             recomputed_hash = make_source_anchor(digest, hashes[0]) if digest and hashes[0] else ""
             # A correction is not a new review of edited source. Keep the
             # original binding, including when the current file is unreadable.

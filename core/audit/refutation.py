@@ -38,7 +38,7 @@ from pathlib import Path
 from core.source import open_regular
 from core.source.lines import iter_splitlines
 from types import SimpleNamespace
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -3200,7 +3200,7 @@ def _get_function_source_and_callees(
         if fentry.get("path") != outcome.file:
             continue
         items = fentry.get("items", [])
-        span = None
+        span: tuple[int, int] | None = None
         # Native inventory rows can prove ambiguity without invoking adapter
         # operations. Keep the legacy lookup for other container/name shapes.
         if type(items) is list and type(outcome.function) is str:
@@ -3214,7 +3214,7 @@ def _get_function_source_and_callees(
                     matches = None
                     break
                 if name == outcome.function:
-                    matches.append(candidate)
+                    cast(list[dict[str, Any]], matches).append(candidate)
             if matches is not None and not matches:
                 continue
             if matches is not None and len(matches) == 1:
@@ -3230,11 +3230,11 @@ def _get_function_source_and_callees(
                 bounds = [(peer.get("line_start"), peer.get("line_end")) for peer in matches]
                 if (any(type(start) is not int or type(end) is not int or not 0 < start <= end
                         for start, end in bounds)
-                        or any(start <= last and first <= end
+                        or any(cast(int, start) <= cast(int, last) and cast(int, first) <= cast(int, end)
                                for peer, (start, end) in zip(matches, bounds) if peer is not item)):
                     return item.get("source", ""), []
                 items = [item]
-                span = (first, last)
+                span = (cast(int, first), cast(int, last))
         for item in items:
             if item.get("name") != outcome.function:
                 continue

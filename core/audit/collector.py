@@ -13,7 +13,7 @@ import contextlib
 import logging
 import threading
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 from .verification_results import VerificationScope
 
@@ -442,7 +442,7 @@ def append_journal_for_outcome(
         if inherited_after != inherited_before or source_hash != inherited_parts[1]:
             logger.warning("journal reused source binding changed during hashing")
             return None
-        source_hash = inherited_anchor
+        source_hash = cast(str, inherited_anchor)
     elif verification_scope is not None and verification_scope.source_identity is not None:
         try:
             source_hash = make_source_anchor(verification_scope.source_identity.sha256, source_hash)
@@ -764,6 +764,7 @@ def append_journal_for_outcome(
             "journal append failed for %s:%s",
             outcome.file, outcome.function, exc_info=True,
         )
+        return None
 
 
 @dataclass
