@@ -17,7 +17,9 @@ the dead-first wrapper.
 
 from __future__ import annotations
 
+from contextlib import ExitStack, suppress
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -38,6 +40,7 @@ from packages.joern.server import (
 # exercised against real children and procfs.
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import reap_on_exit
 
 
 pytestmark = pytest.mark.skipif(
@@ -95,17 +98,19 @@ def _short_graces(monkeypatch):
 
 @pytest.fixture
 def _reap_all():
-    """Kill every group this test spawned, pass or fail."""
-    pgids: list[int] = []
-    yield pgids
-    for pgid in pgids:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
+    """Own direct children, streams and member cleanup across every exit."""
+    with ExitStack() as cleanup:
+        yield cleanup
 
 
-def _spawn_dead_leader_with_survivor(pgids: list[int]) -> tuple:
+def _reap_member(member_fd: int) -> None:
+    """Signal only the anchored survivor after its group leader is reaped."""
+    with suppress(ProcessLookupError):
+        signal.pidfd_send_signal(member_fd, signal.SIGKILL)
+    assert select.select([member_fd], [], [], 5)[0], "owned member did not exit"
+
+
+def _spawn_dead_leader_with_survivor(cleanup: ExitStack) -> tuple:
     """(exited leader Popen, surviving SIGTERM-ignoring member pid)."""
     leader = subprocess.Popen(
         [sys.executable, "-c", _DYING_LEADER_SRC, _IGNORING_MEMBER_SRC],
@@ -113,9 +118,12 @@ def _spawn_dead_leader_with_survivor(pgids: list[int]) -> tuple:
         text=True,
         start_new_session=True,
     )
-    pgids.append(leader.pid)
+    cleanup.enter_context(reap_on_exit(leader, process_group=True))
     assert leader.stdout is not None
     member_pid = int(leader.stdout.readline())
+    member_fd = os.pidfd_open(member_pid)
+    cleanup.callback(os.close, member_fd)
+    cleanup.callback(_reap_member, member_fd)
     leader.wait(timeout=30)
     assert not _pid_gone(member_pid), "member must survive its leader"
     return leader, member_pid
@@ -143,7 +151,7 @@ class TestEnsureGroupDead:
             text=True,
             start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         assert proc.stdout is not None
         proc.stdout.readline()
         assert _pgid_alive(proc.pid)
@@ -246,7 +254,7 @@ class TestStopKillsSurvivingMembers:
             text=True,
             start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         assert proc.stdout is not None
         proc.stdout.readline()
         srv = _server_with(proc, proc.pid)
@@ -352,7 +360,7 @@ class TestEscalationCorroboration:
              "import time; print('ready', flush=True); time.sleep(300)"],
             stdout=subprocess.PIPE, text=True, start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         assert proc.stdout is not None
         proc.stdout.readline()
         return proc
@@ -404,7 +412,7 @@ class TestEscalationCorroboration:
              "import time; print('ready', flush=True); time.sleep(300)"],
             stdout=subprocess.PIPE, text=True, start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         assert proc.stdout is not None
         proc.stdout.readline()
         assert _ensure_group_dead(proc.pid, label="test")

@@ -13,6 +13,7 @@ their own sessions, mirroring test_stop_group_escalation.py.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import signal
 import subprocess
@@ -33,6 +34,7 @@ from packages.joern.server import (
 # against real children and procfs.
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import reap_on_exit
 
 
 pytestmark = pytest.mark.skipif(
@@ -72,14 +74,9 @@ def _wait_gone(pid: int, timeout_s: float = 10.0) -> bool:
 
 @pytest.fixture
 def _reap_all():
-    """Kill every group this test spawned, pass or fail."""
-    pgids: list[int] = []
-    yield pgids
-    for pgid in pgids:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
+    """Own direct children, streams and member cleanup across every exit."""
+    with ExitStack() as cleanup:
+        yield cleanup
 
 
 def _bare_server_for(proc: subprocess.Popen) -> JoernServer:
@@ -104,7 +101,7 @@ class TestStopFastRealProcesses:
             [sys.executable, "-c", _SLEEPER_SRC],
             start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         srv = _bare_server_for(proc)
         t0 = time.monotonic()
         assert srv.stop_fast(grace_s=2.0) is True
@@ -123,7 +120,7 @@ class TestStopFastRealProcesses:
             stdout=subprocess.PIPE, text=True,
             start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         assert proc.stdout is not None
         assert proc.stdout.readline().strip() == "ready"
         srv = _bare_server_for(proc)
@@ -150,7 +147,7 @@ class TestStopFastRealProcesses:
             [sys.executable, "-c", _SLEEPER_SRC],
             start_new_session=True,
         )
-        _reap_all.append(victim.pid)
+        _reap_all.enter_context(reap_on_exit(victim, process_group=True))
         real_start = _proc_starttime(victim.pid)
         assert real_start is not None
 
@@ -193,7 +190,7 @@ class TestStopFastRealProcesses:
             [sys.executable, "-c", _SLEEPER_SRC],
             start_new_session=True,
         )
-        _reap_all.append(proc.pid)
+        _reap_all.enter_context(reap_on_exit(proc, process_group=True))
         srv = _bare_server_for(proc)
         assert srv.stop_fast(grace_s=2.0) is True
         proc.wait(timeout=5)
