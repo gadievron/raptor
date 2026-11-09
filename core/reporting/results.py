@@ -74,6 +74,7 @@ class NativeResult:
     parents: list[str] | None = None
     lifecycle_dir: Path | None = None
     lifecycle_producer: str | None = None
+    lifecycle_metadata: dict | None = None
 
     def build(self):
         payload = json_value(self.payload)
@@ -96,7 +97,7 @@ class NativeResult:
             from copy import deepcopy
             from .lifecycle import apply_lifecycle
             context.stages = deepcopy(context.stages)
-            apply_lifecycle(context, self.lifecycle_dir, producer_command=self.lifecycle_producer)
+            apply_lifecycle(context, self.lifecycle_dir, producer_command=self.lifecycle_producer, metadata=self.lifecycle_metadata)
         document = build_document(context, blocks=[*(self.blocks or []), *result_blocks(payload)])
         document.metadata.update(self.metadata or {})
         return context, document
