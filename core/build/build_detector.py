@@ -1398,7 +1398,7 @@ class BuildDetector:
                 cleanup_paths=cleanup,
             )
         except BaseException:
-            cleanup_build_paths(cleanup)
+            cleanup_build_paths(cleanup, preserve_error=True)
             raise
 
     def _detect_build_params(self, language: str):
