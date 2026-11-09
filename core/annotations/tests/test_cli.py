@@ -1018,17 +1018,31 @@ class TestReviewNoteDelegationInheritsContext:
     """/review note delegates to raptor-annotate via subprocess with
     inherited fds — a piped /review note must land as agent."""
 
-    def test_piped_review_note_defaults_to_agent(self, tmp_path):
+    @pytest.mark.parametrize("stale_launch", [False, True])
+    def test_piped_review_note_defaults_to_agent(self, tmp_path, monkeypatch, stale_launch):
+        if stale_launch:
+            monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "retired-review-authorization")
+            monkeypatch.setenv("RAPTOR_SESSION_PID", "99999999")
+            monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "retired-review-session")
+            monkeypatch.setenv("TMPDIR", str(tmp_path / "retired-review-scratch"))
+        before = dict(os.environ)
         review = REPO_ROOT / "libexec" / "raptor-review"
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"
-        r = run_in_process_group(
-            [sys.executable, str(review), "note",
-             "src/a.py", "f", "-m", "note body",
-             "--base", str(tmp_path)],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, check=False, timeout=30,
-        )
+        # Admit the real isolated provenance CLI without borrowing interpreter
+        # startup hooks; its rejection guard remains enabled in the child.
+        for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(name, None)
+        with standalone_cli_env(env=env) as owned_env:
+            r = run_in_process_group(
+                [sys.executable, str(review), "note",
+                 "src/a.py", "f", "-m", "note body",
+                 "--base", str(tmp_path)],
+                env=owned_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, check=False, timeout=30,
+            )
+        unchanged = dict(os.environ) == before
+        assert unchanged, "review-note delegation changed its caller's launch state"
         if r.returncode != 0 and "--base" in r.stderr:
             import pytest
             pytest.skip("raptor-review note does not forward --base")
