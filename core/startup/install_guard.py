@@ -6,6 +6,7 @@ Landlock or seccomp, preserving descendant namespace setup. No network or IPC na
 from __future__ import annotations
 
 import importlib.util
+from contextlib import contextmanager, suppress
 import marshal
 import os
 import shutil
@@ -411,6 +412,29 @@ def _bytecode_worker(parent: int) -> None:
         os._exit(1)
 
 
+@contextmanager
+def _bytecode_stream(node: int, mode: str):
+    """Own the descriptor across wrapping and stream failures.
+
+    This launcher runs with isolated stdlib imports before core is available.
+    Keep an active operation error primary if closing also fails.
+    """
+    try:
+        stream = os.fdopen(node, mode)
+    except BaseException:
+        with suppress(BaseException):
+            os.close(node)
+        raise
+    try:
+        yield stream
+    except BaseException:
+        with suppress(BaseException):
+            stream.close()
+        raise
+    else:
+        stream.close()
+
+
 def _bytecode_sources():
     excluded = {"out", ".git", "__pycache__", "node_modules", "tests", "fixtures", "corpus"}
     output = str(installation_output())
@@ -435,7 +459,7 @@ def _bytecode_sources():
                 if cache.parent.is_symlink():
                     raise ProtectionError(f"symlinked bytecode cache: {cache}")
                 node = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-                with os.fdopen(node, "rb") as stream:
+                with _bytecode_stream(node, "rb") as stream:
                     info = os.fstat(stream.fileno())
                     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                         raise ProtectionError(f"hard-linked or non-regular installation source: {path}")
@@ -449,7 +473,7 @@ def _bytecode_sources():
                 except OSError as error:
                     raise ProtectionError(f"unsafe or symlinked bytecode cache: {cache}") from error
                 else:
-                    with os.fdopen(node, "rb") as stream:
+                    with _bytecode_stream(node, "rb") as stream:
                         info = os.fstat(stream.fileno())
                         if info.st_nlink != 1:
                             raise ProtectionError(f"hard-linked bytecode cache: {cache}")
@@ -473,14 +497,15 @@ def _save_bytecode(cache: Path, expected: bytes | None) -> None:
     cache.parent.mkdir(parents=True, exist_ok=True)
     node, temporary = tempfile.mkstemp(prefix=".raptor-pyc-", dir=cache.parent)
     try:
-        with os.fdopen(node, "wb") as stream:
+        with _bytecode_stream(node, "wb") as stream:
             stream.write(expected)
         os.replace(temporary, cache)
-    finally:
-        try:
+    except BaseException:
+        # Replacement did not complete. Reclaim our staging name without
+        # replacing the compilation, write or cancellation error.
+        with suppress(BaseException):
             os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+        raise
 
 
 def precompile() -> None:
