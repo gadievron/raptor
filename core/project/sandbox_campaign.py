@@ -28,6 +28,30 @@ _CATEGORIES = ("escape_primitives", "network_probing", "udp_egress",
                "filesystem_escape", "routine")
 _SEVERITY_RANK = {"routine": 0, "elevated": 1, "critical": 2}
 
+# Whole-campaign admission budgets, in addition to per-file/per-run limits.
+# A refusal reports unknown/degraded evidence rather than a partial trend.
+MAX_CAMPAIGN_RUNS = 128
+MAX_CAMPAIGN_TARGETS = 64
+MAX_CAMPAIGN_SIGNATURES = 4096
+MAX_CAMPAIGN_DENIALS = 32000
+
+
+def _budget_refusal(reason: str, entries: list[dict]) -> dict[str, Any]:
+    severity = max((entry["severity"] or "routine" for entry in entries),
+                   key=lambda value: _SEVERITY_RANK[value], default="routine")
+    severity = max((severity, "elevated"), key=lambda value: _SEVERITY_RANK[value])
+    return {
+        "schema_version": 2, "campaign_severity": severity,
+        "integrity": "degraded", "targets": {},
+        "aggregation": {
+            "complete": False, "reason": reason,
+            "runs_considered": len(entries),
+            "limits": {"runs": MAX_CAMPAIGN_RUNS, "targets": MAX_CAMPAIGN_TARGETS,
+                       "signatures": MAX_CAMPAIGN_SIGNATURES,
+                       "denials": MAX_CAMPAIGN_DENIALS},
+        },
+    }
+
 
 def _read_json(path: Path) -> dict | None:
     try:
@@ -163,8 +187,30 @@ def _metrics(entries: list[dict], counts: list[int]) -> dict[str, Any]:
 
 
 def correlate_campaign(run_dirs: list[Path]) -> dict[str, Any] | None:
-    # Deduplicate directories so one run cannot manufacture recurrence.
-    entries = [_read_entry(d) for d in dict.fromkeys(Path(d).resolve() for d in run_dirs)]
+    # Bound path resolution and admission before reading any run evidence.
+    # Repeated input paths also consume work, even though they cannot create
+    # recurrence. Never silently select a prefix and call missing tails clean.
+    if len(run_dirs) > MAX_CAMPAIGN_RUNS:
+        return _budget_refusal("campaign run-path budget exceeded", [])
+    entries = []
+    seen, targets_seen, signatures_seen = set(), set(), set()
+    denials = 0
+    for directory in run_dirs:
+        directory = Path(directory).resolve()
+        if directory in seen:
+            continue
+        seen.add(directory)
+        entry = _read_entry(directory)
+        entries.append(entry)
+        targets_seen.add(entry["target"])
+        if len(targets_seen) > MAX_CAMPAIGN_TARGETS:
+            return _budget_refusal("campaign target budget exceeded", entries)
+        signatures_seen.update((entry["target"], identity) for identity in entry["labels"])
+        if len(signatures_seen) > MAX_CAMPAIGN_SIGNATURES:
+            return _budget_refusal("campaign signature budget exceeded", entries)
+        denials += sum(entry["counts"].values())
+        if denials > MAX_CAMPAIGN_DENIALS:
+            return _budget_refusal("campaign denial budget exceeded", entries)
     if not any(e["evidence_present"] for e in entries):
         return None
     per_target: dict[str, list[dict]] = defaultdict(list)
