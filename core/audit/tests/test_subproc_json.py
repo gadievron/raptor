@@ -54,23 +54,64 @@ class TestRunJsonChild:
         assert sr.outcome == "inconclusive"
         assert sr.tool == "smt"
 
-    def test_child_exception_returns_none(self) -> None:
+    def test_child_exception_returns_none(self, monkeypatch) -> None:
+        from core.audit import subproc_json
+
+        real_run = subproc_json._sandbox_run
+        outcomes = []
+
+        def observe(command, **options):
+            proc = real_run(command, **options)
+            options["stderr"].seek(0)
+            outcomes.append((proc.returncode, options["stderr"].read()))
+            return proc
+
+        monkeypatch.setattr(subproc_json, "_sandbox_run", observe)
+        # This allowed dispatcher raises TypeError for missing arguments.
+        # An unregistered entry would return before starting the worker.
         out = run_json_child(
-            "core.audit.subproc_json:does_not_exist",
+            "core.audit.sweep:_run_smt_verb_inner_json",
             {},
             env=smt_child_env(),
             timeout=30,
         )
         assert out is None
+        assert len(outcomes) == 1
+        assert outcomes[0][0] != 0
+        assert b"SMT worker failed: TypeError" in outcomes[0][1]
 
-    def test_timeout_returns_none(self) -> None:
-        out = run_json_child(
-            "time:sleep",
-            5,
-            env=smt_child_env(),
-            timeout=1,
-        )
-        assert out is None
+    def test_timeout_returns_none(self, monkeypatch) -> None:
+        import subprocess
+        from core.audit import subproc_json
+        from core.audit._json_protocol import decode, MAX_REQUEST_BYTES
+
+        calls = []
+        request = {"tag": "nope", "args": {}}
+        entry = "core.audit.condition_smt:_z3_dispatch_json"
+
+        def timeout(command, **options):
+            assert entry in command
+            assert decode(options["input"], MAX_REQUEST_BYTES) == request
+            assert options["timeout"] == 1
+            calls.append((options["stdout"], options["stderr"], Path(options["cwd"])))
+            raise subprocess.TimeoutExpired(command, options["timeout"])
+
+        monkeypatch.setattr(subproc_json, "_sandbox_run", timeout)
+        assert run_json_child(entry, request, env=smt_child_env(), timeout=1) is None
+        assert len(calls) == 1
+        stdout, stderr, scratch = calls[0]
+        assert stdout.closed and stderr.closed
+        assert not scratch.exists()
+
+    @pytest.mark.parametrize("entry", ["time:sleep", "core.audit.subproc_json:does_not_exist"])
+    def test_unregistered_entry_never_dispatches(self, monkeypatch, entry) -> None:
+        from core.audit import subproc_json
+
+        def unexpected(*args, **kwargs):
+            pytest.fail("unregistered entry reached worker execution")
+
+        monkeypatch.setattr(subproc_json, "_sandbox_run", unexpected)
+        assert run_json_child(entry, {}, env=smt_child_env()) is None
 
     def test_unserialisable_request_returns_none(self) -> None:
         out = run_json_child(
