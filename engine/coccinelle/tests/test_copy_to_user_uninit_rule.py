@@ -188,3 +188,38 @@ def test_partial_data_silence_is_inconclusive(tmp_path, other_hit):
     assert not scoped.matches
     assert scoped.details["confirm_only"]
     assert len(result.matches) == int(other_hit)
+
+
+def test_zero_byte_transfers_and_initializers_preserve_copy_extent(tmp_path):
+    cases = []
+    for length in ("0", "00", "0U", "0UL", "0x00", "0X00ULL", "0b00U", "((0))"):
+        cases.append((f"copy_to_user(up, &out, {length});", False))
+    for length in ("1", "0x1", "0x10", "0b10U", "1UL", "count", "0 + count"):
+        cases.append((f"copy_to_user(up, &out, {length});", True))
+    for operation, value in (("memset", "0"), ("memcpy", "source"), ("memmove", "source")):
+        for length in ("0", "0UL", "0x00", "((0))"):
+            cases.append((f"{operation}(&out, {value}, {length});\ncopy_to_user(up, &out, sizeof(out));", True))
+        cases.append((f"{operation}(&out, {value}, sizeof(out));\ncopy_to_user(up, &out, sizeof(out));", False))
+        cases.append((f"{operation}(&out, {value}, count);\ncopy_to_user(up, &out, sizeof(out));", False))
+    # A no-op copy must not prevent the subsequent real copy being examined.
+    cases.append(("copy_to_user(up, &out, 0);\ncopy_to_user(up, &out, sizeof(out));", True))
+    # Position exclusions must not discard a real operation on the same line.
+    cases += [
+        ("copy_to_user(up, &out, 0); copy_to_user(up, &out, sizeof(out));", True),
+        ("copy_to_user(up, &out, sizeof(out)); copy_to_user(up, &out, 0);", True),
+        ("memset(&out, 0, 0); copy_to_user(up, &out, sizeof(out));", True),
+        # An unknown helper can initialise even when one argument is zero.
+        ("fill_first(&out, source, 0); copy_to_user(up, &out, sizeof(out));", False),
+    ]
+    lines = ["struct info { int first; int second; };"]
+    expected = set()
+    for index, (body, reports) in enumerate(cases):
+        lines += [f"void transfer_{index}(void *up, void *source, unsigned long count) {{",
+                  "struct info out;", *body.splitlines(), "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected), "each nonzero uninitialised copy should report once"
+    assert all(row["rule"] == "copy_to_user_uninit" for row in rows)
