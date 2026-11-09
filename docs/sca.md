@@ -1207,6 +1207,12 @@ findings were reused. No additional scan runs to generate the report.
 Unavailable advisory coverage still returns exit code 4; targeted patch
 gates and native `delta.md`/`delta.json` outputs retain their existing meaning.
 
+`upgrade` supports these report options for pairwise, candidate and add/remove
+comparisons. Reports capture the existing advisory observations and domain
+outcomes without extra lookups. Detail is bounded to 100 observations and
+100 advisory records per observation; full native comparisons remain on
+stdout or in `--out`. Unavailable advisory coverage still returns exit code 2.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml
