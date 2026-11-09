@@ -757,6 +757,17 @@ and rerun its check after rebasing onto changes to the same helpers.
 | Change a curated rule's evidence role | Update tests that pin that rule's role and its result semantics. A confirm-only rule's zero-match is inconclusive; do not restore refutation authority merely to satisfy an old assertion. |
 | Add a workflow or checker test under `.github/tests` or `.github/scripts/tests` | Keep it compatible with the `ci-lint-tests` lane, which installs only pinned pytest and uses the standard library. A developer environment with PyYAML installed can hide a collection failure. Reuse the existing scoped workflow-block extraction patterns; do not skip required workflow assertions when an optional parser is absent. |
 
+Regex edits can change census pin identities through their text, flags or
+call mode. Review changed identities, verdicts and removed pins explicitly.
+Update notes for the new identity or verdict, or retire obsolete notes,
+retaining the original note and decision in the review history.
+`_preserve_pin_review_notes` refuses stale note identities or verdicts.
+
+For Unicode patterns, `re.IGNORECASE` without `re.ASCII` may admit characters
+outside the written `A-Za-z` range. Validate affected entries with targeted
+oracle checks before refreshing digests, and retain negative complexity
+controls. A wall-budget sentinel does not measure a growth exponent.
+
 For live-tool test changes, the quick companion check is:
 
 ```bash
