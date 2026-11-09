@@ -1953,6 +1953,7 @@ class TestGateEnforcement:
 class TestSuspiciousPromotion:
     """Sweep tools should promote suspicious items when they confirm the hypothesis."""
 
+    @pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
     def test_suspicious_with_prefilter_hit_promoted(self, tmp_path: Path):
         """Suspicious item whose source triggers prefilter gets promoted to finding."""
         target = tmp_path / "target"
@@ -1989,13 +1990,13 @@ class TestSuspiciousPromotion:
                 hypothesis="buffer overflow via strcpy",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
             validate=False,
             target_path=target, out_dir=out, resume=False,
-            sweep_validate_findings=True, batch_sloc_threshold=0,
+            prefilter=True, sweep_validate_findings=True, batch_sloc_threshold=0,
             immediate_verify=False,
             # Hermetic: with Joern installed, the suspicious-demotion
             # gate (suspicious + no verification evidence -> clean)
@@ -2004,6 +2005,7 @@ class TestSuspiciousPromotion:
             joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
+        assert result.reviewed == 1
         assert result.sweep_promoted >= 1
         assert result.findings >= 1
         promoted = [o for o in result.outcomes if o.status == "finding"]
