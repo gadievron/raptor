@@ -127,13 +127,7 @@ import hmac
 import os
 import re
 from pathlib import Path
-from types import BuiltinFunctionType, ModuleType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from _hashlib import HASH
-
+from core.hash.text import try_sha256_ascii
 from core.json.utils import dumps_canonical
 from core.logging import get_logger
 from core.security import mac_key
@@ -377,27 +371,6 @@ def key_usable() -> bool:
         return False
 
 
-# Retain the C-backed canonical serialiser; bound only its large ASCII
-# output's temporary UTF-8 allocation. Unknown hash backends stay one-shot.
-_NATIVE_ROW_SHA256: Callable[[], HASH] | None = None
-try:
-    from _hashlib import openssl_sha256 as _openssl_row_sha256
-except ImportError:
-    pass
-else:
-    if type(_openssl_row_sha256) is BuiltinFunctionType:
-        _NATIVE_ROW_SHA256 = _openssl_row_sha256
-    del _openssl_row_sha256
-
-_ROW_HASHLIB_MODULE = hashlib
-_ROW_TEXT_TYPE = str
-_ROW_TYPE_IMPL = type
-_ROW_LEN_IMPL = len
-_ROW_RANGE_IMPL = range
-_ROW_HASH_CHUNK_CHARS = 64 * 1024
-_ROW_HASH_MIN_CHARS = 256 * 1024
-
-
 def row_sha256(row: dict) -> str:
     """sha256 over the row's canonical JSON (token key excluded).
 
@@ -411,22 +384,9 @@ def row_sha256(row: dict) -> str:
     validly-stamped row."""
     scrubbed = {k: v for k, v in row.items() if k != TOKEN_KEY}
     canonical = dumps_canonical(scrubbed)
-    native = _NATIVE_ROW_SHA256
-    if (native is not None
-            and _ROW_TYPE_IMPL(canonical) is _ROW_TEXT_TYPE
-            and _ROW_LEN_IMPL(canonical) >= _ROW_HASH_MIN_CHARS
-            and canonical.isascii()
-            and hashlib is _ROW_HASHLIB_MODULE
-            and _ROW_TYPE_IMPL(hashlib) is ModuleType):
-        # Peek without invoking a foreign module attribute provider. Drop an
-        # unselected callable before taking the original fallback expression.
-        constructor = hashlib.__dict__.get("sha256")
-        if constructor is native and native is not None:
-            digest = native()
-            for offset in _ROW_RANGE_IMPL(0, _ROW_LEN_IMPL(canonical), _ROW_HASH_CHUNK_CHARS):
-                digest.update(canonical[offset:offset + _ROW_HASH_CHUNK_CHARS].encode("utf-8"))
-            return digest.hexdigest()
-        del constructor
+    digest = try_sha256_ascii(canonical, hashlib)
+    if digest is not None:
+        return digest
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

@@ -73,6 +73,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from core.hash.text import try_sha256_ascii
 from core.security import mac_key
 
 _KEY_LEN = 32
@@ -253,6 +254,9 @@ def frame_digest(doc: dict[str, Any]) -> str:
 
     scrubbed = {k: v for k, v in doc.items() if k != FRAME_TOKEN_KEY}
     canonical = dumps_canonical(scrubbed)
+    digest = try_sha256_ascii(canonical, hashlib)
+    if digest is not None:
+        return digest
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
