@@ -758,7 +758,8 @@ def test_worker_cases_in_private_process(tmp_path):
             env[name] = value
     try:
         result = subprocess.run(
-            [sys.executable, "-I", "-m", "pytest", "-q", "-o", "addopts=",
+            [sys.executable, "-I", "-m", "pytest", "-q", "-n", "4",
+             "--dist", "worksteal", "-o", "addopts=",
              "--import-mode=importlib", "-p", "no:cacheprovider",
              "--basetemp", str(tmp_path / "child-pytest"),
              str(Path(__file__).with_name("worker_server_cases.py"))],
