@@ -1122,6 +1122,21 @@ if [ -n "$USE_CODEX" ]; then
         # Missing launch data means resume the conversation's prior target.
         # An exported empty value would explicitly clear that target instead.
         unset RAPTOR_LAUNCH_TARGET
+        # New launches use a per-launch backend because their context settings
+        # exclude Codex's implicit shared daemon. Keep the same ownership on
+        # targetless resume: native hooks inherit the backend's environment,
+        # not the latest client's launcher context.
+        _codex_explicit_backend=""
+        for _codex_argument in "${CODEX_ARGS[@]}"; do
+            case "$_codex_argument" in
+                --) break ;;
+                --no-daemon|--remote|--remote=*) _codex_explicit_backend=1 ;;
+            esac
+        done
+        if [ -z "$_codex_explicit_backend" ]; then
+            CODEX_ARGS=(--no-daemon "${CODEX_ARGS[@]}")
+        fi
+        unset _codex_explicit_backend _codex_argument
         exec env -u BASH_ENV -u ENV -u SHELLOPTS -u BASHOPTS \
             codex resume --last "${CODEX_ARGS[@]}"
     fi
