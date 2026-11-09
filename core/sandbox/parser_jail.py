@@ -544,28 +544,47 @@ class ParserJail:
         return obj
 
     @staticmethod
-    def _recv_exact(sock: socket.socket, n: int, *, deadline: float) -> bytes:
-        # Socket timeouts apply to individual recv calls. Recompute the
-        # remaining budget so fragmented input cannot extend the frame's
-        # deadline, and share that deadline across header and payload.
+    def _recv_exact(sock: socket.socket, n: int, *, deadline: float,
+                    check_cancel=None) -> bytes:
         timeout = sock.gettimeout()
         buf = bytearray()
         try:
             while len(buf) < n:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise socket.timeout("parser worker frame deadline exceeded")
-                sock.settimeout(remaining)
-                chunk = sock.recv(n - len(buf))
+                sock.settimeout(_socket_io_timeout(deadline, check_cancel))
+                try:
+                    chunk = sock.recv(n - len(buf))
+                except InterruptedError:
+                    continue
+                except socket.timeout:
+                    if check_cancel is None:
+                        raise
+                    continue
                 if not chunk:
                     raise OSError("parser worker closed the socket")
                 buf.extend(chunk)
             return bytes(buf)
         finally:
+            _restore_socket_timeout(sock, timeout)
+
+    @staticmethod
+    def _send_exact(sock: socket.socket, data: bytes, *, deadline: float,
+                    check_cancel=None) -> None:
+        # sendall timeout does not disclose its sent offset. Retrying it after
+        # a cancellation slice would duplicate bytes and desynchronise frames.
+        view = memoryview(data)
+        while view:
+            sock.settimeout(_socket_io_timeout(deadline, check_cancel))
             try:
-                sock.settimeout(timeout)
-            except OSError:
-                pass
+                sent = sock.send(view)
+            except InterruptedError:
+                continue
+            except socket.timeout:
+                if check_cancel is None:
+                    raise
+                continue
+            if sent <= 0:
+                raise OSError("parser worker send made no progress")
+            view = view[sent:]
 
     @staticmethod
     def _new_req_id() -> int:
@@ -611,14 +630,17 @@ class ParserJail:
             if remaining <= 0:
                 raise socket.timeout("parser worker request deadline exceeded")
             sock.settimeout(remaining)
-            sock.sendall(FRAME_HEADER.pack(len(raw), req_id) + raw)
-            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline)
+            self._send_exact(sock, FRAME_HEADER.pack(len(raw), req_id) + raw,
+                             deadline=deadline, check_cancel=self._check_running)
+            header = self._recv_exact(sock, FRAME_HEADER.size, deadline=deadline,
+                             check_cancel=self._check_running)
             length, resp_id = FRAME_HEADER.unpack(header)
             if length > MAX_FRAME_PAYLOAD:
                 raise _ProtocolError("oversized verdict frame")
             if resp_id != req_id:
                 raise _ProtocolError("verdict frame id desync")
-            payload = self._recv_exact(sock, length, deadline=deadline)
+            payload = self._recv_exact(sock, length, deadline=deadline,
+                                       check_cancel=self._check_running)
             return _validate_verdict(payload)
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
