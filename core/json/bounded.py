@@ -31,7 +31,7 @@ import stat as _stat
 from pathlib import Path
 from typing import Any
 
-from core.json.utils import JsonBudgetExceededError, _reject_non_finite
+from core.json.utils import JsonBudgetExceededError, _parse_finite_float, _reject_non_finite
 
 __all__ = [
     "JsonBudgetExceededError",  # canonical home: core.json.utils
@@ -65,7 +65,7 @@ def loads_bounded(data: str | bytes, *, max_bytes: int) -> Any:
         )
         logger.warning("%s", msg)
         raise JsonBudgetExceededError(msg)
-    return json.loads(data, parse_constant=_reject_non_finite)
+    return json.loads(data, parse_constant=_reject_non_finite, parse_float=_parse_finite_float)
 
 
 def load_json_bounded(path: str | Path, *, max_bytes: int) -> Any:
@@ -136,4 +136,5 @@ def load_json_bounded(path: str | Path, *, max_bytes: int) -> Any:
     return json.loads(
         raw.decode("utf-8-sig", errors="replace"),
         parse_constant=_reject_non_finite,
+        parse_float=_parse_finite_float,
     )
