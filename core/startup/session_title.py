@@ -1,6 +1,8 @@
 """Best-effort Claude session naming through documented hook output only."""
 from __future__ import annotations
 
+import argparse
+from collections.abc import Sequence
 import json
 import os
 from pathlib import Path
@@ -72,7 +74,17 @@ def hook_output(payload) -> dict:
     return {'hookSpecificOutput': {'hookEventName': event, 'sessionTitle': requested}}
 
 
-def main() -> int:
+def main(argv: Sequence[str] = ()) -> int:
+    parser = argparse.ArgumentParser(
+        description=("Best-effort Claude session-title hook. Reads a SessionStart or "
+                     "UserPromptSubmit JSON event from stdin and emits native hook JSON "
+                     "when an authenticated session needs a title update."),
+        epilog=("Examples:\n"
+                "  _RAPTOR_TRUSTED=1 libexec/raptor-session-title --help\n"
+                "  _RAPTOR_TRUSTED=1 libexec/raptor-session-title < hook-event.json"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.parse_args(argv)
     try:
         data = sys.stdin.buffer.read(65537)
         if len(data) > 65536:

@@ -333,3 +333,46 @@ def test_successful_hook_main_emits_only_native_title_json(titles, monkeypatch, 
     assert output == {'hookSpecificOutput': {'hookEventName': 'SessionStart',
                                            'sessionTitle': 'raptor · alpha · first'}}
     assert states()[0]['confirmed'] is None
+
+
+def test_hook_entrypoint_help_retains_trust_guard(tmp_path):
+    import subprocess
+    import sys
+    root = Path(__file__).resolve().parents[3]
+    env = {'HOME': str(tmp_path), 'TMPDIR': str(tmp_path),
+           'PATH': os.environ['PATH'], '_RAPTOR_TRUSTED': '1'}
+    command = [sys.executable, str(root / 'libexec/raptor-session-title'), '--help']
+    result = subprocess.run(command, input='{bad', capture_output=True,
+                            text=True, env=env, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert 'usage:' in result.stdout
+    assert 'SessionStart' in result.stdout
+    assert 'Examples:' in result.stdout
+    assert result.stderr == ''
+    env.pop('_RAPTOR_TRUSTED')
+    rejected = subprocess.run(command, input='', capture_output=True,
+                              text=True, env=env, timeout=5)
+    assert rejected.returncode == 2
+    assert 'internal dispatch script' in rejected.stderr
+    assert rejected.stdout == ''
+
+
+@pytest.mark.parametrize('flag', ['-h', '--help'])
+def test_help_does_not_read_hook_input_or_state(flag, monkeypatch, capsys):
+    class NoInput:
+        @property
+        def buffer(self):
+            raise AssertionError('help must not read hook stdin')
+
+    def no_context():
+        raise AssertionError('help must not resolve session state')
+
+    patch_module_attribute(monkeypatch, hook, 'sys', 'stdin', NoInput())
+    monkeypatch.setattr(hook, '_context', no_context)
+    with pytest.raises(SystemExit) as stopped:
+        hook.main([flag])
+    assert stopped.value.code == 0
+    output = capsys.readouterr()
+    assert 'usage:' in output.out
+    assert 'Examples:' in output.out
+    assert output.err == ''
