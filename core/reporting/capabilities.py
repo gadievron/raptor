@@ -33,6 +33,7 @@ CAPABILITIES = (
     CommandCapability("sca fix", "sca-fix", "explicit destination required", "existing stdout; report summary on stderr", "standard plan/proposed/apply modes; native change artifacts retained"),
     CommandCapability("sca fix --harden", "sca-harden", "explicit destination required", "existing stdout; report summary on stderr", "planner decisions, check gates, self-test and apply phases retained"),
     CommandCapability("sca fix --cve-only", "sca-fix-cve", "explicit destination required", "existing stdout; report summary on stderr", "native patch, compatibility and auxiliary resolver/hash-pin results retained"),
+    CommandCapability("sca suppress list/check", "sca-suppress", "explicit destination required", "existing stdout; report summary on stderr", "native entries, orphan/expired check groups and gate status retained"),
     CommandCapability("sca fix-diff", "sca-fix-diff", "explicit destination required", "existing stdout; report summary on stderr", "native CVE discovery summary, caps and exit status retained; no extra agent calls"),
     CommandCapability("sca fingerprint", "sca-fingerprint", "explicit destination required", "existing stdout; report summary on stderr", "compute/save/check modes; native drift and missing-baseline statuses retained"),
     CommandCapability("sca health", "sca-health", "explicit destination required", "existing stdout; report summary on stderr", "live reachability only; native gate and offline refusal retained"),

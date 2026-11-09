@@ -1443,3 +1443,10 @@ entries the discovery cap left unattempted. Finding a fix commit does not
 prove that your dependency contains it. Reporting does not start another
 agent or retry failed lookups; an empty selection is a no-op, not a clean
 vulnerability assessment.
+
+`suppress list` and `suppress check` accept explicit report options after the
+subcommand. Reports reuse the entries and check groups already loaded by the
+command. Matching a suppression is not validation of its security rationale;
+an orphan is relative to the supplied findings file and does not prove a
+vulnerability was fixed. Missing overlays and unreadable findings retain
+their existing nonzero exit codes. Reporting does not reload either input.
