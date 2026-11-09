@@ -691,6 +691,14 @@ def _write_project_delta(baseline_context, context, report_dir, report_options):
     from dataclasses import replace
     from core.reporting.service import complete_reporting
     delta_context, delta_document = build_delta(baseline_context, context)
+    from core.project.sbom_reports import sbom_evidence_delta
+    sbom_changes, sbom_delta_blocks = sbom_evidence_delta(baseline_context, context)
+    if sbom_delta_blocks:
+        delta_context.extensions["raptor.sbom_evidence_changes"] = sbom_changes
+        delta_document.blocks.extend(sbom_delta_blocks)
+        delta_document.snapshot_id = delta_context.snapshot_id
+        from core.reporting.summary import build_operator_summary
+        delta_document.extensions["raptor.summary"] = build_operator_summary(delta_context).to_dict()
     delta_options = report_options
     if report_options and report_options.output:
         destination = report_options.output
@@ -920,6 +928,9 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
         if not isinstance(snapshot, dict):
             diagnostics.append(f"{directory.name}: legacy run; structured stage context unavailable")
         stages.append(StageEnvelope(directory.name, snapshot.get("state", "unknown") if isinstance(snapshot, dict) else "unknown"))
+    from core.project.sbom_reports import capture_sbom_reports, sbom_blocks
+    sbom_reports, sbom_notes = capture_sbom_reports(run_dirs, frozen_contexts, frozen_origins)
+    diagnostics.extend(sbom_notes)
     normalized = native_findings(merged, run_id=project.name, producer="project")
     for raw, finding in zip(merged, normalized):
         # Full project-domain grouping key, not a raw tool fingerprint. Matching
@@ -939,6 +950,7 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
                                       "annotations": annotations, "annotation_digest": digest(annotations),
                                       "readjudication": readj_records},
                     "raptor.sca_findings": sca_findings,
+                    "raptor.sbom_reports": sbom_reports,
                     "raptor.scope": {"mode": "project-view", "project": project.name, "root": str(project.output_path)}},
     )
     from core.reporting.results import result_blocks
@@ -947,6 +959,7 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
               *result_blocks(annotations, title="Annotations"),
               *result_blocks(selected, title="Provenance and selection"),
               *result_blocks(readj_records, title="Re-adjudication queue")]
+    blocks.extend(sbom_blocks(sbom_reports))
     if sca_findings:
         blocks.append(Block("code", title="Dependency findings", language="json", text=dumps_artifact(sca_findings, ensure_ascii=True)))
     publication = complete_reporting(context, report_dir, stem="project-report", options=report_options, blocks=blocks, stream=stream,

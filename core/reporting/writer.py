@@ -76,10 +76,10 @@ def _lock(directory: Path) -> Iterator[None]:
         os.close(fd)
 
 
-def _current_manifest(output_dir: Path) -> dict:
+def _current_manifest(output_dir: Path, *, root: Path | None = None) -> dict:
     path = output_dir / "reporting-manifest.json"
     try:
-        data = _read_json(path, 1024 * 1024)
+        data = _read_json(path, 1024 * 1024, root=root)
     except FileNotFoundError:
         return {}
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int or data.get("schema_version") != 1
@@ -315,15 +315,16 @@ def load_context(path: Path) -> ReportContext:
     return ReportContext.from_dict(data)
 
 
-def load_committed_report(output_dir: Path) -> tuple[ReportContext, ReportDocument, dict]:
+def load_committed_report(output_dir: Path, *, root: Path | None = None) -> tuple[ReportContext, ReportDocument, dict]:
     """Read the exact committed generation, with bounded regular-file reads.
 
     Digests enforce consistency, not authentication. Imported snapshots retain
     their caller/domain-owned provenance policy regardless of hash validity.
-    Root compatibility mirrors are deliberately not consulted.
+    Root compatibility mirrors are deliberately not consulted. An explicit
+    root anchors every component of a nested output path beneath its owner.
     """
     output_dir = Path(output_dir)
-    return _load_generation_report(output_dir, _current_manifest(output_dir))
+    return _load_generation_report(output_dir, _current_manifest(output_dir, root=root), root=root)
 
 
 def load_report_generation(output_dir: Path, generation: str, snapshot_id: str):
@@ -331,7 +332,8 @@ def load_report_generation(output_dir: Path, generation: str, snapshot_id: str):
     return _load_generation_report(Path(output_dir), {"generation": generation, "snapshot_id": snapshot_id})
 
 
-def _load_generation_report(output_dir, current):
+def _load_generation_report(output_dir, current, *, root=None):
+    root = Path(root) if root is not None else output_dir
     import re
     identity = current.get("generation")
     if not isinstance(identity, str) or not re.fullmatch(r"[a-f0-9]{64}", identity):
@@ -341,7 +343,7 @@ def _load_generation_report(output_dir, current):
     if owned.is_symlink() or generation.is_symlink() or not generation.resolve().is_relative_to(owned.resolve()):
         raise ValueError("Committed reporting directory is not contained")
     try:
-        manifest = _read_json(generation / "manifest.json", 1024 * 1024, root=output_dir)
+        manifest = _read_json(generation / "manifest.json", 1024 * 1024, root=root)
     except (OSError, ValueError) as exc:
         raise ValueError("Committed reporting manifest unavailable") from exc
     if not isinstance(manifest, dict) or manifest.get("generation") != identity:
@@ -357,7 +359,7 @@ def _load_generation_report(output_dir, current):
         metadata = files.get(name)
         if not isinstance(metadata, dict):
             raise ValueError("Missing committed reporting input")
-        raw = _read_bytes(generation / name, root=output_dir)
+        raw = _read_bytes(generation / name, root=root)
         if len(raw) != metadata.get("size") or hashlib.sha256(raw).hexdigest() != metadata.get("sha256"):
             raise ValueError(f"Committed {name} digest mismatch")
         try:

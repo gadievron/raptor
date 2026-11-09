@@ -15,6 +15,7 @@ class CommandCapability:
     artifact_policy: str
     summary: str
     compatibility: str = ""
+    formats: tuple[str, ...] = ()
 
 
 CAPABILITIES = (
@@ -25,6 +26,14 @@ CAPABILITIES = (
     CommandCapability("project report", "project", "automatic", "terminal and summary.md", "native finding/annotation exports retained"),
     CommandCapability("sca scan", "sca", "automatic", "terminal and summary.md", "--html adds HTML"),
     CommandCapability("sca render", "sca", "existing output policy", "terminal and summary.md", "offline; legacy Markdown/SARIF switches retained"),
+    CommandCapability("sca sbom inspect", "sbom-inspect", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom stats", "sbom-stats", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom diff", "sbom-diff", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom why", "sbom-why", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom plan", "sbom-plan", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom verify-plan", "sbom-verify-plan", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom collect", "sbom-collect", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
+    CommandCapability("sca sbom notices", "sbom-notices", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("web", "web", "automatic", "terminal and summary.md", "existing redaction applies before capture"),
     CommandCapability("fuzz", "fuzz", "automatic", "terminal and summary.md", "corpus preparation excluded"),
     CommandCapability("openant", "openant", "automatic", "terminal and summary.md", "recovered hints separate from findings"),
@@ -39,7 +48,7 @@ CAPABILITIES = (
 
 def _capability_row(capability: CommandCapability) -> dict:
     from .renderers import available_formats
-    return {**asdict(capability), "formats": list(available_formats()), "summary_independent": True}
+    return {**asdict(capability), "formats": [name for name in available_formats() if not capability.formats or name in capability.formats], "summary_independent": True}
 
 
 def command_capabilities() -> list[dict]:

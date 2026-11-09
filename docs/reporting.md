@@ -55,6 +55,46 @@ it does not claim compatibility with SARIF or an external XML standard. PDF is n
 advertised or silently installed; another explicit renderer can be registered via
 `register_renderer(Renderer(...))`.
 
+## SBOM reports
+
+SBOM commands keep their native inventories, CSV/JSONL exports, notice bytes,
+and upgrade evidence. A short operator summary appears on stderr so JSON and CSV
+stdout remain usable in pipelines. An inventory is not a vulnerability assessment;
+missing declarations, unknown coverage and unverified notice evidence remain explicit.
+
+When a command creates an output directory, its additional reports are stored in
+`report/` inside it. For commands that normally only print results or save a JSON
+file, choose a report destination explicitly. For example:
+
+```bash
+raptor-sca sbom inspect release.cdx.json --out inventory
+raptor-sca sbom diff old/inventory.json inventory/inventory.json --report-output changes
+raptor-sca sbom stats inventory/inventory.json --report-format xml --report-output statistics
+```
+
+SBOM reports currently support Markdown, JSON and XML. Native JSON remains the
+full domain evidence; the report JSON describes the presentation. Large inventories
+use a declared bounded report capture while native exports retain the full selection.
+Use `--help` for output controls, selection and display options.
+
+To regenerate a saved report without reopening the SBOM, accessing the network,
+or rechecking advisories or notice bytes:
+
+```bash
+python -m core.reporting render inventory/report --format xml --output inventory-report.xml
+```
+
+SCA scan reports also capture metadata from the SBOM they emit. Project reports
+show available committed SBOM captures per selected run/output, including source
+fingerprints, unresolved declarations and notice-verification status. Counts remain
+separate for each inventory. A project baseline comparison records which evidence
+captures changed or left the selection; it does not infer component remediation.
+Legacy runs without a committed capture are not silently reconstructed from live SBOMs.
+
+Inventory diffs use the SBOM comparison rules, including explicit ambiguous matches.
+A package disappearing from an inventory is not proof that a vulnerability was fixed.
+Upgrade verification still requires the domain's recorded advisory coverage.
+
 ## Programmatic completion
 
 ```python
