@@ -1043,6 +1043,15 @@ metadata indicating triage exists anywhere, it returns no campaign result;
 complete erasure of both evidence and its surviving indicators cannot be
 inferred from these files alone.
 
+Whole-campaign correlation accepts at most 128 input run paths, 64 targets,
+4,096 distinct target/signature pairs and 32,000 attributed denial events.
+Repeated input paths still consume the path budget. On overflow, the result
+has degraded integrity and `aggregation.complete=false`, with the limit
+reason and no partial target trends. Severity retains known critical
+observations and is at least elevated when evidence remains unexamined.
+Split larger campaigns into deliberate review groups; an incomplete result
+must not be interpreted as a clean campaign or resolved signatures.
+
 Coverage remains bounded by the telemetry collected. In-kernel hard denials
 can bypass tracer notification, so enforcement does not imply attribution of
 every attempt. macOS containment likewise does not establish detection parity
