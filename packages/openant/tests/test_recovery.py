@@ -15,6 +15,8 @@ from pathlib import Path
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
+from core.json import load_json
+
 from packages.openant.recovery import (
     RECOVERED_TIER,
     _removal_keys,
@@ -282,40 +284,63 @@ class TestDedupRederivationLane(_ScanDirCase):
         self.assertEqual(len(recovered), 4)
 
     def test_nonfinite_confidence_dropped_record_stays_serializable(self):
-        # stdlib json parses 1e999 to inf even though the non-finite
-        # LITERALS are rejected — a copied inf poisoned the shared
-        # findings-artifact write. Forced through the stdlib parser so
-        # the test is hermetic across orjson-present/absent hosts
-        # (orjson refuses the doc outright, which is the other lane).
-        import core.json.utils as cju
-        from unittest.mock import patch
+        # The score reader opts in; the default reader remains strict.
         rows_text = json.dumps(_results_doc(
             [_row(CALLER), _row(CALLEE)])).replace(
                 '"confidence": 0.9', '"confidence": 1e999')
-        (self.scan_dir / "results.json").write_text(rows_text,
-                                                    encoding="utf-8")
+        path = self.scan_dir / "results.json"
+        path.write_text(rows_text, encoding="utf-8")
         self.write_call_graph({CALLEE: [CALLER]})
-        # Two namespaces on purpose (mirrors _force_stdlib_json in
-        # core/coverage/tests/test_journal_append.py). The
-        # sys.modules-resolved patch covers call-time imports and any
-        # consumer imported after this point; the held function's
-        # __globals__ patch covers recovery.py's import-time
-        # ``from core.json import load_json`` binding — the copy that
-        # actually executes. After a sibling suite purges core.json.*
-        # from sys.modules those are DIFFERENT module objects, and a
-        # sys.modules-only patch leaves the orjson lane live in the
-        # executing copy (orjson then refuses the 1e999 doc and the
-        # recovery silently returns nothing).
-        from packages.openant import recovery as _recovery_mod
-        with patch.object(cju, "_orjson", None), \
-                patch.dict(_recovery_mod.load_json.__globals__,
-                           {"_orjson": None}):
-            recovered = recover_dropped_verdicts(
-                self.scan_dir,
-                _pipeline([_finding_for(CALLER)], deduplicated=1))
+        self.assertIsNone(load_json(path))
+        recovered = recover_dropped_verdicts(
+            self.scan_dir,
+            _pipeline([_finding_for(CALLER)], deduplicated=1))
         self.assertEqual(len(recovered), 1)
         self.assertNotIn("confidence", recovered[0]["metadata"])
         json.dumps(recovered, allow_nan=False)  # must not raise
+
+    def test_nonfinite_result_confidence_preserves_usable_records(self):
+        self.write_call_graph({CALLEE: [CALLER]})
+        for token in ("NaN", "Infinity", "-Infinity", "-1e999"):
+            with self.subTest(token=token):
+                text = json.dumps(_results_doc([
+                    _row(CALLER), _row(CALLEE)])).replace(
+                        '"confidence": 0.9', '"confidence": ' + token)
+                path = self.scan_dir / "results.json"
+                path.write_text(text, encoding="utf-8")
+                self.assertIsNone(load_json(path))
+                recovered = recover_dropped_verdicts(
+                    self.scan_dir,
+                    _pipeline([_finding_for(CALLER)], deduplicated=1))
+                self.assertEqual(len(recovered), 1)
+                self.assertNotIn("confidence", recovered[0]["metadata"])
+                json.dumps(recovered, allow_nan=False)
+
+    def test_finite_confidence_is_preserved_by_public_recovery(self):
+        self.write_call_graph({CALLEE: [CALLER]})
+        for confidence in (0.0, 0.9):
+            with self.subTest(confidence=confidence):
+                self.write_json("results.json", _results_doc([
+                    _row(CALLER), _row(CALLEE, confidence=confidence)]))
+                recovered = recover_dropped_verdicts(
+                    self.scan_dir,
+                    _pipeline([_finding_for(CALLER)], deduplicated=1))
+                self.assertEqual(len(recovered), 1)
+                self.assertEqual(
+                    recovered[0]["metadata"]["confidence"], confidence)
+                json.dumps(recovered, allow_nan=False)
+
+    def test_nonfinite_call_graph_keeps_strict_reader_refusal(self):
+        self.write_json("results.json", _results_doc([
+            _row(CALLER), _row(CALLEE)]))
+        self.write_json("call_graph.json", {
+            "reverse_call_graph": {CALLEE: [CALLER]},
+            "score": float("nan"),
+        })
+        recovered = recover_dropped_verdicts(
+            self.scan_dir,
+            _pipeline([_finding_for(CALLER)], deduplicated=1))
+        self.assertEqual(recovered, [])
 
     def test_cyclic_call_graph_survivor_walk_terminates(self):
         # A crafted cycle in the (target-derived) graph must not hang
@@ -332,6 +357,30 @@ class TestDedupRederivationLane(_ScanDirCase):
 
 
 class TestCheckpointFallbackLane(_ScanDirCase):
+
+    def test_checkpoint_confidence_is_sanitised_before_serialization(self):
+        for confidence, expected in (
+            (0.0, 0.0), (0.9, 0.9),
+            (float("inf"), None), (float("-inf"), None),
+            (float("nan"), None),
+        ):
+            with self.subTest(confidence=confidence):
+                self.write_json("analyze_checkpoints/score.json", {
+                    "id": CALLEE,
+                    "route_key": CALLEE,
+                    "code_for_route": "owned fixture",
+                    "result": _row(CALLEE, confidence=confidence),
+                })
+                recovered = recover_dropped_verdicts(
+                    self.scan_dir, _pipeline([]))
+                self.assertEqual(len(recovered), 1)
+                metadata = recovered[0]["metadata"]
+                if expected is None:
+                    self.assertNotIn("confidence", metadata)
+                else:
+                    self.assertEqual(metadata["confidence"], expected)
+                json.dumps(recovered, allow_nan=False)
+
 
     def test_falls_back_when_results_unreadable(self):
         (self.scan_dir / "results.json").write_text("{not json",
