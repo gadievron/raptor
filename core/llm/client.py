@@ -858,6 +858,20 @@ def _resolve_timeout_retry_cap(raw: Any) -> int:
     return cap if cap >= 0 else _TIMEOUT_RETRY_CAP
 
 
+_CACHE_KEY_TYPE_IMPL = type
+_CACHE_KEY_STR_TYPE = str
+_CACHE_KEY_LEN_IMPL = len
+
+
+def _telemetry_cache_key(key: str) -> str | None:
+    """Expose an already-computed cache digest, never prompt or adapter data."""
+    if (_CACHE_KEY_TYPE_IMPL(key) is _CACHE_KEY_STR_TYPE
+            and _CACHE_KEY_LEN_IMPL(key) == 64
+            and not key.strip("0123456789abcdef")):
+        return key
+    return None
+
+
 def _transport_http_version() -> str | None:
     """Most recent negotiated HTTP protocol (``h1``/``h2``) seen by
     this process's pooled LLM transports — attached to telemetry
@@ -3028,6 +3042,7 @@ class LLMClient:
                     self.cache_hits += 1
                 from core.llm.telemetry import emit as _t_emit
                 _t_emit(
+                    request_cache_key=_telemetry_cache_key(cache_key),
                     event="call",
                     disposition="cache_hit",
                     call_class=call_class,
@@ -3206,6 +3221,7 @@ class LLMClient:
 
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
+                            request_cache_key=_telemetry_cache_key(cache_key),
                             event="call",
                             disposition="ok",
                             call_class=call_class,
@@ -3369,6 +3385,7 @@ class LLMClient:
                         )
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
+                            request_cache_key=_telemetry_cache_key(cache_key),
                             event="attempt_failed",
                             disposition=_disposition,
                             call_class=call_class,
@@ -3643,6 +3660,7 @@ class LLMClient:
                     self.cache_hits += 1
                 from core.llm.telemetry import emit as _t_emit
                 _t_emit(
+                    request_cache_key=_telemetry_cache_key(cache_key),
                     event="call",
                     disposition="cache_hit",
                     call_class=call_class,
@@ -3920,6 +3938,7 @@ class LLMClient:
                         )
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
+                            request_cache_key=_telemetry_cache_key(cache_key),
                             event="call",
                             disposition="ok",
                             call_class=call_class,
@@ -4063,6 +4082,7 @@ class LLMClient:
                         )
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
+                            request_cache_key=_telemetry_cache_key(cache_key),
                             event="attempt_failed",
                             disposition=_disposition,
                             call_class=call_class,

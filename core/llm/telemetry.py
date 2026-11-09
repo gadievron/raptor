@@ -8,6 +8,13 @@ timeouts were disposed of, and the cache-read/cache-write token counts
 when the transport surfaces them — the raw data for measuring prompt
 cache hit rates and retry policy effectiveness on real runs.
 
+Client call and attempt records also carry ``request_cache_key`` when its
+already-computed key is a native SHA-256 spelling. This is the logical cache
+identity, not the final transport body: compare it with structured status,
+serving provider/model, attempt and disposition. Repeated keys alone do not
+prove wasted requests. No prompt text or additional request hash is recorded;
+unknown or adapted key values are reported as null.
+
 Design constraints:
 
 * Zero coupling for callers: :func:`emit` is a no-op unless a sink is
