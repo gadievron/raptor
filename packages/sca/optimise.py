@@ -88,7 +88,7 @@ def main(argv: Sequence[str]) -> int:
               file=sys.stderr)
         return 2
 
-    out_dir = _resolve_out_dir(args.out)
+    out_dir = _resolve_out_dir(args.out).resolve()
     try:
         out_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
