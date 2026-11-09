@@ -27,6 +27,8 @@ import ast
 import logging
 import re
 from bisect import bisect_left, bisect_right
+from types import FunctionType
+from typing import cast
 from dataclasses import dataclass
 
 from ._util import find_enclosing_function as _find_enclosing_function
@@ -690,7 +692,7 @@ _AFFIX_TABLE_IMPL = DispatchTable
 _AFFIX_TABLE_BASES = DispatchTable.__bases__
 _AFFIX_GAP_IMPL = DispatchGap
 _AFFIX_GAP_BASES = DispatchGap.__bases__
-_AFFIX_GAP_INIT = DispatchGap.__dict__.get('__init__')
+_AFFIX_GAP_INIT = cast(FunctionType, DispatchGap.__dict__.get('__init__'))
 _AFFIX_GAP_INIT_CODE = _AFFIX_GAP_INIT.__code__
 _AFFIX_GAP_NEW = DispatchGap.__dict__.get('__new__')
 _AFFIX_GAP_SETATTR = DispatchGap.__dict__.get('__setattr__')

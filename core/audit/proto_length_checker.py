@@ -286,7 +286,7 @@ class _ProtocolCalls:
         self.index_lengths = index_lengths
         self.prepared = False
         self.by_buffer: dict[str, list[re.Match[str]]] = {}
-        self.by_length: dict[str, list[re.Match[str]]] = {}
+        self.by_length: dict[str | None, list[re.Match[str]]] = {}
         self.tokens: dict[re.Match[str], set[str]] = {}
         self.overflow = False
 

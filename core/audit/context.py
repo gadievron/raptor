@@ -4580,7 +4580,7 @@ def _extract_sinks(
             if sinks:
                 return sinks
 
-    result = []
+    result: list[Any] = []
     # Small lists keep their cheap membership path. Index only a proven
     # native history; an adapter query restores ordered list comparisons.
     seen: list[Any] | set[str] = result
