@@ -301,17 +301,31 @@ class RelayHandlerLiveTests(unittest.TestCase):
         ``result`` is the return value, or the SystemExit code, or the
         propagated exception instance.
         """
+        from core.llm.detection import LLMAvailability
+        from core.testing.module_views import scoped_function_imports
+        import packages.llm_analysis as llm_analysis
+
+        caller_main = self.raptor_agentic.main
         sys.argv = ["raptor_agentic.py", *argv]
         stdout, stderr = io.StringIO(), io.StringIO()
         outcome: object = None
         with contextlib.redirect_stdout(stdout), \
-                contextlib.redirect_stderr(stderr):
+                contextlib.redirect_stderr(stderr), \
+                scoped_function_imports(self.raptor_agentic, ("main",), {
+                    "packages.llm_analysis": llm_analysis,
+                }) as imports:
+            # Relay handlers do not exercise optional model analysis.
+            private = getattr(imports, "packages.llm_analysis")
+            private.detect_llm_availability = lambda: LLMAvailability(
+                external_llm=False, claude_code=False, llm_available=False,
+            )
             try:
                 outcome = self.raptor_agentic.main()
             except SystemExit as exc:
                 outcome = exc.code
             except BaseException as exc:  # noqa: BLE001 — the assertion subject
                 outcome = exc
+        self.assertIs(self.raptor_agentic.main, caller_main)
         return outcome, stdout.getvalue(), stderr.getvalue()
 
     def _base_args(self, target: Path, out: Path) -> list[str]:
