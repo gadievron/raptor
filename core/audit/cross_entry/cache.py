@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import zlib
 from importlib.metadata import version, PackageNotFoundError
 from pathlib import Path
@@ -13,6 +14,10 @@ from core.source.contained import read_bytes_capped
 
 from .index import build_access_index
 from .model import AccessIndex, digest
+
+logger = logging.getLogger(__name__)
+_MAX_COMPRESSED_BYTES = 64_000_000
+_MAX_SERIALIZED_BYTES = 128_000_000
 
 
 def load_or_build_index(sources, *, out_dir, limits, entry_points=(), include_edges=None):
@@ -30,25 +35,32 @@ def load_or_build_index(sources, *, out_dir, limits, entry_points=(), include_ed
                   "include_edges":include_edges,
                   "settings":limits.content_settings()})
     folder = Path(out_dir)/"cross-entry-index-cache"
-    folder.mkdir(parents=True,exist_ok=True)
     path = folder/f"{key}.json.z"
-    if path.exists():
-        try:
-            got = read_bytes_capped(path,64_000_000)
-            if got is not None and not got[1]:
-                decoder = zlib.decompressobj()
-                raw = decoder.decompress(got[0],128_000_000)
-                if decoder.eof and not decoder.unconsumed_tail:
-                    data = json.loads(raw)
-                    if data["key"] == key and data["index"]["source_hashes"] == hashes:
-                        return AccessIndex.from_dict(data["index"]),True
-        except (ValueError,KeyError,TypeError,OSError,zlib.error):
-            pass
+    try:
+        got = read_bytes_capped(path, _MAX_COMPRESSED_BYTES)
+        if got is not None and not got[1]:
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(got[0], _MAX_SERIALIZED_BYTES)
+            if decoder.eof and not decoder.unconsumed_tail and not decoder.unused_data:
+                data = json.loads(raw)
+                if data["key"] == key and data["index"]["source_hashes"] == hashes:
+                    return AccessIndex.from_dict(data["index"]), True
+    except (ValueError, KeyError, TypeError, AttributeError, RecursionError, OSError, zlib.error):
+        pass
     index = build_access_index(sources,limits=limits,entry_points=entry_points,include_edges=include_edges)
     # Do not permanently cache a parse abandoned by a transient time budget.
     if not any("time_budget" in str(v) for v in index.coverage["truncated"]) and not any(
         v.get("reason") == "scan_budget" for v in index.coverage["skipped"]
     ):
         raw = dumps_canonical({"key":key,"index":index.to_dict()}).encode("utf-8")
-        write_bytes_atomically(path,zlib.compress(raw))
+        # Only publish entries that this same cache can reload. These are
+        # serialized-byte limits; the fresh analysis result remains available.
+        if len(raw) <= _MAX_SERIALIZED_BYTES:
+            compressed = zlib.compress(raw)
+            if len(compressed) <= _MAX_COMPRESSED_BYTES:
+                try:
+                    folder.mkdir(parents=True, exist_ok=True)
+                    write_bytes_atomically(path, compressed)
+                except OSError as exc:
+                    logger.warning("Could not persist cross-entry index cache: %s", exc)
     return index,False
