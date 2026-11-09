@@ -217,8 +217,12 @@ def _duration(value, default, *, positive=False):
     return value
 
 
-def _release_sidecar(fd, acquired, *, failed):
-    """Close independently of unlock errors; preserve the operation's exception."""
+def release_flock_fd(fd: int, acquired: bool, *, failed: bool) -> None:
+    """Consume an owned descriptor, closing independently of unlock errors.
+
+    OSError cleanup failures are logged. Other cleanup failures propagate
+    after both attempts unless ``failed`` preserves an active operation error.
+    """
     pending = None
     if acquired:
         try:
@@ -355,7 +359,7 @@ def sidecar_flock(
             except OSError as exc:
                 if fd is not None:
                     opened, fd = fd, None
-                    _release_sidecar(opened, False, failed=required)
+                    release_flock_fd(opened, False, failed=required)
                 if required:
                     raise OSError(exc.errno or errno.EACCES,
                                   f"{subject} lock {lock_path}: refusing unlocked operation ({exc})") from exc
@@ -377,7 +381,7 @@ def sidecar_flock(
                                        f"{subject} lock {lock_path}: acquisition deadline expired")
                 # Release the descriptor before entering an explicitly unlocked body.
                 opened, fd = fd, None
-                _release_sidecar(opened, False, failed=False)
+                release_flock_fd(opened, False, failed=False)
                 yield
                 return
             held = os.fstat(fd)
@@ -398,7 +402,7 @@ def sidecar_flock(
             raise
         finally:
             if fd is not None:
-                _release_sidecar(fd, acquired, failed=failed)
+                release_flock_fd(fd, acquired, failed=failed)
     if required:
         raise OSError(errno.EAGAIN, f'{subject} lock {lock_path}: lock identity did not stabilize')
     logger.warning('%s lock %s: lock identity did not stabilize; proceeding WITHOUT cross-process lock',

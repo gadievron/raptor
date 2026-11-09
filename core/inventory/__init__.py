@@ -50,6 +50,7 @@ from .languages import LANGUAGE_MAP, detect_language
 from .lookup import lookup_function, normalise_path
 import logging
 from core.atomic_fs import rename_without_replace
+from core.atomic_fs.fs_lock import release_flock_fd
 import os
 import re
 from collections.abc import Callable, Iterator
@@ -969,16 +970,17 @@ class _checklist_lock:
     direction — the writers' create-mode lock is untouched.
     """
 
-    __slots__ = ("_lock_file", "_lock_path", "_create")
+    __slots__ = ("_lock_fd", "_lock_path", "_create")
 
     def __init__(self, checklist_path: "Path", *,
                  create: bool = True) -> None:
         self._lock_path = checklist_path.with_suffix(".lock")
-        self._lock_file = None
+        self._lock_fd = None
         self._create = create
 
     def __enter__(self):
-        import os
+        if self._lock_fd is not None:
+            raise RuntimeError("checklist lock context is already entered")
         # O_NONBLOCK: a planted reader-less FIFO at the predictable
         # lock path would wedge the blocking O_WRONLY open FOREVER —
         # before the bounded acquisition below ever runs. With
@@ -998,7 +1000,7 @@ class _checklist_lock:
             # Reader mode, no lock file: lockless read (see class
             # docstring).
             return self
-        self._lock_file = os.fdopen(fd, "w", encoding="utf-8")
+        self._lock_fd = fd
         try:
             # Regularity + foreign-uid refusal, then bounded
             # announce-once acquisition (shared helpers): the lock
@@ -1021,31 +1023,16 @@ class _checklist_lock:
                     "unserialised"
                 )
                 raise OSError(msg)
-        except OSError:
-            self._lock_file.close()
-            self._lock_file = None
+        except BaseException:
+            self._lock_fd = None
+            release_flock_fd(fd, False, failed=True)
             raise
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None) -> Literal[False]:
-        import fcntl
-        import logging as _logging
-        _local_logger = _logging.getLogger(__name__)
-        if self._lock_file is not None:
-            try:
-                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
-            except OSError:
-                _local_logger.warning(
-                    "checklist_lock: flock LOCK_UN failed for %s",
-                    self._lock_path, exc_info=True,
-                )
-            try:
-                self._lock_file.close()
-            except OSError:
-                _local_logger.warning(
-                    "checklist_lock: lock file close failed for %s",
-                    self._lock_path, exc_info=True,
-                )
+        fd, self._lock_fd = self._lock_fd, None
+        if fd is not None:
+            release_flock_fd(fd, True, failed=exc_type is not None)
         return False
 
 
