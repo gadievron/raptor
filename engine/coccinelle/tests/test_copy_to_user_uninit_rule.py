@@ -297,3 +297,137 @@ def test_array_decay_receipt_is_detection_only_and_scopes_to_its_function(tmp_pa
     assert not initialized.matches
     assert initialized.details["confirm_only"]
     assert len(result.matches) == 1
+
+
+def test_sibling_initialisers_preserve_object_and_copy_identity(tmp_path):
+    cases = [
+        ("struct info out; copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, *alias = memset(&out, 0, sizeof(out)); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, other = fill(&out); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, other = make_info(); copy_to_user(up, &out, sizeof(out));", True),
+        ("int out, other = (out = 0); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, other; copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, other = fill(&other); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, *alias = memcpy(&out, source, sizeof(out)); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, *alias = memmove(&out, source, sizeof(out)); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, *alias = memcpy(source, &out, sizeof(out)); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, *alias = memmove(source, &out, sizeof(out)); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, other = (memcmp(&out, source, sizeof(out)), make_info()); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, *alias = memset(&out, 0, 0); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, *alias = memcpy(&out, source, 0); copy_to_user(up, &out, sizeof(out));", True),
+        ("struct info out, other = fill((struct info *)&out); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, *alias = memset((void *)&out, 0, sizeof(out)); copy_to_user(up, &out, sizeof(out));", False),
+        ("struct info out, other, third = fill(&out); copy_to_user(up, &out, sizeof(out));\ncopy_to_user(up, &other, sizeof(other));", True),
+        ("struct info out, *alias = memset(&out, 0, sizeof(out));\nif (condition()) copy_to_user(up, &out, sizeof(out)); else copy_to_user(up, &out, sizeof(out));", False),
+    ]
+    lines = ["struct info { int value; };", "struct info make_info(void);", "struct info fill(struct info *);",
+             "void *memset(void *, int, unsigned long);", "void *memcpy(void *, const void *, unsigned long);",
+             "void *memmove(void *, const void *, unsigned long);"]
+    expected = set()
+    for index, (body, reports) in enumerate(cases):
+        lines += [f"void sibling_{index}(void *up, void *source) {{", *body.splitlines(), "}"]
+        if reports:
+            expected.add(len(lines) - 1)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    actual = {row["line"] for row in rows}
+    assert actual == expected, {"missing": expected - actual, "unexpected": actual - expected}
+    assert len(rows) == len(expected)
+
+
+@pytest.mark.integration
+def test_sibling_initialiser_receipts_survive_confined_file_sweep(tmp_path):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = "struct info { int value; };\nstruct info make_info(void);\nvoid *memset(void *, int, unsigned long);\n"
+    cleared = "void initialized(void *up) { struct info out, *alias = memset(&out, 0, sizeof(out)); copy_to_user(up, &out, sizeof(out)); }\n"
+    raw = "void raw(void *up) { struct info out, other = make_info(); copy_to_user(up, &out, sizeof(out)); }\n"
+    source = prefix + cleared + raw
+    (tmp_path / "siblings.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="siblings.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert not result.errors, result.errors
+    assert result.outcome == "confirmed"
+    assert len(result.matches) == 1
+    raw_line = 1 + (prefix + cleared).count("\n")
+    assert result.matches[0]["line"] == raw_line
+    assert result.matches[0]["rule"] == "copy_to_user_uninit"
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="initialized",
+        line_start=1 + prefix.count("\n"), line_end=1 + prefix.count("\n"), language="c",
+    )
+    assert scoped.outcome == "inconclusive" and not scoped.matches
+    assert scoped.details["confirm_only"]
+    raw_result = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="raw", line_start=raw_line, line_end=raw_line, language="c",
+    )
+    assert raw_result.outcome == "confirmed" and len(raw_result.matches) == 1
+    assert len(result.matches) == 1
+
+
+@pytest.mark.integration
+def test_declaration_checks_remain_in_one_native_combined_process(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from packages.coccinelle import runner
+
+    source = (
+        "struct info { int value; };\nstruct info make_info(void);\n"
+        "void *memset(void *, int, unsigned long);\n"
+        "void initialized(void *up) { struct info out, *alias = memset(&out, 0, sizeof(out)); copy_to_user(up, &out, sizeof(out)); }\n"
+        "void raw(void *up) { struct info out, other = make_info(); copy_to_user(up, &out, sizeof(out)); }\n"
+        "void array(void *up) { unsigned char out[16]; copy_to_user(up, out, sizeof(out)); }\n"
+        "void clear(char *secret, unsigned long n) { memset(secret, 0, n); free(secret); }\n"
+    )
+    target = tmp_path / "combined.c"
+    target.write_text(source)
+    rules = [_RULE, _RULE.with_name("dead_memset_free.cocci")]
+    expected = {rule.stem: runner.run_rule(target, rule, no_includes=True, allow_scripting=True)
+                for rule in rules}
+    real = runner._sandboxed_run
+    scan_texts = []
+
+    def observed(command, **scope):
+        if "--sp-file" in command:
+            scan_texts.append(Path(command[command.index("--sp-file") + 1]).read_text())
+        return real(command, **scope)
+
+    monkeypatch.setattr(runner, "_sandboxed_run", observed)
+    actual = runner.run_rules_batched(target, rules, no_includes=True, allow_scripting=True)
+    assert len(scan_texts) == 1, "declaration checks must retain combined-process execution"
+    assert all(f"begin {rule.stem}" in scan_texts[0] for rule in rules)
+    assert set(actual) == {rule.stem for rule in rules}
+    assert len(actual[_RULE.stem].matches) == 2
+    assert len(actual["dead_memset_free"].matches) == 1
+    for rule in rules:
+        assert expected[rule.stem].ok, expected[rule.stem].errors
+        assert actual[rule.stem].ok, actual[rule.stem].errors
+        before, after = asdict(expected[rule.stem]), asdict(actual[rule.stem])
+        before.pop("elapsed_ms")
+        after.pop("elapsed_ms")
+        for row in (before, after):
+            row["matches"].sort(key=lambda item: (item["file"], item["line"], item["column"]))
+        assert before == after
+
+
+@pytest.mark.slow
+@pytest.mark.integration
+def test_repeated_sibling_declarations_fit_one_bounded_native_scan(tmp_path):
+    from packages.coccinelle import runner
+
+    lines = ["struct info { int value; };", "struct info make_info(void);", "void *memset(void *, int, unsigned long);"]
+    expected = set()
+    for index in range(400):
+        declaration = ("struct info out, *alias = memset(&out, 0, sizeof(out));" if index % 2 == 0
+                       else "struct info out, other = make_info();")
+        lines += [f"void repeated_{index}(void *up) {{", declaration,
+                  "copy_to_user(up, &out, sizeof(out));", "}"]
+        if index % 2:
+            expected.add(len(lines) - 1)
+    target = tmp_path / "repeated.c"
+    target.write_text("\n".join(lines) + "\n")
+    # Matching declaration effects once avoids a native re-scan for each
+    # copy candidate. Keep real parsing, confinement and the invocation cap.
+    result = runner.run_rule(target, _RULE, no_includes=True, timeout=30, allow_scripting=True)
+    assert result.ok, result.errors
+    assert {match.line for match in result.matches} == expected
+    assert len(result.matches) == len(expected)

@@ -37,6 +37,49 @@ memcpy@zero_pos(DST, SRC, ZERO)
 memmove@zero_pos(DST, SRC, ZERO)
 )
 
+// A declaration with several variables is one native declaration. Its
+// sibling initialisers can modify the reviewed object before CFG traversal
+// reaches the declaration's following statements. Bind the object and the
+// complete declaration together; a write to a different sibling is unrelated.
+@declaration_write@
+identifier out;
+declaration DECL;
+identifier member;
+identifier helper != {copy_to_user, memset, memcpy, memmove, memcmp, bcmp, memchr};
+expression V;
+type CAST;
+position operation != zero_length_transfer.zero_pos;
+@@
+(
+helper@DECL(..., &out, ...)
+|
+helper@DECL(..., (CAST)&out, ...)
+|
+memset@operation@DECL(&out, ...)
+|
+memset@operation@DECL((CAST)&out, ...)
+|
+memcpy@operation@DECL(&out, ...)
+|
+memcpy@operation@DECL((CAST)&out, ...)
+|
+memmove@operation@DECL(&out, ...)
+|
+memmove@operation@DECL((CAST)&out, ...)
+|
+out@DECL = V
+|
+out.member@DECL = V
+)
+
+@script:python declaration_write_report depends on declaration_write@
+out << declaration_write.out;
+DECL << declaration_write.DECL;
+@@
+import hashlib as _copy_hashlib
+_copy_decl_key = (_copy_hashlib.sha256(str(DECL).encode("utf-8")).digest(), str(out))
+globals().setdefault("_RAPTOR_COPY_UNINIT_DECL_WRITES", set()).add(_copy_decl_key)
+
 // Coccinelle's default decl_init isomorphism lets T out; match
 // T out = initializer;. A declaration initializer must disqualify this
 // proof of absent initialization, including scalar/aggregate initializers.
@@ -54,12 +97,13 @@ position p_copy != zero_length_transfer.zero_pos;
 position initialisation != zero_length_transfer.zero_pos;
 expression dst, sz, V;
 initialiser INIT;
+declaration DECL;
 @@
 
 (
-T out;
+T out@DECL;
 |
-auto T out;
+auto T out@DECL;
 )
 ... when != memset@initialisation(&out, ...)
     when != SHADOW out;
@@ -72,14 +116,20 @@ auto T out;
     when != helper(..., &out, ...)
   copy_to_user@p_copy(dst, &out, sz)
 
-@script:python@
+@script:python uninit_report depends on uninit_copy@
 p_copy << uninit_copy.p_copy;
 out << uninit_copy.out;
 T << uninit_copy.T;
+DECL << uninit_copy.DECL;
 @@
 
 import json, sys
+import hashlib as _copy_hashlib
+_copy_decl_key = (_copy_hashlib.sha256(str(DECL).encode("utf-8")).digest(), str(out))
+_copy_has_declaration_write = _copy_decl_key in globals().get("_RAPTOR_COPY_UNINIT_DECL_WRITES", ())
 for _p in p_copy:
+    if _copy_has_declaration_write:
+        continue
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "copy_to_user_uninit",
