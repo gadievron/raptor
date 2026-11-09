@@ -1218,7 +1218,15 @@ plan-only, proposed-export and applied-in-place modes separately, preserving
 blocked major upgrades and skipped changes. A plan or proposed file is not
 reported as an applied fix. Existing scan and change artifacts remain available;
 the report performs no extra analysis or writes to target manifests.
-`--cve-only` and `--harden` keep their separate reporting interfaces.
+`--cve-only` keeps its separate reporting interface.
+
+`fix --harden` supports explicit portable reports for checks, proposed exports
+and apply/self-test outcomes. Candidate totals include every recorded status;
+actionability is shown separately with the selected ecosystem and consent
+rules. Under degraded advisory coverage, complete actionability remains
+unavailable. A promoted candidate is a planner decision, not proof that a
+change was applied. The report records self-test/apply status without running
+either operation again.
 
 ### Pre-Flight: Registries Reachable
 
