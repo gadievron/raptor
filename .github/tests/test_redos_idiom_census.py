@@ -610,51 +610,10 @@ def _compiled_is_member(pattern: re.Pattern[str]) -> bool:
 
 
 def _data_file_loaders() -> tuple[Any, Any]:
-    """Import the two data-file loader surfaces the census consumes.
-
-    Returns ``(prompt-preflight _load_patterns, exfil_destinations
-    module)``. The lint-tier CI env installs no runtime deps, but the
-    loaders' import chain (``packages.sca`` __init__ →
-    core.http.egress_backend → urllib_backend) imports urllib3 at
-    module top even though the DATA loaders never touch it. When
-    urllib3 is absent, stub exactly the names that import chain binds
-    at import time, scoped to this import (removed again below), so
-    the census arm stays live in the env it was built for instead of
-    erroring — and a later test that genuinely needs urllib3 still
-    sees the honest ModuleNotFoundError. Known residue: the
-    transitively imported runtime modules stay cached in sys.modules
-    with the stub exception classes bound into their namespaces after
-    the helper returns — inert here because the stubs only install
-    where urllib3 is genuinely absent, and no other test in this
-    suite exercises that import chain at runtime.
-    """
-    sys.path.insert(0, str(_REPO))
-    stubbed: list[str] = []
-    if "urllib3" not in sys.modules:
-        try:
-            import urllib3  # noqa: F401
-        except ModuleNotFoundError:
-            import types
-
-            _u3 = types.ModuleType("urllib3")
-            _u3_exc = types.ModuleType("urllib3.exceptions")
-            for _name in ("HTTPError", "LocationValueError",
-                          "MaxRetryError", "ReadTimeoutError",
-                          "SSLError", "ProxyError"):
-                setattr(_u3_exc, _name, type(_name, (Exception,), {}))
-            _u3.exceptions = _u3_exc
-            sys.modules["urllib3"] = _u3
-            sys.modules["urllib3.exceptions"] = _u3_exc
-            stubbed = ["urllib3", "urllib3.exceptions"]
-    try:
+    """Import the data loaders without optional HTTP backends or path residue."""
+    with _path_patch.object(sys, "path", [str(_REPO), *sys.path]):
         from core.security.prompt_input_preflight import _load_patterns
-        from packages.sca.supply_chain import (
-            exfil_destinations as _exfil,
-        )
-    finally:
-        sys.path.remove(str(_REPO))
-        for _mod in stubbed:
-            sys.modules.pop(_mod, None)
+        from packages.sca.supply_chain import exfil_destinations as _exfil
     return _load_patterns, _exfil
 
 
@@ -677,18 +636,21 @@ def _data_file_members() -> list[tuple[str, str]]:
         operator extension would smuggle past the source census).
     """
     _load_patterns, _exfil = _data_file_loaders()
-    members = [
-        (stem, compiled.pattern)
-        for stem, patterns in sorted(_load_patterns().items())
-        for compiled in patterns
-        if _compiled_is_member(compiled)
-    ]
-    members.extend(
-        ("exfil_destinations", rule.pattern.pattern)
-        for rule in _exfil._load_rules()
-        if rule.pattern is not None and _compiled_is_member(rule.pattern)
-    )
-    return members
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(_exfil, {"_RULES_CACHE": None}):
+        members = [
+            (stem, compiled.pattern)
+            for stem, patterns in sorted(_load_patterns().items())
+            for compiled in patterns
+            if _compiled_is_member(compiled)
+        ]
+        members.extend(
+            ("exfil_destinations", rule.pattern.pattern)
+            for rule in _exfil._load_rules()
+            if rule.pattern is not None and _compiled_is_member(rule.pattern)
+        )
+        return members
 
 
 def _census_key(path: Path, pattern: str,
@@ -3361,11 +3323,9 @@ class RedosIdiomCensus(unittest.TestCase):
         import sys
         import tempfile
 
-        sys.path.insert(0, str(_REPO))
-        try:
+        with _path_patch.object(sys, "path", [str(_REPO), *sys.path]):
             from core.security import prompt_input_preflight as pf
-        finally:
-            sys.path.remove(str(_REPO))
+            from core.testing.module_state import isolated_module_state
 
         with tempfile.TemporaryDirectory() as td:
             scratch = Path(td) / "injection_patterns"
@@ -3374,12 +3334,8 @@ class RedosIdiomCensus(unittest.TestCase):
                 "a", encoding="utf-8",
             ) as fh:
                 fh.write("\n^\\s*planted_member\\b\n")
-            original = pf._PATTERNS_DIR
-            pf._PATTERNS_DIR = scratch
-            try:
+            with isolated_module_state(pf, {"_PATTERNS_DIR": scratch}):
                 members = _data_file_members()
-            finally:
-                pf._PATTERNS_DIR = original
         self.assertEqual(
             members,
             [("english_multiline", "^\\s*planted_member\\b")],
@@ -3396,6 +3352,7 @@ class RedosIdiomCensus(unittest.TestCase):
         import tempfile
 
         _, _exfil = _data_file_loaders()
+        from core.testing.module_state import isolated_module_state
 
         planted = r"(?m)^\s*evil\.example\b"
         with tempfile.TemporaryDirectory() as td:
@@ -3407,15 +3364,10 @@ class RedosIdiomCensus(unittest.TestCase):
                 "reason": "planted census member", "pattern": planted,
             })
             scratch.write_text(_json.dumps(data), encoding="utf-8")
-            original_file = _exfil._DATA_FILE
-            original_cache = _exfil._RULES_CACHE
-            _exfil._DATA_FILE = scratch
-            _exfil._RULES_CACHE = None
-            try:
+            with isolated_module_state(
+                _exfil, {"_DATA_FILE": scratch, "_RULES_CACHE": None},
+            ):
                 members = _data_file_members()
-            finally:
-                _exfil._DATA_FILE = original_file
-                _exfil._RULES_CACHE = original_cache
         # The plant — and ONLY the plant — on the shipped rule set.
         self.assertEqual(
             [m for m in members if m[0] == "exfil_destinations"],
@@ -4881,19 +4833,22 @@ class NestedQuantifierCensus(unittest.TestCase):
         corpus line is compiled and searched over untrusted content
         exactly like a source-constant pattern."""
         _load_patterns, _exfil = _data_file_loaders()
-        members = [
-            (stem, compiled.pattern)
-            for stem, patterns in sorted(_load_patterns().items())
-            for compiled in patterns
-            if _nested_is_member(compiled.pattern, compiled.flags)
-        ]
-        members.extend(
-            ("exfil_destinations", rule.pattern.pattern)
-            for rule in _exfil._load_rules()
-            if rule.pattern is not None
-            and _nested_is_member(rule.pattern.pattern,
-                                  rule.pattern.flags)
-        )
+        from core.testing.module_state import isolated_module_state
+
+        with isolated_module_state(_exfil, {"_RULES_CACHE": None}):
+            members = [
+                (stem, compiled.pattern)
+                for stem, patterns in sorted(_load_patterns().items())
+                for compiled in patterns
+                if _nested_is_member(compiled.pattern, compiled.flags)
+            ]
+            members.extend(
+                ("exfil_destinations", rule.pattern.pattern)
+                for rule in _exfil._load_rules()
+                if rule.pattern is not None
+                and _nested_is_member(rule.pattern.pattern,
+                                      rule.pattern.flags)
+            )
         self.assertFalse(members, (
             "nested-quantifier (exponential-composition) regex in a "
             "pattern data file:\n  "
