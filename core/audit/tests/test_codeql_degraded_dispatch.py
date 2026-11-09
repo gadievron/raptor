@@ -9,6 +9,8 @@ step (counted as skipped, loud once) instead of erroring.
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 from core.audit.orchestrator import (
     OrchestratorConfig,
     TierCounters,
@@ -336,17 +338,21 @@ class TestDegradedBannerThreadSafety:
         barrier = threading.Barrier(n_threads)
 
         def hammer() -> None:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             for _ in range(50):
                 _orch._note_codeql_degraded_skip("a.c", "f")
 
         threads = [
             threading.Thread(target=hammer) for _ in range(n_threads)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         loud = [m for m in infos if "codeql chain steps skipped" in m]
         assert len(loud) == 1, (
@@ -401,7 +407,10 @@ class TestUnsupportedIdThreadSafety:
         barrier = threading.Barrier(n_threads)
 
         def hammer() -> None:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             for _ in range(50):
                 _orch._note_codeql_unsupported_query_id("cpp/x", "a.c", "f")
                 _orch._note_codeql_unsupported_query_id("cpp/y", "a.c", "f")
@@ -409,10 +418,11 @@ class TestUnsupportedIdThreadSafety:
         threads = [
             threading.Thread(target=hammer) for _ in range(n_threads)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         loud = [m for m in infos if "unsupported" in m]
         assert len(loud) == 2, (
