@@ -968,11 +968,13 @@ class _AdditionsObserver:
     def __init__(self, real):
         self.real = real
         self.raised: list[BaseException] = []
+        self.source_lengths: list[int] = []
 
     def __call__(self, source: str, line_start: int, **kwargs) -> set[int]:
         # production passes guard_view (the prepare pointer's shared
         # view), so the observer forwards keywords to the real additions
         try:
+            self.source_lengths.append(len(source))
             return self.real(source, line_start, **kwargs)
         except BaseException as exc:
             self.raised.append(exc)
@@ -1681,12 +1683,15 @@ class TestPhpSqlInjectionTiming:
         if stub:
             monkeypatch.setattr(pf, "_php_sql_injection_lines",
                                 lambda s, n, **_: set())
+        recoveries = pf.guard_view_failure_count()
         t0 = time.perf_counter()
         run_prefilter(
             target_path=tmp_path, file_path="big.php", function_name="f",
             source=source, line_start=1,
         )
-        return time.perf_counter() - t0
+        elapsed = time.perf_counter() - t0
+        assert pf.guard_view_failure_count() == recoveries, "guard-view recovery during timing"
+        return elapsed
 
     @pytest.mark.parametrize("line", [
         pytest.param("$a; " + 'mysqli_query($c, "x" . intval($i)) . ' * 4000,
@@ -1718,19 +1723,22 @@ class TestPhpSqlInjectionTiming:
         pytest.param("$a; mysqli_query($c, 'x'); " + "a" * 100000 + "query(",
                      id="trailing_noise"),
     ])
-    def test_hostile_line(self, tmp_path, monkeypatch, line):
+    def test_hostile_line(
+        self, tmp_path, monkeypatch, line, _php_sql_additions_observed,
+    ):
         """Hostile lines cost at most a small multiple of the PHP prefilter
         without the SQL rule, so the rule cannot dominate a scan."""
         source = "function f() {\n" + line + "\n}"
-        # called directly too: run_prefilter would contain a crash
-        _prefilter._php_sql_additions(
-            source, 1, guard_view=_php_sql_shared_view(source))
         rule = self._timed(tmp_path, source)
+        assert _php_sql_additions_observed.source_lengths == [len(source)]
         ref = self._timed(tmp_path, source, monkeypatch, stub=True)
+        assert _php_sql_additions_observed.source_lengths == [len(source)]
         assert rule <= 3 * ref + 0.5, (len(line), rule, ref)
 
     @pytest.mark.slow
-    def test_multi_megabyte_function(self, tmp_path, monkeypatch):
+    def test_multi_megabyte_function(
+        self, tmp_path, monkeypatch, _php_sql_additions_observed,
+    ):
         """A multi-megabyte function with every lexer construct finishes in
         bounded time (no per-line rescans of the function)."""
         block = (
@@ -1744,12 +1752,28 @@ class TestPhpSqlInjectionTiming:
         )
         source = "function f() {\n" + block * (2_200_000 // len(block)) + "}"
         assert len(source) > 2_000_000
-        # called directly too: run_prefilter would contain a crash
-        _prefilter._php_sql_additions(
-            source, 1, guard_view=_php_sql_shared_view(source))
         rule = self._timed(tmp_path, source)
+        assert _php_sql_additions_observed.source_lengths == [len(source)]
         ref = self._timed(tmp_path, source, monkeypatch, stub=True)
+        assert _php_sql_additions_observed.source_lengths == [len(source)]
         assert rule <= 2 * ref + 1.0, (rule, ref)
+
+
+    def test_timing_probe_rejects_guard_view_recovery(self, tmp_path):
+        from core.testing.module_state import isolated_module_state
+
+        def boom(_self):
+            raise RuntimeError("injected guard-view failure")
+
+        source = ('function f($db) {\n'
+                  '  $db->query("x") && $db->prepare("x");\n}\n')
+        with isolated_module_state(
+            _prefilter, {"_guard_view_failures": 0, "_guard_view_warned": True},
+            lock=_prefilter._guard_view_lock,
+        ), pytest.MonkeyPatch.context() as patch:
+            patch.setattr(_prefilter._GuardViews, "code", property(boom))
+            with pytest.raises(AssertionError, match="guard-view recovery during timing"):
+                self._timed(tmp_path, source)
 
 
 
