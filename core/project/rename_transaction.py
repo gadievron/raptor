@@ -38,7 +38,7 @@ def publish_rename(project, old_file: Path, new_file: Path,
             os.link(old_file, backup, follow_symlinks=False)
             if _identity(backup) != old_record_id:
                 raise OSError('project registration changed before rename')
-            if output_id is not None:
+            if new_output is not None and output_id is not None:
                 rename_without_replace(old_output, new_output)
                 if _identity(new_output) != output_id:
                     raise OSError('project output changed during rename')
@@ -59,7 +59,7 @@ def publish_rename(project, old_file: Path, new_file: Path,
                 logger.error('Project rename registry rollback incomplete; inspect %s, %s and %s',
                              old_file, new_file, backup, exc_info=True)
             try:
-                if output_id is not None and _identity(new_output) == output_id:
+                if new_output is not None and output_id is not None and _identity(new_output) == output_id:
                     if _identity(old_file) != old_record_id or _identity(new_file) == new_record_id:
                         raise OSError('registration could not be restored before output rollback')
                     rename_without_replace(new_output, old_output)
