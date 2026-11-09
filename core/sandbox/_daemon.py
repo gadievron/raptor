@@ -1296,8 +1296,8 @@ def _handle_probe(payload: dict) -> dict:
     steps_completed = 0
     exit_class = "unknown"
     proc = _spawn_request_target(target_argv)
-    t0 = time.monotonic()
     try:
+        t0 = time.monotonic()
         for i, step in enumerate(steps):
             _check_request_channel()
             if not isinstance(step, dict):
@@ -1528,8 +1528,8 @@ def _handle_conversation(payload: dict) -> dict:
     exit_class = "unknown"
     target_stderr = b""
     proc = _spawn_request_target(target_argv)
-    t0 = time.monotonic()
     try:
+        t0 = time.monotonic()
         for i, (send_spec, terminator) in enumerate(steps):
             _check_request_channel()
             if isinstance(send_spec, bytes):
@@ -1632,6 +1632,8 @@ _MAX_REPLY_FRAME_BYTES = 4 * _MAX_CAPTURE_BYTES + 1024 * 1024
 
 def _cap(name: str, value, ceiling, fn=float):
     v = fn(value)
+    if isinstance(v, float) and not math.isfinite(v):
+        raise ValueError(f"{name} must be finite")
     if v <= 0:
         msg = f"{name}={v} must be positive"
         raise ValueError(msg)
