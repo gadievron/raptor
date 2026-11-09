@@ -129,8 +129,8 @@ def test_check_offline_smoke(tmp_path: Path) -> None:
     code (0 Clean / 1 Review / 2 Block per the doc'd contract).
 
     Without a populated offline cache the verdict will be
-    Clean (no findings, no signal); we don't assert specific
-    verdict here — just that the dispatcher works."""
+    unavailable (no advisory coverage); this dispatcher smoke does not
+    assert a specific verdict. The upgrade tests below pin cache coverage."""
     proc = _run_cli([
         "check", "npm", "lodash", "4.17.21",
         "--offline", "--out", str(tmp_path / "out"),
@@ -145,18 +145,38 @@ def test_check_offline_smoke(tmp_path: Path) -> None:
 # upgrade (whatif)
 # ---------------------------------------------------------------------------
 
-def test_upgrade_offline_smoke(tmp_path: Path) -> None:
-    """``raptor-sca upgrade npm lodash 4.17.4 4.17.21 --offline``
-    — forward-looking impact analysis. Exit codes per docs:
-    0 net-positive, 1 mixed/regression."""
+@pytest.mark.parametrize("cached", [False, True], ids=["cold-cache", "cached-answer"])
+def test_upgrade_offline_smoke(tmp_path: Path, cached: bool) -> None:
+    """Unavailable offline data returns 2; cached answers permit a verdict."""
+    from core.json import JsonCache
+    from packages.sca.osv import OsvClient
+    from packages.sca.whatif import _synthesise
+
+    cache_root = tmp_path / "advisory-cache"
+    if cached:
+        cache = JsonCache(root=cache_root)
+        for version in ("4.17.4", "4.17.21"):
+            dep = _synthesise("npm", "lodash", version)
+            cache.put(OsvClient._query_key(dep), [], ttl_seconds=86400)
     proc = _run_cli([
         "upgrade", "npm", "lodash", "4.17.4", "4.17.21",
-        "--offline", "--out", str(tmp_path / "out"),
+        "--offline", "--cache-root", str(cache_root),
+        "--out", str(tmp_path / "out"),
     ])
-    assert proc.returncode in (0, 1), (
+    assert proc.returncode == (0 if cached else 2), (
         f"upgrade returned unexpected rc={proc.returncode}\n"
-        f"stderr:\n{proc.stderr[:1000]}"
+        f"stdout:\n{proc.stdout[:1000]}\nstderr:\n{proc.stderr[:1000]}"
     )
+    report = (tmp_path / "out").read_text()
+    assert report == proc.stdout
+    if cached:
+        assert "verdict unavailable" not in report
+        assert "Resolved: **0**" in report
+        assert "Regressed: **0**" in report
+    else:
+        assert "OSV lookups degraded — verdict unavailable" in report
+        assert "2 advisory lookup(s) were unavailable" in report
+        assert "Re-run with available advisory data" in report
 
 
 # ---------------------------------------------------------------------------
