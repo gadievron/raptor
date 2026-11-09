@@ -85,6 +85,7 @@ def main(argv: Sequence[str]) -> int:
             "construction. Run without --offline.",
             file=sys.stderr,
         )
+        _complete_report(args, [], offline=True)
         return 2
 
     # Throwaway cache: this is a LIVE reachability check. Reading
@@ -134,6 +135,7 @@ def main(argv: Sequence[str]) -> int:
         _scratch.close()
 
     _print_table(results)
+    _complete_report(args, results)
     return 0 if all(r.ok for r in results) else 1
 
 
@@ -270,7 +272,19 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "shared cache, so offline mode would fail "
                         "every probe by construction")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
+
+
+def _complete_report(args, results, *, offline=False):
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .health_reporting import complete_health_report
+        complete_health_report(args._report_options, results, offline=offline)
 
 
 def _configure_logging(verbose: int) -> None:

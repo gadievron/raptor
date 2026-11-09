@@ -1422,3 +1422,10 @@ memory use.
 Statistics, dependency-path explanations and upgrade plans use recorded notice
 information. Use `sbom inspect` to check retained notice bytes, or `sbom notices`
 to collect the original texts. These inventory operations work offline.
+
+`health --report-format markdown --report-output health-report/` saves the
+recorded registry probes without running them again. The existing table and
+exit codes remain unchanged. Failed probes, latency and returned-version
+counts describe reachability at the time of the check, not package safety.
+An offline invocation remains an error and its optional report records that
+no live probes ran.
