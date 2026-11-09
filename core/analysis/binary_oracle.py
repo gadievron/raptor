@@ -43,6 +43,7 @@ import subprocess
 import tempfile
 
 from core.security.log_sanitisation import escape_nonprintable
+from core.source.streams import preserving_stream_error
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
@@ -206,21 +207,21 @@ class _OwnedOutputReader(io.RawIOBase):
 @contextlib.contextmanager
 def _owned_output(directory: str) -> Iterator[int]:
     """Create once and delegate a non-inheritable descriptor above stdio."""
-    with tempfile.NamedTemporaryFile(mode="w+b", prefix="stdout-", dir=directory, delete=False) as created:
-        copies = []
-        try:
+    with preserving_stream_error(contextlib.ExitStack()) as delegated:
+        with preserving_stream_error(contextlib.ExitStack()) as setup:
+            created = setup.enter_context(preserving_stream_error(
+                tempfile.NamedTemporaryFile(
+                    mode="w+b", prefix="stdout-", dir=directory, delete=False,
+                )
+            ))
             descriptor = os.dup(created.fileno())
-            copies.append(descriptor)
             while descriptor < 3:
+                setup.callback(os.close, descriptor)
                 descriptor = os.dup(descriptor)
-                copies.append(descriptor)
-            created.close()
-            while len(copies) > 1:
-                os.close(copies.pop(0))
-            yield descriptor
-        finally:
-            for descriptor in copies:
-                os.close(descriptor)
+            delegated.callback(os.close, descriptor)
+        # Setup handles are retired before the child receives its sole output
+        # descriptor. Each close is attempted once, even when another fails.
+        yield descriptor
 
 
 def _stream(argv: list[str], timeout: int,
