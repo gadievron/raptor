@@ -4,6 +4,8 @@ Replaces the old LiteLLM callback tests. Now tests the provider-based
 architecture (OpenAI SDK + Anthropic SDK) without any LiteLLM dependency.
 """
 
+from core.testing.threads import retiring_threads
+
 
 import pytest
 import re
@@ -572,16 +574,20 @@ class TestBudgetReservationConcurrency:
         def attempt():
             # All four threads block at the barrier so the contention
             # is real, not just scheduled-serially-anyway.
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             ok = client._acquire_budget(0.40)
             with results_lock:
                 results.append(ok)
 
         threads = [threading.Thread(target=attempt) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         successes = sum(1 for r in results if r)
         # Either 2 (the strict guarantee: 2 × 0.40 = 0.80 ≤ 1.0; the
