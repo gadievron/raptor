@@ -628,7 +628,7 @@ class TestPlantedNonFiniteCostReports(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 )
                 children.enter_context(reap_on_exit(proc))
-                marker = out_dir / "openant_scan" / "dataset.json"
+                marker = out_dir / "openant_scan" / "wait-ready"
                 out = err = ""
                 try:
                     deadline = time.time() + 120
@@ -638,7 +638,6 @@ class TestPlantedNonFiniteCostReports(unittest.TestCase):
                             self.fail(
                                 f"scan child never started:\n{out}\n{err}")
                         time.sleep(0.2)
-                    time.sleep(1.0)
                     proc.send_signal(signal.SIGTERM)
                     out, err = proc.communicate(timeout=120)
                 finally:
@@ -714,6 +713,9 @@ if out:
     with open(ck + "/u0.json", "w") as f:
         json.dump({"id": "app.py:f",
                    "result": {"verdict": "ERROR", "finding": "error"}}, f)
+    # Publish readiness only after both resumable inputs are fully closed.
+    with open(out + "/wait-ready", "w"):
+        pass
 time.sleep(45)
 sys.exit(1)
 """
@@ -743,7 +745,7 @@ class TestInterruptedRunLane(unittest.TestCase):
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 )
                 children.enter_context(reap_on_exit(proc))
-                marker = out_dir / "openant_scan" / "dataset.json"
+                marker = out_dir / "openant_scan" / "wait-ready"
                 out = err = ""
                 try:
                     deadline = time.time() + 120
@@ -753,7 +755,6 @@ class TestInterruptedRunLane(unittest.TestCase):
                             self.fail(
                                 f"scan child never started:\n{out}\n{err}")
                         time.sleep(0.2)
-                    time.sleep(1.0)  # let the child settle into its wait
                     proc.send_signal(signal.SIGTERM)
                     out, err = proc.communicate(timeout=120)
                 finally:
