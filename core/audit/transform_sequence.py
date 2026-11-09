@@ -337,7 +337,7 @@ def _matching_positions(names: list[str], pattern) -> list[int]:
     positions: list[int] = []
     for i, name in enumerate(names):
         if type(name) is str and len(name) <= 512:
-            matched = matches.get(name)
+            matched: bool | re.Match[str] | None = matches.get(name)
             if matched is None:
                 matched = pattern.search(name) is not None
                 if len(matches) < 256:
@@ -889,15 +889,18 @@ def _annotate_sibling_counts(
     """Annotate each violation with the count of sibling sequences
     that apply the same rule's transforms in the correct order."""
     if _native_sibling_inputs(violations, all_seqs):
-        rules = {}
-        for rule in ORDERING_RULES:
-            rules.setdefault(rule.name, rule)  # first matching catalog name wins
+        rules: dict[str, _OrderingRule] = {}
+        for native_rule in ORDERING_RULES:
+            rules.setdefault(native_rule.name, native_rule)  # first matching catalog name wins
         needed: dict[str, set[tuple[str, str]]] = {}
         for v in violations:
             if v.catalog_rule and v.catalog_rule in rules:
                 needed.setdefault(v.catalog_rule, set()).add((v.file, v.function))
-        indices = {name: _correct_sibling_index(rules[name], all_seqs, groups)
-                   for name, groups in needed.items()}
+        indices: dict[str | None, tuple[
+            int, dict[tuple[str, str], int], list[tuple[str, str]],
+            dict[tuple[str, str], list[tuple[str, str]]],
+        ]] = {name: _correct_sibling_index(rules[name], all_seqs, groups)
+              for name, groups in needed.items()}
         for v in violations:
             index = indices.get(v.catalog_rule)
             if index is None:
@@ -910,7 +913,7 @@ def _annotate_sibling_counts(
     for v in violations:
         if not v.catalog_rule:
             continue
-        rule = None
+        rule: _OrderingRule | None = None
         for r in ORDERING_RULES:
             if r.name == v.catalog_rule:
                 rule = r

@@ -813,7 +813,7 @@ def _source_line_starts(
     if prepared_rows is not None and "\r" not in text:
         # Native LF rows already encode the offsets. Reuse their lengths
         # instead of constructing a regex match object per newline.
-        starts = array("Q") if compact else []
+        starts: list[int] | array = array("Q") if compact else []
         append = starts.append
         offset = 0
         for row in prepared_rows:

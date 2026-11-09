@@ -755,8 +755,10 @@ def _extract_first_arg(
     return ""
 
 
+_FIRST_ARG_NATIVE_NODE: type | None
 try:
-    from tree_sitter import Node as _FIRST_ARG_NATIVE_NODE
+    from tree_sitter import Node as _FirstArgNodeClass
+    _FIRST_ARG_NATIVE_NODE = _FirstArgNodeClass
 except ImportError:
     _FIRST_ARG_NATIVE_NODE = None
 _FIRST_ARG_NODE_TEXT = _node_text
@@ -1265,8 +1267,11 @@ def extract_loop_caps(
     loop_types = _LOOP_TYPES.get(lang, ())
     results: list[LoopCap] = []
 
+    NativeNode: type | None
+    NativeTree: type | None
     try:
-        from tree_sitter import Node as NativeNode, Tree as NativeTree
+        from tree_sitter import Node as LoopNodeClass, Tree as LoopTreeClass
+        NativeNode, NativeTree = LoopNodeClass, LoopTreeClass
     except ImportError:
         NativeNode = NativeTree = None
     native_groups = (
