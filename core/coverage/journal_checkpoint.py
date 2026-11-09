@@ -244,7 +244,7 @@ def _load_state(out_dir: Path) -> dict[str, Any] | None:
     # state" (fire more, the safe direction), never reach a caller.
     ff = data.get("freed_fraction", 0.0)
     if (isinstance(ff, bool) or not isinstance(ff, (int, float))
-            or not math.isfinite(ff) or not 0.0 <= ff <= 1.0):
+            or not 0.0 <= ff <= 1.0 or not math.isfinite(ff)):
         return None
     return data
 

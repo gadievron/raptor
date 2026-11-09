@@ -378,7 +378,11 @@ def spend_value(value: Any) -> float | None:
     """
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return None
-    v = float(value)
+    try:
+        v = float(value)
+    except OverflowError:
+        # Exact JSON integers can exceed float range; keep the same clamp.
+        return _MAX_SPEND_EVIDENCE_USD if value > 0 else 0.0
     if not math.isfinite(v):
         v = _MAX_SPEND_EVIDENCE_USD if v > 0 else 0.0
     return min(max(0.0, v), _MAX_SPEND_EVIDENCE_USD)
