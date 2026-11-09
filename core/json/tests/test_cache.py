@@ -7,6 +7,8 @@ generic ``core.json.cache`` location.
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 import json
 import os
 import sys
@@ -271,16 +273,20 @@ def test_concurrent_threads_same_key_no_torn_writes(tmp_path: Path) -> None:
     barrier = _threading.Barrier(8)
 
     def writer(i: int) -> None:
-        barrier.wait()
+        try:
+            barrier.wait()
+        except _threading.BrokenBarrierError:
+            return
         for _ in range(50):
             cache.put("hot-key", {"writer": i, "n": _}, ttl_seconds=60)
 
     threads = [_threading.Thread(target=writer, args=(i,))
                for i in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     # Whatever the final winner is, the read MUST succeed (no torn
     # file) and produce a value from one of the writers.

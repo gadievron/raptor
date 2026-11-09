@@ -1,5 +1,7 @@
 """Tests for core.json utilities."""
 
+from core.testing.threads import retiring_threads
+
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
@@ -243,7 +245,10 @@ class TestSaveJson(unittest.TestCase):
 
             def writer(i: int) -> None:
                 try:
-                    barrier.wait()
+                    try:
+                        barrier.wait()
+                    except _threading.BrokenBarrierError:
+                        return
                     for n in range(50):
                         save_json(p, {"writer": i, "n": n})
                 except BaseException as e:
@@ -251,10 +256,11 @@ class TestSaveJson(unittest.TestCase):
 
             threads = [_threading.Thread(target=writer, args=(i,))
                        for i in range(8)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            with retiring_threads(threads, release=barrier.abort, timeout=5):
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
 
             self.assertEqual(errors, [], f"writer raised: {errors}")
             # Whatever the final winner is, the file MUST parse cleanly.
