@@ -3786,6 +3786,7 @@ class AutonomousSecurityAgentV2:
                         from core.understand_graph import prompt_context_for_location
                         graph_context = prompt_context_for_location(
                             self.graph_db_path, fpath, fline,
+                            target_path=str(self.repo_path),
                         )
                         if graph_context:
                             metadata = finding.get("metadata") or {}
