@@ -669,6 +669,44 @@ def test_leveldb_patch_drop_benchmark_is_idempotent(tmp_path: Path) -> None:
     assert cmake.read_text() == once  # idempotent
 
 
+@pytest.mark.parametrize("setup", ['FillLevels("a", "z");', 'MakeTables(config::kMaxMemCompactLevel + 1, "a", "z");'])
+def test_leveldb_hidden_values_setup_preserves_assertions(tmp_path: Path, setup: str) -> None:
+    from core.inventory.binary_oracle_corpora.leveldb import _patch_hidden_values_setup
+
+    source = (
+        'TEST_F(DBTest, Other) { FillLevels("a", "z"); }\n'
+        'TEST_F(DBTest, HiddenValuesAreRemoved) {\n'
+        '  do {\n'
+        '    Random rnd(301);\n'
+        f'    {setup}\n'
+        '    ASSERT_GT(NumTableFilesAtLevel(0), 0);\n'
+        '    ASSERT_EQ(AllEntriesFor("foo"), "[ tiny ]");\n'
+        '  } while (ChangeOptions());\n'
+        '}\n'
+    )
+    target = tmp_path / "db_test.cc"
+    target.write_text(source)
+    _patch_hidden_values_setup(target)
+    expected = source.replace(
+        '    FillLevels("a", "z");',
+        '    MakeTables(config::kMaxMemCompactLevel + 1, "a", "z");',
+    )
+    assert target.read_text() == expected
+    _patch_hidden_values_setup(target)
+    assert target.read_text() == expected
+
+
+def test_leveldb_hidden_values_setup_rejects_changed_upstream(tmp_path: Path) -> None:
+    from core.inventory.binary_oracle_corpora.leveldb import _patch_hidden_values_setup
+
+    target = tmp_path / "db_test.cc"
+    source = 'TEST_F(DBTest, HiddenValuesAreRemoved) { DifferentSetup(); }\n'
+    target.write_text(source)
+    with pytest.raises(RuntimeError, match="unexpected HiddenValuesAreRemoved setup"):
+        _patch_hidden_values_setup(target)
+    assert target.read_text() == source
+
+
 # ---------------------------------------------------------------------------
 # regex-rust driver — fast registration + helper tests
 # ---------------------------------------------------------------------------

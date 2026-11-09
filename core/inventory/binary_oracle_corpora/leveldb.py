@@ -57,7 +57,7 @@ LEVELDB_SHA = "7ee830d02b623e8ffe0b95d59a74db1e58da04c5"
 # In case the SHA isn't reachable, fall back to whatever ``main`` HEAD
 # is now — leveldb's main has been stable for years.
 LEVELDB_FALLBACK_BRANCH = "main"
-CACHE_VERSION = "1"
+CACHE_VERSION = "2"
 
 
 @dataclass
@@ -129,6 +129,7 @@ def _build_and_run(sha_dir: Path, build_dir: Path, profdata: Path) -> None:
     # builds and clang-21 trips its own warning fences. Tests don't
     # actually use benchmark.
     _patch_drop_benchmark(src / "CMakeLists.txt")
+    _patch_hidden_values_setup(src / "db" / "db_test.cc")
 
     build_dir.mkdir(parents=True)
 
@@ -199,6 +200,32 @@ def _patch_drop_benchmark(cmakelists: Path) -> None:
     if new_text != text:
         cmakelists.write_text(new_text, encoding="utf-8")
         logger.info("leveldb: patched out benchmark dep in CMakeLists.txt")
+
+
+def _patch_hidden_values_setup(db_test: Path) -> None:
+    """Populate the overlapping levels without starting automatic compaction.
+
+    HiddenValuesAreRemoved needs a level-0 witness until its explicit
+    compaction. FillLevels creates seven tables, exceeding the four-table
+    background-compaction threshold. Three overlapping tables occupy levels
+    2, 1 and 0; the witness flush then stays below that threshold.
+    All of the upstream assertions remain unchanged.
+    """
+    original = (
+        'TEST_F(DBTest, HiddenValuesAreRemoved) {\n'
+        '  do {\n'
+        '    Random rnd(301);\n'
+        '    FillLevels("a", "z");'
+    )
+    replacement = original.replace(
+        'FillLevels("a", "z");',
+        'MakeTables(config::kMaxMemCompactLevel + 1, "a", "z");',
+    )
+    text = db_test.read_text(encoding="utf-8")
+    if text.count(original) == 1:
+        db_test.write_text(text.replace(original, replacement), encoding="utf-8")
+    elif text.count(replacement) != 1:
+        raise RuntimeError("leveldb: unexpected HiddenValuesAreRemoved setup")
 
 
 def _liveness_from_llvm_cov(
