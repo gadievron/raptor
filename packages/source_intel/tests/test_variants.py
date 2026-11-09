@@ -128,7 +128,16 @@ def test_e2e_mixed_yields_correct_variant_ratio(tmp_path):
         "    return p[0];\n"
         "}\n"
     )
-    r = analyze(tmp_path)
+    rules_root = tmp_path / "rules"
+    expected_rules = set()
+    for axis in ("allocation", "variants"):
+        shipped = shipped_axis_rules(axis)
+        shutil.copytree(shipped, rules_root / axis)
+        expected_rules.update(rule.stem for rule in shipped.glob("*.cocci"))
+    r = analyze(tmp_path, rules_dir=rules_root)
+    assert r.skipped_reason is None
+    assert r.rules_failed == ()
+    assert set(r.rules_executed) == expected_rules
     checked, unchecked = r.variant_ratio("kstrdup")
     assert checked == 2, f"expected checked=2, got {checked}"
     assert unchecked == 1, f"expected unchecked=1, got {unchecked}"
