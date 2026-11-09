@@ -5620,6 +5620,7 @@ class TestSageHypothesisPathway:
             assert kw[1]["evidence_tool"] == "chain_context"
 
     @pytest.mark.slow
+    @pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
     def test_source_hash_precompute_via_orchestrator(self, tmp_path: Path):
         """run_orchestrator pre-computes _sage_source_hash on gaps with line_start."""
         from unittest.mock import patch as _patch
@@ -5645,7 +5646,7 @@ class TestSageHypothesisPathway:
             )
 
         target, out = _setup_target(tmp_path)
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -5732,12 +5733,12 @@ class TestSageObservationPathway:
             _accumulate_observations(obs_list, outcome, gap)
             mock_store.assert_not_called()
 
-    def test_sage_store_observation_delegates_to_hook(self):
+    def test_sage_store_observation_delegates_to_hook(self, monkeypatch):
         """_sage_store_observation calls store_audit_observation with correct args."""
         from unittest.mock import patch as _patch
 
         import core.audit.orchestrator as _omod
-        _omod._active_target_path = Path("/data/kernel")
+        monkeypatch.setattr(_omod, "_active_target_path", Path("/data/kernel"))
 
         with _patch("core.sage.hooks.store_audit_observation") as mock_hook:
             mock_hook.return_value = True
@@ -5753,8 +5754,6 @@ class TestSageObservationPathway:
                 source_function="net/tcp.c:tcp_recv",
             )
 
-        _omod._active_target_path = None
-
     def test_sage_store_observation_silent_on_import_error(self):
         """_sage_store_observation swallows ImportError when SAGE unavailable."""
         from unittest.mock import patch as _patch
@@ -5765,6 +5764,7 @@ class TestSageObservationPathway:
             _omod._sage_store_observation("test text long enough", "tool_confirmation", "f.c:fn")
 
 
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestSageCombinedPathway:
     """Test the full SAGE pathway through the production Collector path.
 
@@ -5793,7 +5793,7 @@ class TestSageCombinedPathway:
             )
 
         target, out = _setup_target(tmp_path)
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -5837,7 +5837,7 @@ class TestSageCombinedPathway:
             )
 
         target, out = _setup_target(tmp_path)
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -5876,26 +5876,11 @@ class TestSageRecallGate:
     """
 
     @pytest.fixture(autouse=True)
-    def _stub_mechanical_detectors(self, monkeypatch) -> None:
-        """Stub the pre-loop mechanical-detector pass at its seam (the
-        test_consistency_wiring / TestSageFpPrimer idiom): it does real
-        I/O — sandboxed coccinelle spawns where spatch is installed,
-        plus the detector-cache import-closure fingerprint — seconds
-        per run, entirely orthogonal to the recall gate under test,
-        and enough to trip the default-tier duration guard on a
-        loaded CI runner."""
-        from core.audit import capabilities, orchestrator as orch
+    def _stub_mechanical_detectors(self, monkeypatch, _no_native_review_tools) -> None:
+        """Keep SAGE recall checks independent of unrelated host phases."""
         from core.sage import hooks
-        monkeypatch.setattr(orch, "_run_mechanical_detectors",
-                            lambda *a, **k: ({}, set()))
-        # These gate cases do not exercise host tool discovery, background
-        # study, or observation recall. Keep those seams independent of
-        # installed tools and any operator SAGE service.
-        monkeypatch.setattr(capabilities, "probe_capabilities",
-                            lambda *a, **k: capabilities.AuditCapabilities())
-        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
-        monkeypatch.setattr(hooks, "recall_audit_observations",
-                            lambda *a, **k: [])
+
+        monkeypatch.setattr(hooks, "recall_audit_observations", lambda *a, **k: [])
 
     def _run(self, tmp_path: Path, recall, *, config_kw=None):
         from unittest.mock import patch as _patch
@@ -6035,26 +6020,11 @@ class TestSageFpPrimer:
     """
 
     @pytest.fixture(autouse=True)
-    def _stub_mechanical_detectors(self, monkeypatch) -> None:
-        """Stub the pre-loop mechanical-detector pass at its seam (the
-        test_consistency_wiring / test_peer_group idiom): it does real
-        I/O — sandboxed coccinelle spawns where spatch is installed,
-        plus the detector-cache import-closure fingerprint — seconds
-        per run, entirely orthogonal to the FP-primer injection under
-        test, and enough to trip the default-tier duration guard on a
-        loaded CI runner."""
-        from core.audit import capabilities, orchestrator as orch
+    def _stub_mechanical_detectors(self, monkeypatch, _no_native_review_tools) -> None:
+        """Keep SAGE recall checks independent of unrelated host phases."""
         from core.sage import hooks
-        monkeypatch.setattr(orch, "_run_mechanical_detectors",
-                            lambda *a, **k: ({}, set()))
-        # These gate cases do not exercise host tool discovery, background
-        # study, or observation recall. Keep those seams independent of
-        # installed tools and any operator SAGE service.
-        monkeypatch.setattr(capabilities, "probe_capabilities",
-                            lambda *a, **k: capabilities.AuditCapabilities())
-        monkeypatch.setattr(orch, "_study_consumer", lambda *a, **k: None)
-        monkeypatch.setattr(hooks, "recall_audit_observations",
-                            lambda *a, **k: [])
+
+        monkeypatch.setattr(hooks, "recall_audit_observations", lambda *a, **k: [])
 
     @staticmethod
     def _hash_for(target: Path, line: int) -> str:
