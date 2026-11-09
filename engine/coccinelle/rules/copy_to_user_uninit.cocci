@@ -20,6 +20,22 @@
 // @role: detection
 // raptor: confirm-only
 // Partial member initialisation and padding require separate analysis.
+// Literal zero-byte copies transfer nothing; zero-byte stores do not initialise.
+
+@zero_length_transfer@
+expression DST, SRC;
+expression ZERO =~ "^[ (]*0\([xXbB]0+\|0*\)[uUlL]*[ )]*$";
+position zero_pos;
+@@
+(
+copy_to_user@zero_pos(DST, SRC, ZERO)
+|
+memset@zero_pos(DST, SRC, ZERO)
+|
+memcpy@zero_pos(DST, SRC, ZERO)
+|
+memmove@zero_pos(DST, SRC, ZERO)
+)
 
 // Coccinelle's default decl_init isomorphism lets T out; match
 // T out = initializer;. A declaration initializer must disqualify this
@@ -32,9 +48,10 @@
 identifier out, memb;
 // Address escape to an unknown helper may initialize the object. Known
 // read-only observers and source operands of memory copies do not.
-identifier helper != {copy_to_user, memcpy, memmove, memcmp, bcmp, memchr};
+identifier helper != {copy_to_user, memset, memcpy, memmove, memcmp, bcmp, memchr};
 type T, SHADOW;
-position p_copy;
+position p_copy != zero_length_transfer.zero_pos;
+position initialisation != zero_length_transfer.zero_pos;
 expression dst, sz, V;
 initialiser INIT;
 @@
@@ -44,14 +61,14 @@ T out;
 |
 auto T out;
 )
-... when != memset(&out, ...)
+... when != memset@initialisation(&out, ...)
     when != SHADOW out;
     when != SHADOW out = INIT;
     when != out = V
     when != out.memb = V
     when != out.memb[...] = V
-    when != memcpy(&out, ...)
-    when != memmove(&out, ...)
+    when != memcpy@initialisation(&out, ...)
+    when != memmove@initialisation(&out, ...)
     when != helper(..., &out, ...)
   copy_to_user@p_copy(dst, &out, sz)
 
