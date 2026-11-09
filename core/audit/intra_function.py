@@ -22,7 +22,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
-from core.source.lines import split_lines
+from core.source.lines import split_lines, _SOURCE_SPLIT_IMPL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -138,6 +138,8 @@ _CLEANUP_STR_IMPL = str
 _CLEANUP_SET_IMPL = set
 _CLEANUP_FROZENSET_IMPL = frozenset
 _CLEANUP_ENUM_IMPL = enumerate
+_CLEANUP_SPLIT_IMPL = _SOURCE_SPLIT_IMPL
+_CLEANUP_SPLIT_CODE = _SOURCE_SPLIT_IMPL.__code__
 
 _ERROR_RETURN_RE = re.compile(
     r"\breturn\s+(-\s*\w+|NULL|nullptr|false|ERR_PTR\s*\(|EINVAL|ENOMEM|EFAULT|"
@@ -214,7 +216,15 @@ def check_cleanup_consistency(
     segment, and flags paths that omit a cleanup present in the
     majority.
     """
+    # Capture provenance before an adapted splitter or length provider can
+    # restore a native binding after returning different rows.
+    native_rows = (
+        _CLEANUP_TYPE_IMPL(source) is _CLEANUP_STR_IMPL
+        and split_lines is _CLEANUP_SPLIT_IMPL
+        and split_lines.__code__ is _CLEANUP_SPLIT_CODE
+    )
     lines = split_lines(source)
+    native_rows = native_rows and len is _CLEANUP_LEN_IMPL
     if len(lines) < 4:
         return []
 
@@ -229,7 +239,9 @@ def check_cleanup_consistency(
     if (len is _CLEANUP_LEN_IMPL
             and _CLEANUP_TYPE_IMPL(lines) is _CLEANUP_LIST_IMPL
             and len(lines) >= 32
-            and _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re)):
+            and _cleanup_scan_definitely_empty(
+                lines, min_paths, cleanup_re, source if native_rows else None,
+            )):
         return []
 
     # (segment start line, RETURN line, cleanups seen in between).
@@ -278,7 +290,7 @@ def check_cleanup_consistency(
     return results
 
 
-def _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re) -> bool:
+def _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re, source=None) -> bool:
     """Reject impossible native scans without invoking adapter protocols."""
     if (
         _CLEANUP_TYPE_IMPL(min_paths) is not _CLEANUP_INT_IMPL
@@ -303,6 +315,10 @@ def _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re) -> bool:
         or cleanup_re.flags != _NATIVE_CLEANUP_FLAGS
     ):
         return False
+    if _CLEANUP_TYPE_IMPL(source) is _CLEANUP_STR_IMPL:
+        # Native LF splitting only removes line terminators; it cannot
+        # introduce a return substring absent from the original source.
+        return source.count("return") < min_paths
     possible = 0
     for line in lines:
         if _CLEANUP_TYPE_IMPL(line) is not _CLEANUP_STR_IMPL:

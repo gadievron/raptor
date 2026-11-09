@@ -194,3 +194,65 @@ def test_line_container_adapter_does_not_gain_length_calls(view):
     view.split_lines = lambda source: Lines(["done();"] * 40)
     assert view.check_cleanup_consistency("owned") == []
     assert calls == ["len"]
+
+
+def test_native_source_reaches_bound_without_line_counts(view):
+    calls = []
+    native = view._cleanup_scan_definitely_empty
+
+    def observe(lines, minimum, pattern, source=None):
+        calls.append(source)
+        return native(lines, minimum, pattern, source)
+
+    view._cleanup_scan_definitely_empty = observe
+    source = _source('done();')
+    assert view.check_cleanup_consistency(source) == []
+    assert calls == [source]
+
+
+def test_splitter_restoring_native_binding_keeps_returning_rows(view):
+    source = _source('done();')
+    rows = view.split_lines(_source('free(buf); return -1;\nfree(buf); return -2;\nreturn 0;'))
+    native = view.split_lines
+
+    def adapted(text):
+        assert text is source
+        view.split_lines = native
+        return rows
+
+    view.split_lines = adapted
+    assert len(view.check_cleanup_consistency(source)) == 1
+
+
+def test_length_restoring_native_binding_keeps_mutated_rows(view):
+    source = _source('done();')
+    seen = []
+
+    def adapted(rows):
+        seen.append(rows)
+        rows.extend(['free(buf); return -1;', 'free(buf); return -2;', 'return 0;'])
+        view.len = len
+        return len(rows)
+
+    view.len = adapted
+    assert len(view.check_cleanup_consistency(source)) == 1
+    assert len(seen) == 1
+
+
+def test_source_adapter_does_not_gain_count_calls(view):
+    class Source(str):
+        def count(self, *args):
+            raise AssertionError('source adapter gained count callback')
+
+    assert view.check_cleanup_consistency(Source(_source('done();'))) == []
+
+
+@pytest.mark.parametrize('ending', ['\n', '\r\n', '\r', '\u2028'])
+@pytest.mark.parametrize('word', ['use(buf);', 'return 0;', 'ret\rurn', '😀return😀'])
+def test_source_bound_keeps_line_model_conservative(view, ending, word):
+    source = ending.join([word] * 40)
+    rows = view.split_lines(source)
+    assert source.count('return') >= sum(row.count('return') for row in rows)
+    for minimum in (1, 2, 41):
+        assert view._cleanup_scan_definitely_empty(rows, minimum, view._CLEANUP_CALLS, source) == (
+            view._cleanup_scan_definitely_empty(rows, minimum, view._CLEANUP_CALLS))
