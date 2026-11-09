@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from core.llm import cache_integrity
+from core.llm import telemetry
 from core.llm.providers import StructuredResponse
 from core.testing import (
     FakeStructuredProvider,
@@ -35,10 +36,12 @@ def _isolated_mac_key(tmp_path_factory, monkeypatch):
     )
 
 
-def test_fresh_entry_roundtrips_serving_model(tmp_path: Path) -> None:
+def test_fresh_entry_roundtrips_serving_model(tmp_path: Path, monkeypatch) -> None:
     """An entry written by a fallback model replays with the fallback's
     name, not the requested primary's."""
     client = make_test_client(tmp_path)
+    telemetry_path = tmp_path / "telemetry.jsonl"
+    monkeypatch.setattr(telemetry, "_sink", telemetry.TelemetrySink(telemetry_path))
     fake = FakeStructuredProvider({"verdict": "safe"})
     install_provider(client, fake)
 
@@ -60,6 +63,9 @@ def test_fresh_entry_roundtrips_serving_model(tmp_path: Path) -> None:
     assert replay.cached is True
     assert replay.model == "fallback-model"
     assert replay.result == {"verdict": "safe"}
+    record = json.loads(telemetry_path.read_text())
+    assert record["disposition"] == "cache_hit"
+    assert record["model"] == replay.model
 
 
 def test_legacy_entry_without_model_key_still_replays(
