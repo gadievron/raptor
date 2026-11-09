@@ -117,8 +117,27 @@ def _cleanup_call_re(
 
 # Seed-only matcher for vocabulary-less callers.
 _CLEANUP_CALLS = _cleanup_call_re()
+_NATIVE_CLEANUP_PATTERN = _CLEANUP_CALLS
+_NATIVE_CLEANUP_PATTERN_TYPE = re.Pattern
+_NATIVE_CLEANUP_FLAGS = re.IGNORECASE | re.UNICODE
+_NATIVE_RETURN_FLAGS = re.UNICODE
+# Seed names are literal ASCII identifiers, so no escaping is required here.
+# Derive eligibility independently of a possibly adapted re.compile result.
+_SEED_CLEANUP_PATTERN_TEXT = (
+    r"\b(" + "|".join(sorted(set(_SEED_CLEANUP_NAMES), key=len, reverse=True))
+    + r")\s*\("
+)
 
 _RETURN_RE = re.compile(r"\breturn\b")
+_NATIVE_RETURN_PATTERN = _RETURN_RE
+_CLEANUP_TYPE_IMPL = type
+_CLEANUP_LEN_IMPL = len
+_CLEANUP_LIST_IMPL = list
+_CLEANUP_INT_IMPL = int
+_CLEANUP_STR_IMPL = str
+_CLEANUP_SET_IMPL = set
+_CLEANUP_FROZENSET_IMPL = frozenset
+_CLEANUP_ENUM_IMPL = enumerate
 
 _ERROR_RETURN_RE = re.compile(
     r"\breturn\s+(-\s*\w+|NULL|nullptr|false|ERR_PTR\s*\(|EINVAL|ENOMEM|EFAULT|"
@@ -204,6 +223,15 @@ def check_cleanup_consistency(
         if (domain_model or target_path) else _CLEANUP_CALLS
     )
 
+    # A substring count upper-bounds matching return lines. Keep short
+    # functions on the original path, and construct the vocabulary first
+    # so its errors and freshness behaviour remain unchanged.
+    if (len is _CLEANUP_LEN_IMPL
+            and _CLEANUP_TYPE_IMPL(lines) is _CLEANUP_LIST_IMPL
+            and len(lines) >= 32
+            and _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re)):
+        return []
+
     # (segment start line, RETURN line, cleanups seen in between).
     # The return line is what reports: it is the flagged path's exit
     # site, while the segment start is merely the line after the
@@ -248,6 +276,41 @@ def check_cleanup_consistency(
                 ))
 
     return results
+
+
+def _cleanup_scan_definitely_empty(lines, min_paths, cleanup_re) -> bool:
+    """Reject impossible native scans without invoking adapter protocols."""
+    if (
+        _CLEANUP_TYPE_IMPL(min_paths) is not _CLEANUP_INT_IMPL
+        or min_paths <= 0
+        or _CLEANUP_TYPE_IMPL(lines) is not _CLEANUP_LIST_IMPL
+        or _RETURN_RE is not _NATIVE_RETURN_PATTERN
+        or set is not _CLEANUP_SET_IMPL
+        or frozenset is not _CLEANUP_FROZENSET_IMPL
+        or enumerate is not _CLEANUP_ENUM_IMPL
+    ):
+        return False
+    if (
+        _CLEANUP_TYPE_IMPL(_RETURN_RE) is not _NATIVE_CLEANUP_PATTERN_TYPE
+        or _RETURN_RE.pattern != r"\breturn\b"
+        or _RETURN_RE.flags != _NATIVE_RETURN_FLAGS
+    ):
+        return False
+    if (
+        _CLEANUP_TYPE_IMPL(cleanup_re) is not _NATIVE_CLEANUP_PATTERN_TYPE
+        or _CLEANUP_TYPE_IMPL(cleanup_re.pattern) is not _CLEANUP_STR_IMPL
+        or cleanup_re.pattern != _SEED_CLEANUP_PATTERN_TEXT
+        or cleanup_re.flags != _NATIVE_CLEANUP_FLAGS
+    ):
+        return False
+    possible = 0
+    for line in lines:
+        if _CLEANUP_TYPE_IMPL(line) is not _CLEANUP_STR_IMPL:
+            return False
+        possible += line.count("return")
+        if possible >= min_paths:
+            return False
+    return True
 
 
 def check_operator_consistency(
