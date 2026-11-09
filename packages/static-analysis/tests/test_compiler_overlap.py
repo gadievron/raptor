@@ -391,3 +391,45 @@ def test_shared_budget_stops_supplementary_dispatch_and_keeps_completed_findings
     assert sum('-fno-builtin-memcpy' in cmd for cmd, _ in harness['calls']) == 1
     assert timeouts[-1] == 4
     assert any('skipped 2' in item['reason'] for item in result.detector_limitations)
+
+
+@pytest.mark.parametrize("probe_rc", [0, 1], ids=["supported", "unsupported"])
+def test_capability_probe_owns_its_diagnostic_contract(tmp_path, probe_rc):
+    from core.detectors.compiler import CompilerRequest
+
+    calls = []
+    source_parses = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["block_network"]
+        assert kwargs["target"] == str(tmp_path)
+        code = probe_rc if "-fsyntax-only" in command else 0
+        return subprocess.CompletedProcess(command, code, stdout="", stderr="")
+
+    def parse(workdir, stderr):
+        assert "-c" in calls[-1], "source parser received a capability probe"
+        source_parses.append(workdir)
+        return [{"id": memcpy_overlap.OVERLAP_ID, "kind": "warning"}]
+
+    request = CompilerRequest(
+        command=("owned-gcc", "-c", "case.c"), target=tmp_path,
+        timeout=120, caller_label="owned-probe-test",
+        scratch_prefix="raptor-owned-probe-", scratch_root=str(tmp_path), parse=parse,
+    )
+    state = memcpy_overlap.OverlapAnalysis(
+        target=tmp_path, files=("case.c",), request_for=lambda _: request,
+        sandbox_run=run, candidates={"case.c"}, max_workers=1,
+    )
+    result = memcpy_overlap._compile(state)
+    if probe_rc:
+        assert state.limitations
+        assert not source_parses and not state.diagnostics
+        assert len(calls) == 1
+    else:
+        assert not state.limitations, state.limitations
+        assert result.status == "complete"
+        assert len(source_parses) == 1
+        assert state.diagnostics["case.c"] == [
+            {"id": memcpy_overlap.OVERLAP_ID, "kind": "warning"},
+        ]

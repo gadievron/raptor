@@ -216,6 +216,9 @@ def _compile(state: OverlapAnalysis) -> StageResult:
         first,
         command=(first.command[0], "-fanalyzer", OVERLAP_ID, "-x", "c",
                  "-fsyntax-only", os.devnull),
+        # This only asks whether GCC accepts the option; no source diagnostic
+        # artifact is emitted by the syntax-only /dev/null command.
+        parse=lambda _workdir, _stderr: [],
         timeout=min(first.timeout, 30), analyze=None,
     )
     try:
