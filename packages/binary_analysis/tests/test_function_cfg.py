@@ -13,6 +13,8 @@ import pytest
 
 from core.analysis.cfg_metrics import cyclomatic_number
 from core.analysis.dominators import build_dom_tree
+from core.binary import identity
+from core.testing.module_views import module_function_view, scoped_function_imports
 from packages.binary_analysis import function_cfg
 from packages.binary_analysis.function_cfg import (
     BasicBlockCFG,
@@ -196,7 +198,8 @@ def cache_dir(tmp_path, monkeypatch):
     return d
 
 
-def _make_binary(tmp_path, name, content=b"\x7fELF not-a-real-binary"):
+# Cache schema checks need real content hashes, not native ELF probes.
+def _make_binary(tmp_path, name, content=b"cache test content"):
     p = tmp_path / name
     p.write_bytes(content)
     return p
@@ -235,15 +238,39 @@ class TestCache:
         cache_file.write_text(json.dumps(payload))
         assert load_cached_cfgs(binary) is None
 
-    def test_build_id_collision_is_miss(self, tmp_path, cache_dir):
+    def test_content_collision_is_miss(self, tmp_path, cache_dir):
         # Two files with identical content share a cache key; loading the
         # second must detect the binary_path mismatch and refuse.
-        same = b"\x7fELF identical-content"
+        same = b"identical-content"
         a = _make_binary(tmp_path, "a.bin", same)
         b = _make_binary(tmp_path, "b.bin", same)
         save_cached_cfgs(a, {0x1: BasicBlockCFG(entry=0x1, adjacency={0x1: []})})
         assert load_cached_cfgs(b) is None      # collision guard
         assert load_cached_cfgs(a) is not None  # original still hits
+
+    def test_build_id_collision_is_miss(self, tmp_path, cache_dir):
+        # Keep format-specific key coverage without launching readelf for
+        # synthetic bytes. The real identity dispatcher and cache still run.
+        a = _make_binary(tmp_path, "a.bin", b"\x7fELF first")
+        b = _make_binary(tmp_path, "b.bin", b"\x7fELF second")
+        build_id = "ab" * 20
+        probes = []
+
+        def elf_identity(path):
+            probes.append(path)
+            return identity.ContentIdentity(
+                identity.KIND_ELF_BUILD_ID, build_id, build_id[:16])
+
+        private = module_function_view(
+            identity, bindings={"_elf_identity": elf_identity})
+        with scoped_function_imports(
+            function_cfg, ("_cache_key",), {"core.binary.identity": private},
+        ):
+            save_cached_cfgs(a, {0x1: BasicBlockCFG(entry=0x1, adjacency={0x1: []})})
+            assert (cache_dir / f"{build_id}.json").is_file()
+            assert load_cached_cfgs(b) is None
+            assert load_cached_cfgs(a) is not None
+        assert probes == [a, b, a]
 
     def test_missing_binary_path_field_is_miss(self, tmp_path, cache_dir):
         # A payload with the collision-guard field stripped must be
