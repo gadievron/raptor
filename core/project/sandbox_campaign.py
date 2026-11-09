@@ -193,6 +193,7 @@ def correlate_campaign(run_dirs: list[Path]) -> dict[str, Any] | None:
     if len(run_dirs) > MAX_CAMPAIGN_RUNS:
         return _budget_refusal("campaign run-path budget exceeded", [])
     entries = []
+    signatures_seen: set[tuple[str, str]]
     seen, targets_seen, signatures_seen = set(), set(), set()
     denials = 0
     for directory in run_dirs:
