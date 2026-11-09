@@ -496,8 +496,8 @@ class RunLedgerTest(_RegistryCase):
         (d / ".raptor-run.json").write_text(
             '{"status": "completed"}', encoding="utf-8")
         prior_cwd = os.getcwd()
-        os.chdir(d)
         try:
+            os.chdir(d)
             sessions.ledger_record_finish(".", "completed",
                                           pid=os.getpid())
         finally:

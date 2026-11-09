@@ -446,8 +446,8 @@ class TestTargetMatchesProjectPredicate(unittest.TestCase):
             proj = Path(d) / "proj"
             (proj / "child").mkdir(parents=True)
             old_cwd = os.getcwd()
-            os.chdir(proj)
             try:
+                os.chdir(proj)
                 self.assertTrue(self._both("child", str(proj)))
                 self.assertFalse(
                     self._both(os.path.join("..", "elsewhere"),

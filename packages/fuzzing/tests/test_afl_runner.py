@@ -102,8 +102,8 @@ class TestCreateDefaultCorpus:
             safe_restore = Path.cwd()
         except FileNotFoundError:
             safe_restore = Path(__file__).resolve().parent
-        os.chdir(cwd)
         try:
+            os.chdir(cwd)
             runner = self._make_runner(output_dir)
             result = runner._create_default_corpus()
         finally:
