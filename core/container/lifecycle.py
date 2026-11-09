@@ -9,7 +9,18 @@ never raises into a caller's teardown path.
 
 from __future__ import annotations
 
+import logging
+
 from core.container.proc import RunOutcome, run_cli
+
+logger = logging.getLogger(__name__)
+
+
+def _discovery_complete(outcome: RunOutcome, kind: str) -> bool:
+    if outcome.truncated:
+        logger.warning("Refusing truncated %s cleanup listing", kind)
+        return False
+    return outcome.returncode == 0
 
 
 def _count_removed(requested: list[str], outcome: RunOutcome) -> int:
@@ -38,10 +49,10 @@ def remove_labeled_containers(label: str, value: str,
         ["docker", "ps", "-aq", "--filter", f"label={label}={value}"],
         timeout=timeout,
     )
-    if list_result.returncode != 0:
+    if not _discovery_complete(list_result, "container"):
         return 0
-    ids = [i.strip() for i in (list_result.stdout or "").splitlines()
-           if i.strip()]
+    ids = list(dict.fromkeys(i.strip() for i in (list_result.stdout or "").splitlines()
+                             if i.strip()))
     if not ids:
         return 0
     outcome = run_cli(["docker", "rm", "-f", "-v", *ids], timeout=timeout)
@@ -63,10 +74,10 @@ def remove_labeled_networks(label: str, value: str,
          "--filter", f"label={label}={value}"],
         timeout=timeout,
     )
-    if list_result.returncode != 0:
+    if not _discovery_complete(list_result, "network"):
         return 0
-    ids = [i.strip() for i in (list_result.stdout or "").splitlines()
-           if i.strip()]
+    ids = list(dict.fromkeys(i.strip() for i in (list_result.stdout or "").splitlines()
+                             if i.strip()))
     if not ids:
         return 0
     outcome = run_cli(["docker", "network", "rm", *ids], timeout=timeout)
@@ -132,7 +143,7 @@ def remove_labeled_images(
         ],
         timeout=timeout,
     )
-    if label_result.returncode == 0:
+    if _discovery_complete(label_result, "labelled image"):
         for t in (label_result.stdout or "").splitlines():
             t = t.strip()
             if t and "<none>" not in t:
@@ -143,7 +154,7 @@ def remove_labeled_images(
              "--format", "{{.Repository}}:{{.Tag}}"],
             timeout=timeout,
         )
-        if tag_result.returncode == 0:
+        if _discovery_complete(tag_result, "tagged image"):
             for t in (tag_result.stdout or "").splitlines():
                 t = t.strip()
                 if not t or "<none>" in t:
