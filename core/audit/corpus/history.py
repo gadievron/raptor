@@ -35,7 +35,7 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 from core.json import load_json, loads
 from core.json.jsonl import append_jsonl
@@ -168,7 +168,10 @@ def _recorded_total_spend(record: dict[str, Any]) -> int | float | None:
     """Read a usable saved total, without inferring it from label costs."""
     value = record.get("total_spend_usd")
     try:
-        return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else None
+        if type(value) in (int, float):
+            numeric = cast(int | float, value)
+            return numeric if math.isfinite(numeric) and numeric >= 0 else None
+        return None
     except OverflowError:
         return None
 

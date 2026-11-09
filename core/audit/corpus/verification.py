@@ -136,7 +136,8 @@ def annotate_verification(rows: list[dict], labels: list, audit_dir: Path | None
             row["verification"] = unavailable_verification(check_error or "unexpected_check_artifact", root)
             continue
         refs = links.get("references")
-        matching, other = [], []
+        matching: list[dict] = []
+        other: list[dict] = []
         safe_refs = []
         seen = set()
         valid = isinstance(refs, list) and bool(refs)
