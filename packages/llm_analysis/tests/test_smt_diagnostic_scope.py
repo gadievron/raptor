@@ -199,3 +199,34 @@ def test_model_text_cannot_mimic_saved_smt_refutation_marker():
     source = {"verdict": "refuted", "method": "codeql-iris", "reasoning": "owned source query"}
     assert not unbound_smt_refutation(source)
     assert mechanical_receipt({"analysis": {"dataflow_validation": source}}, "false_positive") == "codeql:dataflow"
+
+
+@pytest.mark.parametrize("record_kind", ["typed", "dictionary"])
+def test_attached_smt_evidence_is_independent_of_cached_results(tmp_path, record_kind):
+    from core.smt_solver import BV_C_UINT8
+    from packages.hypothesis_validation.adapters.smt import SMTAdapter
+
+    native = SMTAdapter(bv_profile=BV_C_UINT8).run("Value == 2", tmp_path)
+    assert native.success and native.predicate_verdict == "sat"
+    assert native.matches[0]["variable"] == "Value"
+    assert native.matches[0]["value"] == 2
+    item = Evidence(
+        tool=native.tool, rule=native.rule, summary=native.summary,
+        matches=native.matches, predicate_verdict=native.predicate_verdict,
+    )
+    original = ValidationResult(
+        verdict="confirmed", evidence=[item.to_dict() if record_kind == "dictionary" else item],
+        iterations=1, reasoning="supplied predicate is satisfiable",
+    )
+    first, second = {}, {}
+    for analysis in (first, second):
+        module._attach_result(analysis, original, method="codeql-iris-llm")
+    first_record = first["dataflow_validation"]["evidence"][0]
+    second_record = second["dataflow_validation"]["evidence"][0]
+    first_record["matches"][0]["value"] = 9
+    assert second_record["matches"][0]["value"] == 2
+    assert native.matches[0]["value"] == 2
+    assert second_record["predicate_verdict"] == "sat"
+    native.matches[0]["value"] = 7
+    assert second_record["matches"][0]["value"] == 2
+    assert first_record["matches"][0]["value"] == 9
