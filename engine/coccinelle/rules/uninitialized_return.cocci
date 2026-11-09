@@ -8,6 +8,8 @@
 // function in the target. The consistency_check runner can still
 // pass -D func= but the rule ignores it.
 // @role: detection
+// raptor: confirm-only
+// Member expressions and interprocedural initialisation remain outside this check.
 
 // Kernel iterator models are applied only to their first cursor, inside a
 // supported body, with its declaration before the iterator. Keep the native

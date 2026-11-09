@@ -13,6 +13,8 @@
 // pattern follows ordinary free(); kernel clearing releases have separate
 // contracts.
 // @role: detection
+// raptor: confirm-only
+// Wrapper calls and compiler erasure behaviour require separate analysis.
 
 @dead_zero_length@
 expression BUF;

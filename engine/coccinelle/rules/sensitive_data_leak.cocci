@@ -8,6 +8,8 @@
 // https://www.open-std.org/jtc1/sc22/wg14/www/docs/n3220.pdf
 // https://www.kernel.org/doc/html/latest/core-api/mm-api.html
 // @role: detection
+// raptor: confirm-only
+// A non-secret identifier does not prove that a buffer contains no secret data.
 
 @sensitive_zero_length@
 expression BUF, VALUE, SIZE, LENGTH;
