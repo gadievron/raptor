@@ -948,3 +948,16 @@ class TestRepoShadowedModuleOrigin:
         clean = resolve_finding(finding, target_root=tmp_path)
         assert isinstance(clean, ResolvedFinding)
         assert len(clean.inter_proc_bindings) == 1
+
+
+class TestDefinitionHeaderCatalogRebinding:
+    def test_default_rebinding_loses_catalog_authority(self):
+        source = (
+            'import html\n'
+            'def configure(arg=(html := replacement)):\n'
+            '    pass\n'
+            'def handle(x):\n'
+            '    y = html.escape(x)\n'
+            '    render(y)\n'
+        )
+        assert TestModuleLevelCatalogRootDistrust()._evaluate(source).verdict == VERDICT_NO_SUPPRESS

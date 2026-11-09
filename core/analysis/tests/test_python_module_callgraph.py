@@ -645,3 +645,54 @@ class TestModuleDynamicNamespace:
             "    return html.escape(s)\n")
         assert not whole
         assert not names
+
+
+class TestDefinitionHeaderBindings:
+    def test_header_assignments_follow_compiler_scope(self):
+        import symtable
+
+        from core.analysis.python_module_callgraph import local_binding_names
+
+        source = '''def outer(value, replacement):
+    def nested(arg=(default_name := replacement), *, kw=(keyword_name := value)):
+        hidden = value
+    async def async_nested(arg=(async_name := replacement)):
+        pass
+    @(decorator_name := replacement)
+    def decorated():
+        pass
+    class Nested((base_name := replacement), metaclass=(meta_name := replacement)):
+        class_body_name = value
+    lam = lambda arg=(lambda_default_name := value): (lambda_body_name := arg)
+    def lambda_header(arg=lambda: (header_body_name := value)):
+        pass
+    return value
+'''
+        scope = next(child for child in symtable.symtable(source, 'fixture.py', 'exec').get_children()
+                     if child.get_name() == 'outer')
+        names = local_binding_names(ast.parse(source).body[0])
+        expected = {'default_name', 'keyword_name', 'async_name', 'decorator_name',
+                    'base_name', 'meta_name', 'lambda_default_name'}
+        assert all(scope.lookup(name).is_local() for name in expected)
+        assert expected <= names
+        assert not {'hidden', 'class_body_name', 'lambda_body_name', 'header_body_name'} & names
+
+    def test_own_defaults_are_not_function_locals(self):
+        from core.analysis.python_module_callgraph import local_binding_names
+
+        source = 'def handle(value=(outer_name := 1)):\n    return value\n'
+        assert local_binding_names(ast.parse(source).body[0]) == frozenset({'value'})
+
+    def test_module_headers_poison_identity_and_callee_joins(self):
+        from core.analysis.python_module_callgraph import module_distrusted_roots
+
+        source = '''import html
+def escape(value):
+    return html.escape(value)
+def configure(arg=(escape := replacement), *, other=(html := replacement)):
+    ignored = 1
+'''
+        graph = _build(source)
+        assert 'escape' in graph.rebound_names
+        assert 'html' in module_distrusted_roots(ast.parse(source))
+        assert 'ignored' not in module_distrusted_roots(ast.parse(source))

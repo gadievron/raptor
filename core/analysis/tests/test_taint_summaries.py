@@ -1437,3 +1437,17 @@ class TestDynamicNamespacePoison:
             "v = globals()['other']\n"
         )
         assert not summaries["esc"].summary_unknown
+
+
+class TestDefinitionHeaderShadowedJoin:
+    def test_nested_default_rebinding_refuses_clean_summary(self):
+        _, summaries = _summaries(
+            'import html\n'
+            'def esc(value):\n'
+            '    return html.escape(value)\n'
+            'def handle(x, replacement):\n'
+            '    def configure(arg=(esc := replacement)):\n'
+            '        pass\n'
+            '    return esc(x)\n'
+        )
+        assert ('html.escape', 0) not in summaries['handle'].return_sanitizers_for_param(0)
