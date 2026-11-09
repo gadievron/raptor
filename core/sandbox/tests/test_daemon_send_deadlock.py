@@ -148,7 +148,7 @@ class TestSendCappedBounds:
     def test_exited_target_returns_without_raising(self):
         proc = daemon._spawn_request_target([_SH, "-c", "exit 0"])
         try:
-            proc.wait(timeout=10.0)
+            assert daemon._wait_request_exit(proc, 10.0) == 0
             drained, trunc, undelivered = daemon._send_capped(
                 proc, b"C" * _SEND_BYTES, 2.0, daemon._MAX_CAPTURE_BYTES,
             )

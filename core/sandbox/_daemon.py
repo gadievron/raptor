@@ -160,6 +160,11 @@ _RETAIN_REQUEST_GROUP = all(hasattr(os, name) for name in (
     "waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT",
     "CLD_EXITED", "CLD_KILLED", "CLD_DUMPED",
 ))
+_REQUEST_CLEANUP_FAILED = False
+
+
+class _RequestCleanupError(RuntimeError):
+    """The daemon must not admit more work after uncertain target cleanup."""
 
 
 class _RequestAbandoned(BaseException):
@@ -1100,6 +1105,7 @@ def _spawn_request_target(argv: list) -> subprocess.Popen:
     )
     try:
         setattr(proc, "_retain_request_group", _RETAIN_REQUEST_GROUP)
+        setattr(proc, "_request_group_retired", False)
         return proc
     except BaseException:
         _retire_request_target(proc)
@@ -1113,7 +1119,12 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
     spawn/probe/conversation handlers. ESRCH — the group already
     fully exited — is the common case and is suppressed.
     """
+    global _REQUEST_CLEANUP_FAILED
     if _RETAIN_REQUEST_GROUP and proc.returncode is not None:
+        if (getattr(proc, "_retain_request_group", False)
+                and not getattr(proc, "_request_group_retired", False)):
+            _REQUEST_CLEANUP_FAILED = True
+            raise _RequestCleanupError("request leader reaped before group retirement")
         return  # A consumed leader no longer owns its numeric group name.
     deadline = time.monotonic() + 1.0
     if _RETAIN_REQUEST_GROUP:
@@ -1122,27 +1133,45 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
                 os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
                 break
             except ChildProcessError:
+                if getattr(proc, "_retain_request_group", False):
+                    _REQUEST_CLEANUP_FAILED = True
+                    raise _RequestCleanupError("request target ownership lost before retirement") from None
                 return
             except InterruptedError:
                 if time.monotonic() >= deadline:
-                    _log("request group ownership unconfirmed before cleanup deadline")
-                    return
+                    _REQUEST_CLEANUP_FAILED = True
+                    raise _RequestCleanupError(
+                        "request group ownership unconfirmed before cleanup deadline") from None
+            except BaseException:
+                _REQUEST_CLEANUP_FAILED = True
+                raise
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    except OSError as e:
-        _log(f"killpg({proc.pid}) failed: {e}")
-    if proc.poll() is None:
-        try:
+    except OSError as error:
+        _REQUEST_CLEANUP_FAILED = True
+        raise _RequestCleanupError("request group signal failed") from error
+    except BaseException:
+        _REQUEST_CLEANUP_FAILED = True
+        raise
+    try:
+        if proc.poll() is None:
             proc.wait(timeout=max(0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            _log(f"request target {proc.pid} unreaped after SIGKILL")
+        if getattr(proc, "_retain_request_group", False):
+            setattr(proc, "_request_group_retired", True)
+    except subprocess.TimeoutExpired as error:
+        _REQUEST_CLEANUP_FAILED = True
+        raise _RequestCleanupError("request target unreaped after group signal") from error
+    except BaseException:
+        _REQUEST_CLEANUP_FAILED = True
+        raise
 
 
-def _retire_request_target(proc):
+def _retire_request_target(proc, *, failure=None):
     """Finish the request and close every Popen-owned pipe on all paths."""
-    original = sys.exc_info()[1]
+    global _REQUEST_CLEANUP_FAILED
+    original = failure if failure is not None else sys.exc_info()[1]
     failures = []
     try:
         _kill_request_group(proc)
@@ -1154,6 +1183,13 @@ def _retire_request_target(proc):
                 stream.close()
             except BaseException as exc:
                 failures.append(exc)
+                try:
+                    closed = getattr(stream, "closed", False)
+                except BaseException as state_error:
+                    failures.append(state_error)
+                    closed = False
+                if closed is not True:
+                    _REQUEST_CLEANUP_FAILED = True
     if failures:
         primary = original if original is not None else failures.pop(0)
         for cleanup_error in failures:
@@ -1187,6 +1223,7 @@ def _handle_spawn(payload: dict) -> dict:
         proc = _spawn_request_target(argv)
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    failure = None
     try:
         try:
             stdout, stderr, out_trunc, err_trunc = _communicate_capped(
@@ -1213,9 +1250,10 @@ def _handle_spawn(payload: dict) -> dict:
             "wall_seconds": round(time.monotonic() - t0, 3),
         }
     except Exception as e:  # noqa: BLE001
+        failure = e
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
-        _retire_request_target(proc)
+        _retire_request_target(proc, failure=failure)
 
 
 def _handle_probe(payload: dict) -> dict:
@@ -1626,6 +1664,8 @@ def _echo_rid(frame: dict, response: dict) -> dict:
     request. Requests without a ``rid`` (older parents) get their
     reply unchanged, so the wire format stays backward-compatible.
     """
+    if _REQUEST_CLEANUP_FAILED and response.get("ok") is not False:
+        response = {"ok": False, "error": "request target cleanup unconfirmed"}
     rid = frame.get("rid")
     if rid is not None:
         response = {**response, "rid": rid}
@@ -1681,8 +1721,13 @@ def _run_one_shot() -> int:
                             "error": (f"handler {cmd} raised: "
                                       f"{type(e).__name__}: {e}")}
             _write_frame(out_fd, _echo_rid(frame, response))
+            if _REQUEST_CLEANUP_FAILED:
+                _log("request target cleanup unconfirmed; one-shot daemon exiting")
             return 0
     except _RequestAbandoned:
+        if _REQUEST_CLEANUP_FAILED:
+            _log("one-shot output closed with request cleanup unconfirmed")
+            return 1
         _log("one-shot RPC output closed — request retired")
         return 0
 
@@ -1765,7 +1810,13 @@ def main() -> int:
                                 "error": (f"handler {cmd} raised: "
                                           f"{type(e).__name__}: {e}")}
                 _write_frame(out_fd, _echo_rid(frame, response))
+                if _REQUEST_CLEANUP_FAILED:
+                    _log("request target cleanup unconfirmed; retiring daemon")
+                    return 1
     except _RequestAbandoned:
+        if _REQUEST_CLEANUP_FAILED:
+            _log("RPC owner disconnected with request cleanup unconfirmed")
+            return 1
         _log("RPC owner disconnected — request retired")
         return 0
     finally:

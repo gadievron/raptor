@@ -93,7 +93,9 @@ def channel(tmp_path):
                 os.close(fd)
         owner.callback(cleanup)
 
-        def start(*, one_shot=False, observe=False, read_after=None, observe_wait=False, skip_retirement=False):
+        def start(*, one_shot=False, observe=False, read_after=None, observe_wait=False,
+                  skip_retirement=False, cleanup_fault=None):
+            assert cleanup_fault in (None, 'group', 'pipe', 'closed-pipe')
             ends = []
             for _ in range(2):
                 pair = [[fd] for fd in os.pipe()]
@@ -109,6 +111,7 @@ def channel(tmp_path):
             fallback = tmp_path / f"fallback-{len(processes)}"
             bootstrap = """
 import os, runpy, signal, sys
+from types import SimpleNamespace
 namespace = runpy.run_path(sys.argv[1])
 g = namespace['main'].__globals__
 owned_targets = []
@@ -120,7 +123,29 @@ def tracked_spawn(argv):
     return proc
 g['_spawn_request_target'] = tracked_spawn
 if sys.argv[9] == 'skip':
-    g['_retire_request_target'] = lambda proc: None
+    g['_retire_request_target'] = lambda proc, **kwargs: None
+if sys.argv[10] == 'group':
+    local_os = SimpleNamespace(**vars(g['os']))
+    def deny_group(*args):
+        raise PermissionError(1, 'owned group signal denial')
+    local_os.killpg = deny_group
+    g['os'] = local_os
+elif sys.argv[10] in ('pipe', 'closed-pipe'):
+    tracked = g['_spawn_request_target']
+    close_first = sys.argv[10] == 'closed-pipe'
+    def failing_pipe_spawn(argv):
+        proc = tracked(argv)
+        actual = proc.stdout
+        class PipeView:
+            def __getattr__(self, name):
+                return getattr(actual, name)
+            def close(self):
+                if close_first:
+                    actual.close()
+                raise OSError('owned pipe close denial')
+        proc.stdout = PipeView()
+        return proc
+    g['_spawn_request_target'] = failing_pipe_spawn
 def retire_bootstrap(signum, frame):
     raise SystemExit(121)
 signal.signal(signal.SIGTERM, retire_bootstrap)
@@ -185,7 +210,8 @@ raise SystemExit(result)
                 [os.path.realpath(sys.executable), '-I', '-S', '-B', '-c', bootstrap,
                  str(Path(daemon.__file__)), str(blocked) if observe else '-',
                  str(request_read[0]), str(reply_write[0]), 'one' if one_shot else 'persistent',
-                 phase, str(phase_marker), str(fallback), 'skip' if skip_retirement else 'normal'],
+                 phase, str(phase_marker), str(fallback), 'skip' if skip_retirement else 'normal',
+                 cleanup_fault or 'normal'],
                 stdin=request_read[0] if one_shot else subprocess.DEVNULL,
                 stdout=reply_write[0] if one_shot else subprocess.DEVNULL,
                 stderr=log, pass_fds=(request_read[0], reply_write[0]),
@@ -237,6 +263,39 @@ def test_queued_requests_are_not_consumed_by_lifetime_watch(channel):
     assert read_reply(rpc.reply[0])['rid'] == 2
     os.write(rpc.request[0], frame({'cmd': 'close', 'rid': 3}))
     assert read_reply(rpc.reply[0]) == {'ok': True, 'closed': True, 'rid': 3}
+    assert rpc.wait(timeout=5) == 0
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('one_shot', [False, True], ids=['persistent', 'one-shot'])
+@pytest.mark.parametrize('fault,message', [('group', 'group signal failed'),
+                                         ('pipe', 'owned pipe close denial')], ids=['group', 'pipe'])
+def test_uncertain_cleanup_returns_error_and_admits_no_more_work(channel, one_shot, fault, message):
+    rpc = channel.start(one_shot=one_shot, cleanup_fault=fault)
+    argv = [os.path.realpath(sys.executable), '-I', '-S', '-B', '-c', 'pass']
+    request = frame({'cmd': 'spawn', 'rid': 31, 'argv': argv, 'timeout': 2})
+    if not one_shot:
+        request += frame({'cmd': 'ping', 'rid': 32})
+    os.write(rpc.request[0], request)
+    response = read_reply(rpc.reply[0])
+    assert response['rid'] == 31 and response['ok'] is False
+    assert message in response['error']
+    assert rpc.wait(timeout=5) == (0 if one_shot else 1)
+    assert ready(rpc.reply[0]), 'retired daemon retained its reply writer'
+    assert os.read(rpc.reply[0], 1) == b'', 'daemon replied to work after uncertain cleanup'
+
+
+@pytest.mark.slow
+def test_confirmed_pipe_close_error_does_not_poison_following_requests(channel):
+    rpc = channel.start(cleanup_fault='closed-pipe')
+    argv = [os.path.realpath(sys.executable), '-I', '-S', '-B', '-c', 'pass']
+    os.write(rpc.request[0], frame({'cmd': 'spawn', 'rid': 31, 'argv': argv, 'timeout': 2})
+             + frame({'cmd': 'ping', 'rid': 32}) + frame({'cmd': 'close', 'rid': 33}))
+    response = read_reply(rpc.reply[0])
+    assert response['rid'] == 31 and response['ok'] is False
+    assert 'owned pipe close denial' in response['error']
+    assert read_reply(rpc.reply[0])['rid'] == 32
+    assert read_reply(rpc.reply[0]) == {'ok': True, 'closed': True, 'rid': 33}
     assert rpc.wait(timeout=5) == 0
 
 

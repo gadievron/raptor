@@ -1,6 +1,7 @@
 """Request group retirement retains a leader until its final signal and reap."""
 
 from contextlib import ExitStack
+import errno
 import os
 from pathlib import Path
 import signal
@@ -41,7 +42,8 @@ def test_retirement_does_not_signal_an_already_reaped_request(requests):
     view = module_function_view(daemon, bindings={"os": local_os})
     proc = requests.create("pass", module=view)
     assert proc.wait(timeout=2) == 0
-    view._kill_request_group(proc)
+    with pytest.raises(view._RequestCleanupError, match="reaped before group retirement"):
+        view._kill_request_group(proc)
     assert signals == []
 
 
@@ -54,11 +56,142 @@ def test_external_reap_prevents_numeric_group_signalling(requests):
     _, status = os.waitpid(proc.pid, 0)
     try:
         assert proc.returncode is None
-        view._kill_request_group(proc)
+        with pytest.raises(view._RequestCleanupError, match="ownership lost"):
+            view._kill_request_group(proc)
         assert signals == []
     finally:
         # The test performed the external reap; retire its cached owner too.
         proc.returncode = os.waitstatus_to_exitcode(status)
+
+
+class BrokenSignalError(PermissionError):
+    def __str__(self):
+        raise AssertionError("cleanup must not format the signal failure")
+
+
+@pytest.mark.parametrize("error", [PermissionError, BrokenSignalError])
+def test_denied_group_signal_is_not_silent_success(requests, error):
+    secondary = error(errno.EPERM, "owned group signal denial")
+
+    def deny(*args):
+        raise secondary
+
+    local_os = SimpleNamespace(**vars(os))
+    local_os.killpg = deny
+    view = module_function_view(daemon, bindings={"os": local_os})
+    proc = requests.create("import sys; sys.stdin.buffer.read()", module=view)
+    with pytest.raises(view._RequestCleanupError, match="group signal") as caught:
+        view._kill_request_group(proc)
+    assert caught.value.__cause__ is secondary
+    assert view._REQUEST_CLEANUP_FAILED
+    assert proc.returncode is None
+
+
+def test_unconfirmed_reap_is_reported_with_the_original_wait_budget(requests):
+    local_os = SimpleNamespace(**vars(os))
+    local_os.killpg = lambda *args: None  # Controlled undelivered signal.
+    view = module_function_view(daemon, bindings={"os": local_os})
+    proc = requests.create("import sys; sys.stdin.buffer.read()", module=view)
+    with pytest.raises(view._RequestCleanupError, match="unreaped") as caught:
+        view._kill_request_group(proc)
+    assert isinstance(caught.value.__cause__, subprocess.TimeoutExpired)
+    assert 0 <= caught.value.__cause__.timeout <= 1
+    assert view._REQUEST_CLEANUP_FAILED and proc.returncode is None
+
+
+@pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
+def test_ownership_probe_failure_is_not_treated_as_retirement(requests, error):
+    primary = error("owned wait probe failure")
+    signals = []
+
+    def fail_probe(*args):
+        raise primary
+
+    local_os = SimpleNamespace(**vars(os))
+    local_os.waitid = fail_probe
+    local_os.killpg = lambda *args: signals.append(args)
+    view = module_function_view(daemon, bindings={"os": local_os})
+    proc = requests.create("import sys; sys.stdin.buffer.read()", module=view)
+    with pytest.raises(error) as caught:
+        view._kill_request_group(proc)
+    assert caught.value is primary and view._REQUEST_CLEANUP_FAILED
+    assert signals == []
+
+
+@pytest.mark.parametrize("error", [PermissionError, KeyboardInterrupt])
+def test_group_signal_failure_preserves_primary_error_and_closes_pipes(requests, error):
+    primary = RuntimeError("owned request error")
+    secondary = error("owned signal failure")
+
+    def deny(*args):
+        raise secondary
+
+    local_os = SimpleNamespace(**vars(os))
+    local_os.killpg = deny
+    view = module_function_view(daemon, bindings={"os": local_os})
+    proc = requests.create("import sys; sys.stdin.buffer.read()", module=view)
+    with pytest.raises(RuntimeError) as caught:
+        try:
+            raise primary
+        except RuntimeError:
+            view._retire_request_target(proc)
+            raise
+    assert caught.value is primary
+    assert all(stream.closed for stream in (proc.stdin, proc.stdout, proc.stderr))
+    assert view._REQUEST_CLEANUP_FAILED
+    assert primary.__notes__
+
+
+def test_spawn_error_survives_cleanup_error_in_its_response(requests):
+    primary = RuntimeError("owned original request error")
+
+    def deny(*args):
+        raise PermissionError(errno.EPERM, "owned signal denial")
+
+    def fail_capture(*args, **kwargs):
+        raise primary
+
+    def create(argv):
+        proc = daemon._spawn_request_target(argv)
+        requests.owners.enter_context(reap_on_exit(proc, process_group=True))
+        return proc
+
+    local_os = SimpleNamespace(**vars(os))
+    local_os.killpg = deny
+    view = module_function_view(daemon, bindings={
+        "os": local_os, "_spawn_request_target": create,
+        "_communicate_capped": fail_capture,
+    })
+    response = view._handle_spawn({
+        "argv": [sys.executable, "-I", "-S", "-B", "-c", "import sys; sys.stdin.buffer.read()"],
+    })
+    assert response == {"ok": False, "error": "RuntimeError: owned original request error"}
+    assert view._REQUEST_CLEANUP_FAILED and primary.__notes__
+
+
+def test_pipe_state_failure_cannot_skip_sibling_closes(requests):
+    view = module_function_view(daemon)
+    proc = requests.create("pass", module=view)
+    assert view._wait_request_exit(proc, 2) == 0
+    actual = proc.stdout
+    requests.owners.callback(actual.close)
+    primary = OSError("owned pipe close failure")
+
+    class PipeView:
+        @property
+        def closed(self):
+            raise KeyboardInterrupt("owned pipe state failure")
+
+        def close(self):
+            raise primary
+
+    proc.stdout = PipeView()
+    with pytest.raises(OSError) as caught:
+        view._retire_request_target(proc)
+    assert caught.value is primary
+    assert proc.stdin.closed and proc.stderr.closed and not actual.closed
+    assert view._REQUEST_CLEANUP_FAILED
+    assert any("KeyboardInterrupt" in note for note in primary.__notes__)
 
 
 def test_platform_without_nonreaping_wait_keeps_existing_wait_behaviour(requests):
