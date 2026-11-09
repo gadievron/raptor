@@ -2852,9 +2852,9 @@ class _ProofVerdict:
 # Widest code-point span a single ``X-Y`` range may expand to.  Real
 # sanitizer charsets are ASCII-sized; without a cap, one attacker-shaped
 # range in a fix diff (space to U+10FFFF) materializes a ~1.1M-element
-# set.  Over-cap ranges are treated as three literals — that UNDER-
-# approximates the forbidden set, which can only push the charset_sub
-# verdict toward DECLINED (sound direction; Tier 2 takes the case).
+# set. Over-cap ranges retain only their endpoints, a subset of the
+# matched characters. The separator is syntax, not an additional member.
+# This under-approximation can only push charset_sub toward DECLINED.
 _RANGE_EXPANSION_CAP = 1024
 
 
@@ -2865,8 +2865,8 @@ def _expand_charset_body(body: str) -> set:
     Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` (spanning at most
     :data:`_RANGE_EXPANSION_CAP` code points, escapes allowed on either
     endpoint via the shared tokenizer) and literal chars; everything
-    else is rejected if malformed. Over-cap ranges are treated as
-    three separate literals.
+    else is rejected if malformed. Over-cap ranges retain only their
+    endpoints, conservatively under-approximating the matched set.
     """
     out: set = set()
     for tok in _iter_charclass_atoms(body):
@@ -2876,7 +2876,7 @@ def _expand_charset_body(body: str) -> set:
                 for cp in range(ord(lo), ord(hi) + 1):
                     out.add(chr(cp))
             else:
-                out.update((lo, "-", hi))
+                out.update((lo, hi))
         else:
             out.add(tok[1])
     return out

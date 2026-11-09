@@ -477,8 +477,8 @@ def test_expand_charset_normal_ascii_ranges_still_expand():
 def test_expand_charset_huge_unicode_range_not_materialized():
     body = " -" + chr(0x10FFFF)
     out = sb._expand_charset_body(body)
-    # Over-cap range degrades to its three literal chars.
-    assert out == {" ", "-", chr(0x10FFFF)}
+    # Over-cap range retains only its matched endpoints.
+    assert out == {" ", chr(0x10FFFF)}
 
 
 def test_expand_charset_range_at_cap_still_expands():
@@ -487,10 +487,10 @@ def test_expand_charset_range_at_cap_still_expands():
     assert len(out) == sb._RANGE_EXPANSION_CAP + 1
 
 
-def test_expand_charset_range_just_over_cap_degrades_to_literals():
+def test_expand_charset_range_just_over_cap_retains_endpoints():
     lo, hi = chr(0), chr(sb._RANGE_EXPANSION_CAP + 1)
     out = sb._expand_charset_body(f"{lo}-{hi}")
-    assert out == {lo, "-", hi}
+    assert out == {lo, hi}
 
 
 def test_expand_charset_over_cap_range_declines_not_sound():
@@ -3895,5 +3895,34 @@ def test_caught_invalid_charset_does_not_prove_guard(tmp_path: Path):
     control = sb.try_tier0(
         fix_diff='+        if not re.fullmatch(r"[a-z]+", name):\n',
         repo_root=tmp_path, sink_uri="app.py", sink_line=8, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+def test_large_forbidden_range_does_not_invent_hyphen_removal(tmp_path: Path):
+    import re
+
+    body = "\t-,;<>`|" + chr(0x1000) + "-" + chr(0x1401)
+    assert re.sub("[" + body + "]+", "", "-") == "-"
+    line = "    value = re.sub(r'[" + body + "]+', '', value)"
+    source = (
+        "import re\nimport subprocess\ndef handle(value):\n"
+        + line + '\n    return subprocess.run(["program", value])\n'
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="cmdi_argv",
+    )
+    assert result.status is sb.Tier0Status.DECLINED
+    assert result.counterexample == "-"
+
+    # Explicitly stripping the surviving hyphen restores the valid proof.
+    safe_line = line.replace(chr(0x1401) + "]", chr(0x1401) + r"\-]")
+    (tmp_path / "app.py").write_text(source.replace(line, safe_line))
+    control = sb.try_tier0(
+        fix_diff="+" + safe_line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="cmdi_argv",
     )
     assert control.status is sb.Tier0Status.SOUND
