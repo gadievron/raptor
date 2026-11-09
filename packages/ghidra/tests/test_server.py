@@ -519,11 +519,15 @@ class TestServerTransportSelection:
 
         srv = self._server(tmp_path, monkeypatch, capable=False)
         monkeypatch.setattr(server_mod, "_BOOT_TIMEOUT_S", 0.3)
-        monkeypatch.setattr(server_mod, "_SHUTDOWN_GRACE_S", 1)
+        # The backend cannot finish until this test releases it. Preserve
+        # the real bounded join without waiting two seconds for that gate.
+        monkeypatch.setattr(server_mod, "_SHUTDOWN_GRACE_S", 0.02)
+        entered = threading_mod.Event()
         release = threading_mod.Event()
         seen: dict = {}
 
         def _slow_spawn_run(cmd, **kwargs):
+            entered.set()
             release.wait(timeout=30)
             fd = (kwargs.get("pass_fds") or (None,))[0]
             try:
@@ -536,14 +540,21 @@ class TestServerTransportSelection:
             return SimpleNamespace(returncode=0, stderr="")
 
         monkeypatch.setattr(sandbox_pkg, "run", _slow_spawn_run)
-        with pytest.raises(
-            server_mod.GhidraServerError, match="did not come up",
-        ):
-            srv.start()
-        release.set()
-        thread = srv._thread
+        try:
+            with pytest.raises(
+                server_mod.GhidraServerError, match="did not come up",
+            ):
+                srv.start()
+            assert entered.is_set(), "backend never reached the pre-spawn gate"
+        finally:
+            release.set()
+            thread = srv._thread
+            try:
+                if thread is not None:
+                    thread.join(timeout=30)
+            finally:
+                srv.stop()
         assert thread is not None
-        thread.join(timeout=30)
         assert not thread.is_alive()
         assert "error" not in seen, seen
         assert seen.get("is_sock") is True
