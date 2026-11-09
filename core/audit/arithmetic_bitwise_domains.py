@@ -12,6 +12,13 @@ def bitwise_domain(model, operator, kind, domains):
     """
     minimum = -(1 << (kind.width - 1)) if kind.signed else 0
     maximum = (1 << (kind.width - (1 if kind.signed else 0))) - 1
+    if all(minimum <= low == high <= maximum for low, high in domains):
+        # Both operands were already proved defined and exact. Python's
+        # bitwise integers preserve this bounded two's-complement result;
+        # no native query or weaker interval is needed.
+        a, b = (low for low, _ in domains)
+        value = {"&": a & b, "|": a | b, "^": a ^ b}[operator]
+        return value, value
     nonnegative = [high for low, high in domains if low >= 0]
     if operator == "&" and nonnegative:
         low, high = 0, min(nonnegative)
