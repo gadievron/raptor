@@ -4138,3 +4138,34 @@ def test_charset_proof_requires_direct_sink_value(tmp_path: Path, sink):
         sink_uri="app.py", sink_line=5, sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("expression,control_expression", [
+    ("name if allow else raw", "name if allow else name"),
+    ("name and raw", "name and name"),
+    ("raw or name", "name or name"),
+], ids=["conditional", "and-value", "or-value"])
+@pytest.mark.parametrize("target", ["path", "name"], ids=["new-binding", "rebind"])
+def test_charset_chain_requires_all_conditional_outputs(
+    tmp_path: Path, expression, control_expression, target,
+):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\ndef handle(name, raw, allow):\n" + guard
+        + "\n        return\n    " + target + " = " + expression
+        + "\n    return open(" + target + ")\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=6, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace(expression, control_expression))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=6, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
