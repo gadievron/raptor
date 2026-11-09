@@ -468,6 +468,11 @@ def _print_summary(result) -> None:
                       f"raptor-sca: parse failures    {summary['parse_failures']}",
                       f"raptor-sca: checked at        {summary['receipt_generated_at']}",
                       "raptor-sca: coverage details  " + str(result.output_dir / "scan-summary.json")])
+    sbom_summary = getattr(result, "sbom_summary", None)
+    if sbom_summary:
+        lines.extend([f"raptor-sca: SBOM packages     {sbom_summary['packages']}",
+                      f"raptor-sca: SBOM declarations {sbom_summary['unresolved_declarations']} unresolved",
+                      f"raptor-sca: notice evidence   {sbom_summary['notice_verification']}"])
     transitive_line = _format_transitive_line(result)
     if transitive_line is not None:
         lines.append(transitive_line)

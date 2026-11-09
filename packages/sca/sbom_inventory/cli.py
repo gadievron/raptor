@@ -17,6 +17,7 @@ from .model import selected
 from .output import inventory_chunks, csv_chunks, record_chunks, export_notices, markdown, write_inventory
 from .source import Source
 from .relationships import explain
+from .reporting import add_arguments, complete_sbom_report, report_options
 
 
 def parser():
@@ -98,6 +99,8 @@ def parser():
     verify.add_argument("--max-coverage-age-hours", type=float, help="require a coverage receipt generated within this many hours; does not establish feed freshness")
     verify.add_argument("--format", choices=("text", "json"), default="text", help="stdout format (default: text)")
     verify.add_argument("--out", type=Path, help="new directory for upgrade-verification.json and upgrade-verification.md")
+    for command in (inspect, stats, diff, why, collect, notices, plan, verify):
+        add_arguments(command)
     return result
 
 
@@ -110,6 +113,7 @@ def main(argv=None):
     args = parser().parse_args(argv)
     configure_cli_logging(logging.WARNING)
     try:
+        options = report_options(args)
         if args.command == "verify-plan":
             from .verification import read_plan, verify_plan
             from .advisory_coverage import read_coverage
@@ -130,6 +134,7 @@ def main(argv=None):
                 _emit(report)
             else:
                 print(escape_nonprintable(verification_markdown(report), preserve_newlines=True))
+            complete_sbom_report(args, options=options, inventory=inventory, payload=report)
             return report["exit_code"]
         if args.command == "plan":
             from .plan import build_plan
@@ -154,11 +159,14 @@ def main(argv=None):
                 _emit(report)
             else:
                 print(escape_nonprintable(upgrade_plan_markdown(report), preserve_newlines=True))
+            complete_sbom_report(args, options=options, inventory=inventory, payload=report)
             return report["exit_code"]
         if args.command == "collect":
             from .collection import collect_image
-            _emit(collect_image(args.syft, args.out, oci_layout=args.oci_layout,
-                                registry_ref=args.registry_ref, identify=args.identify))
+            result = collect_image(args.syft, args.out, oci_layout=args.oci_layout,
+                                   registry_ref=args.registry_ref, identify=args.identify)
+            _emit(result)
+            complete_sbom_report(args, options=options, payload=result)
             return 0
         if args.command == "why":
             with Source(args.input) as source:
@@ -168,6 +176,7 @@ def main(argv=None):
             if args.out:
                 save_json(args.out, result, stream=True)
             _emit(result)
+            complete_sbom_report(args, options=options, inventory=inventory, payload=result)
             return 0
         if args.command == "diff":
             with Source(args.baseline) as source:
@@ -178,6 +187,7 @@ def main(argv=None):
             if args.out:
                 save_json(args.out, result, stream=True)
             _emit(result)
+            complete_sbom_report(args, options=options, payload=result)
             return 0
         with Source(args.input) as source:
             inventory, embedded = read_inventory(source, verify_notices=args.command != "stats")
@@ -195,6 +205,7 @@ def main(argv=None):
                         raise ValueError("statistics output must differ from the input")
                     save_json(args.out, report, stream=True)
                 _emit(report)
+                complete_sbom_report(args, options=options, inventory=inventory, records=records, payload=report)
                 return 0
             if args.command == "inspect" and (args.limit < 1 or args.offset < 0):
                 raise ValueError("display limit must be positive and offset nonnegative")
@@ -218,6 +229,8 @@ def main(argv=None):
                         sys.stdout.write(part)
                 else:
                     print(escape_nonprintable(markdown(inventory, records, limit=args.limit, offset=args.offset), preserve_newlines=True))
+            complete_sbom_report(args, options=options, inventory=inventory, records=records,
+                                 payload=result if args.command == "notices" else None)
         return 0
     except (OSError, ValueError, TypeError, KeyError, RecursionError, zipfile.BadZipFile, TarOpenError) as error:
         print("raptor-sca sbom: " + sanitise_for_terminal(str(error)), file=sys.stderr)

@@ -286,6 +286,7 @@ class RunResult:
     # empty result.
     eco_breakdown: dict[str, int] = field(default_factory=dict)
     report_outputs: dict[str, str] = field(default_factory=dict)
+    sbom_summary: dict = field(default_factory=dict)
 
 
 def _suppression_entry_label(entry: _suppressions.SuppressionEntry) -> str:
@@ -1243,6 +1244,7 @@ def _run_sca(
     # One structured builder owns every report format; existing finding/SARIF
     # and SBOM serializers remain domain-owned and unchanged.
     reporting = None
+    sbom_summary = {}
     try:
         from .reporting import build_sca_document
         from core.reporting.service import complete_reporting
@@ -1252,6 +1254,20 @@ def _run_sca(
             cache_hits=cache.hits, cache_misses=cache.misses,
             cache_evictions=cache.memo_evictions,
         )
+        report_context.artifacts.extend({"path": str(path)} for path in [
+            *coverage_artifacts.values(), output_dir / "advisory-coverage.json", output_dir / "scan-summary.json", sarif_path,
+            *([options.sbom_input] if options.sbom_input is not None else []),
+        ])
+        try:
+            from .sbom_inventory.reporting import attach_sca_inventory
+            inventory_path = output_dir / "sbom.spdx.json" if spdx_source is not None else sbom_path
+            attach_sca_inventory(report_context, report_document, inventory_path)
+            sbom_capture = report_context.extensions["raptor.sbom"]
+            sbom_summary = {**sbom_capture["summary"], "notice_verification": sbom_capture["notice_verification"]}
+        except (OSError, ValueError, TypeError, RecursionError) as exc:
+            report_context.diagnostics.append("SBOM reporting capture unavailable (" + type(exc).__name__ + "); native SBOM retained")
+            report_document.snapshot_id = report_context.snapshot_id
+            report_document.diagnostics = list(report_context.diagnostics)
         reporting = complete_reporting(report_context, output_dir, stem="report", options=report_options,
                                        document=report_document)
         if reporting.publication and reporting.publication.outputs:
@@ -1319,6 +1335,7 @@ def _run_sca(
         parse_failures=list(parse_failures),
         scan_summary=scan_summary,
         report_outputs=reporting.publication.outputs if reporting and reporting.publication else {},
+        sbom_summary=sbom_summary,
     )
 
 

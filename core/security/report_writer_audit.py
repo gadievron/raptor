@@ -620,6 +620,8 @@ _REPORT_WRITER_FILES = (
     "core/audit/report_document.py",
     "core/project/findings_utils.py",
     "packages/sca/reporting.py",
+    "packages/sca/sbom_inventory/reporting.py",
+    "core/project/sbom_reports.py",
     "packages/diagram/reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
@@ -1917,6 +1919,8 @@ _ALLOWLIST += tuple(
          "render_operator_summary is the shared terminal boundary: every foreign field uses sanitise_for_terminal; its generated newlines are deliberate layout, not foreign controls."),
         ("core/reporting/delta.py", "build_delta", ("status",),
          "Delta rows are structured Block table data. They have no IO here and are escaped by the selected report renderer; source verdicts are labeled recorded snapshot claims."),
+        ("core/project/sbom_reports.py", "capture_sbom_reports", ("summary",),
+         "Returned snapshot metadata is structured data, not output. The summary admits only known inventory keys with nonnegative integer or null values; sbom_blocks passes these scalars to typed tables and the selected renderer escapes all text. Imported snapshots remain claims and counts are never added."),
         ("core/project/findings_utils.py", "findings_from_report_context",
          ("tool", "file", "line", "rule_id", "message", "function", "suppressed"),
          "Committed scan findings are returned as native DATA for existing project grouping/merging APIs, never rendered here. Status is the fixed unconfirmed label. Project Markdown and console consumers retain their existing escaping boundaries."),
