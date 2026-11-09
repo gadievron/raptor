@@ -77,7 +77,7 @@ import traceback
 import warnings
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 from . import _pathpin, state
 from ._retirement import retire_parent_resources as _retire_parent_resources
@@ -770,6 +770,33 @@ def _map_own_ids_unprivileged(child_pid: int, inside_id: int) -> None:
         os.close(proc_fd)
 
 
+def _mirror_signal_exit(
+    signum: int, prctl: Callable[[int, int, int, int, int], int] | None,
+) -> NoReturn:
+    """Mirror a target signal without core-dumping the trusted watcher.
+
+    Linux piped core collectors ignore RLIMIT_CORE. This process still has
+    the trusted parent's address space, and never execs again: clear its
+    dumpability before re-raising the target's signal. The callable is
+    resolved in the parent so this final child path imports nothing.
+    """
+    suppressed = False
+    if prctl is not None:
+        try:
+            suppressed = prctl(4, 0, 0, 0, 0) == 0  # PR_SET_DUMPABLE, disabled
+        except Exception:  # noqa: BLE001 — retain the original signal on a dying child
+            pass
+    if not suppressed:
+        warn_post_fork(
+            b"sandbox: trusted watcher could not disable core collection before signal exit\n")
+    try:
+        signal.signal(signum, signal.SIG_DFL)
+    except (OSError, ValueError):
+        pass
+    os.kill(os.getpid(), signum)
+    os._exit(128 + signum)
+
+
 def _set_rlimits(limits: dict, status_fd: "int | None" = None) -> None:
     """Apply rlimits in the child. Mirrors preexec.py's _set_limits but
     designed to run before mount ops / Landlock / seccomp.
@@ -815,8 +842,10 @@ def _set_rlimits(limits: dict, status_fd: "int | None" = None) -> None:
             resource.setrlimit(resource.RLIMIT_NOFILE, (_eff, _eff))
         except (ValueError, OSError):
             warn_post_fork(b"sandbox: _set_rlimits RLIMIT_NOFILE setrlimit failed -- fd-exhaustion bound not applied\n")
-    # RLIMIT_CORE is unconditional — coredumps are always suppressed.
-    # Fail-closed: without RLIMIT_CORE=0 the kernel may write a core
+    # RLIMIT_CORE is unconditional for ordinary core files. Linux piped
+    # collectors can ignore it; trusted signal mirroring also disables
+    # dumpability in _mirror_signal_exit. Without RLIMIT_CORE=0 the kernel
+    # may write a core
     # dump containing the full address-space (including secrets the
     # process read under Landlock's permissive default read policy).
     try:
@@ -2730,6 +2759,7 @@ def run_sandboxed(
         # None when libc cannot be loaded — the child sites degrade
         # exactly as their load-failure branches always did.
         _parent_libc = None
+        _parent_prctl = None
         with contextlib.suppress(ImportError, OSError, AttributeError):
             import ctypes as _pf_ctypes
             import ctypes.util as _pf_ctypes_util
@@ -2737,6 +2767,7 @@ def run_sandboxed(
                 _pf_ctypes_util.find_library("c") or "libc.so.6",
                 use_errno=True,
             )
+            _parent_prctl = _parent_libc.prctl
 
         # Persona lane: step 8.5's set_uts lazily resolves
         # fingerprint's own libc binding on first use, which without
@@ -3769,24 +3800,12 @@ def run_sandboxed(
                         and os.WIFSIGNALED(_tgt_status)
                         and os.WIFEXITED(status)):
                     sig = os.WTERMSIG(_tgt_status)
-                    import signal as _signal
-                    try:
-                        _signal.signal(sig, _signal.SIG_DFL)
-                    except (OSError, ValueError):
-                        pass
-                    os.kill(os.getpid(), sig)
-                    os._exit(128 + sig)
+                    _mirror_signal_exit(sig, _parent_prctl)
                 if os.WIFEXITED(status):
                     os._exit(os.WEXITSTATUS(status))
                 if os.WIFSIGNALED(status):
                     sig = os.WTERMSIG(status)
-                    import signal as _signal
-                    try:
-                        _signal.signal(sig, _signal.SIG_DFL)
-                    except (OSError, ValueError):
-                        pass
-                    os.kill(os.getpid(), sig)
-                    os._exit(128 + sig)
+                    _mirror_signal_exit(sig, _parent_prctl)
                 os._exit(255)
         except BaseException:  # noqa: BLE001
             # Setup failed before exec. Signal WHICH step (status_w) so the
