@@ -1243,29 +1243,78 @@ def extract_loop_caps(
     loop_types = _LOOP_TYPES.get(lang, ())
     results: list[LoopCap] = []
 
-    for node in _walk_descendants(tree.root_node):
+    try:
+        from tree_sitter import Node as NativeNode, Tree as NativeTree
+    except ImportError:
+        NativeNode = NativeTree = None
+    native_groups = (
+        _LOOP_TYPE_IMPL(tree) is NativeTree
+        and _LOOP_TYPE_IMPL(tree.root_node) is NativeNode
+        and _LOOP_TYPE_IMPL(src) is _LOOP_BYTES_IMPL
+        and _LOOP_TYPE_IMPL(lang) is str
+        and _LOOP_TYPE_IMPL(_FUNCTION_TYPES) is dict
+        and _LOOP_TYPE_IMPL(loop_types) is tuple
+        and any is _LOOP_ANY_IMPL and reversed is _LOOP_REVERSED_IMPL
+        and all is _LOOP_ALL_IMPL and zip is _LOOP_ZIP_IMPL
+        and all(current is original for current, original in zip(
+            (_walk_descendants, _find_enclosing_function, _get_func_name,
+             _node_text, _node_line, _same_node, _switch_case_map),
+            _LOOP_ATTRIBUTION_IMPLS,
+        ))
+    )
+    function_types = _FUNCTION_TYPES.get(lang, ()) if native_groups else ()
+    native_groups = (
+        native_groups and _LOOP_TYPE_IMPL(function_types) is tuple
+        and all(_LOOP_TYPE_IMPL(kind) is str
+                for kind in (*loop_types, *function_types))
+        and not any(kind in function_types for kind in loop_types)
+        and not any(kind in ("if_statement", "if_expression") for kind in loop_types)
+        and tree.root_node.type not in loop_types
+    )
+    native_comparisons = native_groups
+    # Hints select the traversal only; the original walk still decides caps.
+    # Avoid grouping overhead on the common loop-free or single-loop file.
+    native_groups = native_groups and (
+        src.count(b"for") + src.count(b"while")
+        + src.count(b"loop") + src.count(b"until") > 1
+    )
+    # The existing nearest-switch traversal also groups conditions by loop.
+    # Foreign trees and replaced helpers retain the original traversal.
+    entries = (
+        _switch_case_map(tree.root_node, lang, loop_types, ("if_statement", "if_expression"))
+        if native_groups else _walk_descendants(tree.root_node)
+    )
+    for entry in entries:
+        if native_groups:
+            node, func_node, conditions = entry
+        else:
+            node = entry
         if node.type not in loop_types:
             continue
 
-        func_node = _find_enclosing_function(node, lang)
+        if not native_groups:
+            func_node = _find_enclosing_function(node, lang)
         func_name = _get_func_name(func_node, lang, src) if func_node else "<module>"
 
         has_cap_break = False
-        for desc in _walk_descendants(node):
+        for desc in conditions if native_groups else _walk_descendants(node):
             if desc.type in ("if_statement", "if_expression"):
                 # Skip if inside a nested loop (not directly in *this* loop)
-                ancestor = desc.parent
-                while ancestor is not None and not _same_node(ancestor, node):
-                    if ancestor.type in loop_types:
-                        break
-                    ancestor = ancestor.parent
-                if not _same_node(ancestor, node):
-                    continue
+                if not native_groups:
+                    ancestor = desc.parent
+                    while ancestor is not None and not _same_node(ancestor, node):
+                        if ancestor.type in loop_types:
+                            break
+                        ancestor = ancestor.parent
+                    if not _same_node(ancestor, node):
+                        continue
 
                 if_text = _node_text(desc, src)
                 has_comparison = any(
                     op in if_text for op in (">=", ">", "==", "len(", ".length", ".size()")
                 )
+                if native_comparisons and not has_comparison:
+                    continue
                 has_break = any(
                     desc_child.type in ("break_statement", "return_statement", "break", "return")
                     for desc_child in _walk_descendants(desc)
@@ -1290,6 +1339,18 @@ def extract_loop_caps(
         ))
 
     return results
+
+
+_LOOP_ATTRIBUTION_IMPLS = (
+    _walk_descendants, _find_enclosing_function, _get_func_name,
+    _node_text, _node_line, _same_node, _switch_case_map,
+)
+_LOOP_TYPE_IMPL = type
+_LOOP_BYTES_IMPL = bytes
+_LOOP_ANY_IMPL = any
+_LOOP_REVERSED_IMPL = reversed
+_LOOP_ALL_IMPL = all
+_LOOP_ZIP_IMPL = zip
 
 
 # ---------------------------------------------------------------------------
