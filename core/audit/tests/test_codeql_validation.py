@@ -620,12 +620,11 @@ class TestGuardPolarity:
         assert (kept, pruned) == (1, 0)
         assert receipts == []
 
-    def test_brace_sharing_negation_still_feeds_true_prunes(
+    def test_brace_sharing_negation_still_feeds_model_diagnostics(
         self, tmp_path: Path,
     ):
-        # No over-correction: the fall-through NEGATION harvested at a
-        # brace-sharing step still combines with a later positive
-        # guard into a genuinely infeasible — prunable — path.
+        # Preserve the fall-through negation and the native contradiction,
+        # without promoting an unbound model to source-path suppression.
         pytest.importorskip("z3")
         target = tmp_path / "target"
         (target / "src").mkdir(parents=True)
@@ -641,8 +640,9 @@ class TestGuardPolarity:
         )
         sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
-        assert (kept, pruned) == (0, 1)
-        assert receipts[0]["verdict"] == "smt_path_infeasible"
+        assert (kept, pruned) == (1, 0)
+        assert receipts[0]["verdict"] == "smt_model_infeasible"
+        assert receipts[0]["source_bound"] is False
 
     def test_live_early_exit_flow_survives_real_smt_prune(
         self, tmp_path: Path,
@@ -823,12 +823,11 @@ class TestGuardPolarity:
         assert (kept, pruned) == (1, 0)
         assert receipts == []
 
-    def test_spliced_negation_still_feeds_true_prunes(
+    def test_spliced_negation_still_feeds_model_diagnostics(
         self, tmp_path: Path,
     ):
-        # No over-correction: the negation recovered from the
-        # splice-hidden exit arm still combines with a later positive
-        # guard into a genuinely infeasible — prunable — path.
+        # Preserve the splice-hidden exit arm's negation and native
+        # contradiction, without granting source refutation authority.
         pytest.importorskip("z3")
         target = tmp_path / "target"
         (target / "src").mkdir(parents=True)
@@ -845,8 +844,9 @@ class TestGuardPolarity:
         )
         sarif = _sarif_with_flow([("src/vuln.c", 5), ("src/vuln.c", 7)])
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
-        assert (kept, pruned) == (0, 1)
-        assert receipts[0]["verdict"] == "smt_path_infeasible"
+        assert (kept, pruned) == (1, 0)
+        assert receipts[0]["verdict"] == "smt_model_infeasible"
+        assert receipts[0]["source_bound"] is False
 
 
 def _stub_validate_path(feasible, *, calls=None):
@@ -870,7 +870,7 @@ def _stub_validate_path(feasible, *, calls=None):
 
 
 class TestSmtPruneSarifMatches:
-    def test_unsat_match_pruned_with_receipt(self, tmp_path, monkeypatch):
+    def test_model_unsat_keeps_match_with_conditional_receipt(self, tmp_path, monkeypatch):
         import packages.exploit_feasibility.smt_path as smt_path_mod
 
         target = _write_guarded_source(tmp_path)
@@ -879,11 +879,13 @@ class TestSmtPruneSarifMatches:
             smt_path_mod, "validate_path", _stub_validate_path(False),
         )
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
-        assert kept == 0
-        assert pruned == 1
+        assert kept == 1
+        assert pruned == 0
         assert len(receipts) == 1
         rec = receipts[0]
-        assert rec["verdict"] == "smt_path_infeasible"
+        assert rec["verdict"] == "smt_model_infeasible"
+        assert rec["proof_scope"] == "conditional-untyped-guard-model"
+        assert rec["source_bound"] is False
         assert rec["file"] == "src/vuln.c"
         assert rec["paths"][0]["unsatisfied"] == ["len < 0", "len > 0"]
 
@@ -979,12 +981,13 @@ class TestSmtPruneSarifMatches:
         ).z3_available(),
         reason="z3 not installed",
     )
-    def test_real_solver_kills_contradictory_guards(self, tmp_path):
-        """Integration: len < 0 AND len > 0 is UNSAT for real."""
+    def test_real_solver_reports_contradictory_model_without_pruning(self, tmp_path):
+        """The native model is UNSAT without proving source value identity."""
         target = _write_guarded_source(tmp_path)
         sarif = _sarif_with_flow([("src/vuln.c", 3), ("src/vuln.c", 5)])
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
-        assert (kept, pruned) == (0, 1)
+        assert (kept, pruned) == (1, 0)
+        assert receipts[0]["source_bound"] is False
         assert receipts[0]["paths"][0]["reasoning"]
 
 
@@ -1003,7 +1006,7 @@ class TestValidateClaimSmtPrune:
 
         return mock_analyze
 
-    def test_vacuous_match_refuted_with_receipts(
+    def test_model_unsat_cannot_refute_a_codeql_match(
         self, tmp_path: Path, monkeypatch,
     ):
         import core.dataflow.codeql_augmented_run as codeql_mod
@@ -1024,11 +1027,13 @@ class TestValidateClaimSmtPrune:
         result = validate_dataflow_claim(
             _claim(), db_path=db, target_path=target,
         )
-        assert result.confirmed is False
-        assert result.sarif_matches == 0
-        assert result.smt_pruned == 1
+        assert result.confirmed is True
+        assert result.sarif_matches == 1
+        assert result.smt_pruned == 0
         assert result.smt_receipts
-        assert "vacuous" in result.reasoning
+        assert result.smt_receipts[0]["source_bound"] is False
+        assert "conditional SMT guard model" in result.reasoning
+        assert "without establishing source-path infeasibility" in result.reasoning
 
     def test_no_target_path_skips_prune(self, tmp_path: Path, monkeypatch):
         import core.dataflow.codeql_augmented_run as codeql_mod
@@ -1612,13 +1617,11 @@ class TestGuardPolarityMultiLineLabels:
         assert (kept, pruned) == (1, 0)
         assert receipts == []
 
-    def test_open_arm_positive_still_feeds_true_prunes(
+    def test_open_arm_positive_still_feeds_model_diagnostics(
         self, tmp_path: Path,
     ):
-        # No over-correction, end to end: a genuine label-free open
-        # arm (with a benign ternary colon in it) still asserts the
-        # positive, and the genuinely contradictory pair still earns
-        # its suppression.
+        # A label-free open arm still contributes its true polarity.
+        # Contradiction remains a model diagnostic, not source suppression.
         pytest.importorskip("z3")
         target = tmp_path / "target"
         (target / "src").mkdir(parents=True)
@@ -1635,8 +1638,9 @@ class TestGuardPolarityMultiLineLabels:
         )
         sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 7)])
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
-        assert (kept, pruned) == (0, 1)
-        assert receipts[0]["verdict"] == "smt_path_infeasible"
+        assert (kept, pruned) == (1, 0)
+        assert receipts[0]["verdict"] == "smt_model_infeasible"
+        assert receipts[0]["source_bound"] is False
 
 
 def _write_ff_twin_source(tmp_path: Path, pad: str) -> Path:
