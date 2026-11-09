@@ -1213,6 +1213,13 @@ outcomes without extra lookups. Detail is bounded to 100 observations and
 100 advisory records per observation; full native comparisons remain on
 stdout or in `--out`. Unavailable advisory coverage still returns exit code 2.
 
+Standard `fix` accepts an explicit report destination too. The receipt labels
+plan-only, proposed-export and applied-in-place modes separately, preserving
+blocked major upgrades and skipped changes. A plan or proposed file is not
+reported as an applied fix. Existing scan and change artifacts remain available;
+the report performs no extra analysis or writes to target manifests.
+`--cve-only` and `--harden` keep their separate reporting interfaces.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml

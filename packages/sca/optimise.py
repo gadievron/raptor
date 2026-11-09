@@ -194,6 +194,17 @@ def main(argv: Sequence[str]) -> int:
         for fr in map(FindingRow.from_row, findings_rows)
     )
     do_hash_pin = has_gha_drift and not args.no_hash_pin
+    llm_approved: set = set()
+    llm_verdicts: dict[tuple[str, str, str], Any] = {}
+    hp_summary = None
+
+    def report_completion(mode, *, changes=(), exit_code=0):
+        if args._report_options.enabled and args._report_options.output is not None:
+            from .remediation_reporting import complete_fix_report
+            complete_fix_report(args, target=target, out_dir=out_dir, scan_result=result, mode=mode,
+                                vuln_plans=vuln_plans, hygiene_plans=hygiene_plans, major_blocked=major_blocked,
+                                changes=changes, exit_code=exit_code, llm_approved=llm_approved,
+                                llm_verdicts=llm_verdicts, hash_pin_receipt=hp_summary)
 
     if (not vuln_plans and not hygiene_plans and not major_blocked
             and not do_hash_pin):
@@ -202,11 +213,10 @@ def main(argv: Sequence[str]) -> int:
               "hygiene findings, if any, are reported by the scan; fix "
               "only plans remediations it can safely apply.)",
               file=sys.stderr)
+        report_completion("no actionable changes")
         return 0
 
     # ---- Phase 3b: LLM impact analysis for major-blocked CVEs -----------
-    llm_approved: set = set()
-    llm_verdicts: dict[tuple[str, str, str], Any] = {}
     if major_blocked and not args.no_llm:
         llm_approved, llm_verdicts = _analyze_major_bumps(
             major_blocked, vuln_plans, target,
@@ -223,7 +233,9 @@ def main(argv: Sequence[str]) -> int:
                 print(hp_summary)
         # Exit 1 when CVEs remain unresolved (blocked by major version).
         # CI can use this to detect "needs attention".
-        return 1 if major_blocked else 0
+        exit_code = 1 if major_blocked else 0
+        report_completion("plan only", exit_code=exit_code)
+        return exit_code
 
     proposed_root = out_dir / "_apply_staging" if args.apply else out_dir / "proposed"
 
@@ -326,7 +338,9 @@ def main(argv: Sequence[str]) -> int:
               f"{len(pin_applied)} pin(s), "
               f"{len(skipped)} skipped — written to {proposed_root}"
               + extra)
-    return 1 if major_blocked else 0
+    exit_code = 1 if major_blocked else 0
+    report_completion("applied in place" if args.apply else "proposed export", changes=changes, exit_code=exit_code)
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -1207,7 +1221,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "optional installs in comment-form and want them "
                         "auto-pinned alongside active deps.")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
 
 
 def _resolve_out_dir(explicit: str | None) -> Path:

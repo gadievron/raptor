@@ -30,6 +30,7 @@ CAPABILITIES = (
     CommandCapability("sca check", "sca-check", "explicit destination required", "existing stdout; report summary on stderr", "native verdict and unavailable-advisory status retained"),
     CommandCapability("sca verify", "sca-verify", "explicit destination required", "existing stdout; report summary on stderr", "native overlay, delta artifacts and gate status retained"),
     CommandCapability("sca upgrade", "sca-upgrade", "explicit destination required", "existing stdout; report summary on stderr", "pairwise, candidates and add/remove comparisons; domain status retained"),
+    CommandCapability("sca fix", "sca-fix", "explicit destination required", "existing stdout; report summary on stderr", "standard plan/proposed/apply modes; cve-only and harden retain domain interfaces"),
     CommandCapability("sca sbom inspect", "sbom-inspect", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom stats", "sbom-stats", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom diff", "sbom-diff", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
