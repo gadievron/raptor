@@ -305,10 +305,15 @@ def test_source_wrapper_failure_closes_open_descriptor(tmp_path, monkeypatch, er
         descriptors.append(fd)
         return fd
 
-    def fail(*args, **kwargs):
+    def fail(fd, mode, close_fd):
+        try:
+            close_fd(fd)
+        except BaseException:
+            pass
         raise error('source wrapper failed')
 
-    monkeypatch.setattr(gated, 'os', SimpleNamespace(**{**vars(os), 'open': open_fd, 'fdopen': fail}))
+    monkeypatch.setattr(gated, 'os', SimpleNamespace(**{**vars(os), 'open': open_fd}))
+    monkeypatch.setattr(gated, 'adopt_fd', fail)
     with pytest.raises(error, match='source wrapper failed'):
         offline._record(source, tmp_path / 'output')
     assert len(descriptors) == 1

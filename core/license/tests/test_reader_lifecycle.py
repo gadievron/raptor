@@ -24,15 +24,17 @@ def test_failed_stream_setup_closes_descriptor(tmp_path, monkeypatch, error_type
         retained.append((fd, (info.st_dev, info.st_ino)))
         return fd
 
-    def fail(*args, **kwargs):
+    def fail(fd, mode, close_fd):
+        try:
+            close_fd(fd)
+        except BaseException:
+            pass
         raise primary
 
     try:
-        with scoped_function_imports(detector, ["_read_license_full"], {"os": os}) as owned:
-            monkeypatch.setattr(owned.os, "open", opened)
-            monkeypatch.setattr(owned.os, "fdopen", fail)
+        with scoped_function_imports(detector, ["_read_license_full"], {"os": os}) as _owned:
             patch_module_attribute(monkeypatch, gated, "os", "open", opened)
-            patch_module_attribute(monkeypatch, gated, "os", "fdopen", fail)
+            monkeypatch.setattr(gated, "adopt_fd", fail)
             with pytest.raises(error_type) as caught:
                 detector._read_license_full(path, 4)
             assert caught.value is primary

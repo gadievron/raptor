@@ -178,12 +178,20 @@ def test_failed_gated_open_preserves_primary_and_releases_fd(tmp_path, monkeypat
     closed = []
     original_close = os.close
     def failed(*args, **kwargs):
+        if phase == 'adopt':
+            try:
+                args[2](args[0])
+            except BaseException:
+                pass
         raise primary
     def close(fd):
         original_close(fd)
         closed.append(fd)
         raise cleanup_type('close failed')
-    patch_module_attribute(monkeypatch, gated, 'os', 'fstat' if phase == 'stat' else 'fdopen', failed)
+    if phase == 'stat':
+        patch_module_attribute(monkeypatch, gated, 'os', 'fstat', failed)
+    else:
+        monkeypatch.setattr(gated, 'adopt_fd', failed)
     patch_module_attribute(monkeypatch, gated, 'os', 'close', close)
     with pytest.raises(primary_type) as caught:
         gated.open_regular_gated(path)

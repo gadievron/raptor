@@ -42,13 +42,16 @@ def test_project_json_failed_wrapping_releases_descriptor(document, monkeypatch,
     error = error_type("wrapping failed")
     retained = []
 
-    def fail(fd, *args, **kwargs):
+    def fail(fd, mode, close_fd):
         info = os.fstat(fd)
         retained.append((fd, (info.st_dev, info.st_ino)))
+        try:
+            close_fd(fd)
+        except BaseException:
+            pass
         raise error
 
-    patch_module_attribute(monkeypatch, cli, "os", "fdopen", fail)
-    patch_module_attribute(monkeypatch, gated, "os", "fdopen", fail)
+    monkeypatch.setattr(gated, "adopt_fd", fail)
     try:
         if error_type is OSError:
             assert cli._stream_threat_model_json(path, root) == 1
@@ -106,7 +109,7 @@ def test_project_json_keeps_outside_root_refusal(document, tmp_path, capsys):
 def test_output_error_survives_source_close_failure(document, monkeypatch):
     path, root = document
     primary = RuntimeError("output failed")
-    real_fdopen = os.fdopen
+    real_adopt = gated.adopt_fd
     closed = []
 
     class Stream:
@@ -128,8 +131,7 @@ def test_output_error_survives_source_close_failure(document, monkeypatch):
         def write(self, data):
             raise primary
 
-    patch_module_attribute(monkeypatch, gated, "os", "fdopen",
-                           lambda *a, **kw: Stream(real_fdopen(*a, **kw)))
+    monkeypatch.setattr(gated, "adopt_fd", lambda *a, **kw: Stream(real_adopt(*a, **kw)))
     with io.TextIOWrapper(BrokenOutput(), encoding="utf-8") as output:
         patch_module_attribute(monkeypatch, cli, "sys", "stdout", output)
         with pytest.raises(RuntimeError) as caught:

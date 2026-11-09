@@ -5,6 +5,7 @@ import os
 import pytest
 
 from core.source import beneath, contained
+from core.source.streams import adopt_fd
 from core.testing.module_bindings import patch_module_attribute
 
 
@@ -14,7 +15,7 @@ def reader(tmp_path, monkeypatch):
     folder.mkdir(parents=True)
     path = folder / "file.txt"
     path.write_bytes(b"owned bytes")
-    real_open, real_close, real_fdopen = os.open, os.close, os.fdopen
+    real_open, real_close = os.open, os.close
     live, streams, opened, closed = {}, [], [], []
 
     def install(route, *, wrap_error=None, close_error=None, close_index=0):
@@ -34,17 +35,21 @@ def reader(tmp_path, monkeypatch):
             if close_error is not None and index == close_index:
                 raise close_error
 
-        def wrap(fd, *args, **kwargs):
+        def wrap(fd, mode, close_fd=None, **kwargs):
             if wrap_error is not None:
+                try:
+                    close_fd(fd)
+                except BaseException:
+                    pass
                 raise wrap_error
-            stream = real_fdopen(fd, *args, **kwargs)
+            stream = adopt_fd(fd, mode, close_fd, **kwargs)
             live.pop(fd)
             streams.append(stream)
             return stream
 
         patch_module_attribute(monkeypatch, owner, "os", "open", open_file)
         patch_module_attribute(monkeypatch, owner, "os", "close", close)
-        patch_module_attribute(monkeypatch, owner, "os", "fdopen", wrap)
+        monkeypatch.setattr(owner, "adopt_fd", wrap)
         invoke = (lambda: contained.open_regular(path, "rb")) if route == "direct" else (
             lambda: beneath.open_regular_beneath(tmp_path, "one/two/file.txt", "rb")
         )

@@ -38,8 +38,9 @@ import os
 import stat as _stat_mod
 from io import BufferedReader
 from pathlib import Path
+from typing import cast
 
-from core.source.streams import preserving_stream_error
+from core.source.streams import adopt_fd, preserving_stream_error
 
 __all__ = [
     "ReadBudgetExceededError",
@@ -87,8 +88,8 @@ def _open_gated(
         if not _stat_mod.S_ISREG(st.st_mode):
             msg = f"not a regular file: {p}"
             raise ValueError(msg)
-        fh = os.fdopen(fd, "rb")
-        fd = -1  # fdopen owns it now
+        transferred_fd, fd = fd, -1
+        fh = cast(BufferedReader, adopt_fd(transferred_fd, "rb", lambda value: os.close(value)))
         return fh, st
     finally:
         if fd >= 0:

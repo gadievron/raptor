@@ -56,7 +56,7 @@ from typing import IO, TypeVar
 
 from core.paths import confine
 from core.source.beneath import open_regular_beneath
-from core.source.streams import preserving_stream_error
+from core.source.streams import adopt_fd, preserving_stream_error
 
 __all__ = [
     "DEFAULT_MAX_SOURCE_CHARS",
@@ -106,8 +106,8 @@ def open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
-        stream = os.fdopen(fd, mode, **kwargs)
-        fd = -1  # Ownership transferred only after successful wrapping.
+        transferred_fd, fd = fd, -1
+        stream = adopt_fd(transferred_fd, mode, lambda value: os.close(value), **kwargs)
         return stream
     except OSError:
         return None
