@@ -1884,6 +1884,9 @@ def check_auth_bypass(
 
         z3_result = _try_z3_auth_bypass(guard_text, bypassed)
         if z3_result is not None:
+            if z3_result.bypass_found is False:
+                # This query refutes one candidate, not every later site.
+                continue
             return z3_result
 
         return AuthBypassResult(
@@ -2198,6 +2201,9 @@ def check_lock_discipline(
                 guard, lock_func, ret_line + 1, bypassed_unlocks,
             )
             if z3_result is not None:
+                if z3_result.violation_found is False:
+                    # This query refutes one candidate, not every later site.
+                    continue
                 return z3_result
 
             return LockDisciplineResult(
@@ -2628,6 +2634,9 @@ def check_resource_leak(
                 guard, var_name, alloc_func, alloc_line + 1, ret_line + 1,
             )
             if z3_result is not None:
+                if z3_result.leak_found is False:
+                    # This query refutes one candidate, not every later site.
+                    continue
                 return z3_result
 
             return ResourceLeakResult(
