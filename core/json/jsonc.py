@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from core.json.utils import _reject_non_finite
+from core.json.utils import _parse_finite_float, _reject_non_finite
 
 
 def strip_jsonc_comments(text: str) -> str:
@@ -114,7 +114,7 @@ def load_jsonc(text: str) -> Any:
     """
     cleaned = strip_jsonc_comments(text)
     cleaned = _strip_trailing_commas(cleaned)
-    return json.loads(cleaned, parse_constant=_reject_non_finite)
+    return json.loads(cleaned, parse_constant=_reject_non_finite, parse_float=_parse_finite_float)
 
 
 __all__ = ["load_jsonc", "strip_jsonc_comments"]

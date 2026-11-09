@@ -28,6 +28,15 @@ except ImportError:
     _orjson = None
 
 
+
+def _parse_finite_float(token: str) -> float:
+    """Keep exponent overflow out of strict readers' numeric results."""
+    number = float(token)
+    if not math.isfinite(number):
+        raise ValueError("non-finite JSON number rejected")
+    return number
+
+
 def _loads(
     text: str | bytes | bytearray,
     *,
@@ -59,7 +68,8 @@ def _loads(
         # range to float — see the docstring before routing any
         # big-int-identity data through here.
         return _orjson.loads(text)
-    return json.loads(text, parse_constant=parse_constant)
+    return json.loads(text, parse_constant=parse_constant,
+                      parse_float=None if allow_non_finite else _parse_finite_float)
 
 
 #: Default byte budget every ``load_json`` / ``load_json_with_comments``
@@ -391,7 +401,8 @@ def loads(
     parse_constant = None if allow_non_finite else _reject_non_finite
     if object_pairs_hook is not None:
         return json.loads(data, object_pairs_hook=object_pairs_hook,
-                          parse_constant=parse_constant)
+                          parse_constant=parse_constant,
+                          parse_float=None if allow_non_finite else _parse_finite_float)
     return _loads(
         data, parse_constant=parse_constant, allow_non_finite=allow_non_finite,
     )
@@ -494,7 +505,8 @@ def load_json_with_comments(
             return None
         if object_pairs_hook is not None:
             return json.loads(stripped, object_pairs_hook=object_pairs_hook,
-                              parse_constant=_reject_non_finite)
+                              parse_constant=_reject_non_finite,
+                              parse_float=_parse_finite_float)
         return _loads(stripped, parse_constant=_reject_non_finite)
     except (json.JSONDecodeError, ValueError, OSError, RecursionError) as e:
         logger.warning("load_json_with_comments: failed to parse %s: %s", p, e)
