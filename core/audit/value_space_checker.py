@@ -656,8 +656,8 @@ def _compute_gaps(
                 unhandled, consumer.consumed, consumer_norms,
             )
         else:
-            format_mismatches: list[str] = []
-            remaining_unhandled: list[str] = []
+            format_mismatches = []
+            remaining_unhandled = []
             for u in unhandled:
                 u_norm = _normalize_for_comparison(u)
                 matched = False

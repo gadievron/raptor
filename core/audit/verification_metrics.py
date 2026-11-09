@@ -11,7 +11,7 @@ import logging
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from core.hash import sha256_string
 from core.json import dumps_canonical
@@ -52,11 +52,19 @@ def record_attempt(out_dir, tool, key_parts, result, *, origin, elapsed_s, error
         logger.debug("verification attempt could not be recorded", exc_info=True)
 
 
+class _AttemptBucket(TypedDict):
+    attempts: int
+    outcomes: Counter[str]
+    origins: Counter[str]
+    reasons: Counter[str]
+    elapsed_s: float
+
+
 def summarize_attempts(records) -> dict[str, Any]:
     """Summarize observed attempts, without equating tool hits with real bugs."""
-    tools = defaultdict(lambda: {"attempts": 0, "outcomes": Counter(),
+    tools: defaultdict[str, _AttemptBucket] = defaultdict(lambda: {"attempts": 0, "outcomes": Counter(),
                                  "origins": Counter(), "reasons": Counter(), "elapsed_s": 0.0})
-    fresh_inputs = Counter()
+    fresh_inputs: Counter[tuple[str, str]] = Counter()
     total = 0
     for record in records:
         if not isinstance(record, dict) or record.get("event") != "verification_attempt":
