@@ -44,6 +44,7 @@ from core.audit.tests._live_transport import (
     skip_if_expanded_view_transport_degraded,
     skip_if_semgrep_transport_degraded,
     skip_unless_cpp_carries_probe,
+    skip_unless_semgrep_carries_probe,
 )
 
 _TESTS_DIR = Path(__file__).resolve().parent
@@ -1340,7 +1341,7 @@ class TestCppDirectionsThroughLiveBody:
 class TestCppCarryProbe:
     """The trivially expandable probe for the identity-collapsed
     surfaces: healthy toolchain returns silently and scrubs its spy
-    entries; a degraded or incapable toolchain skips."""
+    entries; transport failures skip and product failures remain hard."""
 
     @staticmethod
     def _writing_runner(cmd, **kwargs):  # noqa: ANN001, ANN003, ANN205 — subprocess.run signature
@@ -1390,12 +1391,11 @@ class TestCppCarryProbe:
                 tmp_path, cpp_probed=True, context="probe test",
             )
 
-    def test_incapable_toolchain_skips_with_probe_identity(
+    def test_product_diagnostic_fails_with_probe_identity(
         self, monkeypatch, tmp_path,
     ) -> None:
-        # A toolchain that REJECTS the trivial TU (product shape, not
-        # transport) cannot license adjudication on the collapsed
-        # surface either — the probe skips with its own identity.
+        # A rejection of this known-good TU is product-visible evidence,
+        # even when the consumer has collapsed the failure identity.
         def _diag_runner(cmd, **kwargs):  # noqa: ANN001, ANN003 — subprocess.run signature
             return subprocess.CompletedProcess(
                 cmd, 1, "", "probe.c:1:1: error: unsupported dialect",
@@ -1407,12 +1407,63 @@ class TestCppCarryProbe:
         )
         monkeypatch.setattr("core.sandbox.context.run", _diag_runner)
         with pytest.raises(
-            pytest.skip.Exception,
+            pytest.fail.Exception,
             match="cannot carry a trivial known-good TU",
         ):
             skip_unless_cpp_carries_probe(
                 tmp_path, cpp_probed=True, context="probe test",
             )
+
+
+    @pytest.mark.parametrize("reason", [
+        "could not read preprocessor output: [Errno 2] missing output",
+        "preprocessor invocation failed: malformed invocation",
+    ])
+    def test_product_failure_does_not_skip(self, monkeypatch, tmp_path, reason):
+        monkeypatch.setattr(
+            pv, "expand_translation_unit",
+            lambda **kwargs: pv.ExpandedView(ok=False, file_path="probe.c", errors=[reason]),
+        )
+        def body():
+            with pytest.raises(pytest.fail.Exception, match="known-good TU"):
+                skip_unless_cpp_carries_probe(
+                    tmp_path, cpp_probed=True, context="product control",
+                )
+        _fail_on_skip(body)
+
+
+class TestSemgrepCarryProbe:
+    @pytest.mark.parametrize("outcome,errors", [
+        ("refuted", []),
+        ("error", ["invalid rule schema"]),
+    ])
+    def test_product_failure_does_not_skip(self, monkeypatch, tmp_path, outcome, errors):
+        result = SweepResult(
+            tool="semgrep", outcome=outcome, errors=errors,
+            file_path="probe.py", function_name="probe", rule_id="probe",
+        )
+        monkeypatch.setattr("core.audit.sweep.run_semgrep_sweep", lambda **kwargs: result)
+        def body():
+            with pytest.raises(pytest.fail.Exception, match="known-matching probe"):
+                skip_unless_semgrep_carries_probe(tmp_path, context="product control")
+        _fail_on_skip(body)
+
+    @pytest.mark.parametrize("outcome,errors", [
+        ("confirmed", []),
+        ("error", ["Timeout after 45s"]),
+        ("error", ["semgrep is not installed (semgrep binary not found on PATH)"]),
+    ])
+    def test_healthy_or_transport_partition(self, monkeypatch, tmp_path, outcome, errors):
+        result = SweepResult(
+            tool="semgrep", outcome=outcome, errors=errors,
+            file_path="probe.py", function_name="probe", rule_id="probe",
+        )
+        monkeypatch.setattr("core.audit.sweep.run_semgrep_sweep", lambda **kwargs: result)
+        if outcome == "confirmed":
+            _fail_on_skip(lambda: skip_unless_semgrep_carries_probe(tmp_path, context="healthy"))
+        else:
+            with pytest.raises(pytest.skip.Exception, match="transport degraded"):
+                skip_unless_semgrep_carries_probe(tmp_path, context="transport")
 
 
 # ---------------------------------------------------------------------
