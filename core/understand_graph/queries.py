@@ -421,13 +421,16 @@ def hypothesis_seeds(
     *,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Return functions near unchecked flows, ranked by flow density."""
+    """Rank functions near flows, excluding stale source and endpoints."""
     def _do(conn, target, lim):
         # understand-shaped nodes only: a newer scan/validate snapshot
         # of the same target would blank the result otherwise.
         snapshot = _latest_snapshot(conn, target, producer="understand")
         if not snapshot:
             return []
+        stale = _stale_files_for_snapshot(
+            conn, snapshot, target or snapshot["target_path"])
+        stale_json = json_dumps(sorted(stale))
         rows = conn.execute(
             """
             SELECT n.file, n.name, n.line_start,
@@ -439,15 +442,21 @@ def hypothesis_seeds(
                          AND ep.snapshot_id = n.snapshot_id
             JOIN edges e ON (e.src_id = ep.id OR e.dst_id = ep.id)
                          AND e.kind = 'REACHES' AND e.stale = 0
+                         AND e.snapshot_id = n.snapshot_id
             LEFT JOIN nodes sk ON sk.id = e.dst_id AND sk.kind = 'sink'
             WHERE n.kind = 'function' AND n.stale = 0
               AND n.snapshot_id = ?
+              AND ep.stale = 0
+              AND n.file NOT IN (SELECT value FROM json_each(?))
+              AND (sk.id IS NULL OR (
+                  sk.stale = 0 AND sk.snapshot_id = n.snapshot_id
+                  AND sk.file NOT IN (SELECT value FROM json_each(?))))
             GROUP BY n.id
             HAVING flow_count > 0
             ORDER BY flow_count DESC
             LIMIT ?
             """,
-            (snapshot["id"], lim),
+            (snapshot["id"], stale_json, stale_json, lim),
         ).fetchall()
         return [
             {
