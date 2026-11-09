@@ -2256,6 +2256,14 @@
    "note": "The nonspace lookbehind permits only the first whitespace position after a token, preventing retries within that whitespace run. The current horizontal-spacing lane measured linear.",
    "verdict": "linear"
   },
+  "core/smt_solver/canonicalise.py\u001f_WORD_OPERATOR_RE": {
+   "digests": [
+    "477dcf0a0f88"
+   ],
+   "exp": 1.0,
+   "note": "The positive predecessor lookbehind is disjoint from the following horizontal-whitespace run, so at most its first position can match per run. Fixed operator words separate the repeats. Under IGNORECASE, extra case-folded letters remain disjoint from horizontal whitespace. The focused position-density oracle measures this identity linear; removing the predecessor guard exposes the quadratic negative control.",
+   "verdict": "linear"
+  },
   "core/startup/init.py\u001fm": {
    "digests": [
     "8c37c47787c0"
