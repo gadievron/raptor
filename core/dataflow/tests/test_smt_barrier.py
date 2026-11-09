@@ -4099,3 +4099,32 @@ def test_charset_chain_declines_nested_sink_transform(tmp_path: Path, value):
         sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("sink", [
+    "audit_log(name); return open(raw)",
+    "return open(raw, encoding=name)",
+    "return open(raw, name)",
+    "return open(raw + name)",
+    'return open(f"{raw}{name}")',
+], ids=["unrelated-call", "keyword-role", "positional-role", "mixed-concat", "mixed-format"])
+def test_charset_proof_requires_direct_sink_value(tmp_path: Path, sink):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\ndef handle(name, raw):\n" + guard
+        + "\n        return\n    " + sink + "\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace(sink, "return open(name)"))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND

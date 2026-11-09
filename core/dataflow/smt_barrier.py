@@ -2437,36 +2437,32 @@ def _bind_chain_target(
 
 
 
-def _sink_reads_chain_without_nested_calls(
+def _sink_reads_chain_directly(
     scope_root: ast.AST, chain: set, sink_line: int,
 ) -> bool:
-    """Require executable chain reads without an intervening call result.
+    """Bind the fallback proof to one unambiguous, direct sink value.
 
-    The outer sink call may consume a validated value. An inner call
-    returning the sink argument needs a separate transfer contract.
-    Callee/receiver use is not evidence that an argument is validated.
+    Without a sink-argument contract, additional arguments, transformed
+    values and multiple statements on the reported line must decline.
     """
-    nodes = list(_walk_same_scope(scope_root))
-    parents = {
-        child: parent for parent in nodes for child in ast.iter_child_nodes(parent)
-    }
-    for node in nodes:
-        if not (
-            isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-            and node.id in chain and node.lineno == sink_line
-        ):
-            continue
-        current, calls = node, 0
-        while current in parents:
-            parent = parents[current]
-            if isinstance(parent, ast.Call):
-                calls += 1
-                if current is parent.func or calls > 1:
-                    break
-            if isinstance(parent, ast.stmt):
-                return True
-            current = parent
-    return False
+    statements = [
+        node for node in _walk_same_scope(scope_root)
+        if isinstance(node, ast.stmt) and node.lineno == sink_line
+    ]
+    if len(statements) != 1:
+        return False
+    statement = statements[0]
+    if not isinstance(statement, (ast.Return, ast.Expr, ast.Assign, ast.AnnAssign)):
+        return False
+    value = statement.value
+    if isinstance(value, ast.Call):
+        if len(value.args) != 1 or value.keywords:
+            return False
+        value = value.args[0]
+    return (
+        isinstance(value, ast.Name) and isinstance(value.ctx, ast.Load)
+        and value.id in chain
+    )
 
 
 def _python_chain_reaches_sink(
@@ -2645,7 +2641,7 @@ def _python_chain_reaches_sink(
     chain -= _nested_scope_escaping_rebinds(scope_root)
     if not chain:
         return False
-    return _sink_reads_chain_without_nested_calls(scope_root, chain, sink_line)
+    return _sink_reads_chain_directly(scope_root, chain, sink_line)
 
 
 def _lexical_var_reaches_sink(
