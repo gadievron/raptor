@@ -1568,7 +1568,8 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run_semgrep_sweep") == {"_sweep"}
         assert _callers_of(calls, "run_semgrep_sweep_guarded") == {
             "test_probed_vulnerable_mod_confirms",
-            "test_probed_sanitized_mod_refutes_with_witness",
+            "test_probed_sanitized_confirm_only_mod_stays_inconclusive",
+            "test_unmarked_rule_clean_probe_has_scanned_witness",
             "test_no_hint_stays_inconclusive",
             "test_c_content_never_scanned_as_php",
             "test_partial_parse_never_refutes",
