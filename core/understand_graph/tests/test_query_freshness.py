@@ -99,13 +99,88 @@ def test_prompt_lookup_hashes_only_the_requested_file(tmp_path, monkeypatch):
     ingest_run(run, str(target), graph_path=graph)
     from core import hash as hash_mod
 
-    original = hash_mod.sha256_file
+    original = hash_mod.sha256_fileobj
     hashed = []
 
-    def track(path, *args, **kwargs):
-        hashed.append(path.name)
-        return original(path, *args, **kwargs)
+    def track(source, *args, **kwargs):
+        hashed.append(source.name)
+        return original(source, *args, **kwargs)
 
-    monkeypatch.setattr(hash_mod, "sha256_file", track)
+    monkeypatch.setattr(hash_mod, "sha256_fileobj", track)
     assert prompt_context_for_location(graph, "app.py", target_path=str(target))
-    assert hashed == ["app.py"]
+    assert len(hashed) == 1
+
+
+def test_source_symlink_outside_target_is_not_fresh(tmp_path):
+    target, _, graph = _seed(tmp_path)
+    source = target / "app.py"
+    outside = tmp_path / "outside.py"
+    outside.write_bytes(source.read_bytes())
+    source.unlink()
+    source.symlink_to(outside)
+    assert reachable_sinks(graph, str(target)) == []
+    assert prompt_context_for_location(graph, "app.py", target_path=str(target)) == ""
+
+
+def test_source_symlink_within_target_remains_fresh(tmp_path):
+    target, _, graph = _seed(tmp_path)
+    source = target / "app.py"
+    destination = target / "implementation.py"
+    source.rename(destination)
+    source.symlink_to(destination)
+    assert reachable_sinks(graph, str(target))
+    assert prompt_context_for_location(graph, "app.py", target_path=str(target))
+
+
+def test_source_directory_swap_after_containment_refuses(tmp_path, monkeypatch):
+    target, run, graph = _seed(tmp_path)
+    sub = target / "sub"
+    sub.mkdir()
+    (target / "app.py").rename(sub / "app.py")
+    for filename in ("checklist.json", "context-map.json"):
+        text = (run / filename).read_text().replace('"app.py"', '"sub/app.py"')
+        (run / filename).write_text(text)
+    ingest_run(run, str(target), graph_path=graph)
+    assert reachable_sinks(graph, str(target))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "app.py").write_bytes((sub / "app.py").read_bytes())
+    from core import paths
+
+    original = paths.confine
+    swapped = []
+
+    def swap(root, candidate):
+        resolved = original(root, candidate)
+        if not swapped:
+            sub.rename(target / "saved")
+            sub.symlink_to(outside, target_is_directory=True)
+            swapped.append(True)
+        return resolved
+
+    monkeypatch.setattr(paths, "confine", swap)
+    assert reachable_sinks(graph, str(target)) == []
+    assert swapped == [True]
+
+
+def test_target_root_swap_during_containment_refuses(tmp_path, monkeypatch):
+    target, _, graph = _seed(tmp_path)
+    assert reachable_sinks(graph, str(target))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "app.py").write_bytes((target / "app.py").read_bytes())
+    from core import paths
+
+    original = paths.confine
+    swapped = []
+
+    def swap(root, candidate):
+        if not swapped:
+            target.rename(tmp_path / "saved-root")
+            target.symlink_to(outside, target_is_directory=True)
+            swapped.append(True)
+        return original(root, candidate)
+
+    monkeypatch.setattr(paths, "confine", swap)
+    assert reachable_sinks(graph, str(target)) == []
+    assert swapped == [True]

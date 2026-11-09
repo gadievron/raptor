@@ -1498,11 +1498,13 @@ def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
     if not target_path:
         return set()
     try:
-        from core.hash import sha256_file
+        from core.hash import sha256_fileobj
+        from core.paths import confine
+        from core.source import open_regular_beneath
     except Exception:
         return set()
     stale: set[str] = set()
-    target = Path(target_path)
+    target = Path(target_path).resolve()
     rows = conn.execute(
         "SELECT file, props_json FROM nodes WHERE snapshot_id=? AND kind='file'",
         (snapshot["id"],),
@@ -1517,13 +1519,18 @@ def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
         expected = props.get("sha256")
         if not rel or not expected:
             continue
-        full = target / rel
-        if not full.is_file():
+        full = confine(target, rel)
+        if full is None:
             stale.add(rel)
             continue
         try:
-            if sha256_file(full) != expected:
+            source = open_regular_beneath(target, full.relative_to(target), "rb")
+            if source is None:
                 stale.add(rel)
-        except OSError:
+                continue
+            with source:
+                if sha256_fileobj(source) != expected:
+                    stale.add(rel)
+        except (OSError, ValueError):
             stale.add(rel)
     return stale
