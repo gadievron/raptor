@@ -408,7 +408,6 @@ class TestStampFileGatedRead:
 
     def test_fifo_findings_skipped_not_hung(self, tmp_path):
         import os as _os
-        import signal as _signal
 
         if not hasattr(_os, "mkfifo"):
             pytest.skip("platform lacks mkfifo")
@@ -419,11 +418,8 @@ class TestStampFileGatedRead:
             msg = "stamping blocked on a planted FIFO"
             raise AssertionError(msg)
 
-        old = _signal.signal(_signal.SIGALRM, _on_alarm)
-        _signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             counts = stamp_findings_in_run(tmp_path)
-        finally:
-            _signal.alarm(0)
-            _signal.signal(_signal.SIGALRM, old)
         assert counts["files_stamped"] == 0

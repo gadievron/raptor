@@ -404,7 +404,6 @@ def test_fifo_binary_path_does_not_hang_scoring(tmp_path):
     # planted FIFO must be treated as unhashable, not block the
     # scoring loop at the open.
     import os as _os
-    import signal as _signal
 
     import pytest
 
@@ -418,14 +417,11 @@ def test_fifo_binary_path_does_not_hang_scoring(tmp_path):
         raise AssertionError(msg)
 
     w = _make_witness({}, target_binary_hash="ab" * 32)
-    old = _signal.signal(_signal.SIGALRM, _on_alarm)
-    _signal.alarm(30)
-    try:
+    from core.testing.signals import alarm_after
+
+    with alarm_after(30, _on_alarm):
         score, _ = score_witness_for_finding(
             w, {"binary_path": str(fifo)})
-    finally:
-        _signal.alarm(0)
-        _signal.signal(_signal.SIGALRM, old)
     assert score == 0
 
 

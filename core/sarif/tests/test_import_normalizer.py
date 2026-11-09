@@ -1595,7 +1595,6 @@ class TestSnippetSourceGating:
         # is the swap-race / defence-in-depth layer — exercise the
         # reader directly.
         import os as _os
-        import signal as _signal
 
         if not hasattr(_os, "mkfifo"):
             import pytest
@@ -1609,13 +1608,10 @@ class TestSnippetSourceGating:
             msg = "snippet synthesis blocked on a planted FIFO"
             raise AssertionError(msg)
 
-        old = _signal.signal(_signal.SIGALRM, _on_alarm)
-        _signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             snippet = _synthesize_snippet(tmp_path, "trap.c", 1, None)
-        finally:
-            _signal.alarm(0)
-            _signal.signal(_signal.SIGALRM, old)
         assert snippet == ""
 
     def test_regular_file_snippet_still_synthesized(self, tmp_path):

@@ -14,7 +14,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import signal
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -79,13 +78,10 @@ class TestLoadSuppressionRecords:
             raise AssertionError(
                 "reader blocked on a reader-less FIFO — the "
                 "non-blocking regularity gate regressed")
-        old = signal.signal(signal.SIGALRM, _boom)
-        signal.alarm(20)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(20, _boom):
             assert cli._load_suppression_records(tmp_path, "a", "f") == []
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
 
     def test_symlink_at_trail_path_refused(
             self, cli, tmp_path: Path) -> None:

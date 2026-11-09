@@ -687,7 +687,6 @@ class TestBindingNonceRead:
     hanging every graded verifier, and cap what it buffers."""
 
     def test_fifo_binding_refused_not_hung(self, tmp_path):
-        import signal as _signal
 
         if not hasattr(os, "mkfifo"):
             pytest.skip("platform lacks mkfifo")
@@ -697,13 +696,10 @@ class TestBindingNonceRead:
             msg = "nonce read blocked on a planted FIFO"
             raise AssertionError(msg)
 
-        old = _signal.signal(_signal.SIGALRM, _on_alarm)
-        _signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             assert prov._read_run_nonce(tmp_path) is None
-        finally:
-            _signal.alarm(0)
-            _signal.signal(_signal.SIGALRM, old)
 
     def test_oversize_binding_malformed_not_buffered(self, tmp_path):
         (tmp_path / ".witness-binding").write_text("a" * 1_000_000)
