@@ -11,6 +11,7 @@ from .schema import (
     EDGE_PROVENANCE_MECHANICAL,
     json_loads,
     json_dumps,
+    stable_key,
 )
 from .store import query_graph
 
@@ -1505,10 +1506,19 @@ def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
         return set()
     stale: set[str] = set()
     target = Path(target_path).resolve()
-    rows = conn.execute(
-        "SELECT file, props_json FROM nodes WHERE snapshot_id=? AND kind='file'",
-        (snapshot["id"],),
-    ).fetchall()
+    if only_file is None:
+        rows = conn.execute(
+            "SELECT file, props_json FROM nodes WHERE snapshot_id=? AND kind='file'",
+            (snapshot["id"],),
+        ).fetchall()
+    else:
+        # The producer keys file nodes by checklist path. Reuse the
+        # stable-key index rather than decode every file's properties.
+        rows = conn.execute(
+            "SELECT file, props_json FROM nodes WHERE snapshot_id=? "
+            "AND kind='file' AND stable_key=?",
+            (snapshot["id"], stable_key("file", only_file)),
+        ).fetchall()
     for row in rows:
         props = json_loads(row["props_json"])
         rel = props.get("path") or row["file"]

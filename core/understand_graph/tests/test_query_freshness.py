@@ -184,3 +184,31 @@ def test_target_root_swap_during_containment_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "confine", swap)
     assert reachable_sinks(graph, str(target)) == []
     assert swapped == [True]
+
+
+def test_point_lookup_does_not_decode_unrelated_file_metadata(tmp_path, monkeypatch):
+    target, run = tmp_path / "target", tmp_path / "run"
+    _write_fixture_run(run, target)
+    checklist = json.loads((run / "checklist.json").read_text())
+    checklist["files"].extend({
+        "path": f"unrelated-{i}.py", "sha256": "0" * 64, "performance_noise": True,
+    } for i in range(1000))
+    checklist["total_files"] = len(checklist["files"])
+    (run / "checklist.json").write_text(json.dumps(checklist))
+    graph = ingest_run(run, str(target), graph_path=tmp_path / "graph.sqlite")
+    from core.understand_graph import queries
+
+    original = queries.json_loads
+    unrelated = []
+
+    def count(value):
+        props = original(value)
+        if isinstance(props, dict) and props.get("performance_noise"):
+            unrelated.append(True)
+        return props
+
+    monkeypatch.setattr(queries, "json_loads", count)
+    assert "SINK-001" in prompt_context_for_location(graph, "app.py", target_path=str(target))
+    assert unrelated == []
+    (target / "app.py").write_text("# changed source\n")
+    assert prompt_context_for_location(graph, "app.py", target_path=str(target)) == ""
