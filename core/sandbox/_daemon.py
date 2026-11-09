@@ -156,6 +156,10 @@ def _read_frame(fd: int) -> dict | None:
 # Scope it to dispatch so direct helper calls have no ambient channel state.
 _REQUEST_CHANNEL_FDS = ()
 _CHANNEL_WAIT_TICK_S = 0.05
+_RETAIN_REQUEST_GROUP = all(hasattr(os, name) for name in (
+    "waitid", "P_PID", "WEXITED", "WNOHANG", "WNOWAIT",
+    "CLD_EXITED", "CLD_KILLED", "CLD_DUMPED",
+))
 
 
 class _RequestAbandoned(BaseException):
@@ -727,6 +731,61 @@ def _recv_until(proc, terminator, per_recv_timeout: float,
     return bytes(buf)
 
 
+def _request_returncode(proc: subprocess.Popen) -> int | None:
+    """Read the observed status without pretending the leader was reaped."""
+    observed = getattr(proc, "_request_exit_status", None)
+    return observed if isinstance(observed, int) else proc.returncode
+
+
+def _wait_request_exit(proc: subprocess.Popen, timeout: float) -> int:
+    """Observe request exit while retaining its group leader for retirement.
+
+    Request targets have one reaper: _kill_request_group. WNOWAIT keeps an
+    exited leader's number allocated until that owner signals the group.
+    Plain Popen callers and platforms without WNOWAIT retain their existing
+    wait behaviour; no retained-group guarantee is made on that fallback.
+    """
+    deadline = time.monotonic() + timeout
+    if not getattr(proc, "_retain_request_group", False):
+        if not _REQUEST_CHANNEL_FDS:
+            return proc.wait(timeout=timeout)
+        while True:
+            _check_request_channel()
+            remaining = max(deadline - time.monotonic(), 0)
+            try:
+                return proc.wait(timeout=min(remaining, _CHANNEL_WAIT_TICK_S))
+            except subprocess.TimeoutExpired:
+                if time.monotonic() >= deadline:
+                    raise
+    delay = 0.0005
+    while True:
+        _check_request_channel()
+        if proc.returncode is not None:
+            return proc.returncode  # Already retired by timeout cleanup.
+        try:
+            status = os.waitid(
+                os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except InterruptedError:
+            status = None
+        except ChildProcessError as error:
+            raise RuntimeError("request target reaped before group retirement") from error
+        if status is not None and status.si_pid:
+            if status.si_code == os.CLD_EXITED:
+                code = status.si_status
+            elif status.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
+                code = -status.si_status
+            else:
+                raise RuntimeError("unexpected request target wait status")
+            setattr(proc, "_request_exit_status", code)
+            return code
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout)
+        time.sleep(min(delay, remaining, _CHANNEL_WAIT_TICK_S))
+        delay = min(delay * 2, _CHANNEL_WAIT_TICK_S)
+
+
 def _communicate_capped(
     proc: subprocess.Popen,
     stdin_bytes: bytes,
@@ -854,21 +913,10 @@ def _communicate_capped(
             if not view:
                 _close_stdin()
 
-    if _REQUEST_CHANNEL_FDS:
-        while True:
-            _check_request_channel()
-            remaining = max(deadline - time.monotonic(), 0)
-            try:
-                proc.wait(timeout=min(remaining, _CHANNEL_WAIT_TICK_S))
-                break
-            except subprocess.TimeoutExpired:
-                if time.monotonic() >= deadline:
-                    raise _timeout_exc() from None
-    else:
-        try:
-            proc.wait(timeout=max(deadline - time.monotonic(), 0))
-        except subprocess.TimeoutExpired:
-            raise _timeout_exc() from None
+    try:
+        _wait_request_exit(proc, max(deadline - time.monotonic(), 0))
+    except subprocess.TimeoutExpired:
+        raise _timeout_exc() from None
     return (_got(out_fd), _got(err_fd),
             _truncated(out_fd), _truncated(err_fd))
 
@@ -1045,11 +1093,17 @@ def _spawn_request_target(argv: list) -> subprocess.Popen:
     sandbox, retaining pipes and mutating shared state.
     """
     _check_request_channel()
-    return subprocess.Popen(
+    proc = subprocess.Popen(
         argv,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         start_new_session=True,
     )
+    try:
+        setattr(proc, "_retain_request_group", _RETAIN_REQUEST_GROUP)
+        return proc
+    except BaseException:
+        _retire_request_target(proc)
+        raise
 
 
 def _kill_request_group(proc: subprocess.Popen) -> None:
@@ -1059,6 +1113,20 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
     spawn/probe/conversation handlers. ESRCH — the group already
     fully exited — is the common case and is suppressed.
     """
+    if _RETAIN_REQUEST_GROUP and proc.returncode is not None:
+        return  # A consumed leader no longer owns its numeric group name.
+    deadline = time.monotonic() + 1.0
+    if _RETAIN_REQUEST_GROUP:
+        while True:
+            try:
+                os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                break
+            except ChildProcessError:
+                return
+            except InterruptedError:
+                if time.monotonic() >= deadline:
+                    _log("request group ownership unconfirmed before cleanup deadline")
+                    return
     try:
         os.killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1067,7 +1135,7 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
         _log(f"killpg({proc.pid}) failed: {e}")
     if proc.poll() is None:
         try:
-            proc.wait(timeout=1)
+            proc.wait(timeout=max(0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
             _log(f"request target {proc.pid} unreaped after SIGKILL")
 
@@ -1124,7 +1192,7 @@ def _handle_spawn(payload: dict) -> dict:
             stdout, stderr, out_trunc, err_trunc = _communicate_capped(
                 proc, stdin_bytes, timeout,
             )
-            returncode: int | None = proc.returncode
+            returncode: int | None = _request_returncode(proc)
             timed_out = False
         except subprocess.TimeoutExpired as e:
             stdout, stderr, out_trunc, err_trunc = _finish_timed_out_capture(
@@ -1297,7 +1365,7 @@ def _handle_probe(payload: dict) -> dict:
         stdout_trunc = stdout_trunc or pushback_trunc
         stdout_buf += tail_stdout
         exit_class = _classify_exit(
-            proc.returncode, target_stderr, timed_out)
+            _request_returncode(proc), target_stderr, timed_out)
     finally:
         _retire_request_target(proc)
 
@@ -1477,7 +1545,7 @@ def _handle_conversation(payload: dict) -> dict:
         stdout_trunc = stdout_trunc or pushback_trunc
         stdout_buf += tail_stdout
         exit_class = _classify_exit(
-            proc.returncode, target_stderr, timed_out)
+            _request_returncode(proc), target_stderr, timed_out)
     finally:
         _retire_request_target(proc)
 
