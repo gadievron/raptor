@@ -525,10 +525,18 @@ class TestRunReportStats:
 
 
 class TestCliWiring:
-    def test_analyze_cli_defines_and_threads_the_flag(self):
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_analyze_cli_defines_and_threads_the_flag(self, enabled):
         import inspect
+        from packages.llm_analysis.cli import build_parser
+
+        options = ["--repo", "target", "--findings", "findings.json"]
+        if enabled:
+            options.append("--context-expansion")
+        args = build_parser().parse_args(options)
+        assert args.context_expansion is enabled
+
         src = inspect.getsource(agent_mod.main)
-        assert '"--context-expansion"' in src
         assert "context_expansion=args.context_expansion" in src
 
     def test_agentic_forwards_only_on_sequential(self):

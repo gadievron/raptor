@@ -697,10 +697,18 @@ class TestTranscriptRoundTrip:
 
 
 class TestCliWiring:
-    def test_analyze_cli_defines_and_threads_the_flag(self):
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_analyze_cli_defines_and_threads_the_flag(self, enabled):
         import inspect
+        from packages.llm_analysis.cli import build_parser
+
+        options = ["--repo", "target", "--findings", "findings.json"]
+        if enabled:
+            options.append("--context-toolloop")
+        args = build_parser().parse_args(options)
+        assert args.context_toolloop is enabled
+
         src = inspect.getsource(agent_mod.main)
-        assert '"--context-toolloop"' in src
         assert "context_toolloop=args.context_toolloop" in src
         # The /analyze console summary surfaces the loop counters
         # (the eval protocol reads them).
