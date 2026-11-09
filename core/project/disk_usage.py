@@ -1,8 +1,13 @@
 """Allocated-space estimates for project views and completed cleanup receipts."""
+from collections.abc import Generator
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
 import stat
+from typing import cast
+
+
+_WalkRow = tuple[str, list[str], list[str]] | tuple[str, list[str], list[str], int]
 
 
 _MAX_USAGE_RECORDS = 1_000_000
@@ -153,8 +158,9 @@ def scan_usage(root: Path) -> Usage:
         usage.incomplete = True
     anchored = callable(getattr(os, 'fwalk', None))
     try:
-        walker = (os.fwalk(root, follow_symlinks=False, onerror=failed) if anchored
-                  else os.walk(root, followlinks=False, onerror=failed))
+        walker = cast(Generator[_WalkRow, None, None],
+                      os.fwalk(root, follow_symlinks=False, onerror=failed) if anchored
+                      else os.walk(root, followlinks=False, onerror=failed))
     except OSError:
         usage.incomplete = True
         return usage
@@ -164,7 +170,7 @@ def scan_usage(root: Path) -> Usage:
             for row in walker:
                 path, directories, files = row[:3]
                 try:
-                    parent = os.fstat(row[3]) if anchored else os.lstat(path)
+                    parent = os.fstat(cast(tuple[str, list[str], list[str], int], row)[3]) if anchored else os.lstat(path)
                     parent_key = _key(parent, path)
                     if (not stat.S_ISDIR(parent.st_mode)
                             or expected.get(str(path)) != parent_key):
@@ -175,7 +181,7 @@ def scan_usage(root: Path) -> Usage:
                     for name in directories + files:
                         item = Path(path) / name
                         try:
-                            info = (os.stat(name, dir_fd=row[3], follow_symlinks=False) if anchored
+                            info = (os.stat(name, dir_fd=cast(tuple[str, list[str], list[str], int], row)[3], follow_symlinks=False) if anchored
                                     else item.lstat())
                         except OSError:
                             usage.incomplete = True

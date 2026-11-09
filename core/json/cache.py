@@ -383,12 +383,13 @@ class JsonCache:
             return
         if not complete:
             return
+        current_marker: os.stat_result | None
         try:
             try:
-                marker = sentinel.lstat()
+                current_marker = sentinel.lstat()
             except FileNotFoundError:
-                marker = None
-            if marker is not None and (not stat.S_ISREG(marker.st_mode) or marker.st_nlink != 1):
+                current_marker = None
+            if current_marker is not None and (not stat.S_ISREG(current_marker.st_mode) or current_marker.st_nlink != 1):
                 return
             # Atomic replacement never follows a planted link, even if the
             # marker changes after the lstat. Its contents are not cache data.

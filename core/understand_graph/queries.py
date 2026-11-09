@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any, BinaryIO, Optional, Sequence, cast
 
 from .schema import (
     EDGE_PROVENANCE_MECHANICAL,
@@ -1529,7 +1529,7 @@ def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
                 stale.add(rel)
                 continue
             with source:
-                if sha256_fileobj(source) != expected:
+                if sha256_fileobj(cast(BinaryIO, source)) != expected:
                     stale.add(rel)
         except (OSError, ValueError):
             stale.add(rel)

@@ -513,7 +513,7 @@ def main(argv=None) -> int:
     sanitise_for_terminal = _terminal_sanitizer()
     try:
         selected = records(args.limit + 1)
-        counts = {}
+        counts: dict[str, int] = {}
         inspected = 0
         if args.session:
             node = _open_registry()

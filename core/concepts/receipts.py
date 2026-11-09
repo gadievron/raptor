@@ -139,7 +139,7 @@ def locate_quote_in_snippets(quote: str, snippets) -> tuple[str, int | None] | N
     norm = _normalise(quote)
     if len(norm) < MIN_QUOTE_CHARS:
         return None
-    locations = {}
+    locations: dict[str, int | None] = {}
     for file, line, text in snippets:
         if file and text and norm in _normalise(text):
             locations.setdefault(file, line)
