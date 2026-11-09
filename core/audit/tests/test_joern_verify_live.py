@@ -137,13 +137,19 @@ def live(tmp_path_factory):
         joern_tunables,
     )
     from packages.joern.server import JoernServer
+    from packages.joern.tunables import JoernTunables
 
     target = tmp_path_factory.mktemp("verify-target")
     (target / "copy.c").write_text(_FIXTURE)
-    srv = JoernServer.from_tunables(joern_tunables())
+    # This small graph needs a bounded test heap, not a host-sized heap
+    # reservation per parallel server. Keep parser/import timeout defaults.
+    server_tunables = joern_tunables({"heap_mb": 1024})
+    assert server_tunables is not None and server_tunables.heap_mb == 1024
+    cpg_tunables = JoernTunables(heap_mb=1024)
+    srv = JoernServer.from_tunables(server_tunables)
     srv.start()
     try:
-        assert _ensure_cpg_loaded(srv, target) is True
+        assert _ensure_cpg_loaded(srv, target, tunables=cpg_tunables) is True
     except BaseException:
         srv.stop()
         raise
