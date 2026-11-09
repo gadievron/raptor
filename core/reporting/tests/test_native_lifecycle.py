@@ -71,3 +71,17 @@ def test_published_native_alias_context_and_document_share_bound_snapshot(tmp_pa
     assert not publication.errors
     context, document, _ = load_committed_report(tmp_path)
     assert context.run_id == identity["run_id"] and context.snapshot_id == document.snapshot_id
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_native_captured_lifecycle_does_not_reload_a_replaced_execution(tmp_path, monkeypatch, available):
+    from core.reporting import lifecycle
+    original = _metadata(tmp_path)
+    captured = {"command": "understand", "reporting_identity": original} if available else {}
+    replacement = _metadata(tmp_path)
+    assert replacement != original
+    monkeypatch.setattr(lifecycle, "load_run_metadata", lambda directory: pytest.fail("captured lifecycle must not be reloaded"))
+    context, _ = NativeResult("binary-map", "target", "unknown", {}, lifecycle_dir=tmp_path,
+                              lifecycle_producer="understand", lifecycle_metadata=captured).build()
+    assert context.run_id == (original["run_id"] if available else "unknown")
+    assert context.run_id != replacement["run_id"]
