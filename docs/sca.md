@@ -1450,3 +1450,11 @@ command. Matching a suppression is not validation of its security rationale;
 an orphan is relative to the supplied findings file and does not prove a
 vulnerability was fixed. Missing overlays and unreadable findings retain
 their existing nonzero exit codes. Reporting does not reload either input.
+
+`triage` accepts explicit report options for candidate listing, optional LLM
+triage and reviewed-legit re-audits. Reports keep near-name heuristics, LLM
+proposals and gate dispositions separate; a suspected typosquat still needs
+the existing human confirmation before denylisting. Missing feed coverage
+and unavailable LLM triage stay visible. Reporting neither requests another
+LLM verdict nor repeats curation writes, and preserves the native empty
+Markdown output used by refresh workflows.

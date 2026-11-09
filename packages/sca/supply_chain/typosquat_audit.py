@@ -299,6 +299,7 @@ def run_llm_triage(
     results: dict[str, list[Candidate]],
     *,
     reviewed_legit_path: Path,
+    capture: dict | None = None,
 ) -> str:
     """Stage 3→A→4 over the pending candidates (operator-side, needs an LLM).
     Auto-files legit verdicts to reviewed-legit; renders the squat-confirm +
@@ -314,6 +315,12 @@ def run_llm_triage(
         triage_ecosystem,
     )
     llm = get_llm_client()
+    captured_outcomes: dict[str, list] = {}
+    outcome_counts: dict[str, int] = {}
+    gate_counts: dict[str, int] = {}
+    if capture is not None:
+        capture.update(llm_available=llm is not None, outcomes=captured_outcomes,
+                       outcome_counts=outcome_counts, gate_counts=gate_counts)
     if llm is None:
         return ("No LLM model configured — cannot triage; listing candidates "
                 "only.\n\n" + render_text(results))
@@ -323,6 +330,8 @@ def run_llm_triage(
     except AttributeError:
         # Duck-typed probe: client doubles may lack the config chain.
         pass
+    if capture is not None:
+        capture["model"] = model_label
     http = default_client()
     cache = JsonCache(root=sca_cache_root())
     clients = _registry_clients(http, cache)
@@ -342,7 +351,14 @@ def run_llm_triage(
             verdict_fn=make_llm_verdict_fn(llm, eco),
             reviewed_legit_path=reviewed_legit_path, model=model_label,
         )
+        if capture is not None:
+            from .triage_reporting import DETAIL_LIMIT
+            captured_outcomes[eco] = outcomes[:DETAIL_LIMIT]
+            outcome_counts[eco] = len(outcomes)
         for o in outcomes:
+            if capture is not None:
+                disposition = o.gate_result.disposition.value
+                gate_counts[disposition] = gate_counts.get(disposition, 0) + 1
             line = (f"[{eco}] {o.candidate.name} ~ {o.candidate.near_twin} "
                     f"— {o.gate_result.reason}")
             if o.gate_result.disposition is Disposition.AUTO_LEGIT:
@@ -396,7 +412,7 @@ def _render_reaudit_llm(enriched: dict[str, list]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
+def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False, capture: dict | None = None) -> str:
     """Step-3 re-audit. Tier 1 (mechanical, no LLM): re-check every
     reviewed-legit entry's current registry state and flag contradictions.
     Tier 2 (``use_llm``, operator-side): re-examine the flagged entries with the
@@ -424,12 +440,16 @@ def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
         reviewed_legit_path, list(clients),
         get_metadata=_gm, osv_malicious_fn=lambda e, n: osv_malicious(http, e, n))
 
+    if capture is not None:
+        capture["flags"] = flagged
     if not use_llm:
         return _render_reaudit(flagged)
 
     # Tier 2 — LLM re-examination of just the flagged entries (cheap; usually 0).
     from ..llm import get_llm_client
     llm = get_llm_client()
+    if capture is not None:
+        capture["llm_available"] = llm is not None
     if llm is None:
         return (_render_reaudit(flagged)
                 + "\n(no LLM configured — Tier-1 mechanical flags only)\n")
@@ -458,6 +478,8 @@ def run_reaudit(reviewed_legit_path: Path, *, use_llm: bool = False) -> str:
         enriched[eco] = run_parallel(
             list(items), _do_one, label="typosquat-reaudit",
         )
+    if capture is not None:
+        capture["reexamined"] = enriched
     return _render_reaudit_llm(enriched)
 
 
@@ -496,7 +518,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "format writes an empty file when there are no "
                         "candidates; text writes a short no-candidates note)")
     p.add_argument("-v", "--verbose", action="count", default=0)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
+    options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    capture: dict | None = {} if options.enabled and options.output is not None else None
+    args._report_ecosystems = tuple(_RANKED_FETCHERS)
 
     # Escaping console formatter — see core.logging.configure_cli_logging.
     configure_cli_logging(logging.WARNING - 10 * min(args.verbose, 2))
@@ -505,14 +534,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Re-audit re-checks the reviewed-legit list, not the candidate feeds,
         # so it skips the feed fetch entirely. ``--llm`` adds the Tier-2
         # re-examination of flagged entries.
-        report = run_reaudit(_REVIEWED_LEGIT_PATH, use_llm=args.llm)
+        report = (run_reaudit(_REVIEWED_LEGIT_PATH, use_llm=args.llm, capture=capture) if capture is not None
+                  else run_reaudit(_REVIEWED_LEGIT_PATH, use_llm=args.llm))
     else:
         http = UrllibClient()
         results = audit(http, args.only, top_n=args.top_n, ratio=args.ratio,
                         min_pos=args.min_pos, min_len=args.min_len)
+        if capture is not None:
+            capture["candidates"] = results
         if args.llm:
-            report = run_llm_triage(results,
-                                    reviewed_legit_path=_REVIEWED_LEGIT_PATH)
+            report = (run_llm_triage(results, reviewed_legit_path=_REVIEWED_LEGIT_PATH, capture=capture) if capture is not None
+                      else run_llm_triage(results, reviewed_legit_path=_REVIEWED_LEGIT_PATH))
         else:
             report = (render_markdown if args.format == "markdown"
                       else render_text)(results)
@@ -522,6 +554,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.out.write_text(report, encoding="utf-8")
     else:
         sys.stdout.write(report)
+    if capture is not None:
+        from .triage_reporting import complete_triage_report
+        complete_triage_report(args, options, capture, denylist_path=_DENYLIST_PATH,
+                               reviewed_legit_path=_REVIEWED_LEGIT_PATH)
     return 0
 
 
