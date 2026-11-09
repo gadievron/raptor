@@ -1,10 +1,12 @@
 """Bounded capture for the plain subprocess executor's owned pipe streams."""
 
 import codecs
+from collections.abc import Callable
 import errno
 import os
 import subprocess
 import time
+from typing import Protocol, cast
 
 from ._pipe_poll import ready_fds
 
@@ -50,6 +52,13 @@ def limit_result(result, cap: int) -> None:
     result._capture_limit_snapshot = (cap, result.stdout, result.stderr)
 
 
+class _TextCaptureMetadata(Protocol):
+    # Text-mode Popen supplies these attributes at runtime; its stubs omit
+    # them. Binary capture does not enter this decoding path.
+    encoding: str
+    errors: str | None
+
+
 class BoundedCommunicator:
     """Drain owned PIPEs while retaining at most cap bytes per output.
 
@@ -63,10 +72,10 @@ class BoundedCommunicator:
 
     def __init__(self, cap: int) -> None:
         self.cap = cap
-        self.proc = None
-        self._buffers = {}
-        self._truncated = {}
-        self._readers = {}
+        self.proc: subprocess.Popen[str] | subprocess.Popen[bytes] | None = None
+        self._buffers: dict[str, bytearray] = {}
+        self._truncated: dict[str, bool] = {}
+        self._readers: dict[int, str] = {}
         self._attached = False
         self._input_started = False
         self._input_stopped = False
@@ -110,15 +119,22 @@ class BoundedCommunicator:
         self._truncated[label] |= len(chunk) > room
 
     def outputs(self, *, text: bool = False):
-        values = []
+        values: list[bytes | str | None] = []
         for label in ("stdout", "stderr"):
             if label not in self._buffers:
                 values.append(None)
                 continue
             raw = bytes(self._buffers[label])
-            value = raw
+            value: bytes | str = raw
             if text:
-                decoder = codecs.getincrementaldecoder(self.proc.encoding)(self.proc.errors)
+                proc = cast(_TextCaptureMetadata, self.proc)
+                # Popen retains None for the default error policy. Preserve
+                # that value for codecs even though the factory stub is narrower.
+                decoder_factory = cast(
+                    Callable[[str | None], codecs.IncrementalDecoder],
+                    codecs.getincrementaldecoder(proc.encoding),
+                )
+                decoder = decoder_factory(proc.errors)
                 # A cap can split a valid encoded character. Keep the complete
                 # decoded prefix; an untruncated malformed stream still errors.
                 value = decoder.decode(raw, final=not self._truncated[label])
