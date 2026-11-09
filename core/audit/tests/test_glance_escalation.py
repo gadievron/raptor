@@ -311,7 +311,10 @@ class TestGlanceEscalationCapDerivation:
             count = per_file + (1 if i < rem else 0)
             files.append({
                 "path": f"src/f{i}.c",
-                "items": [{"name": f"fn_{i}_{j}"} for j in range(count)],
+                # Cap derivation counts slots, never item metadata. Keep
+                # the full list length without allocating a million names
+                # and dictionaries; these tests do not mutate descriptors.
+                "items": [{"name": f"fn_{i}"}] * count,
             })
         return SimpleNamespace(checklist={"files": files})
 
