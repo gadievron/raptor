@@ -192,7 +192,7 @@ class TestCrossThreadRestore:
             await asyncio.wait_for(waiter, timeout=2.0)
             assert t._effective == 4
 
-        asyncio.run(scenario())
+        asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
 
     def test_restore_on_loop_thread_still_sets_event(self):
         async def scenario():
@@ -206,7 +206,7 @@ class TestCrossThreadRestore:
             assert event.is_set()
             assert t._effective == 4
 
-        asyncio.run(scenario())
+        asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
 
     def test_restore_without_event_is_noop(self):
         """Sync-only usage never creates the event — restore must not
@@ -235,7 +235,7 @@ class TestAsyncAcquire:
         async def run():
             await asyncio.gather(*(worker() for _ in range(6)))
 
-        asyncio.run(run())
+        asyncio.run(run(), loop_factory=asyncio.new_event_loop)
         assert peak[0] <= 2
 
     def test_acquire_respects_throttle(self):
@@ -255,7 +255,7 @@ class TestAsyncAcquire:
         async def run():
             await asyncio.gather(*(worker() for _ in range(8)))
 
-        asyncio.run(run())
+        asyncio.run(run(), loop_factory=asyncio.new_event_loop)
         assert peak[0] <= 2
 
     def test_mid_flight_throttle_down(self):
@@ -280,7 +280,7 @@ class TestAsyncAcquire:
         async def run():
             await asyncio.gather(*(worker(i) for i in range(8)))
 
-        asyncio.run(run())
+        asyncio.run(run(), loop_factory=asyncio.new_event_loop)
         assert peak_after_signal[0] <= 4
 
     def test_in_flight_tracking(self):
@@ -295,7 +295,7 @@ class TestAsyncAcquire:
                 assert t.in_flight == 1
             assert t.in_flight == 0
 
-        asyncio.run(run())
+        asyncio.run(run(), loop_factory=asyncio.new_event_loop)
 
     def test_restore_unblocks_waiters(self):
         """A cooldown restore must admit a parked waiter with NO slot
@@ -347,7 +347,7 @@ class TestAsyncAcquire:
             )
             assert t.in_flight == 0
 
-        asyncio.run(scenario())
+        asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
 
 
 class TestAcquireLivelockAndMixedWakeups:

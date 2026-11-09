@@ -193,7 +193,7 @@ class TestLookupPeerUidHotPath:
 
     @staticmethod
     def _run(coro):
-        return asyncio.run(coro)
+        return asyncio.run(coro, loop_factory=asyncio.new_event_loop)
 
     def test_inline_path_uses_module_seam(self, monkeypatch):
         """With netlink usable the lookup runs inline AND through the
@@ -357,7 +357,7 @@ class TestLookupPeerUidHotPath:
             release.set()
             return await asyncio.gather(*wave1, *wave2)
 
-        results = asyncio.run(driver())
+        results = asyncio.run(driver(), loop_factory=asyncio.new_event_loop)
         assert results == [4242] * 24, "a lookup lost its verdict"
         assert state["started"] == 24, "a lookup skipped its scan"
         assert state["max"] == bound, (
