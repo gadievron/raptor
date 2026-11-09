@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 import importlib.util
 import json
 import os
@@ -11,6 +13,7 @@ import secrets
 import stat
 import subprocess
 import sys
+from typing import IO
 
 _restored = False
 _metadata_path: Path | None = None
@@ -49,6 +52,43 @@ def _open_directory(path: Path, *, create: bool = False) -> int:
         raise
 
 
+
+@contextmanager
+def _owned_writer(
+    fd: int, mode: str = 'w', *, fdopen: Callable[..., IO] | None = None,
+    close_fd: Callable[[int], None] | None = None,
+) -> Iterator[IO]:
+    """Own a writer before adoption, retaining the standalone stdlib boundary.
+
+    The native wrapper borrows its descriptor. Retire each independently and
+    preserve the operation error if either cleanup also fails. Callbacks keep
+    delegated writers bound to their own consumer's OS view.
+    """
+    failed = False
+    try:
+        stream = (os.fdopen if fdopen is None else fdopen)(fd, mode, closefd=False)
+        try:
+            yield stream
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                stream.close()
+            except BaseException:
+                if not failed:
+                    raise
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            (os.close if close_fd is None else close_fd)(fd)
+        except BaseException:
+            if not failed:
+                raise
+
+
 def create(session_root: Path, *, protected: bool = False) -> Path:
     """Populate a freshly-created launcher directory, without reusing files."""
     root = session_root.resolve(strict=True)
@@ -65,7 +105,7 @@ def create(session_root: Path, *, protected: bool = False) -> Path:
         try:
             target = os.open('launch.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600, dir_fd=meta)
-            with os.fdopen(target, 'w') as stream:
+            with _owned_writer(target) as stream:
                 json.dump({'v': 1, 'tmpdir': str(root / 'tmp'), 'protected': protected}, stream)
         finally:
             os.close(meta)
@@ -383,7 +423,7 @@ def issue(base: Path, metadata: Path, pid: int) -> str:
         issuer_fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
         fd = os.open(str(pid), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=issuer_fd)
-        with os.fdopen(fd, 'w') as stream:
+        with _owned_writer(fd) as stream:
             json.dump({'v': 1, 'identity': identity, 'metadata': str(metadata), 'token': token}, stream)
     finally:
         if issuer_fd is not None:

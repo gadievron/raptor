@@ -130,36 +130,18 @@ def _write(node: int, name: str, value: dict) -> None:
     raw = json.dumps(value, separators=(',', ':')).encode()
     if len(raw) > MAX_RECORD:
         raise ValueError('oversized scratch control record')
+    write_owned = scratch()._owned_writer
     temporary = '.write-' + secrets.token_hex(16)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                  0o600, dir_fd=node)
-    descriptor_owned = True
-    stream = None
     try:
-        # Keep the raw descriptor owned even if wrapping only partly succeeds.
-        stream = os.fdopen(fd, 'wb', closefd=False)
-        stream.write(raw)
-        stream.flush()
-        os.fsync(stream.fileno())
-        closing_stream, stream = stream, None
-        closing_stream.close()
-        descriptor_owned = False
-        os.close(fd)
+        with write_owned(fd, 'wb', fdopen=os.fdopen, close_fd=lambda value: os.close(value)) as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(temporary, name, src_dir_fd=node, dst_dir_fd=node)
         os.fsync(node)
     except BaseException:
-        # Retire independently: a secondary close/unlink failure must not
-        # replace the write failure or prevent the other cleanup attempts.
-        if stream is not None:
-            try:
-                stream.close()
-            except BaseException:
-                pass
-        if descriptor_owned:
-            try:
-                os.close(fd)
-            except BaseException:
-                pass
         try:
             os.unlink(temporary, dir_fd=node)
         except BaseException:
@@ -247,9 +229,10 @@ def register(metadata: Path, owner_pid: int) -> str:
         descriptors.callback(os.close, meta)
         # Claim the physical root exactly once before publishing any control
         # records or credential groups. A duplicate registration has no effects.
+        write_owned = scratch()._owned_writer
         marker = os.open('session-id', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                          0o600, dir_fd=meta)
-        with os.fdopen(marker, 'w') as stream:
+        with write_owned(marker, fdopen=os.fdopen, close_fd=lambda value: os.close(value)) as stream:
             stream.write(session_id)
             stream.flush()
             os.fsync(stream.fileno())
