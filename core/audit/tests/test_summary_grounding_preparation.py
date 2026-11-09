@@ -21,8 +21,8 @@ def test_empty_native_paths_do_not_split_source():
                 and getattr(arg, "__self__", None) is source):
             splits.append(arg)
 
-    sys.setprofile(profile)
     try:
+        sys.setprofile(profile)
         result = _ground_summary(summary, source)
     finally:
         sys.setprofile(None)
