@@ -827,15 +827,16 @@ def check_invariant_multi_site(
 
     verdicts = {e["verdict"] for e in per_site}
     aggregate = aggregate_verdicts(verdicts)
-    if any(e["verdict"] == "unknown" and "z3" in (e.get("reason") or "")
-           for e in per_site):
-        outcome, reason = "inconclusive", "z3 unavailable"
-    elif aggregate == "violable":
+    if aggregate == "violable":
+        # An admitted counterexample survives failures at independent sites.
         outcome = "violable"
         reason = (
             "at least one census write site can break the invariant "
             "(inductive step, dominating guards encoded)"
         )
+    elif any(e["verdict"] == "unknown" and "z3" in (e.get("reason") or "")
+             for e in per_site):
+        outcome, reason = "inconclusive", "z3 unavailable"
     elif aggregate == "preserved":
         coverage_refusal = coverage_check()
         source_incomplete = source_incomplete or bool(coverage_refusal)
