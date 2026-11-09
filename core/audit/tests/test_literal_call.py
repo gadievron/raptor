@@ -130,3 +130,21 @@ def test_positive_overflow_call_requires_independent_exact_math(changed):
     else:
         del reply["parameter_types"]
     assert not literal_call_witness_valid(reply, call, "check-overflow", hypothesis, "ilp32")
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+def test_literal_call_requires_a_visible_supported_callee(language):
+    if language == "cpp":
+        pytest.importorskip("tree_sitter_cpp")
+    callee = "int Read(int Value, int Step) { if(Value >= 1) return Value - Step; return 0; }"
+    wrapper = "int Drive(void) { return Read(2147483647, -1); }"
+    hypothesis = "integer overflow in `Value - Step`"
+    result = check_literal_calls(
+        wrapper + "\n" + callee, "Read", "check-overflow", hypothesis, "ilp32", [1], language,
+    )
+    assert result["status"] == "checked"
+    assert result["calls"] == []
+    control = check(callee=callee, wrapper=wrapper, verb="check-overflow",
+                    hypothesis=hypothesis, language=language)
+    assert control["calls"][0]["verdict"] == "violation"
+    assert control["calls"][0]["mathematical_result"] == 2147483648

@@ -285,3 +285,48 @@ def test_comment_call_shapes_do_not_exhaust_the_candidate_budget(tmp_path, monke
     source += "\n/* " + "Read(4,1);" * 41 + " */\n"
     (tmp_path / "record.c").write_text(source)
     assert gate(tmp_path, source).action == "promote"
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+def test_forward_call_without_visible_signature_cannot_promote(monkeypatch, language):
+    from core.audit.literal_call_gate import evaluate_literal_caller_gate
+
+    if language == "cpp":
+        pytest.importorskip("tree_sitter_cpp")
+    callee = "int Read(int Value, int Step) { if(Value >= 1) return Value - Step; return 0; }"
+    wrapper = "int Drive(void) { return Read(2147483647, -1); }"
+    hypothesis = "integer overflow in `Value - Step`"
+    requests = []
+
+    def dispatch(tag, args, **kwargs):
+        requests.append(args)
+        return condition_smt._z3_dispatch_json({"tag": tag, "args": args})
+
+    monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)
+    forward = wrapper + "\n" + callee
+    refused = evaluate_literal_caller_gate(
+        "record." + language, "Read", "check-overflow", hypothesis,
+        defining_source=forward, source=forward, integer_abi="ilp32",
+    )
+    assert len(requests) == 1
+    assert refused.action == "hold" and refused.channel_outcome == "inconclusive"
+    assert refused.details["status"] == "checked" and refused.details["calls"] == []
+    ordered = callee + "\n" + wrapper
+    admitted = evaluate_literal_caller_gate(
+        "record." + language, "Read", "check-overflow", hypothesis,
+        defining_source=ordered, source=ordered, integer_abi="ilp32",
+    )
+    assert len(requests) == 2
+    assert admitted.action == "promote" and admitted.channel_outcome == "confirmed"
+    assert admitted.details["calls"][0]["mathematical_result"] == 2147483648
+
+
+def test_previous_visibility_contract_cannot_supply_a_receipt(tmp_path, monkeypatch):
+    source, _ = fixture(tmp_path, monkeypatch)
+    old = check_literal_calls(source, "Read", "check-array-bounds", HYPOTHESIS, "ilp32", [2])
+    assert old["calls"][0]["verdict"] == "violation"
+    old["binding"]["query_contract"] = "common-width-literal-frame-v9"
+    monkeypatch.setattr(condition_smt, "_run_z3_child", lambda *args, **kwargs: deepcopy(old))
+    refused = gate(tmp_path, source)
+    assert refused.action == "hold"
+    assert "binding mismatched" in refused.reason
