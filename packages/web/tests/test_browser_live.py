@@ -183,14 +183,25 @@ class TestOriginGateHardening(unittest.TestCase):
 
         class _TargetHandler(BaseHTTPRequestHandler):
             evil_port = 0
+            received: list[tuple[str, dict[str, str]]] = []
+            received_fields: list[tuple[str, list[tuple[str, str]]]] = []
+            posts: list[tuple[str, bytes]] = []
 
             def do_GET(self):  # noqa: N802
+                type(self).received.append((self.path, dict(self.headers)))
+                type(self).received_fields.append((self.path, list(self.headers.items())))
                 if self.path == "/redirect-out":
                     self.send_response(302)
                     self.send_header(
                         "Location",
                         f"http://127.0.0.1:{type(self).evil_port}/redirect-hop",
                     )
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if self.path == "/redirect-in":
+                    self.send_response(302)
+                    self.send_header("Location", "/target-final")
                     self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
@@ -208,10 +219,22 @@ class TestOriginGateHardening(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(body)
 
+            def do_POST(self):  # noqa: N802
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                type(self).posts.append((self.path, body))
+                if self.path == "/binary-redirect":
+                    self.send_response(307)
+                    self.send_header("Location", "/binary-final")
+                else:
+                    self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
             def log_message(self, *_args):
                 pass
 
         cls.evil_handler = _EvilHandler
+        cls.target_handler = _TargetHandler
         cls.evil = ThreadingHTTPServer(("127.0.0.1", 0), _EvilHandler)
         cls.threads = [start_http_server(cls.evil, cls.addClassCleanup)]
         _TargetHandler.evil_port = cls.evil.server_port
@@ -227,11 +250,57 @@ class TestOriginGateHardening(unittest.TestCase):
         with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             engine.render(f"{self.base}/redirect-out")
             blocked = engine.blocked_requests
+            blocked_hosts = engine.blocked_hosts
 
         self.assertEqual(
             [h for h in self.evil_handler.hits if "redirect-hop" in h], [],
         )
         self.assertGreaterEqual(blocked, 1)
+        self.assertIn(f"127.0.0.1:{self.evil.server_port}", blocked_hosts)
+
+    def test_target_header_preserves_session_cookie_across_redirect(self):
+        self.target_handler.received.clear()
+        self.target_handler.received_fields.clear()
+        from packages.web.origin_verify import HEADER_NAME
+
+        with BrowserEngine(
+            self.base, cookies={"session": "fixture-session"},
+            extra_headers={HEADER_NAME: "a" * 64},
+            allow_unsandboxed_chromium=_INNER_WAIVER,
+        ) as engine:
+            assert engine._context.cookies(self.base)
+            engine.render(f"{self.base}/redirect-in")
+
+        hops = [(path, headers) for path, headers in self.target_handler.received
+                if path in ("/redirect-in", "/target-final")]
+        self.assertEqual(len(hops), 2)
+        for path, headers in hops:
+            self.assertEqual(headers.get(HEADER_NAME), "a" * 64)
+            self.assertIn("session=fixture-session", headers.get("Cookie", ""), path)
+        fields = [values for path, values in self.target_handler.received_fields
+                  if path in ("/redirect-in", "/target-final")]
+        for values in fields:
+            self.assertEqual(sum(name.lower() == "x-origin-verify" for name, _ in values), 1)
+
+    def test_binary_post_body_survives_same_origin_redirect(self):
+        self.target_handler.posts.clear()
+        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
+            page = engine._context.new_page()
+            try:
+                page.goto(f"{self.base}/target-final")
+                status = page.evaluate("""async () => {
+                    const body = new Uint8Array([0, 255, 1, 128, 42]);
+                    return (await fetch('/binary-redirect', {
+                        method: 'POST', body, headers: {'Content-Type': 'application/octet-stream'}
+                    })).status;
+                }""")
+            finally:
+                page.close()
+        self.assertEqual(status, 200)
+        self.assertEqual(self.target_handler.posts, [
+            ("/binary-redirect", b"\x00\xff\x01\x80*"),
+            ("/binary-final", b"\x00\xff\x01\x80*"),
+        ])
 
     def test_websocket_cannot_leave_origin(self):
         self.evil_handler.hits.clear()

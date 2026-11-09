@@ -1105,9 +1105,11 @@
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_target_header_preserves_session_cookie_across_redirect",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_binary_post_body_survives_same_origin_redirect",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
           ],
-          "expected": 12
+          "expected": 14
         },
         "darwin": {
           "tests": [
@@ -1121,9 +1123,11 @@
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_target_header_preserves_session_cookie_across_redirect",
+            "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_binary_post_body_survives_same_origin_redirect",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
           ],
-          "expected": 12
+          "expected": 14
         }
       }
     },

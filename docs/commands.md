@@ -421,6 +421,8 @@ Web application security scanner (alpha).
 | `--ffuf-cookie <cookie>` | Cookie to include in requests (repeatable) |
 | `--allow-unsandboxed-chromium` | Explicitly waive Chromium’s inner sandbox (requires `--browser`); RAPTOR’s outer confinement remains mandatory. Recorded in logs and scan results. |
 | `--browser` | Headless-browser phases: rendered crawl (post-JS DOM), execution-proof XSS, fragment DOM-XSS probes |
+| `--origin-verify-file <file>` | Read the target's `X-Origin-Verify` value from an owner-only file |
+| `--required-host <host>` | Admit an additional exact DNS host to the active login transport proxy; repeatable |
 | `--oob-listen <[host:]port>` | In-process out-of-band callback listener; injects blind-SSRF canaries (0 = ephemeral port) |
 | `--oob-callback-host <host[:port]>` | Externally reachable callback address when it differs from the bind (NAT/container) |
 | `--oob-grace <seconds>` | Wait for out-of-band callbacks after fuzzing (default 10) |
