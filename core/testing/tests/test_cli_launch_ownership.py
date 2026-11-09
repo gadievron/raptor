@@ -1,14 +1,19 @@
 """Standalone shell routers retain native assertions under borrowed state."""
 
+import ast
 import importlib.util
+import json
 import os
 import shutil
 import sys
+import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
 from core.security import launch_scratch
+from core.testing.standalone_cli import run_standalone_cli
 
 ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX launcher and shell routes")
@@ -55,19 +60,88 @@ def test_transitive_router_owns_launch_state(tmp_path, monkeypatch, mode, method
 ])
 def test_copied_lifecycle_hook_owns_stale_parent_launch(tmp_path, monkeypatch, method):
     path = ROOT / "core/run/tests/test_lifecycle_hook.py"
-    spec = importlib.util.spec_from_file_location("owned_lifecycle_router", path)
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
+    # Compile the actual subprocess class and its payload, without executing
+    # the unrelated in-process hook loader at module collection. The copied
+    # script still runs its real bootstrap in the owned child.
+    tree = ast.parse(path.read_text())
+    nodes = [node for node in tree.body
+             if isinstance(node, ast.ClassDef) and node.name == "TestE2EHookScript"
+             or isinstance(node, ast.Assign) and any(
+                 isinstance(target, ast.Name) and target.id == "RAPTOR_BASH_FAILURE"
+                 for target in node.targets)]
+    namespace = dict(__name__=__name__, unittest=unittest, json=json,
+                     TemporaryDirectory=TemporaryDirectory, Path=Path, os=os,
+                     sys=sys, run_standalone_cli=run_standalone_cli,
+                     REPO_ROOT=ROOT, HOOK_SCRIPT=ROOT / "libexec/raptor-lifecycle-hook")
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
     monkeypatch.setenv("CLAUDECODE", "1")
     monkeypatch.setenv("_RAPTOR_SCRATCH_AUTH", "retired-authorization")
     monkeypatch.setenv("TMPDIR", str(tmp_path / "retired-scratch"))
     before = dict(os.environ)
     # Keep the actual copied-script dispatch and its native assertions.
-    case = module.TestE2EHookScript(method)
+    case = namespace["TestE2EHookScript"](method)
     getattr(case, method)()
     unchanged = dict(os.environ) == before
     assert unchanged, "copied hook changed its caller's launch state"
+
+
+@pytest.fixture
+def stdin_budget_native(monkeypatch):
+    path = ROOT / "packages/exploit_feasibility/tests/test_smt_path.py"
+    spec = importlib.util.spec_from_file_location("owned_stdin_budget", path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module.TestStdinBudget()
+
+
+@pytest.mark.parametrize("cached", [False, True], ids=["cold-bootstrap", "cached-bootstrap"])
+@pytest.mark.parametrize("outcome", ["normal", "error", "interrupt"])
+def test_stdin_loader_restores_launch_owner(stdin_budget_native, tmp_path, monkeypatch, cached, outcome):
+    from contextlib import ExitStack, redirect_stderr
+    import io
+
+    from core.security import env_sanitisation
+    from core.testing.module_registry import fresh_module_tree
+
+    # The bootstrap's documented no-fileno path avoids registering a process
+    # signal handler while retaining its real scratch admission/restore call.
+    with fresh_module_tree("core.startup.process_init"), redirect_stderr(io.StringIO()), \
+            ExitStack() as warmth, pytest.MonkeyPatch.context() as parent:
+        if cached:
+            # The outer launch and its metadata stay alive while the inner
+            # loader borrows the already-imported bootstrap module.
+            warmth.enter_context(stdin_budget_native._load_module())
+        else:
+            parent.setattr(launch_scratch, "_restored", False)
+        parent.setenv("_RAPTOR_SCRATCH_AUTH", "retired-authorization")
+        parent.setenv("TMPDIR", str(tmp_path / "retired-scratch"))
+        before = dict(os.environ)
+        scratch = (launch_scratch._restored, launch_scratch._metadata_path,
+                   env_sanitisation._subprocess_tmpdir)
+        failure = KeyboardInterrupt("owned stdin interruption") if outcome == "interrupt" else RuntimeError("owned stdin error")
+
+        def body():
+            with stdin_budget_native._load_module() as module:
+                assert Path(os.environ["TMPDIR"]).is_dir()
+                assert "_RAPTOR_SCRATCH_AUTH" not in os.environ
+                assert callable(module.main)
+                if not cached:
+                    assert launch_scratch._restored is True
+                if outcome != "normal":
+                    raise failure
+
+        if outcome == "normal":
+            body()
+        else:
+            with pytest.raises(type(failure)) as caught:
+                body()
+            assert caught.value is failure
+        unchanged = dict(os.environ) == before
+        assert unchanged, "stdin loader changed borrowed launch credentials"
+        assert launch_scratch._restored is scratch[0]
+        assert launch_scratch._metadata_path is scratch[1]
+        assert env_sanitisation._subprocess_tmpdir is scratch[2]
 
 
 @pytest.mark.parametrize("subject", ["test_e2e_orchestrator_signals", "test_fail_open_census"])
