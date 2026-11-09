@@ -80,6 +80,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import _pathpin, state
+from ._retirement import retire_parent_resources as _retire_parent_resources
 from ._pipe_poll import readable_fds as _readable_fds
 from ._tracer_launch import prepare_tracer_launch
 from ._pathpin import canonical_bind_path as _canonical_bind_path
@@ -1130,23 +1131,6 @@ def _cleanup_stub(root_dir: str) -> None:
     if getattr(shutil.rmtree, "avoids_symlink_attacks", False):
         shutil.rmtree(root_dir, ignore_errors=True)
 
-
-def _retire_parent_resources(*callbacks) -> None:
-    """Attempt every owner without replacing an operation already unwinding."""
-    original = sys.exc_info()[1]
-    failures = []
-    for callback in callbacks:
-        try:
-            callback()
-        except BaseException as error:
-            failures.append(error)
-    if failures:
-        primary = original if original is not None else failures.pop(0)
-        for error in failures:
-            with contextlib.suppress(BaseException):
-                primary.add_note("namespace owner cleanup: " + type(error).__name__)
-        if original is None:
-            raise primary
 
 
 def _pin_bind_sources(

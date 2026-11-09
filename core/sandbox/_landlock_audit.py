@@ -56,6 +56,8 @@ import time
 import warnings
 from collections.abc import Iterable
 
+from ._retirement import retire_parent_resources as _retire_parent_resources
+
 from . import evidence as _evidence_mod
 from ._pipe_poll import readable_fds as _readable_fds
 from ._tracer_launch import prepare_tracer_launch
@@ -521,6 +523,48 @@ def run_landlock_audit(
         audit_run_dir, _out_name(bool(observe_mode)),
     )
     config_fd = -1
+    p_go_r = p_go_w = t_ready_r = t_ready_w = -1
+    out_r = out_w = err_r = err_w = -1
+    target_pid = tracer_pid = -1
+    verify_evidence = False
+
+    def _cleanup_fds() -> None:
+        nonlocal p_go_r, p_go_w, t_ready_r, t_ready_w
+        nonlocal out_r, out_w, err_r, err_w
+        owned = (p_go_r, p_go_w, t_ready_r, t_ready_w,
+                 out_r, out_w, err_r, err_w)
+        p_go_r = p_go_w = t_ready_r = t_ready_w = -1
+        out_r = out_w = err_r = err_w = -1
+        _retire_parent_resources(*(lambda fd=fd: _close_safely(fd) for fd in owned))
+
+    def _retire_config() -> None:
+        nonlocal config_fd
+        fd, config_fd = config_fd, -1
+        _close_safely(fd)
+
+    def _retire_evidence():
+        nonlocal evidence_file
+        handle, evidence_file = evidence_file, None
+        if handle is not None:
+            if verify_evidence:
+                return _evidence_mod.finalize_capture(handle)
+            handle.close(verify=False)
+        return None
+
+    def _retire_target() -> None:
+        nonlocal target_pid
+        pid, target_pid = target_pid, -1
+        if pid > 0:
+            with contextlib.suppress(OSError):
+                _kill_and_reap(pid)
+
+    def _retire_tracer() -> None:
+        nonlocal tracer_pid
+        pid, tracer_pid = tracer_pid, -1
+        if pid > 0:
+            with contextlib.suppress(OSError):
+                _kill_and_reap(pid)
+
     try:
         audit_config = _build_audit_config(
             audit_verbose=audit_verbose,
@@ -535,21 +579,7 @@ def run_landlock_audit(
             evidence_fd=evidence_file.fd,
         )
         config_fd = _write_audit_config(audit_config)
-    except BaseException:
-        evidence_file.close(verify=False)
-        raise
-    # argv spelling of the config fd — "self" resolves in the tracer.
-    config_arg = _evidence_mod.fd_path(config_fd)
-
-    # Sync pipes:
-    #   p_go: parent → target ("tracer attached, proceed")
-    #   t_ready: tracer → parent ("I'm attached")
-    # Created under a guard: a mid-sequence failure (EMFILE) must not
-    # leak the pipes already created, nor the evidence/config fds
-    # opened above — the covering try below has not been entered yet.
-    p_go_r = p_go_w = t_ready_r = t_ready_w = -1
-    out_r = out_w = err_r = err_w = -1
-    try:
+        config_arg = _evidence_mod.fd_path(config_fd)
         p_go_r, p_go_w = os.pipe()
         t_ready_r, t_ready_w = os.pipe()
         # The tracer subprocess inherits t_ready_w via execvpe →
@@ -559,53 +589,34 @@ def run_landlock_audit(
         if capture_output:
             out_r, out_w = os.pipe()
             err_r, err_w = os.pipe()
-    except BaseException:
-        for fd in (p_go_r, p_go_w, t_ready_r, t_ready_w,
-                   out_r, out_w, err_r, err_w):
-            _close_safely(fd)
-        _close_safely(config_fd)
-        evidence_file.close(verify=False)
-        raise
+        # env=None → scrubbed allowlist env, NOT the full host
+        # environment (same contract as _spawn.run_sandboxed): the public
+        # context.run() path always supplies an env, so this default only
+        # serves direct callers — and an audited target must not inherit
+        # ambient secrets (session credentials, cloud keys) because a
+        # caller skipped the wrapper. This is the namespace-less lane,
+        # where /proc-based exfil defences are weakest. env={} still
+        # means an empty env. Resolved parent-side so the forked child
+        # performs no post-fork imports.
+        if env is None:
+            from core.config import RaptorConfig
+            env = RaptorConfig.get_safe_env()
 
-    # env=None → scrubbed allowlist env, NOT the full host
-    # environment (same contract as _spawn.run_sandboxed): the public
-    # context.run() path always supplies an env, so this default only
-    # serves direct callers — and an audited target must not inherit
-    # ambient secrets (session credentials, cloud keys) because a
-    # caller skipped the wrapper. This is the namespace-less lane,
-    # where /proc-based exfil defences are weakest. env={} still
-    # means an empty env. Resolved parent-side so the forked child
-    # performs no post-fork imports.
-    if env is None:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
+        # libc handle resolved PRE-FORK for the target child's
+        # PR_SET_PTRACER opt-in: find_library("c") can shell out to
+        # /sbin/ldconfig, and spawning a subprocess from the forked child
+        # of this multi-threaded parent is the banned fork-storm pattern
+        # (same parent-side capture as _spawn._parent_libc). None → the
+        # child degrades best-effort silent, exactly as the load-failure
+        # branch always did.
+        _parent_libc: ctypes.CDLL | None = None
+        with contextlib.suppress(OSError, AttributeError):
+            _parent_libc = ctypes.CDLL(
+                ctypes.util.find_library("c") or "libc.so.6",
+                use_errno=True,
+            )
 
-    # libc handle resolved PRE-FORK for the target child's
-    # PR_SET_PTRACER opt-in: find_library("c") can shell out to
-    # /sbin/ldconfig, and spawning a subprocess from the forked child
-    # of this multi-threaded parent is the banned fork-storm pattern
-    # (same parent-side capture as _spawn._parent_libc). None → the
-    # child degrades best-effort silent, exactly as the load-failure
-    # branch always did.
-    _parent_libc: ctypes.CDLL | None = None
-    with contextlib.suppress(OSError, AttributeError):
-        _parent_libc = ctypes.CDLL(
-            ctypes.util.find_library("c") or "libc.so.6",
-            use_errno=True,
-        )
-
-    target_pid = -1
-    tracer_pid = -1
-    def _cleanup_fds() -> None:
-        nonlocal p_go_r, p_go_w, t_ready_r, t_ready_w
-        nonlocal out_r, out_w, err_r, err_w
-        for fd in (p_go_r, p_go_w, t_ready_r, t_ready_w,
-                   out_r, out_w, err_r, err_w):
-            _close_safely(fd)
-        p_go_r = p_go_w = t_ready_r = t_ready_w = -1
-        out_r = out_w = err_r = err_w = -1
-
-    try:
+        verify_evidence = True
         # ----- Fork the target -----
         # (fork-warning suppression is the module-level filter above)
         target_pid = os.fork()
@@ -760,13 +771,13 @@ def run_landlock_audit(
         # ============== PARENT after target fork ==============
         # Close the read end of go-pipe and capture-write ends —
         # the target owns them now.
-        _close_safely(p_go_r)
-        p_go_r = -1
+        _closing_fd, p_go_r = p_go_r, -1
+        _close_safely(_closing_fd)
         if capture_output:
-            _close_safely(out_w)
-            out_w = -1
-            _close_safely(err_w)
-            err_w = -1
+            _closing_fd, out_w = out_w, -1
+            _close_safely(_closing_fd)
+            _closing_fd, err_w = err_w, -1
+            _close_safely(_closing_fd)
 
         # ----- Fork the tracer -----
         # Resolve imports and prepare argv before fork; the child only
@@ -804,14 +815,14 @@ def run_landlock_audit(
         # Parent doesn't keep the tracer's signalling write end;
         # without closing it the read below would never see EOF
         # if the tracer dies before signalling.
-        _close_safely(t_ready_w)
-        t_ready_w = -1
+        _closing_fd, t_ready_w = t_ready_w, -1
+        _close_safely(_closing_fd)
         # Drop our copy of the anonymous config fd — the tracer holds
         # its own inherited copy (closed right after parsing). This
         # minimises the window in which /proc/<parent-pid>/fd exposes
         # the nonce-carrying config to same-UID processes.
-        _close_safely(config_fd)
-        config_fd = -1
+        _closing_fd, config_fd = config_fd, -1
+        _close_safely(_closing_fd)
 
         # Wait for tracer to signal ready (or die).
         ready = b""
@@ -823,8 +834,8 @@ def run_landlock_audit(
             else:
                 ready_timed_out = True
         finally:
-            _close_safely(t_ready_r)
-            t_ready_r = -1
+            _closing_fd, t_ready_r = t_ready_r, -1
+            _close_safely(_closing_fd)
         if not ready:
             # Tracer failed before signalling. Reap it for diag,
             # kill the still-blocked target, raise. On the deadline
@@ -850,8 +861,8 @@ def run_landlock_audit(
             # what escapes is OSError (PermissionError when the pid
             # was recycled to a foreign process).
             with contextlib.suppress(OSError):
-                _kill_and_reap(target_pid)
-                target_pid = -1
+                _reaping_pid, target_pid = target_pid, -1
+                _kill_and_reap(_reaping_pid)
             rc_hint = ""
             if (tracer_status is not None
                     and os.WIFEXITED(tracer_status)):
@@ -883,8 +894,8 @@ def run_landlock_audit(
         try:
             os.write(p_go_w, b"G")
         finally:
-            _close_safely(p_go_w)
-            p_go_w = -1
+            _closing_fd, p_go_w = p_go_w, -1
+            _close_safely(_closing_fd)
 
         # Drain both stdio pipes concurrently to avoid deadlock when
         # the child fills one pipe buffer while we block reading the
@@ -900,10 +911,10 @@ def run_landlock_audit(
             )
             stdout_bytes = drained[out_r]
             stderr_bytes = drained[err_r]
-            _close_safely(out_r)
-            out_r = -1
-            _close_safely(err_r)
-            err_r = -1
+            _closing_fd, out_r = out_r, -1
+            _close_safely(_closing_fd)
+            _closing_fd, err_r = err_r, -1
+            _close_safely(_closing_fd)
 
         # waitpid the target. The reap attempt comes FIRST on every
         # iteration — deadline expiry is only checked after a WNOHANG
@@ -932,12 +943,12 @@ def run_landlock_audit(
                 if time.monotonic() >= deadline:
                     # Genuinely still running past the deadline —
                     # kill, then re-wait, then raise.
-                    _kill_and_reap(target_pid)
-                    target_pid = -1
+                    _reaping_pid, target_pid = target_pid, -1
+                    _kill_and_reap(_reaping_pid)
                     # Tracer is PTRACE_O_EXITKILL'd — should die soon.
                     if tracer_pid > 0:
-                        _kill_and_reap(tracer_pid)
-                        tracer_pid = -1
+                        _reaping_pid, tracer_pid = tracer_pid, -1
+                        _kill_and_reap(_reaping_pid)
                     raise subprocess.TimeoutExpired(
                         cmd=list(cmd), timeout=timeout,  # type: ignore[arg-type]
                         output=stdout_bytes if text is False else (
@@ -981,7 +992,8 @@ def run_landlock_audit(
                     "records may be truncated)",
                     tracer_pid, _TRACER_REAP_TIMEOUT_S,
                 )
-                _kill_and_reap(tracer_pid)
+                _reaping_pid, tracer_pid = tracer_pid, -1
+                _kill_and_reap(_reaping_pid)
             tracer_pid = -1
 
         # Marshal output to the requested type.
@@ -1001,7 +1013,7 @@ def run_landlock_audit(
         # ``getattr(result, "evidence_verified", True)`` rather than
         # having to scrape the process log for the tamper warning.
         # The finally-block close below becomes an idempotent no-op.
-        evidence_ok = _evidence_mod.finalize_capture(evidence_file)
+        evidence_ok = _retire_evidence()
         result = subprocess.CompletedProcess(
             args=list(cmd),
             returncode=target_rc,
@@ -1011,19 +1023,8 @@ def run_landlock_audit(
         result.evidence_verified = evidence_ok  # type: ignore[attr-defined]
         return result
     finally:
-        _cleanup_fds()
-        # _kill_and_reap only escapes with OSError (PermissionError on
-        # pid recycle); everything else it handles internally.
-        if target_pid > 0:
-            with contextlib.suppress(OSError):
-                _kill_and_reap(target_pid)
-        if tracer_pid > 0:
-            with contextlib.suppress(OSError):
-                _kill_and_reap(tracer_pid)
-        # Release the anonymous config fd (normally already closed
-        # right after the tracer fork; covers early-exit paths).
-        _close_safely(config_fd)
-        # Finalise the evidence file (idempotent — the normal-return
-        # path already closed with verification; this covers
-        # exception paths, where verify() still logs loudly).
-        _evidence_mod.finalize_capture(evidence_file)
+        # Every callback runs, even after a pipe or child retirement interrupt.
+        # Config/evidence follow both child owners; capture verification stays
+        # on the existing result path and early setup closes without it.
+        _retire_parent_resources(_cleanup_fds, _retire_target, _retire_tracer,
+                                 _retire_config, _retire_evidence)
