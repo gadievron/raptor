@@ -589,8 +589,13 @@ def coverage_residual(
     paths = attack_paths(db_path, target_path)
     if not paths:
         return []
+    # Bind validation to the snapshot which actually produced these paths,
+    # not a separately selected latest snapshot or a reused display sink id.
+    snapshot_id = paths[0].get("evidence", {}).get("snapshot_id")
+    if not snapshot_id:
+        return paths
 
-    def _do(conn, target):
+    def _do(conn):
         # Exact graph join, never substring-in-key: a VALIDATES edge
         # whose dst is an unchecked_flow identifies the flow's sink
         # via its HAS_SINK edge. (A short sink id or label like
@@ -602,29 +607,23 @@ def coverage_residual(
         # Matching is by the sink's context-map ID only — sink NAMES
         # are callee labels ("system") shared across distinct sinks,
         # and matching them would re-open the false-suppression lane
-        # at label grain. Scoped to the queried target's snapshots
-        # when a target is given.
-        target_join = ""
-        params: list[str] = []
-        if target:
-            target_join = (
-                "JOIN snapshots s ON s.id = sk.snapshot_id "
-                "AND (s.target_path=? OR s.target_path=?) "
-            )
-            params = [str(target), str(Path(target).resolve())]
+        # at label grain. Historical validation of the same display id
+        # does not establish validation of the selected understand snapshot.
         rows = conn.execute(
-            f"""
+            """
             SELECT DISTINCT sk.props_json
             FROM edges v
             JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
+                         AND vo.stale = 0 AND vo.snapshot_id = v.snapshot_id
             JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'
+                         AND fl.stale = 0 AND fl.snapshot_id = ?
             JOIN edges hs ON hs.src_id = fl.id AND hs.kind = 'HAS_SINK'
-                         AND hs.stale = 0
+                         AND hs.stale = 0 AND hs.snapshot_id = fl.snapshot_id
             JOIN nodes sk ON sk.id = hs.dst_id AND sk.kind = 'sink'
-            {target_join}
+                         AND sk.stale = 0 AND sk.snapshot_id = fl.snapshot_id
             WHERE v.kind = 'VALIDATES' AND v.stale = 0
             """,
-            params,
+            (snapshot_id,),
         ).fetchall()
         validated: set[str] = set()
         for row in rows:
@@ -634,7 +633,7 @@ def coverage_residual(
                 validated.add(str(sink_id))
         return validated
 
-    validated_sink_ids = query_graph(db_path, _do, target_path)
+    validated_sink_ids = query_graph(db_path, _do)
     if not validated_sink_ids:
         return paths
 
