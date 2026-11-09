@@ -15,6 +15,20 @@ from urllib3.util import Url
 
 
 class _ConnectHTTPConnection(HTTPConnection):
+    _tunnel_headers: dict[str, str]
+
+    def close(self) -> None:
+        # urllib3 clears tunnel configuration on close, but may retain the
+        # connection object in its pool. This pool is permanently bound to
+        # one destination: preserve its CONNECT identity for both the next
+        # Host header (prepared before connect) and the next TCP connection.
+        host, port, headers = self._tunnel_host, self._tunnel_port, self._tunnel_headers
+        try:
+            super().close()
+        finally:
+            if host is not None:
+                self.set_tunnel(host, port=port, headers=headers)
+
     def connect(self) -> None:
         try:
             super().connect()
