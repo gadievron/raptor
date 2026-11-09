@@ -340,31 +340,22 @@ class TestCodeqlCliFlag:
 # ---------------------------------------------------------------------------
 
 def _curated_ql_files():
-    """Collect all .ql files under engine/codeql/queries/.
+    """Discover checked-in queries; required configuration errors must fail."""
+    from core.config import RaptorConfig
 
-    Called at parametrize time (module collection), so must not crash
-    if the import chain is unavailable in an xdist worker.
-    """
-    try:
-        from core.config import RaptorConfig
-        root = Path(RaptorConfig.CODEQL_QUERIES_DIR)
-        return sorted(root.rglob("*.ql"))
-    except Exception:
-        return []
+    root = Path(RaptorConfig.CODEQL_QUERIES_DIR)
+    assert root.is_dir(), f"curated query directory is missing: {root}"
+    queries = sorted(root.rglob("*.ql"))
+    assert queries, f"no checked-in curated queries found under {root}"
+    return queries
 
 
 class TestCuratedQueryStructure:
     """Each curated .ql file must contain a select clause — a file
     that fails this is either empty, truncated, or not a query."""
 
-    @pytest.fixture(autouse=True)
-    def _queries(self):
-        self.queries = _curated_ql_files()
-        if not self.queries:
-            pytest.skip("no curated queries on disk")
-
     def test_at_least_one_query_per_language(self):
-        langs = {q.parent.name for q in self.queries}
+        langs = {q.parent.name for q in _curated_ql_files()}
         assert "cpp" in langs
         assert "java" in langs
 
@@ -377,6 +368,57 @@ class TestCuratedQueryStructure:
         assert "\nselect" in text.lower() or text.lower().startswith("select"), (
             f"{ql.name} has no select clause"
         )
+
+
+class TestCuratedQueryDiscoveryContract:
+    @staticmethod
+    def _discover(config=None, error=None):
+        from core.testing.module_views import module_function_view
+
+        owner = sys.modules[__name__]
+        imported = ModuleType("core.config")
+        imported.RaptorConfig = config
+        calls = []
+
+        def import_config(name, globals=None, locals=None, fromlist=(), level=0):
+            assert (name, fromlist, level) == ("core.config", ("RaptorConfig",), 0)
+            calls.append(name)
+            if error is not None:
+                raise error
+            return imported
+
+        view = module_function_view(owner, import_hook=import_config)
+        try:
+            return view._curated_ql_files()
+        finally:
+            assert calls == ["core.config"]
+            assert owner._curated_ql_files.__globals__ is vars(owner)
+
+    def test_valid_config_discovers_sorted_queries(self, tmp_path):
+        for language in ("java", "cpp"):
+            pack = tmp_path / language
+            pack.mkdir()
+            (pack / "Example.ql").write_text("select 1\n")
+        assert self._discover(SimpleNamespace(CODEQL_QUERIES_DIR=tmp_path)) == [
+            tmp_path / "cpp" / "Example.ql", tmp_path / "java" / "Example.ql",
+        ]
+
+    def test_missing_required_config_attribute_fails(self):
+        with pytest.raises(AttributeError, match="CODEQL_QUERIES_DIR"):
+            self._discover(SimpleNamespace())
+
+    @pytest.mark.parametrize("error", [ImportError("missing required config"), RuntimeError("broken config")])
+    def test_required_config_import_failure_propagates(self, error):
+        with pytest.raises(type(error), match=str(error)):
+            self._discover(error=error)
+
+    @pytest.mark.parametrize("exists", [False, True], ids=["missing-directory", "empty-directory"])
+    def test_missing_checked_in_queries_fails(self, tmp_path, exists):
+        root = tmp_path / "queries"
+        if exists:
+            root.mkdir()
+        with pytest.raises(AssertionError, match="curated quer"):
+            self._discover(SimpleNamespace(CODEQL_QUERIES_DIR=root))
 
 
 class TestLocalDependencyContracts:
