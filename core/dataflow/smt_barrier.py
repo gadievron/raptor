@@ -2997,6 +2997,12 @@ def prove_neutralizes(
             False, None,
             f"no danger model for sink_class={sink_class!r}",
         )
+    if spec.kind in {"charset", "charset_sub"}:
+        body = spec.charset if spec.kind == "charset" else spec.forbidden
+        if not isinstance(body, str) or not _charset_body_is_safe(body):
+            return _ProofVerdict(
+                False, None, "unsupported character class in proof model",
+            )
     if spec.kind == "charset":
         return _prove_charset(spec, sink_class, danger, timeout_ms=timeout_ms)
     if spec.kind == "charset_sub":

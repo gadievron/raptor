@@ -1729,11 +1729,11 @@ def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
 
 
 @_requires_z3
-def test_prove_empty_charset_is_sound():
-    """An empty character class rejects all input — trivially sound."""
+def test_prove_empty_charset_declines():
+    """An empty class body is invalid regex syntax, not an empty language."""
     spec = sb.ValidatorSpec("charset", "x", "", "+...", 0)
     v = sb.prove_neutralizes(spec, "cmdi")
-    assert v.sound is True
+    assert v.sound is False
 
 
 # ---------------------------------------------------------------------------
@@ -3926,3 +3926,34 @@ def test_large_forbidden_range_does_not_invent_hyphen_removal(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="cmdi_argv",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("body", ["^a", r"\D", r"\x3b"],
+                         ids=["negated", "shorthand", "hex-escape"])
+def test_public_charset_proof_rejects_unsupported_model(body):
+    import re
+
+    assert re.fullmatch("[" + body + "]+", ";") is not None
+    spec = sb.ValidatorSpec(kind="charset", var_name="x", charset=body)
+    verdict = sb.prove_neutralizes(spec, "cmdi")
+    assert not verdict.sound
+    assert verdict.counterexample is None
+    assert "unsupported character class" in verdict.reasoning
+    control = sb.ValidatorSpec(kind="charset", var_name="x", charset="a-z")
+    assert sb.prove_neutralizes(control, "cmdi").sound
+
+
+@_requires_z3
+def test_public_substitution_proof_rejects_negated_model():
+    import re
+
+    body = r"^/\\."
+    assert re.sub("[" + body + "]+", "", "/") == "/"
+    spec = sb.ValidatorSpec(kind="charset_sub", var_name="x", forbidden=body)
+    verdict = sb.prove_neutralizes(spec, "pathtrav")
+    assert not verdict.sound
+    assert verdict.counterexample is None
+    assert "unsupported character class" in verdict.reasoning
+    control = sb.ValidatorSpec(kind="charset_sub", var_name="x", forbidden=body[1:])
+    assert sb.prove_neutralizes(control, "pathtrav").sound
