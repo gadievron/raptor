@@ -278,7 +278,7 @@ def _image_cleanup(build_id: str):
 @contextmanager
 def _artifact_outputs(product: BuildProduct):
     """Roll back only files this extraction published if the operation fails."""
-    receipts = []
+    receipts: list[tuple[Path, tuple[int, int]]] = []
     try:
         yield receipts
     except BaseException:
