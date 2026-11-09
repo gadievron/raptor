@@ -637,14 +637,14 @@ class JsonCache:
 
         Keys are caller-chosen and may contain ``/`` to denote a
         subdirectory (e.g., ``vulns/GHSA-xxx``). They MUST NOT contain
-        ``..``, ``.``, or empty segments — those are refused loudly
+        ``..``, ``.``, empty segments or backslashes — these are refused loudly
         rather than normalised away: silently dropping them made
         distinct keys collide onto one file (``foo/..`` used to map to
         the same path as ``foo``), which let one entry shadow another.
         Callers that interpolate externally-sourced names into key
         segments are responsible for using an injective encoding
         (percent-encoding or a hash); this method guarantees only that
-        no key can traverse or alias its way to another key's file.
+        directory traversal and separator-normalisation aliases are refused.
         """
         if self._root is None:
             msg = "cache root not initialised"
@@ -654,23 +654,12 @@ class JsonCache:
             if not part or part in (".", ".."):
                 msg = f"cache key contains a degenerate path segment: {key!r}"
                 raise ValueError(msg)
-            # Strip BOTH separators regardless of host. Pre-fix
-            # `part.replace(os.sep, "_")` only stripped the host's
-            # separator — on Linux (os.sep="/") an embedded
-            # backslash from a Windows-formatted cache key
-            # (`"vulns\\GHSA-xxx"`) leaked through; the resulting
-            # filename either confused downstream tooling or, on a
-            # filesystem that honours backslash as a literal byte,
-            # produced a file with a backslash in its name that
-            # later glob patterns missed. Replace both `\` and `/`
-            # explicitly so the same key produces the same cache
-            # file regardless of which platform formatted it.
-            clean = part.replace("\\", "_").replace("/", "_")
-            # Strip os.sep too in case the platform uses a third
-            # separator (Path.alt_sep on some systems).
-            if os.sep not in ("\\", "/"):
-                clean = clean.replace(os.sep, "_")
-            clean_parts.append(clean)
+            # Rewriting a separator to '_' aliases a distinct valid key.
+            # Require callers to encode components instead of normalising them.
+            if "\\" in part or (os.sep not in ("\\", "/") and os.sep in part):
+                msg = f"cache key contains an ambiguous path separator: {key!r}"
+                raise ValueError(msg)
+            clean_parts.append(part)
         if not clean_parts:
             msg = f"empty cache key after sanitisation: {key!r}"
             raise ValueError(msg)
