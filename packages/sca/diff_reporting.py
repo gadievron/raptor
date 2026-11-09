@@ -1,6 +1,7 @@
 """Portable presentation of recorded SCA comparisons; no new analysis."""
 from __future__ import annotations
 
+from dataclasses import asdict
 import sys
 
 from core.reporting.builders import build_document
@@ -42,6 +43,7 @@ def build_diff_document(delta, *, baseline: str, current: str, threshold: str,
                             stages=[StageEnvelope("compare", "completed", producer="sca")], diagnostics=notes,
                             artifacts=[{"path": baseline}, {"path": current}],
                             extensions={"raptor.findings_available": False, "raptor.metrics": counts,
+                                        "raptor.result_sections": [asdict(block) for block in blocks],
                                         "raptor.selection": {"baseline": baseline, "current": current,
                                                              "include_suppressed": include_suppressed,
                                                              "show_persistent": show_persistent,

@@ -87,3 +87,18 @@ def test_report_destination_cannot_replace_input_findings(tmp_path, capsys):
     assert json.loads(streams.out)["summary"]["new"] == 1
     assert "failed" in streams.err.lower()
     assert current.read_bytes() == original
+
+
+def test_snapshot_identity_binds_displayed_rows_with_equal_category_counts():
+    def capture(name):
+        delta = diff.DeltaResult(new=[{"severity": "high", "sca": {"name": name}}], resolved=[],
+                                 suppression_added=[], suppression_lifted=[])
+        return build_diff_document(delta, baseline="before", current="after", threshold="high",
+                                   include_suppressed=False, show_persistent=False, exit_code=1)
+    first, first_document = capture("one")
+    second, second_document = capture("two")
+    assert first_document.summary == second_document.summary
+    assert first.snapshot_id != second.snapshot_id
+    assert first_document.snapshot_id == first.snapshot_id
+    assert second_document.snapshot_id == second.snapshot_id
+    assert first.extensions["raptor.result_sections"] != second.extensions["raptor.result_sections"]
