@@ -61,6 +61,9 @@ rules:
           - pattern-either:
               - pattern: $DB.execute($QUERY, ...)
               - pattern: $DB.executemany($QUERY, ...)
+              - pattern: $DB.execute(query=$QUERY, ...)
+              - pattern: $DB.executemany(query=$QUERY, ...)
+              - pattern: $DB.execute(statement=$QUERY, ...)
           - focus-metavariable: $QUERY
     # Wrapping text with sqlalchemy.text() or psycopg2.sql.SQL() does not
     # escape it. Bound values are separate from SQL text: adding bind
