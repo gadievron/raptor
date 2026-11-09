@@ -1218,7 +1218,11 @@ plan-only, proposed-export and applied-in-place modes separately, preserving
 blocked major upgrades and skipped changes. A plan or proposed file is not
 reported as an applied fix. Existing scan and change artifacts remain available;
 the report performs no extra analysis or writes to target manifests.
-`--cve-only` keeps its separate reporting interface.
+`fix --cve-only` supports the same explicit report options. It retains
+compatibility risk signals and results of requested resolver/hash-pin
+operations. Those operations are not rerun for reporting, and an absent
+current validation result is not replaced with an older receipt. A command
+exit code of 0 does not imply every resolver constraint passed.
 
 `fix --harden` supports explicit portable reports for checks, proposed exports
 and apply/self-test outcomes. Candidate totals include every recorded status;

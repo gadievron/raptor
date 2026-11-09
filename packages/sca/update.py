@@ -113,10 +113,25 @@ def main(argv: Sequence[str]) -> int:
     if excluded_files:
         print(f"raptor-sca fix: {len(excluded_files)} surface(s) "
               f"excluded from write by --exclude patterns")
+    cascade_result = external_result = hash_pin_result = None
+    cascade_attempted = external_attempted = hash_pin_attempted = False
+    patch_path = None
+    apply_exit = None
+
+    def report_completion(mode, *, changes=(), compatibility=None, exit_code=0):
+        if args._report_options.enabled and args._report_options.output is not None:
+            from .cve_reporting import complete_cve_report
+            complete_cve_report(args, out_dir=out_dir, targets=targets, excluded_files=excluded_files,
+                                changes=changes, compatibility=compatibility or {}, mode=mode, exit_code=exit_code,
+                                patch_path=patch_path, apply_exit=apply_exit, cascade_result=cascade_result,
+                                external_result=external_result, hash_pin_result=hash_pin_result,
+                                cascade_attempted=cascade_attempted, external_attempted=external_attempted,
+                                hash_pin_attempted=hash_pin_attempted)
     if not targets:
         print("raptor-sca fix: no actionable upgrades — every vulnerable dep is "
               "either unfixed, already at the highest fix, or filtered out by "
               "--fix.", file=sys.stderr)
+        report_completion("no actionable changes")
         return 0
 
     changes = _materialise_changes(
@@ -148,7 +163,6 @@ def main(argv: Sequence[str]) -> int:
     applied = [c for c in changes if c.skipped_reason is None]
     skipped = [c for c in changes if c.skipped_reason is not None]
     extra = ""
-    patch_path: Path | None = None
     repo_root: Path | None = None
     # ``--apply`` implies ``--git-patch``: you can't apply what wasn't
     # generated, and forcing operators to remember both flags is just
@@ -176,7 +190,9 @@ def main(argv: Sequence[str]) -> int:
             patch_path,
             caller_label="raptor-sca fix --cve-only",
         )
+        apply_exit = rc
         if rc != 0:
+            report_completion("apply failed", changes=changes, compatibility=compat_reports, exit_code=rc)
             return rc
 
     # ``--allow-cascade``: run the proposed manifest through the native
@@ -184,13 +200,15 @@ def main(argv: Sequence[str]) -> int:
     # success / conflict; when the resolver succeeds, the proposed
     # lockfile is captured alongside the manifest.
     if args.allow_cascade and applied:
-        _run_cascade_validation(applied, out_dir)
+        cascade_attempted = True
+        cascade_result = _run_cascade_validation(applied, out_dir)
 
     # ``--validate-against=<file>``: same shape as cascade but against
     # an externally-supplied manifest (Dependabot's PR).
     if args.validate_against:
+        external_attempted = True
         ext = Path(args.validate_against).resolve()
-        _run_external_validation(ext, out_dir)
+        external_result = _run_external_validation(ext, out_dir)
 
     # ``--format=pr-comment``: emit a separate GitHub-flavoured Markdown
     # rendering of the change set alongside changes.md.
@@ -220,37 +238,38 @@ def main(argv: Sequence[str]) -> int:
             print("raptor-sca fix: --hash-pin needs a target directory; "
                   "rerun with --target <repo>", file=sys.stderr)
         else:
+            hash_pin_attempted = True
             result = hash_pin_workflows(
                 target_dir, write=args.hash_pin_write,
             )
-            save_json(
-                out_dir / "hash-pin.json",
-                {
-                    "changed_files": [str(p) for p in result.changed_files],
-                    "changes": [
-                        {"file": str(c.file), "line": c.line,
-                          "action": c.action,
-                          "old_ref": c.old_ref, "new_sha": c.new_sha}
-                        for c in result.changes
-                    ],
-                    "skipped": [
-                        {"file": str(f), "line": ln, "action": a,
-                          "reason": r}
-                        for f, ln, a, r in result.skipped
-                    ],
-                },
-            )
+            hash_pin_result = {
+                "changed_files": [str(p) for p in result.changed_files],
+                "changes": [
+                    {"file": str(c.file), "line": c.line,
+                      "action": c.action,
+                      "old_ref": c.old_ref, "new_sha": c.new_sha}
+                    for c in result.changes
+                ],
+                "skipped": [
+                    {"file": str(f), "line": ln, "action": a,
+                      "reason": r}
+                    for f, ln, a, r in result.skipped
+                ],
+            }
+            save_json(out_dir / "hash-pin.json", hash_pin_result)
             verb = "rewrote" if args.hash_pin_write else "would rewrite"
             print(f"raptor-sca fix --cve-only --hash-pin: {verb} {len(result.changes)} "
                   f"ref(s) across {len(result.changed_files)} workflow file"
                   f"(s); {len(result.skipped)} skipped. Plan: "
                   f"{out_dir}/hash-pin.json")
+    mode = "proposed export" if not args.apply else ("apply completed" if patch_path is not None else "no patch to apply")
+    report_completion(mode, changes=changes, compatibility=compat_reports)
     return 0
 
 
 def _run_cascade_validation(
     applied: list[UpgradeChange], out_dir: Path,
-) -> None:
+) -> list[dict[str, Any]]:
     """Per-ecosystem resolver pass over the proposed manifests.
 
     Groups applied changes by ecosystem; for each ecosystem, runs the
@@ -291,6 +310,7 @@ def _run_cascade_validation(
     print(f"raptor-sca fix --cve-only --allow-cascade: {oks} ecosystem(s) resolve "
           f"cleanly; {conflicts} have conflicts. Plan: "
           f"{out_dir}/cascade.json")
+    return summary
 
 
 def _validate_ecosystems_parallel(
@@ -374,7 +394,7 @@ def _validate_one_ecosystem(
     return row
 
 
-def _run_external_validation(manifest: Path, out_dir: Path) -> None:
+def _run_external_validation(manifest: Path, out_dir: Path) -> dict[str, Any] | None:
     """Run the ecosystem's resolver against an externally-supplied
     manifest (e.g. Dependabot's PR). Detects the ecosystem from the
     filename."""
@@ -384,29 +404,28 @@ def _run_external_validation(manifest: Path, out_dir: Path) -> None:
         print(f"raptor-sca fix --cve-only --validate-against: cannot detect ecosystem from "
               f"{manifest.name!r}; supported names: package.json, "
               f"requirements.txt, go.mod, Cargo.toml, ...", file=sys.stderr)
-        return
+        return None
     resolver = get_resolver(eco, project_dir=manifest.parent)
     if resolver is None:
         print(f"raptor-sca fix --cve-only --validate-against: no resolver wrapper for "
               f"{eco}", file=sys.stderr)
-        return
+        return None
     if not resolver.is_available():
         print(f"raptor-sca fix --cve-only --validate-against: {eco} toolchain not in PATH",
               file=sys.stderr)
-        return
+        return None
     result = resolver.dry_run(manifest.parent)
-    save_json(
-        out_dir / "validate-against.json",
-        {
-            "manifest": str(manifest),
-            "ecosystem": eco,
-            "verdict": "ok" if result.success else "conflict",
-            "error": result.error,
-        },
-    )
+    receipt = {
+        "manifest": str(manifest),
+        "ecosystem": eco,
+        "verdict": "ok" if result.success else "conflict",
+        "error": result.error,
+    }
+    save_json(out_dir / "validate-against.json", receipt)
     verb = "validates" if result.success else "fails"
     print(f"raptor-sca fix --cve-only --validate-against: {manifest.name} {verb} via "
           f"{eco} resolver. Detail: {out_dir}/validate-against.json")
+    return receipt
 
 
 def _detect_ecosystem_from_filename(name: str) -> str | None:
@@ -509,6 +528,10 @@ def value_flags() -> frozenset[str]:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p = _build_parser()
     args = p.parse_args(argv)
+    from core.reporting.options import options_from_args
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
     # ``--allow-cascade`` shells out to npm/pip/go which all need
     # network to query their registries (the sandbox routes them
     # through the egress proxy with a per-ecosystem allowlist).
@@ -605,6 +628,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="(accepted for orthogonality with `fix`; "
                         "this mode does not consult an LLM)")
     p.add_argument("-v", "--verbose", action="count", default=0)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p)
     return p
 
 
@@ -631,6 +656,7 @@ def _load_findings(args: argparse.Namespace) -> list[dict[str, Any]] | None:
             print(f"raptor-sca fix: {path} is not a finding list",
                   file=sys.stderr)
             return None
+        args._findings_source = path
         return data
 
     target = Path(args.target).resolve()
@@ -661,6 +687,7 @@ def _load_findings(args: argparse.Namespace) -> list[dict[str, Any]] | None:
         if data is None:
             # Strict load_json soft-returns None for a missing file.
             raise FileNotFoundError(result.findings_path)
+        args._findings_source = result.findings_path
         return data
     except (OSError, ValueError) as exc:
         print(f"raptor-sca fix: cannot read findings: {exc}",
