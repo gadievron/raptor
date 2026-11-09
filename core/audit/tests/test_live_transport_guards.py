@@ -1595,6 +1595,15 @@ class TestSemgrepSurfaceFences:
     runner, enumerated per file. A new live test that calls the raw
     sweep — or a guard silently dropped — flips these."""
 
+    def test_python_sql_recovery_native_surface(self) -> None:
+        calls = _function_call_map("../../detectors/tests/test_python_sql.py")
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_two_source_batch_uses_one_marker_and_one_native_scan", "transport",
+        }
+        assert _callers_of(calls, "run_rule") == {
+            "test_two_source_batch_uses_one_marker_and_one_native_scan", "invoke",
+        }
+
     def test_engine_sql_argument_regressions(self) -> None:
         calls = _function_call_map("../../../engine/semgrep/tests/test_sql_argument_precision.py")
         assert _callers_of(calls, "run") == set()

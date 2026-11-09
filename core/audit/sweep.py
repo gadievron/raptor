@@ -885,6 +885,7 @@ def run_semgrep_sweep(
         # runner's run_rule (different keyword surface), and the
         # bare shared name made the kwargs miswiring gate unable to
         # tell the callees apart.
+        from packages.semgrep.models import SemgrepFinding
         from packages.semgrep.runner import is_available
         from packages.semgrep.runner import run_rule as run_semgrep_rule
 
@@ -913,6 +914,20 @@ def run_semgrep_sweep(
         # keyword, whose fixtures all carry mapped extensions); a
         # future caller adding unknown-extension extra_targets must
         # re-audit this.
+        from core.detectors.python_sql import is_curated_sql_config, recover_python_sql
+        from core.source import read_contained_bytes
+
+        python_sql_language = full_path.suffix.lower() in {".py", ".pyw"}
+        if not python_sql_language and language:
+            from .hypothesis_mapping import semgrep_probed_language as _sql_probed_language
+            python_sql_language = _sql_probed_language(file_path, language) == "python"
+        python_sql_selected = python_sql_language and is_curated_sql_config(rule_config)
+        python_sql_snapshot: bytes | None = None
+        if python_sql_selected:
+            snapshot = read_contained_bytes(target_path, file_path, 1024 * 1024)
+            if snapshot is not None and not snapshot[1]:
+                python_sql_snapshot = snapshot[0]
+
         extra_args: list[str] | None = None
         # Receipt-policy honesty for foreign-extension targets: when
         # the inventory language is known but semgrep CANNOT witness
@@ -1052,7 +1067,7 @@ def run_semgrep_sweep(
                 # authoritative, exactly as unbatched.
                 _negative_control_cache[control_key] = bool(control_findings)
 
-        in_function = []
+        in_function: list[SemgrepFinding | dict[str, Any]] = []
         for finding in target_findings:
             if hasattr(finding, "line"):
                 finding_line = finding.line
@@ -1066,7 +1081,33 @@ def run_semgrep_sweep(
             else:
                 in_function.append(finding)
 
-        capped_reason: str | None = None
+        python_sql_reason: str | None = None
+        python_sql_details: dict[str, Any] | None = None
+        if (not in_function and python_sql_selected
+                and _target_in_examined_files(getattr(result, "files_examined", None), full_path, file_path)):
+            if python_sql_snapshot is None:
+                python_sql_reason = "Python SQL source snapshot unavailable; silence is inconclusive"
+                python_sql_details = {"status": "unavailable", "selected": 1, "prepared": 0}
+            else:
+                recovery = recover_python_sql(
+                    target_path, [file_path], out_dir=None,
+                    expected={file_path: python_sql_snapshot},
+                )
+                if recovery.status != "skipped":
+                    python_sql_details = {
+                        "status": recovery.status, "selected": recovery.selected,
+                        "prepared": recovery.prepared, "limitations": list(recovery.limitations),
+                    }
+                    python_sql_reason = (
+                        "prepared Python SQL view: detection-only leads, never verification or refutation"
+                    )
+                    if recovery.reason:
+                        python_sql_reason += "; " + recovery.reason
+                    in_function = [row for row in recovery.matches
+                                   if not (line_start and line_end)
+                                   or line_start <= row["line"] <= line_end]
+
+        capped_reason: str | None = python_sql_reason
         if presence_only:
             capped_reason = "presence-only query: matches do not establish the claimed defect"
         witness_cov: Coverage | None = None
@@ -1267,6 +1308,9 @@ def run_semgrep_sweep(
         details: dict[str, Any] | None = None
         if capped_reason:
             details = {"reason": capped_reason}
+        if python_sql_details is not None:
+            details = details or {}
+            details["python_sql_preparation"] = python_sql_details
         if control_error:
             details = details or {}
             details["negative_control_error"] = True

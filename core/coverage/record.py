@@ -8,7 +8,7 @@ Semgrep JSON output, CodeQL SARIF, and findings.json.
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from core.json import DEFAULT_JSON_MAX_BYTES, load_json, save_json
 from core.run.toolprobe import reported_version
@@ -302,15 +302,23 @@ class SemgrepOutputSummary:
     input_errors: int
     files_failed: list[dict[str, str]]
     skipped_rules: int = 0  # incompatible-rule notices across the supplied packs
+    result_locations: frozenset[tuple[str, str, int, int, int, int]] = frozenset()
+    location_rows_rejected: int = 0
+    locations_truncated: bool = False
 
 
 def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None = None,
-                         *, max_bytes: int | None = None) -> SemgrepOutputSummary:
+                         *, max_bytes: int | None = None,
+                         location_rule_ids: frozenset[str] = frozenset(),
+                         location_limit: int = 100_000) -> SemgrepOutputSummary:
     """Read each bounded pack output once and union its actual examined files.
 
     Language-specific packs need not examine the same files. Errors and skips
     also belong to individual packs; retain their union without retaining the
-    much larger result arrays. Duplicate paths are read once, with no cache
+    much larger result arrays. Optional requested-rule location keys are
+    projected during that same decode; rejected rows and key-budget loss are
+    disclosed separately and never erase otherwise valid coverage facts.
+    Duplicate paths are read once, with no cache
     surviving this call. The shared run-artifact byte ceiling remains the
     default; callers with a stricter existing ceiling can preserve it.
     """
@@ -323,13 +331,50 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
     version = ""
     input_errors = 0
     skipped_rules = 0
+    result_locations: set[tuple[str, str, int, int, int, int]] = set()
+    location_rows_rejected = 0
+    locations_truncated = False
 
     def consume(path: Path) -> None:
-        nonlocal version, input_errors, skipped_rules
+        nonlocal version, input_errors, skipped_rules, location_rows_rejected, locations_truncated
         data = load_json(path, max_bytes=max_bytes)
         if not isinstance(data, dict):
             input_errors += 1
             return
+        # Optional derived identities only: recovery adapters can deduplicate
+        # while this bounded report is already decoded. Coverage-only callers
+        # retain no result rows or location keys.
+        if location_rule_ids:
+            results = data.get("results", [])
+            if not isinstance(results, list):
+                location_rows_rejected += 1
+                results = []
+            for result in results:
+                if not isinstance(result, dict) or not isinstance(result.get("check_id"), str):
+                    location_rows_rejected += 1
+                    continue
+                rule_id = next((rule for rule in location_rule_ids
+                                if result["check_id"] == rule or result["check_id"].endswith("." + rule)), None)
+                if rule_id is None:
+                    continue
+                file = result.get("path")
+                start, end = result.get("start"), result.get("end")
+                if (not isinstance(file, str) or not file or "\x00" in file
+                        or not isinstance(start, dict) or not isinstance(end, dict)):
+                    location_rows_rejected += 1
+                    continue
+                points = (start.get("line"), start.get("col"), end.get("line"), end.get("col"))
+                if (any(type(point) is not int or point <= 0 for point in points)
+                        or (points[2], points[3]) < (points[0], points[1])):
+                    location_rows_rejected += 1
+                    continue
+                coordinates = cast("tuple[int, int, int, int]", points)
+                location_key = (rule_id, file, *coordinates)
+                if location_key in result_locations or len(result_locations) < max(0, location_limit):
+                    result_locations.add(location_key)
+                else:
+                    locations_truncated = True
+                    location_rows_rejected += 1
         damaged = False
         paths = data.get("paths", {})
         if not isinstance(paths, dict):
@@ -418,7 +463,8 @@ def read_semgrep_outputs(json_paths: list[Path], rules_applied: list[str] | None
     return SemgrepOutputSummary(
         record, {path: sorted(kinds) for path, kinds in sorted(dropped.items())},
         {reason: len(files) for reason, files in skipped.items()}, input_errors, failed_rows,
-        skipped_rules=skipped_rules,
+        skipped_rules=skipped_rules, result_locations=frozenset(result_locations),
+        location_rows_rejected=location_rows_rejected, locations_truncated=locations_truncated,
     )
 
 

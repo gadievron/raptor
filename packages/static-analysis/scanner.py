@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from core.coverage.record import SemgrepOutputSummary
     from core.detectors.setup import AnalysisSetup
 
 # Python path safety: the only permitted sys.path addition is the
@@ -2038,6 +2039,76 @@ def _write_stage_report(path: Path, document: dict, diagnostics: list[dict]) -> 
     return [str(path)]
 
 
+def run_python_sql_stage(
+    repo_path: Path, out_dir: Path, configs: list[str], semgrep_sarifs: list[str],
+) -> tuple[list[str], "SemgrepOutputSummary | None"]:
+    """Recover SQL leads only in files witnessed by the selected plain scan."""
+    from core.coverage.record import read_semgrep_outputs
+    from core.detectors.python_sql import (
+        RULE_ID, is_curated_sql_config, recover_python_sql,
+    )
+    from core.paths import confine
+
+    if not any(is_curated_sql_config(config) for config in configs):
+        return [], None
+    summary = read_semgrep_outputs(
+        [Path(path).with_suffix(".json") for path in semgrep_sarifs],
+        max_bytes=_MAX_TOOL_JSON_BYTES, location_rule_ids=frozenset({RULE_ID}),
+    )
+    diagnostics = []
+    if summary.input_errors:
+        diagnostics.append(_stage_diagnostic("Python SQL: original scan metadata is incomplete"))
+    if summary.location_rows_rejected:
+        diagnostics.append(_stage_diagnostic("Python SQL: raw match-location projection is incomplete"))
+    known = {(rule, path, line, column, line_end, column_end)
+             for rule, file, line, column, line_end, column_end in summary.result_locations
+             if (path := confine(repo_path, file)) is not None}
+    failed = {confine(repo_path, row["path"]) for row in summary.files_failed}
+    sources = []
+    for file in (summary.record or {}).get("files_examined", []):
+        path = confine(repo_path, file)
+        if path is None or path in failed or path.suffix.lower() not in {".py", ".pyw"}:
+            continue
+        sources.append(str(path.relative_to(repo_path.resolve())))
+    sources = list(dict.fromkeys(sources))
+    matches = []
+    if sources:
+        try:
+            recovery = recover_python_sql(repo_path, sources, out_dir=out_dir)
+        except Exception as exc:
+            diagnostics.append(_stage_diagnostic(f"Python SQL: recovery failed: {exc}", failed=True))
+        else:
+            matches = list(recovery.matches)
+            if recovery.status in {"partial", "error"}:
+                diagnostics.append(_stage_diagnostic(
+                    f"Python SQL: {recovery.reason or 'preparation incomplete'}",
+                    failed=recovery.status == "error",
+                ))
+            for file, reason in recovery.limitations:
+                diagnostics.append(_stage_diagnostic(f"Python SQL: {file}: {reason}"))
+    if not matches and not diagnostics:
+        return [], summary
+    results = []
+    for row in matches:
+        identity = (RULE_ID, confine(repo_path, row["file"]), row["line"], row["column"],
+                    row["line_end"], row["column_end"])
+        if identity in known:
+            continue
+        region = sarif_emit.source_region(
+            row["line"], column=row["column"], end_line=row["line_end"], end_column=row["column_end"],
+        )
+        results.append(sarif_emit.result(
+            RULE_ID, row["message"], [sarif_emit.location(row["file"], region)],
+            level=row["level"], properties={
+                "prepared_view": "python-builtin-int", "source_sha256": row["source_sha256"],
+            },
+        ))
+    document = sarif_emit.document([sarif_emit.run(
+        "semgrep-python-sql", [sarif_emit.minimal_rule(RULE_ID, properties={"cwe": "CWE-89"})], results,
+    )], schema_uri=sarif_emit.SCHEMA_URI_SCHEMASTORE)
+    return _write_stage_report(out_dir / "python-sql.sarif", document, diagnostics), summary
+
+
 def run_expanded_semgrep_stage(
     repo_path: Path,
     out_dir: Path,
@@ -3445,6 +3516,10 @@ def main() -> None:
                 traced_build=args.traced_build,
             )
 
+        python_sql_sarifs, python_sql_summary = run_python_sql_stage(
+            repo_path, out_dir, [*rules_dirs, *(args.extra_config or [])], semgrep_sarifs,
+        )
+
         # Coccinelle stage. Default-on for C/C++ targets; auto-skips
         # silently when spatch is absent or the repo has no C/C++
         # source. ``--no-cocci`` is the explicit opt-out (e.g.
@@ -3536,7 +3611,7 @@ def main() -> None:
         sarif_inputs = (
             semgrep_sarifs + codeql_sarifs + cocci_sarifs
             + compiler_sarifs + expanded_sarifs + graduated_sarifs
-            + config_resolved_sarifs + source_wrapper_sarifs
+            + config_resolved_sarifs + source_wrapper_sarifs + python_sql_sarifs
         )
         merged = out_dir / "combined.sarif"
         merge_completed = False
@@ -3712,7 +3787,11 @@ def main() -> None:
             # Degradation visibility: a file dropped by rule timeouts /
             # memory caps was NOT analysed even though the pack
             # "succeeded" — silent coverage loss unless said out loud.
-            semgrep_summary = read_semgrep_outputs(_all_semgrep_jsons, rules_applied=_rules_applied)
+            semgrep_summary = python_sql_summary or read_semgrep_outputs(
+                _all_semgrep_jsons, rules_applied=_rules_applied,
+            )
+            if semgrep_summary.record and _rules_applied:
+                semgrep_summary.record["rules_applied"] = _rules_applied
             metrics["semgrep_skipped_rules"] = semgrep_summary.skipped_rules
             if semgrep_summary.skipped_rules:
                 print(f"⚠️  semgrep: {semgrep_summary.skipped_rules} incompatible-rule notice(s); "

@@ -208,6 +208,14 @@ class SweepMemo:
             "negative_control_error",
         ):
             return
+        if isinstance(details, dict):
+            preparation = details.get("python_sql_preparation")
+            if isinstance(preparation, dict) and preparation.get("status") in {
+                "partial", "error", "unavailable",
+            }:
+                # A successful plain scan does not make an incomplete
+                # recovery pass reusable: the next dispatch must retry it.
+                return
         stored = copy.deepcopy(result)
         with self._lock:
             self._entries[key] = stored
