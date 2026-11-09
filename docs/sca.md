@@ -1429,3 +1429,10 @@ exit codes remain unchanged. Failed probes, latency and returned-version
 counts describe reachability at the time of the check, not package safety.
 An offline invocation remains an error and its optional report records that
 no live probes ran.
+
+`fingerprint` accepts the same explicit report options in compute, `--save`
+and `--check` modes. Reports retain the current fingerprint, the baseline
+actually used and the recorded drift. A missing baseline stays unavailable
+(exit 2); a capability change stays a drift signal (exit 1), not proof of
+malicious behavior. Reporting neither fetches the image again nor replaces
+the baseline. Native JSON and `--out` behavior remain unchanged.
