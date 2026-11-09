@@ -91,8 +91,11 @@ with patch.object(sys, "path", sys.path.copy()):
 
 
 @pytest.fixture(autouse=True)
-def _scope_isolation_ok():
-    """Most tests don't care about the version gate — default to available."""
+def _scope_isolation_ok(request):
+    """Unit command tests own the gate; live tests use the real capability."""
+    if request.node.get_closest_marker("integration"):
+        yield
+        return
     with patch("packages.semgrep.runner.scope_isolation_available",
                return_value=True):
         yield
@@ -996,20 +999,30 @@ class TestScanScopeLive:
 @pytest.mark.integration
 @pytest.mark.usefixtures('_live_tool_prerequisite_0')
 class TestIntegration:
-    """Real-semgrep tests. Skipped when binary unavailable."""
+    """Real Semgrep against owned rules, without registry availability."""
 
-    def test_run_on_simple_file(self, tmp_path):
+    @pytest.fixture
+    def local_python_rule(self, tmp_path):
+        rule = tmp_path / "native-rule.yaml"
+        rule.write_text(
+            "rules:\n- id: native.smoke\n  languages: [python]\n"
+            "  pattern: os.system(...)\n  message: owned native call\n  severity: WARNING\n",
+            encoding="utf-8",
+        )
+        return rule
+
+    def test_run_on_simple_file(self, tmp_path, local_python_rule):
         target = tmp_path / "x.py"
         target.write_text("import os\nos.system('hi')\n")
-        result = run_rule(target, "p/python", timeout=120)
-        # Either finds something or doesn't, but should not error.
-        assert result.ok or result.returncode == 0
+        result = run_rule(target, str(local_python_rule), timeout=120)
+        assert result.ok, result.errors
+        assert any("native.smoke" in finding.rule_id for finding in result.findings)
         assert result.semgrep_version
 
-    def test_files_examined_populated(self, tmp_path):
+    def test_files_examined_populated(self, tmp_path, local_python_rule):
         target = tmp_path / "x.py"
         target.write_text("a = 1\n")
-        result = run_rule(target, "p/python", timeout=120)
+        result = run_rule(target, str(local_python_rule), timeout=120)
         # paths.scanned should include at least our file
         assert result.ok, result.errors
         assert any("x.py" in f for f in result.files_examined)
@@ -1414,3 +1427,10 @@ def test_partial_sarif_retains_findings_and_reports_failure(tmp_path):
     assert not result.ok
     assert len(result.findings) == 1
     assert "malformed" in result.errors[0]
+
+
+@pytest.mark.integration
+def test_live_scope_gate_is_not_replaced_by_unit_fixture():
+    from packages.semgrep import runner
+
+    assert runner.scope_isolation_available is scope_isolation_available
