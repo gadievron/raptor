@@ -168,7 +168,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--budget-multiplier", type=float, default=1.0)
     parser.add_argument("--model", default=None,
                         help="model override, passed through to /cve-diff")
-    return parser.parse_args(list(argv))
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
+    args = parser.parse_args(list(argv))
+    args._report_options = options_from_args(args, parser)
+    if args.report_format and args.report_output is None:
+        parser.error("--report-format requires --report-output for this command")
+    return args
 
 
 def main(argv: Sequence[str]) -> int:
@@ -180,19 +186,21 @@ def main(argv: Sequence[str]) -> int:
     _configure_logging(0)
     args = _parse_args(argv)
 
+    findings_path: Path | None = None
     cves: list[str] = []
     for c in args.cve:
         cve = str(c).strip().upper()
         if not _CVE_RE.match(cve):
             print(f"raptor-sca fix-diff: not a CVE id: {c!r}", file=sys.stderr)
+            _complete_report(args, [], error="Invalid CVE identifier")
             return 2
         cves.append(cve)
 
-    findings_path: Path | None = None
     if not cves:
         if not args.findings:
             print("raptor-sca fix-diff: pass findings.json or --cve CVE-ID",
                   file=sys.stderr)
+            _complete_report(args, [], error="No findings input or explicit CVE supplied")
             return 2
         findings_path = Path(args.findings).resolve()
         try:
@@ -205,16 +213,19 @@ def main(argv: Sequence[str]) -> int:
         except (OSError, ValueError) as e:
             print(f"raptor-sca fix-diff: cannot read {findings_path}: {e}",
                   file=sys.stderr)
+            _complete_report(args, [], findings_path=findings_path, error="Findings input could not be read")
             return 2
         if not isinstance(rows, list):
             print(f"raptor-sca fix-diff: {findings_path} is not a finding "
                   "list", file=sys.stderr)
+            _complete_report(args, [], findings_path=findings_path, error="Findings input is not a finding list")
             return 2
         cves = collect_cve_ids(rows)
 
     if not cves:
         print("raptor-sca fix-diff: no CVE-identified advisories found — "
               "nothing to do")
+        _complete_report(args, [], findings_path=findings_path)
         return 0
 
     dropped = 0
@@ -252,7 +263,15 @@ def main(argv: Sequence[str]) -> int:
 
     ok = sum(1 for r in results if r["ok"])
     print(f"fix-diff: {ok}/{len(results)} CVEs resolved to fix commits")
+    _complete_report(args, results, dropped=dropped, findings_path=findings_path, summary_path=summary_path)
     return 0 if ok == len(results) else 1
+
+
+def _complete_report(args, results, *, dropped=0, findings_path=None, summary_path=None, error=None):
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .fix_diff_reporting import complete_fix_diff_report
+        complete_fix_diff_report(args._report_options, results, dropped=dropped,
+                                 findings_path=findings_path, summary_path=summary_path, error=error)
 
 
 if __name__ == "__main__":  # pragma: no cover
