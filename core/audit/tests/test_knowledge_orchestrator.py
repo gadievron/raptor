@@ -12,7 +12,8 @@ from core.testing.wallclock import wall_deadline
 
 
 @pytest.mark.parametrize("workers,max_seconds", [(1, None), (2, 20)], ids=["serial", "parallel"])
-def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path, monkeypatch, workers, max_seconds):
+@pytest.mark.parametrize("second_status", ["clean", "suspicious"])
+def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path, monkeypatch, workers, max_seconds, second_status):
     target = tmp_path / "target"
     target.mkdir()
     (target / "types.h").write_text("typedef struct { unsigned length; } foo_t;\n")
@@ -50,8 +51,12 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
             else:
                 assert "The target type carries length" in prompt
                 assert "integer" in prompt.lower() and "language reference" in prompt.lower()
-                payload = {"status": "clean", "body": "The reviewer now believes it is safe.",
+                payload = {"status": second_status, "body": "The reviewer has reassessed it.",
                            "reading_list": [], "language_reference_requests": []}
+                if second_status == "suspicious":
+                    payload.update(hypothesis="a distinct conversion needs review", cwe="CWE-190",
+                                   hypotheses=[{"mechanism": "a distinct conversion needs review",
+                                                "confidence": "medium"}])
             return StructuredResponse(result=payload, raw="", cost=0, model="scripted")
 
     client = Client()
@@ -72,11 +77,17 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
     assert len(request_ids) == 2
     assert len({r["origin"]["pass_id"] for r in trace["requests"]}) == 1
     completed = [e for e in trace["events"] if e["event"] == "continuation_completed"]
-    assert len(completed) == 1 and completed[0]["reason"] == "prior_retained"
+    reason = "prior_retained" if second_status == "clean" else "new_unverified_candidates"
+    assert len(completed) == 1 and completed[0]["reason"] == reason
+    if second_status == "suspicious":
+        canonical = result.outcomes[0]
+        assert canonical.hypothesis == "length wraps before caller validation"
+        added = next(h for h in canonical.hypotheses if h["mechanism"] == "a distinct conversion needs review")
+        assert added["confidence"] == "medium" and not canonical.evidence_tool
     assert set(completed[0]["delivered_request_ids"]) == request_ids
     assert completed[0]["published_status"] == "suspicious"
     assert trace["units"][0]["all_model_calls"] == 3
     assert trace["units"][0]["cycle"]["started"] == 1
     assessments = [e for e in trace["events"] if e["event"] == "review_assessment"]
-    assert [e["status"] for e in assessments] == ["suspicious", "clean"]
+    assert [e["status"] for e in assessments] == ["suspicious", second_status]
     assert assessments[1]["pass_id"] == completed[0]["pass_id"]

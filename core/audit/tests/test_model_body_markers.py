@@ -1626,7 +1626,9 @@ class TestReviewKeyScannerWrites:
          "dict(primary_entry[0])", "dict(primary_entry[-1])"),
         ("core/audit/orchestrator.py", "_synthesize_unmapped_suspicious", "value-expression", "review",
          "deepcopy(outcome.review_result or {})", "deepcopy(outcome.review_result)"),
-    ], ids=["panel-copy", "late-synthesis-copy"])
+        ("core/audit/orchestrator.py", "_merge_unverified_study_candidates", "value-expression", "prior_review",
+         "deepcopy(prior.review_result or {})", "deepcopy(prior.review_result)"),
+    ], ids=["panel-copy", "late-synthesis-copy", "study-candidate-copy"])
     def test_edited_pinned_expression_fails_its_pin(self, tmp_path, rel, qualname, shape, binding, old, new):
         """A pin binds the written expression's content. Editing a pinned write
         turns it into an unpinned site and makes its old pin stale."""
@@ -1742,6 +1744,11 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
         "review; existing model-authored and pipeline-owned classifications "
         "are retained. Selected hypothesis/cwe/cwe_class are classified; "
         "ondemand_synth_hypothesis is a pipeline-owned diagnostic",
+    ("core/audit/orchestrator.py", "_merge_unverified_study_candidates",
+     "value-expression", "4430a3d6d01e27ff"):
+        "deepcopy(prior.review_result or {}): isolated prior admitted review; "
+        "existing key classifications retained. Only model-authored hypotheses "
+        "are updated; fresh receipt/tool fields cannot enter the copy",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).
