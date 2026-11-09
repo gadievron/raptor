@@ -4,6 +4,7 @@ from contextlib import contextmanager, ExitStack, suppress
 import os
 import signal
 import subprocess
+import time
 
 
 def run_in_process_group(args, *, timeout, input=None, check=False,
@@ -45,6 +46,25 @@ def reap_on_exit(process, *, process_group=False, wait_timeout=5):
             with suppress(OSError):
                 stream.close()
 
+        def wait_for_exit():
+            deadline = (None if wait_timeout is None
+                        else time.monotonic() + wait_timeout)
+            try:
+                process.wait(timeout=wait_timeout)
+            except KeyboardInterrupt as interrupted:
+                # A boundary interrupt can occur before Popen.wait reaps.
+                # Preserve the interruption while attempting one bounded drain.
+                if process.returncode is None:
+                    remaining = (None if deadline is None
+                                 else max(0, deadline - time.monotonic()))
+                    try:
+                        process.wait(timeout=remaining)
+                    except BaseException as drain_error:
+                        if drain_error is interrupted:
+                            raise
+                        raise interrupted from drain_error
+                raise
+
         with ExitStack() as cleanup:
             # Preserve stdin/stdout/stderr close order, while attempting all
             # streams even if an earlier close raises or is interrupted.
@@ -72,12 +92,12 @@ def reap_on_exit(process, *, process_group=False, wait_timeout=5):
                 # attempt the bounded wait, keeping the signaling error
                 # visible if the wait fails too (notably a live-child EPERM).
                 try:
-                    process.wait(timeout=wait_timeout)
+                    wait_for_exit()
                 except BaseException as wait_error:
                     raise primary from wait_error
                 raise
             else:
-                process.wait(timeout=wait_timeout)
+                wait_for_exit()
 
 
 @contextmanager
