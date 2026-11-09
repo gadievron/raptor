@@ -5,7 +5,7 @@ still require a resolved layout, and never guess one from repository text.
 """
 
 from dataclasses import replace
-from typing import Any
+from typing import Any, Literal, cast
 from core.smt_solver.integer_abi import (
     INTEGER_ABIS as INTEGER_ABIS, IntegerABI as IntegerABI,
     IntegerABIInput as IntegerABIInput, resolve_integer_abi as resolve_integer_abi,
@@ -29,7 +29,8 @@ def host_integer_abi() -> IntegerABI | None:
 
     types = (ctypes.c_byte, ctypes.c_short, ctypes.c_int,
              ctypes.c_long, ctypes.c_longlong)
-    widths = tuple(ctypes.sizeof(kind) * 8 for kind in types)
+    widths = cast(tuple[int, int, int, int, int],
+                  tuple(ctypes.sizeof(kind) * 8 for kind in types))
     if any(width not in {8, 16, 32, 64} for width in widths):
         return None
     # Check the representation we model instead of silently assuming that
@@ -73,7 +74,7 @@ def binary_integer_abi(target_path: Path) -> IntegerABI | None:
         # System V/Linux, NetBSD, Solaris, FreeBSD and OpenBSD conventions.
         # Unknown OS ABIs and architectures can use different C data models.
         if meta is not None and len(header) >= 20 and header[7] in {0, 2, 3, 6, 9, 12}:
-            machine = int.from_bytes(header[18:20], meta.endianness)
+            machine = int.from_bytes(header[18:20], cast(Literal["little", "big"], meta.endianness))
             platform_bits = {
                 2: {32},           # SPARC
                 3: {32},           # i386
@@ -107,9 +108,9 @@ def binary_integer_abi(target_path: Path) -> IntegerABI | None:
             THIN_MACHO_MAGICS, extract_macho_facts,
         )
         if header[:4] in THIN_MACHO_MAGICS:
-            facts = extract_macho_facts(target_path)
-            if facts is not None and len(facts.slices) == 1:
-                item = facts.slices[0]
+            macho_facts = extract_macho_facts(target_path)
+            if macho_facts is not None and len(macho_facts.slices) == 1:
+                item = macho_facts.slices[0]
                 expected_bits = {"x86": 32, "arm": 32, "ppc": 32,
                                  "x86_64": 64, "arm64": 64, "ppc64": 64}.get(item.arch)
                 if expected_bits == item.bits:

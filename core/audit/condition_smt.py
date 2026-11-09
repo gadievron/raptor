@@ -748,7 +748,7 @@ def check_signed_mismatch(
         return SignedMismatchResult(reasoning="complete guard model unavailable — no mismatch claim")
 
     for c in constraints:
-        unsigned = var_is_unsigned
+        unsigned: bool | None = var_is_unsigned
         if unsigned is None:
             unsigned = declared_signedness(c.variable, source)
         if unsigned is not True or c.operator not in ("<", "<=") or c.bound_value < 0:

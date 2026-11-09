@@ -179,11 +179,11 @@ def _summarize_observations(checks: list[dict]) -> dict:
     assumptions list is still a report from the checker; an absent field
     does not mean that the check required no assumptions.
     """
-    outcomes = Counter()
-    by_tool = defaultdict(Counter)
-    payloads = Counter()
-    identities = Counter()
-    assumptions = Counter()
+    outcomes: Counter[str] = Counter()
+    by_tool: defaultdict[str, Counter[str]] = defaultdict(Counter)
+    payloads: Counter[str] = Counter()
+    identities: Counter[str] = Counter()
+    assumptions: Counter[str] = Counter()
     for check in checks:
         tool = str(check.get("tool") or "unknown")
         outcome = str(check.get("outcome") or "unknown")
@@ -218,7 +218,7 @@ def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
     Keep first-delivery order for display, without using it to choose a winner.
     The append-only log retains all deliveries, including rejected records.
     """
-    events = {}
+    events: dict[str, dict[bytes, dict]] = {}
     input_records = duplicate_records = invalid_records = 0
     for row in rows:
         if row.get("action") != "verification_check" or row.get("schema_version") != 1:
@@ -239,8 +239,8 @@ def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
             duplicate_records += 1
         else:
             variants[fingerprint] = payload
-    checks = []
-    quarantined = []
+    checks: list[dict] = []
+    quarantined: list[dict] = []
     conflicting_ids = 0
     for variants in events.values():
         if len(variants) == 1:
@@ -267,7 +267,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     sidecar; channels that bypass this observation seam remain unavailable.
     """
     status = "unavailable"
-    checks = []
+    checks: list[dict] = []
     artifact = None
     retained_summary = _summarize_observations([])
     admission = None
@@ -325,8 +325,8 @@ def write_check_results(export: dict, out_dir: Path) -> None:
                            "recorded" if refs else "unavailable"),
             }
 
-    matching = []
-    other_claims = []
+    matching: list[dict] = []
+    other_claims: list[dict] = []
     linked_objects = set()
     findings_with_matches = 0
     for finding in findings:
