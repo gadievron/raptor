@@ -13,99 +13,106 @@ involved — do not just name the pattern.
 
 ## 1. Integer Overflow in Allocation Size
 
-Arithmetic on attacker-influenced values used for malloc/calloc. Overflow
-wraps the result, producing an undersized buffer.
+C11 review lead: establish actual target types/ranges, not host widths.
+Unsigned arithmetic wraps; signed overflow is undefined behaviour. A
+destination type does not widen the earlier expression. Check other
+language editions separately.
 
 ```c
-// BUG: width * height * 4 can wrap to a small value
+// LEAD: multiplication may overflow before allocation
 size_t total = width * height * 4;
 buf = malloc(total);
 
-// FIX: check before multiply
-if (width > SIZE_MAX / height / 4) return ERROR;
-size_t total = width * height * 4;
+// CHECK: width and height are validated size_t values
+if (height != 0 && width > SIZE_MAX / height) return ERROR;
+size_t pixels = width * height;
+if (pixels > SIZE_MAX / 4) return ERROR;
+size_t total = pixels * 4;
 buf = malloc(total);
 ```
 
-Also watch for `calloc(n, size)` — it checks internally, but code that
-pre-multiplies then passes to `malloc` does not.
+Also check the identified `calloc` implementation and its failure handling;
+a product computed before the call has already lost overflow information.
 
 ---
 
 ## 2. Integer Overflow in Length/Bounds Computation
 
-Arithmetic overflow in a length or offset used for bounds checking. The
-check passes because the overflowed value is small, but the actual
-operation uses the original large value.
+A wrapped unsigned length or offset can defeat a bounds check. Signed
+overflow is undefined behaviour, not portable wrapping. Check actual extents.
 
 ```c
-// BUG: offset + len wraps, passes the < check, memcpy overflows
-if (offset + len < buf_size) {
-    memcpy(buf + offset, src, len);
-}
+// LEAD: size_t offset + len may wrap before the comparison
+if (offset + len < buf_size) memcpy(buf + offset, src, len);
 
-// FIX: rearrange to avoid overflow
-if (len > buf_size - offset) return ERROR;
+// CHECK: size_t values; reject before subtraction can underflow
+if (offset > buf_size || len > buf_size - offset) return ERROR;
 ```
+
+This checks the destination range only; the source range still needs review.
 
 ---
 
 ## 3. Signed/Unsigned Comparison
 
-A signed value compared to an unsigned value. Negative signed values
-become large positives, bypassing bounds checks.
+Apply promoted operand ranks/ranges. A negative-to-unsigned conversion
+becomes large; comparison direction determines whether it defeats a check.
 
 ```c
-// BUG: if len is -1, (unsigned)-1 > sizeof(buf) may not hold
-//      depending on promotion rules
-int len = get_length(input);
-if (len > sizeof(buf)) return ERROR;
-memcpy(buf, input, len);  // len cast to size_t = huge
+// LEAD: same-rank mixed operands; available == -1 becomes UINT_MAX
+int available = get_available();  // negative on failure
+unsigned int requested = parse_count(input);
+if (requested > available) return ERROR;
+memcpy(dst, src, requested);
 
-// FIX: check negative separately
-int len = get_length(input);
-if (len < 0 || (size_t)len > sizeof(buf)) return ERROR;
+// CHECK: reject the error before converting; verify actual buffer extents too
+if (available < 0 || requested > (unsigned int)available) return ERROR;
 ```
+
+Do not assume `int len = -1; len > sizeof(buf)` bypasses rejection: where
+`len` converts to size_t, the resulting large value normally rejects it.
 
 ---
 
 ## 4. Signed/Unsigned Conversion Truncation
 
-Assigning a larger unsigned value to a smaller signed type, or vice
-versa. The value silently truncates or reinterprets.
+In C11, out-of-range signed integer conversion has an implementation-defined result or signal.
+Representable integer values are unchanged; other unsigned destinations
+reduce modulo their range. `_Bool` instead converts zero to zero and other
+scalar values to one.
 
 ```c
-// BUG: size_t n assigned to int — values > INT_MAX become negative
+// LEAD: n may not fit int; do not assume it necessarily becomes negative
 size_t n = parse_header_length(pkt);
 int remaining = n;
-if (remaining > 0) {
-    process(buf, remaining);
-}
+process(buf, remaining);
 
-// FIX: validate range before narrowing
+// CHECK: reject before narrowing, then verify process's buffer contract
 if (n > INT_MAX) return ERROR;
 int remaining = (int)n;
 ```
+
+Show a reachable out-of-range value and harmful use; a cast alone is not a defect.
 
 ---
 
 ## 5. Integer Promotion in Arithmetic
 
-C promotes `char`, `short`, `uint8_t`, `uint16_t` to `int` before
-arithmetic. When the result is stored back into a narrow type, it
-truncates silently.
+Integer promotions depend on the original type's range and rank.
+Eligible operands become int only if it holds all values, otherwise
+unsigned int. uint16_t need not promote to int.
+Apply the operator's rules; a wider assignment does not fix earlier overflow.
 
 ```c
-// BUG: uint16_t offset wraps at 65536, not at buffer size
-uint16_t offset = 0;
-while (parse_next(&offset, data)) {
-    offset += field_len;   // promoted to int, truncated to uint16_t
-}
-buf[offset] = val;         // offset wrapped, out of bounds
-
-// FIX: use size_t for offsets that can grow
-size_t offset = 0;
+// LEAD: compound assignment converts the result back to uint16_t
+uint16_t offset = base;
+offset += field_len;
 ```
+
+If arithmetic is defined, conversion back to uint16_t reduces modulo
+65536. Wrapping is not automatically out of bounds. size_t alone is no
+fix: check `offset <= buf_size` and `field_len <= buf_size - offset`
+before adding validated size_t values.
 
 ---
 
@@ -396,17 +403,20 @@ elem = &array->items[3];
 
 ## 21. Signedness of char
 
-`char` is signed on most platforms. Passing `char` to ctype functions
-or using as array index produces UB for values > 127.
+Plain char signedness is implementation-defined; ctype arguments have a restricted domain.
+Ctype requires EOF or a value representable as unsigned char; other arguments have
+undefined behaviour. A negative array index needs its own bounds analysis.
 
 ```c
-// BUG: c may be negative
 char c = buf[i];
+// LEAD: a negative c other than EOF is outside isalpha's domain
 if (isalpha(c)) { ... }
 
-// FIX
+// CHECK: byte held in char, on a target with UCHAR_MAX <= INT_MAX
 if (isalpha((unsigned char)c)) { ... }
 ```
+
+For an int returned by fgetc, preserve and check EOF before converting.
 
 ---
 
@@ -448,31 +458,36 @@ memcpy(&result, &bits, sizeof(result));
 
 ## 24. Shift Undefined Behaviour
 
-Shifting by >= type width, shifting a negative value left, or shifting
-into the sign bit.
+In C11, shift counts must be nonnegative and below the promoted left operand's width.
+Other counts are undefined. Signed left shift also requires a nonnegative
+left operand and a representable result. Negative signed right shift is
+implementation-defined. The destination width does not set the shift width.
 
 ```c
-// BUG: n >= 32 → UB
+// LEAD: 1 has type int; n == 31 may already fail on a 32-bit int
 uint32_t mask = 1 << n;
 
-// FIX
+// CHECK: n is unsigned; form a 32-bit mask using an unsigned wide operand
 if (n >= 32) return ERROR;
-uint32_t mask = (uint32_t)1 << n;
+uint32_t mask = (uint32_t)(1ULL << n);
 ```
+
+The checked form assumes uint32_t exists; a signed count also needs n >= 0.
 
 ---
 
 ## 25. Division / Modulo by Zero
 
-Dividing by a value from external input that may be zero.
+C11 division/remainder is undefined for zero divisors or unrepresentable quotients.
+INT_MIN / -1 and INT_MIN % -1 fail only on asymmetric int ranges.
 
 ```c
-// BUG
-int ratio = total_len / avg_len;  // avg_len from parsed data
-
-// FIX
-if (avg_len == 0) return ERROR;
+// CHECK: total_len and avg_len are int
+if (avg_len == 0 || (total_len < -INT_MAX && avg_len == -1)) return ERROR;
+int ratio = total_len / avg_len;
 ```
+
+Use the actual promoted operand type and its limits for other integer types.
 
 ---
 
@@ -709,25 +724,26 @@ atomic_fetch_add(&count, 1);
 
 ## 39. Unsafe Integer Parsing (atoi / atol)
 
-`atoi()` has no overflow detection, no error indication, and returns 0
-for non-numeric input (indistinguishable from a valid "0").
+C11 atoi/atol lack reliable error reporting; an unrepresentable result is undefined.
+Do not assume silent wrapping. No conversion
+can also return zero. Check the entire accepted input and destination range.
 
 ```c
-// BUG: no error detection; "99999999999" silently wraps; "abc" → 0
+// LEAD: malformed or out-of-range input is not diagnosed
 int port = atoi(user_input);
-bind_to_port(port);
 
-// FIX: strtol with full validation
+// CHECK: strtol conversion and application range (unsigned int holds 65535)
 char *end;
 errno = 0;
 long val = strtol(user_input, &end, 10);
 if (errno || end == user_input || *end != '\0' ||
     val < 0 || val > 65535)
     return ERROR;
-int port = (int)val;
+unsigned int port = (unsigned int)val;
 ```
 
-Also: `sscanf("%d", ...)` has the same overflow-silently behaviour.
+For scanf-family numeric conversion, an unrepresentable destination result
+also has undefined behaviour; field width alone is not a range check.
 
 ---
 
@@ -753,24 +769,23 @@ if (diff == 0) accept();
 
 ## 41. Negative Offset in Pointer Arithmetic
 
-An offset computed from attacker data that can go negative (via integer
-overflow or signed/unsigned mismatch), causing the pointer to land
-before the buffer start.
+A negative index or wrapped unsigned offset can select the wrong buffer position.
+size_t operands may promote to signed int: signed overflow is undefined. If evaluated unsigned, a
+product wraps to a nonnegative value, potentially selecting the wrong record.
 
 ```c
-// BUG: if base_offset overflows via multiplication, ptr lands before buf
+// LEAD: size_t product may wrap, losing the intended record position
 size_t base_offset = record_index * record_size;
-char *ptr = buf + base_offset;
-memcpy(ptr, src, record_size);
+memcpy(buf + base_offset, src, record_size);
 
-// FIX: check multiplication overflow AND bounds
-if (record_index > (buf_size / record_size)) return ERROR;
+// CHECK: validated size_t values; reject zero and require one whole record
+if (record_size == 0 || record_size > buf_size) return ERROR;
+if (record_index > (buf_size - record_size) / record_size) return ERROR;
 size_t base_offset = record_index * record_size;
-if (base_offset + record_size > buf_size) return ERROR;
 ```
 
-Also: signed index used with pointer arithmetic — a negative `int` index
-on `buf[index]` reads/writes before the buffer.
+The product and destination fit; check source extent separately. Zero-sized
+records need an explicit policy, not division by zero.
 
 ---
 
