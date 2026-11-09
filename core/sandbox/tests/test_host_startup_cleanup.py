@@ -467,3 +467,78 @@ def test_acknowledgement_attempts_both_daemon_endpoint_closes(setup_tracker, mon
                         raise
                     if (info.st_dev, info.st_ino) == identity:
                         real_close(fd)
+
+
+@pytest.mark.parametrize('fault_site', ['join', 'first_fd', 'last_fd', 'output'])
+@pytest.mark.parametrize('secondary_type', [OSError, KeyboardInterrupt])
+def test_preparation_secondary_failure_retires_all_owners(
+    setup_tracker, monkeypatch, fault_site, secondary_type,
+):
+    """A failed start owns every endpoint even when retirement is interrupted."""
+    import shutil
+
+    tracker = setup_tracker
+    primary = KeyboardInterrupt('owned thread startup failure')
+    secondary = secondary_type('owned preparation retirement failure')
+    real_close = os.close
+    remove = host_mod._remove_owned_output
+    workers, identities, closed, removed = [], {}, [], []
+
+    class FailedStart(threading.Thread):
+        def start(self):
+            workers.append(self)
+            identities.update({fd: (os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+                               for fd in tracker.fds})
+            super().start()
+            raise primary
+
+        def join(self, timeout):
+            super().join(timeout)
+            if fault_site == 'join':
+                raise secondary
+
+    def close(fd):
+        real_close(fd)
+        closed.append(fd)
+        failed_fd = tracker.fds[0 if fault_site == 'first_fd' else -1]
+        if fault_site in ('first_fd', 'last_fd') and fd == failed_fd:
+            raise secondary
+
+    def remove_output(path):
+        result = remove(path)
+        removed.append(path)
+        if fault_site == 'output':
+            raise secondary
+        return result
+
+    patch_module_attribute(monkeypatch, host_mod, 'threading', 'Thread', FailedStart)
+    patch_module_attribute(monkeypatch, host_mod, 'os', 'close', close)
+    monkeypatch.setattr(host_mod, '_remove_owned_output', remove_output)
+    caught = None
+    try:
+        try:
+            host_mod.SandboxHost.start(target=tracker.target)
+        except BaseException as error:
+            caught = error
+        assert caught is primary
+        assert all(not worker.is_alive() for worker in workers)
+        assert sorted(closed) == sorted(tracker.fds)
+        assert removed == tracker.owned
+        assert_cleaned(tracker, None)
+    finally:
+        # The original implementation can leak after the injected failure.
+        # Retire only still-owned physical endpoints, never reused numbers.
+        for worker in workers:
+            threading.Thread.join(worker, timeout=5)
+            assert not worker.is_alive()
+        for fd, identity in identities.items():
+            try:
+                info = os.fstat(fd)
+            except OSError as error:
+                if error.errno == errno.EBADF:
+                    continue
+                raise
+            if (info.st_dev, info.st_ino) == identity:
+                real_close(fd)
+        for path in tracker.owned:
+            shutil.rmtree(path, ignore_errors=True)

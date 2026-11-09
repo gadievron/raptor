@@ -362,21 +362,31 @@ class SandboxHost:
                 _owned_output=owned_output,
             )
             thread.start()
-        except BaseException:
-            # A thread whose start was interrupted must exit without
-            # using descriptors this failure path is about to release.
-            if launch_gate is not None:
-                launch_gate.set()
-            if thread is not None:
-                with contextlib.suppress(RuntimeError):
-                    thread.join(timeout=5.0)
-            # Before startup succeeds, this scope owns every pipe end
-            # and any private scratch directory it allocated.
-            for fd in setup_fds:
+        except BaseException as failure:
+            # Register every owner before retirement can itself fail. The
+            # disabled worker must be released and joined before its setup
+            # endpoints are retired; private output is removed last.
+            def close_setup_fd(fd):
                 with contextlib.suppress(OSError):
                     os.close(fd)
-            if owned_output:
-                _remove_owned_output(owned_output)
+
+            def join_disabled_worker():
+                with contextlib.suppress(RuntimeError):
+                    thread.join(timeout=5.0)
+
+            try:
+                with contextlib.ExitStack() as cleanup:
+                    if owned_output:
+                        cleanup.callback(_remove_owned_output, owned_output)
+                    for fd in setup_fds:
+                        cleanup.callback(close_setup_fd, fd)
+                    if thread is not None:
+                        cleanup.callback(join_disabled_worker)
+                    if launch_gate is not None:
+                        cleanup.callback(launch_gate.set)
+            except BaseException as cleanup_error:
+                failure.add_note(
+                    "host preparation cleanup: " + type(cleanup_error).__name__)
             raise
         try:
             worker_enabled = True
