@@ -542,3 +542,61 @@ def test_preparation_secondary_failure_retires_all_owners(
                 real_close(fd)
         for path in tracker.owned:
             shutil.rmtree(path, ignore_errors=True)
+
+
+@pytest.mark.parametrize('stage', ['paths', 'spawn', 'decode', 'success'])
+@pytest.mark.parametrize('secondary_type', [OSError, KeyboardInterrupt])
+def test_one_shot_output_cleanup_preserves_operation_failure(
+    setup_tracker, monkeypatch, stage, secondary_type,
+):
+    import json
+    import struct
+    import core.sandbox
+    from core.sandbox import python_paths
+
+    tracker = setup_tracker
+    original = RuntimeError('owned one-shot operation failure')
+    cleanup = secondary_type('owned output cleanup failure')
+    remove = host_mod._remove_owned_output
+    removed = []
+
+    def paths():
+        if stage == 'paths':
+            raise original
+        return []
+
+    def run(*args, **kwargs):
+        if stage == 'spawn':
+            raise original
+        if stage == 'decode':
+            body = b'[]'
+        else:
+            request = json.loads(kwargs['input'][4:])
+            body = json.dumps({'ok': True, 'rid': request['rid']}).encode()
+        return SimpleNamespace(stdout=struct.pack('!I', len(body)) + body,
+                               stderr=b'', returncode=0)
+
+    def remove_output(path):
+        assert remove(path)
+        removed.append(path)
+        raise cleanup
+
+    monkeypatch.setattr(python_paths, 'python_runtime_tool_paths', paths)
+    monkeypatch.setattr(core.sandbox, 'run', run)
+    monkeypatch.setattr(host_mod, '_remove_owned_output', remove_output)
+    with pytest.raises(BaseException) as caught:
+        host_mod.one_shot_call(cmd='ping', payload={}, target=tracker.target)
+    if stage == 'success':
+        assert caught.value is cleanup
+    elif stage == 'paths':
+        assert caught.value is original
+    else:
+        assert isinstance(caught.value, host_mod.HostRPCError)
+        if stage == 'spawn':
+            assert caught.value.__cause__ is original
+        else:
+            assert 'JSON object' in str(caught.value)
+    if stage != 'success':
+        assert 'one-shot output cleanup: ' + secondary_type.__name__ in caught.value.__notes__
+    assert removed == tracker.owned
+    assert_cleaned(tracker, None)
