@@ -1200,6 +1200,13 @@ remains an unavailable verdict, with exit code 2. Report generation performs
 no extra registry or advisory queries. It captures up to 100 records per
 category with full totals; the native review retains the full list.
 
+`verify` also accepts an explicit report destination, for example
+`--report-format json --report-output verification.json`. It reports the
+completed overlay comparison, the applied files and whether baseline
+findings were reused. No additional scan runs to generate the report.
+Unavailable advisory coverage still returns exit code 4; targeted patch
+gates and native `delta.md`/`delta.json` outputs retain their existing meaning.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml
