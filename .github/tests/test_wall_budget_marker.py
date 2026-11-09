@@ -53,8 +53,9 @@ markers =
 
 
 def _run_nested(
-    tmp_path: Path, budget: str, test_source: str,
+    tmp_path: Path, budget: str | None, test_source: str,
     phase_durations: dict[tuple[str, str], float | None] | None = None,
+    *, workers: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Run one nested pytest session over ``test_source`` with the
     root conftest loaded and RAPTOR_MAX_TEST_SECONDS=``budget``.
@@ -94,7 +95,10 @@ def _run_nested(
         RAPTOR_REGISTRY_HOME=str(tmp_path / "registry"),
         RAPTOR_OUT_DIR=str(tmp_path / "out"),
     )
-    env["RAPTOR_MAX_TEST_SECONDS"] = budget
+    if budget is None:
+        env.pop("RAPTOR_MAX_TEST_SECONDS", None)
+    else:
+        env["RAPTOR_MAX_TEST_SECONDS"] = budget
     # These sessions exercise root hooks, not installed third-party plugins.
     # Load the LLM guard explicitly rather than inheriting arbitrary plugins.
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
@@ -124,6 +128,7 @@ def _run_nested(
             "core.testing.llm_tripwire",
             "-p",
             "no:cacheprovider",
+            *(["-p", "xdist.plugin", "-n", str(workers), "--max-worker-restart=0"] if workers else []),
             str(test_file),
         ],
         cwd=REPO_ROOT,
@@ -299,3 +304,42 @@ class TestWallBudgetMarker:
             "@pytest.mark.wall_budget takes exactly one positional"
             in combined
         ), combined
+
+
+@pytest.mark.wall_budget(30)
+class TestWallBudgetWorkerReports:
+    @pytest.mark.parametrize("marker", ["@pytest.mark.wall_budget", "@pytest.mark.wall_budget('invalid')"])
+    @pytest.mark.parametrize("budget", ["1.0", None], ids=["guard-enabled", "guard-disabled"])
+    def test_malformed_marker_preserves_worker_setup_error(self, tmp_path, marker, budget):
+        pytest.importorskip("xdist")
+        body_ran = tmp_path / "invalid-body-ran"
+        proc = _run_nested(
+            tmp_path, budget,
+            "import pytest\nfrom pathlib import Path\n"
+            f"{marker}\ndef test_invalid():\n    Path({str(body_ran)!r}).touch()\n"
+            "def test_valid_companion():\n    pass\n",
+            phase_durations={}, workers=4,
+        )
+        combined = proc.stdout + proc.stderr
+        assert proc.returncode == 1, combined
+        assert "1 passed, 1 error" in combined, combined
+        assert "wall_budget takes exactly one positional" in combined, combined
+        assert "INTERNALERROR" not in combined, combined
+        assert "worker crashed" not in combined, combined
+        assert not body_ran.exists()
+
+    @pytest.mark.parametrize("budget", ["1.0", None], ids=["guard-enabled", "guard-disabled"])
+    def test_valid_worker_marker_keeps_report_budget(self, tmp_path, budget):
+        pytest.importorskip("xdist")
+        proc = _run_nested(
+            tmp_path, budget,
+            "import pytest\n@pytest.mark.wall_budget(15)\ndef test_valid():\n    pass\n",
+            # Exceeds the global budget, so enabled guard needs the actual
+            # serialized marker stamp to preserve the raised budget.
+            phase_durations={("test_valid", "call"): 2.0}, workers=4,
+        )
+        combined = proc.stdout + proc.stderr
+        assert proc.returncode == 0, combined
+        assert "1 passed" in combined, combined
+        assert "slow-test guard FAILED" not in combined, combined
+        assert "INTERNALERROR" not in combined, combined
