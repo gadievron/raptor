@@ -1325,9 +1325,8 @@ def test_validator_block_in_try_with_exception_catch_declines(tmp_path: Path):
 
 
 @_requires_z3
-def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Path):
-    """``except OSError:`` doesn't catch the ValueError raised by the
-    validator — dominance still holds."""
+def test_validator_specific_handler_needs_call_error_contract(tmp_path: Path):
+    """Failure-branch exception types do not constrain call-time errors."""
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
         "    try:\n"
@@ -1347,17 +1346,20 @@ def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Pa
         "+        pass\n"
         "     return open(x)\n"
     )
+    import ast
+
+    tree = ast.parse((tmp_path / "app.py").read_text())
+    assert sb._validator_block_exits_on_failure(tree, 3)
     r = sb.try_tier0(
         fix_diff=diff, repo_root=tmp_path,
         sink_uri="app.py", sink_line=7, sink_class="pathtrav",
     )
-    assert r.status is sb.Tier0Status.SOUND
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
 @_requires_z3
-def test_validator_with_return_inside_try_still_dominates(tmp_path: Path):
-    """Return is NOT catchable — even ``except:`` doesn't intercept it.
-    Dominance still holds when the failure branch uses ``return``."""
+def test_validator_return_expression_can_raise_before_return(tmp_path: Path):
+    """The call in ``return error()`` may raise before the return executes."""
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
         "    try:\n"
@@ -1381,7 +1383,7 @@ def test_validator_with_return_inside_try_still_dominates(tmp_path: Path):
         fix_diff=diff, repo_root=tmp_path,
         sink_uri="app.py", sink_line=7, sink_class="pathtrav",
     )
-    assert r.status is sb.Tier0Status.SOUND
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
 def test_variable_reassigned_detects_except_as():
@@ -3880,7 +3882,7 @@ def test_caught_invalid_charset_does_not_prove_guard(tmp_path: Path):
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
 
     # The same exception-handling shape still admits a valid allowlist.
-    path.write_text(source.replace("z-a", "a-z"))
+    path.write_text(source.replace("z-a", "a-z").replace("        pass", "        return"))
     control = sb.try_tier0(
         fix_diff='+        if not re.fullmatch(r"[a-z]+", name):\n',
         repo_root=tmp_path, sink_uri="app.py", sink_line=8, sink_class="pathtrav",
@@ -4191,3 +4193,51 @@ def test_charset_chain_requires_identity_transfer(tmp_path: Path, statements, ta
         sink_uri="app.py", sink_line=len(control_source.splitlines()), sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("handler", ["TypeError", "Exception", "BaseException"])
+@pytest.mark.parametrize("exit_statement", ["return", "raise"])
+def test_charset_guard_error_cannot_bypass_validation(
+    tmp_path: Path, handler, exit_statement,
+):
+    import re
+
+    # A path-like input is rejected by regex but accepted by the path sink.
+    with pytest.raises(TypeError):
+        re.fullmatch("[a-z]+", Path("../unvalidated"))
+    guard = '        if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\ndef handle(name):\n    try:\n" + guard
+        + "\n            return\n    except " + handler
+        + ":\n        pass\n    return open(name)\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=8, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "does not dominate" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace("        pass", "        " + exit_statement))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=8, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+def test_charset_guard_error_skips_protected_sink(tmp_path: Path):
+    guard = '        if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\ndef handle(name):\n    try:\n" + guard
+        + "\n            return\n        return open(name)\n"
+        "    except TypeError:\n        pass\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=6, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.SOUND

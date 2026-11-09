@@ -1045,6 +1045,34 @@ def _line_in_try_body_with_catching_handler(
     return False
 
 
+def _validator_call_error_may_reach_sink(
+    tree: ast.AST, validator_line: int, sink_line: int,
+) -> bool:
+    """A caught call error must not bypass validation on the sink path.
+
+    Handler types are not a complete call-exception contract. A sink in
+    the same protected body is skipped by the exception edge; otherwise
+    a falling-through handler leaves the input unvalidated at the sink.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Try, ast.TryStar)):
+            continue
+
+        body = node.body
+
+        def in_body(line: int) -> bool:
+            return any(
+                stmt.lineno <= line <= (getattr(stmt, "end_lineno", None) or stmt.lineno)
+                for stmt in body
+            )
+
+        if not in_body(validator_line) or in_body(sink_line):
+            continue
+        if any(not _block_always_exits(handler.body) for handler in node.handlers):
+            return True
+    return False
+
+
 def _validator_block_exits_on_failure(
     tree: ast.AST, validator_line: int,
 ) -> bool:
@@ -2054,6 +2082,8 @@ def _lexical_validator_dominates(
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
     if not _validator_block_exits_on_failure(tree, validator_line):
+        return False
+    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line):
         return False
     if not _if_test_contains_call(tree, validator_line):
         return False
