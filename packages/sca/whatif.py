@@ -102,6 +102,10 @@ def main(
            if not args.no_kev else None)
     epss = (EpssClient(http, cache, offline=args.offline, ttl_seconds=ttl_query)
             if not args.no_epss else None)
+    capture = None
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .whatif_reporting import UpgradeCapture
+        capture = UpgradeCapture()
 
     if args.add or args.remove or args.from_file:
         report, exit_code = _modal_report(
@@ -110,16 +114,19 @@ def main(
             from_file=args.from_file,
             findings_path=args.findings,
             osv=osv,
+            capture=capture,
         )
     elif args.candidate:
         report, exit_code = _candidates_report(
             args.ecosystem, args.name, args.from_version, args.candidate,
             osv, kev, epss,
+            capture=capture,
         )
     else:
         report, exit_code = _pairwise_report(
             args.ecosystem, args.name, args.from_version, args.to_version,
             osv, kev, epss,
+            capture=capture,
         )
 
     if args.explain and not (args.add or args.remove or args.from_file):
@@ -130,6 +137,8 @@ def main(
         )
         if explain_section:
             report += explain_section
+            if capture is not None:
+                capture.record("impact explanation", {"recorded domain text": explain_section})
 
     if osv.degraded:
         # A transient OSV failure must never read as "no known
@@ -156,6 +165,9 @@ def main(
         write_text_atomically(out, report)
     sys.stdout.write(report)
     sys.stdout.flush()
+    if capture is not None:
+        from .whatif_reporting import complete_upgrade_report
+        complete_upgrade_report(args, capture, exit_code=exit_code, osv=osv)
     return exit_code
 
 
@@ -227,7 +239,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--no-epss", action="store_true")
     p.add_argument("--cache-root")
     p.add_argument("-v", "--verbose", action="count", default=0)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
     args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
     # Expand ``--candidates A,B,C`` into the existing ``--candidate`` list.
     if args.candidates:
         extras = [c.strip() for c in args.candidates.split(",") if c.strip()]
@@ -260,6 +277,7 @@ def _modal_report(
     from_file: str | None,
     findings_path: str | None,
     osv: OsvClient,
+    capture=None,
 ) -> tuple[str, int]:
     """Run the ``--add`` / ``--remove`` / ``--from`` shape.
 
@@ -290,6 +308,8 @@ def _modal_report(
                 Path(from_file), max_bytes=64 * 1024 * 1024,
             )
         except (OSError, ValueError) as e:
+            if capture is not None:
+                capture.record("refusal", {"reason": str(e), "source": from_file})
             return f"raptor-sca upgrade --from: cannot read {from_file}: {e}\n", 2
         if isinstance(entries, list):
             for entry in entries:
@@ -314,6 +334,11 @@ def _modal_report(
         lines.append("")
         for eco, name, ver in spec_adds:
             advs = _query_one(osv, eco, name, ver)
+            if capture is not None:
+                from .findings import _advisory_summary
+                capture.record("add", {"ecosystem": eco, "name": name, "version": ver,
+                                       "advisory count": len(advs),
+                                       "advisories": [_advisory_summary(a) for a in advs[:100]] if capture.has_capacity else []})
             if advs:
                 has_introduced = True
                 # osv_id is remote registry content headed for
@@ -337,6 +362,10 @@ def _modal_report(
         cleared = _findings_clearing(findings_path, spec_removes)
         for eco, name in spec_removes:
             advs = cleared.get((eco, name), [])
+            if capture is not None:
+                capture.record("remove", {"ecosystem": eco, "name": name,
+                                          "recorded clearing advisories": len(advs), "advisories": advs[:100],
+                                          "baseline supplied": bool(findings_path)})
             if advs:
                 lines.append(
                     f"- removing **{eco}:{name}** would clear "
@@ -440,6 +469,7 @@ def _pairwise_report(
     osv: OsvClient,
     kev: KevClient | None,
     epss: EpssClient | None,
+    *, capture=None,
 ) -> tuple[str, int]:
     # Validate the version pair against the ecosystem comparator
     # before any network. Pre-fix: unparseable versions silently
@@ -451,6 +481,8 @@ def _pairwise_report(
     try:
         _vcompare(ecosystem, from_version, to_version)
     except VersionError as exc:
+        if capture is not None:
+            capture.record("refusal", {"reason": str(exc)})
         return (
             (f"# raptor-sca upgrade — {ecosystem}:{name} "
              f"{from_version} → {to_version}\n\n"
@@ -475,6 +507,12 @@ def _pairwise_report(
                 if _canonical_id(f) in resolved_ids]
     regressed = [f for f in by_version[to_version]
                  if _canonical_id(f) in regressed_ids]
+    if capture is not None:
+        capture.findings("from", from_version, by_version[from_version])
+        capture.findings("to", to_version, by_version[to_version])
+        capture.record("comparison", {"resolved": len(resolved), "regressed": len(regressed),
+                                      "resolved advisory ids": sorted(resolved_ids)[:100],
+                                      "regressed advisory ids": sorted(regressed_ids)[:100]})
 
     buf = StringIO()
     buf.write(f"# raptor-sca upgrade — {ecosystem}:{name} "
@@ -517,6 +555,7 @@ def _candidates_report(
     osv: OsvClient,
     kev: KevClient | None,
     epss: EpssClient | None,
+    *, capture=None,
 ) -> tuple[str, int]:
     from .versions import VersionError
     from .versions import compare as _vcompare
@@ -524,6 +563,8 @@ def _candidates_report(
         try:
             _vcompare(ecosystem, from_version, cand)
         except VersionError as exc:
+            if capture is not None:
+                capture.record("refusal", {"reason": str(exc), "version": cand})
             return (
                 (f"# raptor-sca upgrade — {ecosystem}:{name} "
                  f"from {from_version}\n\n"
@@ -539,6 +580,9 @@ def _candidates_report(
     by_version: dict[str, list[VulnFinding]] = {v: [] for v in versions}
     for f in findings:
         by_version.setdefault(f.dependency.version or "", []).append(f)
+    if capture is not None:
+        for version in versions:
+            capture.findings("candidate" if version != from_version else "from", version, by_version.get(version, []))
 
     base_findings = by_version.get(from_version, [])
     base_ids = {_canonical_id(f): f for f in base_findings}
@@ -604,6 +648,11 @@ def _candidates_report(
     # Recommendation: smallest candidate that resolves the full set.
     full_clear = [cand for cand in candidates
                   if coverage[cand] == len(base_ids)]
+    if capture is not None:
+        capture.record("candidate comparison", {"open advisories": len(base_ids),
+                                                "candidate count": len(candidates),
+                                                "resolved counts": {cand: coverage[cand] for cand in candidates[:100]},
+                                                "recommended candidate": full_clear[0] if full_clear else None})
     if full_clear:
         buf.write(f"## Recommendation\n\nUpgrade to **{full_clear[0]}** "
                   "— resolves every open advisory.\n")
