@@ -4386,6 +4386,7 @@ class TestJoernLiveQuery:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestIterativeReReview:
     """Re-review callers of findings with propagated callee knowledge."""
 
@@ -4478,7 +4479,7 @@ class TestIterativeReReview:
                 body="nothing remarkable",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -4515,7 +4516,7 @@ class TestIterativeReReview:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0, propagate_constraints=True,
             # hermetic: the clean-check rescue is a separate, documented
@@ -4601,7 +4602,7 @@ class TestIterativeReReview:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -4623,6 +4624,7 @@ class TestIterativeReReview:
 class TestSessionObservations:
     """Session context: observations accumulate across reviews."""
 
+    @pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
     def test_observations_accumulate(self, tmp_path: Path):
         target = tmp_path / "target"
         target.mkdir()
@@ -4662,7 +4664,7 @@ class TestSessionObservations:
                 },
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             budget=10, batch_sloc_threshold=0,
             # The assertions below encode strict review ORDER (f1's
