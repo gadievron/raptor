@@ -249,7 +249,9 @@ def _redact_url_inner(raw_url: str) -> str:
     try:
         parsed = urlsplit(raw_url)
     except ValueError:
-        return raw_url
+        # Malformed authorities can still contain credentials. A parser
+        # rejection must not turn the redactor into a pass-through sink.
+        return "[REDACTED malformed URL]"
 
     # Don't bail when netloc is empty — schemeless or netloc-less inputs
     # (`/api?token=secret`, `data:...`, custom schemes) still carry
