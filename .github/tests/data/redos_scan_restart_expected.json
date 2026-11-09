@@ -1015,18 +1015,18 @@
   },
   "core/audit/path_feasibility.py\u001fnonneg_patterns": {
    "digests": [
-    "d2e08b967930"
+    "96346abf1ef3"
    ],
    "exp": 1.0,
-   "note": "The identifier boundary pins starts; the new terminal token guard does not add restart positions. The current scan lane measured linear.",
+   "note": "Reviewed frozen main-002: explicit identifier start/continuation classes under the existing IGNORECASE flag narrow admitted identifiers; the word boundary and terminal token guard remain. Full position-density regeneration measured the current pattern linear (exp=1.00). This review belongs to this digest, not future pattern edits.",
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fnull_patterns": {
    "digests": [
-    "efda20e4da99"
+    "bbea7cf6e6d2"
    ],
    "exp": 1.0,
-   "note": "The identifier boundary pins starts; the new terminal token guard does not add restart positions. The current scan lane measured linear.",
+   "note": "Reviewed frozen main-002: explicit identifier start/continuation classes under the existing IGNORECASE flag narrow admitted identifiers; the word boundary and terminal token guard remain. Full position-density regeneration measured the current pattern linear (exp=1.00). This review belongs to this digest, not future pattern edits.",
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
