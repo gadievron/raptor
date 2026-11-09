@@ -9,7 +9,6 @@ from typing import Any, Optional, Sequence
 
 from .schema import (
     EDGE_PROVENANCE_MECHANICAL,
-    _like_escape,
     json_loads,
     json_dumps,
 )
@@ -143,6 +142,8 @@ def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[di
         snapshot = _latest_snapshot(conn, target_path, producer="understand")
         if not snapshot:
             return []
+        stale_files = _stale_files_for_snapshot(
+            conn, snapshot, target_path or snapshot["target_path"])
         rows = conn.execute(
             """
             SELECT e.confidence, e.evidence_json,
@@ -152,6 +153,8 @@ def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[di
             JOIN nodes s ON s.id=e.src_id
             JOIN nodes d ON d.id=e.dst_id
             WHERE e.snapshot_id=? AND e.kind='REACHES' AND e.stale=0
+              AND s.snapshot_id=e.snapshot_id AND d.snapshot_id=e.snapshot_id
+              AND s.stale=0 AND d.stale=0
               AND s.kind IN ('entry_point', 'source') AND d.kind='sink'
             ORDER BY d.file, d.line_start
             """,
@@ -169,6 +172,8 @@ def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[di
                 "evidence": json_loads(row["evidence_json"]),
             }
             for row in rows
+            if row["source_file"] not in stale_files
+            and row["sink_file"] not in stale_files
         ]
 
     result = query_graph(db_path, _do, target_path)
@@ -350,37 +355,47 @@ def threat_model_graph_context(
     return "\n".join(lines)
 
 
-def prompt_context_for_location(db_path: Path, file_path: str, line: int | None = None, *, limit: int = 6) -> str:
-    """Return a compact, prompt-safe graph memory block for one finding."""
+def prompt_context_for_location(db_path: Path, file_path: str, line: int | None = None, *,
+                                limit: int = 6, target_path: str | None = None) -> str:
+    """Return current graph context for an exact source location.
+
+    Older callers may omit the target only for a single-target graph.
+    Ambiguous project history and basename-only matches are not evidence
+    about the requested source file.
+    """
     if not file_path:
         return ""
-    file_name = str(file_path)
 
     def _do(conn):
-        rows = conn.execute(
+        from core.paths import to_repo_relative
+
+        target = target_path
+        if not target:
+            targets = conn.execute(
+                "SELECT DISTINCT target_path FROM snapshots "
+                "WHERE producer='understand' LIMIT 2"
+            ).fetchall()
+            if len(targets) != 1 or not targets[0]["target_path"]:
+                return []
+            target = targets[0]["target_path"]
+        snapshot = _latest_snapshot(conn, target, producer="understand")
+        if not snapshot:
+            return []
+        file_name = to_repo_relative(str(file_path), target)
+        if file_name is None or file_name in _stale_files_for_snapshot(
+                conn, snapshot, target, only_file=file_name):
+            return []
+        return conn.execute(
             """
             SELECT kind, name, file, line_start, props_json
             FROM nodes
-            WHERE stale=0 AND file=?
+            WHERE snapshot_id=? AND stale=0 AND file=?
               AND kind IN ('entry_point', 'trust_boundary', 'sink', 'unchecked_flow', 'finding')
             ORDER BY kind, ABS(COALESCE(line_start, 0) - ?)
             LIMIT ?
             """,
-            (file_name, int(line or 0), limit),
+            (snapshot["id"], file_name, int(line or 0), max(0, min(limit, 100))),
         ).fetchall()
-        if not rows:
-            rows = conn.execute(
-                """
-                SELECT kind, name, file, line_start, props_json
-                FROM nodes
-                WHERE stale=0 AND file LIKE ? ESCAPE '\\'
-                  AND kind IN ('entry_point', 'trust_boundary', 'sink', 'unchecked_flow', 'finding')
-                ORDER BY kind, line_start
-                LIMIT ?
-                """,
-                (f"%{_like_escape(Path(file_name).name)}", limit),
-            ).fetchall()
-        return rows
 
     rows = query_graph(db_path, _do)
     if not rows:
@@ -1478,7 +1493,8 @@ def _latest_snapshot(conn, target_path: Optional[str],
     ).fetchone()
 
 
-def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str]) -> set[str]:
+def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
+                              only_file: str | None = None) -> set[str]:
     if not target_path:
         return set()
     try:
@@ -1494,6 +1510,10 @@ def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str]) -> set
     for row in rows:
         props = json_loads(row["props_json"])
         rel = props.get("path") or row["file"]
+        # Point lookups must not rehash the entire source tree for every
+        # finding. Whole-snapshot consumers retain the full scan.
+        if only_file is not None and rel != only_file:
+            continue
         expected = props.get("sha256")
         if not rel or not expected:
             continue
