@@ -27,6 +27,7 @@ from core.audit.cwe_dispatch import (
     resolve_semgrep_rule_for_cwe,
 )
 from core.audit.orchestrator import _cwe_fallback_chain
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
 
 _RULES_DIR = (
     Path(__file__).resolve().parents[3] / "engine" / "semgrep" / "rules"
@@ -139,7 +140,7 @@ class TestLanguageGate:
         ) is None
 
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
-    def test_php_chain_is_baseline_plus_semgrep_head(self, cwe: str):
+    def test_php_chain_is_baseline_plus_semgrep_head(self, cwe: str, codeql_chain_catalogue):
         chain = _cwe_fallback_chain(cwe, "", "src/index.php")
         assert chain[0]["type"] == "semgrep"
         assert chain[0]["config"]["rule"].endswith(_WEB_FAMILIES[cwe][0])
@@ -150,6 +151,9 @@ class TestLanguageGate:
         # Exactly one semgrep leg, prepended to the baseline chain.
         baseline = self._chain_without_semgrep_keys(cwe, "src/index.php")
         assert chain[1:] == baseline
+        assert [e["config"]["query"] for e in chain if e["type"] == "codeql"] == [
+            str(codeql_chain_catalogue[lookup(cwe)["codeql"]]),
+        ]
         assert [e["type"] for e in chain].count("semgrep") == 1
 
     @staticmethod
@@ -165,7 +169,7 @@ class TestLanguageGate:
             CWE_TO_TOOL_DISPATCH[cwe] = original
 
     @pytest.mark.parametrize("cwe", sorted(_WEB_FAMILIES))
-    def test_non_php_chains_byte_identical(self, cwe: str):
+    def test_non_php_chains_byte_identical(self, cwe: str, codeql_chain_catalogue):
         """The differential: for every non-PHP target the chain built
         from the real table equals the chain built from the entry
         stripped of its semgrep keys — the semgrep leg is the ONLY
@@ -174,6 +178,9 @@ class TestLanguageGate:
             with_keys = _cwe_fallback_chain(cwe, "", path)
             without = self._chain_without_semgrep_keys(cwe, path)
             assert with_keys == without, (cwe, path)
+            assert [e["config"]["query"] for e in with_keys if e["type"] == "codeql"] == [
+                str(codeql_chain_catalogue[lookup(cwe)["codeql"]]),
+            ]
             assert all(e["type"] != "semgrep" for e in with_keys)
 
     def test_sibling_class_untouched(self):

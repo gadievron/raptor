@@ -23,6 +23,8 @@ from core.audit.cwe_dispatch import (
 )
 from core.audit.fail_open_verify import fail_open_applicable
 from core.audit.joern_verify import flow_chain_entry
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
+
 from core.audit.orchestrator import (
     _cwe_fallback_chain,
     _hypothesis_to_tool_chain,
@@ -49,8 +51,12 @@ class TestCwe908UninitialisedResource:
     def test_consistency_census_channel(self):
         assert consistency_applicable("CWE-908")
 
-    def test_fallback_chain(self):
-        types = {e["type"] for e in _cwe_fallback_chain("CWE-908")}
+    def test_fallback_chain(self, codeql_chain_catalogue):
+        chain = _cwe_fallback_chain("CWE-908")
+        types = {e["type"] for e in chain}
+        assert [e["config"]["query"] for e in chain if e["type"] == "codeql"] == [
+            str(codeql_chain_catalogue["cpp/uninitialized-local"]),
+        ]
         assert "joern" in types
         assert "joern_flow" in types
         assert "consistency" in types
@@ -94,7 +100,7 @@ class TestCwe345Authenticity:
 
 
 class TestWarningAndSynthesisTail:
-    def test_no_empty_dispatch_warning_for_new_families(self, monkeypatch):
+    def test_no_empty_dispatch_warning_for_new_families(self, monkeypatch, codeql_chain_catalogue):
         import core.audit.orchestrator as _orch
 
         warned = []
@@ -104,6 +110,10 @@ class TestWarningAndSynthesisTail:
         for cwe in ("CWE-908", "CWE-835", "CWE-345"):
             chain = _hypothesis_to_tool_chain("", "a.c", cwe=cwe)
             assert chain, f"{cwe} must dispatch at least one channel"
+            if cwe == "CWE-908":
+                assert [e["config"]["query"] for e in chain if e["type"] == "codeql"] == [
+                    str(codeql_chain_catalogue["cpp/uninitialized-local"]),
+                ]
         assert warned == []
 
     def test_unmapped_tail_still_warns_and_seeds_synthesis(

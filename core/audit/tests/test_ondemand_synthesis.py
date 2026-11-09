@@ -7,6 +7,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import ClassVar
 
+import pytest
+
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
+
 from packages.checker_synthesis.models import (
     CheckerSynthesisResult,
     SeedBug,
@@ -236,6 +240,7 @@ class TestOnDemandHookInPromoteSuspicious:
         )
         return calls
 
+    @pytest.mark.usefixtures("codeql_chain_catalogue")
     def test_secondary_sweep_routes_aliasing_mechanism_to_synthesis(
         self, tmp_path, monkeypatch,
     ):
@@ -564,6 +569,7 @@ class TestSynthesisHypothesisForCwe:
         assert _synthesis_hypothesis_for_cwe(o, "CWE-416", "p") == "p"
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestCVE2026_31431_AliasingRoute:
     """Focused proof that CVE-2026-31431 (_aead_recvmsg, CWE-416
     aliasing UAF) routes to on-demand synthesis instead of dying
@@ -619,16 +625,10 @@ class TestCVE2026_31431_AliasingRoute:
             "CWE-416 smt:check-early-release must be absent"
         )
 
-    def test_sequential_uaf_keeps_full_chain(self, monkeypatch):
+    def test_sequential_uaf_keeps_full_chain(self):
         """Contrast: a sequential UAF hypothesis keeps the full
         CWE-416 standing tools (cocci, smt, codeql, joern)."""
         from core.audit.orchestrator import _cwe_fallback_chain
-
-        monkeypatch.setattr(
-            "core.audit.orchestrator._codeql_query_file",
-            lambda q: q or None,
-        )
-
 
         seq_hyp = (
             "kfree is called and then the pointer is dereferenced "
@@ -693,7 +693,7 @@ class TestCVE2026_31431_AliasingRoute:
         )
 
     def test_llm_routing_drops_cwe_chain_for_aliasing(
-        self, tmp_path, monkeypatch,
+        self, tmp_path, monkeypatch, codeql_chain_catalogue,
     ):
         """LLM routing: LLM says standing tools do NOT dominate the
         aliasing hypothesis → CWE chain dropped → string-matched
@@ -705,10 +705,13 @@ class TestCVE2026_31431_AliasingRoute:
             def generate_structured(self, *a, **kw):
                 return {"dominated": False, "reasoning": "aliasing"}
 
-        monkeypatch.setattr(
-            "core.audit.orchestrator._run_tool_chain",
-            lambda *a, **kw: [],
-        )
+        dispatched = []
+
+        def run_chain(chain, **kwargs):
+            dispatched.extend(chain)
+            return []
+
+        monkeypatch.setattr("core.audit.orchestrator._run_tool_chain", run_chain)
         monkeypatch.setattr(
             "core.audit.orchestrator.run_prefilter",
             lambda **kw: SimpleNamespace(hits=[]),
@@ -744,6 +747,9 @@ class TestCVE2026_31431_AliasingRoute:
 
         _promote_suspicious(result, config)
 
+        assert [e["config"]["query"] for e in dispatched if e["type"] == "codeql"] == [
+            str(codeql_chain_catalogue["cpp/use-after-free"]),
+        ]
         assert len(calls) == 1, (
             "synthesis must fire — LLM dropped CWE chain + exhaustion"
         )
