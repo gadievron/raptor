@@ -21,7 +21,7 @@ from typing import Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from tree_sitter import Node
+    from tree_sitter import Node, Tree
 
 logger = logging.getLogger(__name__)
 
@@ -755,7 +755,7 @@ def _extract_first_arg(
     return ""
 
 
-_FIRST_ARG_NATIVE_NODE: type | None
+_FIRST_ARG_NATIVE_NODE: type[Node] | None
 try:
     from tree_sitter import Node as _FirstArgNodeClass
     _FIRST_ARG_NATIVE_NODE = _FirstArgNodeClass
@@ -1267,8 +1267,8 @@ def extract_loop_caps(
     loop_types = _LOOP_TYPES.get(lang, ())
     results: list[LoopCap] = []
 
-    NativeNode: type | None
-    NativeTree: type | None
+    NativeNode: type[Node] | None
+    NativeTree: type[Tree] | None
     try:
         from tree_sitter import Node as LoopNodeClass, Tree as LoopTreeClass
         NativeNode, NativeTree = LoopNodeClass, LoopTreeClass
