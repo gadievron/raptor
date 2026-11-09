@@ -496,12 +496,11 @@ def append_journal_for_outcome(
     reading_list_items: list[str] = []
     review_result = getattr(outcome, "review_result", None)
     if review_result and review_result.get("reading_list"):
-        # LLM rows carry present-but-null / non-str questions; a
-        # .get default never fires on a present null, and the journal
-        # declares list[str] — route bad leaves to the str(item)
-        # fallback instead of persisting null.
+        # Prefer subjects while retaining legacy question labels. The journal
+        # declares list[str]; preserve malformed leaves as visible text rather
+        # than persisting null.
         reading_list_items = [
-            q if isinstance(q := item.get("question"), str) and q
+            q if isinstance(q := item.get("subject") or item.get("question"), str) and q
             else str(item)
             for item in review_result["reading_list"]
             if isinstance(item, dict)

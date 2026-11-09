@@ -164,7 +164,7 @@ _BUG_CLASS_FIELD = {
     "description": "Category of the defect found.",
 }
 
-# Languages the study loop can resolve reading_list assumptions in.
+# Languages with source-identifier and concept study support.
 # C/C++ resolve via the study-prep corpus; the others via
 # core.concepts.lang_resolve (per-language identifier/concept
 # resolution).  Extend BOTH this tuple and the resolution layer when
@@ -674,65 +674,92 @@ REVIEW_SCHEMA = {
         "reading_list": {
             "type": "array",
             "description": (
-                f"{_STUDY_LANGS_TEXT} targets only — omit for other "
-                "languages; the study loop cannot resolve assumptions "
-                "there. Domain knowledge you relied on for your "
-                "verdict that was NOT defined in the provided source "
-                "context. List every type, macro, API contract, "
-                "library call, or invariant whose semantics you "
-                "assumed from training knowledge rather than reading "
-                "in the provided code. The study loop will verify "
-                "these assumptions against the actual source. Most "
-                "non-trivial functions reference at least one "
-                "external contract — an empty list means you made "
-                "zero assumptions beyond what was shown, which is "
-                "rare."
+                f"{_STUDY_LANGS_TEXT} targets only; omit for other languages. "
+                "Unfamiliar target-source identifiers or concepts whose role or "
+                "relationships need source study. Empty is valid. Do not list "
+                "questions, caller checks, language rules or every assumption."
             ),
             "items": {
                 "type": "object",
                 "properties": {
-                    "question": {
+                    "subject": {
                         "type": "string",
-                        "description": (
-                            "The assumption phrased as a verifiable "
-                            "question. Be precise: name the type, macro, "
-                            "function, or contract. E.g. 'Does rcu_read_lock "
-                            "prevent the task_struct from being freed?', "
-                            "'Does skb_cow_data handle shared frags by "
-                            "copying them?', or 'Does parse_config validate "
-                            "the schema before returning?'"
-                        ),
-                    },
-                    "priority": {
-                        "type": "string",
-                        "enum": ["critical", "high", "normal", "low"],
-                        "description": (
-                            "critical = verdict depends entirely on this. "
-                            "high = likely changes the verdict if wrong. "
-                            "normal = would change confidence. "
-                            "low = background assumption."
-                        ),
+                        "description": "One source identifier, e.g. foo_t, or a target concept, e.g. page tables. No question."
                     },
                     "resolution": {
                         "type": "string",
-                        "enum": ["identifier", "concept"],
-                        "description": (
-                            "identifier = a specific type, macro, or "
-                            "function that can be looked up in the source. "
-                            "concept = a broader domain concept or API "
-                            "contract that requires explanation."
-                        ),
+                        "enum": [
+                            "identifier",
+                            "concept"
+                        ]
                     },
                     "context": {
                         "type": "string",
-                        "description": (
-                            "How this assumption influenced your verdict — "
-                            "what would change if the assumption is wrong."
-                        ),
+                        "description": "What understanding of this subject is missing from this review."
                     },
+                    "priority": {
+                        "type": "string",
+                        "enum": [
+                            "critical",
+                            "high",
+                            "normal",
+                            "low"
+                        ]
+                    }
                 },
-                "required": ["question"],
-            },
+                "required": [
+                    "subject",
+                    "resolution",
+                    "context"
+                ]
+            }
+        },
+        "language_reference_requests": {
+            "type": "array",
+            "description": "Language rules needed to interpret the supplied implementation; resolved from local references separately from source study. Empty is valid. Caller behaviour is a code-review/context need, not a language topic.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string"
+                    },
+                    "entry_id": {
+                        "type": "string",
+                        "description": "Optional known reference ID; a natural-language topic is sufficient."
+                    },
+                    "source_anchor": {
+                        "type": "object",
+                        "properties": {
+                            "file": {
+                                "type": "string"
+                            },
+                            "line": {
+                                "type": "integer"
+                            }
+                        },
+                        "required": [
+                            "file",
+                            "line"
+                        ]
+                    },
+                    "needed_for": {
+                        "type": "string"
+                    },
+                    "priority": {
+                        "type": "string",
+                        "enum": [
+                            "critical",
+                            "high",
+                            "normal",
+                            "low"
+                        ]
+                    }
+                },
+                "required": [
+                    "topic",
+                    "needed_for"
+                ]
+            }
         },
         "intent_trace": {
             "type": "array",
@@ -846,6 +873,7 @@ REVIEW_SCHEMA_BLIND = {
         "observations": REVIEW_SCHEMA["properties"]["observations"],  # type: ignore[index]
         "constraints": REVIEW_SCHEMA["properties"]["constraints"],  # type: ignore[index]
         "reading_list": REVIEW_SCHEMA["properties"]["reading_list"],  # type: ignore[index]
+        "language_reference_requests": REVIEW_SCHEMA["properties"]["language_reference_requests"],  # type: ignore[index]
         "intent_trace": REVIEW_SCHEMA["properties"]["intent_trace"],  # type: ignore[index]
         "verdict_rationale": REVIEW_SCHEMA["properties"]["verdict_rationale"],  # type: ignore[index]
         "status": _STATUS_NO_DORMANT,
@@ -982,22 +1010,20 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "your final status value. The status must follow from the "
     "reasoning, never the reverse. Do not generate empty arrays or "
     "objects as placeholder values — omit optional fields entirely "
-    "when they do not apply (exception: reading_list for "
-    "study-supported languages — see ASSUMED KNOWLEDGE).\n\n"
-    "ASSUMED KNOWLEDGE (" + _STUDY_LANGS_TEXT + "): When reviewing "
-    "code in these languages, state in reading_list every domain "
-    "fact you relied on that was NOT defined in the provided source "
-    "context — type semantics, API contracts, macro expansions, "
-    "locking invariants, allocator contracts, error-handling "
-    "conventions, framework and library behaviour. Phrase each as a "
-    "verifiable question: 'Does rcu_read_lock prevent the "
-    "task_struct from being freed here?', 'Does EVP_CIPHER_CTX_new "
-    "return NULL on allocation failure?', or 'Does json.loads accept "
-    "duplicate keys without error?'. Most non-trivial functions "
-    "reference at least one external contract. If your verdict would "
-    "change if any assumption is wrong, mark it critical. For other "
-    "languages, omit reading_list entirely — the study loop cannot "
-    "resolve assumptions there.\n\n"
+    "when they do not apply. Empty knowledge-request lists are valid.\n\n"
+    "MISSING KNOWLEDGE (" + _STUDY_LANGS_TEXT + "): "
+    "Review the actual supplied implementation. Remembering a safe implementation "
+    "does not establish that this one is safe. Return provisional hypotheses and "
+    "assessment while requesting materially missing knowledge in the same response. "
+    "Use reading_list for unfamiliar source identifiers or target concepts, such as "
+    "foo_t or page tables, with a learning context. For other languages, omit "
+    "reading_list. Use language_reference_requests for language rules, such as "
+    "integer promotion or conversion destinations. Do not turn caller validation "
+    "or missing code into a study subject or a language topic; record the "
+    "code-context limitation. Empty request lists are valid; do not inventory "
+    "every assumption. On continuation, re-examine the actual code with the new "
+    "information. Reference rules and study explanations are context, not "
+    "confirmation or refutation evidence.\n\n"
     "OPERATOR NOTES: The operator may attach advisory notes in "
     "``<operator_note>`` blocks (visible in your context under "
     "'Previous annotation'). Read these for context — the operator's "
@@ -1340,7 +1366,9 @@ def make_review_fn(
     ):
         """Standard single-call structured generation."""
         from core.llm.structured_call import unwrap_structured_response
-        response = llm_client.generate_structured(
+        from .knowledge_calls import observed_client
+
+        response = observed_client(llm_client, purpose="review").generate_structured(
             prompt,
             active_schema,
             system_prompt=effective_system_prompt,
@@ -1654,6 +1682,11 @@ def make_review_fn(
             review_result=result,
         )
 
+    # The normal knowledge owner can conservatively count one structured
+    # dispatch attempt per invocation, including failures before dispatch.
+    # This is not a count of transport retries or verification side calls.
+    setattr(review_fn, "_knowledge_single_call_contract", True)
+    setattr(review_fn, "_knowledge_observed_client_contract", True)
     return review_fn
 
 

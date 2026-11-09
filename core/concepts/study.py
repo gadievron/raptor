@@ -15,9 +15,10 @@ import contextlib
 import logging
 import os
 import re
+from dataclasses import asdict, replace
 from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, TypedDict
 
 from core.json import dumps_display, save_json
 from core.source.lines import splitlines_prefix
@@ -36,6 +37,11 @@ from .model import (
     StudyItem,
     evidence_hash_composite,
 )
+from .subject_study import StudySubjects, SubjectDispatchRefused
+
+class _SubjectOptions(TypedDict, total=False):
+    subjects: StudySubjects
+
 
 logger = logging.getLogger(__name__)
 
@@ -3218,6 +3224,7 @@ def _run_one_batch(
     vocab_sink: list | None = None,
     max_tokens: int | None = None,
     wall_timeout: float | None = None,
+    subjects: StudySubjects | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3241,10 +3248,43 @@ def _run_one_batch(
         else float(_BATCH_WALL_TIMEOUT)
     )
 
-    prompt = _build_batch_prompt(
-        focus, context, target,
-        doc_context=doc_context, correlate=correlate,
-    )
+    if subjects is not None:
+        # A prep producer may still hold these mutable objects. The source
+        # binding and the rendered prompt must observe the SAME owned copy,
+        # including lists/dicts used by the renderer, not two live reads.
+        focus = [StudyItem(**asdict(item)) for item in focus]
+        context = [StudyItem(**asdict(item)) for item in context]
+    subject_packet = subjects.prepare(focus, context) if subjects is not None else None
+    if subject_packet is not None and doc_context:
+        subject_packet = replace(subject_packet, extra_context_excluded=True)
+    response_schema = _RESPONSE_SCHEMA
+    system_prompt = _SYSTEM_PROMPT
+    if subject_packet is not None:
+        if not subject_packet.subjects:
+            # This targeted batch contains no requested subject. Its pending
+            # requests remain explicit; do not buy generic extraction instead.
+            return [], [], [], [], []
+        if not subject_packet.materials:
+            if subjects is not None:
+                subjects.unavailable(subject_packet, "no_bound_source_material")
+            return [], [], [], [], []
+        from .subject_study import SUBJECT_ANSWERS_SCHEMA, SUBJECT_SYSTEM_PROMPT
+
+        # Send only the explicit raw-source packet. Old derived fields,
+        # free-form doc_context and SAGE seeds have no input bindings here.
+        # Broader concept/invariant extraction retains its separate path.
+        prompt = subject_packet.prompt()
+        response_schema = {
+            "type": "object",
+            "properties": {"subject_answers": SUBJECT_ANSWERS_SCHEMA},
+            "required": ["subject_answers"],
+        }
+        system_prompt = SUBJECT_SYSTEM_PROMPT
+    else:
+        prompt = _build_batch_prompt(
+            focus, context, target,
+            doc_context=doc_context, correlate=correlate,
+        )
 
     # Daemon worker thread, not a ThreadPoolExecutor: a wall-timeout
     # cannot cancel the RUNNING call either way (the thread lives
@@ -3259,19 +3299,29 @@ def _run_one_batch(
     result_q: _queue.Queue = _queue.Queue(maxsize=1)
 
     def _call() -> None:
+        from contextlib import nullcontext
+
         try:
-            result_q.put(("ok", llm_client.generate_structured(
-                prompt, _RESPONSE_SCHEMA,
-                system_prompt=_SYSTEM_PROMPT, task_type="study",
-                max_tokens=request_max_tokens,
-                # Study batches are the canonical long structured
-                # call — per-call streaming opt-in (SSE-capable
-                # surfaces honour it, others degrade to plain
-                # create). The one-shot cap escalation keys on this
-                # opt-in resolved against the surface's capability
-                # (``_batch_call_streams``).
-                stream=_BATCH_CALLS_STREAM,
-            )))
+            dispatch = (subjects.dispatching(subject_packet)
+                        if subjects is not None and subject_packet is not None else nullcontext())
+            with dispatch:
+                result_q.put(("ok", llm_client.generate_structured(
+                    prompt, response_schema,
+                    system_prompt=system_prompt, task_type="study",
+                    max_tokens=request_max_tokens,
+                    # Study batches are the canonical long structured
+                    # call — per-call streaming opt-in (SSE-capable
+                    # surfaces honour it, others degrade to plain
+                    # create). The one-shot cap escalation keys on this
+                    # opt-in resolved against the surface's capability
+                    # (``_batch_call_streams``).
+                    stream=_BATCH_CALLS_STREAM,
+                )))
+        except SubjectDispatchRefused as exc:
+            if subjects is not None and subject_packet is not None:
+                result_q.put(("refused", exc.reason))
+            else:
+                result_q.put(("err", exc))
         except BaseException as exc:  # noqa: BLE001 — marshalled to caller
             result_q.put(("err", exc))
 
@@ -3291,6 +3341,12 @@ def _run_one_batch(
         )
         msg = f"batch {idx + 1}/{total} wall-timeout"
         raise _BatchLLMError(msg) from None
+    if kind == "refused":
+        # The refusal names a reason, never another caller's packet. No
+        # provider ran and this is not a failed/retryable LLM batch.
+        if subjects is not None and subject_packet is not None:
+            subjects.unavailable(subject_packet, payload)
+        return [], [], [], [], []
     if kind == "err":
         try:
             from core.llm.budget_errors import is_budget_exceeded_error
@@ -3314,7 +3370,20 @@ def _run_one_batch(
     result = structured_result(payload)
 
     if not isinstance(result, dict):
+        if subjects is not None and subject_packet is not None:
+            subjects.record(subject_packet, {})
         logger.warning("Phase 2 batch %d: non-dict response", idx + 1)
+        return [], [], [], [], []
+
+    if subjects is not None and subject_packet is not None:
+        # Explanation delivery is independent of invariant parsing, receipt
+        # grading and optional compilation. This records untrusted context,
+        # not a new concept tier or a proof/refutation marker.
+        subject_answers = subjects.record(subject_packet, result)
+        logger.info("Phase 2 batch %d/%d: %d subject explanation record(s)",
+                    idx + 1, total, len(subject_answers))
+        # These are learning explanations, not receipts for derived rules.
+        # Deliver immediately without invariant parsing or compilation.
         return [], [], [], [], []
 
     n_c = len(result.get("concepts") or [])
@@ -3378,6 +3447,7 @@ def _run_batch_splitting_on_truncation(
     vocab_sink: list | None = None,
     trunc_events: list | None = None,
     escalation_ratchet: list[int] | None = None,
+    subjects: StudySubjects | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3473,6 +3543,7 @@ def _run_batch_splitting_on_truncation(
                 _escalated_wall_timeout(escalated)
                 if ratcheted and escalated is not None else None
             ),
+            **({"subjects": subjects} if subjects is not None else {}),
         )
     except _BatchLLMError as exc:
         if not exc.truncation:
@@ -3500,6 +3571,7 @@ def _run_batch_splitting_on_truncation(
                 discard_sink=discard_sink, vocab_sink=vocab_sink,
                 max_tokens=escalated,
                 wall_timeout=_escalated_wall_timeout(escalated),
+                **({"subjects": subjects} if subjects is not None else {}),
             )
             if escalation_ratchet is not None:
                 escalation_ratchet[0] += 1
@@ -3568,6 +3640,7 @@ def _run_batch_splitting_on_truncation(
     last_trunc: _BatchLLMError | None = None
     for half in (focus[:mid], focus[mid:]):
         try:
+            subject_options: _SubjectOptions = {"subjects": subjects} if subjects is not None else {}
             parts = _run_batch_splitting_on_truncation(
                 idx, total, half, context, target, source_root,
                 llm_client, reading_list,
@@ -3577,6 +3650,7 @@ def _run_batch_splitting_on_truncation(
                 doc_context=doc_context, correlate=correlate,
                 discard_sink=discard_sink, vocab_sink=vocab_sink,
                 trunc_events=trunc_events,
+                **subject_options,
             )
         except _PhaseBudgetExhausted as stop:
             # Salvage the sibling half's already-paid results onto
@@ -3618,6 +3692,7 @@ def run_phase2(
     batch_target: int | None = None,
     should_stop: Any = None,
     phase_stats: dict | None = None,
+    subjects: StudySubjects | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3703,6 +3778,7 @@ def run_phase2(
             correlate=correlate, discard_sink=discard_sink,
             vocab_sink=vocab_sink, should_stop=should_stop,
             phase_stats=phase_stats,
+            **({"subjects": subjects} if subjects is not None else {}),
         )
 
     logger.info("Phase 2: parallel dispatch, max_workers=%d", max_workers)
@@ -3712,6 +3788,7 @@ def run_phase2(
         correlate=correlate, discard_sink=discard_sink,
         vocab_sink=vocab_sink, should_stop=should_stop,
         phase_stats=phase_stats,
+        **({"subjects": subjects} if subjects is not None else {}),
     )
 
 
@@ -3728,6 +3805,7 @@ def _run_phase2_serial(
     vocab_sink: list | None = None,
     should_stop: Any = None,
     phase_stats: dict | None = None,
+    subjects: StudySubjects | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3790,6 +3868,7 @@ def _run_phase2_serial(
                     vocab_sink=vocab_sink,
                     trunc_events=batch_trunc_events,
                     escalation_ratchet=escalation_ratchet,
+                    **({"subjects": subjects} if subjects is not None else {}),
                 )
             )
         except _PhaseBudgetExhausted as exc:
@@ -3913,6 +3992,7 @@ def _run_phase2_parallel(
     vocab_sink: list | None = None,
     should_stop: Any = None,
     phase_stats: dict | None = None,
+    subjects: StudySubjects | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3948,6 +4028,7 @@ def _run_phase2_parallel(
             discard_sink=discard_sink, vocab_sink=vocab_sink,
             trunc_events=batch_trunc_events,
             escalation_ratchet=_escalation_ratchet,
+            **({"subjects": subjects} if subjects is not None else {}),
         )
         with _fail_lock:
             _consecutive_failures[0] = 0

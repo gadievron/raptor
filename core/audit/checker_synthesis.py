@@ -243,6 +243,9 @@ def _build_llm_callable(config: Any):
     # spend exactly. (Reading the shared budget client's per-class
     # history cross-attributed concurrent synthesis callers' spend.)
     cost_lock = threading.Lock()
+    from .knowledge_calls import observed_client
+
+    call_client = observed_client(client, purpose="synthesis")
 
     def _call(prompt: str, schema: dict[str, Any], system_prompt: str):
         from core.security.prompt_framing import with_audit_framing
@@ -251,7 +254,7 @@ def _build_llm_callable(config: Any):
             # skip the network round trip; the phase driver raises.
             return None
         try:
-            resp = client.generate_structured(
+            resp = call_client.generate_structured(
                 prompt=prompt,
                 schema=schema,
                 # Audit-purpose framing at the audit boundary — the

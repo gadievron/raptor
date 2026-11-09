@@ -295,6 +295,8 @@ if TYPE_CHECKING:
 
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
+    from .knowledge_requests import KnowledgeRequest
+    from .knowledge_runtime import AuditKnowledgeRuntime
 
 from .integer_abi import IntegerABIInput, integer_abi_record as _integer_abi_record, integer_abi_key as _integer_abi_key
 
@@ -2710,6 +2712,7 @@ def review_one_function(
     graph=None,
     reviewed_outcomes=None,
     batch_context: list[str] | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ):
     """Review a single function gap and return the outcome.
 
@@ -3834,6 +3837,9 @@ def review_one_function(
                 exc_info=True,
             )
 
+    if knowledge_runtime is not None:
+        review_fn = knowledge_runtime.wrap_review(review_fn)
+
     # ── LLM review ────────────────────────────────────────────────────
     review_start = time.monotonic()
     # Failed attempts are counted (failed_calls) but carry NO per-call
@@ -3860,6 +3866,7 @@ def review_one_function(
             ctx,
             config,
             max(config.review_passes, 1),
+            knowledge_runtime=knowledge_runtime,
         )
     else:
         try:
@@ -3873,6 +3880,9 @@ def review_one_function(
             )
         except Exception as exc:
             from core.llm.budget_errors import is_budget_exceeded_error
+            from .knowledge_calls import KnowledgeCallRefused
+            if isinstance(exc, KnowledgeCallRefused):
+                raise
 
             result.cost_tracker.record_failed_attempt(
                 "review", cost_usd=0.0,
@@ -4711,7 +4721,7 @@ def review_one_function(
 
     # ── Post-commit tracking ──────────────────────────────────────────
     review_result = getattr(outcome, "review_result", None)
-    if review_result and review_result.get("reading_list"):
+    if knowledge_runtime is None and review_result and review_result.get("reading_list"):
         sq = getattr(shared, "study_queue", None)
         if sq is not None:
             for rl_item in review_result["reading_list"]:
@@ -9581,9 +9591,75 @@ def _run_audit_body(
     study_queue: StudyQueue | None = None
     study_consumer_thread: _threading.Thread | None = None
     concept_index_ref: list = [ConceptIndex.empty()]
+    from .knowledge_runtime import AuditKnowledgeRuntime
+    study_queue = StudyQueue()
+    shared.study_queue = study_queue
+    knowledge_panel_width = max(1, config.review_passes, len(config.models or []) if config.multi_model else 1)
+    knowledge_runtime = AuditKnowledgeRuntime(
+        config.target_path, study_queue,
+        deadline=(config.run_deadline_monotonic if config.run_deadline_monotonic is not None
+                  else start_time + config.max_seconds if config.max_seconds else float("inf")),
+        max_model_calls=6 * knowledge_panel_width,
+    )
+    knowledge_gaps: dict[int, tuple[dict, Any]] = {}
+    knowledge_source_closed = False
+
+    def _knowledge_idle() -> float | None:
+        # Only schedule here: workers own paid calls and throttle slots.
+        nonlocal knowledge_source_closed
+        if (not knowledge_source_closed and study_consumer_thread is not None
+                and not study_consumer_thread.is_alive()):
+            knowledge_source_closed = True
+            knowledge_runtime.close_sources("source_worker_stopped")
+        for reservation in knowledge_runtime.ready_continuations(
+            admission=lambda: not _check_budget(config, start_time, result),
+            required_calls=knowledge_panel_width,
+        ):
+            origin = reservation.origin
+            gap = {"file": origin.file, "name": origin.function,
+                   "line_start": origin.line_start, "line_end": origin.line_end}
+            knowledge_gaps[id(gap)] = (gap, reservation)
+            if not graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0):
+                knowledge_gaps.pop(id(gap), None)
+                knowledge_runtime.fail(reservation, "continuation_schedule_refused")
+        return knowledge_runtime.wake_interval()
+
+    def _knowledge_review_one(gap, *args, **kwargs):
+        owned = knowledge_gaps.pop(id(gap), None)
+        if owned is None or owned[0] is not gap:
+            from .knowledge_calls import KnowledgeCallRefused
+            try:
+                return review_one_function(gap, *args, knowledge_runtime=knowledge_runtime, **kwargs)
+            except KnowledgeCallRefused:
+                # Refusal is local to this unit. No completed verdict is
+                # committed and the run/environment rails remain unchanged.
+                return ReviewOutcome(gap["file"], gap["name"], "deferred",
+                                     "Knowledge review allowance exhausted", line=gap.get("line_start", 0))
+        reservation = owned[1]
+        try:
+            _re_review_study_enriched(
+                result, config, review_fn, checklist, context_map, evidence_index,
+                sarif_cache, entry_points,
+                {(gap["file"], gap["name"], gap["line_start"])}, start_time,
+                on_progress, audit_log=audit_log,
+                session_observations=session_observations,
+                discovered_evidence=discovered_evidence, joern_server=joern_server,
+                max_workers=1, throttle=None,
+                knowledge_runtime=knowledge_runtime, knowledge_reservation=reservation,
+            )
+            knowledge_runtime.fail(reservation, "continuation_not_completed")
+            canonical = next((o for o in reversed(result.outcomes)
+                              if (o.file, o.function, o.line) ==
+                              (gap["file"], gap["name"], gap["line_start"])), None)
+            if canonical is not None:
+                reviewed_outcomes[f"{gap['file']}:{gap['name']}"] = canonical
+            return canonical
+        except BaseException:
+            knowledge_runtime.fail(reservation, "continuation_failed")
+            raise
+
+    knowledge_review_one = knowledge_runtime.wrap_unit(_knowledge_review_one)
     if _has_study_files and config.out_dir:
-        study_queue = StudyQueue()
-        shared.study_queue = study_queue
         study_consumer_thread = _threading.Thread(
             target=bind_joern_context(_study_consumer),
             args=(
@@ -9609,6 +9685,7 @@ def _run_audit_body(
                 "collector": collector,
                 "throttle": throttle,
                 "concept_index_ref": concept_index_ref,
+                "knowledge_runtime": knowledge_runtime,
             },
             daemon=True,
             name="study-consumer",
@@ -9670,6 +9747,8 @@ def _run_audit_body(
             collector=collector,
             budget_check=lambda: _check_budget(config, start_time, result),
             on_tick=_executor_tick,
+            on_idle=_knowledge_idle,
+            review_one_fn=knowledge_review_one,
             reviewed_outcomes=reviewed_outcomes,
             throttle=throttle,
             study_queue=study_queue,
@@ -9686,6 +9765,12 @@ def _run_audit_body(
         _cleanup_after_executor_failure(
             throttle, study_queue, study_consumer_thread, collector,
         )
+        try:
+            knowledge_runtime.close("executor_failed")
+            if config.out_dir is not None:
+                knowledge_runtime.write_artifacts(config.out_dir)
+        except Exception:
+            logger.warning("knowledge trace flush failed during executor cleanup", exc_info=True)
         raise
     joern_future = joern_state["future"]
     _record_executor_stop(result, executor_stats)
@@ -9742,6 +9827,7 @@ def _run_audit_body(
                     collector=collector,
                     graph=graph,
                     reviewed_outcomes=reviewed_outcomes,
+                    knowledge_runtime=knowledge_runtime,
                 ), batch
 
         review_idx = 0
@@ -9798,12 +9884,58 @@ def _run_audit_body(
                 "exhaustion — pending batches cancelled",
             )
 
+    # Keep the source producer open for bounded follow-up requests.
+    if deepen_reserve_held:
+        deepen_reserve_held = _hold_deepen_reserve(config, composition_active=config.open_discovery)
+        if not deepen_reserve_held:
+            _release_deepen_reserve(config)
+    if study_consumer_thread is None:
+        knowledge_runtime.close_sources("source_study_unavailable")
+    try:
+        while not _check_budget(config, start_time, result):
+            _knowledge_idle()
+            if knowledge_gaps:
+                run_executor_sync(
+                    graph, review_fn, shared, config, result, executor_config,
+                    joern_server=joern_server, audit_log=audit_log,
+                    workqueue=workqueue, reviewed_set=reviewed_set,
+                    start_time=start_time, layer_disagreements=layer_disagreements,
+                    on_progress=on_progress, collector=collector,
+                    budget_check=lambda: _check_budget(config, start_time, result),
+                    on_tick=_executor_tick, on_idle=_knowledge_idle,
+                    review_one_fn=knowledge_review_one, reviewed_outcomes=reviewed_outcomes,
+                    throttle=throttle, study_queue=study_queue,
+                    concept_index_ref=concept_index_ref, quiescer=journal_quiescer,
+                )
+                continue
+            if not knowledge_runtime.has_pending_work():
+                break
+            delay = knowledge_runtime.wake_interval()
+            if delay is None:
+                break
+            knowledge_runtime.wait_for_update(delay)
+    except BaseException:
+        _cleanup_after_executor_failure(throttle, study_queue, study_consumer_thread, collector)
+        try:
+            knowledge_runtime.close("knowledge_drain_failed")
+            if config.out_dir is not None:
+                knowledge_runtime.write_artifacts(config.out_dir)
+        except Exception:
+            logger.warning("knowledge trace flush failed during drain cleanup", exc_info=True)
+        raise
+    finally:
+        study_queue.signal_producer_done()
+
     # --- Drain study consumer (reserve handover inside) ---
     deepen_reserve_held = _drain_study_with_reserve_handover(
         config, study_queue, study_consumer_thread,
         deepen_reserve_held, start_time, result,
         composition_active=config.open_discovery,
     )
+
+    knowledge_runtime.close("review_drain_complete")
+    if config.out_dir is not None:
+        knowledge_runtime.write_artifacts(config.out_dir)
 
     # --- SIGTERM salvage: skip every optional post pass ---
     # In-flight completions are already harvested (the executor's
@@ -14667,6 +14799,7 @@ def _multi_pass_review(
     ctx: dict[str, Any],
     config: OrchestratorConfig,
     passes: int,
+    *, knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> ReviewOutcome:
     """Run review_fn across a panel and merge verdicts.
 
@@ -14680,6 +14813,7 @@ def _multi_pass_review(
     pass remains as the last-resort fallback when the substrate fails
     at runtime.
     """
+    from .knowledge_calls import KnowledgeCallRefused
     file_path = ctx.get("file", "")
     function_name = ctx.get("function", "")
     model = config.models[0] if config.models else "default"
@@ -14705,9 +14839,13 @@ def _multi_pass_review(
                 # single review_fn keeps consumers that never built the
                 # map (tests) on the old behaviour.
                 model_review_fn = review_fns.get(model_name, review_fn)
+                if knowledge_runtime is not None:
+                    model_review_fn = knowledge_runtime.wrap_review(model_review_fn)
                 outcome = model_review_fn(context, config)
                 return _outcome_to_panel_result(outcome, model_name)
 
+            from .knowledge_calls import observed_client
+            critique_client = observed_client(config.llm_client, purpose="critique")
             refute_fn = None
             if config.adversarial:
 
@@ -14724,7 +14862,7 @@ def _multi_pass_review(
                     )
 
                     ref = run_refutation(
-                        config.llm_client,
+                        critique_client,
                         file=finding.get("file", file_path),
                         function=finding.get("function", function_name),
                         hypothesis=finding.get("hypothesis", "") or "",
@@ -14836,7 +14974,7 @@ def _multi_pass_review(
             # per-function failure: swallowing it here journaled an
             # 'error' verdict (or bought MORE spend via the fallback
             # passes below) after the cap was already blown.
-            if _is_budget_exceeded(exc):
+            if _is_budget_exceeded(exc) or isinstance(exc, KnowledgeCallRefused):
                 raise
             # The operator asked for cross-model consensus (--model A
             # --model B); a runtime failure here silently downgrades
@@ -14874,7 +15012,7 @@ def _multi_pass_review(
                             "status": "error",
                             "body": "blocked by content filter"}
                 except Exception as exc:
-                    if _is_budget_exceeded(exc):
+                    if _is_budget_exceeded(exc) or isinstance(exc, KnowledgeCallRefused):
                         raise
                     logger.warning(
                         "review_fn pass failed for %s:%s: %s",
@@ -14934,7 +15072,7 @@ def _multi_pass_review(
                 file_path, function_name,
             )
         except Exception as exc:
-            if _is_budget_exceeded(exc):
+            if _is_budget_exceeded(exc) or isinstance(exc, KnowledgeCallRefused):
                 raise
             logger.warning(
                 "self-consistency substrate failed for %s:%s — "
@@ -14956,7 +15094,7 @@ def _multi_pass_review(
             body="blocked by content filter",
         )
     except Exception as exc:
-        if _is_budget_exceeded(exc):
+        if _is_budget_exceeded(exc) or isinstance(exc, KnowledgeCallRefused):
             raise
         logger.warning(
             "review_fn pass failed for %s:%s: %s",
@@ -15599,9 +15737,10 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
     Falls back to a fresh client (pinned to the run's primary model)
     only when no budget client was wired — library callers and tests.
     """
+    from .knowledge_calls import observed_client
     client = getattr(config, "llm_budget_client", None)
     if client is not None:
-        return client
+        return observed_client(client, purpose="auxiliary")
     # Transcript seam: identical to LLMClient(...) with no session
     # active.
     from core.llm.transcript import build_llm_client
@@ -15611,7 +15750,8 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
         if config.models and config.models[0] != "default"
         else None
     )
-    return build_llm_client(pinned_model=model) if model else build_llm_client()
+    client = build_llm_client(pinned_model=model) if model else build_llm_client()
+    return observed_client(client, purpose="auxiliary")
 
 
 #: Seconds between incremental spend-floor writes from the budget
@@ -15981,7 +16121,7 @@ class StudyQueue:
     """
 
     def __init__(self) -> None:
-        self._queue: list[StudyRequest] = []
+        self._queue: list[StudyRequest | KnowledgeRequest] = []
         self._lock = _threading.Lock()
         self._not_empty = _threading.Condition(_threading.Lock())
         self._producer_done = False
@@ -16052,9 +16192,27 @@ class StudyQueue:
                 self._pending_concepts.add(concept.lower())
             self._not_empty.notify()
 
+    def enqueue_knowledge(self, item: "KnowledgeRequest") -> bool:
+        """Queue a bound learning request without subject-level suppression.
+
+        A previous explanation of a name does not establish that another
+        source version or learning context is understood. The coordinator
+        owns any exact-job coalescing and records a refused enqueue explicitly.
+        """
+        from .knowledge_requests import KnowledgeRequest
+
+        if not isinstance(item, KnowledgeRequest) or item.kind != "target_study":
+            return False
+        with self._not_empty:
+            if self._consumer_done or self._producer_done or self._stop_requested:
+                return False
+            self._queue.append(item)
+            self._not_empty.notify()
+            return True
+
     def dequeue_batch(
         self, max_items: int = 15, timeout: float = 30.0,
-    ) -> list[StudyRequest]:
+    ) -> "list[StudyRequest | KnowledgeRequest]":
         with self._not_empty:
             if self._stop_requested:
                 return []
@@ -17493,6 +17651,7 @@ def _study_consumer(
     collector: Any = None,
     throttle: Any = None,
     concept_index_ref: list | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> None:
     """Thread B: consume study requests, study in-process, re-review."""
     study_list_built = False
@@ -17519,6 +17678,7 @@ def _study_consumer(
             collector=collector,
             throttle=throttle,
             concept_index_ref=concept_index_ref,
+            knowledge_runtime=knowledge_runtime,
             state={
                 "study_list_built": study_list_built,
                 "study_list_path": study_list_path,
@@ -17747,6 +17907,17 @@ def _requeue_pending_study(
         return 0
 
 
+def _study_knowledge_batch(
+    batch, runtime, config: OrchestratorConfig, result: OrchestratorResult,
+    *, checklist: dict, should_stop: Callable[[], bool], throttle=None,
+) -> None:
+    """Dispatch linked subjects through the existing source-study adapter."""
+    from .knowledge_study import study_batch
+
+    study_batch(batch, runtime, config, result, checklist=checklist,
+                should_stop=should_stop, throttle=throttle)
+
+
 def _study_consumer_loop(
     study_queue: StudyQueue,
     config: OrchestratorConfig,
@@ -17769,9 +17940,29 @@ def _study_consumer_loop(
     collector: Any = None,
     throttle: Any = None,
     concept_index_ref: list | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
     state: dict | None = None,
 ) -> None:
     """Inner loop for _study_consumer (separated for try/finally)."""
+    if knowledge_runtime is not None:
+        # Typed production is enabled only with this consumer branch. In
+        # particular it must never fall through the question-shaped deduper.
+        while not study_queue.is_done():
+            study_queue.set_working(False)
+            if _check_budget(config, start_time, result) or study_queue.stop_requested:
+                break
+            batch = study_queue.dequeue_batch(max_items=15, timeout=30.0)
+            if not batch:
+                continue
+            study_queue.set_working(True)
+            try:
+                _study_knowledge_batch(batch, knowledge_runtime, config, result,
+                    checklist=checklist, throttle=throttle,
+                    should_stop=lambda: study_queue.stop_requested or _check_budget(config, start_time, result))
+                study_queue.note_progress()
+            finally:
+                study_queue.set_working(False)
+        return
     st = state or {}
     study_list_built = st.get("study_list_built", False)
     study_list_path = st.get("study_list_path")
@@ -18071,11 +18262,12 @@ def _study_consumer_loop(
         study_queue.set_working(True)
 
         dm = shared.domain_model
-        fresh = _dedup_batch(batch, seen_concepts, dm)
+        legacy_batch = [request for request in batch if isinstance(request, StudyRequest)]
+        fresh = _dedup_batch(legacy_batch, seen_concepts, dm)
         # Every skip path below must release the suppression gate for
         # the concepts it drops — a concept left in _pending_concepts
         # with no future batch to study it holds the executor forever.
-        dropped = [req for req in batch if req not in fresh]
+        dropped = [req for req in legacy_batch if req not in fresh]
         if dropped:
             # Within-batch duplicates: the FRESH sibling still studies
             # this concept, so releasing its suppression hold now would
@@ -19669,6 +19861,7 @@ def _review_items(
     collector: Any = None,
     graph: Any = None,
     reviewed_outcomes: Any = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> list[ReviewOutcome]:
     """Review a batch of trivial functions through the full pipeline.
 
@@ -19683,9 +19876,11 @@ def _review_items(
         for g in batch
     ]
     outcomes: list[ReviewOutcome] = []
+    review_one = (knowledge_runtime.wrap_unit(review_one_function)
+                  if knowledge_runtime is not None else review_one_function)
     for gap in batch:
         try:
-            outcome = review_one_function(
+            outcome = review_one(
                 gap,
                 shared,
                 config,
@@ -19704,6 +19899,7 @@ def _review_items(
                 graph=graph,
                 reviewed_outcomes=reviewed_outcomes,
                 batch_context=siblings,
+                **({"knowledge_runtime": knowledge_runtime} if knowledge_runtime is not None else {}),
             )
         except LLMBudgetExceededError:
             logger.warning(
@@ -25074,7 +25270,8 @@ def _gather_library_candidates(cwe: str) -> list:
 
 def _get_llm_client(config: OrchestratorConfig):
     """Return the LLM client from config, or None."""
-    return getattr(config, "llm_client", None)
+    from .knowledge_calls import observed_client
+    return observed_client(getattr(config, "llm_client", None), purpose="verification")
 
 
 def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter):
@@ -34579,6 +34776,8 @@ def _re_review_study_enriched(
     throttle: Any = None,
     mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
     synthesis_counter: AtomicSynthesisCounter | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
+    knowledge_reservation: Any = None,
 ) -> OrchestratorResult:
     """Re-review functions that queued reading-list items.
 
@@ -34595,7 +34794,8 @@ def _re_review_study_enriched(
     candidates = []
     seen_candidate_keys: set[str] = set()
     for key in reading_list_functions:
-        parts = key.split(":", 1)
+        occurrence_line = key[2] if isinstance(key, tuple) and len(key) == 3 else None
+        parts = list(key[:2]) if occurrence_line is not None else key.split(":", 1)
         if len(parts) != 2:
             continue
         file_path, func_name = parts
@@ -34604,7 +34804,7 @@ def _re_review_study_enriched(
         # same prior outcome — without dedupe the second replace would
         # raise ValueError from outcomes.index() (same pattern as
         # _re_review_joern_enriched).
-        candidate_key = f"{file_path}:{func_name}"
+        candidate_key = f"{file_path}:{func_name}:{occurrence_line}"
         if candidate_key in seen_candidate_keys:
             continue
 
@@ -34613,6 +34813,7 @@ def _re_review_study_enriched(
                 o
                 for o in result.outcomes
                 if o.file == file_path and o.function == func_name
+                and (occurrence_line is None or o.line == occurrence_line)
             ),
             None,
         )
@@ -34624,6 +34825,8 @@ def _re_review_study_enriched(
             "name": func_name,
             "line_start": getattr(prior, "line", 0),
         }
+        if knowledge_reservation is not None:
+            gap["line_end"] = knowledge_reservation.origin.line_end
         seen_candidate_keys.add(candidate_key)
         candidates.append((gap, prior))
 
@@ -34655,6 +34858,9 @@ def _re_review_study_enriched(
             evidence_index,
             discovered_evidence=discovered_evidence,
         )
+        if knowledge_runtime is not None and not knowledge_runtime.enrich_context(ctx, knowledge_reservation):
+            knowledge_runtime.fail(knowledge_reservation, "context_unavailable", ctx=ctx)
+            continue
         ctx["study_re_review"] = True
         ctx["prior_verdict"] = {
             "status": prior_outcome.status,
@@ -34694,14 +34900,23 @@ def _re_review_study_enriched(
             ctx["prior_hypotheses"] = prior_hyps
         prepared.append((len(prepared), gap, prior_outcome, ctx))
 
+    if knowledge_runtime is not None:
+        review_fn = knowledge_runtime.wrap_review(review_fn)
+
     def _do_review(item):
         idx, _gap, _prior, ctx = item
         try:
+            def dispatch():
+                if knowledge_runtime is not None:
+                    return _multi_pass_review(review_fn, ctx, config, max(config.review_passes, 1),
+                                              knowledge_runtime=knowledge_runtime)
+                return review_fn(ctx, config)
+
             if throttle is not None:
                 with throttle.acquire_sync():
-                    outcome = review_fn(ctx, config)
+                    outcome = dispatch()
             else:
-                outcome = review_fn(ctx, config)
+                outcome = dispatch()
             return (idx, outcome, None)
         except Exception as exc:  # noqa: BLE001
             return (idx, None, exc)
@@ -34724,6 +34939,8 @@ def _re_review_study_enriched(
         _, gap, prior_outcome, ctx = idx_to_prepared[idx]
 
         if exc is not None:
+            if knowledge_runtime is not None:
+                knowledge_runtime.fail(knowledge_reservation, "review_failed", ctx=ctx)
             logger.warning(
                 "study re-review failed for %s:%s: %s",
                 gap["file"],
@@ -34740,6 +34957,12 @@ def _re_review_study_enriched(
             cost_usd=outcome.cost_usd,
             wall_time_s=outcome.duration_s,
         )
+
+        if knowledge_runtime is not None and not knowledge_runtime.can_publish(knowledge_reservation):
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
+            knowledge_runtime.fail(knowledge_reservation, "source_changed", ctx=ctx)
+            continue
 
         # Receipt threading: a verdict whose re-review was triggered
         # by study answers embeds their receipts in its evidence
@@ -34805,6 +35028,12 @@ def _re_review_study_enriched(
                         f"[gate violation: {'; '.join(gate_violations)}]",
                     )
 
+        if knowledge_runtime is not None and not knowledge_runtime.can_publish(knowledge_reservation):
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
+            knowledge_runtime.fail(knowledge_reservation, "source_changed", ctx=ctx)
+            continue
+
         withdrawing = (
             prior_outcome.status == "finding" and outcome.status != "finding"
             or prior_outcome.status == "suspicious" and outcome.status not in ("finding", "suspicious")
@@ -34849,6 +35078,9 @@ def _re_review_study_enriched(
                 # must still add this completed call to the run's spend total.
                 with result._lock:
                     result.total_cost_usd += outcome.cost_usd
+                if knowledge_runtime is not None:
+                    knowledge_runtime.complete(knowledge_reservation, ctx, published_status=prior_outcome.status,
+                                               reason="prior_retained")
                 continue
 
         if outcome.status != prior_outcome.status:
@@ -34902,6 +35134,10 @@ def _re_review_study_enriched(
             # above (deepen's dominated branch is the template).
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
+
+        if knowledge_runtime is not None:
+            knowledge_runtime.complete(knowledge_reservation, ctx, published_status=outcome.status,
+                                       reason="completed" if outcome.status != prior_outcome.status else "unchanged")
 
     return result
 
