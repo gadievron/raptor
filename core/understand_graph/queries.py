@@ -1517,6 +1517,8 @@ def _latest_snapshot(conn, target_path: Optional[str],
 def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str], *,
                               only_file: str | None = None) -> set[str]:
     if not target_path:
+        target_path = snapshot["target_path"]
+    if not target_path:
         return set()
     try:
         from core.hash import sha256_fileobj
