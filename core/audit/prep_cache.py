@@ -36,9 +36,13 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from core.json import DEFAULT_JSON_MAX_BYTES
+from core.source.gated import read_text_gated
+
 logger = logging.getLogger(__name__)
 
 PREP_CACHE_DIRNAME = "prep-cache"
+_MAX_PREP_CACHE_BYTES = DEFAULT_JSON_MAX_BYTES
 
 
 def content_fingerprint(items: Iterable[tuple[str, bytes]]) -> str:
@@ -106,12 +110,12 @@ def load_prep_cache(
     logs at debug and rebuilds.
     """
     path = prep_cache_path(out_dir, filename)
-    if not path.is_file():
-        return None
     try:
+        data = json.loads(read_text_gated(
+            path, max_bytes=_MAX_PREP_CACHE_BYTES, follow_symlinks=False,
+        ))
         from core.coverage import journal_mac
 
-        data = json.loads(path.read_text(encoding="utf-8"))  # raw-open: RAPTOR-written prep cache in the run dir
         if data.get("fingerprint") != fingerprint:
             logger.info(
                 "%s prep cache stale (input fingerprint changed) — "
@@ -149,7 +153,6 @@ def write_prep_cache(
     """Best-effort atomic persist; a failure never costs the run."""
     try:
         cache_dir = Path(out_dir) / PREP_CACHE_DIRNAME
-        cache_dir.mkdir(parents=True, exist_ok=True)
         from core.coverage import journal_mac
 
         # Raw json.dumps is deliberate: an unserialisable payload must
@@ -163,7 +166,13 @@ def write_prep_cache(
             row, journal_mac.audit_log_run_binding(out_dir))
         if token is not None:
             row[journal_mac.TOKEN_KEY] = token
-        blob = json.dumps(row)
+        # ASCII escaping makes character count equal the UTF-8 byte count
+        # without allocating a second copy just to measure the envelope.
+        blob = json.dumps(row, ensure_ascii=True)
+        if len(blob) > _MAX_PREP_CACHE_BYTES:
+            logger.debug("%s prep cache exceeds its byte budget; not persisting", label)
+            return
+        cache_dir.mkdir(parents=True, exist_ok=True)
         # Shared atomic writer: the hand-rolled mkstemp/replace pair
         # leaked its .tmp file when the write failed mid-way and never
         # fsynced before the rename.
