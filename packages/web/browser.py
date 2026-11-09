@@ -243,6 +243,20 @@ class BrowserEngine:
 
     _MAX_REDIRECT_HOPS = 5
 
+    def _target_request_headers(self, request: Any, url: str) -> dict[str, str]:
+        """Rebuild target headers and cookies for a gated Playwright fetch."""
+        headers = {
+            name.lower(): value for name, value in request.headers.items()
+            if name.lower() not in ("host", "content-length", "cookie")
+        }
+        headers.update({name.lower(): value for name, value in self._extra_headers.items()})
+        cookies = self._context.cookies(url)
+        if cookies:
+            headers["Cookie"] = "; ".join(
+                f"{cookie['name']}={cookie['value']}" for cookie in cookies
+            )
+        return headers
+
     def _route_gate(self, route: Any) -> None:
         """Origin-gate every request INCLUDING redirect hops.
 
@@ -262,8 +276,14 @@ class BrowserEngine:
             self._note_blocked(route.request.url)
             route.abort()
             return
+        response = None
         try:
-            response = route.fetch(max_redirects=0)
+            response = self._context.request.fetch(
+                route.request.url, method=route.request.method,
+                data=route.request.post_data_buffer,
+                headers=self._target_request_headers(route.request, route.request.url),
+                max_redirects=0,
+            )
             current_url = route.request.url
             hops = 0
             while 300 <= response.status < 400:
@@ -283,13 +303,8 @@ class BrowserEngine:
                     self._note_blocked(target)
                     route.abort()
                     return
-                hop_headers = {
-                    name: value
-                    for name, value in route.request.headers.items()
-                    # fetch recomputes framing; the host belongs to
-                    # the hop target.
-                    if name.lower() not in ("content-length", "host")
-                }
+                hop_headers = self._target_request_headers(route.request, target)
+                previous_response = response
                 if response.status in (307, 308):
                     # Method/body-preserving redirects: replay the
                     # original request shape (headers included — the
@@ -298,7 +313,7 @@ class BrowserEngine:
                     response = self._context.request.fetch(
                         target,
                         method=route.request.method,
-                        data=route.request.post_data,
+                        data=route.request.post_data_buffer,
                         headers=hop_headers,
                         max_redirects=0,
                     )
@@ -307,6 +322,7 @@ class BrowserEngine:
                     response = self._context.request.get(
                         target, headers=hop_headers, max_redirects=0,
                     )
+                previous_response.dispose()
                 current_url = target
             route.fulfill(response=response)
         except Exception:
@@ -315,6 +331,9 @@ class BrowserEngine:
                 route.abort()
             except Exception:
                 logger.debug("route abort failed", exc_info=True)
+        finally:
+            if response is not None:
+                response.dispose()
 
     def _websocket_gate(self, ws_route: Any) -> None:
         # ws/wss map onto the http/https origin for the compare.

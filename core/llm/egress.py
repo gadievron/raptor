@@ -574,11 +574,33 @@ def _reset_for_tests() -> None:
         _original_proxy_env = None
 
 
+def register_web_target(url: str) -> None:
+    """Admit a web target to the active transport proxy before preflight."""
+    from urllib.parse import urlsplit
+
+    import idna
+
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname or "*" in parsed.hostname:
+        raise ValueError("web target must be an HTTP(S) URL with an exact host")
+    host = parsed.hostname.rstrip(".。．｡").lower()
+    if not host.isascii():
+        try:
+            host = idna.encode(host, uts46=True).decode("ascii")
+        except idna.IDNAError as exc:
+            raise ValueError("web target has an invalid host") from exc
+    with _STATE_LOCK:
+        if _enabled:
+            from core.sandbox.proxy import get_proxy
+            get_proxy([host])
+
+
 __all__ = [
     "augment_child_no_proxy",
     "derive_allowlist",
     "enable_llm_egress",
     "loopback_safe_get",
     "operator_proxy_env",
+    "register_web_target",
     "url_is_loopback",
 ]

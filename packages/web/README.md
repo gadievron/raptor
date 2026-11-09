@@ -2,6 +2,22 @@
 
 A web application security scanner built into RAPTOR. It does two things: runs risk-tiered checks mapped to ASVS 5.0 against any target, and uses an LLM to generate and evaluate injection payloads against discovered parameters and forms. It works unauthenticated or with a live session.
 
+When the LLM transport proxy is active, a web scan registers its target host
+before preflight. This permits connectivity to the configured target without
+changing the scanner's exact-origin scope. The target URL may use HTTP or HTTPS
+and any port supported by the configured transport.
+
+Use repeatable `--required-host HOST` or comma-separated
+`RAPTOR_WEB_REQUIRED_HOSTS` for additional DNS hosts needed by a login flow.
+These hosts are admitted to the transport proxy and do not expand the scanner's
+or browser's origin scope. A host applies to HTTP and HTTPS on any port; the
+underlying transport still determines which protocols it can carry.
+
+For a lab requiring `X-Origin-Verify`, put the 64-character value in an
+owner-only file (mode `0600`) and pass `--origin-verify-file FILE`, or set
+`RAPTOR_ORIGIN_VERIFY_FILE`. The value is sent on target requests only.
+Opt-in ffuf and nuclei phases receive it through their private config files.
+
 ---
 
 ## Quick start
