@@ -93,8 +93,10 @@ _PROJECT_SCHEMA_VERSION = 6
 #: classified the annotations tree as an unknown run: adoption
 #: stamped machine metadata inside the human notes and /project
 #: clean planned it for deletion.
+#: `graph` is persistent cross-run storage, including graph/WAL history;
+#: it must never acquire run metadata or become a clean/adoption candidate.
 GENERATED_PROJECT_DIRS = frozenset({"findings", "ghidra-attach",
-                                    "annotations"})
+                                    "annotations", "graph"})
 
 # URL-shaped targets (/web scans) are stored and matched as opaque
 # strings, never Path-resolved. Same pattern as core/run/output.py.
