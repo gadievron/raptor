@@ -87,8 +87,8 @@ class TestCollectCrashFilesCwdSafety(unittest.TestCase):
             root = Path(tmpdir)
             (root / "crash-0001").write_bytes(b"x")
             old_cwd = os.getcwd()
-            os.chdir(root)
             try:
+                os.chdir(root)
                 assert _collect_crash_files(Path("")) == []
             finally:
                 os.chdir(old_cwd)

@@ -672,8 +672,8 @@ class TestLandlockEnforcement(unittest.TestCase):
         from tempfile import TemporaryDirectory
         with TemporaryDirectory() as target_abs, TemporaryDirectory() as parent:
             saved_cwd = os.getcwd()
-            os.chdir(parent)
             try:
+                os.chdir(parent)
                 rel_out = "out/scan_relative_test"
                 os.makedirs(rel_out, exist_ok=True)
                 # Resolve to absolute for the shell command — the
