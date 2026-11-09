@@ -5,6 +5,7 @@ import threading
 import time
 
 from core.testing.wallclock import wall_deadline
+from core.testing.threads import retiring_threads
 
 from core.audit.orchestrator import (
     ConceptIndex,
@@ -102,7 +103,10 @@ class TestStudyQueue:
         barrier = threading.Barrier(4)
 
         def _producer(start):
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             for i in range(start, start + n):
                 q.enqueue(StudyRequest(f"q{i}?", "f.c", "fn"))
 
@@ -110,10 +114,11 @@ class TestStudyQueue:
             threading.Thread(target=_producer, args=(i * n,))
             for i in range(4)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         total = 0
         while True:
