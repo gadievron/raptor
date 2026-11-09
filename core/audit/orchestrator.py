@@ -32,7 +32,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, NoReturn, TYPE_CHECKING
+from typing import Any, Callable, NoReturn, TYPE_CHECKING, cast
 
 from core.detectors.setup import AnalysisSetup
 from core.analysis.reach_audit import bind_joern_context, submit_with_joern
@@ -69,6 +69,7 @@ from .verification_results import (
     SOURCE_VALIDATION_TOOL,
     ClaimRefutation,
     ToolChainResult,
+    VerificationScope,
     claims_refuted,
 )
 from .codeql_backend import (
@@ -25029,7 +25030,7 @@ def _verify_hypotheses_immediate(
             ) | _skipped
 
         if tools_confirmed:
-            binding = tools_confirmed.binding if isinstance(tools_confirmed, ToolChainResult) else None
+            binding: VerificationScope | None = tools_confirmed.binding if isinstance(tools_confirmed, ToolChainResult) else None
             # Empty legacy list wrappers carry no producer claim identity.
             # Keep that missing information explicit rather than inventing it
             # from the consumer's current location or file snapshot.
@@ -25309,7 +25310,9 @@ def _aggregate_ihv_verdicts(
         return candidate
 
     if blocked is not None:
-        blocked.review_result["ihv_hypotheses_confirmed"] = outcome.review_result["ihv_hypotheses_confirmed"]
+        # Every blocked candidate was constructed with the review dict above.
+        blocked_review = cast(dict[str, Any], blocked.review_result)
+        blocked_review["ihv_hypotheses_confirmed"] = outcome.review_result["ihv_hypotheses_confirmed"]
         return blocked
     current_source = capture_source_identity(config.target_path, outcome.file)
     refuted_count = sum(v.refuted and claims_refuted(
@@ -29965,8 +29968,8 @@ def _is_detection_only(tool_id: str) -> bool:
     Ambiguous ownership or unavailable metadata stays detection-only.
     """
     if tool_id.startswith("coccinelle:"):
-        from core.analysis.coccinelle_metadata import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.analysis.coccinelle_metadata import is_detection_rule_id as coccinelle_is_detection
+        return coccinelle_is_detection(tool_id)
 
     if tool_id.startswith("joern:"):
         # Bare taint reachability (joern:live / joern:pre_sweep)
@@ -29980,8 +29983,8 @@ def _is_detection_only(tool_id: str) -> bool:
         # module is the single authority for the split — the
         # evidence-grade firewall (is_tool_evidence) consults the
         # same classifier via _DETECTION_CLASSIFIER_MODULES.
-        from core.audit.joern_verify import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.joern_verify import is_detection_rule_id as joern_is_detection
+        return joern_is_detection(tool_id)
 
     if tool_id.startswith("smt:"):
         verb = tool_id.split("smt:", 1)[1]
@@ -29993,8 +29996,8 @@ def _is_detection_only(tool_id: str) -> bool:
         # role evidence) may not promote alone; they participate in
         # review diagnostics like other detection-role
         # channels. Registry-grade confirmations promote directly.
-        from core.audit.fail_open_verify import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.fail_open_verify import is_detection_rule_id as fail_open_is_detection
+        return fail_open_is_detection(tool_id)
 
     if tool_id.startswith("consistency:"):
         # -majority variants (majority-only contract source) are
@@ -30006,36 +30009,36 @@ def _is_detection_only(tool_id: str) -> bool:
         # (The ptr_lifecycle field-parity leg emits under this
         # namespace by construction — the same rule applies to it
         # with zero extra code.)
-        from core.audit.peer_evidence import is_detection_rule_id  # type: ignore[assignment]
-        return is_detection_rule_id(tool_id)
+        from core.audit.peer_evidence import is_detection_rule_id as consistency_is_detection
+        return consistency_is_detection(tool_id)
 
     if tool_id.startswith("ptr_lifecycle:"):
         # -naming variants (naming-stem event vocabulary / degraded
         # census) may not promote alone; registry-grade stale-alias
         # confirmations promote directly (the fail_open pattern).
-        from core.audit.ptr_lifecycle import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.ptr_lifecycle import is_detection_rule_id as ptr_lifecycle_is_detection
+        return ptr_lifecycle_is_detection(tool_id)
 
     if tool_id.startswith("lock_region:"):
         # -naming variants (naming-stem lock pair / internal-only
         # setter) may not promote alone; registry-grade confirmations
         # promote through the both-escalators status rule.
-        from core.audit.lock_region import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.lock_region import is_detection_rule_id as lock_region_is_detection
+        return lock_region_is_detection(tool_id)
 
     if tool_id.startswith("resource_bounds:"):
         # -naming variants (seed-only vocabulary or unknown
         # reachability) may not promote alone; registry-grade
         # confirmations promote directly.
-        from core.audit.resource_bounds import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.resource_bounds import is_detection_rule_id as resource_bounds_is_detection
+        return resource_bounds_is_detection(tool_id)
 
     if tool_id.startswith("release_order:"):
         # -naming variants (seed-exemplar-only verify/release pairing)
         # may not promote alone; learned-pair confirmations promote
         # directly.
-        from core.audit.release_order import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.release_order import is_detection_rule_id as release_order_is_detection
+        return release_order_is_detection(tool_id)
 
     if tool_id.startswith("protocol_state:"):
         # The two lead rule-ids (dead-state-field /
@@ -30043,8 +30046,8 @@ def _is_detection_only(tool_id: str) -> bool:
         # -unreceipted invariant confirmations carry an uncorroborated
         # premise — none may promote alone. Only the study-receipted
         # invariant-violated rule promotes directly.
-        from core.audit.protocol_state import is_detection_rule_id
-        return is_detection_rule_id(tool_id)
+        from core.audit.protocol_state import is_detection_rule_id as protocol_state_is_detection
+        return protocol_state_is_detection(tool_id)
 
     # Exact-spelling registry namespaces (core.audit.evidence_grade):
     # the enumerated role decides, and an unlisted spelling under an

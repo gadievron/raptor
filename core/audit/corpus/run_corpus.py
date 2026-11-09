@@ -31,7 +31,7 @@ from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.json import load_json, loads, save_json
@@ -160,6 +160,22 @@ class CorpusBudget:
         if self.max_cost is not None and self.remaining_cost() <= 0:
             return "cost_budget_exhausted"
         return ""
+
+
+class _AuditExecutionOptions(TypedDict, total=False):
+    run_budget: CorpusBudget
+    static_only: bool
+
+
+def _audit_execution_options(
+    run_budget: CorpusBudget | None, static_only: bool,
+) -> _AuditExecutionOptions:
+    options: _AuditExecutionOptions = {}
+    if run_budget is not None:
+        options["run_budget"] = run_budget
+    if static_only:
+        options["static_only"] = True
+    return options
 
 
 def _budget_error_rows(labels, reason, *, model="", mode=None):
@@ -1251,8 +1267,7 @@ def _run_audit(
                 open_discovery=open_discovery,
                 immediate_verify=immediate_verify,
                 integer_abi=integer_abi,
-                **({"run_budget": run_budget} if run_budget is not None else {}),
-                **({"static_only": True} if static_only else {}),
+                **_audit_execution_options(run_budget, static_only),
             )
             if audit_dir:
                 run_dirs.append(audit_dir)
@@ -3511,8 +3526,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
                 checkpoint_stamp=ckpt_stamp_extra,
                 heartbeat=_heartbeat,
-                **({"run_budget": run_budget} if run_budget is not None else {}),
-                **({"static_only": True} if args.static_only else {}),
+                **_audit_execution_options(run_budget, args.static_only),
             )
             wall_s = time.monotonic() - t0
 
