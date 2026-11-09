@@ -12,7 +12,7 @@ absent):
 
 from __future__ import annotations
 
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, closing, suppress
 import http.client
 import json
 import os
@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from core.sandbox.tests.socket_server import SocketServer
+from core.testing.processes import reap_on_exit
 from packages.joern import netns_forwarder
 from packages.joern.netns_forwarder import Forwarder, create_listener
 
@@ -371,7 +372,7 @@ class TestForwarderStop:
 
 
 _STUB_HTTP_CHILD = r"""
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class H(BaseHTTPRequestHandler):
@@ -380,6 +381,7 @@ class H(BaseHTTPRequestHandler):
         body = self.rfile.read(n)
         out = json.dumps({
             "success": True,
+            "pid": os.getpid(),
             "auth": self.headers.get("Authorization"),
             "echo": body.decode("utf-8"),
         }).encode("utf-8")
@@ -414,11 +416,33 @@ def _wait_for(predicate, timeout_s: float = 15.0) -> None:
         time.sleep(0.1)
 
 
+def _pid_state(pid):
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
+    except FileNotFoundError:
+        return None
+    return fields[19], fields[0]  # start ticks and state; never act on a reused PID
+
+
+def _stopped(pid):
+    state = _pid_state(pid)
+    return state is not None and state[1] in {"T", "t"}
+
+
+def _quiescent(pid, identity):
+    state = _pid_state(pid)
+    return state is None or state[0] != identity or state[1] in {"Z", "X"}
+
+
 @needs_userns
 class TestNamespaceIsolation:
     @pytest.fixture
+    def termination_waits(self):
+        return 10, 5
+
+    @pytest.fixture
     def running_stack(
-        self, uds_dir: str,
+        self, uds_dir: str, termination_waits: tuple[float, float],
     ) -> Iterator[tuple[str, int, subprocess.Popen[bytes]]]:
         """Forwarder script + stub in-namespace HTTP child."""
         path = os.path.join(uds_dir, "joern.sock")
@@ -432,33 +456,26 @@ class TestNamespaceIsolation:
             [sys.executable, str(_SCRIPT),
              "--socket", path, "--port", str(port),
              "--", sys.executable, "-c", _STUB_HTTP_CHILD, str(port)],
+            start_new_session=True,
         )
-        try:
-            _wait_for(lambda: os.path.exists(path))
-            yield path, port, proc
-        finally:
-            # The socket (this fixture's readiness gate) exists before
-            # the supervisor installs its SIGTERM handler, and that
-            # handler DROPS the signal while the wrapped child is not
-            # yet bound (netns_forwarder.main: create_listener precedes
-            # both the signal.signal calls and the Popen). A terminate()
-            # landing in that boot window is absorbed entirely, and
-            # under load a delivered one can simply be slow to unwind —
-            # either way a bare fixed wait errored the teardown with
-            # TimeoutExpired. Escalate instead: a second SIGTERM sent
-            # after the window has passed still gets the clean
-            # forwarded shutdown; SIGKILL is the total backstop for a
-            # supervisor that cannot act on signals at all.
-            proc.terminate()
+        # Register group ownership before startup can fail. Escalation must
+        # signal the group while the unreaped leader still anchors its ID;
+        # killing only a stopped supervisor leaves its HTTP child alive.
+        with reap_on_exit(proc, process_group=True, wait_timeout=10):
             try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+                _wait_for(lambda: os.path.exists(path))
+                yield path, port, proc
+            finally:
                 proc.terminate()
                 try:
-                    proc.wait(timeout=5)
+                    proc.wait(timeout=termination_waits[0])
                 except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=10)
+                    proc.terminate()
+                    with suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=termination_waits[1])
+                # The outer reaper kills/reaps a still-live group, including
+                # on errors or interrupts. A clean supervisor already waited
+                # for its child before returning.
 
     @staticmethod
     def _uds_roundtrip(path: str) -> dict:
@@ -513,15 +530,14 @@ class TestNamespaceIsolation:
         assert proc.wait(timeout=10) != 0
         assert not os.path.exists(path)
 
+    @pytest.mark.parametrize("termination_waits", [(0.05, 0.05)], ids=["short-graces"])
     def test_teardown_reclaims_unresponsive_supervisor(
         self,
         running_stack: tuple[str, int, subprocess.Popen[bytes]],
     ) -> None:
         """The fixture teardown must reclaim a supervisor that cannot
-        act on SIGTERM. SIGSTOP simulates that faithfully: a stopped
-        process holds a handled SIGTERM pending, exactly like the
-        supervisor's boot window where the installed handler drops the
-        signal because the wrapped child is not yet bound. The real
+        act on SIGTERM. A stopped process holds a handled SIGTERM
+        pending, so waiting longer cannot enable a graceful exit. The real
         assertion is the fixture's own finally block (the shipped
         teardown, not a copy): it must escalate and reclaim the
         process within its bounds instead of erroring the teardown
@@ -529,6 +545,32 @@ class TestNamespaceIsolation:
         path, _port, proc = running_stack
         self._uds_roundtrip(path)  # fully booted first
         os.kill(proc.pid, signal.SIGSTOP)  # own Popen child only
+        _wait_for(lambda: _stopped(proc.pid), timeout_s=2)
+
+    @pytest.mark.parametrize("finish", ["resume", "close", "error", "interrupt"])
+    def test_stopped_stack_reclaims_child_on_unwind(self, uds_dir, finish):
+        # Drive the shipped fixture generator, with short test-owned TERM
+        # graces. No copied teardown or fake process can hide a lost child.
+        owner = type(self).running_stack.__wrapped__(self, uds_dir, (0.05, 0.05))
+        with closing(owner):
+            path, _port, proc = next(owner)
+            child_pid = self._uds_roundtrip(path)["pid"]
+            child_state = _pid_state(child_pid)
+            assert child_state is not None
+            assert os.getpgid(child_pid) == proc.pid
+            os.kill(proc.pid, signal.SIGSTOP)
+            _wait_for(lambda: _stopped(proc.pid), timeout_s=2)
+            if finish == "resume":
+                with pytest.raises(StopIteration):
+                    next(owner)
+            elif finish == "close":
+                owner.close()
+            else:
+                error = RuntimeError if finish == "error" else KeyboardInterrupt
+                with pytest.raises(error, match="body interrupted"):
+                    owner.throw(error("body interrupted"))
+        assert proc.returncode == -signal.SIGKILL
+        _wait_for(lambda: _quiescent(child_pid, child_state[0]), timeout_s=5)
 
 
 class TestSelfProbe:
