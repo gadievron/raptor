@@ -1170,6 +1170,23 @@ Operator-tunable: change `--fail-on-severity high` in the workflow to
 The diff command's exit code is 0 = no regression at threshold,
 1 = regression found, 2 = inputs invalid.
 
+To save a separate comparison report while keeping the usual console or
+`--json` output, choose a destination explicitly:
+
+```bash
+bin/raptor-sca diff before/findings.json after/findings.json \
+  --report-format markdown --report-output comparison.md
+```
+
+Use `json` or `xml` for structured reports, or repeat `--report-format`
+with a directory destination to save several formats. These reports show
+category totals and up to 100 rows per category; `--show-persistent` includes
+backlog details. Native `--json` retains the complete comparison. Report
+failures appear on stderr and leave the regression gate's exit code intact.
+With no report destination, the command creates no extra report files.
+An item marked resolved is absent from the selected current findings; that
+alone does not prove remediation or equivalent scan coverage.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml

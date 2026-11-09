@@ -26,6 +26,7 @@ CAPABILITIES = (
     CommandCapability("project report", "project", "automatic", "terminal and summary.md", "native finding/annotation exports retained"),
     CommandCapability("sca scan", "sca", "automatic", "terminal and summary.md", "--html adds HTML"),
     CommandCapability("sca render", "sca", "existing output policy", "terminal and summary.md", "offline; legacy Markdown/SARIF switches retained"),
+    CommandCapability("sca diff", "sca-diff", "explicit destination required", "existing stdout; report summary on stderr", "native --json/--out and gate status retained"),
     CommandCapability("sca sbom inspect", "sbom-inspect", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom stats", "sbom-stats", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),
     CommandCapability("sca sbom diff", "sbom-diff", "explicit output or native directory", "stderr and captured summary", "native evidence formats retained", ("markdown", "json", "xml")),

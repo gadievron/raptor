@@ -110,7 +110,11 @@ def main(argv: Sequence[str]) -> int:
         if severity_rank(r.get("severity", "info")) >= threshold
         or (r.get("sca") or {}).get("in_kev")
     ]
-    return 1 if triggering else 0
+    exit_code = 1 if triggering else 0
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .diff_reporting import complete_diff_report
+        complete_diff_report(args, delta, exit_code=exit_code)
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +252,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                    help="severity threshold for the exit-code check "
                         "(default: high)")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this read-only command")
+    return args
 
 
 def _load_rows(path_str: str) -> list[dict[str, Any]] | None:
