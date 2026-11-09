@@ -380,12 +380,10 @@ def test_memo_invalidated_on_invalidate(tmp_path: Path) -> None:
     assert cache.get("k", ttl_seconds=60) is None
 
 
-def test_memo_negative_cached_miss_is_recomputed_after_put(
+def test_memo_miss_is_recomputed_after_put(
     tmp_path: Path,
 ) -> None:
-    """Repeated misses on a never-written key shouldn't trigger
-    repeat disk stat — but a subsequent put on that key must be
-    seen by the next get."""
+    """Repeated misses must not hide a subsequent write to the same key."""
     cache = JsonCache(root=tmp_path)
     assert cache.get("k", ttl_seconds=60) is None
     assert cache.get("k", ttl_seconds=60) is None

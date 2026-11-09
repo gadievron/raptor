@@ -61,6 +61,7 @@ import logging
 import math
 import os
 import stat
+import sys
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -125,12 +126,6 @@ _REAP_SENTINEL_NAME = ".reap_last_run"
 # ``tuning.json::max_json_memo_mb``.
 _DEFAULT_MEMO_BUDGET_MB = 128
 
-# Byte cost charged for a memoised ``MISSING`` entry. The actual
-# Python overhead is tens of bytes (dict slot + entry object); 96
-# is generous but keeps the negative-cache bounded even when the
-# scan probes thousands of keys that don't exist on disk.
-_MISSING_ENTRY_BYTES = 96
-
 # Max directory depth searched for orphan tempfiles. Cache keys
 # containing ``/`` produce nested files (`<root>/sub/name.json`); SCA
 # callers in practice go at most two levels deep
@@ -162,11 +157,9 @@ class CacheEnvelope:
 class _MemoEntry:
     """One row of the in-process memo, accounted against a byte budget.
 
-    ``payload`` is either a :class:`CacheEnvelope` (fresh entry) or
-    the :data:`MISSING` sentinel (negative cache). ``signature`` records
-    the file identity, size and nanosecond timestamps; ``None`` for
-    MISSING. ``size`` is the byte cost charged against the budget —
-    file-size for fresh entries, a small constant for MISSING.
+    ``payload`` is a parsed :class:`CacheEnvelope`. ``signature`` records
+    the file identity, size and nanosecond timestamps. ``size`` charges
+    the envelope's file bytes plus the retained Python key's memory.
     """
 
     payload: Any
@@ -285,13 +278,10 @@ class JsonCache:
         # times within a single scan — pre-memo the SCA pipeline
         # spent ~5s of a 20s saleor warm scan re-opening + re-parsing
         # the same JSON files for the same keys. The memo is bounded
-        # by the working set (typically a few thousand entries per
-        # scan); we don't LRU-evict because scans are short-lived
-        # and the memo is reclaimed when the cache instance is GC'd.
-        # ``put`` and ``invalidate`` write through to keep the memo
-        # consistent with disk for callers who put + immediately get.
-        # ``MISSING`` is also memoised so a cold-cache miss isn't
-        # re-checked on disk repeatedly.
+        # by a byte-budgeted LRU. ``put`` and ``invalidate`` evict
+        # changed keys so subsequent reads inspect the current file.
+        # Misses are not retained: every lookup must recheck the path,
+        # and unreadable entries must be retried after repair.
         self._memo_lock = threading.Lock()
         # OrderedDict tracks insertion / access order so we can evict
         # least-recently-used entries when the byte budget is exceeded.
@@ -411,6 +401,7 @@ class JsonCache:
         """Insert / replace a memo entry and evict from the front
         while over budget. Caller holds the memo lock.
         """
+        size += sys.getsizeof(key)
         existing = self._memo.get(key)
         if existing is not None:
             self._memo_bytes -= existing.size
@@ -423,12 +414,9 @@ class JsonCache:
         # the whole memo budget (the floor is one entry, not zero):
         # evicting it would make every over-budget payload a
         # guaranteed re-read-per-hit while still paying the insert.
-        # The cost is one resident over-budget envelope until the
-        # next insert evicts it in turn — bounded by the largest
-        # single payload, which the disk-side envelope already
-        # bounds. A hard per-entry cap would instead silently drop
-        # memoisation for exactly the payloads that are most
-        # expensive to re-parse.
+        # The cost is one resident over-budget envelope and key until
+        # the next insert evicts it in turn. A hard per-entry cap would
+        # instead drop memoisation for the most expensive payloads to parse.
         while (
             self._memo_bytes > self._memo_budget
             and len(self._memo) > 1  # keep the just-inserted entry
@@ -503,32 +491,25 @@ class JsonCache:
             file_size = 0
         if signature is None:
             with self._memo_lock:
-                self._memo_put(key, MISSING, None, _MISSING_ENTRY_BYTES)
+                self._memo_evict(key)
             with self._counter_lock:
                 self.misses += 1
             return MISSING
         with self._memo_lock:
             cached = self._memo.get(key)
         envelope: CacheEnvelope | None = None
-        if (cached is not None and cached.payload is not MISSING
-                and cached.signature == signature):
+        if cached is not None and cached.signature == signature:
             envelope = cached.payload
             with self._memo_lock:
                 if key in self._memo:
                     self._memo_touch(key)
-        elif cached is not None and cached.payload is MISSING:
-            # Negative-cached miss is rechecked because the file may
-            # have appeared between the previous miss and this call —
-            # disk stat already proved presence above, so fall through
-            # to the read path.
-            pass
         if envelope is None:
             try:
                 envelope = self._read_envelope(path)
             except (OSError, ValueError, KeyError) as e:
                 logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
                 with self._memo_lock:
-                    self._memo_put(key, MISSING, None, _MISSING_ENTRY_BYTES)
+                    self._memo_evict(key)
                 with self._counter_lock:
                     self.misses += 1
                 return MISSING
