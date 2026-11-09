@@ -15,6 +15,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
+from .verification_results import VerificationScope
+
 from core.coverage.journal import CLEAN_BASIS_VERDICT
 
 from .journal import (
@@ -281,7 +283,8 @@ def append_journal_for_outcome(
     checked_by: list[str] | None = None,
     domain_model_hash: str | None = None,
     producer: str | None = None,
-) -> None:
+    verification_scope: VerificationScope | None = None,
+) -> ReviewJournalEntry | None:
     """Append one ``ReviewJournalEntry`` for a completed review outcome.
 
     Shared by ``Collector.submit`` (which caches the domain-model
@@ -302,6 +305,14 @@ def append_journal_for_outcome(
     prefixes (amendment §1 A2 / final review Finding #2). Default
     ``"audit"`` matches the historical convention — /agentic call
     sites pass ``"agentic"`` explicitly.
+
+    An optional pipeline-created verification scope binds the claim and
+    known source version around journal hashing. It does not certify a
+    proof or an immutable build; unbound callers retain legacy behaviour.
+
+    Return the appended entry, or None when admission or append failed. Callers
+    that remove pending work use this exact acknowledgement, rather than
+    unrelated journal growth. The caller still owns batch durability.
 
     Best-effort: any failure logs at DEBUG and swallows so an
     unrelated review can't be lost when a hash / concept lookup
@@ -324,6 +335,66 @@ def append_journal_for_outcome(
         qualified = getattr(outcome, "function_qualified", "") or ""
 
     source_hash = ""
+    from .refutation_source import capture_source_identity
+    from .source_anchor import make_source_anchor, parse_source_anchor
+
+    inherited_anchor = getattr(outcome, "reused_source_anchor", None) if getattr(outcome, "reused", False) else None
+    inherited_parts = parse_source_anchor(inherited_anchor)
+    inherited_before = None
+    if inherited_anchor is not None:
+        if inherited_parts is None:
+            logger.warning("journal reused source anchor is invalid")
+            return None
+        inherited_before = capture_source_identity(target_path, outcome.file)
+        if inherited_before is None or inherited_before.sha256 != inherited_parts[0]:
+            logger.warning("journal reused source binding changed")
+            return None
+
+    def binding_current(*, after_hash=False):
+        try:
+            from .claim_verification import ClaimVerification
+            from .refutation_source import capture_source_identity
+
+            if not isinstance(verification_scope, VerificationScope):
+                logger.warning("journal verification scope has an invalid type")
+                return False
+            review = getattr(outcome, "review_result", None) or {}
+            mechanism = getattr(outcome, "hypothesis", "") or review.get("hypothesis") or ""
+            current = capture_source_identity(target_path, verification_scope.file) if (
+                verification_scope.source_identity is not None) else None
+            reason = ClaimVerification({"mechanism": verification_scope.hypothesis},
+                binding=verification_scope).scope_rejection(file=outcome.file, function=outcome.function,
+                    line_start=gap.get("line_start", 0), hypothesis=mechanism, source_identity=current)
+            if reason is None and review.get("hypothesis", mechanism) != mechanism:
+                reason = "claim-revised"
+            published_claims = getattr(outcome, "hypotheses", None)
+            if reason is None and published_claims and not any(
+                    isinstance(claim, dict) and claim.get("mechanism") == verification_scope.hypothesis
+                    for claim in published_claims):
+                reason = "claim-revised"
+            if reason is None and after_hash and verification_scope.source_identity is not None and not source_hash:
+                reason = "source-hash-unavailable"
+            if reason:
+                from .check_trace import record_claim_scope_rejection, record_source_invalidation
+
+                receipts = tuple(filter(None, [getattr(outcome, "evidence_tool", ""),
+                                               review.get("ondemand_synth_receipt")]))
+                if reason == "source-version-drift":
+                    record_source_invalidation(out_dir, verification_scope, source_identity_after=current,
+                        prior_receipts=receipts, prior_outcomes=(), phase="journal_admission")
+                else:
+                    record_claim_scope_rejection(out_dir, verification_scope, reason=reason, receipts=receipts,
+                        attempted_scope={"file": outcome.file, "function": outcome.function,
+                            "line_start": gap.get("line_start", 0), "hypothesis": mechanism,
+                            "phase": "journal_admission"})
+                return False
+            return True
+        except Exception:
+            logger.warning("could not admit bound journal source", exc_info=True)
+            return False
+
+    if verification_scope is not None and not binding_current():
+        return None
     edge_callee = gap.get("edge_callee") or None
     try:
         if edge_callee:
@@ -363,6 +434,21 @@ def append_journal_for_outcome(
         pass
     except Exception:
         logger.debug("source hash computation failed for %s", outcome.file, exc_info=True)
+
+    if verification_scope is not None and not binding_current(after_hash=True):
+        return None
+    if inherited_parts is not None:
+        inherited_after = capture_source_identity(target_path, outcome.file)
+        if inherited_after != inherited_before or source_hash != inherited_parts[1]:
+            logger.warning("journal reused source binding changed during hashing")
+            return None
+        source_hash = inherited_anchor
+    elif verification_scope is not None and verification_scope.source_identity is not None:
+        try:
+            source_hash = make_source_anchor(verification_scope.source_identity.sha256, source_hash)
+        except ValueError:
+            logger.warning("journal known source cannot be represented by a source anchor")
+            return None
 
     hypotheses_list: list[dict[str, str]] = []
     if getattr(outcome, "hypotheses", None):
@@ -672,6 +758,7 @@ def append_journal_for_outcome(
     )
     try:
         append_entry(out_dir, entry)
+        return entry
     except Exception:
         logger.debug(
             "journal append failed for %s:%s",

@@ -495,16 +495,30 @@ def import_validation_results(
         target_path_arg = target_path or (
             audit_out_dir.parent if audit_out_dir else Path(".")
         )
-        recomputed_hash = _compute_hash(
-            Path(target_path_arg), file_path,
-            (prior_entry.line_start if prior_entry else 0) or 0,
-            prior_entry.line_end if prior_entry else None,
-        ) or ""
         prior_hash = (prior_entry.source_hash if prior_entry else "") or ""
-        source_drifted = bool(
-            recomputed_hash and prior_hash
-            and recomputed_hash != prior_hash
-        )
+        from .source_anchor import SOURCE_ANCHOR_PREFIX, hash_source_spans, make_source_anchor
+
+        bound_source = prior_hash.startswith(SOURCE_ANCHOR_PREFIX)
+        if bound_source:
+            from .context import fallback_span_end
+
+            line_start = prior_entry.line_start or 0
+            hashes, digest = hash_source_spans(Path(target_path_arg), file_path,
+                [(line_start, fallback_span_end(line_start, prior_entry.line_end))])
+            recomputed_hash = make_source_anchor(digest, hashes[0]) if digest and hashes[0] else ""
+            # A correction is not a new review of edited source. Keep the
+            # original binding, including when the current file is unreadable.
+            source_drifted = recomputed_hash != prior_hash
+        else:
+            recomputed_hash = _compute_hash(
+                Path(target_path_arg), file_path,
+                (prior_entry.line_start if prior_entry else 0) or 0,
+                prior_entry.line_end if prior_entry else None,
+            ) or ""
+            source_drifted = bool(
+                recomputed_hash and prior_hash
+                and recomputed_hash != prior_hash
+            )
 
         new_entry = ReviewJournalEntry(
             ts=now_iso(),
@@ -512,7 +526,7 @@ def import_validation_results(
             file=file_path,
             function=function_name,
             verdict=new_verdict,
-            source_hash=recomputed_hash or prior_hash,
+            source_hash=prior_hash if bound_source else recomputed_hash or prior_hash,
             line_start=prior_entry.line_start if prior_entry else 0,
             line_end=prior_entry.line_end if prior_entry else None,
             cwe=prior_entry.cwe if prior_entry else None,

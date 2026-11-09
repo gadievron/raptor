@@ -151,16 +151,16 @@ def compute_drift(
 
     Returns ``(drifted, checked)`` where *checked* counts the entries
     that carried a verifiable ``source_hash``. Uses the same span
-    hashing as the cross-run reuse fold (``core.staleness.hash_spans``,
-    common-prefix comparison — via :func:`core.run.resume.spans_drift`),
-    so the resume gate and the in-run fold can never disagree about
-    what "changed" means.
+    hashing as the cross-run reuse fold. Tagged source hashes also require
+    the producer's full-file digest to match; legacy span records retain
+    :func:`core.run.resume.spans_drift` semantics.
 
     Error verdicts are skipped (they are retried, not reused); entries
     without a recorded hash cannot be verified and are not counted.
     """
     from .context import fallback_span_end
     from .journal import latest_entries
+    from .source_anchor import SOURCE_ANCHOR_PREFIX, hash_source_spans, make_source_anchor
 
     by_file: dict[str, list[Any]] = {}
     # fresh=True: drift decides which prior verdicts a resume may
@@ -189,8 +189,23 @@ def compute_drift(
         )
         for _file, entries in sorted(by_file.items())
         for entry in entries
+        if not entry.source_hash.startswith(SOURCE_ANCHOR_PREFIX)
     ]
     drifted, checked = spans_drift(Path(target_path), records)
+    bound_drifted = []
+    for file, entries in sorted(by_file.items()):
+        bound = [entry for entry in entries if entry.source_hash.startswith(SOURCE_ANCHOR_PREFIX)]
+        if not bound:
+            continue
+        spans = [(entry.line_start, fallback_span_end(entry.line_start, entry.line_end or None))
+                 for entry in bound]
+        hashes, digest = hash_source_spans(target_path, file, spans)
+        for entry, span_hash in zip(bound, hashes):
+            current = make_source_anchor(digest, span_hash) if digest and span_hash else ""
+            checked += 1
+            if current != entry.source_hash:
+                bound_drifted.append(DriftItem(file=entry.file, function=entry.function,
+                    stored_hash=entry.source_hash, current_hash=current))
     return (
         [
             DriftItem(
@@ -200,7 +215,7 @@ def compute_drift(
                 current_hash=d.current_hash,
             )
             for d in drifted
-        ],
+        ] + bound_drifted,
         checked,
     )
 

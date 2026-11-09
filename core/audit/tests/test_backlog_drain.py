@@ -660,7 +660,8 @@ class TestDrain:
             (run_dir / DRAIN_REPORT_FILENAME).read_text(encoding="utf-8"))
         row = next(r for r in report_data["rows"]
                    if r.get("action") == "attempted")
-        assert "did not land" in row["reason"]
+        assert row["journal"] == "not-acknowledged"
+        assert "not acknowledged" in row["reason"]
 
     def test_sample_is_seeded_and_recorded(self, tmp_path, monkeypatch):
         clusters = [{

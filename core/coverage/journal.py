@@ -1105,7 +1105,7 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                 os.close(fd)
 
 
-def flush_journal(out_dir: Path) -> None:
+def flush_journal(out_dir: Path, *, strict: bool = False) -> None:
     """fsync the journal file(s) — call at batch/run boundaries.
 
     Same fd discipline as the appender: the pre-fix bare ``O_RDONLY``
@@ -1115,11 +1115,17 @@ def flush_journal(out_dir: Path) -> None:
     silently skipped, like the old ``is_file()`` probe's negative.
     Every shard is synced — a batch can span a roll boundary, so the
     just-sealed shard needs the sync as much as the active one.
+
+    ``strict`` refuses missing or unreadable shards instead of skipping them.
+    Pending-work consumers require this mode before retiring an acknowledged
+    append. It does not lock out later deletion or replacement of journal data.
     """
     from core.source import open_regular
     for shard in journal_shard_paths(out_dir):
         fh = open_regular(shard, "rb")
         if fh is None:
+            if strict:
+                raise OSError(f"journal shard could not be opened for flush: {shard}")
             continue
         with fh:
             os.fsync(fh.fileno())

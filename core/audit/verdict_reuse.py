@@ -115,6 +115,9 @@ def outcome_from_entry(entry: Any) -> Any:
     outcome.line = entry.line_start or 0
     outcome.reused = True
     outcome.reused_from_run = origin
+    from .source_anchor import SOURCE_ANCHOR_PREFIX
+    if isinstance(entry.source_hash, str) and entry.source_hash.startswith(SOURCE_ANCHOR_PREFIX):
+        outcome.reused_source_anchor = entry.source_hash
     # The basis travels with the verdict, so the reused row's own
     # re-journal never launders it into a fresh "verdict"; a clean from
     # a pre-field row carries "unknown" (which the fold refuses), never

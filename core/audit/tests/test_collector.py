@@ -1164,3 +1164,79 @@ class TestExtractWeaknesses:
         ws = extract_weaknesses(hyps, cwe="CWE-120")
         assert len(ws) == 1
         assert ws[0]["cwe_class"] == "CWE-476"
+
+
+def test_journal_append_returns_the_entry_that_landed(tmp_path):
+    from core.audit.backlog_drain import _RowOutcome
+    from core.audit.collector import append_journal_for_outcome
+    from core.coverage.journal import ReviewJournalEntry, load_entries
+
+    (tmp_path / "a.c").write_text("int f(void) { return 0; }\n", encoding="utf-8")
+    outcome = _RowOutcome(file="a.c", function="f", status="suspicious", line=1,
+                          hypothesis="owned concern", review_result={})
+    appended = append_journal_for_outcome(out_dir=tmp_path, target_path=tmp_path,
+        run_id="owned-run", outcome=outcome, gap={"line_start": 1, "line_end": 1})
+    assert isinstance(appended, ReviewJournalEntry)
+    assert (appended.file, appended.function, appended.run_id) == ("a.c", "f", "owned-run")
+    assert appended.source_hash
+    actual = load_entries(tmp_path)[0]
+    assert (actual.file, actual.function, actual.ts, actual.source_hash) == (
+        appended.file, appended.function, appended.ts, appended.source_hash)
+
+
+def test_failed_journal_append_returns_no_acknowledgement(tmp_path, monkeypatch):
+    from core.audit import collector
+    from core.audit.backlog_drain import _RowOutcome
+
+    (tmp_path / "a.c").write_text("int f(void) { return 0; }\n", encoding="utf-8")
+    outcome = _RowOutcome(file="a.c", function="f", status="suspicious", line=1,
+                          hypothesis="owned concern", review_result={})
+    seen = []
+
+    def failed_append(directory, entry):
+        seen.append((directory, entry.function))
+        raise OSError("owned append failure")
+
+    monkeypatch.setattr(collector, "append_entry", failed_append)
+    result = collector.append_journal_for_outcome(out_dir=tmp_path, target_path=tmp_path,
+        run_id="owned-run", outcome=outcome, gap={"line_start": 1, "line_end": 1})
+    assert seen == [(tmp_path, "f")]
+    assert result is None and not (tmp_path / "review-journal.jsonl").exists()
+
+
+@pytest.mark.parametrize("failure", ["scope_mismatch", "hash_unavailable", "recording", "untyped_scope"])
+def test_bound_journal_refusal_cannot_produce_an_acknowledgement(tmp_path, monkeypatch, failure):
+    from dataclasses import replace
+    from core.audit import check_trace, collector, record
+    from core.audit.backlog_drain import _RowOutcome
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import VerificationScope
+
+    path = tmp_path / "a.c"
+    path.write_text("int f(void) { return 0; }\n", encoding="utf-8")
+    scope = VerificationScope("a.c", "f", 1, "owned concern", capture_source_identity(tmp_path, "a.c"))
+    outcome = _RowOutcome(file="a.c", function="f", status="suspicious", line=1,
+                          hypothesis="owned concern", review_result={})
+    seen = []
+
+    def no_hash(*args, **kwargs):
+        seen.append("hash")
+        return None
+
+    def failed_record(*args, **kwargs):
+        seen.append("record")
+        raise OSError("owned recording failure")
+
+    if failure == "scope_mismatch":
+        scope = replace(scope, function="g")
+    elif failure == "hash_unavailable":
+        monkeypatch.setattr(record, "_compute_hash", no_hash)
+    elif failure == "recording":
+        path.write_text("int f(void) { return 1; }\n", encoding="utf-8")
+        monkeypatch.setattr(check_trace, "record_source_invalidation", failed_record)
+    else:
+        scope = {"file": "a.c"}  # model-shaped data is not a pipeline scope
+    result = collector.append_journal_for_outcome(out_dir=tmp_path, target_path=tmp_path,
+        run_id="owned-run", outcome=outcome, gap={"line_start": 1, "line_end": 1}, verification_scope=scope)
+    assert result is None and not (tmp_path / "review-journal.jsonl").exists()
+    assert seen == ({"hash_unavailable": ["hash"], "recording": ["record"]}.get(failure, []))
