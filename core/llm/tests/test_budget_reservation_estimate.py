@@ -73,12 +73,15 @@ def _client(*, cap: float, cost: float = 4.0, delay_s: float = 0.0,
 
 
 @pytest.fixture(autouse=True)
-def _no_telemetry_sink():
-    """Isolate each test from any process-wide sink."""
-    prior = llm_telemetry.current_sink()
-    llm_telemetry.set_sink(None)
-    yield
-    llm_telemetry.set_sink(prior)
+def _no_telemetry_sink(monkeypatch):
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(telemetry, {"_sink": None}, lock=telemetry._sink_lock):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 class TestEstimate:

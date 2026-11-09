@@ -49,11 +49,22 @@ class FakeClock:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_breaker():
-    """No test leaks a singleton (or a trip) into its neighbours."""
-    set_degradation_breaker(None)
-    yield
-    set_degradation_breaker(None)
+def _isolated_breaker(monkeypatch):
+    from contextlib import ExitStack
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+
+    with ExitStack() as scopes:
+        scopes.enter_context(isolated_module_state(
+            breaker_mod, {"_singleton": None}, lock=breaker_mod._singleton_lock,
+        ))
+        scopes.enter_context(isolated_module_state(
+            telemetry, {"_sink": None}, lock=telemetry._sink_lock,
+        ))
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _breaker(clock: FakeClock, **overrides) -> DegradedModeBreaker:
