@@ -90,18 +90,6 @@ _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
     # find it in their source).
     (re.compile(r'(?<=\S)[ \t]+is[ \t]+null\b',                     re.IGNORECASE), ' == NULL '),
     (re.compile(r'(?<=\S)[ \t]+is[ \t]+zero\b',                     re.IGNORECASE), ' == 0 '),
-    # Single-word synonyms. Tightened to require WHITESPACE
-    # (or string boundary) on both sides — `\b` alone matches
-    # at any word/non-word transition, including code-form
-    # identifiers like `a.equals(b)` (`.` and `(` are
-    # non-word, so `\bequals\b` matches the method name and
-    # rewrites to `==`, breaking the parse downstream). Real-
-    # world hit: any constraint expression that quotes
-    # source-form text with `.equals(`, `.exceeds(`,
-    # `.below(` — common in Java/Kotlin/C# audits.
-    (re.compile(r'(?:^|[ \t])equals(?:[ \t]|$)',                    re.IGNORECASE), ' == '),
-    (re.compile(r'(?:^|[ \t])exceeds(?:[ \t]|$)',                   re.IGNORECASE), ' > '),
-    (re.compile(r'(?:^|[ \t])below(?:[ \t]|$)',                     re.IGNORECASE), ' < '),
     # ``up to N`` is read as inclusive (``<= N``) — the most common
     # convention in maths/CS, though some writers treat it as exclusive.
     # Document the choice rather than guess case-by-case.
@@ -129,6 +117,44 @@ _REWRITES: tuple[tuple[re.Pattern[str], str], ...] = (
 MAX_CANONICALISE_CHARS = 256 * 1024
 
 _WHITESPACE_RUN = re.compile(r'[ \t]+')
+
+
+# Consume both whitespace boundaries in one pass. A word used as the
+# right operand must not be reconsidered as another English operator.
+_WORD_OPERATORS = {'equals': '==', 'exceeds': '>', 'below': '<'}
+_WORD_OPERATOR_RE = re.compile(
+    r'(?<=[A-Za-z0-9_)\]])[ \t]+(equals|exceeds|below)[ \t]+'
+    r'(?=[A-Za-z0-9_(\[+\-])', re.IGNORECASE,
+)
+_GROUPED_NAMES = re.compile(r'[ \t]*[A-Za-z_]\w*(?:[ \t]+[A-Za-z_]\w*)*[ \t]*')
+
+
+def _rewrite_word_operators(code: str) -> str:
+    # A grouped name followed by an alias and unary +/- or a call is also
+    # a possible C cast: `(Type) equals - 1` or `(Type) equals (1)`.
+    # Preserve that ambiguity for the parser instead of inventing a
+    # comparison with an operand named Type.
+    opens = []
+    matching_open = {}
+    for index, char in enumerate(code):
+        if char == '(':
+            opens.append(index)
+        elif char == ')' and opens:
+            matching_open[index] = opens.pop()
+
+    def replace(match: re.Match[str]) -> str:
+        left = match.start() - 1
+        if code[left] == ')' and code[match.end()] in '+-(':
+            opening = matching_open.get(left)
+            if opening is not None and _GROUPED_NAMES.fullmatch(code, opening + 1, left):
+                before = opening - 1
+                while before >= 0 and code[before] in ' \t':
+                    before -= 1
+                if before < 0 or not (code[before].isalnum() or code[before] in '_)]'):
+                    return match.group()
+        return ' ' + _WORD_OPERATORS[match.group(1).lower()] + ' '
+
+    return _WORD_OPERATOR_RE.sub(replace, code)
 
 
 def canonicalise(text: str) -> str:
@@ -168,6 +194,7 @@ def canonicalise(text: str) -> str:
         if code and not code.isspace():
             for pat, repl in _REWRITES:
                 code = pat.sub(repl, code)
+            code = _rewrite_word_operators(code)
         return _WHITESPACE_RUN.sub(' ', code)
 
     # Keep literals and comments byte-for-byte. Their punctuation and
