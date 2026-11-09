@@ -386,8 +386,9 @@ class SandboxHost:
                     if launch_gate is not None:
                         cleanup.callback(launch_gate.set)
             except BaseException as cleanup_error:
-                failure.add_note(
-                    "host preparation cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    failure.add_note(
+                        "host preparation cleanup: " + type(cleanup_error).__name__)
             raise
         try:
             worker_enabled = True
@@ -401,7 +402,8 @@ class SandboxHost:
             try:
                 host.close()
             except BaseException as cleanup_error:
-                e.add_note("host startup cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    e.add_note("host startup cleanup: " + type(cleanup_error).__name__)
             if not isinstance(e, Exception):
                 raise
             if not thread.is_alive():
@@ -422,7 +424,8 @@ class SandboxHost:
             try:
                 host.close()
             except BaseException as cleanup_error:
-                failure.add_note("host acknowledgement cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    failure.add_note("host acknowledgement cleanup: " + type(cleanup_error).__name__)
             raise
         return host
 
@@ -441,7 +444,8 @@ class SandboxHost:
         if errors:
             primary = errors.pop(0)
             for cleanup_error in errors:
-                primary.add_note("daemon endpoint cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    primary.add_note("daemon endpoint cleanup: " + type(cleanup_error).__name__)
             raise primary
 
     def _cleanup_owned_output(self) -> None:
@@ -467,7 +471,8 @@ class SandboxHost:
         if errors:
             primary = failure if failure is not None else errors.pop(0)
             for cleanup_error in errors:
-                primary.add_note("RPC endpoint cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    primary.add_note("RPC endpoint cleanup: " + type(cleanup_error).__name__)
             if failure is None:
                 raise primary
 
@@ -503,7 +508,8 @@ class SandboxHost:
                 if failure is None:
                     failure = exc
                 else:
-                    failure.add_note("RPC close cleanup: " + type(exc).__name__)
+                    with contextlib.suppress(BaseException):
+                        failure.add_note("RPC close cleanup: " + type(exc).__name__)
             try:
                 self._thread.join(timeout=max(0, deadline - time.monotonic()))
                 if self._thread.is_alive():
@@ -514,7 +520,8 @@ class SandboxHost:
                 if failure is None:
                     failure = exc
                 else:
-                    failure.add_note("RPC worker cleanup: " + type(exc).__name__)
+                    with contextlib.suppress(BaseException):
+                        failure.add_note("RPC worker cleanup: " + type(exc).__name__)
             if failure is not None:
                 raise failure
 
@@ -845,5 +852,6 @@ def one_shot_call(
             except BaseException as cleanup_error:
                 if failure is None:
                     raise
-                failure.add_note(
-                    "one-shot output cleanup: " + type(cleanup_error).__name__)
+                with contextlib.suppress(BaseException):
+                    failure.add_note(
+                        "one-shot output cleanup: " + type(cleanup_error).__name__)

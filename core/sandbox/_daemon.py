@@ -64,7 +64,7 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import errno
 import json
 import math
@@ -1193,7 +1193,8 @@ def _retire_request_target(proc, *, failure=None):
     if failures:
         primary = original if original is not None else failures.pop(0)
         for cleanup_error in failures:
-            primary.add_note("target cleanup: " + type(cleanup_error).__name__)
+            with suppress(BaseException):
+                primary.add_note("target cleanup: " + type(cleanup_error).__name__)
         if original is None:
             raise primary
 
