@@ -364,7 +364,7 @@ def _step_refutes_path(
     else:
         var_reaches = _lexical_var_reaches_sink(
             spec.var_name, source_text, step_line, sink_line,
-            sink_line_text,
+            sink_line_text, language=language,
         )
     if not var_reaches:
         return False, (

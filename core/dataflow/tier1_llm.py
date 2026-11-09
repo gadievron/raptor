@@ -610,7 +610,7 @@ def _try_known_safe_call(
         chain_ok = any(
             _lexical_var_reaches_sink(
                 var, source_text, validator_line, sink_line,
-                sink_line_text,
+                sink_line_text, language=language,
             )
             for var in chain_vars
         )
@@ -808,7 +808,7 @@ def try_tier1b(
         else:
             chain_ok = _lexical_var_reaches_sink(
                 mech.var_name, source_text, validator_line, sink_line,
-                sink_line_text,
+                sink_line_text, language=language,
             )
         if not chain_ok:
             return Tier0Result(
