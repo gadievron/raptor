@@ -1016,17 +1016,17 @@ def _parse_condition(
     """
     _validate_var_registry(vars_, profile)
     pending_vars = dict(vars_)
-    pending_calls = {} if anon_map is not None else None
-    pending_axioms = [] if axiom_sink is not None else None
+    pending_calls: dict[str, str] | None = {} if anon_map is not None else None
+    pending_axioms: list[tuple[str, Any]] | None = [] if axiom_sink is not None else None
     result = _parse_condition_in_frame(
         text, pending_vars, profile=profile, anon_map=pending_calls,
         axiom_sink=pending_axioms, reserved_native_names=reserved_native_names,
     )
     if not isinstance(result, Rejection):
         vars_.update(pending_vars)
-        if anon_map is not None:
+        if anon_map is not None and pending_calls is not None:
             anon_map.update(pending_calls)
-        if axiom_sink is not None:
+        if axiom_sink is not None and pending_axioms is not None:
             axiom_sink.extend(pending_axioms)
     return result
 
