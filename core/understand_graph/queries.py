@@ -609,12 +609,18 @@ def coverage_residual(
         # and matching them would re-open the false-suppression lane
         # at label grain. Historical validation of the same display id
         # does not establish validation of the selected understand snapshot.
+        snapshot = _snapshot_by_id(conn, snapshot_id)
+        if snapshot is None or not snapshot["target_path"]:
+            return set()
+        target = str(snapshot["target_path"])
         rows = conn.execute(
             """
             SELECT DISTINCT sk.props_json
             FROM edges v
             JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
                          AND vo.stale = 0 AND vo.snapshot_id = v.snapshot_id
+            JOIN snapshots vs ON vs.id = vo.snapshot_id
+                         AND (vs.target_path = ? OR vs.target_path = ?)
             JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'
                          AND fl.stale = 0 AND fl.snapshot_id = ?
             JOIN edges hs ON hs.src_id = fl.id AND hs.kind = 'HAS_SINK'
@@ -623,7 +629,7 @@ def coverage_residual(
                          AND sk.stale = 0 AND sk.snapshot_id = fl.snapshot_id
             WHERE v.kind = 'VALIDATES' AND v.stale = 0
             """,
-            (snapshot_id,),
+            (target, str(Path(target).resolve()), snapshot_id),
         ).fetchall()
         validated: set[str] = set()
         for row in rows:

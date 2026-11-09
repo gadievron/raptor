@@ -41,3 +41,14 @@ def test_stale_validation_outcome_does_not_suppress_path(tmp_path):
         conn.execute("UPDATE nodes SET stale=1 WHERE kind='verified_outcome'")
     paths = coverage_residual(graph, str(target))
     assert {p["sink"]["id"] for p in paths} == {"SINK-1", "SINK-2"}
+
+
+@pytest.mark.parametrize("outcome_target", ["other", ""])
+def test_persisted_validation_from_another_target_does_not_suppress_path(tmp_path, outcome_target):
+    graph, target = _validated_graph(tmp_path)
+    with graph_write_txn(graph) as conn:
+        # Model a VALIDATES edge minted by the former unscoped ingestion:
+        # its destination is current, but its outcome belongs elsewhere.
+        conn.execute("UPDATE snapshots SET target_path=? WHERE producer='validate'",
+                     (str(tmp_path / outcome_target) if outcome_target else "",))
+    assert {p["sink"]["id"] for p in coverage_residual(graph, str(target))} == {"SINK-1", "SINK-2"}
