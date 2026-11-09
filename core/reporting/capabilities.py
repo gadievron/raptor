@@ -57,6 +57,7 @@ CAPABILITIES = (
     CommandCapability("describe", "describe", "explicit destination required", "existing stdout and captured summary", "no default file writes"),
     CommandCapability("cve-checker", "cve-checker", "explicit export; native checker directory default", "native JSON stdout; report summary on stderr", "public provenance gates and actual promotion outcomes retained; no extra synthesis or rule execution"),
     CommandCapability("frida", "frida", "explicit export; lifecycle directory default", "existing stdout; report summary on stderr", "capture metadata only; no raw events, hook source, seed data or instrumentation replay"),
+    CommandCapability("binary map/investigate", "binary-map", "explicit export; native run directory default", "existing stdout; report summary on stderr", "final map and current phase statuses; no intermediate-population aggregation or active replay"),
     CommandCapability("binary report", "binary", "explicit export", "existing report display or export summary", "no analysis is run"),
 )
 

@@ -649,3 +649,14 @@ ctx = load_exploit_context(context_file)
 
 It tells you what is possible so you do not waste time on what is
 impossible.
+
+`binary map` and `binary investigate` accept portable report options. Add
+`--report-format markdown`, `json` or `xml` to export into the existing run
+directory, or select `--report-output`. Native summaries and artifacts stay
+unchanged. The export records the final map's scope, candidate counts,
+evidence tiers, decompilation coverage and current active-phase outcomes.
+Intermediate map populations are not added together. An older investigation
+receipt is not adopted by a new map export, and a skipped or failed active
+phase stays visible. Reporting does not run analysis, tracing or fuzzing again.
+Choose destinations outside imported runtime/fuzz directories and individual
+active-phase output directories to preserve their native evidence.

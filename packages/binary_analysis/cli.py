@@ -269,6 +269,8 @@ def _add_map_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--fuzz-dir", help="Existing /binary fuzz or /fuzz run to ingest")
     parser.add_argument("--constraint-file", help="JSON file containing explicit SMT path conditions")
     parser.add_argument("--compare", help="Older compiled artefact to compare against")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
 
 
 def _add_trace_args(parser: argparse.ArgumentParser, *, include_out: bool) -> None:
@@ -344,6 +346,7 @@ def _run_map(args: argparse.Namespace) -> int:
     from core.run.pin import ProjectArgvError
     try:
         start_run(out_dir, "understand", target=str(target))
+        _capture_map_lifecycle(args, out_dir)
     except (OpLockContention, ProjectArgvError) as e:
         print(f"raptor-binary: {e}", file=sys.stderr)
         return 1
@@ -362,6 +365,7 @@ def _run_map(args: argparse.Namespace) -> int:
               f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
         return 1
     _print_map_summary(payload, output_path)
+    _complete_map_report(args, payload, result, out_dir, 0)
     return 0
 
 
@@ -551,6 +555,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
     from core.run.pin import ProjectArgvError
     try:
         start_run(out_dir, "understand", target=str(target))
+        _capture_map_lifecycle(args, out_dir)
     except (OpLockContention, ProjectArgvError) as e:
         print(f"raptor-binary: {e}", file=sys.stderr)
         return 1
@@ -667,6 +672,7 @@ def _run_investigate(args: argparse.Namespace) -> int:
               f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
         return 1
     _print_investigation_summary(investigation, out_dir)
+    _complete_map_report(args, payload, result, out_dir, 0, active_phases=active_phases)
     return 0
 
 
@@ -1290,16 +1296,44 @@ def _run_diagram(args: argparse.Namespace) -> int:
     return subprocess.run(cmd, env=RaptorConfig.get_safe_env(), timeout=120).returncode
 
 
+def _capture_map_lifecycle(args, out_dir):
+    options = getattr(args, "_report_options", None)
+    if options is not None and options.enabled and (args.report_format or args.report_output):
+        from copy import deepcopy
+        from core.run.metadata import load_run_metadata
+        args._report_lifecycle_dir = out_dir
+        try:
+            metadata = load_run_metadata(out_dir) or {}
+            manifest = metadata.get("manifest") or {}
+            args._report_lifecycle_metadata = deepcopy({"command": metadata.get("command"),
+                "reporting_identity": metadata.get("reporting_identity"),
+                "manifest": {"target": manifest.get("target") if isinstance(manifest, dict) else None}})
+        except (OSError, ValueError, TypeError):
+            args._report_lifecycle_metadata = {}
+
+
+def _complete_map_report(args, payload, result, out_dir, status, *, active_phases=()):
+    options = getattr(args, "_report_options", None)
+    if options is not None and options.enabled and (args.report_format or args.report_output):
+        args._report_done = True
+        from .reporting import complete_map_report
+        complete_map_report(args, payload, result, out_dir, status, active_phases=active_phases)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(_normalise_argv(sys.argv[1:] if argv is None else argv))
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command == "investigate":
-        return _run_investigate(args)
-    if args.command == "map":
-        return _run_map(args)
+    if args.command in {"investigate", "map"}:
+        from core.reporting.options import options_from_args
+        args._report_options = options_from_args(args, parser)
+        args._report_done = False
+        status = _run_investigate(args) if args.command == "investigate" else _run_map(args)
+        if not args._report_done:
+            _complete_map_report(args, None, None, Path(args.out) if args.out else None, status)
+        return status
     if args.command == "runtime":
         return _run_runtime(args)
     if args.command == "trace-parser":
