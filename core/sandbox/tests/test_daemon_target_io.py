@@ -265,7 +265,15 @@ def test_retirement_attempts_every_pipe_and_preserves_primary_failure(target, mo
     def close():
         physical.close()
         raise close_error
-    monkeypatch.setattr(proc, label, SimpleNamespace(close=close))
+    class PipeView:
+        @property
+        def closed(self):
+            return physical.closed
+
+        def close(self):
+            close()
+
+    monkeypatch.setattr(proc, label, PipeView())
     error = RuntimeError('request failed before cleanup')
     with pytest.raises(RuntimeError if primary_failure else failure) as caught:
         if primary_failure:
@@ -281,6 +289,7 @@ def test_retirement_attempts_every_pipe_and_preserves_primary_failure(target, mo
         assert 'target cleanup: ' + failure.__name__ in error.__notes__
     assert all(s.closed for s in target.streams)
     assert proc.returncode is not None
+    assert not daemon._REQUEST_CLEANUP_FAILED
 
 
 @pytest.mark.parametrize('phase', ['send', 'recv', 'communicate'])
