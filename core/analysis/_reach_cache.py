@@ -524,8 +524,6 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
     path = _cache_path_for(fingerprint)
     if path is None:
         return None
-    if not path.exists():
-        return None
     # UID + mode gate before decoding. The payload is data-only JSON
     # (never executed), so this gate is hygiene rather than the RCE
     # boundary it had to be under the retired pickle format — but a
@@ -549,7 +547,8 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
     # is authoritative for the actually-opened inode.
     import stat as _stat
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW
+                     | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0))
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -570,6 +569,9 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
                 "refusing to load",
                 path,
             )
+            return None
+        if not _stat.S_ISREG(st.st_mode):
+            logger.debug("reach_cache: cache entry %s is not a regular file", path)
             return None
         if st.st_uid != os.getuid():
             logger.warning(
@@ -606,7 +608,7 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
             chunks: list[bytes] = []
             total = 0
             while True:
-                buf = os.read(fd, 1 << 20)
+                buf = os.read(fd, min(1 << 20, _MAX_INDEX_BYTES - total + 1))
                 if not buf:
                     break
                 total += len(buf)
