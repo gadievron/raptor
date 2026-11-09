@@ -609,7 +609,7 @@
     "core/testing/__init__.py": "f2bc310e8e120d06204d7bd5782a90f1be31122d4adf541b354782ffafd4b695",
     "core/testing/asan.py": "327ae088cdb4b54fdaa5e7367057e1c6ead2c2fada6012db70ed3c6ba6b901fb",
     "core/testing/audit_shutdown.py": "e3195bbfe1e0a887092edfa282323bb9fe8953a99a5e3f3b0405d99f6a09f0b5",
-    "core/testing/cli_launch_inventory.py": "8bbb601325cd1449fc6e7d10f2a74ba1a1d4d4a3c92310b26933384a7f03b413",
+    "core/testing/cli_launch_inventory.py": "7b869140fdbc36f1c9744b396575b293b2bbf863983e9402a4ec314bd5124bd6",
     "core/testing/expected_crash.py": "ad4e2a879ad1d0c0c936cc4959ecc93e1d8e65f9eaa8f28ad1a897df1ee81852",
     "core/testing/fds.py": "8a0e1e43e0ccbf582bd45f9965013b5b03b4af5f48453c676fa5e07786e2487f",
     "core/testing/git_hermeticity.py": "ed1c1ae8ad74ba48645fb36ffb75a52923ea41e45523c889c26180db5cbc7c39",

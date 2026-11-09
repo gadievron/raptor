@@ -159,7 +159,7 @@ def inventory(root: Path, paths: list[str]) -> list[dict]:
             "test" in path or path.startswith(("core/testing/", ".github/"))
         ):
             sources[path] = (root / path).read_text(encoding="utf-8")
-    helpers = set()
+    helpers: set[str] = set()
     while True:
         rows = [row for path, source in sources.items()
                 for row in process_sites(path, source, launch_helpers=helpers)]
@@ -191,7 +191,7 @@ def source_witnesses(root: Path, paths: list[str], rows: list[dict]) -> dict[str
         witnessed[path] = hashlib.sha256((root / path).read_bytes()).hexdigest()
         package = path[:-3].replace("/", ".").split(".")[:-1]
         for node in ast.walk(ast.parse(source, filename=path)):
-            modules = []
+            modules: list[str] = []
             if isinstance(node, ast.Import):
                 modules.extend(item.name for item in node.names)
             elif isinstance(node, ast.ImportFrom):
