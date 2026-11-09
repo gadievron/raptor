@@ -190,6 +190,7 @@ TIERS: dict[str, dict] = {
             "plugins",
             "raptor.py", "raptor_agentic.py", "raptor_codeql.py",
             "raptor_fuzzing.py", "raptor_openant.py",
+            "raptor_zkpox.py",
         ],
         "outside_graph": True,
     },
