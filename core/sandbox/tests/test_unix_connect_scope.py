@@ -355,8 +355,16 @@ class TestPrivateTmpfsPinning(unittest.TestCase):
     def _supervisor(self, **kw):
         from core.sandbox._unix_scope import UnixScopeSupervisor
         fd = os.open("/dev/null", os.O_RDONLY)
-        self.addCleanup(os.close, fd)
-        return UnixScopeSupervisor(fd, **kw)
+        owner = [None]
+
+        def retire():
+            if owner[0] is None:
+                os.close(fd)
+            else:
+                owner[0].close()
+        self.addCleanup(retire)
+        owner[0] = UnixScopeSupervisor(fd, **kw)
+        return owner[0]
 
     def test_rebound_tmp_cannot_reclassify_shared_bind_socket(self):
         """The NV shape: the socket's st_dev equals the (rebound)

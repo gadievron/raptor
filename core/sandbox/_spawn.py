@@ -3857,15 +3857,17 @@ def run_sandboxed(
                 _array = array
                 _socket_mod2 = _socket_mod
                 sp = _unix_scope_parent_sock
+                fds = _array.array("i")
+                sup = None
                 try:
                     sp.settimeout(120)
-                    fds = _array.array("i")
                     try:
+                        # Install received rights as CLOEXEC atomically where
+                        # supported; a concurrent fork must not inherit them.
+                        flags = getattr(_socket_mod2, "MSG_CMSG_CLOEXEC", 0)
                         msg, ancdata, _fl, _ad = sp.recvmsg(
-                            64, _socket_mod2.CMSG_SPACE(fds.itemsize))
+                            64, _socket_mod2.CMSG_SPACE(fds.itemsize), flags)
                     except (OSError, TimeoutError):
-                        return
-                    if not msg:
                         return
                     for _lvl, _typ, _data in ancdata:
                         if (_lvl == _socket_mod2.SOL_SOCKET
@@ -3873,7 +3875,11 @@ def run_sandboxed(
                             fds.frombytes(
                                 _data[:len(_data)
                                       - (len(_data) % fds.itemsize)])
-                    if not fds:
+                    if not msg:
+                        return
+                    truncated = _fl & (_socket_mod2.MSG_CTRUNC | _socket_mod2.MSG_TRUNC)
+                    if truncated or len(fds) != 1:
+                        logger.debug("unix-scope receiver requires one complete notify fd")
                         return
                     notify_fd = fds[0]
                     os.set_inheritable(notify_fd, False)
@@ -3930,8 +3936,17 @@ def run_sandboxed(
                 except Exception:  # noqa: BLE001 — supervisor thread must never propagate
                     logger.debug("unix-scope receiver failed", exc_info=True)
                 finally:
-                    with contextlib.suppress(OSError):
-                        sp.close()
+                    # Constructor success acknowledges ownership. Until then
+                    # every installed right belongs to this receiver, including
+                    # after validation/CLOEXEC failures. Later registration or
+                    # service failures still retire the constructed supervisor.
+                    def close_received(fd):
+                        with contextlib.suppress(OSError):
+                            os.close(fd)
+                    callbacks = ([sup.close] if sup is not None else
+                                 [lambda fd=fd: close_received(fd) for fd in fds])
+                    callbacks.append(lambda: _close_scope_socket(sp))
+                    _retire_parent_resources(*callbacks)
 
             threading.Thread(target=_unix_scope_receiver,
                              name=f"unix-scope-recv-{child_pid}",
