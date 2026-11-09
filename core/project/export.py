@@ -323,6 +323,12 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
     """Build the archive, excluding its own output and private staging."""
     with preserving_stream_error(zipfile.ZipFile(staged_path, "w", zipfile.ZIP_DEFLATED)) as zf:
         written = entries = 0
+        source_versions: dict[Path, tuple[int, ...]] = {}
+
+        def source_version(path):
+            info = path.lstat()
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                    info.st_mtime_ns, info.st_ctime_ns)
 
         def add(path, arcname, limit=None):
             nonlocal written, entries
@@ -331,6 +337,7 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
             remaining = _MAX_PROJECT_ARCHIVE_BYTES - written
             if limit is not None:
                 remaining = min(remaining, limit)
+            source_versions.setdefault(path, source_version(path))
             written += _write_zip_regular(zf, path, arcname, remaining)
             entries += 1
 
@@ -398,6 +405,18 @@ def _write_project_zip(project_output_dir: Path, staged_path: Path,
             if project_json_path.stat().st_size > _MAX_PROJECT_META_BYTES:
                 raise ValueError('Project metadata exceeds the importable metadata byte limit')
             add(project_json_path, f"{project_output_dir.name}/.project.json", _MAX_PROJECT_META_BYTES)
+        # A SQLite checkpoint can change an already-copied DB while its WAL
+        # is still waiting to be copied. Successful per-file reads alone do
+        # not establish a consistent archive. Refuse source changes before
+        # publishing staging, keeping databases opaque and the old export safe.
+        for path, version in source_versions.items():
+            message = f"Project source changed during export: {str(path)!r}"
+            try:
+                current = source_version(path)
+            except OSError as error:
+                raise ValueError(message) from error
+            if current != version:
+                raise ValueError(message)
 
 
 
