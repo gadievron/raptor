@@ -22,10 +22,10 @@ paths-ignore:
   # validate_exec_target — inherently TOCTOU by test design.
   # The write_file_mode TOCTOU is fixed (fchmod on fd), but the
   # chmod→validate pairs are the test exercising the security check.
-  - core/sandbox/helpers/*_test*
+  - "core/sandbox/helpers/*_test*"
   # Git worktree mirrors — duplicates of in-tree source that would cause
   # double-counted alerts if scanned.
-  - .claude/worktrees/**
+  - ".claude/worktrees/**"
   # The web scanner's raw-probe TLS shim disables certificate and
   # hostname validation and floors the version at TLS 1.0 BY DESIGN —
   # it builds attack traffic for authorized scan targets (self-signed
@@ -34,4 +34,4 @@ paths-ignore:
   # insecurity is the feature. The shim is quarantined to this one
   # module (with a never-use-for-real-egress warning) precisely so the
   # checks consuming it stay fully scanned.
-  - packages/web/_probe_tls.py
+  - "packages/web/_probe_tls.py"

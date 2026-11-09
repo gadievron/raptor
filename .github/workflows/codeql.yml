@@ -107,7 +107,7 @@ jobs:
           case "$EVENT" in
             pull_request|pull_request_target)
               gh api --paginate "repos/${REPO}/pulls/${PR_NUMBER}/files" \
-                --jq '(. // [])[]?.filename' >> "$out"
+                --jq '(. // [])[]? | .filename, (.previous_filename // empty)' >> "$out"
               ;;
             push)
               if [[ -z "$BEFORE" || "$BEFORE" == "0000000000000000000000000000000000000000" ]]; then
@@ -124,13 +124,11 @@ jobs:
                   gh api --paginate \
                     "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
                 fi
-                # No previous_filename companion here (tests.yml emits
-                # it): deliberate asymmetry — these lists feed
-                # glob-shaped LANGUAGE filters, and a rename's old
-                # path never changes which languages the new tree
-                # contains.
-                jq -r '(.files // [])[]?.filename' "$resp" >> "$out"
-                files_n=$(wc -l < "$out")
+                # Include both paths so a source renamed into an ignored
+                # directory still refreshes its previous language analysis.
+                jq -r '(.files // [])[]? | .filename, (.previous_filename // empty)' "$resp" >> "$out"
+                # Rename companions are extra paths, not extra API file entries.
+                files_n=$(jq '(.files // []) | length' "$resp")
                 if (( files_n >= 300 )); then
                   echo "::notice::compare listed ${files_n} files — at the API's 300-file cap, list may be truncated; forcing full scan"
                   rm -f "$out"

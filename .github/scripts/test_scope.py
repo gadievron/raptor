@@ -212,6 +212,9 @@ TIERS: dict[str, dict] = {
         "extra_triggers": [
             ".github/scripts",
             ".github/workflows",
+            # CodeQL source admission reads this config; config-only edits must
+            # run the selector's workflow and fallback contract tests.
+            ".github/codeql/codeql-config.yml",
             ".devcontainer",
             "CLAUDE.md",
             ".claude",

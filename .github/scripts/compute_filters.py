@@ -10,13 +10,17 @@ meaningful diff base).
 Subsystem-level test dispatch (sandbox, sca, llm_analysis, etc.) is
 handled by ``test_scope.py`` via import-graph analysis.  This file
 retains only the CodeQL per-language gates (codeql_python, codeql_cpp,
-codeql_actions) used by ``codeql.yml``.
+codeql_actions) used by ``codeql.yml``. Python source triggers honour the
+scanner config's exclusions; unfamiliar config shapes retain broad matching.
+Dependency and workflow metadata keep their original triggers.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -89,6 +93,73 @@ def match_glob(path: str, pattern: str) -> bool:
     return fnmatch.fnmatchcase(path, pattern)
 
 
+CONFIG = Path(__file__).resolve().parents[2] / ".github/codeql/codeql-config.yml"
+
+
+def _ignored_source_patterns() -> tuple[str, ...]:
+    """Recognise the config's scalar list; unfamiliar shapes keep broad scans.
+
+    Restrict this optimisation to the current simple config rather than adding
+    a YAML dependency to the selector. Metadata edits always trigger scans.
+    """
+    patterns = []
+    seen_name = seen_list = False
+    try:
+        for line in CONFIG.read_text(encoding="utf-8").splitlines():
+            value = line.strip()
+            if not value or value.startswith("#"):
+                continue
+            if not line.startswith(" "):
+                if value.startswith("name: ") and not seen_name and not seen_list:
+                    label = value[len("name: "):]
+                    if label.startswith('"'):
+                        if not isinstance(json.loads(label), str):
+                            return ()
+                    elif not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_. -]*", label):
+                        return ()
+                    seen_name = True
+                    continue
+                if value == "paths-ignore:" and not seen_list:
+                    seen_list = True
+                    continue
+                return ()
+            if not seen_list or not line.startswith("  - "):
+                return ()
+            value = line[4:].strip()
+            if not value.startswith('"'):
+                return ()  # JSON-quoted scalars are unambiguous YAML strings.
+            value = json.loads(value)
+            if (not isinstance(value, str)
+                    or not re.fullmatch(r"[A-Za-z0-9_./*\-]+", value)
+                    or any(part in ("", ".", "..") or "**" in part and part != "**"
+                           for part in value.split("/"))):
+                return ()
+            patterns.append(value)
+    except (OSError, ValueError):
+        return ()
+    return tuple(patterns)
+
+
+def _ignored_source(path: str, pattern: str) -> bool:
+    """Match CodeQL's segment stars and recursive directory prefixes."""
+    parts, tokens = path.split("/"), pattern.split("/")
+
+    def expand(positions):
+        for j, token in enumerate(tokens):
+            if token == "**" and j in positions:
+                positions.add(j + 1)
+        return positions
+
+    positions = expand({0})
+    for part in parts:
+        if len(tokens) in positions:
+            return True  # A matched directory includes its descendants.
+        positions = expand({j if tokens[j] == "**" else j + 1
+                            for j in positions
+                            if tokens[j] == "**" or fnmatch.fnmatchcase(part, tokens[j])})
+    return len(tokens) in positions
+
+
 def evaluate(changed_files: list[str] | None) -> dict[str, bool]:
     """Return ``{filter_name: matched}`` for every filter in ``FILTERS``.
 
@@ -97,10 +168,15 @@ def evaluate(changed_files: list[str] | None) -> dict[str, bool]:
     """
     if changed_files is None:
         return dict.fromkeys(FILTERS, True)
+    ignored = _ignored_source_patterns()
+    python_sources = [path for path in changed_files
+                      if not any(_ignored_source(path, pattern) for pattern in ignored)]
     out: dict[str, bool] = {}
     for name, patterns in FILTERS.items():
         out[name] = any(
-            match_glob(f, p) for f in changed_files for p in patterns
+            match_glob(f, p) for p in patterns
+            for f in (python_sources if name == "codeql_python" and p == "**/*.py"
+                      else changed_files)
         )
     return out
 
