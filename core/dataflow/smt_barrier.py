@@ -550,7 +550,13 @@ def _charset_body_is_safe(body: str) -> bool:
     """
     if not body or body.startswith("^"):
         return False
-    return _ALPHA_BACKSLASH_ESCAPE.search(body) is None
+    if _ALPHA_BACKSLASH_ESCAPE.search(body) is not None:
+        return False
+    try:
+        tuple(_iter_charclass_atoms(body))
+    except ValueError:
+        return False
+    return True
 
 
 def _code_view_line(line: str, language: str) -> str:
@@ -2780,8 +2786,8 @@ def _iter_charclass_atoms(body: str):
     of live findings via an innocuous-looking guard.
 
     A DESCENDING range (``z-a``) is a compile-time ``re.error`` in
-    Python — the guard would never run; treat it as three literals
-    (same doctrine both consumers already used).
+    Python. Reject it: an enclosing handler may catch that error and
+    continue to the sink without validating the input.
 
     Alphabetic/digit escapes (``\d``, ``\2``…) never reach this
     tokenizer: :func:`_charset_body_is_safe` rejects those bodies.
@@ -2789,7 +2795,9 @@ def _iter_charclass_atoms(body: str):
     i, n = 0, len(body)
 
     def _atom(j: int) -> tuple[str, int]:
-        if body[j] == "\\" and j + 1 < n:
+        if body[j] == "\\":
+            if j + 1 == n:
+                raise ValueError("unterminated character-class escape")
             return body[j + 1], j + 2
         return body[j], j + 1
 
@@ -2800,9 +2808,7 @@ def _iter_charclass_atoms(body: str):
             if ord(first) <= ord(second):
                 yield ("range", first, second)
             else:
-                yield ("lit", first)
-                yield ("lit", "-")
-                yield ("lit", second)
+                raise ValueError("descending character-class range")
             i = after2
             continue
         yield ("lit", first)
@@ -2859,8 +2865,8 @@ def _expand_charset_body(body: str) -> set:
     Handles ``X-Y`` ranges with ``ord(X) <= ord(Y)`` (spanning at most
     :data:`_RANGE_EXPANSION_CAP` code points, escapes allowed on either
     endpoint via the shared tokenizer) and literal chars; everything
-    else (descending ranges — a compile-time ``re.error`` in Python —
-    and over-cap ranges) is treated as three separate literals.
+    else is rejected if malformed. Over-cap ranges are treated as
+    three separate literals.
     """
     out: set = set()
     for tok in _iter_charclass_atoms(body):
@@ -2883,7 +2889,10 @@ def _prove_charset(
     """Z3 regex-intersection emptiness, including admitted anchor suffixes."""
     require_bool(spec.accepts_trailing_newline, argument="accepts_trailing_newline")
     name = z3.String("name")
-    char_re = _charclass_to_re(spec.charset)
+    try:
+        char_re = _charclass_to_re(spec.charset)
+    except ValueError as exc:
+        return _ProofVerdict(False, None, f"invalid character class: {exc}")
     if char_re is None:
         return _ProofVerdict(
             True, None,
@@ -2942,7 +2951,10 @@ def _prove_charset_sub(
     as the Z3 charset path — a real mathematical proof of language
     neutralisation — just on a domain small enough to evaluate directly.
     """
-    forbidden_set = _expand_charset_body(spec.forbidden)
+    try:
+        forbidden_set = _expand_charset_body(spec.forbidden)
+    except ValueError as exc:
+        return _ProofVerdict(False, None, f"invalid character class: {exc}")
     danger_set = set(danger)
     missing = danger_set - forbidden_set
     if not missing:

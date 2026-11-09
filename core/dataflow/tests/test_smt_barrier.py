@@ -504,8 +504,9 @@ def test_expand_charset_over_cap_range_declines_not_sound():
     assert not verdict.sound
 
 
-def test_expand_charset_descending_range_still_literal():
-    assert sb._expand_charset_body("z-a") == {"z", "-", "a"}
+def test_expand_charset_descending_range_rejected():
+    with pytest.raises(ValueError, match="descending"):
+        sb._expand_charset_body("z-a")
 
 
 def test_substitution_dominance_clean_path():
@@ -1815,10 +1816,25 @@ def test_charclass_escaped_hyphen_is_not_a_range_operator():
     assert sb._expand_charset_body("a\\-z") == {"a", "-", "z"}
 
 
-def test_charclass_descending_escaped_range_degrades_to_literals():
-    """``[a-\\-]`` is descending (0x61 > 0x2D): a compile-time
-    ``re.error`` in Python; treated as three literals."""
-    assert sb._expand_charset_body("a-\\-") == {"a", "-"}
+def test_charclass_descending_escaped_range_rejected():
+    with pytest.raises(ValueError, match="descending"):
+        sb._expand_charset_body("a-\\-")
+
+
+@_requires_z3
+@pytest.mark.parametrize("body", ["z-a", "a-\\-", "a\\"])
+@pytest.mark.parametrize("kind", ["charset", "charset_sub"])
+def test_malformed_charset_proof_declines(body, kind):
+    spec = sb.ValidatorSpec(
+        kind=kind, var_name="name", charset=body, forbidden=body,
+    )
+    if kind == "charset":
+        verdict = sb._prove_charset(spec, "pathtrav", ["/"])
+    else:
+        verdict = sb._prove_charset_sub(spec, "pathtrav", ["a"])
+    assert not verdict.sound
+    assert verdict.counterexample is None
+    assert "invalid character class" in verdict.reasoning
 
 
 @_requires_z3
@@ -3848,3 +3864,36 @@ def test_mutated_anchor_metadata_is_validated_before_query():
     spec.accepts_trailing_newline = 0
     with pytest.raises(ValueError, match='must be a boolean'):
         sb.prove_neutralizes(spec, 'cmdi')
+
+
+@_requires_z3
+def test_caught_invalid_charset_does_not_prove_guard(tmp_path: Path):
+    import re
+
+    source = (
+        "import re\n"
+        "def handle(name):\n"
+        "    try:\n"
+        '        if not re.fullmatch(r"[z-a]+", name):\n'
+        "            return\n"
+        "    except re.error:\n"
+        "        pass\n"
+        "    return open(name)\n"
+    )
+    path = tmp_path / "app.py"
+    path.write_text(source)
+    with pytest.raises(re.error):
+        re.compile("[z-a]+")
+    result = sb.try_tier0(
+        fix_diff='+        if not re.fullmatch(r"[z-a]+", name):\n',
+        repo_root=tmp_path, sink_uri="app.py", sink_line=8, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+
+    # The same exception-handling shape still admits a valid allowlist.
+    path.write_text(source.replace("z-a", "a-z"))
+    control = sb.try_tier0(
+        fix_diff='+        if not re.fullmatch(r"[a-z]+", name):\n',
+        repo_root=tmp_path, sink_uri="app.py", sink_line=8, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
