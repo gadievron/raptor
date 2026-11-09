@@ -8,6 +8,11 @@ default of 10. An explicit int always wins.
 from __future__ import annotations
 
 import json
+from types import ModuleType
+
+import pytest
+
+from core.testing.module_views import scoped_function_imports
 
 from packages.llm_analysis.orchestrator import (
     _CLOUD_DEFAULT_MAX_FINDINGS,
@@ -98,9 +103,12 @@ class TestCapFindingsNoCap:
         assert len(out) == 10
 
 
-# Orchestrate-level resolution: drive to the cap point via the blocked-CC
-# exit (llm_config set to a local/cloud stub, block_cc_dispatch path),
-# mirroring test_orchestrate_rank_wiring.py's technique.
+# Drive the real cap and role resolution, then stop at the consumer's
+# client-construction seam. block_cc_dispatch only gates the CC path;
+# a configured primary would otherwise continue into a live canary probe.
+
+class _CapReached(Exception):
+    pass
 
 def _write_prep_report(tmp_path, n):
     findings = [
@@ -128,9 +136,8 @@ def _quiet(monkeypatch, tmp_path):
 
 def _real_cfg(provider, api_base=None):
     # A real LLMConfig/ModelConfig so orchestrate's downstream (role
-    # resolution, client bring-up) has every attribute it expects — we
-    # only care about the cap resolution, captured by the spy before any
-    # real model call (block_cc_dispatch exits the dispatch path).
+    # resolution) has every attribute it expects. Client construction is
+    # the owned stop after the real cap and post-cap cardinality banner.
     from core.llm.config import LLMConfig, ModelConfig
     primary = ModelConfig(
         provider=provider, model_name="stub-model",
@@ -143,9 +150,7 @@ def _real_cfg(provider, api_base=None):
 
 def _cap_seen(monkeypatch, tmp_path, *, provider, max_findings,
               api_base=None, n=25):
-    """Run orchestrate far enough to apply the cap, capturing the value
-    passed to _cap_findings via a spy. A RuntimeError from the blocked-CC
-    exit AFTER the spy fires is fine — we read the spy."""
+    """Observe the real cap and require arrival at the later dispatch seam."""
     _quiet(monkeypatch, tmp_path)
     seen = {}
     import packages.llm_analysis.orchestrator as orch
@@ -155,50 +160,85 @@ def _cap_seen(monkeypatch, tmp_path, *, provider, max_findings,
     def spy(findings, mf):
         seen["n_in"] = len(findings)
         seen["cap"] = mf
-        return real_cap(findings, mf)
+        capped = real_cap(findings, mf)
+        seen["n_out"] = len(capped)
+        return capped
 
     monkeypatch.setattr(orch, "_cap_findings", spy)
     report = _write_prep_report(tmp_path, n)
-    try:
-        orch.orchestrate(
-            prep_report_path=report,
-            repo_path=tmp_path,
-            out_dir=tmp_path / "out",
-            max_findings=max_findings,
-            llm_config=_real_cfg(provider, api_base),
-            block_cc_dispatch=True,
-        )
-    except Exception:  # noqa: BLE001 — downstream exit after the cap spy
-        pass
+    config = _real_cfg(provider, api_base)
+    client_import = ModuleType("core.llm.client")
+
+    def stop_before_dispatch(resolved):
+        assert resolved is config
+        raise _CapReached
+
+    client_import.LLMClient = stop_before_dispatch
+    original = orch.orchestrate
+    with scoped_function_imports(orch, ("orchestrate",),
+                                 {"core.llm.client": client_import}):
+        with pytest.raises(_CapReached):
+            orch.orchestrate(
+                prep_report_path=report,
+                repo_path=tmp_path,
+                out_dir=tmp_path / "out",
+                max_findings=max_findings,
+                llm_config=config,
+                block_cc_dispatch=True,
+            )
+    assert orch.orchestrate is original
     return seen
 
 
-def test_local_primary_none_analyses_all(monkeypatch, tmp_path):
+def test_local_primary_none_analyses_all(monkeypatch, tmp_path, capsys):
     # Local + unspecified → cap resolves to 0; _cap_findings is only
     # called when cap > 0, so a no-cap run never invokes it.
     seen = _cap_seen(
         monkeypatch, tmp_path, provider="ollama", max_findings=None, n=25,
     )
     assert "cap" not in seen  # the `> 0` guard short-circuited — no truncation
+    assert "25 findings → stub-model" in capsys.readouterr().out
 
 
-def test_cloud_primary_none_caps_at_default(monkeypatch, tmp_path):
+def test_cloud_primary_none_caps_at_default(monkeypatch, tmp_path, capsys):
     seen = _cap_seen(
         monkeypatch, tmp_path, provider="anthropic", max_findings=None, n=25,
     )
     assert seen["cap"] == _CLOUD_DEFAULT_MAX_FINDINGS
+    assert seen["n_in"] == 25
+    assert seen["n_out"] == _CLOUD_DEFAULT_MAX_FINDINGS
+    assert f"{_CLOUD_DEFAULT_MAX_FINDINGS} findings → stub-model" in capsys.readouterr().out
 
 
-def test_loopback_openai_primary_none_analyses_all(monkeypatch, tmp_path):
+def test_loopback_openai_primary_none_analyses_all(monkeypatch, tmp_path, capsys):
     seen = _cap_seen(
         monkeypatch, tmp_path, provider="openai",
         api_base="http://localhost:8000/v1", max_findings=None, n=25,
     )
     assert "cap" not in seen
+    assert "25 findings → stub-model" in capsys.readouterr().out
 
 
-def test_explicit_value_wins_on_local(monkeypatch, tmp_path):
+def test_explicit_value_wins_on_local(monkeypatch, tmp_path, capsys):
     seen = _cap_seen(
         monkeypatch, tmp_path, provider="ollama", max_findings=5, n=25,
     )
     assert seen["cap"] == 5
+    assert seen["n_in"] == 25
+    assert seen["n_out"] == 5
+    assert "5 findings → stub-model" in capsys.readouterr().out
+
+
+def test_cap_probe_rejects_a_return_before_dispatch(monkeypatch, tmp_path):
+    import packages.llm_analysis.orchestrator as orch
+
+    def corrupt_report(directory, n):
+        path = directory / "corrupt.json"
+        path.write_text("{bad")
+        return path
+
+    monkeypatch.setitem(globals(), "_write_prep_report", corrupt_report)
+    original = orch.orchestrate
+    with pytest.raises(pytest.fail.Exception, match="DID NOT RAISE"):
+        _cap_seen(monkeypatch, tmp_path, provider="ollama", max_findings=None)
+    assert orch.orchestrate is original
