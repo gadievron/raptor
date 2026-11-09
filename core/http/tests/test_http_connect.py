@@ -22,21 +22,27 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def endpoint(request):
     hits, ports = [], []
+    version, framing = getattr(request, "param", ("HTTP/1.1", "length"))
     release_body = Event()
     request.addfinalizer(release_body.set)
 
     class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
+        protocol_version = version
 
         def respond(self, *, head=False):
             size = int(self.headers.get("Content-Length", "0"))
             data = self.rfile.read(size) if size else b""
             hits.append((self.command, self.path,
-                         {k.lower(): v for k, v in self.headers.items()}, data))
+                         {k.lower(): v for k, v in self.headers.items()}, data, self.request_version))
             ports.append(self.client_address[1])
             body = b"x" * 65 if self.path == "/large" else b"hello"
             self.send_response(302 if self.path == "/redirect" else 200)
-            self.send_header("Content-Length", str(len(body)))
+            if framing != "close-delimited":
+                self.send_header("Content-Length", str(len(body)))
+            if framing == "keep-alive":
+                self.send_header("Connection", "keep-alive")
+            elif framing == "length-close":
+                self.send_header("Connection", "close")
             self.send_header("Set-Cookie", "fixture=value; Path=/")
             if self.path == "/redirect":
                 self.send_header("Location", "/followed")
@@ -241,3 +247,31 @@ def test_https_still_verifies_certificate_through_connect(https_endpoint, proxy)
         with pytest.raises(HttpError):
             untrusted.get_bytes(origin, retries=0)
     assert len(hits) == 1
+
+
+@pytest.mark.parametrize("endpoint,reuses_connection", [
+    (("HTTP/1.0", "close-delimited"), False),
+    (("HTTP/1.0", "length"), False),
+    (("HTTP/1.0", "keep-alive"), True),
+    (("HTTP/1.1", "length-close"), False),
+], indirect=["endpoint"])
+def test_http10_response_framing_and_connection_lifetime(endpoint, proxy, reuses_connection):
+    origin, hits, ports = endpoint
+    with closing(EgressClient(["127.0.0.1"])) as client:
+        assert client.get_bytes(origin + "/first", retries=0) == b"hello"
+        assert client.get_bytes(origin + "/second", retries=0) == b"hello"
+    assert [hit[1] for hit in hits] == ["/first", "/second"]
+    # The client still sends HTTP/1.1; response persistence is decided from
+    # the HTTP/1.0 response framing and explicit connection semantics.
+    assert all(hit[4] == "HTTP/1.1" for hit in hits)
+    assert (ports[0] == ports[1]) is reuses_connection
+
+
+@pytest.mark.parametrize("endpoint", [("HTTP/1.0", "close-delimited")], indirect=True)
+def test_http10_close_delimited_body_retains_size_cap(endpoint, proxy):
+    origin, hits, _ = endpoint
+    with closing(EgressClient(["127.0.0.1"])) as client:
+        with pytest.raises(SizeLimitExceeded):
+            client.get_bytes(origin + "/large", max_bytes=64, retries=0)
+        assert client.get_bytes(origin + "/after-limit", retries=0) == b"hello"
+    assert [hit[1] for hit in hits] == ["/large", "/after-limit"]
