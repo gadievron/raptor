@@ -2425,12 +2425,12 @@ class LLMClient:
 
     def _get_cached_structured_response(
         self, cache_key: str,
-    ) -> tuple[dict[str, Any], str, str | None] | None:
-        """Retrieve cached (result_dict, raw, serving_model) if
-        available. ``serving_model`` is the model that actually
-        produced the entry (a fallback's name when the primary failed
-        at write time); None for entries written before the field
-        existed."""
+    ) -> tuple[dict[str, Any], str, str | None, str | None] | None:
+        """Retrieve cached result, raw text and serving model/provider.
+
+        Serving identity describes the writer, including a fallback.
+        Missing or malformed legacy identity fields return None.
+        """
         if not self.config.enable_caching:
             return None
 
@@ -2456,9 +2456,10 @@ class LLMClient:
         # covered like the rest of the entry). Tolerate its absence —
         # legacy entries predate the field.
         model = data.get("model")
+        provider = data.get("provider")
         return data["result"], data["raw"], (
             model if isinstance(model, str) and model else None
-        )
+        ), (provider if isinstance(provider, str) and provider else None)
 
     def _save_structured_to_cache(
         self, cache_key: str, response: "StructuredResponse",
@@ -3601,10 +3602,8 @@ class LLMClient:
 
         # Check cache. Key includes schema so two callers who share a
         # prompt but ask for different output shapes don't collide.
-        # Pinned to model_config.model_name (the configured first-choice
-        # model), not whichever fallback we actually use — replays come
-        # back as if the configured model was queried, matching how
-        # generate() does it.
+        # Pinned to the configured first-choice model for lookup. Serving
+        # identity remains in the authenticated entry for replay attribution.
         cache_key = self._get_structured_cache_key(
             prompt, system_prompt, model_config.model_name, schema, kwargs,
         )
@@ -3613,13 +3612,16 @@ class LLMClient:
         with self._key_lock(cache_key):
             cached = self._get_cached_structured_response(cache_key)
             cached_model: str | None = None
+            cached_provider: str | None = None
             if cached is not None:
                 # Tolerant unpack: the reader returns (result, raw,
-                # serving_model); older stubs and overrides may still
-                # hand back a bare (result, raw) pair.
+                # serving_model, serving_provider); older stubs and
+                # overrides may still return pairs or triples.
                 cached_result, cached_raw = cached[0], cached[1]
                 if len(cached) > 2:
                     cached_model = cached[2]
+                if len(cached) > 3:
+                    cached_provider = cached[3]
                 # Strict schema floor applies to cache replays too —
                 # entries written before the floor existed (or by an
                 # older RAPTOR) may carry smuggled fields. Treat a
@@ -3632,6 +3634,7 @@ class LLMClient:
                     )
                     cached = None
             if cached is not None:
+                serving_provider = (cached_provider or model_config.provider).lower()
                 logger.debug(
                     "Using cached structured response for %s/%s", model_config.provider, model_config.model_name
                 )
@@ -3643,7 +3646,7 @@ class LLMClient:
                     event="call",
                     disposition="cache_hit",
                     call_class=call_class,
-                    provider=model_config.provider.lower(),
+                    provider=serving_provider,
                     model=cached_model or model_config.model_name,
                     structured=True,
                     cost_usd=0.0,
@@ -3664,7 +3667,7 @@ class LLMClient:
                     # LLMConfig provider would otherwise split
                     # cached/fresh responses into separate buckets for
                     # consumers grouping by provider.
-                    provider=model_config.provider.lower(),
+                    provider=serving_provider,
                     duration=0.0,
                     cached=True,
                 )
