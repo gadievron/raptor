@@ -343,6 +343,14 @@ def _no_native_review_tools(monkeypatch):
     assert not attempted_model_calls, "an auxiliary model-call failure was swallowed"
 
 
+@pytest.fixture
+def _no_post_review_witness_synthesis(monkeypatch):
+    """Keep canned-review transitions separate from later witness synthesis."""
+    monkeypatch.setattr(
+        "core.audit.orchestrator._run_dark_verification", lambda *a, **k: None,
+    )
+
+
 @pytest.mark.usefixtures("_no_native_review_tools")
 class TestRunOrchestrator:
     """Review-loop contracts with fake reviews; live Joern has dedicated tests."""
@@ -1350,6 +1358,7 @@ class TestPrefilterWiring:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestSweepValidation:
     """Test post-LLM sweep validation of findings."""
 
@@ -1375,7 +1384,7 @@ class TestSweepValidation:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=True, batch_sloc_threshold=0,
             immediate_verify=False,
@@ -1405,7 +1414,7 @@ class TestSweepValidation:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -1429,7 +1438,7 @@ class TestSweepValidation:
                 evidence_tool="semgrep:unbounded-strcpy",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -1764,17 +1773,9 @@ class TestCheckFindingGates:
 
 
 @pytest.mark.slow
-@pytest.mark.usefixtures("_no_native_review_tools")
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestGateEnforcement:
     """Test G1/G2 gate enforcement in _commit_outcome."""
-
-    @pytest.fixture(autouse=True)
-    def _no_witness_synthesis(self, monkeypatch):
-        # The gate transition is under test, not the later attempt to
-        # synthesise an executable witness for a gate-demoted dark row.
-        monkeypatch.setattr(
-            "core.audit.orchestrator._run_dark_verification", lambda *a, **k: None,
-        )
 
     def test_finding_without_hypothesis_demoted_by_gate(self, tmp_path: Path):
         """G1: finding without hypothesis gets demoted to suspicious.
@@ -4759,6 +4760,7 @@ class TestSessionObservations:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestDeepenSuspicious:
     """Deepen step: re-review suspicious verdicts with enriched context."""
 
@@ -4817,7 +4819,7 @@ class TestDeepenSuspicious:
                 },
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -4874,7 +4876,7 @@ class TestDeepenSuspicious:
                 review_result={"status": "suspicious", "body": "Maybe"},
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             budget=10, batch_sloc_threshold=0,
             deepen_suspicious=True,
@@ -4924,7 +4926,7 @@ class TestDeepenSuspicious:
                 review_result={"status": "suspicious", "body": "Possible"},
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out,
             budget=10, batch_sloc_threshold=0,
             deepen_suspicious=False,
