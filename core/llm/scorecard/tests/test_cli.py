@@ -12,7 +12,6 @@ from __future__ import annotations
 import datetime as _dt
 import io
 import os
-import subprocess
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,7 +20,7 @@ import pytest
 
 from core.llm.scorecard import EventType, ModelScorecard
 from core.llm.scorecard import cli as cli_mod
-
+from core.testing.standalone_cli import run_standalone_cli
 
 # ---------------------------------------------------------------------------
 # Fixture: a richly-populated scorecard
@@ -595,7 +594,7 @@ def test_libexec_shim_runs(tmp_path):
         pytest.skip("shim not present (running outside the repo)")
     sc_path = tmp_path / "empty.json"
     env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-    out = subprocess.run(
+    out = run_standalone_cli(
         [str(shim), "--path", str(sc_path), "list"],
         capture_output=True, text=True, timeout=10, env=env,
     )

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -43,7 +45,7 @@ def _run(cmd_args: list, *, env_extra: dict | None = None,
     env["RAPTOR_DIR"] = str(_RAPTOR_ROOT)
     if env_extra:
         env.update(env_extra)
-    return subprocess.run(
+    return run_standalone_cli(
         cmd_args, capture_output=True, text=True,
         env=env, timeout=timeout,
     )
@@ -137,7 +139,7 @@ class TestRaptorPrepareMode:
         env["RAPTOR_DIR"] = str(_RAPTOR_ROOT)
         env["HOME"] = str(tmp_path)  # no ~/.raptor/projects/.active
         env.pop("RAPTOR_CALLER_DIR", None)
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, str(_RAPTOR_ROOT / "raptor.py"), "describe"],
             capture_output=True, text=True,
             env=env, cwd=str(tmp_path), timeout=30,
@@ -186,7 +188,7 @@ class TestLibexecRaptorPrepare:
         env.pop("CLAUDECODE", None)
         env.pop("_RAPTOR_TRUSTED", None)
         target = _c_daemon_target(tmp_path / "t")
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable,
              str(_RAPTOR_ROOT / "libexec" / "raptor-describe"),
              "--target", str(target)],

@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-r2-sandboxed"
 
@@ -72,7 +74,7 @@ def _trusted_env(**extra) -> dict:
 def _run_wrapper(args, env=None, stdin=None, timeout=30):
     """Invoke the wrapper as r2pipe would. Returns CompletedProcess."""
     cmd = [str(WRAPPER), *args]
-    return subprocess.run(
+    return run_standalone_cli(
         cmd,
         check=False,
         env=env or _trusted_env(),
@@ -211,7 +213,7 @@ class TestSandboxEngageFailureContract:
             f"runpy.run_path({str(WRAPPER)!r}, run_name='__main__')\n"
         )
         env = _trusted_env(OUTPUT_DIR=str(tmp_path))
-        r = subprocess.run(
+        r = run_standalone_cli(
             [sys.executable, "-c", code],
             check=False, env=env, capture_output=True, text=True,
             timeout=60,
@@ -240,7 +242,7 @@ class TestSymlinkResolution:
         # We don't actually wait for r2 to fully run — just confirm
         # the wrapper got past validation. Short timeout, ignore rc.
         try:
-            r = subprocess.run(
+            r = run_standalone_cli(
                 [str(WRAPPER), "-2", str(link)],
                 check=False,
                 env=env, input="q\n", capture_output=True, text=True,
@@ -285,7 +287,7 @@ class TestR2Invocation:
             OUTPUT_DIR=str(self.output_dir),
             R2_TARGET_DIR=str(self.binary.parent),
         )
-        r = subprocess.run(
+        r = run_standalone_cli(
             [str(WRAPPER), "-2", *extra_flags, str(self.binary)],
             check=False,
             env=env,
@@ -357,7 +359,7 @@ class TestAdversarialIsolation:
             OUTPUT_DIR=str(self.output_dir),
             R2_TARGET_DIR=str(self.binary.parent),
         )
-        r = subprocess.run(
+        r = run_standalone_cli(
             [str(WRAPPER), "-2", str(self.binary)],
             check=False,
             env=env,

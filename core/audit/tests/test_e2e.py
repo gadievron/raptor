@@ -10,13 +10,13 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 from core.audit.tests.checklist_corpus import ChecklistBuildCache
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _AUDIT_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-audit")
@@ -36,9 +36,9 @@ needs_semgrep = pytest.mark.skipif(
 def _run(args, **kwargs):
     env = dict(os.environ, CLAUDECODE="1", _RAPTOR_TRUSTED="1",
                PYTHONPATH=str(_RAPTOR_DIR))
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable] + args,
-        env=env, capture_output=True, text=True, check=False, **kwargs,
+        env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, text=True, check=False, **kwargs,
     )
 
 

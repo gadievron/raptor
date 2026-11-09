@@ -566,6 +566,11 @@ on the same worker or from files shared by other workers.
   setup, and re-pin it after any per-test default key fixture when later
   tests authenticate those artifacts. Exercise rejection of stale inherited
   state without weakening production guards.
+  Treat shell routers, inline Python and imported helper aliases as part of
+  the same launch chain: shell-only help may never reach the Python startup
+  that a routed command uses. Scope launch-state producers too: refreshing
+  authorization can change both environment credentials and cached scratch
+  bindings, which must restore together before their metadata is retired.
   When changing startup contracts, audit shared subprocess helpers and every
   caller they serve, including parametrised CLI suites. Exercise each affected
   matrix with deliberately stale inherited launch state. Run those matrices

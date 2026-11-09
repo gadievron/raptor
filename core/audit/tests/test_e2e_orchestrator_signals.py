@@ -15,7 +15,6 @@ No actual LLM calls.  ~1s wall time.
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,11 +22,27 @@ from typing import Any, Dict, List, Optional
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 pytestmark = pytest.mark.slow
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _TARGET_DIR = _RAPTOR_DIR / "eval" / "audit-synthetic" / "target"
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
+
+
+@pytest.fixture(scope="module")
+def _launch_signing_home(tmp_path_factory):
+    return tmp_path_factory.mktemp("cli-shared-signing")
+
+
+@pytest.fixture(autouse=True)
+def _shared_launch_signing_keys(request, monkeypatch, _launch_signing_home):
+    # Directory defaults run first; every later verifier uses the producing
+    # module fixture's keys. Extracted tests may lack the directory conftest.
+    if "_isolated_mac_keys" in request.fixturenames:
+        request.getfixturevalue("_isolated_mac_keys")
+    monkeypatch.setenv("XDG_DATA_HOME", str(_launch_signing_home))
 
 
 @pytest.fixture(scope="module")
@@ -38,19 +53,23 @@ def target_path():
 
 
 @pytest.fixture(scope="module")
-def out_dir(target_path, tmp_path_factory):
+def out_dir(target_path, tmp_path_factory, _launch_signing_home):
     """Build checklist.json via the real libexec script."""
-    out = tmp_path_factory.mktemp("orchestrator_e2e")
-    import os
-    env = dict(os.environ, CLAUDECODE="1", _RAPTOR_TRUSTED="1",
-               PYTHONPATH=str(_RAPTOR_DIR))
-    r = subprocess.run(
-        [sys.executable, _CHECKLIST_CLI, str(target_path), str(out)],
-        env=env, capture_output=True, text=True,
-    )
-    assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
-    assert (out / "checklist.json").exists()
-    return out
+    with pytest.MonkeyPatch.context() as launch_owner:
+        from core.testing.state_isolation import pin_user_state_dirs
+        pin_user_state_dirs(launch_owner, _launch_signing_home / "registry")
+        launch_owner.setenv("XDG_DATA_HOME", str(_launch_signing_home))
+        out = tmp_path_factory.mktemp("orchestrator_e2e")
+        import os
+        env = dict(os.environ, CLAUDECODE="1", _RAPTOR_TRUSTED="1",
+                   PYTHONPATH=str(_RAPTOR_DIR))
+        r = run_standalone_cli(
+            [sys.executable, _CHECKLIST_CLI, str(target_path), str(out)],
+            env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, text=True,
+        )
+        assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
+        assert (out / "checklist.json").exists()
+        return out
 
 
 @dataclass

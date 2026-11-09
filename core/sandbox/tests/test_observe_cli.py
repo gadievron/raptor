@@ -28,6 +28,7 @@ from core.sandbox.observe_cli import (
     _profile_to_json,
 )
 from core.sandbox.observe_profile import ConnectTarget, ObserveProfile
+from core.testing.standalone_cli import run_standalone_cli
 
 
 @pytest.fixture(autouse=True)
@@ -652,7 +653,7 @@ class TestE2EShim:
             pytest.skip("ptrace blocked")
 
         env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-        result = subprocess.run(
+        result = run_standalone_cli(
             [str(shim), "--out", str(tmp_path), "--",
              "/usr/bin/true"],
             env=env, capture_output=True, text=True, timeout=30, check=False,
@@ -676,7 +677,7 @@ class TestE2EShim:
             pytest.skip("observe-mode prerequisites unavailable (libseccomp / ptrace)")
 
         env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-        result = subprocess.run(
+        result = run_standalone_cli(
             [str(shim), "--out", str(tmp_path), "--json", "--",
              "/usr/bin/true"],
             env=env, capture_output=True, text=True, timeout=30, check=False,
@@ -705,7 +706,7 @@ class TestTrustMarker:
 
         env = {k: v for k, v in os.environ.items()
                if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
-        result = subprocess.run(
+        result = run_standalone_cli(
             [str(shim), "--", "/usr/bin/true"],
             env=env, capture_output=True, text=True, timeout=10, check=False,
         )

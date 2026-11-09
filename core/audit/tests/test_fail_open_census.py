@@ -12,12 +12,11 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import patch
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -28,6 +27,7 @@ from core.audit.fail_open_census import (
     seed_fail_open_leads,
 )
 from core.testing import requires_ts
+from core.testing.standalone_cli import run_standalone_cli
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -292,69 +292,87 @@ class TestUndischargedTelemetry:
 
 
 @pytest.fixture(scope="module")
-def census_prep(tmp_path_factory):
+def _launch_signing_home(tmp_path_factory):
+    return tmp_path_factory.mktemp("cli-shared-signing")
+
+
+@pytest.fixture(autouse=True)
+def _shared_launch_signing_keys(request, monkeypatch, _launch_signing_home):
+    # Directory defaults run first; every later verifier uses the producing
+    # module fixture's keys. Extracted tests may lack the directory conftest.
+    if "_isolated_mac_keys" in request.fixturenames:
+        request.getfixturevalue("_isolated_mac_keys")
+    monkeypatch.setenv("XDG_DATA_HOME", str(_launch_signing_home))
+
+
+@pytest.fixture(scope="module")
+def census_prep(tmp_path_factory, _launch_signing_home):
     """The real prep path (checklist CLI + _compute_audit_prep) over a
     Python target with one silent role-bound handler."""
-    target = tmp_path_factory.mktemp("fail_open_target")
-    (target / "gate.py").write_text(_PY_SWALLOW)
+    with pytest.MonkeyPatch.context() as launch_owner:
+        from core.testing.state_isolation import pin_user_state_dirs
+        pin_user_state_dirs(launch_owner, _launch_signing_home / "registry")
+        launch_owner.setenv("XDG_DATA_HOME", str(_launch_signing_home))
+        target = tmp_path_factory.mktemp("fail_open_target")
+        (target / "gate.py").write_text(_PY_SWALLOW)
 
-    # Nested below the mktemp allocation so out_dir.parent is a
-    # private empty dir: prep's cross-run readers (sibling_run_dirs,
-    # domain-model/coverage lookups) scan the parent, and the
-    # session-shared pytest tmp root grows by one dir per test —
-    # tens of thousands of stat calls late in a full run (observed
-    # as ~20s fixture setups on CI). Also makes hermeticity
-    # structural: no other test's run dir can be a sibling.
-    out = tmp_path_factory.mktemp("fail_open_out") / "run"
-    out.mkdir()
-    env = dict(
-        os.environ,
-        CLAUDECODE="1",
-        _RAPTOR_TRUSTED="1",
-        PYTHONPATH=str(_RAPTOR_DIR),
-    )
-    r = subprocess.run(
-        [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
+        # Nested below the mktemp allocation so out_dir.parent is a
+        # private empty dir: prep's cross-run readers (sibling_run_dirs,
+        # domain-model/coverage lookups) scan the parent, and the
+        # session-shared pytest tmp root grows by one dir per test —
+        # tens of thousands of stat calls late in a full run (observed
+        # as ~20s fixture setups on CI). Also makes hermeticity
+        # structural: no other test's run dir can be a sibling.
+        out = tmp_path_factory.mktemp("fail_open_out") / "run"
+        out.mkdir()
+        env = dict(
+            os.environ,
+            CLAUDECODE="1",
+            _RAPTOR_TRUSTED="1",
+            PYTHONPATH=str(_RAPTOR_DIR),
+        )
+        r = run_standalone_cli(
+            [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
+            env=env, data_home=env["XDG_DATA_HOME"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
-    from core.audit import orchestrator as orch
-    from core.audit.orchestrator import (
-        OrchestratorConfig,
-        _compute_audit_prep,
-    )
+        from core.audit import orchestrator as orch
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            _compute_audit_prep,
+        )
 
-    config = OrchestratorConfig(
-        target_path=target,
-        out_dir=out,
-        resume=False,
-        force=True,
-        include_stale=False,
-        enable_session_context=False,
-        propagate_constraints=False,
-    )
-    # The census channel is under test (it runs in its own prep phase,
-    # after the detector pass); prep's mechanical-detector phase is
-    # incidental substrate — sandboxed Coccinelle runs on
-    # spatch-equipped hosts plus the detector-cache import-closure
-    # fingerprint, the bulk of this fixture's setup and enough to trip
-    # the default-tier duration guard on a loaded CI runner. Manual
-    # patch/restore because module-scoped fixtures cannot take the
-    # function-scoped monkeypatch; full variadic signature + the real
-    # (dict, set) return contract (the test_consistency_wiring idiom).
-    _real_mechanical = orch._run_mechanical_detectors
-    orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
-    try:
-        with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
-            prep = _compute_audit_prep(config)
-    finally:
-        orch._run_mechanical_detectors = _real_mechanical
-    assert prep is not None
-    return prep, out
+        config = OrchestratorConfig(
+            target_path=target,
+            out_dir=out,
+            resume=False,
+            force=True,
+            include_stale=False,
+            enable_session_context=False,
+            propagate_constraints=False,
+        )
+        # The census channel is under test (it runs in its own prep phase,
+        # after the detector pass); prep's mechanical-detector phase is
+        # incidental substrate — sandboxed Coccinelle runs on
+        # spatch-equipped hosts plus the detector-cache import-closure
+        # fingerprint, the bulk of this fixture's setup and enough to trip
+        # the default-tier duration guard on a loaded CI runner. Manual
+        # patch/restore because module-scoped fixtures cannot take the
+        # function-scoped monkeypatch; full variadic signature + the real
+        # (dict, set) return contract (the test_consistency_wiring idiom).
+        _real_mechanical = orch._run_mechanical_detectors
+        orch._run_mechanical_detectors = lambda *args, **kwargs: ({}, set())
+        try:
+            with patch.object(orch, "_resolve_joern_evidence_raw", return_value=({}, None)):
+                prep = _compute_audit_prep(config)
+        finally:
+            orch._run_mechanical_detectors = _real_mechanical
+        assert prep is not None
+        return prep, out
 
 
 class TestPrepWiring:

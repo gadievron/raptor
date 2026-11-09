@@ -33,8 +33,8 @@ import pytest
 
 from core.sandbox import summary as summary_mod
 from core.sandbox import triage as triage_mod
-
 from core.testing.sandbox_state_scope import isolated_summary_state
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -292,9 +292,9 @@ class TestVerifiedOutcomesCli:
     def _run(self, run_dir: Path,
              *extra: str) -> "subprocess.CompletedProcess[str]":
         env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-        return subprocess.run(
+        return run_standalone_cli(
             [sys.executable, str(self.SHIM), str(run_dir), *extra],
-            capture_output=True, text=True, timeout=60, env=env,
+            capture_output=True, text=True, timeout=60, env=env, data_home=env["XDG_DATA_HOME"],
         )
 
     @pytest.fixture()

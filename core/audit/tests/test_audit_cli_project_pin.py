@@ -30,6 +30,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.standalone_cli import standalone_cli_env
+
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 
 
@@ -73,51 +75,59 @@ def test_projectless_run_lands_standalone_under_active_project(
                RAPTOR_OUT_DIR=str(out_root),
                CLAUDECODE="1",
                _RAPTOR_TRUSTED="1")
-    pm = str(_RAPTOR_DIR / "libexec" / "raptor-project-manager")
-    for cmd in (
-        [sys.executable, pm, "create", "tmpproj",
-         "--target", str(target), "-d", "pin regression"],
-        [sys.executable, pm, "use", "tmpproj"],
-    ):
-        cp = subprocess.run(cmd, env=env, capture_output=True, text=True,
-                            check=False, timeout=120)
-        assert cp.returncode == 0, cp.stderr
-    proj_out = out_root / "projects" / "tmpproj"
-    assert proj_out.is_dir()
+    with standalone_cli_env(env=env, data_home=tmp_path / "keys") as child_env:
+        child_env.update(HOME=str(home), RAPTOR_REGISTRY_HOME=str(home / ".raptor"))
+        env = child_env
+        for name in ("TMPDIR", "TEMP", "TMP", "XDG_DATA_HOME", "RAPTOR_REGISTRY_HOME"):
+            monkeypatch.setenv(name, env[name])
+        for name in ("_RAPTOR_SCRATCH_AUTH", "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN"):
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
+        pm = str(_RAPTOR_DIR / "libexec" / "raptor-project-manager")
+        for cmd in (
+            [sys.executable, pm, "create", "tmpproj",
+             "--target", str(target), "-d", "pin regression"],
+            [sys.executable, pm, "use", "tmpproj"],
+        ):
+            cp = subprocess.run(cmd, env=env, capture_output=True, text=True,
+                                check=False, timeout=120)
+            assert cp.returncode == 0, cp.stderr
+        proj_out = out_root / "projects" / "tmpproj"
+        assert proj_out.is_dir()
 
-    mod = _load_cli()
-    real_run = subprocess.run
+        mod = _load_cli()
+        real_run = subprocess.run
 
-    def selective_run(cmd, **kwargs):
-        if "raptor-run-lifecycle" in str(cmd[0]):
-            return real_run(cmd, **kwargs)
-        return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
+        def selective_run(cmd, **kwargs):
+            if "raptor-run-lifecycle" in str(cmd[0]):
+                return real_run(cmd, **kwargs)
+            return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
 
-    # The in-process cmd_run spawns the REAL lifecycle child, which
-    # reads HOME / RAPTOR_OUT_DIR from the (patched) process env.
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_root))
-    monkeypatch.setenv("CLAUDECODE", "1")
-    monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
-    monkeypatch.setattr(subprocess, "run", selective_run)
+        # The in-process cmd_run spawns the REAL lifecycle child, which
+        # reads HOME / RAPTOR_OUT_DIR from the (patched) process env.
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("RAPTOR_OUT_DIR", str(out_root))
+        monkeypatch.setenv("CLAUDECODE", "1")
+        monkeypatch.setenv("_RAPTOR_TRUSTED", "1")
+        monkeypatch.setattr(subprocess, "run", selective_run)
 
-    rc = mod.cmd_run(SimpleNamespace(
-        target=str(target), out=None, project="-"))
-    assert rc == 1                       # stopped at the stubbed step
+        rc = mod.cmd_run(SimpleNamespace(
+            target=str(target), out=None, project="-"))
+        assert rc == 1                       # stopped at the stubbed step
 
-    out_line = [ln for ln in capsys.readouterr().out.splitlines()
-                if ln.startswith("OUTPUT_DIR=")]
-    assert out_line, "lifecycle start printed no OUTPUT_DIR"
-    run_dir = Path(out_line[-1].split("=", 1)[1])
+        out_line = [ln for ln in capsys.readouterr().out.splitlines()
+                    if ln.startswith("OUTPUT_DIR=")]
+        assert out_line, "lifecycle start printed no OUTPUT_DIR"
+        run_dir = Path(out_line[-1].split("=", 1)[1])
 
-    # Standalone by pin: never inside the active project's output dir.
-    assert not run_dir.resolve().is_relative_to(proj_out.resolve())
-    marker = json.loads(
-        (run_dir / ".raptor-run.json").read_text(encoding="utf-8"))
-    assert marker["project"] is None
-    assert marker["project_source"] == "argv"
+        # Standalone by pin: never inside the active project's output dir.
+        assert not run_dir.resolve().is_relative_to(proj_out.resolve())
+        marker = json.loads(
+            (run_dir / ".raptor-run.json").read_text(encoding="utf-8"))
+        assert marker["project"] is None
+        assert marker["project_source"] == "argv"
 
-    # The contamination vector stays shut: the active project gained
-    # no run dir and no IRIS spec store from the projectless run.
-    assert not list(proj_out.glob("audit*"))
-    assert not (proj_out / "iris-specs").exists()
+        # The contamination vector stays shut: the active project gained
+        # no run dir and no IRIS spec store from the projectless run.
+        assert not list(proj_out.glob("audit*"))
+        assert not (proj_out / "iris-specs").exists()

@@ -9,7 +9,6 @@ trust-marker guard.
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -44,7 +43,7 @@ class TestTrustMarker:
     def test_refuses_without_marker(self):
         env = {k: v for k, v in os.environ.items()
                if k not in ("_RAPTOR_TRUSTED", "CLAUDECODE")}
-        r = subprocess.run(  # noqa: PLW1510 — exit code asserted below
+        r = run_standalone_cli(  # noqa: PLW1510 — exit code asserted below
             [sys.executable, str(SHIM), "--cwe", "CWE-78"],
             env=env, capture_output=True, text=True,
         )

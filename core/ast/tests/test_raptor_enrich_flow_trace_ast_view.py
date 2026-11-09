@@ -2,7 +2,6 @@
 
 import json
 import os
-import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -182,7 +181,7 @@ class RaptorEnrichFlowTraceAstViewTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             env = {k: v for k, v in os.environ.items()
                    if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
-            proc = subprocess.run(
+            proc = run_standalone_cli(
                 [str(WRAPPER), tmp],
                 capture_output=True, text=True, timeout=10, env=env,
             )

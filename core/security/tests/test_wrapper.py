@@ -13,11 +13,11 @@ Colocated at core/security/tests/test_wrapper.py in-tree.
 
 import json
 import os
-import subprocess
 from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
 
 WRAPPER = None
 for ancestor in Path(__file__).resolve().parents:
@@ -35,7 +35,7 @@ if WRAPPER is None:
 def _run(*extra_args: str, cwd=None):
     """Invoke the wrapper with the given argv. Returns (rc, stdout, stderr)."""
     env = os.environ.copy()
-    proc = subprocess.run(
+    proc = run_standalone_cli(
         [str(WRAPPER), *extra_args],
         env=env, cwd=cwd,
         capture_output=True, text=True, timeout=20,
@@ -174,7 +174,7 @@ class TestShadowAttack:
         self._plant_shadow(shadow, "SHADOW LOADED VIA PYTHONPATH")
         env = os.environ.copy()
         env["PYTHONPATH"] = str(shadow)
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), str(evil_dir)],
             env=env, capture_output=True, text=True, timeout=20,
         )

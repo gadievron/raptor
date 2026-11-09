@@ -31,6 +31,8 @@ from typing import List
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -53,7 +55,7 @@ def _run_agent(
     """Invoke the SCA agent.py entry directly (where the
     ``--sandbox`` flag lives — CLI wraps but doesn't expose it)."""
     cmd = [sys.executable, "-m", "packages.sca.agent"] + args
-    return subprocess.run(
+    return run_standalone_cli(
         cmd, capture_output=True, text=True,
         cwd=str(REPO_ROOT), timeout=timeout,
     )

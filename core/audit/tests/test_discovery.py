@@ -11,17 +11,16 @@ import pytest
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
-from core.testing.standalone_cli import run_standalone_cli
 from core.audit.discovery import (
+    _GUARD_TYPES,
+    _HINT_MULTI_THREADED,
+    _HINT_SINGLE_THREADED,
     HandlerSite,
     SeamBundle,
     SideEffectSite,
     StateMachineBundle,
     SweepTarget,
     WorkflowBundle,
-    _GUARD_TYPES,
-    _HINT_MULTI_THREADED,
-    _HINT_SINGLE_THREADED,
     _build_forward_index,
     _build_func_index,
     _build_sm_prompt,
@@ -53,7 +52,7 @@ from core.audit.discovery import (
     run_workflow_discovery,
     write_discovery_weaknesses,
 )
-
+from core.testing.standalone_cli import run_standalone_cli
 
 # ── fixtures ────────────────────────────────────────────────────────
 
@@ -1097,8 +1096,7 @@ class TestDryRunEndToEnd:
         run_dir.mkdir()
         (run_dir / "checklist.json").write_text(json.dumps(checklist))
 
-        import subprocess
-        result = subprocess.run(
+        result = run_standalone_cli(
             [
                 sys.executable, "-m", "core.audit.discovery",
                 "--run-dir", str(run_dir),
@@ -1131,8 +1129,7 @@ class TestDryRunEndToEnd:
         run_dir.mkdir()
         (run_dir / "checklist.json").write_text(json.dumps(checklist))
 
-        import subprocess
-        result = subprocess.run(
+        result = run_standalone_cli(
             [
                 sys.executable, "-m", "core.audit.discovery",
                 "--run-dir", str(run_dir),

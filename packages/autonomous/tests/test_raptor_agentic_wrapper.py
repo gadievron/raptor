@@ -1,11 +1,11 @@
 """Tests for the libexec/raptor-agentic bash wrapper."""
 
 import os
-import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from core.testing.standalone_cli import run_standalone_cli
 
 # parents[3] climbs:
 #   [0] packages/autonomous/tests/  (this file's directory)
@@ -27,7 +27,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
         # --help must be handled by raptor_agentic.py argparse, not by the
         # wrapper. We assert the resulting output mentions agentic-specific
         # flags including the new --understand and --validate.
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), "--help"],
             capture_output=True, text=True, timeout=60,
         )
@@ -71,7 +71,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             env["RAPTOR_OUT_DIR"] = str(out)
             env["HOME"] = tmp
             env.pop("RAPTOR_CALLER_DIR", None)
-            proc = subprocess.run(
+            proc = run_standalone_cli(
                 [str(WRAPPER), "--repo", str(repo),
                  "--definitely-not-a-flag"],
                 capture_output=True, text=True, timeout=60, env=env,
@@ -95,7 +95,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
             # Copy the wrapper but NOT raptor.py — the parent dir is empty.
             broken.write_text(WRAPPER.read_text())
             broken.chmod(0o755)
-            proc = subprocess.run(
+            proc = run_standalone_cli(
                 [str(broken), "--help"],
                 capture_output=True, text=True, timeout=60,
             )
@@ -109,7 +109,7 @@ class RaptorAgenticWrapperTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             link = Path(tmp) / "raptor-agentic"
             link.symlink_to(WRAPPER)
-            proc = subprocess.run(
+            proc = run_standalone_cli(
                 [str(link), "--help"],
                 capture_output=True, text=True, timeout=60,
             )

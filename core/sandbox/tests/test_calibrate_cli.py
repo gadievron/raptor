@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -13,6 +12,7 @@ import pytest
 from core.sandbox import calibrate as cal
 from core.sandbox.calibrate_cli import _cli_main
 from core.sandbox.tests.capability import requires_landlock
+from core.testing.standalone_cli import run_standalone_cli
 
 
 def _profile_for(bin_path) -> cal.SandboxProfile:
@@ -250,8 +250,8 @@ class TestSpawnPath:
 class TestE2EShim:
 
     def test_shim_calibrates_bin_cat(self, tmp_path, monkeypatch):
-        from core.sandbox.seccomp import check_seccomp_available
         from core.sandbox.ptrace_probe import check_ptrace_available
+        from core.sandbox.seccomp import check_seccomp_available
         if not (check_seccomp_available()
                 and check_ptrace_available()):
             pytest.skip("observe prerequisites unavailable")
@@ -265,7 +265,7 @@ class TestE2EShim:
         # subprocess sees it. Easiest: monkeypatch HOME — the cache
         # dir is rooted at Path.home().
         env = {**os.environ, "_RAPTOR_TRUSTED": "1", "HOME": str(tmp_path)}
-        result = subprocess.run(
+        result = run_standalone_cli(
             [str(shim), "--bin", "/bin/cat",
              "--probe-args", "/etc/hosts",
              "--json", "--timeout", "15"],

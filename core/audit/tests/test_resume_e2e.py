@@ -16,24 +16,35 @@ subprocess — they exit before any LLM plumbing. ~10s wall time.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
 import socket
-import contextlib
 import subprocess
 import sys
 import textwrap
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
+
+from core.testing.processes import reap_on_exit
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 pytestmark = pytest.mark.slow
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
 _AUDIT_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-audit")
+
+def _run_cli(args, *, env, **kwargs):
+    # _env(home) gives every segment the same fixture-owned signing keys.
+    return run_standalone_cli(
+        args, env=env, data_home=env["XDG_DATA_HOME"], **kwargs,
+    )
+
 
 _ORIGINAL_CAP_USD = 10.0
 _COST_PER_REVIEW = 0.25
@@ -296,82 +307,84 @@ def killed_run(tmp_path_factory):
     out = root / "audit-run"
     home = _home(root)
 
-    r = subprocess.run(
-        [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-        env=_env(home), capture_output=True, text=True, check=False,
-    )
-    assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
-
-    # What `raptor-audit run` persists at start: lifecycle metadata +
-    # the resolved run config (the resume contract's two inputs).
-    from core.audit.resume import save_run_config
-    from core.run import start_run
-    with _isolated_registries(home):
-        start_run(out, "audit", target=str(target))
-    save_run_config(out, {
-        "version": 1,
-        "target_path": str(target),
-        "max_cost_usd": _ORIGINAL_CAP_USD,
-        "models": [],
-        "validate": False,
-        "verdict_reuse": True,
-        "no_binary_oracle": True,
-    })
-
-    driver = out.parent / "driver.py"
-    driver.write_text(_DRIVER)
-    child_log = root / "segment-1.log"
-    with child_log.open("wb") as log:
-        child = subprocess.Popen(
-            [sys.executable, str(driver), str(target), str(out),
-             str(_RAPTOR_DIR)],
-            env=_env(home), stdout=log, stderr=subprocess.STDOUT,
+    with standalone_cli_env(env=_env(home), data_home=home / ".local/share") as child_env, ExitStack() as children:
+        r = _run_cli(
+            [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
+            env=child_env, capture_output=True, text=True, check=False,
         )
+        assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
-    try:
-        # Record the child as the run's worker — in production the
-        # lifecycle-start subprocess records its parent (the raptor-audit
-        # process), which is exactly what the supervisor kills. The
-        # eligibility check keys "still in flight" off this pid.
-        from core.json import load_json, save_json
-        from core.run import RUN_METADATA_FILE
-        meta_path = out / RUN_METADATA_FILE
-        meta = load_json(meta_path)
-        meta["tool_pid"] = child.pid
-        save_json(meta_path, meta)
+        # What `raptor-audit run` persists at start: lifecycle metadata +
+        # the resolved run config (the resume contract's two inputs).
+        from core.audit.resume import save_run_config
+        from core.run import start_run
+        with _isolated_registries(home):
+            start_run(out, "audit", target=str(target))
+        save_run_config(out, {
+            "version": 1,
+            "target_path": str(target),
+            "max_cost_usd": _ORIGINAL_CAP_USD,
+            "models": [],
+            "validate": False,
+            "verdict_reuse": True,
+            "no_binary_oracle": True,
+        })
 
-        # SIGKILL once at least two reviews are journaled — mid-loop, some
-        # work done, more remaining.
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            if child.poll() is not None:
-                pytest.fail(
-                    "segment-1 child finished before the kill — "
-                    "no mid-loop window\n" + child_log.read_text(errors="replace")[-4000:],
-                )
-            if len(_journal_entries(out)) >= 2:
-                break
-            time.sleep(0.1)
-        else:
-            child.kill()
-            pytest.fail("segment-1 child produced no journal entries in time\n"
-                        + child_log.read_text(errors="replace")[-4000:])
+        driver = out.parent / "driver.py"
+        driver.write_text(_DRIVER)
+        child_log = root / "segment-1.log"
+        with child_log.open("wb") as log:
+            child = subprocess.Popen(
+                [sys.executable, str(driver), str(target), str(out),
+                 str(_RAPTOR_DIR)],
+                env=child_env, stdout=log, stderr=subprocess.STDOUT,
+            )
+            children.enter_context(reap_on_exit(child))
 
-        os.kill(child.pid, signal.SIGKILL)
-        child.wait(timeout=30)
-    finally:
-        if child.poll() is None:
-            child.kill()
-        child.wait(timeout=30)
+        try:
+            # Record the child as the run's worker — in production the
+            # lifecycle-start subprocess records its parent (the raptor-audit
+            # process), which is exactly what the supervisor kills. The
+            # eligibility check keys "still in flight" off this pid.
+            from core.json import load_json, save_json
+            from core.run import RUN_METADATA_FILE
+            meta_path = out / RUN_METADATA_FILE
+            meta = load_json(meta_path)
+            meta["tool_pid"] = child.pid
+            save_json(meta_path, meta)
 
-    from core.audit.resume import resume_ineligibility
-    from core.run import load_run_metadata
-    killed_state = {
-        "status": load_run_metadata(out)["status"],
-        "ineligibility": resume_ineligibility(out),
-        "journal_entries": _journal_entries(out),
-    }
-    return out, target, killed_state
+            # SIGKILL once at least two reviews are journaled — mid-loop, some
+            # work done, more remaining.
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                if child.poll() is not None:
+                    pytest.fail(
+                        "segment-1 child finished before the kill — "
+                        "no mid-loop window\n" + child_log.read_text(errors="replace")[-4000:],
+                    )
+                if len(_journal_entries(out)) >= 2:
+                    break
+                time.sleep(0.1)
+            else:
+                child.kill()
+                pytest.fail("segment-1 child produced no journal entries in time\n"
+                            + child_log.read_text(errors="replace")[-4000:])
+
+            os.kill(child.pid, signal.SIGKILL)
+            child.wait(timeout=30)
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=30)
+
+        from core.audit.resume import resume_ineligibility
+        from core.run import load_run_metadata
+        killed_state = {
+            "status": load_run_metadata(out)["status"],
+            "ineligibility": resume_ineligibility(out),
+            "journal_entries": _journal_entries(out),
+        }
+        return out, target, killed_state
 
 
 class TestKilledRunState:
@@ -649,7 +662,7 @@ class TestHermeticByDefault:
 
         env = _env(_home(tmp_path))
 
-        probe = subprocess.run(
+        probe = _run_cli(
             [sys.executable, "-c", textwrap.dedent("""\
                 import json, shutil
                 from core.llm.detection import detect_llm_availability
@@ -690,7 +703,7 @@ class TestHermeticByDefault:
         assert data["spawn"] == "refused"
 
         # End-to-end: a real CLI-gate invocation stays hermetic.
-        r = subprocess.run(
+        r = _run_cli(
             [sys.executable, _AUDIT_CLI, "resume", str(tmp_path)],
             env=env, capture_output=True, text=True, timeout=120,
             check=False,
@@ -726,7 +739,7 @@ class TestResumeCliGates:
             write_report(generate_report(out), out)
         complete_run(out)
 
-        r = subprocess.run(
+        r = _run_cli(
             [sys.executable, _AUDIT_CLI, "resume",
              str(resumed_run["out"])],
             env=_env(_home(tmp_path)), capture_output=True, text=True, timeout=120,
@@ -737,7 +750,7 @@ class TestResumeCliGates:
         assert "verdict reuse" in r.stderr
 
     def test_refuses_non_run_directory(self, tmp_path):
-        r = subprocess.run(
+        r = _run_cli(
             [sys.executable, _AUDIT_CLI, "resume", str(tmp_path)],
             env=_env(_home(tmp_path)), capture_output=True, text=True, timeout=120,
             check=False,
@@ -750,7 +763,7 @@ class TestResumeCliGates:
         out = tmp_path / "run"
         start_run(out, "audit", target=str(tmp_path))
         interrupt_run(out, "test")
-        r = subprocess.run(
+        r = _run_cli(
             [sys.executable, _AUDIT_CLI, "resume", str(out)],
             env=_env(_home(tmp_path)), capture_output=True, text=True, timeout=120,
             check=False,
@@ -794,7 +807,7 @@ class TestResumeCliGates:
         interrupt_run(out, "test")
         src.write_text("int f() {\n  return 2;\n}\n")
 
-        r = subprocess.run(
+        r = _run_cli(
             [sys.executable, _AUDIT_CLI, "resume", str(out)],
             env=_env(_home(tmp_path)), capture_output=True, text=True, timeout=120,
             check=False,
