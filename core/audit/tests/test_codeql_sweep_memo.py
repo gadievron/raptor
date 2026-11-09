@@ -1109,9 +1109,26 @@ class TestWarmupSandboxAndGuard:
             codeql_memo=BoundedMemo(4),
             environment_guard_state=guard,
         )
-        orch_mod._launch_codeql_warmup(config)
-        assert not done.wait(2)  # second DB never warmed
-        assert warmed == [str(dbs[0])]
+        from core.testing.module_bindings import patch_module_attribute
+        from core.testing.threads import retiring_threads
+
+        workers = []
+        real_thread = orch_mod._threading.Thread
+
+        def own_thread(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        patch_module_attribute(monkeypatch, orch_mod, "_threading", "Thread", own_thread)
+        with retiring_threads(workers, release=lambda: state.update(holdoff=True), timeout=5):
+            orch_mod._launch_codeql_warmup(config)
+            assert len(workers) == 1
+            workers[0].join(timeout=5)
+            assert not workers[0].is_alive()
+            # Completion proves absence; a fixed delay could race the worker.
+            assert not done.is_set()
+            assert warmed == [str(dbs[0])]
 
 
 class TestWarmupSeamPinAtLaunch:

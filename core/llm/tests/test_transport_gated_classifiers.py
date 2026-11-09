@@ -343,7 +343,8 @@ class TestDailyQuotaLatchNeedsTransport:
             provider="anthropic", model_name="claude-fallback", api_key="k")
         cfg = LLMConfig(
             primary_model=primary, fallback_models=[fallback],
-            enable_caching=False, max_retries=2)
+            # Exercise the real retries without waiting between fake replies.
+            enable_caching=False, max_retries=2, retry_delay=0)
         client = LLMClient(cfg)
 
         # Call 1: the primary's response carries ONE extra top-level
