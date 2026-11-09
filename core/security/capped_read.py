@@ -30,6 +30,8 @@ import os
 import stat
 from typing import TYPE_CHECKING, Literal, overload
 
+from core.source.streams import owned_fd, preserving_stream_error
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -95,6 +97,13 @@ def _read_capped_or_raise(
     ``max_bytes + 1`` read re-checks so a file that grew between
     fstat and read is refused rather than silently truncated.
     """
+    def close_descriptor(descriptor: int) -> None:
+        # This reader historically tolerates close I/O failures even on success.
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+
     flags = (
         os.O_RDONLY
         | getattr(os, "O_NONBLOCK", 0)
@@ -103,7 +112,7 @@ def _read_capped_or_raise(
     if not follow_symlinks:
         flags |= getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(str(path), flags, dir_fd=dir_fd)
-    try:
+    with owned_fd(fd, close_fd=close_descriptor):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise CappedReadRefused(
@@ -120,13 +129,8 @@ def _read_capped_or_raise(
                 st_mode=st.st_mode,
                 st_size=st.st_size,
             )
-        with os.fdopen(fd, "rb", closefd=False) as f:
+        with preserving_stream_error(os.fdopen(fd, "rb", closefd=False)) as f:
             data = f.read(max_bytes + 1)
-    finally:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
     if len(data) > max_bytes:
         raise CappedReadRefused(
             f"file grew past {max_bytes} byte cap: {path}",
