@@ -738,9 +738,31 @@ def _extract_first_arg(
     for child in args_node.children:
         if child.type in ("(", ")", ","):
             continue
+        if (_node_text is _FIRST_ARG_NODE_TEXT
+                and _FIRST_ARG_TYPE(child) is _FIRST_ARG_NATIVE_NODE
+                and _FIRST_ARG_TYPE(src) is _FIRST_ARG_BYTES
+                and len is _FIRST_ARG_LEN):
+            # At most four UTF-8 bytes contribute to each decoded character,
+            # including replacement decoding. Keep enough for the existing
+            # 60-character summary without copying/decoding the whole node.
+            start = child.start_byte
+            end = child.end_byte
+            if end - start > 240:
+                end = start + 240
+            return src[start:end].decode("utf-8", errors="replace")[:60]
         text = _node_text(child, src)
         return text[:60] if len(text) > 60 else text
     return ""
+
+
+try:
+    from tree_sitter import Node as _FIRST_ARG_NATIVE_NODE
+except ImportError:
+    _FIRST_ARG_NATIVE_NODE = None
+_FIRST_ARG_NODE_TEXT = _node_text
+_FIRST_ARG_TYPE = type
+_FIRST_ARG_BYTES = bytes
+_FIRST_ARG_LEN = len
 
 
 def _is_chain_object(node, call_types: tuple[str, ...]) -> bool:
