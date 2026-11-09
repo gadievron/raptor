@@ -36,17 +36,19 @@ def _no_project_trust_markers(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _restore_trust_overrides():
-    """``options_from_args`` propagates the resolved repo-trust value
-    to the process-wide ``cc_trust`` / ``codeql_trust`` overrides
-    (via ``resolve_repo_trust``); restore both module globals so
-    trust state never leaks between tests."""
+def _restore_trust_overrides(monkeypatch):
+    '``options_from_args`` propagates the resolved repo-trust value\nto the process-wide ``cc_trust`` / ``codeql_trust`` overrides\n(via ``resolve_repo_trust``); restore both module globals so\ntrust state never leaks between tests.'
+    from contextlib import ExitStack
+
     from core.security import cc_trust, codeql_trust
-    saved_cc = cc_trust.is_trust_overridden()
-    saved_ql = codeql_trust._trust_override_set
-    yield
-    cc_trust.set_trust_override(saved_cc)
-    codeql_trust.set_trust_override(saved_ql)
+
+    with ExitStack() as restore:
+        restore.callback(cc_trust.set_trust_override, cc_trust.is_trust_overridden())
+        restore.callback(codeql_trust.set_trust_override, codeql_trust._trust_override_set)
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _parser_with_scan_args() -> argparse.ArgumentParser:

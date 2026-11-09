@@ -74,12 +74,16 @@ needs_pidns = pytest.mark.usefixtures("pidns_available")
 
 
 @pytest.fixture
-def restore_signal_handlers():
-    saved = {s: signal.getsignal(s)
-             for s in (signal.SIGTERM, signal.SIGINT)}
-    yield
-    for sig, handler in saved.items():
-        signal.signal(sig, handler)
+def restore_signal_handlers(monkeypatch):
+    from contextlib import ExitStack
+
+    with ExitStack() as restore:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            restore.callback(signal.signal, sig, signal.getsignal(sig))
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 # ── waiter prctl failure must fail CLOSED (exit 96, no arm) ──────────
