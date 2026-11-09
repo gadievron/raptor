@@ -1,0 +1,144 @@
+"""SQL text, rather than context, receiver or bound data, is the sink."""
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+
+import pytest
+
+from core.audit.tests._live_transport import run_pinned_subprocess
+
+_RULES = Path(__file__).resolve().parents[1] / "rules"
+pytestmark = [pytest.mark.slow, pytest.mark.skipif(
+    shutil.which("semgrep") is None, reason="semgrep not installed")]
+
+_MATRICES = {
+    "python": ("injection/sql-concat.yaml", "raptor.injection.sql.taint.python", [
+        ('cursor.execute(input())', True),
+        ('cursor.execute(input(), ())', True),
+        ('cursor.executemany(input(), [(1,)])', True),
+        ('cursor.execute("SELECT ?", (input(),))', False),
+        ('cursor.executemany("INSERT INTO t VALUES (?)", [(input(),)])', False),
+        ('query = input()\ncursor.execute(query, {"id": 1})', True),
+        ('cursor.execute(sqlalchemy.text(input()), {"id": 1})', True),
+        ('int(cursor.execute(input(), (1,)))', True),
+        ('cursor.execute("SELECT ?", (cursor.execute(input()),))', True),
+        ('cursor = get_cursor(input())\ncursor.execute("SELECT 1")', False),
+    ]),
+    "go-concat": ("injection/sql-taint.yaml", "raptor.injection.sql.taint.go", [
+        ('db.Query("SELECT * FROM t WHERE " + r.FormValue("sql"), 1)', True),
+        ('db.Query("SELECT * FROM t WHERE " + strings.TrimSpace("id = ?"), r.FormValue("id"))', False),
+        ('db.QueryContext(ctx, "SELECT * FROM t WHERE " + r.FormValue("sql"), 1)', True),
+        ('ctx = context.WithValue(ctx, "trace", r.FormValue("trace"))\ndb.QueryContext(ctx, "SELECT " + strings.TrimSpace("1"), 1)', False),
+        ('search.Query("asset " + r.FormValue("key"))', False),
+        ('db.Query("SELECT " + r.FormValue("head") + " FROM t", 1)', True),
+    ]),
+    "go-format": ("go/go-security.yaml", "raptor.go.sql-sprintf-query", [
+        ('db.Query(fmt.Sprintf("SELECT %s", r.FormValue("sql")), 1)', True),
+        ('db.Query(fmt.Sprintf("SELECT %s", "1"), r.FormValue("id"))', False),
+        ('ctx = context.WithValue(ctx, "trace", r.FormValue("trace"))\ndb.QueryContext(ctx, fmt.Sprintf("SELECT %s", "1"), 1)', False),
+        ('db.QueryRow(r.FormValue("sql"), 1)', True),
+        ('db.QueryContext(ctx, r.FormValue("sql"), 1)', True),
+        ('db.QueryRowContext(ctx, r.FormValue("sql"), 1)', True),
+        ('db.ExecContext(ctx, r.FormValue("sql"), 1)', True),
+        ('db.QueryRow("SELECT ?", r.FormValue("id"))', False),
+        ('db.QueryContext(ctx, "SELECT ?", r.FormValue("id"))', False),
+        ('search.Query(fmt.Sprintf("selected items: %s", r.FormValue("key")))', False),
+    ]),
+    "javascript": ("injection/sql-taint.yaml", "raptor.injection.sql.taint.javascript", [
+        ('connection.query("SELECT * FROM t WHERE " + req.query.sql, [1]);', True),
+        ('connection.query("SELECT * FROM t WHERE " + clean("id = ?"), [req.query.id]);', False),
+        ('connection.query("SELECT ?", [req.query.id]);', False),
+        ('connection.query("SELECT " + req.query.head + " FROM t", [1]);', True),
+        ('search.query("asset " + req.query.key);', False),
+        ('connection.query(req.query.sql, [1]);', True),
+        ('connection.execute(req.query.sql, [1]);', True),
+    ]),
+    "java": ("injection/sql-taint.yaml", "raptor.injection.sql.taint.java", [
+        ('stmt.executeQuery(request.getParameter("sql"));', True),
+        ('stmt.execute(request.getParameter("sql"), Statement.RETURN_GENERATED_KEYS);', True),
+        ('stmt.executeUpdate(request.getParameter("sql"), new String[]{"id"});', True),
+        ('stmt.execute("SELECT 1", Integer.parseInt(request.getParameter("flags")));', False),
+        ('Statement selected = factory.forTenant(request.getParameter("tenant"));\nselected.execute("SELECT 1");', False),
+        ('PreparedStatement p = conn.prepareStatement("SELECT ?");\np.setString(1, request.getParameter("data"));\np.execute();', False),
+        ('conn.prepareStatement(request.getParameter("sql"), Statement.RETURN_GENERATED_KEYS);', True),
+    ]),
+}
+
+
+_MATRICES["java-wrapper"] = (
+    None, "raptor.generated.source-wrapper.sqli",
+    [(body.replace("request.getParameter", "wrapper.grab"), finding)
+     for body, finding in _MATRICES["java"][2]],
+)
+
+
+@pytest.mark.parametrize("family", _MATRICES)
+def test_sql_text_argument_is_the_sink(tmp_path, monkeypatch, family):
+    config, rule_id, cases = _MATRICES[family]
+    if family == "python":
+        name = "cases.py"
+        prefix = ["import sqlite3", "import sqlalchemy", "def get_cursor(tenant):",
+                  "    return sqlite3.connect(':memory:').cursor()"]
+        head, tail, indent = "def case_{index}(cursor):", "", "    "
+    elif family.startswith("go-"):
+        name = "cases.go"
+        imports = '"context"; "database/sql"; "net/http"; ' + ('"strings"' if family == "go-concat" else '"fmt"')
+        prefix = ["package example", "import (" + imports + ")", "type Search struct{}",
+                  "func (*Search) Query(text string, args ...interface{}) {}"]
+        head, tail, indent = "func case_{index}(r *http.Request, db *sql.DB, search *Search) {{", "}", "    "
+    elif family == "javascript":
+        name, prefix, head, tail, indent = "cases.js", [], "function case_{index}(req, connection, search) {{", "}", "  "
+    else:
+        name = "Cases.java"
+        prefix = ["import java.sql.*;", "import javax.servlet.http.HttpServletRequest;",
+                  "interface StatementFactory { Statement forTenant(String tenant); }", "class Cases {"]
+        if family == "java-wrapper":
+            prefix.insert(-1, "class RequestSource { private final HttpServletRequest request; "
+                          "RequestSource(HttpServletRequest request) { this.request = request; } "
+                          "String grab(String name) { return request.getParameter(name); } }")
+        head = "void case_{index}(HttpServletRequest request, Statement stmt, Connection conn, StatementFactory factory, RequestSource wrapper) throws Exception {{" if family == "java-wrapper" else "void case_{index}(HttpServletRequest request, Statement stmt, Connection conn, StatementFactory factory) throws Exception {{"
+        tail, indent = "}", "    "
+    lines, expected = list(prefix), set()
+    for index, (body, reports) in enumerate(cases):
+        lines.append(head.format(index=index))
+        if family.startswith("go-"):
+            lines.extend([indent + "ctx := context.Background()", indent + "_ = ctx"])
+        lines.extend(indent + line for line in body.splitlines())
+        if reports:
+            expected.add(len(lines))
+        if tail:
+            lines.append(tail)
+    if family in ("java", "java-wrapper"):
+        lines.append("}")
+    target = tmp_path / name
+    target.write_text("\n".join(lines) + "\n")
+    monkeypatch.chdir(tmp_path)
+    if family == "java-wrapper":
+        from core.analysis.java_source_summaries import SourceSummary
+        from packages.semgrep.source_wrapper_rules import generate_rules_yaml
+
+        summary = SourceSummary(package="", owner="RequestSource", name="grab", arity=1,
+                                signature="(String)", via="field")
+        projected = generate_rules_yaml([summary])
+        assert projected is not None
+        rule_config = tmp_path / "source-wrappers.json"
+        rule_config.write_text(projected)
+    else:
+        rule_config = _RULES / config
+    proc = run_pinned_subprocess(
+        ["semgrep", "scan", "--config", str(rule_config), "--metrics", "off",
+         "--disable-version-check", "--jobs", "1", "--json", str(target)],
+        timeout=180, context="SQL argument precision", skip_signals=(9,),
+        env={**os.environ, "SEMGREP_SETTINGS_FILE": str(tmp_path / "settings.yml"),
+             "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log")},
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert not data.get("errors"), data.get("errors")
+    assert {Path(path).name for path in data["paths"]["scanned"]} == {name}
+    assert expected, family
+    actual = {row["start"]["line"] for row in data["results"] if row["check_id"].endswith(rule_id)}
+    assert actual == expected, (family, data.get("version"), actual, expected)

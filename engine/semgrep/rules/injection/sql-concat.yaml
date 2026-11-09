@@ -57,15 +57,14 @@ rules:
           - pattern: input(...)
           - pattern: os.environ[$_]
     pattern-sinks:
-      - pattern-either:
-          - pattern: $DB.execute($QUERY)
-          - pattern: $DB.executemany($QUERY)
-    # NOTE: sqlalchemy.text() and psycopg2.sql.SQL() are NOT
-    # sanitizers — both wrap the string verbatim, so tainted data
-    # concatenated into their argument still reaches the database
-    # as executable SQL. Genuinely parameterised calls
-    # (db.execute(query, params)) are already non-findings: the
-    # one-argument sink patterns above do not match them.
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.execute($QUERY, ...)
+              - pattern: $DB.executemany($QUERY, ...)
+          - focus-metavariable: $QUERY
+    # Wrapping text with sqlalchemy.text() or psycopg2.sql.SQL() does not
+    # escape it. Bound values are separate from SQL text: adding bind
+    # arguments cannot make an already tainted statement safe.
     pattern-sanitizers:
       - pattern: int(...)
         exact: true

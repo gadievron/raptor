@@ -55,44 +55,32 @@ rules:
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
     pattern-sinks:
-      # Query/Exec are generic method names shared with non-SQL types,
-      # so they only qualify with an inline fmt.Sprintf whose format
-      # string opens with SQL text — the keyword guard is the FP
-      # control. This closes the gap where db.Query(fmt.Sprintf(...))
-      # fell between this rule (which excluded Query/Exec) and
-      # sql-taint.yaml (which requires + concatenation).
+      # Generic method names require SQL-shaped formatting. The formatted
+      # query is the sink, rather than the context or trailing bind values.
       - patterns:
           - pattern-either:
-              - pattern: $DB.Query(fmt.Sprintf($FMT, ...), ...)
-              - pattern: $DB.Exec(fmt.Sprintf($FMT, ...), ...)
-              - pattern: $DB.QueryRow(fmt.Sprintf($FMT, ...), ...)
-              - pattern: $DB.QueryContext($CTX2, fmt.Sprintf($FMT, ...), ...)
-              - pattern: $DB.QueryRowContext($CTX2, fmt.Sprintf($FMT, ...), ...)
-              - pattern: $DB.ExecContext($CTX2, fmt.Sprintf($FMT, ...), ...)
-          - metavariable-regex:
-              metavariable: $FMT
-              regex: '(?i)^"\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
-      # Single-argument calls to SQL-unique methods only.
-      # Bare-variable Query/Exec excluded — generic names shared with
-      # non-SQL types (concat spellings are caught by sql-taint.yaml's
-      # concat + SQL keyword rule; Sprintf spellings by the guard
-      # above). pattern-not excludes string-literal $Q to prevent FPs
-      # on hardcoded queries.
+              - pattern: $DB.Query($QUERY, ...)
+              - pattern: $DB.Exec($QUERY, ...)
+              - pattern: $DB.QueryRow($QUERY, ...)
+              - pattern: $DB.QueryContext($CTX2, $QUERY, ...)
+              - pattern: $DB.QueryRowContext($CTX2, $QUERY, ...)
+              - pattern: $DB.ExecContext($CTX2, $QUERY, ...)
+          - metavariable-pattern:
+              metavariable: $QUERY
+              patterns:
+                - pattern: fmt.Sprintf($FMT, ...)
+                - metavariable-regex:
+                    metavariable: $FMT
+                    regex: '(?i)^"\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
+          - focus-metavariable: $QUERY
+      # These SQL-specific methods also accept bound values. Those values
+      # neither taint constant SQL text nor sanitise tainted SQL text.
       - patterns:
-          - pattern: $DB.QueryRow($Q)
-          - pattern-not: $DB.QueryRow("...")
-          - focus-metavariable: $Q
-      - patterns:
-          - pattern: $DB.QueryContext($CTX2, $Q)
-          - pattern-not: $DB.QueryContext($CTX2, "...")
-          - focus-metavariable: $Q
-      - patterns:
-          - pattern: $DB.QueryRowContext($CTX2, $Q)
-          - pattern-not: $DB.QueryRowContext($CTX2, "...")
-          - focus-metavariable: $Q
-      - patterns:
-          - pattern: $DB.ExecContext($CTX2, $Q)
-          - pattern-not: $DB.ExecContext($CTX2, "...")
+          - pattern-either:
+              - pattern: $DB.QueryRow($Q, ...)
+              - pattern: $DB.QueryContext($CTX2, $Q, ...)
+              - pattern: $DB.QueryRowContext($CTX2, $Q, ...)
+              - pattern: $DB.ExecContext($CTX2, $Q, ...)
           - focus-metavariable: $Q
     metadata:
       cwe: ["CWE-89"]
