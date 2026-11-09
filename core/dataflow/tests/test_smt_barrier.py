@@ -4284,3 +4284,54 @@ def test_substitution_error_skips_protected_sink(tmp_path: Path):
         sink_uri="app.py", sink_line=5, sink_class="pathtrav",
     )
     assert result.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("language,template", [
+    ("python", 'if not re.match(r"^[a-z]{q}$", name): return'),
+    ("python", 'if not re.fullmatch(r"[a-z]{q}", name): return'),
+    ("javascript", "if (!/^[a-z]{q}$/.test(name)) return;"),
+    ("typescript", "if (!name.match(/^[a-z]{q}$/)) return;"),
+    ("java", 'if (!name.matches("[a-z]{q}")) return;'),
+    ("ruby", r"return unless name =~ /\A[a-z]{q}\z/"),
+], ids=["python-match", "python-fullmatch", "js-test", "ts-match", "java", "ruby"])
+@pytest.mark.parametrize("quantifier", ["+", "*"], ids=["nonempty", "empty-allowed"])
+def test_charset_model_preserves_source_quantifier(language, template, quantifier):
+    from core.smt_solver.session import check_solver, new_solver
+
+    line = template.replace("{q}", quantifier)
+    spec = sb.extract_validator("+" + line + "\n", language=language)
+    assert spec is not None
+    assert spec.allows_empty is (quantifier == "*")
+    model_language = sb._charset_language(spec)
+    solver = new_solver()
+    solver.add(sb.z3.InRe(sb.z3.StringVal(""), model_language))
+    assert check_solver(solver) == (sb.z3.sat if quantifier == "*" else sb.z3.unsat)
+    control = new_solver()
+    control.add(sb.z3.InRe(sb.z3.StringVal("abc"), model_language))
+    assert check_solver(control) == sb.z3.sat
+    assert sb.prove_neutralizes(spec, "pathtrav").sound
+
+
+@pytest.mark.parametrize("flag", [0, 1, None, "*"], ids=["zero", "one", "missing", "text"])
+def test_empty_acceptance_metadata_requires_boolean(flag):
+    with pytest.raises(ValueError, match="allows_empty"):
+        sb.ValidatorSpec(kind="charset", var_name="name", charset="a-z", allows_empty=flag)
+    spec = sb.ValidatorSpec(kind="charset", var_name="name", charset="a-z")
+    spec.allows_empty = flag
+    with pytest.raises(ValueError, match="allows_empty"):
+        sb.prove_neutralizes(spec, "pathtrav")
+
+
+@_requires_z3
+def test_star_quantifier_preserved_in_tier0_artifact(tmp_path: Path):
+    line = '    if not re.fullmatch(r"[a-z]*", name):'
+    source = "import re\ndef handle(name):\n" + line + "\n        return\n    return open(name)\n"
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.SOUND
+    assert result.artifact == "smt:charset:[a-z]*@app.py:3"
+    assert "[a-z]*" in result.reasoning
