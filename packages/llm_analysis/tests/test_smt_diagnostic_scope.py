@@ -71,6 +71,41 @@ def test_partial_native_results_retain_uncertainty_and_add_no_witness(conditions
     assert "smt_witness" not in analysis
 
 
+def test_native_dual_timeout_reaches_diagnostics_and_rejection_metrics(monkeypatch):
+    from core.smt_solver import path_feasibility as paths
+    from core.smt_solver.session import query_budget
+
+    original = paths.check_path_feasibility
+    legs = []
+
+    def observe(*args, **kwargs):
+        if len(legs) >= expire_after:
+            with query_budget(0):
+                checked = original(*args, **kwargs)
+        else:
+            checked = original(*args, **kwargs)
+        legs.append(checked)
+        return checked
+
+    monkeypatch.setattr(paths, 'check_path_feasibility', observe)
+    for predicates, expire_after in [(['Value < 0'], 1), (['Value == 1', 'Value == 2'], 2)]:
+        legs.clear()
+        prior = existing_result('confirmed')
+        snapshot = deepcopy(prior)
+        analysis = {'path_conditions': [*predicates, 'unrecognized @ syntax'], 'path_profile': None}
+        metrics = {}
+        result, status = module._tier4_smt_refine(prior, {}, analysis, metrics=metrics)
+        assert [leg.feasible for leg in legs] == [False] * expire_after + [None]
+        assert result is prior and result == snapshot and status == 'smt_no_change'
+        diagnostic = analysis['smt_diagnostics']
+        assert diagnostic['modeled_feasible'] is None
+        assert diagnostic['unknown'] == ['unrecognized @ syntax', *predicates]
+        assert len(diagnostic['unknown_reasons']) == 1 + len(predicates)
+        counts = metrics['n_smt_rejections_by_kind']
+        assert counts['solver_timeout'] == len(predicates) and sum(counts.values()) == 1 + len(predicates)
+        assert 'smt_witness' not in analysis
+
+
 def test_saved_records_snapshot_the_solved_question_and_model():
     condition = {"text": "Value == 2", "negated": False}
     analysis = {"path_conditions": [condition], "path_profile": "uint8"}
