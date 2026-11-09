@@ -29,7 +29,8 @@ def build_diff_document(delta, *, baseline: str, current: str, threshold: str,
         cells = []
         for row in shown:
             sca = row.get("sca") if isinstance(row.get("sca"), dict) else {}
-            advisory = sca.get("advisory") if isinstance(sca.get("advisory"), dict) else {}
+            raw_advisory = sca.get("advisory")
+            advisory = raw_advisory if isinstance(raw_advisory, dict) else {}
             cells.append([str(sca.get("ecosystem") or "unknown"), str(sca.get("name") or "unknown"),
                           str(sca.get("version") or "unknown"), str(advisory.get("id") or row.get("vuln_type") or "unknown"),
                           str(row.get("severity") or "unknown"), bool(row.get("suppressed")), bool(sca.get("in_kev")),
