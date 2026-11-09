@@ -108,7 +108,8 @@ class TestRunBuildStep:
         else:
             assert "etc_overlay" not in kwargs
 
-    def test_resolver_resolution_error_never_dispatches(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("error_type", [OSError, RuntimeError])
+    def test_resolver_resolution_error_never_dispatches(self, tmp_path, monkeypatch, error_type):
         resolver = tmp_path / "resolv.conf"
         resolver.write_text("nameserver 192.0.2.53\n", encoding="utf-8")
         resolved = []
@@ -116,7 +117,7 @@ class TestRunBuildStep:
         class Unresolvable(type(tmp_path)):
             def resolve(self, strict=False):
                 resolved.append(self)
-                raise OSError("owned resolver resolution failure")
+                raise error_type("owned resolver resolution failure")
 
         monkeypatch.setattr(_sandbox_exec, "_RESOLVER_CONFIG", Unresolvable(resolver))
         rec = _Recorder()
@@ -124,12 +125,65 @@ class TestRunBuildStep:
             _sandbox_exec, ("run_build_step",), {"core.sandbox": sandbox_mod},
         ) as imports:
             getattr(imports, "core.sandbox").run = rec
-            with pytest.raises(OSError, match="owned resolver resolution failure"):
+            with pytest.raises(error_type, match="owned resolver resolution failure"):
                 _sandbox_exec.run_build_step(
                     ["cargo", "build"], cwd=tmp_path, timeout=10, network=True,
                 )
         assert resolved == [resolver]
         assert rec.calls == []
+
+    def test_offline_build_never_probes_resolver(self, tmp_path, monkeypatch):
+        class Unprobed(type(tmp_path)):
+            def is_file(self):
+                pytest.fail("offline build probed resolver")
+
+            def resolve(self, strict=False):
+                pytest.fail("offline build resolved resolver")
+
+        monkeypatch.setattr(_sandbox_exec, "_RESOLVER_CONFIG", Unprobed(tmp_path / "resolv.conf"))
+        rec = _Recorder()
+        with scoped_function_imports(
+            _sandbox_exec, ("run_build_step",), {"core.sandbox": sandbox_mod},
+        ) as imports:
+            getattr(imports, "core.sandbox").run = rec
+            _sandbox_exec.run_build_step(["make"], cwd=tmp_path, timeout=10)
+        assert len(rec.calls) == 1
+        assert rec.calls[0][1]["block_network"] is True
+        assert "etc_overlay" not in rec.calls[0][1]
+
+    @pytest.mark.parametrize("kind", ["broken", "loop", "directory"])
+    @pytest.mark.parametrize("check", [False, True])
+    def test_unusable_resolver_preserves_build_failure(self, tmp_path, monkeypatch, kind, check):
+        resolver = tmp_path / "resolv.conf"
+        if kind == "broken":
+            resolver.symlink_to(tmp_path / "missing")
+        elif kind == "loop":
+            resolver.symlink_to(resolver)
+        else:
+            resolver.mkdir()
+        monkeypatch.setattr(_sandbox_exec, "_RESOLVER_CONFIG", resolver)
+        rec = _Recorder(returncode=7)
+        with scoped_function_imports(
+            _sandbox_exec, ("run_build_step",), {"core.sandbox": sandbox_mod},
+        ) as imports:
+            getattr(imports, "core.sandbox").run = rec
+            if check:
+                with pytest.raises(subprocess.CalledProcessError) as raised:
+                    _sandbox_exec.run_build_step(
+                        ["cargo", "fetch"], cwd=tmp_path, timeout=10, network=True,
+                    )
+                assert raised.value.returncode == 7
+                assert raised.value.output == "out"
+                assert raised.value.stderr == "err"
+            else:
+                result = _sandbox_exec.run_build_step(
+                    ["cargo", "fetch"], cwd=tmp_path, timeout=10, network=True, check=False,
+                )
+                assert result.returncode == 7
+        assert len(rec.calls) == 1
+        assert rec.calls[0][1]["block_network"] is False
+        assert "etc_overlay" not in rec.calls[0][1]
+        assert "restrict_reads" not in rec.calls[0][1]
 
     def test_nonzero_exit_raises_calledprocesserror(
             self, tmp_path, monkeypatch):

@@ -104,7 +104,9 @@ def run_build_step(
         "timeout": timeout,
     }
     if network and _RESOLVER_CONFIG.is_file():
-        # /etc may contain a symlink into /run, which is private after
+        # This helper selects trusted host configuration, never a path
+        # supplied by the fetched repository. /etc may contain a symlink
+        # into /run, which is private after
         # pivot_root. Bind only the canonical file at its namespace path,
         # read-only, so the existing /etc symlink remains valid.
         resolver = str(_RESOLVER_CONFIG.resolve())
