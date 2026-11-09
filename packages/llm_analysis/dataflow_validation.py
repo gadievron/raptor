@@ -2865,10 +2865,12 @@ def _attach_result(
     """
     evidence = []
     for e in result.evidence:
+        # Each finding owns its records; cached results and other findings
+        # must not share mutable match/model dictionaries with this output.
         if isinstance(e, dict):
-            evidence.append(e)
+            evidence.append(copy.deepcopy(e))
         elif hasattr(e, "to_dict"):
-            evidence.append(e.to_dict())
+            evidence.append(copy.deepcopy(e.to_dict()))
         else:
             evidence.append(str(e))  # type: ignore[arg-type]
     recommends_downgrade = (
