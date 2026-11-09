@@ -583,3 +583,98 @@ def test_memoizable_set_excludes_stateful_classes():
 def test_hash_text_stable():
     assert hash_text("abc") == hash_text("abc")
     assert hash_text("abc") != hash_text("abd")
+
+
+
+def test_distinct_hypotheses_keep_their_native_smt_query_binding(tmp_path, monkeypatch):
+    import hashlib
+
+    pytest.importorskip("z3")
+    pytest.importorskip("tree_sitter_c")
+    from core.audit import sweep
+
+    source = "unsigned Read(unsigned Value,unsigned Step){if(Value>0 && Step>0) return Value+Step; return 0;}"
+    hypothesis = "integer overflow in `Value + Step` during review ?"
+    malformed = hypothesis.replace("?", "\ud800")
+    config = orch.OrchestratorConfig(
+        target_path=tmp_path, out_dir=tmp_path / "out", integer_abi="ilp32",
+    )
+    (tmp_path / "unit.c").write_text(source)
+    native_results, returned_results = [], []
+
+    def native_worker(**request):
+        assert request.pop("include_callers") is False
+        result = sweep._run_smt_verb_inner(**request)
+        native_results.append(result)
+        return result
+
+    real_get_or_run = config.sweep_memo.get_or_run
+
+    def observe(key, runner):
+        result = real_get_or_run(key, runner)
+        returned_results.append(result)
+        return result
+
+    monkeypatch.setattr(orch, "run_smt_verb_direct", native_worker)
+    monkeypatch.setattr(config.sweep_memo, "get_or_run", observe)
+    chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
+    for claim in (hypothesis, malformed, hypothesis):
+        result = _run_tool_chain(
+            chain, config=config, file_path="unit.c", function_name="Read",
+            source=source, hypothesis=claim, line_start=1,
+        )
+        assert result == ["smt:check-overflow"]
+        packet = returned_results[-1]
+        assert packet.details["witness_validated"] is True
+        expected = hashlib.sha256(claim.encode("utf-8", "surrogatepass")).hexdigest()
+        assert packet.details["source_scope"]["hypothesis_sha256"] == expected
+    assert len(native_results) == 2  # only the unchanged query reuses a receipt
+
+
+
+@pytest.mark.parametrize("text", ["owned ascii", "\u00e9", "\U0001f642"])
+def test_text_hash_keeps_existing_valid_utf8_digests(text):
+    import hashlib
+
+    assert hash_text(text) == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_text_hash_preserves_surrogate_and_replacement_identities():
+    texts = ["?", "\ufffd", "\ud800", "\udfff", "\ud800\udfff", "\U000103ff"]
+    assert len({hash_text(text) for text in texts}) == len(texts)
+
+
+def test_transient_smt_worker_failure_is_retried(tmp_path, monkeypatch):
+    pytest.importorskip("z3")
+    pytest.importorskip("tree_sitter_c")
+    from core.audit import subproc_json, sweep
+
+    source = "unsigned Read(unsigned Value,unsigned Step){if(Value>0 && Step>0) return Value+Step; return 0;}"
+    (tmp_path / "unit.c").write_text(source)
+    config = orch.OrchestratorConfig(
+        target_path=tmp_path, out_dir=tmp_path / "out", integer_abi="ilp32",
+    )
+    calls = []
+
+    def transport(entry, request, **options):
+        assert entry == "core.audit.sweep:_run_smt_verb_inner_json"
+        calls.append(request)
+        if len(calls) == 1:
+            return None  # the production transport's crash/timeout sentinel
+        return sweep._run_smt_verb_inner_json(request)
+
+    monkeypatch.setattr(subproc_json, "run_json_child", transport)
+    chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
+
+    def run():
+        return orch._run_tool_chain(
+            chain, config=config, file_path="unit.c", function_name="Read",
+            source=source, hypothesis="integer overflow in `Value + Step`", line_start=1,
+        )
+
+    assert run() == []
+    assert len(calls) == 1
+    assert run() == ["smt:check-overflow"]
+    assert len(calls) == 2
+    assert run() == ["smt:check-overflow"]
+    assert len(calls) == 2  # a successful retry remains memoised

@@ -36,9 +36,10 @@ Scope and soundness contract:
   practically hash in full (a TU's ``#include`` closure, a CodeQL
   database's row data — the database is additionally pinned by its
   metadata file's content hash).
-* ``error`` outcomes are never stored: a transient failure (tool
-  timeout, sandbox refusal) pinned for the run would suppress every
-  later retry of that step.  Results whose negative-control leg
+* ``error`` outcomes and results carrying checker errors are never
+  stored: some worker failures return inconclusive observations rather
+  than error outcomes. A transient failure pinned for the run would
+  suppress every later retry of that step.  Results whose negative-control leg
   errored (``details["negative_control_error"]``) are never stored
   either: they are uncapped only because a broken control must not
   fabricate inconclusive outcomes, and pinning one would replay the
@@ -80,8 +81,10 @@ MAX_MEMO_ENTRIES = 1024
 
 
 def hash_text(text: str) -> str:
-    """Content hash of an in-memory string input."""
-    return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
+    """Lossless content hash of an in-memory Python string input."""
+    # Replacement would alias an unpaired surrogate with a literal question
+    # mark and reuse a receipt bound to a different source or hypothesis.
+    return hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def hash_file(path: str | Path | None) -> str | None:
@@ -198,7 +201,7 @@ class SweepMemo:
         the run. Refuse instead: the next dispatch re-runs the whole
         step, control included, and can cap.
         """
-        if getattr(result, "outcome", None) == "error":
+        if getattr(result, "outcome", None) == "error" or getattr(result, "errors", None):
             return
         details = getattr(result, "details", None)
         if isinstance(details, dict) and details.get(
