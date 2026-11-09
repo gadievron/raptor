@@ -156,19 +156,14 @@ if phase.startswith('read:'):
     local_os.read = observed_read
     g['os'] = local_os
 elif phase == 'wait':
-    tracked = g['_spawn_request_target']
-    def observed_spawn(argv):
-        proc = tracked(argv)
-        native_wait, marked = proc.wait, False
-        def observed_wait(*args, **kwargs):
-            nonlocal marked
-            if not marked:
-                with open(phase_path, 'w') as marker: marker.write('process wait entered')
-                marked = True
-            return native_wait(*args, **kwargs)
-        proc.wait = observed_wait
-        return proc
-    g['_spawn_request_target'] = observed_spawn
+    native_wait, marked = g['_wait_request_exit'], False
+    def observed_wait(proc, *args, **kwargs):
+        global marked
+        if not marked:
+            with open(phase_path, 'w') as marker: marker.write('process wait entered')
+            marked = True
+        return native_wait(proc, *args, **kwargs)
+    g['_wait_request_exit'] = observed_wait
 sys.argv = ['daemon', '--one-shot'] if sys.argv[5] == 'one' else [
     'daemon', '--rpc-in-fd', sys.argv[3], '--rpc-out-fd', sys.argv[4]]
 try:
