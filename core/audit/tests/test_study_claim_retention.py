@@ -153,3 +153,211 @@ def test_assessment_write_failure_preserves_prior_and_spend(study_case, monkeypa
     _reassess(study_case, _candidate())
     _retained(study_case)
     assert "study reassessment event could not be written" in caplog.text
+
+
+def _knowledge_reassess(case, candidate, *, during_review=None, verify=False):
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+
+    case["config"].immediate_verify = verify
+    runtime = AuditKnowledgeRuntime(case["config"].target_path, orch.StudyQueue(),
+                                    deadline=float("inf"), window=0)
+    source = (case["config"].target_path / "owned.c").read_text().rstrip("\n")
+    ctx = {"file": "owned.c", "function": "f", "line_start": 1,
+           "source": source, "language": "c"}
+    runtime._register(runtime._origin(ctx), ctx, {
+        "language_reference_requests": [{"topic": "integer promotion"}]})
+    reservation, = runtime.ready_continuations(admission=lambda: True)
+
+    def review(context, config):
+        if during_review is not None:
+            during_review()
+        return candidate
+
+    with isolated_audit_shutdown(orch):
+        orch._re_review_study_enriched(case["result"], case["config"], review,
+            case["checklist"], None, {}, None, set(), {("owned.c", "f", 1)}, monotonic(), None,
+            max_workers=1, knowledge_runtime=runtime, knowledge_reservation=reservation)
+    return runtime
+
+
+def test_same_status_study_retains_new_independent_hypotheses(study_case):
+    case = study_case
+    case["config"].immediate_verify = False  # isolate publication, not checker correctness
+    mechanism = "a distinct ownership transition leaves a stale reference"
+    fresh = orch.ReviewOutcome("owned.c", "f", "suspicious", "New concern after learning",
+        line=1, hypothesis=mechanism, cost_usd=0.2,
+        hypotheses=[{"mechanism": mechanism, "confidence": "medium", "cwe": "CWE-416"}],
+        review_result={"status": "suspicious", "hypothesis": mechanism, "cwe": "CWE-416"})
+    _knowledge_reassess(case, fresh)
+    canonical = case["result"].outcomes[0]
+    assert mechanism in {h["mechanism"] for h in canonical.hypotheses}
+    assert canonical.hypothesis == "length overflows before validation"
+    assert canonical.body == "Prior concerns" and not canonical.evidence_tool
+    assert case["result"].reviewed == case["result"].suspicious == 1
+    assert case["result"].total_cost_usd == 0.7
+
+
+def _new_suspicion():
+    mechanism = "new independent candidate"
+    return orch.ReviewOutcome("owned.c", "f", "suspicious", "New assessment",
+        line=1, hypothesis=mechanism, cost_usd=0.2,
+        hypotheses=[{"mechanism": mechanism, "confidence": "medium"}],
+        review_result={"hypothesis": mechanism, "cwe": "CWE-416"})
+
+
+def test_same_status_candidates_survive_journal_and_next_context(study_case):
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    fresh = _new_suspicion()
+    _knowledge_reassess(case, fresh)
+    canonical = case["result"].outcomes[0]
+    entries = load_entries(case["config"].out_dir, fresh=True)
+    assert entries[-1].hypotheses == canonical.hypotheses
+    assert entries[-1].cost_usd == canonical.cost_usd == 0.7
+    assert canonical.review_result["hypotheses"] == canonical.hypotheses
+    assert fresh.hypothesis in {h["mechanism"] for h in orch._prior_hypotheses_for(canonical)}
+    assert canonical.hypotheses[-1]["confidence"] == "medium"
+    _knowledge_reassess(case, _new_suspicion())
+    assert len(load_entries(case["config"].out_dir, fresh=True)) == len(entries)
+    assert len(case["result"].outcomes[0].hypotheses) == 3
+    assert case["result"].reviewed == case["result"].suspicious == 1
+    assert case["result"].total_cost_usd == pytest.approx(0.9)
+
+
+def test_same_status_copy_preserves_prior_and_excludes_fresh_proof_fields(study_case):
+    from copy import deepcopy
+
+    case = study_case
+    case["prior"].review_result = {"study_receipts": [{"locations": ["prior-only"]}]}
+    case["prior"].tools_dispatched = {"semgrep"}
+    case["prior"].tools_inconclusive = {"semgrep"}
+    before = deepcopy(case["prior"].hypotheses)
+    fresh = _new_suspicion()
+    case["prior"].tokens_in = 10
+    fresh.tokens_in = 5
+    fresh.review_result["immediate_verified"] = True
+    fresh.hypotheses[0]["evidence_tool"] = "smt:unrelated"
+    fresh.hypotheses[0]["claim_refutations"] = ["forged"]
+    _knowledge_reassess(case, fresh)
+    canonical = case["result"].outcomes[0]
+    assert canonical is not case["prior"]
+    assert canonical.tokens_in == 15 and case["prior"].tokens_in == 10
+    assert case["prior"].hypotheses == before
+    assert canonical.hypotheses[:2] == before
+    assert canonical.tools_dispatched == canonical.tools_inconclusive == {"semgrep"}
+    assert not canonical.evidence_tool and not canonical.claim_refutations
+    assert "immediate_verified" not in canonical.review_result
+    assert set(canonical.hypotheses[-1]) == {"mechanism", "cwe", "confidence"}
+    fresh.hypotheses[0]["mechanism"] = "mutated"
+    case["prior"].review_result["study_receipts"][0]["locations"].append("mutated")
+    assert canonical.hypotheses[-1]["mechanism"] == "new independent candidate"
+    assert canonical.review_result["study_receipts"][0]["locations"] == ["prior-only"]
+
+
+@pytest.mark.parametrize("fault", ["prior_verified", "fresh_verified", "wrong_occurrence", "source_changed"])
+def test_same_status_unsafe_candidate_merge_is_refused(study_case, monkeypatch, fault):
+    case = study_case
+    fresh = _new_suspicion()
+    callback = None
+    if fault == "prior_verified":
+        case["prior"].evidence_tool = "frida:runtime"
+    elif fault in ("fresh_verified", "wrong_occurrence"):
+        # Inject at the checker-result boundary, after model sanitisation
+        # and pipeline-owned line stamping; no native checker is exercised.
+        def checker_result(outcome, *args, **kwargs):
+            if fault == "fresh_verified":
+                outcome.evidence_tool = "frida:runtime"
+            else:
+                outcome.line = 2
+            return outcome
+        monkeypatch.setattr(orch, "_verify_hypotheses_immediate", checker_result)
+    else:
+        path = case["config"].target_path / "owned.c"
+        callback = lambda: path.write_text(path.read_text() + "/* changed */\n")
+    _knowledge_reassess(case, fresh, during_review=callback,
+                        verify=fault in ("fresh_verified", "wrong_occurrence"))
+    _retained(case)
+    assert case["result"].suspicious == 1
+
+
+def test_same_status_failed_journal_does_not_publish_candidates(study_case, monkeypatch):
+    case = study_case
+
+    def refuse(*args, **kwargs):
+        raise OSError("scripted candidate journal failure")
+
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", refuse)
+    runtime = _knowledge_reassess(case, _new_suspicion())
+    _retained(case)
+    assert any(e.get("reason") == "candidate_journal_write_failed" for e in runtime.events())
+
+
+def test_same_status_requires_actual_journal_acknowledgement(study_case, monkeypatch):
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", lambda **kwargs: None)
+    runtime = _knowledge_reassess(study_case, _new_suspicion())
+    _retained(study_case)
+    assert any(e.get("reason") == "candidate_journal_write_failed" for e in runtime.events())
+
+
+def test_same_status_changed_canonical_is_not_written(study_case, monkeypatch):
+    from dataclasses import replace
+
+    case = study_case
+    newer = replace(case["prior"], body="Another pipeline update")
+    calls = []
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", lambda **kwargs: calls.append(kwargs))
+    runtime = _knowledge_reassess(case, _new_suspicion(),
+        during_review=lambda: case["result"].outcomes.__setitem__(0, newer))
+    assert case["result"].outcomes == [newer] and not calls
+    assert any(e.get("reason") == "canonical_outcome_changed" for e in runtime.events())
+    assert case["result"].total_cost_usd == 0.7
+
+
+def test_same_status_journal_writer_holds_canonical_ownership(study_case, monkeypatch):
+    from core.audit.collector import append_journal_for_outcome
+
+    def owned_write(**kwargs):
+        assert not study_case["result"]._lock.acquire(blocking=False)
+        assert kwargs["verification_scope"].source_identity is not None
+        return append_journal_for_outcome(**kwargs)
+
+    merge = orch._merge_unverified_study_candidates
+
+    def owned_merge(*args):
+        assert not study_case["result"]._lock.acquire(blocking=False)
+        return merge(*args)
+
+    monkeypatch.setattr(orch, "_merge_unverified_study_candidates", owned_merge)
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", owned_write)
+    _knowledge_reassess(study_case, _new_suspicion())
+    assert study_case["result"].outcomes[0] is not study_case["prior"]
+
+
+def test_same_status_finalized_run_refuses_candidate_publication(study_case, monkeypatch):
+    calls = []
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", lambda **kwargs: calls.append(kwargs))
+    runtime = _knowledge_reassess(study_case, _new_suspicion(),
+        during_review=lambda: setattr(study_case["config"], "_verdicts_finalized", True))
+    _retained(study_case)
+    assert not calls
+    assert any(e.get("reason") == "verdicts_finalized" for e in runtime.events())
+
+
+@pytest.mark.parametrize("multi_model,passes,expected", [(False, 1, 0), (True, 1, 1), (False, 2, 1)])
+def test_study_preserves_requested_review_mode(study_case, monkeypatch, multi_model, passes, expected):
+    case = study_case
+    case["config"].models = ["first", "second"]
+    case["config"].multi_model = multi_model
+    case["config"].review_passes = passes
+    dispatched = []
+
+    def panel_dispatch(review, context, config, count, **kwargs):
+        # Test the dispatch decision, not provider or panel execution.
+        dispatched.append(count)
+        return review(context, config)
+
+    monkeypatch.setattr(orch, "_multi_pass_review", panel_dispatch)
+    _knowledge_reassess(case, _new_suspicion())
+    assert len(dispatched) == expected
+    assert not dispatched or dispatched == [passes]

@@ -296,7 +296,7 @@ if TYPE_CHECKING:
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
     from .knowledge_requests import KnowledgeRequest
-    from .knowledge_runtime import AuditKnowledgeRuntime
+    from .knowledge_runtime import AuditKnowledgeRuntime, KnowledgeReservation
 
 from .integer_abi import IntegerABIInput, integer_abi_record as _integer_abi_record, integer_abi_key as _integer_abi_key
 
@@ -34756,6 +34756,99 @@ def _callee_contract_requeue(
     return re_reviewed
 
 
+def _merge_unverified_study_candidates(
+    prior: ReviewOutcome, fresh: ReviewOutcome,
+) -> ReviewOutcome | None:
+    """Retain new candidates without changing the selected claim or its evidence."""
+    if (prior.status != "suspicious" or fresh.status != "suspicious"
+            or (prior.file, prior.function, prior.line) != (fresh.file, fresh.function, fresh.line)
+            or _is_verification_evidence_for_gate(prior)
+            or _is_verification_evidence_for_gate(fresh)):
+        return None
+    from copy import deepcopy
+
+    hypotheses = deepcopy(_prior_hypotheses_for(prior))
+    if prior.hypothesis and not any(h.get("mechanism") == prior.hypothesis for h in hypotheses):
+        hypotheses.insert(0, {"mechanism": prior.hypothesis, "confidence": "high",
+                              "cwe": (prior.review_result or {}).get("cwe", "")})
+
+    def identity(hypothesis):
+        return (str(hypothesis.get("mechanism", "")).strip().casefold(),
+                str(hypothesis.get("cwe", "")).strip().upper())
+
+    seen = {identity(h) for h in hypotheses}
+    primary_cwe = (fresh.review_result or {}).get("cwe_class") or (fresh.review_result or {}).get("cwe", "")
+    stated_confidence = {
+        identity({**h, "cwe": h.get("cwe") or primary_cwe}): h.get("confidence")
+        for h in _prior_hypotheses_for(fresh)
+    }
+    added = False
+    # Import only model-authored candidate text, never receipt or tool fields.
+    fields = ("mechanism", "cwe", "confidence", "counter", "counter_scope", "guard_type", "assumed_property")
+    for hypothesis in _extract_all_hypotheses(fresh):
+        key = identity(hypothesis)
+        if not key[0] or key in seen:
+            continue
+        entry = {field: hypothesis[field] for field in fields
+                 if isinstance(hypothesis.get(field), str)}
+        confidence = stated_confidence.get(key)
+        if confidence in ("high", "medium", "low", "refuted"):
+            entry["confidence"] = confidence
+        hypotheses.append(entry)
+        seen.add(key)
+        added = True
+    if not added:
+        return None
+    prior_review = deepcopy(prior.review_result or {})
+    prior_review["hypotheses"] = deepcopy(hypotheses)
+    # Published state carries the contributing rounds' financial metadata;
+    # the caller books only this round into the run ledger, without retallying.
+    return replace(prior, hypotheses=hypotheses, review_result=prior_review,
+                   cost_usd=(prior.cost_usd or 0) + (fresh.cost_usd or 0),
+                   duration_s=(prior.duration_s or 0) + (fresh.duration_s or 0),
+                   tokens_in=(prior.tokens_in or 0) + (fresh.tokens_in or 0),
+                   tokens_out=(prior.tokens_out or 0) + (fresh.tokens_out or 0),
+                   cache_read_tokens=(prior.cache_read_tokens or 0) + (fresh.cache_read_tokens or 0),
+                   cache_write_tokens=(prior.cache_write_tokens or 0) + (fresh.cache_write_tokens or 0))
+
+
+def _publish_study_candidates(
+    config: OrchestratorConfig, result: OrchestratorResult,
+    runtime: "AuditKnowledgeRuntime", reservation: "KnowledgeReservation",
+    prior: ReviewOutcome, fresh: ReviewOutcome, gap: dict[str, Any],
+) -> str:
+    """Keep canonical ownership through the existing journal writer's acknowledgement."""
+    from .collector import append_journal_for_outcome
+    from .verification_results import VerificationScope
+
+    with result._lock:
+        if config._verdicts_finalized:
+            return "verdicts_finalized"
+        index = next((i for i, current in enumerate(result.outcomes) if current is prior), None)
+        if index is None:
+            return "canonical_outcome_changed"
+        if not runtime.can_publish(reservation):
+            return "source_changed"
+        # Snapshot construction belongs to the same ownership boundary as
+        # the append: even an in-place update must not be overwritten.
+        candidate = _merge_unverified_study_candidates(prior, fresh)
+        if candidate is None:
+            return "unchanged"
+        acknowledgement = append_journal_for_outcome(
+            out_dir=config.out_dir, target_path=config.target_path,
+            run_id=_resolved_run_id(config.out_dir), outcome=candidate, gap=gap,
+            verification_scope=VerificationScope(candidate.file, candidate.function, candidate.line,
+                                                 candidate.hypothesis, reservation.origin.source_identity),
+        )
+        if acknowledgement is None:
+            return "candidate_journal_write_failed"
+        if (acknowledgement.file, acknowledgement.function, acknowledgement.line_start) != (
+                candidate.file, candidate.function, candidate.line):
+            return "candidate_journal_ack_mismatch"
+        result.outcomes[index] = candidate
+    return "published"
+
+
 def _re_review_study_enriched(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -34907,7 +35000,8 @@ def _re_review_study_enriched(
         idx, _gap, _prior, ctx = item
         try:
             def dispatch():
-                if knowledge_runtime is not None:
+                if knowledge_runtime is not None and (config.review_passes > 1 or
+                        (config.multi_model and len(config.models) > 1)):
                     return _multi_pass_review(review_fn, ctx, config, max(config.review_passes, 1),
                                               knowledge_runtime=knowledge_runtime)
                 return review_fn(ctx, config)
@@ -35129,11 +35223,25 @@ def _re_review_study_enriched(
             if ctx.get("study_answers"):
                 _record_study_flip(config, outcome)
         else:
-            # Kept the prior verdict — the re-review call still spent
-            # real money; changed verdicts book it via _tally_outcome
-            # above (deepen's dominated branch is the template).
+            # Same-status calls still consume spend, even if candidate
+            # publication fails or adds no independently new information.
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
+            if knowledge_runtime is not None:
+                try:
+                    disposition = _publish_study_candidates(config, result, knowledge_runtime,
+                                                           knowledge_reservation, prior_outcome, outcome, gap)
+                except Exception:
+                    logger.warning("study candidate journal write failed for %s:%s",
+                                   gap["file"], gap["name"], exc_info=True)
+                    disposition = "candidate_journal_write_failed"
+                if disposition == "published":
+                    knowledge_runtime.complete(knowledge_reservation, ctx, published_status=prior_outcome.status,
+                                               reason="new_unverified_candidates")
+                    continue
+                if disposition != "unchanged":
+                    knowledge_runtime.fail(knowledge_reservation, disposition, ctx=ctx)
+                    continue
 
         if knowledge_runtime is not None:
             knowledge_runtime.complete(knowledge_reservation, ctx, published_status=outcome.status,
