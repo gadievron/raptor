@@ -597,17 +597,16 @@ def coverage_residual(
 
     def _do(conn):
         # Exact graph join, never substring-in-key: a VALIDATES edge
-        # whose dst is an unchecked_flow identifies the flow's sink
-        # via its HAS_SINK edge. (A short sink id or label like
+        # whose dst is an unchecked_flow identifies its entry/sink pair
+        # via HAS_SOURCE and HAS_SINK. (A short sink id or label like
         # "system" substring-matching an unrelated
         # scan_finding://... key used to falsely drop never-validated
         # paths from the residual this function exists to report.
         # VALIDATES edges pointing at scan_finding/codeql_result
         # nodes identify no sink and never suppress a path.)
-        # Matching is by the sink's context-map ID only — sink NAMES
-        # are callee labels ("system") shared across distinct sinks,
-        # and matching them would re-open the false-suppression lane
-        # at label grain. Historical validation of the same display id
+        # Match context-map IDs, never shared callee labels. A validated
+        # flow from one entry does not validate another entry's path to
+        # the same sink. Historical validation of the same display id
         # does not establish validation of the selected understand snapshot.
         snapshot = _snapshot_by_id(conn, snapshot_id)
         if snapshot is None or not snapshot["target_path"]:
@@ -615,7 +614,7 @@ def coverage_residual(
         target = str(snapshot["target_path"])
         rows = conn.execute(
             """
-            SELECT DISTINCT sk.props_json
+            SELECT DISTINCT ep.props_json AS entry_props, sk.props_json AS sink_props
             FROM edges v
             JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
                          AND vo.stale = 0 AND vo.snapshot_id = v.snapshot_id
@@ -623,6 +622,10 @@ def coverage_residual(
                          AND (vs.target_path = ? OR vs.target_path = ?)
             JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'
                          AND fl.stale = 0 AND fl.snapshot_id = ?
+            JOIN edges he ON he.src_id = fl.id AND he.kind = 'HAS_SOURCE'
+                         AND he.stale = 0 AND he.snapshot_id = fl.snapshot_id
+            JOIN nodes ep ON ep.id = he.dst_id AND ep.kind IN ('entry_point', 'source')
+                         AND ep.stale = 0 AND ep.snapshot_id = fl.snapshot_id
             JOIN edges hs ON hs.src_id = fl.id AND hs.kind = 'HAS_SINK'
                          AND hs.stale = 0 AND hs.snapshot_id = fl.snapshot_id
             JOIN nodes sk ON sk.id = hs.dst_id AND sk.kind = 'sink'
@@ -631,22 +634,25 @@ def coverage_residual(
             """,
             (target, str(Path(target).resolve()), snapshot_id),
         ).fetchall()
-        validated: set[str] = set()
+        validated: set[tuple[str, str]] = set()
         for row in rows:
-            props = json_loads(row["props_json"])
-            sink_id = props.get("id")
-            if sink_id:
-                validated.add(str(sink_id))
+            entry_id = json_loads(row["entry_props"]).get("id")
+            sink_id = json_loads(row["sink_props"]).get("id")
+            if entry_id and sink_id:
+                validated.add((str(entry_id), str(sink_id)))
         return validated
 
-    validated_sink_ids = query_graph(db_path, _do)
-    if not validated_sink_ids:
+    validated_pairs = query_graph(db_path, _do)
+    if not validated_pairs:
         return paths
 
-    def _sink_validated(path: dict[str, Any]) -> bool:
-        return str(path.get("sink", {}).get("id") or "") in validated_sink_ids
+    def _path_validated(path: dict[str, Any]) -> bool:
+        return (
+            str(path.get("entry", {}).get("id") or ""),
+            str(path.get("sink", {}).get("id") or ""),
+        ) in validated_pairs
 
-    return [p for p in paths if not _sink_validated(p)]
+    return [p for p in paths if not _path_validated(p)]
 
 
 def scan_dedup_chains(
