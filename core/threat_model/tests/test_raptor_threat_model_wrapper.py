@@ -1,10 +1,10 @@
 """Tests for the libexec/raptor-threat-model bash wrapper."""
 
 import os
-import subprocess
 import unittest
 from pathlib import Path
 
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = REPO_ROOT / "libexec" / "raptor-threat-model"
@@ -24,7 +24,7 @@ class RaptorThreatModelWrapperTests(unittest.TestCase):
                         msg=f"not executable: {WRAPPER}")
 
     def test_help_prints_usage(self):
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), "--help"],
             capture_output=True, text=True, timeout=15, env=_env(),
         )
@@ -34,7 +34,7 @@ class RaptorThreatModelWrapperTests(unittest.TestCase):
         self.assertIn("refresh", proc.stdout)
 
     def test_unknown_command_fails_cleanly(self):
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), "nonsense"],
             capture_output=True, text=True, timeout=15, env=_env(),
         )
@@ -42,7 +42,7 @@ class RaptorThreatModelWrapperTests(unittest.TestCase):
         self.assertIn("unknown command", proc.stderr.lower())
 
     def test_show_routes_to_project_threat_model(self):
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), "show"],
             capture_output=True, text=True, timeout=15, env=_env(),
         )
@@ -56,7 +56,7 @@ class RaptorThreatModelWrapperTests(unittest.TestCase):
         )
 
     def test_build_help_routes_to_agentic_help(self):
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [str(WRAPPER), "build", "--help"],
             capture_output=True, text=True, timeout=15, env=_env(),
         )

@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "libexec" / "raptor-wsl-consent"
 
@@ -34,10 +36,10 @@ def _env(tmp_path: Path, *, trusted: bool = True) -> dict:
 
 def _run(tmp_path: Path, *args: str, trusted: bool = True,
          stdin=subprocess.DEVNULL) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return run_standalone_cli(
         [sys.executable, str(SCRIPT), *args],
         stdin=stdin, capture_output=True, text=True, timeout=60,
-        env=_env(tmp_path, trusted=trusted), check=False)
+        env=_env(tmp_path, trusted=trusted), data_home=tmp_path / "xdg", check=False)
 
 
 def _marker(tmp_path: Path) -> Path:
@@ -64,10 +66,10 @@ def test_grant_refuses_non_tty_stdin(tmp_path):
 def test_grant_refuses_piped_confirmation(tmp_path):
     """Piping the confirmation text does not help — the TTY check
     fires regardless of what stdin would say."""
-    r = subprocess.run(
+    r = run_standalone_cli(
         [sys.executable, str(SCRIPT), "grant"],
         input="ns-only\n", capture_output=True, text=True, timeout=60,
-        env=_env(tmp_path), check=False)
+        env=_env(tmp_path), data_home=tmp_path / "xdg", check=False)
     assert r.returncode == 3
     assert "requires an interactive terminal" in r.stderr
     assert not _marker(tmp_path).exists()
@@ -87,10 +89,10 @@ def test_grant_on_tty_still_preflights_the_host(tmp_path):
             pytest.skip("runner is a real WSL host")
     master, slave = pty.openpty()
     try:
-        r = subprocess.run(
+        r = run_standalone_cli(
             [sys.executable, str(SCRIPT), "grant"],
             stdin=slave, capture_output=True, text=True, timeout=60,
-            env=_env(tmp_path), check=False)
+            env=_env(tmp_path), data_home=tmp_path / "xdg", check=False)
     finally:
         os.close(master)
         os.close(slave)

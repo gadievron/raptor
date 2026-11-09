@@ -8,7 +8,6 @@ by the skill markdown when it calls the wrapper.
 
 import json
 import os
-import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -160,7 +159,7 @@ class RaptorEnrichContextMapAstViewTests(unittest.TestCase):
             # Strip both trust markers — must refuse.
             env = {k: v for k, v in os.environ.items()
                    if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
-            proc = subprocess.run(
+            proc = run_standalone_cli(
                 [str(WRAPPER), str(tmp)],
                 capture_output=True, text=True, timeout=10, env=env,
             )

@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.processes import reap_on_exit
-from core.testing.standalone_cli import standalone_cli_env
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 # parents[3] climbs:
 #   [0] core/startup/tests/  (this file's directory)
@@ -483,7 +483,7 @@ def test_mode_help_is_side_effect_free(mode: str, help_flag: str):
 )
 def test_top_level_module_imports(module: str):
     """Top-level dispatcher modules import cleanly with the repo on sys.path."""
-    r = subprocess.run(
+    r = run_standalone_cli(
         [
             sys.executable,
             "-c",
@@ -501,7 +501,7 @@ def test_top_level_module_imports(module: str):
 
 def test_core_config_imports():
     """``core.config`` imports cleanly."""
-    r = subprocess.run(
+    r = run_standalone_cli(
         [
             sys.executable,
             "-c",

@@ -20,6 +20,7 @@ from core.orchestration.understand_bridge import (
     load_understand_context,
     normalize_context_map,
 )
+from core.testing.standalone_cli import run_standalone_cli
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -2018,7 +2019,6 @@ class TestBuildChecklistScript:
     subprocess — marker keeps the class out of default fast-tier runs."""
     def test_creates_checklist(self, tmp_path):
         """raptor-build-checklist creates checklist.json."""
-        import subprocess
         target = tmp_path / "src"
         target.mkdir()
         (target / "hello.c").write_text("int main() { return 0; }\n")
@@ -2026,7 +2026,7 @@ class TestBuildChecklistScript:
         out_dir.mkdir()
 
         repo_root = Path(__file__).parents[3]  # core/orchestration/tests -> repo root
-        result = subprocess.run(
+        result = run_standalone_cli(
             ["libexec/raptor-build-checklist", str(target), str(out_dir)],
             capture_output=True, text=True, cwd=repo_root, check=False,
         )

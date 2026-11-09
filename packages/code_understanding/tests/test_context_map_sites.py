@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+from core.testing.standalone_cli import run_standalone_cli
 
 # packages/code_understanding/tests/test_context_map_sites.py
 #   parents[0]=tests  [1]=code_understanding  [2]=packages  [3]=repo
@@ -247,7 +248,7 @@ _SHIM = REPO / "libexec" / "raptor-enrich-context-map-sites"
 def test_shim_requires_trust_marker():
     env = {k: v for k, v in os.environ.items()
            if k not in ("CLAUDECODE", "_RAPTOR_TRUSTED")}
-    r = subprocess.run([sys.executable, str(_SHIM), "/tmp"],
+    r = run_standalone_cli([sys.executable, str(_SHIM), "/tmp"],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 2
     assert "internal dispatch script" in r.stderr
@@ -268,7 +269,7 @@ def test_shim_noop_on_non_c_target(tmp_path):
     (out / "context-map.json").write_text(json.dumps(cmap), encoding="utf-8")
 
     env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-    r = subprocess.run([sys.executable, str(_SHIM), str(out)],
+    r = run_standalone_cli([sys.executable, str(_SHIM), str(out)],
                        capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     after = json.loads((out / "context-map.json").read_text(encoding="utf-8"))

@@ -18,6 +18,7 @@ import sys
 import textwrap
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
@@ -31,6 +32,8 @@ from core.audit.run_lock import (
     read_holder,
     run_lock_path,
 )
+from core.testing.processes import reap_on_exit
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -594,41 +597,43 @@ def test_incident_replay_resume_refused_during_real_drain(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     cli = str(_REPO_ROOT / "libexec" / "raptor-audit")
-    proc = subprocess.Popen(
-        [sys.executable, "-c", _DRAINING_ORCHESTRATOR,
-         str(run_dir), str(_REPO_ROOT)],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
-    )
-    try:
-        line = proc.stdout.readline()
-        assert line.startswith("READY"), f"child failed: {line!r}"
-        proc.send_signal(15)                       # SIGTERM → drain
-        assert proc.stdout.readline().strip() == "DRAINING"
-        meta = json.loads(
-            (run_dir / ".raptor-run.json").read_text(encoding="utf-8"))
-        assert meta["status"] == "interrupted"     # gate would allow
-        assert proc.poll() is None                 # ... but holder lives
-        for _ in range(5):
-            r = subprocess.run(
-                [sys.executable, cli, "resume", str(run_dir)],
-                capture_output=True, text=True, timeout=120,
-            )
-            assert r.returncode != 0
-            assert "live audit orchestrator" in r.stderr
-            assert f"pid {proc.pid}" in r.stderr
-    finally:
-        _finish(proc)
-    # Holder exited: the next real resume gets PAST the lock (its
-    # stale stamp reclaims silently — the run status is terminal) and
-    # fails on run-config eligibility instead.
-    r = subprocess.run(
-        [sys.executable, cli, "resume", str(run_dir)],
-        capture_output=True, text=True, timeout=120,
-    )
-    assert r.returncode != 0
-    assert "live audit orchestrator" not in r.stderr
-    assert "no audit-run-config.json" in r.stderr
-    assert read_holder(run_lock_path(run_dir)).get("pid") != proc.pid
+    with standalone_cli_env(data_home=tmp_path / "keys") as child_env, ExitStack() as children:
+        proc = subprocess.Popen(
+            [sys.executable, "-c", _DRAINING_ORCHESTRATOR,
+             str(run_dir), str(_REPO_ROOT)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=child_env,
+        )
+        children.enter_context(reap_on_exit(proc))
+        try:
+            line = proc.stdout.readline()
+            assert line.startswith("READY"), f"child failed: {line!r}"
+            proc.send_signal(15)                       # SIGTERM → drain
+            assert proc.stdout.readline().strip() == "DRAINING"
+            meta = json.loads(
+                (run_dir / ".raptor-run.json").read_text(encoding="utf-8"))
+            assert meta["status"] == "interrupted"     # gate would allow
+            assert proc.poll() is None                 # ... but holder lives
+            for _ in range(5):
+                r = run_standalone_cli(
+                    [sys.executable, cli, "resume", str(run_dir)],
+                    capture_output=True, text=True, timeout=120, env=child_env,
+                )
+                assert r.returncode != 0
+                assert "live audit orchestrator" in r.stderr
+                assert f"pid {proc.pid}" in r.stderr
+        finally:
+            _finish(proc)
+        # Holder exited: the next real resume gets PAST the lock (its
+        # stale stamp reclaims silently — the run status is terminal) and
+        # fails on run-config eligibility instead.
+        r = run_standalone_cli(
+            [sys.executable, cli, "resume", str(run_dir)],
+            capture_output=True, text=True, timeout=120, env=child_env,
+        )
+        assert r.returncode != 0
+        assert "live audit orchestrator" not in r.stderr
+        assert "no audit-run-config.json" in r.stderr
+        assert read_holder(run_lock_path(run_dir)).get("pid") != proc.pid
 
 
 # ---------------------------------------------------------------------------

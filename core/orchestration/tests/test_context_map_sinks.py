@@ -23,6 +23,7 @@ from core.orchestration.context_map_sinks import (
     _populate_sinks_array,
     enrich_with_sink_discovery,
 )
+from core.testing.standalone_cli import run_standalone_cli
 
 
 def _sample_result() -> SinkDiscoveryResult:
@@ -316,7 +317,6 @@ class TestE2ELibexecShim:
     def test_e2e_synthetic_target(self, tmp_path: Path):
         """Full pipeline: synthetic Python target -> enriched context-map."""
         import json
-        import subprocess
 
         target = tmp_path / "app"
         target.mkdir()
@@ -351,7 +351,7 @@ class TestE2ELibexecShim:
         }))
 
         raptor_dir = Path(__file__).resolve().parents[3]
-        result = subprocess.run(
+        result = run_standalone_cli(
             [sys.executable, str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
             capture_output=True, text=True, check=False,
@@ -395,7 +395,7 @@ class TestE2ELibexecShim:
             }
 
         # Verify idempotency
-        result2 = subprocess.run(
+        result2 = run_standalone_cli(
             [sys.executable, str(raptor_dir / "libexec" / "raptor-enrich-context-map-sinks"),
              str(workdir)],
             capture_output=True, text=True, check=False,

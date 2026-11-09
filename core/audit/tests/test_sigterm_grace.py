@@ -16,12 +16,15 @@ import subprocess
 import sys
 import textwrap
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 
 import core.audit.orchestrator as orch
 from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
+from core.testing.processes import reap_on_exit
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 _CHECKLIST_CLI = str(_RAPTOR_DIR / "libexec" / "raptor-build-checklist")
@@ -253,84 +256,86 @@ class TestSigtermE2E:
         out = tmp_path / "audit-run"
         env = dict(os.environ, CLAUDECODE="1", _RAPTOR_TRUSTED="1",
                    PYTHONPATH=str(_RAPTOR_DIR))
-        r = subprocess.run(
-            [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
-            env=env, capture_output=True, text=True, check=False,
-        )
-        assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
-
-        driver = tmp_path / "driver.py"
-        driver.write_text(_DRIVER)
-        journal = out / "review-journal.jsonl"
-
-        def _entries() -> int:
-            if not journal.is_file():
-                return 0
-            return sum(
-                1 for line in journal.read_text().splitlines() if line
+        with standalone_cli_env(env=env, data_home=env["XDG_DATA_HOME"]) as env, ExitStack() as children:
+            r = run_standalone_cli(
+                [sys.executable, _CHECKLIST_CLI, str(target), str(out)],
+                env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, text=True, check=False,
             )
+            assert r.returncode == 0, f"build-checklist failed: {r.stderr}"
 
-        # A file cannot fill a PIPE while the parent waits for journal
-        # progress, and preserves diagnostics from early child failures.
-        log_path = tmp_path / "sigterm-child.log"
-        with log_path.open("w+") as log:
-            child = subprocess.Popen(
-                [sys.executable, str(driver), str(target), str(out),
-                 str(_RAPTOR_DIR)],
-                env=env, stdout=log, stderr=subprocess.STDOUT, text=True,
-            )
-            try:
-                deadline = time.monotonic() + 180
-                while time.monotonic() < deadline:
-                    if child.poll() is not None:
-                        pytest.fail(
-                            "child finished before SIGTERM window:\n"
-                            + log_path.read_text()
-                        )
-                    if _entries() >= 2:
-                        break
-                    time.sleep(0.1)
-                else:
-                    pytest.fail("no journal entries in time:\n" + log_path.read_text())
+            driver = tmp_path / "driver.py"
+            driver.write_text(_DRIVER)
+            journal = out / "review-journal.jsonl"
 
-                at_term = _entries()
-                term_sent = time.monotonic()
-                child.send_signal(signal.SIGTERM)
+            def _entries() -> int:
+                if not journal.is_file():
+                    return 0
+                return sum(
+                    1 for line in journal.read_text().splitlines() if line
+                )
+
+            # A file cannot fill a PIPE while the parent waits for journal
+            # progress, and preserves diagnostics from early child failures.
+            log_path = tmp_path / "sigterm-child.log"
+            with log_path.open("w+") as log:
+                child = subprocess.Popen(
+                    [sys.executable, str(driver), str(target), str(out),
+                     str(_RAPTOR_DIR)],
+                    env=env, stdout=log, stderr=subprocess.STDOUT, text=True,
+                )
+                children.enter_context(reap_on_exit(child))
                 try:
-                    child.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    pytest.fail("child did not drain within 60s of SIGTERM")
-                drain_s = time.monotonic() - term_sent
-            finally:
-                if child.poll() is None:
-                    child.kill()
-                child.wait(timeout=10)
-            log.seek(0)
-            stdout = log.read()
+                    deadline = time.monotonic() + 180
+                    while time.monotonic() < deadline:
+                        if child.poll() is not None:
+                            pytest.fail(
+                                "child finished before SIGTERM window:\n"
+                                + log_path.read_text()
+                            )
+                        if _entries() >= 2:
+                            break
+                        time.sleep(0.1)
+                    else:
+                        pytest.fail("no journal entries in time:\n" + log_path.read_text())
 
-        # Graceful conclusion: exit 130-style, prompt (well under the
-        # watchdog's forced-exit bound), stop reason named.
-        assert child.returncode == 130
-        assert "TERMINATED_BY=sigterm" in stdout
-        assert drain_s < 25, f"drain took {drain_s:.1f}s"
+                    at_term = _entries()
+                    term_sent = time.monotonic()
+                    child.send_signal(signal.SIGTERM)
+                    try:
+                        child.wait(timeout=60)
+                    except subprocess.TimeoutExpired:
+                        pytest.fail("child did not drain within 60s of SIGTERM")
+                    drain_s = time.monotonic() - term_sent
+                finally:
+                    if child.poll() is None:
+                        child.kill()
+                    child.wait(timeout=10)
+                log.seek(0)
+                stdout = log.read()
 
-        # Harvest-first: the in-flight review completed and journaled;
-        # dispatch stopped (not all six functions reviewed).
-        final_entries = _entries()
-        assert final_entries >= at_term
-        assert final_entries < 6, (
-            "SIGTERM must stop dispatching remaining reviews"
-        )
+            # Graceful conclusion: exit 130-style, prompt (well under the
+            # watchdog's forced-exit bound), stop reason named.
+            assert child.returncode == 130
+            assert "TERMINATED_BY=sigterm" in stdout
+            assert drain_s < 25, f"drain took {drain_s:.1f}s"
 
-        # Salvage artifacts: flushed audit log (collector buffer),
-        # graded export, tier diagnostics, reconciled ledger.
-        assert (out / ".audit-log.jsonl").is_file()
-        assert (out / "findings-graded.json").is_file()
-        assert (out / "tier-diagnostics.json").is_file()
-        ledger = json.loads((out / "cost-breakdown.json").read_text())
-        assert ledger["totals"]["cost_usd"] == pytest.approx(
-            0.25 * final_entries,
-        )
+            # Harvest-first: the in-flight review completed and journaled;
+            # dispatch stopped (not all six functions reviewed).
+            final_entries = _entries()
+            assert final_entries >= at_term
+            assert final_entries < 6, (
+                "SIGTERM must stop dispatching remaining reviews"
+            )
+
+            # Salvage artifacts: flushed audit log (collector buffer),
+            # graded export, tier diagnostics, reconciled ledger.
+            assert (out / ".audit-log.jsonl").is_file()
+            assert (out / "findings-graded.json").is_file()
+            assert (out / "tier-diagnostics.json").is_file()
+            ledger = json.loads((out / "cost-breakdown.json").read_text())
+            assert ledger["totals"]["cost_usd"] == pytest.approx(
+                0.25 * final_entries,
+            )
 
 
 class TestGuardRestoresForeignBaseline:

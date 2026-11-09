@@ -25,6 +25,8 @@ from typing import List
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 # Whole-module slow tier: every test spawns a full `python -m
 # packages.sca.cli` subprocess (interpreter startup + pipeline), which
 # is one load-spike away from the CI per-test budget cliff on a shared
@@ -74,7 +76,7 @@ def _run_cli(args: List[str], *, cwd: Path = None,
     """Invoke the CLI via ``python -m``. Returns the completed
     process; caller asserts on it."""
     cmd = [sys.executable, "-m", "packages.sca.cli"] + args
-    return subprocess.run(
+    return run_standalone_cli(
         cmd, capture_output=True, text=True,
         cwd=str(cwd) if cwd else str(REPO_ROOT),
         timeout=timeout,

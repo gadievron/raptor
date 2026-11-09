@@ -12,11 +12,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from core.testing.standalone_cli import run_standalone_cli
 from core.json import load_json, save_json
 from core.run.metadata import (
-    RUN_METADATA_FILE, STATUS_RUNNING, STATUS_COMPLETED, STATUS_FAILED,
+    RUN_METADATA_FILE,
+    STATUS_COMPLETED,
+    STATUS_FAILED,
+    STATUS_RUNNING,
 )
+from core.testing.standalone_cli import run_standalone_cli
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # core/run/tests/ → raptor/
 HOOK_SCRIPT = REPO_ROOT / "libexec" / "raptor-lifecycle-hook"
@@ -546,6 +549,7 @@ class TestProjectDirScan(unittest.TestCase):
         session run ledger (project runs live TWO levels below the out
         root, unreachable by the legacy one-level walk)."""
         import os
+
         from core.project import sessions
         with TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -715,7 +719,7 @@ class TestE2EHookScript(unittest.TestCase):
             self.skipTest("Requires CLAUDECODE environment")
         with TemporaryDirectory() as tmp:
             argv, env = self._hermetic_invocation(Path(tmp))
-            result = subprocess.run(
+            result = run_standalone_cli(
                 [*argv, "stop"],
                 capture_output=True, text=True, env=env, timeout=120,
             )
@@ -727,7 +731,7 @@ class TestE2EHookScript(unittest.TestCase):
             self.skipTest("Requires CLAUDECODE environment")
         with TemporaryDirectory() as tmp:
             argv, env = self._hermetic_invocation(Path(tmp))
-            result = subprocess.run(
+            result = run_standalone_cli(
                 [*argv, "tool-failure"],
                 capture_output=True, text=True, env=env, timeout=120,
                 input=RAPTOR_BASH_FAILURE,
@@ -740,7 +744,7 @@ class TestE2EHookScript(unittest.TestCase):
             self.skipTest("Requires CLAUDECODE environment")
         with TemporaryDirectory() as tmp:
             argv, env = self._hermetic_invocation(Path(tmp))
-            result = subprocess.run(
+            result = run_standalone_cli(
                 [*argv, "session-end"],
                 capture_output=True, text=True, env=env, timeout=120,
             )

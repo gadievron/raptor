@@ -10,6 +10,8 @@ import sys as _sys
 
 import pytest as _pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 pytestmark = [
     # Linux-only sandbox internals (mount-ns / Landlock / seccomp /
     # ptrace tracer) on real subprocesses — see core/sandbox/
@@ -32,6 +34,8 @@ import unittest  # noqa: E402
 from pathlib import Path  # noqa: E402
 from tempfile import TemporaryDirectory, mkdtemp  # noqa: E402
 
+import pytest
+
 from core.sandbox import (  # noqa: E402
     check_landlock_available,
     check_net_available,
@@ -40,14 +44,15 @@ from core.sandbox import (  # noqa: E402
 from core.sandbox import (  # noqa: E402
     run as sandbox_run,
 )
-from core.testing.logging_state import isolated_cli_logging, owned_log_handler  # noqa: E402
 from core.sandbox.tests.capability import (  # noqa: E402
     own_pid_collides_with_sandbox_pidns,
     pidns_isolation_available,
 )
+from core.testing.logging_state import (  # noqa: E402
+    isolated_cli_logging,
+    owned_log_handler,
+)
 
-
-import pytest
 
 @pytest.fixture(autouse=True)
 def _user_state_in_tmp(tmp_path: Path):
@@ -701,7 +706,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         self._tmp.cleanup()
 
     def test_basic_execution(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             ["libexec/raptor-run-sandboxed", "echo", "hello"],
             capture_output=True, text=True, timeout=10, env=self._env,
             check=False,
@@ -719,7 +724,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         self.assertIn("hello", result.stdout)
 
     def test_network_blocked(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             ["libexec/raptor-run-sandboxed",
              "python3", "-c",
              "import socket; s=socket.socket(); s.settimeout(2); s.connect(('1.1.1.1',80))"],
@@ -729,7 +734,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
 
     def test_no_args_shows_usage(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             ["libexec/raptor-run-sandboxed"],
             capture_output=True, text=True, timeout=5, env=self._env,
             check=False,
@@ -747,7 +752,7 @@ class TestE2ELibexecScript(unittest.TestCase):
             env_no_output = {
                 k: v for k, v in os.environ.items() if k != "OUTPUT_DIR"}
             env_no_output["HOME"] = empty_home
-            result = subprocess.run(
+            result = run_standalone_cli(
                 ["libexec/raptor-run-sandboxed", "echo", "hi"],
                 capture_output=True, text=True, timeout=5,
                 env=env_no_output, check=False,
@@ -758,7 +763,7 @@ class TestE2ELibexecScript(unittest.TestCase):
         self.assertIn("[sandbox] ERROR", result.stderr)
 
     def test_help_flag_exits_zero(self):
-        result = subprocess.run(
+        result = run_standalone_cli(
             ["libexec/raptor-run-sandboxed", "--help"],
             capture_output=True, text=True, timeout=5, env=self._env,
             check=False,

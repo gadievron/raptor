@@ -13,19 +13,17 @@ End-to-end coverage:
 
 from __future__ import annotations
 
-import packages.describe.cli as _mock_consumer_tempfile
-from core.testing.module_bindings import patch_module_attribute
-
-
 import io
 import json
-import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
 
 import pytest
 
+import packages.describe.cli as _mock_consumer_tempfile
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.standalone_cli import run_standalone_cli
 from packages.describe.cli import describe_main
 
 
@@ -319,7 +317,7 @@ class TestRaptorDescribeArchiveE2E:
         env = os.environ.copy()
         env["CLAUDECODE"] = "1"
         env["RAPTOR_DIR"] = str(repo)
-        result = subprocess.run(
+        result = run_standalone_cli(
             [_sys.executable, str(repo / "raptor.py"),
              "describe", "--target", str(archive)],
             capture_output=True, text=True, env=env, timeout=30,

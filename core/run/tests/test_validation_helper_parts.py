@@ -29,11 +29,11 @@ if __name__ == "__main__":
     sys.path.insert(0, str(REPO_ROOT))
 
 from core.json import load_json, save_json  # noqa: E402
-from core.testing.standalone_cli import run_standalone_cli  # noqa: E402
 from core.security.log_sanitisation import (  # noqa: E402
     EXCERPT_MAX_LEN,
     sanitise_excerpt,
 )
+from core.testing.standalone_cli import run_standalone_cli  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -621,11 +621,11 @@ class TestSinglePartAndCli:
 
         env = dict(os.environ)
         env["_RAPTOR_TRUSTED"] = "1"
-        gate = subprocess.run(
+        gate = run_standalone_cli(
             [sys.executable,
              str(REPO_ROOT / "libexec" / "raptor-validate-schema"),
              "stage", str(tmp_path / "stage-c.json")],
-            capture_output=True, text=True, env=env, cwd=REPO_ROOT,
+            capture_output=True, text=True, env=env, data_home=env["XDG_DATA_HOME"], cwd=REPO_ROOT,
             timeout=30,
         )
         assert gate.returncode == 0, gate.stderr

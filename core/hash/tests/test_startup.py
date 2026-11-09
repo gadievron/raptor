@@ -1,16 +1,18 @@
 """Fresh-process hashing and help must not require unrelated configuration."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
+import core.concepts.model  # noqa: F401
+
 # Preserve dependency routing for the child-only imports.
 import core.hash  # noqa: F401
-import core.concepts.model  # noqa: F401
+from core.testing.standalone_cli import run_standalone_cli
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -26,7 +28,7 @@ def _python(source, tmp_path, *args):
         RAPTOR_REGISTRY_HOME=str(tmp_path / "registry"),
         RAPTOR_OUT_DIR=str(tmp_path / "out"), _RAPTOR_TRUSTED="1",
     )
-    result = subprocess.run(
+    result = run_standalone_cli(
         [sys.executable, "-I", "-c",
          f"import sys\nsys.path.insert(0, {str(ROOT)!r})\n" + textwrap.dedent(source),
          *map(str, args)],

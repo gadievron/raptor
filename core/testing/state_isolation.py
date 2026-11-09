@@ -42,6 +42,7 @@ scratch, the innermost wins.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -76,6 +77,23 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
             raise ValueError(
                 f"refusing pin base {base}: it covers real user "
                 f"state at {root}")
+    # Entry-point imports can refresh authorization and cache its scratch path.
+    # Register borrowed values before those producers run; do not clear a
+    # valid caller context or weaken restoration/refusal behaviour.
+    from core.security import env_sanitisation, launch_scratch
+
+    for module, name in (
+        (launch_scratch, "_restored"),
+        (launch_scratch, "_metadata_path"),
+        (env_sanitisation, "_subprocess_tmpdir"),
+    ):
+        monkeypatch.setattr(module, name, getattr(module, name))
+    authorization = "_RAPTOR_SCRATCH_AUTH"
+    if authorization in os.environ:
+        monkeypatch.setenv(authorization, os.environ[authorization])
+    else:
+        monkeypatch.setenv(authorization, "")
+        monkeypatch.delenv(authorization)
     registry = base / "projects"
 
     # These public names are resolved lazily by module __getattr__. Pin their

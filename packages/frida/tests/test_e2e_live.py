@@ -497,7 +497,6 @@ class TestWrapperLiveE2E:
     )
 
     def test_wrapper_spawn_relative_target(self, victim_binary, tmp_path):
-        import subprocess
 
         run_dir = tmp_path / "wrap_run"
         env = os.environ.copy()
@@ -505,7 +504,7 @@ class TestWrapperLiveE2E:
         env.pop("_RAPTOR_TRUSTED", None)
         # Relative ./victim from the binary's own directory — the form
         # every doc example uses.
-        result = subprocess.run(
+        result = run_standalone_cli(
             [str(RAPTOR_DIR / "libexec" / "raptor-frida"),
              "--target", f"./{victim_binary.name}",
              "--template", "api-trace",

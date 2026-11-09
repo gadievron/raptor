@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import runpy
-import subprocess
 import sys
 from pathlib import Path
 
@@ -205,7 +204,7 @@ class TestTrustMarker:
         e = os.environ.copy()
         e.pop("_RAPTOR_TRUSTED", None)
         e.pop("CLAUDECODE", None)
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(LIBEXEC), "--help"],
             capture_output=True, text=True, env=e, timeout=10,
         )
@@ -216,7 +215,7 @@ class TestTrustMarker:
         e = os.environ.copy()
         e.pop("_RAPTOR_TRUSTED", None)
         e["CLAUDECODE"] = "1"
-        proc = subprocess.run(
+        proc = run_standalone_cli(
             [sys.executable, str(LIBEXEC), "--help"],
             capture_output=True, text=True, env=e, timeout=10,
         )

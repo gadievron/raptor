@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.standalone_cli import run_standalone_cli
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CLI = REPO_ROOT / "libexec" / "raptor-frida"
 
@@ -36,7 +38,7 @@ def _run(args: list[str], tmp_path: Path,
         stub.chmod(stub.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP
                    | stat.S_IXOTH)
         env["PATH"] = f"{stub_dir}:{env['PATH']}"
-    return subprocess.run(
+    return run_standalone_cli(
         ["bash", str(CLI), *args],
         env=env,
         capture_output=True,

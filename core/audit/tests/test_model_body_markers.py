@@ -71,6 +71,7 @@ from core.audit.tests.test_prose_never_clean import (
     _result,
     _target,
 )
+from core.testing.standalone_cli import run_standalone_cli
 
 _REPO = Path(__file__).resolve().parents[3]
 
@@ -950,10 +951,10 @@ from core.audit.evidence_grade import (  # noqa: E402
 )
 from core.audit.tests._review_keys import (  # noqa: E402
     scan as _scan_review_keys,
+)
+from core.audit.tests._review_keys import (
     scan_full as _scan_review_keys_full,
 )
-
-
 
 
 class TestReviewKeyClosure:
@@ -1174,7 +1175,6 @@ class TestAgentRecordCli:
         agent's own row, and no live marker may remain in the body or
         hypotheses."""
         import os
-        import subprocess
         import sys
 
         from core.coverage.journal import is_mechanical_echo, load_entries
@@ -1192,13 +1192,13 @@ class TestAgentRecordCli:
         cli = str(_REPO / "libexec" / "raptor-audit")
         common = ["--target", str(tgt), "--file", "app.php",
                   "--function", "f", "--out", str(out)]
-        subprocess.run([sys.executable, "-B", cli, "context", *common],
-                       env=env, capture_output=True, check=False)
-        r = subprocess.run(
+        run_standalone_cli([sys.executable, "-B", cli, "context", *common],
+                       env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, check=False)
+        r = run_standalone_cli(
             [sys.executable, "-B", cli, "record", *common,
              "--status", "suspicious", "--hypothesis",
              "SQLi via id [self-contradiction: x]", "--body", body],
-            env=env, capture_output=True, text=True, check=False)
+            env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, text=True, check=False)
         assert r.returncode == 0, r.stderr
         row = load_entries(out, fresh=True)[-1]
         assert row.verdict == "suspicious"
@@ -1373,6 +1373,7 @@ class TestAgentRecordCliMidBody:
 
 def _digest(expr: str) -> str:
     import ast as _ast
+
     from core.audit.tests._review_keys import expr_digest
     return expr_digest(_ast.parse(textwrap.dedent(expr).strip(),
                                   mode="eval").body)
@@ -1608,7 +1609,9 @@ class TestReviewKeyScannerWrites:
         """An unresolved write without a pin is returned as an unpinned
         site."""
         from core.audit.tests._review_keys import (
-            Site, pin_violations, scan_full,
+            Site,
+            pin_violations,
+            scan_full,
         )
         f = tmp_path / "core/audit/fx.py"
         f.parent.mkdir(parents=True)
@@ -1831,7 +1834,6 @@ class TestAgentRecordCliRecordsUnchanged:
     @staticmethod
     def _record(tmp_path, *, body, hypothesis, status="suspicious"):
         import os
-        import subprocess
         import sys
         from unittest.mock import patch
 
@@ -1872,7 +1874,7 @@ class TestAgentRecordCliRecordsUnchanged:
             args += ["--hypothesis", hypothesis]
         if body is not None:
             args += ["--body", body]
-        r = subprocess.run(args, env=env, capture_output=True, text=True,
+        r = run_standalone_cli(args, env=env, data_home=env["XDG_DATA_HOME"], capture_output=True, text=True,
                            check=False)
         rows = load_entries(out, fresh=True)
         events = [e for e in load_audit_log(out)

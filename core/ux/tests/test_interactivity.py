@@ -11,6 +11,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from core.testing.standalone_cli import run_standalone_cli
 from core.ux.interactivity import (
     INTERACTIVE,
     NON_INTERACTIVE,
@@ -102,7 +103,7 @@ class ShimTests(unittest.TestCase):
             "HOME": os.environ.get("HOME", "/tmp"),
         }
         env.update(extra_env)
-        return subprocess.run(
+        return run_standalone_cli(
             [sys.executable, str(SHIM)],
             capture_output=True, text=True, timeout=60, env=env,
             stdin=subprocess.DEVNULL,
@@ -148,6 +149,7 @@ class TerminalApprovalTests(unittest.TestCase):
 
     def test_terminal_probe_error_fails_closed(self):
         from unittest.mock import patch
+
         from core.ux.interactivity import terminal_may_ask
         with patch('sys.stdin.isatty', side_effect=OSError('closed input')):
             self.assertFalse(terminal_may_ask({}, ci=lambda: False, output_tty=True))

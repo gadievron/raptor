@@ -24,10 +24,14 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+
+from core.testing.processes import reap_on_exit
+from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 _REPO_ROOT = Path(__file__).parents[3]  # packages/openant/tests -> repo root
 if __name__ == "__main__":
@@ -74,7 +78,7 @@ def _run(cmd: list, env_extra: dict, env_drop: tuple = ()) -> subprocess.Complet
     env = {**os.environ, "_RAPTOR_TRUSTED": "1", **env_extra}
     for key in env_drop:
         env.pop(key, None)
-    return subprocess.run(
+    return run_standalone_cli(
         cmd, capture_output=True, text=True, timeout=300,
         cwd=str(_REPO_ROOT), env=env,
     )
@@ -614,37 +618,39 @@ class TestPlantedNonFiniteCostReports(unittest.TestCase):
             out_dir.mkdir()
             env = {**os.environ, "_RAPTOR_TRUSTED": "1",
                    **_stub_no_orjson(base)}
-            proc = subprocess.Popen(
-                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
-                 "--repo", str(src), "--out", str(out_dir),
-                 "--openant-core", str(core),
-                 "--openant-core-unpinned"],
-                cwd=str(_REPO_ROOT), env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            marker = out_dir / "openant_scan" / "dataset.json"
-            out = err = ""
-            try:
-                deadline = time.time() + 120
-                while not marker.exists():
-                    if proc.poll() is not None or time.time() > deadline:
-                        out, err = proc.communicate(timeout=30)
-                        self.fail(
-                            f"scan child never started:\n{out}\n{err}")
-                    time.sleep(0.2)
-                time.sleep(1.0)
-                proc.send_signal(signal.SIGTERM)
-                out, err = proc.communicate(timeout=120)
-            finally:
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.communicate(timeout=30)
-            self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
-            report = json.loads(
-                (out_dir / "raptor_openant_report.json").read_text())
-            self.assertEqual(report["outcome"], "interrupted")
-            self.assertEqual(report["cost"]["total_usd"], 0.0)
-            self.assertEqual(_run_status(out_dir), "interrupted")
+            with standalone_cli_env(env=env) as child_env, ExitStack() as children:
+                proc = subprocess.Popen(
+                    [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                     "--repo", str(src), "--out", str(out_dir),
+                     "--openant-core", str(core),
+                     "--openant-core-unpinned"],
+                    cwd=str(_REPO_ROOT), env=child_env,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                children.enter_context(reap_on_exit(proc))
+                marker = out_dir / "openant_scan" / "dataset.json"
+                out = err = ""
+                try:
+                    deadline = time.time() + 120
+                    while not marker.exists():
+                        if proc.poll() is not None or time.time() > deadline:
+                            out, err = proc.communicate(timeout=30)
+                            self.fail(
+                                f"scan child never started:\n{out}\n{err}")
+                        time.sleep(0.2)
+                    time.sleep(1.0)
+                    proc.send_signal(signal.SIGTERM)
+                    out, err = proc.communicate(timeout=120)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.communicate(timeout=30)
+                self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
+                report = json.loads(
+                    (out_dir / "raptor_openant_report.json").read_text())
+                self.assertEqual(report["outcome"], "interrupted")
+                self.assertEqual(report["cost"]["total_usd"], 0.0)
+                self.assertEqual(_run_status(out_dir), "interrupted")
 
 
 class TestResumeUnexpectedFailureRefusesCleanly(unittest.TestCase):
@@ -727,51 +733,53 @@ class TestInterruptedRunLane(unittest.TestCase):
             out_dir = base / "out"
             out_dir.mkdir()
             env = {**os.environ, "_RAPTOR_TRUSTED": "1"}
-            proc = subprocess.Popen(
-                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
-                 "--repo", str(src), "--out", str(out_dir),
-                 "--openant-core", str(core),
-                 "--openant-core-unpinned"],
-                cwd=str(_REPO_ROOT), env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            )
-            marker = out_dir / "openant_scan" / "dataset.json"
-            out = err = ""
-            try:
-                deadline = time.time() + 120
-                while not marker.exists():
-                    if proc.poll() is not None or time.time() > deadline:
-                        out, err = proc.communicate(timeout=30)
-                        self.fail(
-                            f"scan child never started:\n{out}\n{err}")
-                    time.sleep(0.2)
-                time.sleep(1.0)  # let the child settle into its wait
-                proc.send_signal(signal.SIGTERM)
-                out, err = proc.communicate(timeout=120)
-            finally:
-                if proc.poll() is None:
-                    proc.kill()
-                    proc.communicate(timeout=30)
-            self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
-            report = json.loads(
-                (out_dir / "raptor_openant_report.json").read_text())
-            self.assertEqual(report["outcome"], "interrupted")
-            # The resume-gate fields ride the interrupted report too.
-            self.assertIn("target_fingerprint", report)
-            self.assertEqual(report["config"]["model"], "sonnet")
-            self.assertIn("core_provenance", report["config"])
-            self.assertIn("total_usd", report["cost"])
-            self.assertEqual(_run_status(out_dir), "interrupted")
-            self.assertFalse(
-                (out_dir / "openant_findings.json").exists(),
-                "an interrupted run must not leave a findings file")
-            # The dead interrupted run is eligible for --resume.
-            from packages.openant.config import OPENANT_PINNED_COMMIT
-            from packages.openant.resume import validate_prior_run
-            result = validate_prior_run(
-                out_dir, src, pinned_commit=OPENANT_PINNED_COMMIT,
-                current_core_head=None)
-            self.assertTrue(result.remaining["resumable"])
+            with standalone_cli_env(env=env) as child_env, ExitStack() as children:
+                proc = subprocess.Popen(
+                    [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                     "--repo", str(src), "--out", str(out_dir),
+                     "--openant-core", str(core),
+                     "--openant-core-unpinned"],
+                    cwd=str(_REPO_ROOT), env=child_env,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+                children.enter_context(reap_on_exit(proc))
+                marker = out_dir / "openant_scan" / "dataset.json"
+                out = err = ""
+                try:
+                    deadline = time.time() + 120
+                    while not marker.exists():
+                        if proc.poll() is not None or time.time() > deadline:
+                            out, err = proc.communicate(timeout=30)
+                            self.fail(
+                                f"scan child never started:\n{out}\n{err}")
+                        time.sleep(0.2)
+                    time.sleep(1.0)  # let the child settle into its wait
+                    proc.send_signal(signal.SIGTERM)
+                    out, err = proc.communicate(timeout=120)
+                finally:
+                    if proc.poll() is None:
+                        proc.kill()
+                        proc.communicate(timeout=30)
+                self.assertEqual(proc.returncode, 130, f"{out}\n{err}")
+                report = json.loads(
+                    (out_dir / "raptor_openant_report.json").read_text())
+                self.assertEqual(report["outcome"], "interrupted")
+                # The resume-gate fields ride the interrupted report too.
+                self.assertIn("target_fingerprint", report)
+                self.assertEqual(report["config"]["model"], "sonnet")
+                self.assertIn("core_provenance", report["config"])
+                self.assertIn("total_usd", report["cost"])
+                self.assertEqual(_run_status(out_dir), "interrupted")
+                self.assertFalse(
+                    (out_dir / "openant_findings.json").exists(),
+                    "an interrupted run must not leave a findings file")
+                # The dead interrupted run is eligible for --resume.
+                from packages.openant.config import OPENANT_PINNED_COMMIT
+                from packages.openant.resume import validate_prior_run
+                result = validate_prior_run(
+                    out_dir, src, pinned_commit=OPENANT_PINNED_COMMIT,
+                    current_core_head=None)
+                self.assertTrue(result.remaining["resumable"])
 
 
 class TestScannerResultShape(unittest.TestCase):
