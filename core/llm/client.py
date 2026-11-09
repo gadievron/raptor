@@ -3644,7 +3644,7 @@ class LLMClient:
                     disposition="cache_hit",
                     call_class=call_class,
                     provider=model_config.provider.lower(),
-                    model=model_config.model_name,
+                    model=cached_model or model_config.model_name,
                     structured=True,
                     cost_usd=0.0,
                     duration_s=0.0,
