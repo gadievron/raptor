@@ -754,6 +754,10 @@ def module_dynamic_namespace(
     * ``exec`` / ``eval`` at module-reachable scope (module body,
       class body — both run at import), or anywhere with an explicit
       globals argument — arbitrary rebinds → whole module.
+    * exposed ``builtins`` / ``__builtins__`` namespaces (aliases and
+      local imports included) — replacing a builtin decorator can invalidate
+      an otherwise trusted method body; escaping/read-only namespace access
+      is conservatively uncertain, like ``sys.modules`` below;
     * any reachable ``sys.modules`` (aliased imports included) — a
       ``setattr(sys.modules[__name__], …)`` rebinds by attribute,
       and aliasing makes name-level tracking unsound → whole module.
@@ -775,6 +779,22 @@ def module_dynamic_namespace(
     for node in ast.walk(tree):
         for child in ast.iter_child_nodes(node):
             parents[child] = node
+
+    # Builtins are process-wide mutable namespace objects, including when
+    # imported inside a function. Once exposed, an alias can replace builtin
+    # decorators or callable names without any ordinary module assignment.
+    builtin_namespace_names = {"__builtins__"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            builtin_namespace_names.update(
+                alias.asname or alias.name for alias in node.names
+                if alias.name == "builtins"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "builtins":
+            builtin_namespace_names.update(
+                alias.asname or alias.name for alias in node.names
+                if alias.name == "__dict__"
+            )
 
     imap = module_import_map(tree)
     sys_aliases = {r for r, src in imap.items() if src == "sys"}
@@ -808,7 +828,7 @@ def module_dynamic_namespace(
                     and node.value.id in sys_aliases):
                 whole = True
         elif isinstance(node, ast.Name):
-            if node.id in modules_aliases:
+            if node.id in modules_aliases or node.id in builtin_namespace_names:
                 whole = True
         elif isinstance(node, ast.Call):
             func = node.func
