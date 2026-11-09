@@ -1044,7 +1044,7 @@ def test_chain_grows_through_multi_step_assignment():
         "def f(name):\n"
         '    if not re.match(r"^[a-z]+$", name): return\n'
         "    cfg = name\n"           # cfg derived from name
-        "    safe_path = cfg + '.cfg'\n"                  # safe_path derived from cfg
+        "    safe_path = cfg\n"                  # safe_path derived from cfg
         "    return open(safe_path)\n"                    # sink uses safe_path
     )
     assert sb._python_chain_reaches_sink(
@@ -2030,10 +2030,8 @@ def test_chain_fstring_mixing_never_grows_chain():
     ) is False
 
 
-def test_chain_concat_with_constant_still_grows():
-    """``safe_path = cfg + '.cfg'`` has no non-chain Name in the
-    operator expression — the pinned multi-step derivation keeps
-    working."""
+def test_chain_concat_with_constant_requires_contract():
+    """Literal concatenation requires a property-specific transfer contract."""
     import ast as _ast_mod
     tree = _ast_mod.parse(
         "def f(name):\n"
@@ -2044,12 +2042,11 @@ def test_chain_concat_with_constant_still_grows():
     )
     assert sb._python_chain_reaches_sink(
         tree, "name", 2, 5, "    return open(safe_path)",
-    ) is True
+    ) is False
 
 
-def test_chain_mix_of_two_chain_members_still_grows():
-    """Concatenating two CHAIN members is not mixing —
-    ``full = stem + ext`` where both derive from the validated var."""
+def test_chain_concat_of_aliases_requires_contract():
+    """Concatenation is a transformation even when both operands are aliases."""
     import ast as _ast_mod
     tree = _ast_mod.parse(
         "def f(name):\n"
@@ -2061,7 +2058,7 @@ def test_chain_mix_of_two_chain_members_still_grows():
     )
     assert sb._python_chain_reaches_sink(
         tree, "name", 2, 6, "    return open(full)",
-    ) is True
+    ) is False
 
 
 def test_try_tier0_assign_mixing_not_sound(tmp_path: Path):
@@ -3410,10 +3407,8 @@ def test_chain_container_literal_mixing_never_grows():
     ) is False
 
 
-def test_chain_container_literal_all_members_still_grows():
-    """Two-direction: a container of chain members only (plus
-    constants) is not mixing — ``p = [x, 'suffix']`` stays derived
-    from the validated value."""
+def test_chain_container_construction_requires_contract():
+    """Constructing a mutable container does not preserve an immutable certificate."""
     import ast as _ast_mod
     tree = _ast_mod.parse(
         "def serve(request):\n"
@@ -3425,7 +3420,7 @@ def test_chain_container_literal_all_members_still_grows():
     )
     assert sb._python_chain_reaches_sink(
         tree, "x", 3, 6, "    return sink(p)",
-    ) is True
+    ) is False
 
 
 def test_chain_loop_backedge_same_line_trailing_rebind_kills():
@@ -4167,5 +4162,32 @@ def test_charset_chain_requires_all_conditional_outputs(
     control = sb.try_tier0(
         fix_diff="+" + guard + "\n", repo_root=tmp_path,
         sink_uri="app.py", sink_line=6, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("statements,target", [
+    ('path = name + "/../../unvalidated"', "path"),
+    ('path = f"{name}/../../unvalidated"', "path"),
+    ('name += "/../../unvalidated"', "name"),
+    ("path = [name]\n    alias = path\n    alias[0] = raw\n    path = path[0]", "path"),
+], ids=["literal-concat", "formatted-literal", "augmented-literal", "mutable-alias"])
+def test_charset_chain_requires_identity_transfer(tmp_path: Path, statements, target):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    prefix = "import re\ndef handle(name, raw):\n" + guard + "\n        return\n    "
+    source = prefix + statements + "\n    return open(" + target + ")\n"
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=len(source.splitlines()), sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    control_source = prefix + target + " = name\n    return open(" + target + ")\n"
+    (tmp_path / "app.py").write_text(control_source)
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=len(control_source.splitlines()), sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND

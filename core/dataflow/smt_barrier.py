@@ -2214,40 +2214,16 @@ def _conditional_outputs_are_chain_members(value: ast.AST, chain: set) -> bool:
     return True
 
 
-def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
-    """True when a string-building operator expression OR a container
-    literal inside ``value`` combines a chain member with a non-chain
-    :class:`ast.Name`.
+def _value_preserves_chain_identity(value: ast.AST, chain: set) -> bool:
+    """Carry a certificate only through aliases and validated branch choices.
 
-    Covers ``BinOp`` (``+`` concatenation and ``%`` formatting),
-    f-strings (``JoinedStr``), and container literals (``Tuple`` /
-    ``List`` / ``Set`` / ``Dict``): ``p = [safe, raw]`` carries the
-    raw element verbatim to whatever consumes ``p`` (``''.join(p)``),
-    and a select over a mixed container (``{...: safe, ...: raw}[k]``)
-    may BE the raw member — so a target bound to a mixed container
-    must never join the chain as fully validated. An arbitrary call
-    result also lacks a property-preserving contract: even one fully
-    validated argument can be ignored or transformed into unsafe output.
-    Conditional and short-circuit results must select only validated
-    aliases. The initial certified sanitizer binding is exempted by the caller.
+    Operators, formatting, attribute access and container construction
+    need property-specific contracts. Dependency on a validated name
+    does not establish that their result retains its certificate.
     """
-    for sub in ast.walk(value):
-        if isinstance(sub, ast.Call):
-            return True
-        if isinstance(sub, (ast.IfExp, ast.BoolOp)):
-            names = {n.id for n in ast.walk(sub) if isinstance(n, ast.Name)}
-            if names & chain and not _conditional_outputs_are_chain_members(sub, chain):
-                return True
-        if isinstance(sub, (ast.BinOp, ast.JoinedStr,
-                            ast.Tuple, ast.List, ast.Set, ast.Dict)):
-            if isinstance(sub, ast.Tuple) and isinstance(sub.ctx, ast.Store):
-                continue  # target-side tuple, not a value expression
-            names = {
-                n.id for n in ast.walk(sub) if isinstance(n, ast.Name)
-            }
-            if (names & chain) and (names - chain):
-                return True
-    return False
+    if any(isinstance(node, ast.Call) for node in ast.walk(value)):
+        return False
+    return _conditional_outputs_are_chain_members(value, chain)
 
 
 def _is_sanitizer_call_value(
@@ -2441,14 +2417,9 @@ def _bind_chain_target(
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
     }
     if chain & rhs_names:
-        if _operator_mixes_taint(value, chain):
-            # Taint mixing on a plain Assign: a string-building
-            # operator expression (``cmd = name + raw``, an f-string
-            # interpolating both) or a mixed container literal
-            # combines a chain member with a non-chain name.  The
-            # target carries PARTIALLY-unvalidated data, so it must
-            # never join the chain — and if it was a member, it stops
-            # being one.
+        if not _value_preserves_chain_identity(value, chain):
+            # Only identity-preserving transfers retain this certificate.
+            # A transformed value needs a separate property proof.
             kills |= names
             return
         grows |= names
@@ -2499,18 +2470,10 @@ def _python_chain_reaches_sink(
     Ordinary call-result assignments therefore cannot grow this chain;
     only the initially certified sanitizer binding has a call exemption.
 
-    Chain growth: an Assign/AnnAssign between validator and
-    sink whose RHS references a chain variable adds its target name(s)
-    to the chain — element-wise through tuple/list destructuring
-    (:func:`_bind_chain_target`: ``a, b = safe, x`` grows only ``a``;
-    unpairable shapes never join and kill member targets) and UNLESS
-    the paired RHS operator-mixes taint
-    (:func:`_operator_mixes_taint`): ``cmd = name + raw`` combines the
-    validated ``name`` with the unvalidated ``raw``, so ``cmd`` never
-    joins the chain (and a chain-member target is killed); container
-    literals mixing chain and non-chain names count as mixing too.
-    Unknown call results never join: an input dependency does not
-    prove that the return preserves the validated property.
+    Chain growth follows direct aliases and choices whose selectable
+    outputs are all validated aliases. Tuple/list destructuring pairs
+    targets with values; constructing a container does not certify it.
+    Operators and calls require separate transfer contracts.
 
     Validator-line exemption is per-NODE, never per-line: only the
     binding whose value IS the sanitizer call
@@ -2610,25 +2573,11 @@ def _python_chain_reaches_sink(
             continue  # bare annotation (``x: int``) binds nothing
         at_validator = node.lineno == validator_line
         if isinstance(node, ast.AugAssign):
-            # ``x += rhs`` mixes the old value with the RHS.  It never
-            # ADDS to the chain (the old target value may be
-            # unvalidated), and it kills a chain member when the RHS
-            # references any non-chain name (the mixed-in data is not
-            # covered by the validator's constraint).  An AugAssign is
-            # never the sanitizing binding itself (every curated /
-            # mechanical sanitizer binds via plain assignment), so the
-            # validator line grants NO exemption here —
-            # ``p = safe_join(base, fn); p += fn`` re-taints ``p``.
-            rhs_names = {
-                n.id for n in ast.walk(node.value)
-                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-            }
+            # Augmented assignment transforms the certified value; without
+            # an operator contract the old certificate no longer applies.
             target_names: set = set()
             _collect_target_names(node.target, target_names)
-            if rhs_names - chain or any(
-                isinstance(sub, ast.Call) for sub in ast.walk(node.value)
-            ):
-                chain -= target_names
+            chain -= target_names
             continue
         targets = (list(node.targets) if isinstance(node, ast.Assign)
                    else [node.target])
