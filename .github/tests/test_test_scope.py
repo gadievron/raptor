@@ -630,15 +630,18 @@ class TestDispatchFailsOpen:
         result = compute_tier_dispatch(["docs/guide.md"], mini_repo)
         assert _active(result) == []
 
-    @pytest.mark.parametrize("changed", ["README.md", "docs/guide.md", ".github/workflows/lint.yml"])
+    @pytest.mark.parametrize("changed", [
+        "README.md", "docs/guide.md", ".github/workflows/lint.yml",
+        ".github/codeql/codeql-config.yml",
+    ])
     def test_metadata_change_does_not_parse_python_tree(self, mini_repo, monkeypatch, changed):
         def unexpected_graph(*args, **kwargs):
             pytest.fail("metadata-only dispatch must not parse the Python tree")
 
         monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
         result = compute_tier_dispatch([changed], mini_repo)
-        assert not result["python"]["run"]
-        assert result["ci_lint"]["run"] == (changed == "README.md" or changed.startswith(".github/"))
+        expected = ["ci_lint"] if changed == "README.md" or changed.startswith(".github/") else []
+        assert _active(result) == expected
 
     def test_dangling_symlink_tree_still_dispatches(self, tmp_path):
         # A dangling .py symlink anywhere under a scan root used to

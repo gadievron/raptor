@@ -198,14 +198,15 @@ class TestCompareCapTruncation:
 
 
 
+@pytest.mark.parametrize("workflow_name", sorted(WORKFLOWS))
 class TestRenameCompanionsDontCountTowardCap:
-    def test_renames_kept_and_not_miscounted(self, tmp_path):
-        # tests.yml also emits previous_filename lines (rename
+    def test_renames_kept_and_not_miscounted(self, tmp_path, workflow_name):
+        # Both workflows emit previous_filename lines (rename
         # companions). 200 renamed files produce 400 list lines but
         # only 200 API file entries — nowhere near the cap, so the
         # list must be kept, and both path spellings must be in it.
         out_list, gh_output = _run_step(
-            tmp_path, WORKFLOWS["tests.yml"],
+            tmp_path, WORKFLOWS[workflow_name],
             _compare_response(200, renames=True),
         )
         assert out_list.is_file()
