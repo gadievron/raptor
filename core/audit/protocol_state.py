@@ -785,7 +785,7 @@ def check_invariant_multi_site(
         guards = _branch_guards(source, site["function"], site["line"]) \
             if site["function"] else []
         unavailable_guards = guards is None
-        if unavailable_guards:
+        if guards is None:
             guard_leg = False
             guards = []
         refusal = "source guard binding unavailable or unsupported" if unavailable_guards else ""

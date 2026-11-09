@@ -26,7 +26,7 @@ from bisect import bisect_right
 from collections import deque
 from dataclasses import dataclass
 from itertools import chain, islice
-from typing import Any
+from typing import Any, Iterator, cast
 from core.source.lines import iter_source_lines, split_lines
 from core.source.line_index import LineSpanIndex
 
@@ -111,7 +111,7 @@ def _detect_falsy_coercion(
     current_func = "<module>"
     streaming = type(source) is str and split_lines is _SENTINEL_LINES_IMPL
     lines = iter_source_lines(source) if streaming else split_lines(source)
-    recent = deque(maxlen=4) if streaming else None
+    recent: deque[str] | None = deque(maxlen=4) if streaming else None
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
@@ -141,7 +141,7 @@ def _detect_falsy_coercion(
             # in the preceding 3-line window
             window_start = max(0, lineno_0 - 3)
             window = "\n".join(
-                recent if recent is not None else lines[window_start:lineno_0 + 1]
+                recent if recent is not None else cast(list[str], lines)[window_start:lineno_0 + 1]
             )
             guarded = re.search(
                 rf"\bif\s+{re.escape(var_name)}\s+is\s+not\s+None\b",
@@ -360,7 +360,7 @@ def _detect_go_sentinel(
         return results
     lines = [] if streaming else split_lines(source)
     source_lines = iter_source_lines(source) if streaming else None
-    pending = deque()
+    pending: deque[str] = deque()
     rows = _lines_with_pending(source_lines, pending) if streaming else lines
     current_func = "<module>"
 
@@ -519,7 +519,7 @@ def _detect_js_sentinel(
 
     streaming = type(source) is str and split_lines is _SENTINEL_LINES_IMPL
     lines = iter_source_lines(source) if streaming else split_lines(source)
-    recent = deque(maxlen=4) if streaming else None
+    recent: deque[str] | None = deque(maxlen=4) if streaming else None
     current_func = "<module>"
     delayed_names = name_index is not None and enumerate is _JS_LINE_ENUM_IMPL
 
@@ -563,7 +563,7 @@ def _detect_js_sentinel(
             default = m.group(2)
             window_start = max(0, lineno_0 - 3)
             window = "\n".join(
-                recent if recent is not None else lines[window_start:lineno_0 + 1]
+                recent if recent is not None else cast(list[str], lines)[window_start:lineno_0 + 1]
             )
             if re.search(
                 rf"\b{re.escape(var_name)}\s*!==?\s*(?:null|undefined)\b",
@@ -945,7 +945,7 @@ def _find_coercion_of_call(
         return None
     lines = [] if streaming else split_lines(source)
     source_lines = iter_source_lines(source) if streaming else None
-    pending = deque()
+    pending: deque[str] = deque()
     rows = _lines_with_pending(source_lines, pending) if streaming else lines
     in_caller = False
     caller_indent = 0
@@ -973,6 +973,7 @@ def _find_coercion_of_call(
         )
         if call_pat:
             var = call_pat.group(1)
+            checks: Iterator[tuple[int, str]]
             if streaming:
                 checks = enumerate(_forward_window(line, source_lines, pending), lineno_0)
             else:
