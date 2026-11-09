@@ -1660,6 +1660,10 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "_probe_or_skip_semgrep") == {
             "test_semgrepable_dark_row_is_witnessed",
             "test_unmatchable_rule_leaves_row_dark",
+            # Hermetic partition controls exercise this same adapter seam.
+            "test_product_failure_is_hard",
+            "test_healthy_adapter_returns",
+            "test_transport_failure_still_skips",
         }
         # Both round-trip tests re-probe AFTER the drain ran: the
         # drain report collapses failure identity, so the pre-flight
