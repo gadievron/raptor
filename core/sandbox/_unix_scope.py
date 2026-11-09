@@ -414,6 +414,8 @@ class UnixScopeSupervisor:
                  netns_isolated: bool = False,
                  private_tmpfs_devs: frozenset[int] | None = None) -> None:
         self._fd = notify_fd
+        self._close_lock = threading.RLock()
+        self._owns_fd = True
         self._label = label
         # Device ids of the child's private tmpfs mounts (/tmp, /run,
         # /dev/shm), captured INSIDE the child after mount setup and
@@ -490,10 +492,26 @@ class UnixScopeSupervisor:
     def close(self) -> None:
         """Stop supervising. In-flight children get ENOSYS from the
         kernel once the fd is gone — fail-closed."""
-        if not self._closed.is_set():
-            self._closed.set()
-            with contextlib.suppress(OSError):
-                os.close(self._fd)
+        with self._close_lock:
+            if not self._owns_fd:
+                return
+            self._owns_fd = False
+            fd = self._fd
+
+            def release():
+                with contextlib.suppress(OSError):
+                    os.close(fd)
+
+            try:
+                self._closed.set()
+            except BaseException as primary:
+                try:
+                    release()
+                except BaseException as secondary:
+                    with contextlib.suppress(BaseException):
+                        primary.add_note("notify fd cleanup: " + type(secondary).__name__)
+                raise
+            release()
 
     # -- main loop ----------------------------------------------------
 
