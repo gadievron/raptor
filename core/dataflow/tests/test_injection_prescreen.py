@@ -216,7 +216,7 @@ class TestGuardFormRefutation:
         app = GUARD_APP.replace(
             "re.match(r'^[A-Za-z0-9_+-]+$', name)",
             "re.fullmatch(r'[A-Za-z0-9_.]+', name)",
-        ).replace("cfg = name", "cfg = 'ls ' + name")
+        )
         repo = _write_app(tmp_path, app)
         verdict = prescreen_finding(
             paths=[_guard_path()], repo_root=repo,
@@ -273,8 +273,7 @@ class TestLiftabilityConservatism:
         # Python's $ under re.match tolerates one trailing newline and
         # "\n" is a cmdi danger char — the same guard that soundly
         # refutes pathtrav must NOT refute cmdi.
-        app = GUARD_APP.replace("cfg = name",
-                                "cfg = 'ls ' + name")
+        app = GUARD_APP
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
             paths=[_guard_path()], repo_root=repo,
