@@ -19,6 +19,7 @@ import pytest
 
 import core.sandbox as sandbox_mod
 from core.inventory.binary_oracle_corpora import _sandbox_exec
+from core.testing.module_views import scoped_function_imports
 
 REPO = Path(__file__).resolve().parents[3]
 CORPORA = REPO / "core" / "inventory" / "binary_oracle_corpora"
@@ -72,6 +73,63 @@ class TestRunBuildStep:
             ["cargo", "build"], cwd=tmp_path, timeout=10, network=True,
         )
         assert rec.calls[0][1]["block_network"] is False
+
+    @pytest.mark.parametrize("network", [False, True])
+    @pytest.mark.parametrize("kind", ["regular", "symlink", "missing"])
+    def test_resolver_overlay_is_file_scoped_and_fetch_only(
+            self, tmp_path, monkeypatch, network, kind):
+        runtime = tmp_path / "runtime"
+        runtime.mkdir()
+        source = runtime / "resolver.conf"
+        resolver = tmp_path / "resolv.conf"
+        if kind != "missing":
+            source.write_text("nameserver 192.0.2.53\n", encoding="utf-8")
+            if kind == "symlink":
+                resolver.symlink_to(source)
+            else:
+                resolver.write_text(source.read_text(), encoding="utf-8")
+        monkeypatch.setattr(_sandbox_exec, "_RESOLVER_CONFIG", resolver)
+        rec = _Recorder()
+        with scoped_function_imports(
+            _sandbox_exec, ("run_build_step",), {"core.sandbox": sandbox_mod},
+        ) as imports:
+            getattr(imports, "core.sandbox").run = rec
+            _sandbox_exec.run_build_step(
+                ["cargo", "build"], cwd=tmp_path, timeout=10, network=network,
+            )
+        assert len(rec.calls) == 1
+        cmd, kwargs = rec.calls[0]
+        assert cmd == ["cargo", "build"]
+        assert kwargs["block_network"] is (not network)
+        assert kwargs["target"] == str(tmp_path)
+        assert kwargs["output"] == str(tmp_path)
+        if network and kind != "missing":
+            assert kwargs["etc_overlay"] == {str(resolver.resolve()): str(resolver.resolve())}
+        else:
+            assert "etc_overlay" not in kwargs
+
+    def test_resolver_resolution_error_never_dispatches(self, tmp_path, monkeypatch):
+        resolver = tmp_path / "resolv.conf"
+        resolver.write_text("nameserver 192.0.2.53\n", encoding="utf-8")
+        resolved = []
+
+        class Unresolvable(type(tmp_path)):
+            def resolve(self, strict=False):
+                resolved.append(self)
+                raise OSError("owned resolver resolution failure")
+
+        monkeypatch.setattr(_sandbox_exec, "_RESOLVER_CONFIG", Unresolvable(resolver))
+        rec = _Recorder()
+        with scoped_function_imports(
+            _sandbox_exec, ("run_build_step",), {"core.sandbox": sandbox_mod},
+        ) as imports:
+            getattr(imports, "core.sandbox").run = rec
+            with pytest.raises(OSError, match="owned resolver resolution failure"):
+                _sandbox_exec.run_build_step(
+                    ["cargo", "build"], cwd=tmp_path, timeout=10, network=True,
+                )
+        assert resolved == [resolver]
+        assert rec.calls == []
 
     def test_nonzero_exit_raises_calledprocesserror(
             self, tmp_path, monkeypatch):
