@@ -37,15 +37,16 @@
     ".github/scripts/tests/test_check_transcript_seam.py": "97a681a1bc1373209bc7645afc0539b0856af143e05d665d053c65a0cd50bf1a",
     ".github/scripts/tests/test_check_vocab_lists.py": "fa11d04a8a68973e555f814a072013d5dacbb0e2aa2d5ab87182cad9a64a61e7",
     ".github/scripts/tests/test_check_workflow_pipefail.py": "cc67731c301cc2e65f80e79b8310d38e29541479616f5e4a6c3eac2a008aa06a",
-    ".github/scripts/tests/test_ci_cache_key.py": "baa787ff50c494126f0e6869ab7c8316c2ab387a25342275f836c6ca5f90a210",
+    ".github/scripts/tests/test_ci_cache_key.py": "abaa7e7ef74cb24e33b040528b69d279ca9f8471375c2a0b89cfeb80ec3c841c",
     ".github/scripts/tests/test_ci_publish_scope.py": "f8cdd681048914ad2d567d371c1d71608b13b9d0a4e7d5ee1604fbe8093c7ac8",
     ".github/scripts/tests/test_ci_push_base.py": "7bb71bca602e7626ae2b0b8f2535a02d73ee508708adfaeb7aba85661c7ad891",
+    ".github/scripts/tests/test_compile_checked_bytecode.py": "d82fa182984cc3f175a4360b7451fdd8ada02823edf9e424309e427622afdd93",
     ".github/scripts/tests/test_contact_gate.py": "8ed383b1ce20c9b9f4e7a3fcfc655a46c7be17e97ab2fc22a03b82af803ed55a",
     ".github/scripts/tests/test_corpus_label_scope.py": "f593fde257a6cd52c2b75d862cdad680f3b15aeb0277426fe7ba00210431945e",
     ".github/scripts/tests/test_hide_modules.py": "1c0c11d28941c03ec0f6c0e24cc28e8cbd4e434e5e07d3784e7c2e946811cc03",
     ".github/scripts/tests/test_macos_test_scope.py": "2076d1a9ab51b848c0acebeaa995ce07f888bdca94511f84b695bd992e76956d",
     ".github/scripts/tests/test_preflight_scope.py": "60bdad2178e4c65922b30e75f94083f3d5895376131b8816f332a41299e7ab3f",
-    ".github/scripts/tests/test_pytest_retry_reports.py": "01af5c4339858c89a5c6d7608294e2907e5d10351a11d28ce5de0449629263d6",
+    ".github/scripts/tests/test_pytest_retry_reports.py": "0fb298a0630b11c17db2eefea04c5a5293711d6f5e4492e57d2b1bf4798299e6",
     ".github/scripts/tests/test_repo_invariant_scope.py": "9a85c515eca543069f45b17e08d990a6062814defe481fe8d97d07dde3468a4b",
     ".github/scripts/tests/test_ruff_scope.py": "686e1b39cb745d7fdb37c4e34d50ba686105a574cfdc6f707e0fe29ece0b1551",
     ".github/scripts/tests/test_sandbox_wrapper_scope.py": "cc291184ea1c46d719a151491ac63ce03626d2664bf9014456f1b4a35c39b2b8",
@@ -60,15 +61,16 @@
     ".github/tests/test_approval_surface_registry.py": "efe1a84bdaa3169cd5ea64b670b97c26ddca8272014bbd30c40aa40913ce2203",
     ".github/tests/test_capture_container_evidence.py": "a8ede020682ca6d1a99b4442b37e4deeb7211a3ae1900b64b26a74764596fa25",
     ".github/tests/test_cargo_notice_inventory.py": "b21367088b2f25019cd222b1269e548450c714d9b5d1ac869df2d886165dbc15",
-    ".github/tests/test_changed_files_step.py": "c7774cc886fc6cc11c7f4903ff8470c31cb65f764f5ca4a20938786cdac1569b",
+    ".github/tests/test_changed_files_step.py": "a9e486f255f4a7a7aa50838fae78bc934a442ffc8227a17b7691a7a1e1b0dc41",
     ".github/tests/test_check_report_writer_closure.py": "6b88716c2bd64713fb520c844cd5bbc550fb5fb955734214e75cae9182b9d808",
     ".github/tests/test_check_tracked_file_census.py": "d32716c02b36be296c0d188f3a51ba58a30029791bdf1ad167fe318701652126",
     ".github/tests/test_codeql_cli_version_anchor.py": "4040a0b28a6ea1475b82ee1b5bc85352e4ba6346858098e30ce4f4fb94b7f43f",
     ".github/tests/test_codeql_job_scope.py": "ada14dce5f98120092b67cb05415adfbf7a74491bc7f2f531a9a6221b980a458",
+    ".github/tests/test_codeql_source_scope.py": "c7cea753e0570e8648e9035007d5d4d139b8a8a85a8e9d468ba82d11c7d57426",
     ".github/tests/test_collect_native_notices.py": "897b9da3b2d9b9ae597c11578f01e0f7f0db47fde66f5d597e871dd3c46b308f",
     ".github/tests/test_collect_npm_native_notices.py": "9f4e02bf08cc38441bb71abc83a6973ce5271a1453246cd63a7db37ab2fcb746",
     ".github/tests/test_contact_gate_tiers.py": "e6522fb74ab75fccbce31ec8f5065fab256d957591f85e7322eee65d780722ce",
-    ".github/tests/test_container_chromium.py": "9cc5fbdf014adb43b84c8c52daaa6650cd33e6edee78dbc8d51b59580e0d4b57",
+    ".github/tests/test_container_chromium.py": "8fb5620e6d98f69e96bb914689a020422a832d54e79dde7e91d80d87198d2a16",
     ".github/tests/test_container_npm_notices.py": "8432196c4380b70fb73d28fdcd4a6cc949916b075921317668b5b1e3eaf78132",
     ".github/tests/test_container_python_notices.py": "7e5434c4f8faa18a3b45e3544afcb6ca1b90f47c911f41f427a68b08dd990da4",
     ".github/tests/test_container_sbom_reporting_workflow.py": "8d853dbfeff3b370fe5ecf0d75440dc79e57a516a3bc8fec3341f1adca7b0faf",
@@ -90,12 +92,13 @@
     ".github/tests/test_libexec_marker_coverage.py": "1b8edb7c59470af018902fa688f7e5e192d3d9d0f90617fc084dab03510cfb19",
     ".github/tests/test_macos_workflow_scope.py": "2967e68863e7897d07f1f3a56f80c9d635d1223f5a857e6796969b6983865f2a",
     ".github/tests/test_native_build_inventory.py": "0f26c2c34877fcd6814c3024c9dc9ad3b3eda4f4bbc75acf476d32b703b8c74e",
-    ".github/tests/test_nightly_semgrep_routing.py": "a0f3e36762b280908f74c485e98685b3ff695f37d49b980e55c976525bfd4c81",
+    ".github/tests/test_nightly_marker_selection.py": "1a6124e77778f84b0044ea2106b97c9fe8e3b17fb41ac149ac5feb444129ddda",
+    ".github/tests/test_nightly_semgrep_routing.py": "3729182f9c987062442e57a036ad7a35a3e30c5ae4863d54a5aa0745b1703318",
     ".github/tests/test_npm_license_reference.py": "cf8d3df8eb94638eabea99dd2252665d5ddfd3341a253e4f1e2381b531dd8b17",
     ".github/tests/test_prune_linux_extras.py": "0bcba877fc33fece64f0f348fe591f18139619ae9a2a9abfd34a63e9ff8ed2ee",
     ".github/tests/test_prune_windows_helpers.py": "e6dd60b0caa621eca0e9301092aade4608e0ccef7da0133001162b475c0094fb",
     ".github/tests/test_pytest_workers.py": "784ca12d665f1fb59d185dcb8c815923987b17b8e8fce8324f5b7f68e57047ab",
-    ".github/tests/test_redos_idiom_census.py": "bf4c43ec825c87c3484e107ca5cd2527ccbab11a648e9a9caa2efb0982238f95",
+    ".github/tests/test_redos_idiom_census.py": "44ecc0f28b2aaba1a21ae45ea3fb8bf824a16d714dd3850621691712394f1d79",
     ".github/tests/test_redos_member_variants.py": "694b8f75ebd811bd053b43523f08b7df47c1c62839bfaae0ebf931723e692bb7",
     ".github/tests/test_redos_oracle_protocol.py": "a380e169fa091ad7285bfc10131a03a9083461014c5730b484211cf22e314f0f",
     ".github/tests/test_redos_pin_review_notes.py": "ab505246170032085db56197f65ac56c8bd7f2e4ab9b905910d4a60c6a0078a4",
@@ -109,7 +112,7 @@
     ".github/tests/test_review_partition_closure.py": "3ac5ee3d3fc8068482c11b341704eedbd520a53583640d49f60634b2aba446ae",
     ".github/tests/test_rust_notice_inventory.py": "c8e77957fba59dfbaecda10fa1f12b10a3e99948702ca10e87b40b485257c7b6",
     ".github/tests/test_sandbox_wrapper_tests.py": "2a990cc665e1b6421bdb2cba8c9f67ff09e98e8dad9da10a6fa9ee9373e65f11",
-    ".github/tests/test_sbom_checksums.py": "c6dbf1bc41e49f04de0706354912c0c00001a5458d222892d4d88ec928d208c0",
+    ".github/tests/test_sbom_checksums.py": "13804c9d6203722aa6bfa3fada67932f1cf1cb9c6a06421bc14a06c0d5a1e6e3",
     ".github/tests/test_sca_gate_file_shapes.py": "f1c2f839553cffb16617f9ae1142048c73b2f372cc20e4f366df7d52bf749d78",
     ".github/tests/test_sca_pr_baseline.py": "7d7aa0383c56b1daa53f9312ca260c8bf6fd1ae0333b1923bc61c215907a1196",
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
@@ -118,14 +121,14 @@
     ".github/tests/test_setup_venv_cache.py": "dc52903f8aa99b4f1b5a3073f9990dc5f8af7318670ee5450ca55e2dc63807a8",
     ".github/tests/test_symlink_hop_bound.py": "f031725cd5dfeb073b6885a1d53e079022c069571aeab4f4006f5df1fd6a99ff",
     ".github/tests/test_test_impact.py": "9736391f51e07196bb6fa6c44b07ad4668923859ce7ebfe0c3e764c908aac846",
-    ".github/tests/test_test_scope.py": "39fa91cc6d858730a7574ec5018dbf9c4632181144f669e44192ea9fe2101077",
+    ".github/tests/test_test_scope.py": "1d610bd5a72103e6b353cdd832464d522c697ae88e27e262fb69833ac1961b9c",
     ".github/tests/test_tier_marker_selection.py": "fd9c9ce9778b0a21370a71bdcbc54d47495c2a764f2524f6febc2ce121420367",
     ".github/tests/test_use_system_node.py": "dbb2861e0b135ef93d6cf101c976d76e632424556f679f8ccfa65a3c0d4d869e",
-    ".github/tests/test_wall_budget_marker.py": "8bc841e681d27a3cd7ccd0ff4ff48676a84653aaa6928646231537c8908aa68a",
+    ".github/tests/test_wall_budget_marker.py": "ee0b97df7553b2962c235233c5709a395e30c3a08df3556715bc7c514e56d1be",
     ".github/tests/test_wrapper_fixture_collection.py": "672db7e98b81f2f1215cbef8dcdbf6c783b19f401f7f3cbd1dd3aedb351ae421",
     ".github/tests/test_wrapper_runner_parallelism.py": "8f246a531a6fbbee1e6272a99bc48fcfa6a3e48c2833f759d70653a05fe939c2",
     ".github/tests/test_wrapper_workflow_setup.py": "2c08e7e1263a9b064eda98f642618853c57fa6b9ef8b08c649f5e0ea4bcd240e",
-    "conftest.py": "b9645e469b22a613ad7014be9145991f1c1803599e309b6bf9dc253bcc8b25d2",
+    "conftest.py": "fd186acb7ad4e7d5299aa928f7aff02eeb2438636484f1264a0aa21f83b14703",
     "core/analysis/tests/test_binary_oracle.py": "75f3c5acc7b52adfd5811fbe8d6360dce56b315128855ba6f2be916f62acd5f4",
     "core/analysis/tests/test_binary_oracle_autodetect.py": "d904a18148c4e074694d6bbd9f35a555656f3e56e24b2ce0977453604c7b0534",
     "core/analysis/tests/test_binary_oracle_cli.py": "9f2691e424be637aaec1a4edc6449129837f7bd4b1649200f74d6a57a03bc97e",
@@ -147,7 +150,7 @@
     "core/audit/corpus/tests/test_run_budget.py": "c5338d8c6dd9a994f4e1a786efe2b57dbaee09e4208d14e0180f4dfbe746e64b",
     "core/audit/corpus/tests/test_run_corpus.py": "2d3539acf1636c785ce2847c812e7e37584b4497244e8b4bd0351c955ac09030",
     "core/audit/corpus/tests/test_sources.py": "2b0ded9c5ba4c5b6717bf1ddb9dcd85bbc1dd67fe8cf2f56b75f996836c929d8",
-    "core/audit/tests/_live_transport.py": "f03bbc2acd1b480818f5706fe44ac57865a7ac58d113586a03bf40f8d8ea2143",
+    "core/audit/tests/_live_transport.py": "a412810cd49586c089135eb229bc3353ce8c3b3475b914c2cb41e6366f210fb8",
     "core/audit/tests/_marker_sites.py": "3fa09c3f1cb75db46dcb8b74991d811852225ea6e2660005f6544dbc0296320f",
     "core/audit/tests/_review_keys.py": "f4d108218782f8f131ea73d120cd9bff514b73ffd5faee4ec68f7f9891fb039a",
     "core/audit/tests/checklist_corpus.py": "9b128263f07150ec75f765601963b2d14dac2897ba0cab67c5b6ec0c13de941c",
@@ -162,7 +165,7 @@
     "core/audit/tests/test_audit_log_rotate_remedy.py": "e130efdc20670022b6c582735c41649a28f42dcad202d9e97e03abab26d2fd47",
     "core/audit/tests/test_audit_target_message.py": "e8d7448e836d18b4c82f2dda9126de9a8667d8f53d9ad1c18c4d8e60b7b52793",
     "core/audit/tests/test_auto_siblings.py": "e029fd18d5f577f2fcb829dc4b466725b6bd678535b152c926ee599f05a0721a",
-    "core/audit/tests/test_backlog_drain.py": "810f39d82b938cd2dbb7fdab37ffaa3e3addb4f8377e75e0576f657683618085",
+    "core/audit/tests/test_backlog_drain.py": "1ba272501dd943fa8769fb93711be78735c7f2e2eb3522ef8020a07d1c972272",
     "core/audit/tests/test_backlog_regrade.py": "297616e564d60b6f96ccf03b0f5fbbbc16837c7d9d998ae2a7e2d5c225f57592",
     "core/audit/tests/test_backlog_reimport.py": "e2f88d3516d271e8f811f4a755ddf52b7480d39991dd6b3d8f58236463c54c4e",
     "core/audit/tests/test_binary_collision_resolution.py": "a81e4a57f84c974c35ccf9467f680709a19355830f6ce8cc8fbe13ebf46bc758",
@@ -200,7 +203,7 @@
     "core/audit/tests/test_journal.py": "85bc1bb4251839ef5d9e3df890c490992394060114e5388bf04090b639d254e7",
     "core/audit/tests/test_legacy_smt_query_contracts.py": "815e9ac4aee146e80fb3d02e1c5d4acfa67c075145ced5dc6a84dd90e0e1d3a8",
     "core/audit/tests/test_lifecycle_call_timeouts.py": "bda89548d819a3e32575c938d8e2cd5daa6211d89b127e7fefc74426ab230b24",
-    "core/audit/tests/test_live_transport_guards.py": "6141463ceabe9a7900bce4f714fae1cb426e24e8029257e72174f84ef312d8a9",
+    "core/audit/tests/test_live_transport_guards.py": "5e4d29410ee4ffa39484d223f4ca6ae1c804faae1ed6c71cdfeb2594f3e9338d",
     "core/audit/tests/test_max_workers_flag.py": "2822ad2c540f781bf533568e4bdf702b4ec89190427e855906fecb3ba5535ef6",
     "core/audit/tests/test_model_body_markers.py": "07773607d05a7e6249778ed98f5d0d5e3fa35dc06a7fa9d49d949de7844c98d6",
     "core/audit/tests/test_peer_group_domain_wiring.py": "04849ebe15b4bc1dff72ad585948238c69d88b867329c3d982afa918fa7369fe",
@@ -292,7 +295,7 @@
     "core/coverage/tests/test_store.py": "b065e31c6754395eb273ee97aac4d7f5455f1a9014bd79f5d001eff5a9eb2225",
     "core/coverage/tests/test_store_budget.py": "d5309fc89a011266f50f44e8f3119eec32240e534f6f00664c03aa80b3d82a34",
     "core/coverage/tests/test_summary_cli.py": "f86d470356af92710e491500fcbc85de7b983262d2596445ce1a42b8847bbfe0",
-    "core/coverage/tests/test_summary_map_grade.py": "c73763542fac738274cf25903120bfd67044ff0f62f6f8ea7cbeb965b33f9dad",
+    "core/coverage/tests/test_summary_map_grade.py": "4c2c7b9b76f46bb12b492144c9e8bbea2e14b7c3399ad17b5532267827961af9",
     "core/coverage/tests/test_summary_mark_unmark_paths.py": "46073020db034d079a3ca36c7eb25c39cd19b53277b8d36bf7a7b1f56b041ab2",
     "core/coverage/tests/test_track_read_session.py": "f3bee4ce8023b729dd2307b922c6ce4bcbfd289a4e41075dc543dbd4347bc7d2",
     "core/cve/tests/test_cve_diff_systemexit_failrun.py": "f269d1050b8470768e6e5e65a6d656263ce66d6124525941b79cf9f4a2350751",
@@ -319,6 +322,7 @@
     "core/git/tests/test_clone_repo_cli.py": "02abfd4777360310f19f2d400af462f0a60652e20514d8e59b537dd7b7b9ab88",
     "core/git/tests/test_dirty.py": "e24c71d65018e5c5a6e94fdb87dc96bbdf9b4213dc0bb53ea45db637b2baab02",
     "core/hash/tests/test_startup.py": "fb3e7239c2a5ea9417132ecfd03138aebd36b96ab97779e980c2f2fba246abf1",
+    "core/http/tests/test_anonymous_https.py": "b0e3f614fad224a436e9b530c05ee7b01726f86ff41cdbd5102e55e8448eb94b",
     "core/http/tests/test_egress_backend.py": "8f0708c4f5fb25b37436ca29fa2b718c1247a0f0ee717b2886364fff83ec9a56",
     "core/http/tests/test_fetch_attachment_cli.py": "d3ee499b43599f33d3486d64de82c0be5353537daf0c25fab2bb12536b48b259",
     "core/inventory/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
@@ -385,16 +389,16 @@
     "core/recall/tests/test_juliet_manifest.py": "9eb3d38425b3b6d910090119b94c6c29c6a772806f6c430d45b40db16ef2ed63",
     "core/recall/tests/test_pinned_clone.py": "f07b2ecb4d226eafa4e44ba16ad3e4122f86d1d6e90976af4bb1308dc8ca5b8a",
     "core/run/tests/conftest.py": "7acbf0857c7e57e50a5658fc158a719fa9dbf53b7a4ccc1763c3024969e8f7bc",
-    "core/run/tests/test_agentic_entrypoint_hardening.py": "45e2dc81da1a65b26f49190dc7e3fa3779370013cfd18996bdd58e0329326a3c",
+    "core/run/tests/test_agentic_entrypoint_hardening.py": "c8e3f04c89c9892762a7d798e5620a267414080da6d0c618135a5671df426a73",
     "core/run/tests/test_cli.py": "7c1f2b9b52d4237a5d7476cf6be1424c04e7b18441f2049e814d29a2a9da6bc1",
-    "core/run/tests/test_emu_basetemp_sweep.py": "956e585e395fe9c4b71dc347b428ecceab612787abf0b4d8cfba4132e634b4f1",
+    "core/run/tests/test_emu_basetemp_sweep.py": "f6b22dc1e6983db08017ed9f507e698c2a0a08d4520be5608525c627f2710476",
     "core/run/tests/test_frida_wrapper_project_pin.py": "703bafff3787653601bbcc65944660f8c477bac7479874f4eb207a35a434b875",
-    "core/run/tests/test_frida_wrapper_signals.py": "48996152f0921e5419dfd50cb8090e4003369e074f2f6e32787eca085ae3a35e",
+    "core/run/tests/test_frida_wrapper_signals.py": "622636add4677c9935c0bdd39d06c77472ebea02cd554bb3f9fbc8a39ba746f8",
     "core/run/tests/test_hook_finalize_precedence.py": "daa770781421d265b01746f16f4a27e704895a96498bd78fc3b33c4573865f1b",
     "core/run/tests/test_launcher_import_paths.py": "f3c0f2becac9a9cae1dfec3385ad55b701fa5f5c4aaf41bf0d0bd511d14b7dbb",
     "core/run/tests/test_lifecycle_cost_gate.py": "c1595bf735884e1ec4dab59b75a93ff9849e993960cc6688320b8915b6f7e7cc",
     "core/run/tests/test_lifecycle_hook.py": "e8d754142f9526d1a3c9db5d7eff9c21d166604d9537a94ffd4637104c42c01b",
-    "core/run/tests/test_metadata.py": "43f3bc2c73c2edde28237c36b5134aad54890f46270963af7ada0ecff0e59f5b",
+    "core/run/tests/test_metadata.py": "e4b21771ece92c7ec750da89e7b884010a7535e05b7fafad69d4807a09935b05",
     "core/run/tests/test_parent_liveness.py": "de9ae8c3d7b6389042d87aeb26a29914b9177d3899e8301a05f7db46f18e4b0f",
     "core/run/tests/test_provenance.py": "ab526a2fd059879b129ad827cb6059a1f2bd6a8e5286d0bc723cbfa729340761",
     "core/run/tests/test_readjudication_refresh_hook.py": "eb3d32b1fdd539772cdde8a77fa38f66279b81b3855d1fdb556bb7a26b3e16b6",
@@ -408,10 +412,10 @@
     "core/run/tests/test_run_status_cli.py": "98a1a62f8c040e2759dbb7fa617fd98ee130200298a3cd5418a3b70ec7c0ed73",
     "core/run/tests/test_sca_run_lifecycle.py": "146b9a013cd1943b1dfafed30440f50e4de14174437a679b8d3f84ad944afdd2",
     "core/run/tests/test_selftest_scratch_lifetime.py": "b974faf98e5bcf24d95b5020d4812219313b1d60c7390f528a68f160c8923604",
-    "core/run/tests/test_session_scratch_sweep.py": "d4acf80a0413523e8dedba21a626874a0a20e9885e8ac95c9372a963c3335b49",
+    "core/run/tests/test_session_scratch_sweep.py": "0e2617902d1f1e2f6569f7ff7c8554de819521cfdd4eb0eb8a78ada8342ab991",
     "core/run/tests/test_supervisor.py": "74f57d421c550c7ec11021c2d2e59783a8c3eb3f44c9fc7c40a78da42cba809a",
-    "core/run/tests/test_tmp_ownership.py": "5b2e3749184ebaf4ddf4afaab9a0074b85e880810278ea61cbc1c05683b2040e",
-    "core/run/tests/test_tmp_reaper.py": "dd5994c1bd266f5533d58d6fd1c7a8173c0bcb922fb014691849330ea0ffd98d",
+    "core/run/tests/test_tmp_ownership.py": "d422042817681f4f1cc33cc0b0f4ea657c4b0f4c117e407b856662fefc4eac2b",
+    "core/run/tests/test_tmp_reaper.py": "ba137f9fe7b397a2668856f6c592f7c37870a091cc02db18572999fd938ac390",
     "core/run/tests/test_validation_helper_default_read_budget.py": "46995c34486b792c9c5b29f760f25965d4a0c14cb6e27083bcd98b8a1183b574",
     "core/run/tests/test_validation_helper_findings_import.py": "e7946d8b313c8af924a1096b93dbcc04015673f4339dc2fcb2f387c5127ec3e2",
     "core/run/tests/test_validation_helper_flags.py": "757cb39cdfe109191f88126b51b81dac24aa8c5b0662ee532ace3663672fed46",
@@ -486,7 +490,7 @@
     "core/sandbox/tests/test_fresh_procfs_contract.py": "8838ee6476bbe2a9b14006bdc6937aa5cd46c0c9f7f24ed3bbcbe57f6c523635",
     "core/sandbox/tests/test_helper_contracts.py": "b1661b5eb6475632b15414a6f09cdb0fa5fd340c611a73c74012c9d8d6e22bba",
     "core/sandbox/tests/test_host_response_reliability.py": "90ea3f674153adfda518ce06b1cca8aac720681a362b265ac5ffa3fc2a88ab18",
-    "core/sandbox/tests/test_host_startup_cleanup.py": "6466798b5e491953107ad274b0e6bfe37b1341311e62c3cbc9938e67eb426bdd",
+    "core/sandbox/tests/test_host_startup_cleanup.py": "aafcab09f34f0ed7d39623afac1ffcd087d1f41b8898949c03fc313108fac0fb",
     "core/sandbox/tests/test_kill_and_reap_kills_process_group.py": "49d14940f040779ce0aba2b90126db1b9ceceb3f8f732e98c40116ec6a4872bf",
     "core/sandbox/tests/test_landlock.py": "f5b7a4923a095e45f0996f0c7a9f4871c84d4b5ebd14cc6f306345da2e0aeb9a",
     "core/sandbox/tests/test_landlock_audit_child_guard.py": "8124c7dc3ed591ce59fd806b15cfb88809921dff6a4dde736f98fe7905c80351",
@@ -637,12 +641,14 @@
     "core/testing/tests/conftest.py": "4448550dece53fa5ba7df0b334342adaf1963fb9e799230262422c265d90d7d4",
     "core/testing/tests/test_asan.py": "6a7a5c5968ced093f204b1c4d0179a06d788fe4c00d9197a40beefdde4453804",
     "core/testing/tests/test_availability_probe_fixture_scope.py": "2686b91fbbc17fea0c2690a822337244c407de7e926e9a652b88b3b09bd3ca0a",
+    "core/testing/tests/test_census_loader_ownership.py": "7f7f1554de72e2a08112bd78b873273fd2e5598f955f0a48dedac29db0c68e0e",
     "core/testing/tests/test_cli_import_lifetime.py": "7c259ba8112c237e479d6226552db3a812506382ee9d5520e5c70d2593bd3e5c",
     "core/testing/tests/test_cli_import_ownership.py": "1ab144ffc503c6fbe290aa303395ff2b7816b2edc42ab360749d1385662e76e2",
     "core/testing/tests/test_cli_launch_inventory.py": "e97b13506d22191e7378f3a56172ad6f78006d74d56e9e8786f7af9a2bf7322b",
-    "core/testing/tests/test_cli_launch_ownership.py": "c6d90e7bc6578272a174a21ec4b8cc386c177127fc38da2763f854b2d8b853ca",
+    "core/testing/tests/test_cli_launch_ownership.py": "31a75dd16b25068b009deef11a11f8849926412e3740d87b5fb2095037f37910",
     "core/testing/tests/test_collection_bootstrap_ownership.py": "a7747474f563198b3efc601b214a13d633b0078cbcd988d3060928a0a0190671",
     "core/testing/tests/test_composite_registry_ownership.py": "949506624f406f08fc2b7265d26f7099bb79f7c36ed0a75e52c2889fa3878845",
+    "core/testing/tests/test_dead_pid_helper_ownership.py": "dbe726755ba58a430587568149f5ec4e5873466c196fed046eca13110ecbb202",
     "core/testing/tests/test_egress_fixture_lifetime.py": "26d40d4a766dbb9c61b9683696f934ee81cb3d7263a24824bd8da210d6c9ff5b",
     "core/testing/tests/test_expected_crash.py": "f9d3e94045e08ea2b6898d3eefdbe82117b4587942d650f1d40c93092227ef50",
     "core/testing/tests/test_expected_crash_cleanup.py": "c1fee7552a5150550506640fbd15f1162668051ae96fc895adc5152cfe36cf87",
@@ -653,6 +659,7 @@
     "core/testing/tests/test_host_interface_fixture_scope.py": "17335c8aa595d93390029ff07650c44172414188c7779eb37cefa6c56f91a96c",
     "core/testing/tests/test_infile_registry_ownership.py": "991eaca37036d1fad913c14534aa0796c03606631362c6d20a0a89deadf2e448",
     "core/testing/tests/test_jail_fixture_ownership.py": "1b961ddfc2ce7af4c3e5e7ea3a4503320bc94d5a0f86e070a0b71a5d9c05787f",
+    "core/testing/tests/test_joern_process_fixture_ownership.py": "7a6251bddce5a66c0dfb6fc6d1ccc60bb18189f6d66cb0ef42701faccf4eff28",
     "core/testing/tests/test_llm_hosts_tripwire.py": "b483ee5a4050191ee603be64feae0054484ffc5016b80ffc70edd3f5008907d5",
     "core/testing/tests/test_llm_tripwire.py": "9ef88998f06fe207994561e7e85fc916f3b19631a44b70f788c38cebd674832f",
     "core/testing/tests/test_local_lock_clock_fixture_scope.py": "fccf2ddf6e47213dcf1d2f9e9da9b0f8905c5fbff99ef4d479f9c70ece44c734",
@@ -666,6 +673,7 @@
     "core/testing/tests/test_proxy_scope_ownership.py": "92f75d22437e479c9d95a3b2ebd25e593c3f182e404a0fd8d518bdf5dbf62d9a",
     "core/testing/tests/test_registry_fixture_lifetime.py": "092bdb590175271c89ef5e8342d78db83c0cb874d6bde451f2325eb5f386c617",
     "core/testing/tests/test_registry_resource_owners.py": "0bdc8fd5790318de7570173208934105fd47a8c5ce47da3831e6649c99dfd2aa",
+    "core/testing/tests/test_remaining_import_path_ownership.py": "27e60a059d1bb9f1bc579c8dd6a3fb58a759c07725a91765f223d89a8db00894",
     "core/testing/tests/test_remaining_module_fixture_scope.py": "404a12f1a687b40398ee3eade17fc8a205271d7a5f61f4002ee696fe86a9bfa0",
     "core/testing/tests/test_reset_cache_ownership.py": "6c8236cdaba5c67dda377d6dc42292f0644b074796e8235303fea25f95c264f3",
     "core/testing/tests/test_resource_setup_cleanup.py": "18c18f908a01fc314e208df528878d46a92a9c8d76f9b8c7fd99f5762f068164",
@@ -696,17 +704,17 @@
     "engine/coccinelle/tests/test_alloc_narrow_count_rule.py": "ddb12f1567aeaf4c10cca0ce4d879a297e66e21a26894a1b8c872562d994b27d",
     "engine/coccinelle/tests/test_atomic_check_then_act_rule.py": "bf18cdb48922052a883f2080ce2a0e3f35f6f7028960e7102d05563bbb3f2141",
     "engine/coccinelle/tests/test_chroot_no_chdir_rule.py": "ad4045d267552e0ad07b3b680a1f9cc0ea03b77fc99b2d4fba986d777e6f9a26",
-    "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py": "b943577d573712c8ecccae78ffc466da46c87f3aea2c0ca44763e0f8f02e9ab5",
+    "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py": "f4ab8dd71efcd39efb7aa1ff065d3c745faecbfb9161d7b95866a705766fad52",
     "engine/coccinelle/tests/test_copy_user_size_mismatch_rule.py": "5059312153914aef05b44b901e4c109ffcde4be7392a78091e119edfcf805912",
-    "engine/coccinelle/tests/test_dead_memset_free_rule.py": "9aced76a183843ff09ced927c5acc5a795031641214e9e64e9872a9f21d995f3",
+    "engine/coccinelle/tests/test_dead_memset_free_rule.py": "0e884b99396c7aec549d138eeab3d09d471db5ed7c2ee95e669397197e9ffa74",
     "engine/coccinelle/tests/test_division_by_zero_rule.py": "352d4589162670ac595162fb7a24d47f9c733160a77730f823640644f7cbe09e",
     "engine/coccinelle/tests/test_double_byteswap_rule.py": "fa4609674fe56576d1a10f03e848506f44dd92842f56eaabd1255958dc255cf9",
-    "engine/coccinelle/tests/test_double_close_rule.py": "02ecabe2d164fc9c5ede80297ff9bd6df1291994b6ed4820f5168560e5d720d8",
+    "engine/coccinelle/tests/test_double_close_rule.py": "504bb58c93cbbea700ddd486f7c18c6ef980cc96d10ba04fcfc86e3b6e0d054c",
     "engine/coccinelle/tests/test_double_fetch_rule.py": "47b1ac867237a637d4096ceadf7998ef92eb1d44e9dc57fe631ddbb94b490bfa",
     "engine/coccinelle/tests/test_double_free_rule.py": "428c975f1c0e7a44274fa19528839a76116e1569557c1ee6d5763ebdb5a046df",
     "engine/coccinelle/tests/test_double_sizeof_rule.py": "9bf14bd373ddc5487fabd5dc57db2c87779759fa3fdb9041d27bcf6528c343f8",
     "engine/coccinelle/tests/test_fcntl_flag_domain_rule.py": "5c3fdf91c354bc57d23409447a9f080276275c0c3f3c01d4af3aadbfa0e9bee2",
-    "engine/coccinelle/tests/test_fdopendir_double_close_rule.py": "c866e723be0f34efec6c2ba3e0870bcebb7e09aa61738e73a3ba5896291fb917",
+    "engine/coccinelle/tests/test_fdopendir_double_close_rule.py": "9ed92969f6b07d5c3c395c9aba45cc5baaf5d27ab7663a1267aa8b8b8e07e972",
     "engine/coccinelle/tests/test_format_string_rule.py": "a096b551b78069fc1e0e4a27c95e9255f6cbcc3ff70d30d3ed823469cd599ce3",
     "engine/coccinelle/tests/test_free_nonbase_ptr_rule.py": "3990076256a93e972660635728362cef935dba9eb9e43a7e1963ed1b5659c2e2",
     "engine/coccinelle/tests/test_free_stack_array_rule.py": "0947be59cddd9f7d4588022060f89c6a61cb913f3f6260021fb0f57782edd9ef",
@@ -721,24 +729,24 @@
     "engine/coccinelle/tests/test_lock_order_violation_rule.py": "9d23fb3edcb67a7c2e36c3a8b420511d5cb50214254e7c1aec90e290f9c5f904",
     "engine/coccinelle/tests/test_lock_scope_gap_rule.py": "ec47f2c1b51e88412a3e7f4169e170206a29aec7b63edea4ea822759e7f77ba9",
     "engine/coccinelle/tests/test_malloc_strlen_strcpy_rule.py": "a8b9920e067953eacf7c2040d210138fde360a67a233b9158e7262c4dfb304f4",
-    "engine/coccinelle/tests/test_missing_bounds_check_rule.py": "c1e1432444f0ed037359c9d4ab088444725bac5fe9317196650f721efa8d08e4",
+    "engine/coccinelle/tests/test_missing_bounds_check_rule.py": "592f7c952485c368dd5309e4ba80fe593bf7ab5d651dea3e23c6bbe145b9222e",
     "engine/coccinelle/tests/test_missing_memory_barrier_rule.py": "57c22e3e023a2dd9e19e475bcfcbe8e7a01b0fa2f3dccce0b8abafbf7cb67a8f",
-    "engine/coccinelle/tests/test_missing_null_check_rule.py": "79f66fba74f81d96218a121ea067cdde6c6e5651ee6186e35a1a7889986a7477",
+    "engine/coccinelle/tests/test_missing_null_check_rule.py": "493db7aadde8d096b8fc0916a5a3f4d74da9a18246716f7eaf38b336a81bfb59",
     "engine/coccinelle/tests/test_mmap_free_rule.py": "815bc53e8a8c333fdbc9a2febd42c5d5918e3ddc20309eecfb4a51fd62ee2098",
     "engine/coccinelle/tests/test_mmap_leak_err_rule.py": "ab0d9e4b52198551e8ffcf23d09be05ac3f29c7fa80706453ba3ad5ae3cc0a10",
-    "engine/coccinelle/tests/test_negative_errno_unsigned_return_rule.py": "666c6303378226a5e9c22a966cc9b690e110002cf8e745510661085053814307",
+    "engine/coccinelle/tests/test_negative_errno_unsigned_return_rule.py": "19c30e01476ff91b3cae5b7e2e518523cca2b4a6864348b783fbb83b1122a105",
     "engine/coccinelle/tests/test_open_creat_no_mode_rule.py": "aa4ed6922e34859ea756e17381693518dfe1d5cbdc0e5a08de4c067e257d60d2",
-    "engine/coccinelle/tests/test_packet_length_inverted_guard_rule.py": "6c6cf64f696f3fc64c00af2b9bf15e25fe5ae133774328a98da1ee36ab938fb9",
+    "engine/coccinelle/tests/test_packet_length_inverted_guard_rule.py": "298bddec83d9f4c593149d27582b1e99a7fc7352437a7af2226bf67fb4a55cd7",
     "engine/coccinelle/tests/test_popen_fclose_rule.py": "e7887a465a84293b474e276a18a58a54286f60db25adce40baf71889b3ec65e5",
-    "engine/coccinelle/tests/test_rcu_dereference_outside_rcu_rule.py": "d9917585813522adc6e3c1673ed8a564bd78af263518114ba1f2f513d4aff6d9",
-    "engine/coccinelle/tests/test_rcu_no_lock_rule.py": "4479deeec601dd282c847188516a667bfbb9e1db0a06635f0beb9d27d6dc5277",
+    "engine/coccinelle/tests/test_rcu_dereference_outside_rcu_rule.py": "d75408c66ff9a8984d1049ac4ae667cb51d221b8e74d4c8131542d4f7b098715",
+    "engine/coccinelle/tests/test_rcu_no_lock_rule.py": "8ac14d184dbca4a086f8d30d81eefbae89e15458c9c7aeb3bc8ae5b6832a6fcc",
     "engine/coccinelle/tests/test_rcu_split_decision_rule.py": "da47ddafbb6a15ecd1c9cef1ee1d63c01dc8af0a73508a8c1b3f3ef391a68292",
     "engine/coccinelle/tests/test_realloc_losing_ptr_rule.py": "3dfe46993dc379e81cd4d294ac32099579963708b87291798e5501f4465ffb4f",
     "engine/coccinelle/tests/test_render_validity.py": "24e692ab93cb1a2f6a2013e5f16e8f1572023948802fed6c97ea0d3faf7dc739",
     "engine/coccinelle/tests/test_resource_leak_err_rule.py": "dfa24987d57ae8f7aeb36af023c765499880a52cfea79e5abc0a140fdba44bb5",
     "engine/coccinelle/tests/test_rule_runner.py": "3642779569576a846b3540120f576472d3f80fe6e449ad66b1d61dc7dbf89fb2",
-    "engine/coccinelle/tests/test_scatterlist_frag_undersize_rule.py": "4156b0e7a9e98dc48d918a9d6d9e12c4fd5389a2fffc69fca0c6d6d49e198a4d",
-    "engine/coccinelle/tests/test_sensitive_data_leak_rule.py": "c855914d2c4e55f9fc7fe9348e0d2fea9402bb58346da87bd3048d6801c60d82",
+    "engine/coccinelle/tests/test_scatterlist_frag_undersize_rule.py": "e202028454ce85c63308314082616b76346e9657627ba4539f066b77ed268d5b",
+    "engine/coccinelle/tests/test_sensitive_data_leak_rule.py": "caeb3f41a4a267dd595a810839b2703d925a1e97cc19e49071809b10590051b6",
     "engine/coccinelle/tests/test_shift_overflow_rule.py": "bad2b2d0b23e1a8568a10d152981b9a9c75dcd7d1d167bc49c55da1476f578a1",
     "engine/coccinelle/tests/test_sign_extension_widen_rule.py": "745c20350b2f1317e64f80df89c33f0999962398f77595622807c73b817d2cc1",
     "engine/coccinelle/tests/test_signal_handler_unsafe_rule.py": "770d0b45e21e45d8136c501d2080986e63f1c523837a8254efcc50b3445194df",
@@ -746,21 +754,21 @@
     "engine/coccinelle/tests/test_sizeof_array_param_rule.py": "65e51add9959710b3b102bee5c20607c1d3982e34f5b7357339471218a625bb5",
     "engine/coccinelle/tests/test_sizeof_container_of_rule.py": "1d2874719f4b7a14b460f9e55125cf657a3999e4452e6d114e30a62e6acd9c27",
     "engine/coccinelle/tests/test_sleep_under_spinlock_rule.py": "2291c05e19073af7f13ad40b3599f40a9b4faadc3bc3660442b99ad256e5334c",
-    "engine/coccinelle/tests/test_snprintf_advance_rule.py": "28b85123be46aa5978aeb5c8a9bf1e55c3882947c7d12c1a250110c016b36293",
-    "engine/coccinelle/tests/test_snprintf_truncation_boundary_rule.py": "97321c9d06222ea883804c90657b41c4cb2e6ed57c0c841970e9d767e91565c1",
+    "engine/coccinelle/tests/test_snprintf_advance_rule.py": "c622d09a98844074e28a6f324c95833031096581907a4e9ed489e5cfc354efe4",
+    "engine/coccinelle/tests/test_snprintf_truncation_boundary_rule.py": "2106ef1e12e5dfe24154ed38db2bc5f21790883a0cee8fe91be41597a6e6eb39",
     "engine/coccinelle/tests/test_socket_no_cloexec_rule.py": "47647a9bc025dbda4921eae56bb56ea4b1401641f4dab089828536f91f1f46bc",
     "engine/coccinelle/tests/test_stack_addr_escape_rule.py": "f1a454fb3f60cccde03da51ad186f6b8c835ffbaf65c003b9aa5494484c0147d",
-    "engine/coccinelle/tests/test_strncpy_no_nul_rule.py": "0acc9bc2a0b9c196c69a9b48cf1a14f538cedecf8d8f90e999d0d3ba6732c242",
+    "engine/coccinelle/tests/test_strncpy_no_nul_rule.py": "49b5d201dcc7c64292577c73d294f6c71c81f23b0d93a25f79904da25505d839",
     "engine/coccinelle/tests/test_teardown_lifetime_rule.py": "8f56de5a6f5545bb736c8fde2e81c1b74ba0a262183df7ecd286345bf5c64865",
     "engine/coccinelle/tests/test_toctou_check_use_rule.py": "c0c8ff5569ed77b44d4cef36ae11a216a7d2b3dc930e43db0def70ae7e24c6f1",
     "engine/coccinelle/tests/test_toctou_stat_open_rule.py": "725e21fb273b6e7d98980849fac46ba6fa09e4fceabc6c6c4754c5496b5a17f2",
     "engine/coccinelle/tests/test_uid_truncation_rule.py": "6f1e1633850d26cebe5f719db242326a2820ffb19331ca8113078239af097afc",
-    "engine/coccinelle/tests/test_unchecked_return_rule.py": "ec7e29fa2ee7fb5c0e70042afb8cbae23515fe7dd52386f06210138666cada85",
+    "engine/coccinelle/tests/test_unchecked_return_rule.py": "be387e40166a118017da34e045ccb6d7480e36e08be7dc93a67583d37e54cafc",
     "engine/coccinelle/tests/test_unchecked_strtol_rule.py": "5dce68a55775114fad038d9b116ea0049619ed94736e81aba576ce0a7b24125e",
-    "engine/coccinelle/tests/test_uninitialized_return_rule.py": "8d923bb9c84a0ac9ea9ebbc897c185390d6e4a6ae0cd165d1e938025d47aec8a",
+    "engine/coccinelle/tests/test_uninitialized_return_rule.py": "d317fcc5589204daab0832d6d77b99fdfeeb5fa10508b791f36e53118a6a5df4",
     "engine/coccinelle/tests/test_unsafe_list_del_rule.py": "d441a339dbc64fe957e46bdc27b8d5af08fccf11b40f1d813491160373fc0f6c",
-    "engine/coccinelle/tests/test_use_after_close_rule.py": "69f5d0de31ecb8910f562aa75d6a620426acc6b3faf356d937ca53dc5cfebb69",
-    "engine/coccinelle/tests/test_use_after_fclose_rule.py": "1caaade135230f0df94736f2fc365fbb0524bf00ddea453b55cef8ec8bbb481d",
+    "engine/coccinelle/tests/test_use_after_close_rule.py": "32f99d945429a3b15fccc68060b3d6e94e5e71683c979739a410a7d2ffb6489b",
+    "engine/coccinelle/tests/test_use_after_fclose_rule.py": "d2ada170dfd8f2b259e7669900433d89c1dbc34d02d4538781fa4abec911e73f",
     "engine/coccinelle/tests/test_use_after_free_rule.py": "f881dc3add5548dcc31f29d4ae643b0f1de741bf82af1e2ef7cbfa426b6d311c",
     "engine/coccinelle/tests/test_use_after_unlock_rule.py": "5ecb87d5198d3a93fd8d798b4e4e524109dbdc44e8ec4ce1b6273803cb65469d",
     "engine/coccinelle/tests/test_va_arg_mismatch_rule.py": "9114b1acb66a2bbdddc28036d21af3a0e75d0d78af35bc79f568beaac2c04dfe",
@@ -789,10 +797,10 @@
     "packages/autonomous/tests/conftest.py": "8b8730a0b16ffe59f10934176f43bd4d1283b716508eab0019f19ab5608d3141",
     "packages/autonomous/tests/test_exploit_validator_compiler_detect.py": "bad135e79989a46fd60327203734de959509b9cae7ed55e0a13d2b8d5bb0af84",
     "packages/autonomous/tests/test_exploit_validator_sanitizers.py": "f4a5199b69b108b4535488abab920ac9cceb690821c4e9a83c0f1f49607c636f",
-    "packages/autonomous/tests/test_phase_timeout.py": "e9201e0c12e78bba2382c00e5ee56d536391af74b5ba4fda1226f285973e4a5d",
+    "packages/autonomous/tests/test_phase_timeout.py": "b1845ca04585c266e61367ff8cd6482c0fda1f3f450268b3c2c89bbff1dd5ec4",
     "packages/autonomous/tests/test_pipe_drainer.py": "fc9a8fff6ab05180b28315baf750cf87746bc19e749d4b4caa52bda25d190cb9",
     "packages/autonomous/tests/test_raptor_agentic_wrapper.py": "ba1a20ea69832116632fbbc2109afb775b249d1b2e1a4e828f80358fc596c60f",
-    "packages/autonomous/tests/test_relay_handler_scoping.py": "6dbd40db4e47949f81fa6991f6e0bcfdef23aa1a8b5a087bc5a86ea6f7174131",
+    "packages/autonomous/tests/test_relay_handler_scoping.py": "c051f8f9f856a98e83a8b59f193de94a0d567d19ebf2266c2ac171bad97d2912",
     "packages/binary_analysis/tests/test_cli.py": "fc0b4e9cb80e77493cffc969fd9fff2820cc2c95e4e2ad82bea1324960eaf4c7",
     "packages/binary_analysis/tests/test_crash_execution_native.py": "88807a0de23e514380fa44a226c77da68d8213b52adeae2d8082edc617939300",
     "packages/binary_analysis/tests/test_macho_facts.py": "dfd1433db92222021d3e15ba50fb1d2b665bc2c233d852ef188696812906753e",
@@ -812,7 +820,7 @@
     "packages/code_understanding/tests/test_understand_resume.py": "9937a73d4a932eeb9fe2f1d58c8fe8a27b8f9b9344b870a1af2e83456ea9d4fd",
     "packages/codeql/tests/conftest.py": "c798b6f862b392e4fb727d3d001ebcb912977c9d9fa54c506e71d0be8ef74472",
     "packages/codeql/tests/test_buildless_mode.py": "671e8c07dc5c1408112adfb621fff393d0649acf9b082f7185cb6b4c0b2ca73c",
-    "packages/codeql/tests/test_curated_queries.py": "2dde20e8151acb3f741a9dd4a42748b07b6c089baf793c7db585a04216c11792",
+    "packages/codeql/tests/test_curated_queries.py": "3dcfc6109ad850ed35ffbf54b07b3296c6c0618d3dbc680cc4e7855ff7228ceb",
     "packages/codeql/tests/test_database_manager.py": "5e06ef7e5c8050d362cb152bc864c613f7933221a0a7ab37cd786bcbaf5424fa",
     "packages/codeql/tests/test_e2e_refine_harness.py": "bf48c4dd63b31306f0d5b1fb602d077417b50ef2cdf6aba6ee16d341a1d6bb63",
     "packages/codeql/tests/test_first_use_install.py": "350fc536c2cc10c56684e6df2d67f59f05edb395777dbde138cae1114cdf6641",
@@ -858,8 +866,8 @@
     "packages/exploit_feasibility/tests/test_operand_call_model.py": "811b8c14aef351b54e130169fabe885eb04fa12837d1ecb2ff99cfacf95fcf9d",
     "packages/exploit_feasibility/tests/test_runtime_probe_native.py": "044673a0477cc426f927efd2da1142ebbf9075ae3e08093bac930da49d6e4271",
     "packages/exploit_feasibility/tests/test_sandboxed_probes.py": "5456895861d541052b3f18a5d8f76cf12383785c202c7e952d3e00fa0780dc97",
-    "packages/exploit_feasibility/tests/test_smt_path.py": "8811e0bf888ec28fa96093a6d5fe19aa5a88566136a0ebff7847fae9195b0171",
-    "packages/exploit_feasibility/tests/test_smt_verbs.py": "95489c4ecb044782104ade339c42101c8edf243f736467ca6d88bc3e49c49d78",
+    "packages/exploit_feasibility/tests/test_smt_path.py": "00e6ce5ee957d77435855907b056e5d83fe988e410a4df2801b25401a3ff8a4a",
+    "packages/exploit_feasibility/tests/test_smt_verbs.py": "5b5e8e0fe89fbbc21be0ba2387d02ddb8ec8344f103c7a6361a36927d0086a20",
     "packages/exploit_feasibility/tests/test_under_mitigations.py": "70b9b8de634b507b8dc40aa4f051342a6f6481d7528b3d0307f86465a4b2908f",
     "packages/exploit_feasibility/tests/test_witness_args.py": "2dc710198109e3e1e4d84b87ad28eac4d5af26937342651034211abd071a6832",
     "packages/exploitability_validation/tests/conftest.py": "a66af71f302781ebec96c4dafb228f83fc76eb6063511912d8d786b3636c7cb7",
@@ -918,7 +926,7 @@
     "packages/ghidra/tests/test_java_scripts_comment_api.py": "9d07be9f3300868819bd2516e176f1d1f1ce177f84c44be3d5926554621a4d12",
     "packages/ghidra/tests/test_redb_ceiling.py": "77122c79484b3aed3a66d1c4c0352078931e27805ac8a1c7c2bb125aeb994ae2",
     "packages/ghidra/tests/test_server.py": "8f84b1ec98158b392a289df5d5a90bd04a72bd39993c19c3fbb34d72dfc00463",
-    "packages/ghidra/tests/test_worker_lifetime.py": "584b15647820551672273c80322177af401ad739e2489ecdefc679fda9a383e4",
+    "packages/ghidra/tests/test_worker_lifetime.py": "3e8ad75890025b9cda3e08dbebfb1912f77dc0cdad0db9ecec8fda0d9cc7ed9e",
     "packages/joern/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "packages/joern/tests/broker_server.py": "5b2ba81e9adbc75d6eaba33eba329518a5efa170f9e397bb9e859c923ad79f90",
     "packages/joern/tests/conftest.py": "3372068ca472f9fa86843bc0657cc1153ad32e381eac2150782caa0de558ca80",
@@ -936,15 +944,15 @@
     "packages/joern/tests/test_netns_forwarder_parent_death.py": "1e289d93c6c421b7a82763f095be9029d9394fb93da82ad084a5467b101fbb5f",
     "packages/joern/tests/test_netns_forwarder_sigmask.py": "9931147d3d5e5ccda958fa51f2b2751d168928d99620158fe31d7b874a44b4fc",
     "packages/joern/tests/test_owned_process_signals.py": "b860ce30058584fcf1c8b9aa19aa4c7c4e57af8785aad5f911fe46223dea0c2f",
-    "packages/joern/tests/test_pidns_contract.py": "869bc01eb64317d3a0f3230965e37fe0c92380dee9b887b4b6edbaf9c30f1fd3",
-    "packages/joern/tests/test_pidns_forwarder.py": "f5081ac43d51fb94da7271ca5208adb90aa03f5b487ceb5cce964683d4f0a5aa",
+    "packages/joern/tests/test_pidns_contract.py": "daf7a6050d3784ba3de2e9c2472819e8cf8050b8d1ec3352ca7ebe9041accf0e",
+    "packages/joern/tests/test_pidns_forwarder.py": "6aa128903ba6e9b262ea05550c3a286f1d2429994b29108ecae4078478de6db8",
     "packages/joern/tests/test_pidns_tier.py": "5f35694774ce04c2ed31a492fce8914e420c2755fc4e65f5b5df675ffb24e6fc",
     "packages/joern/tests/test_prereqs.py": "875cd72503ece2443853a9d737e67e5e151ad8fefefb089926a0d3473ef154bf",
     "packages/joern/tests/test_runner.py": "9cb388b642149215f1460ba6b093ccbbe1556155da60841d722f05bc930c8fcb",
     "packages/joern/tests/test_secure_java_launch.py": "58d0b24419ee5f2f4830efdd9d282890982c539c12d89052b13bdb94dbac2807",
-    "packages/joern/tests/test_server_stop_fast.py": "e393f607d3f458769153e100b54b4ab476191953e9e421926001b49a94c97cd2",
+    "packages/joern/tests/test_server_stop_fast.py": "4dcbd94f18764aae94fa352bbe63f92488bd8ea384ad865393c3e3cfbc913479",
     "packages/joern/tests/test_server_uds.py": "000d96ae31b93f269ebea3b36d1ad98734e715057d11aaa332188bf5e44f1388",
-    "packages/joern/tests/test_stop_group_escalation.py": "5d07f29529e98d092842af911d5c44b8b9d32582f404c6621731b43ff7e65476",
+    "packages/joern/tests/test_stop_group_escalation.py": "ff1b0bc0859f4636b1f36f1602dbb806205b968a543127c3fe8c083dd8724b92",
     "packages/joern/tests/test_worker_guard.py": "2e832b763da74a029e536d84c0b804e9b1fe91c91561c2a1b7e049002e62fe73",
     "packages/joern/tests/test_worker_guard_acceptance.py": "62b2ec91a30303c8f8ba62dde347347ed89a3e3e3dfb663f31b9225de32ea3e3",
     "packages/joern/tests/test_workspace_sweep.py": "f4460c8e420473f9adf40d891336a496bd0accc7b2ca26925dd95030913ed458",
@@ -952,7 +960,7 @@
     "packages/llm_analysis/tests/fixtures/iris_e2e/src/cli_command_injection.py": "2b0a826c2a6074fa27dbfa0676684910823de166ab7a8717c1057bbdaea9aac1",
     "packages/llm_analysis/tests/fixtures/iris_e2e/src/false_positive_command.py": "4fbd4c1508546830d61f298e14bf346c2e6d1495ebcb2e0ae3aeae65032d47ad",
     "packages/llm_analysis/tests/fixtures/iris_e2e/src/real_command_injection.py": "d8f72e142d68ed4c64ed4cdac0ff9f88699755608a89e050392b66fb9e7b621d",
-    "packages/llm_analysis/tests/test_agentic_dv_reporting.py": "7cee6f6d1fa64452279ab002bf97f18f05df7fed257327566df801ed477efd70",
+    "packages/llm_analysis/tests/test_agentic_dv_reporting.py": "fdd148a8b719cba3c5e3f5f4d4ce1f693bb09dfc630022af31c177ce289d1345",
     "packages/llm_analysis/tests/test_cli_help.py": "6a31a23d05055433b93ce28b735aea5da2482235409feb1a3e3aa67e34511a55",
     "packages/llm_analysis/tests/test_exploit_verify_execute.py": "d1ef387da6e7c373b973b29898d0b85406e7045bbfe9b4f43313a73d3a19698e",
     "packages/llm_analysis/tests/test_exploit_verify_forgery.py": "08875b788fb1a148d4285ec5190139d6c153dce0856cf022d81673fc6e8af36b",
@@ -1043,7 +1051,7 @@
     "packages/web/tests/test_ffuf_live.py": "2fc110b193a563308e80a2ba7732aca57866260446585cc22a6601ad7a9be0da",
     "packages/web/tests/test_nuclei_live.py": "60e21f39613feb9bccdd43de38a6949d8eb24e12da18e355a7608a5b623817e4",
     "packages/web/tests/test_poc.py": "ea6315d58681dd2916b17b68683d53df66cf907ae3c8eaee3c34dfb1a3398170",
-    "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "899c59ab63d6f85a07f7ba228f351b2dc0679881b53bbf9bedfc053aed82a816",
+    "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
     "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
     "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b"
   },
@@ -2753,6 +2761,14 @@
       "purpose": ".github/scripts/tests/test_ci_push_base.py:<module>: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
     },
     {
+      "path": ".github/scripts/tests/test_compile_checked_bytecode.py",
+      "scope": "",
+      "signature": "96fb6043caa5e1b47ed04b508f3fb4e4153787f574eb6219f60d6d334ecdde6b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/scripts/tests/test_compile_checked_bytecode.py:: Loads the checked-bytecode compiler as a private module; compilation never executes fixture source and does not restore RAPTOR launch state."
+    },
+    {
       "path": ".github/scripts/tests/test_contact_gate.py",
       "scope": "cg",
       "signature": "5daf1b8c6029c1a7aacaeda02cc5b28f5f00618e574d36f9fce04410f80e3247",
@@ -3715,10 +3731,10 @@
     {
       "path": ".github/tests/test_changed_files_step.py",
       "scope": "TestRenameCompanionsDontCountTowardCap.test_renames_kept_and_not_miscounted",
-      "signature": "620358d725b82783555a0f1f93452b7d06f88b31865abbc251c029e8969bd8b6",
+      "signature": "49deb1be6e2c608105dd0bdc0714a2a0f1c441af8ea4a47714aa51588d85651a",
       "count": 1,
       "contract": "non-cli-probe",
-      "purpose": ".github/tests/test_changed_files_step.py:TestRenameCompanionsDontCountTowardCap.test_renames_kept_and_not_miscounted: delegates through reviewed helper(s) _run_step; producer source and this exact caller are pinned."
+      "purpose": ".github/tests/test_changed_files_step.py:TestRenameCompanionsDontCountTowardCap.test_renames_kept_and_not_miscounted: Existing isolated shell/GitHub-stub helper now covers both workflow variants; no internal RAPTOR CLI is executed."
     },
     {
       "path": ".github/tests/test_changed_files_step.py",
@@ -4223,6 +4239,38 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": ".github/tests/test_codeql_job_scope.py:test_required_status_accepts_intentional_skips_and_refuses_failures: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": ".github/tests/test_codeql_source_scope.py",
+      "scope": "",
+      "signature": "397588791d1f7b698350d81723fb17f2bca87087341068c1b4cf1210fff708ec",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/tests/test_codeql_source_scope.py:: Loads pure workflow filters and the existing shell-step harness; its separate literal-environment shell leg runs only owned gh/jq stubs."
+    },
+    {
+      "path": ".github/tests/test_codeql_source_scope.py",
+      "scope": "_load_filters",
+      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/tests/test_codeql_source_scope.py:_load_filters: Loads pure workflow filters and the existing shell-step harness; its separate literal-environment shell leg runs only owned gh/jq stubs."
+    },
+    {
+      "path": ".github/tests/test_codeql_source_scope.py",
+      "scope": "test_rename_into_ignored_tree_keeps_source_scan",
+      "signature": "8190abfe8b57e5d56a644056d4eeec9c7ab1c0f1b91c0bad6d368160b149b528",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": ".github/tests/test_codeql_source_scope.py:test_rename_into_ignored_tree_keeps_source_scan: Loads pure workflow filters and the existing shell-step harness; its separate literal-environment shell leg runs only owned gh/jq stubs."
+    },
+    {
+      "path": ".github/tests/test_codeql_source_scope.py",
+      "scope": "test_rename_into_ignored_tree_keeps_source_scan",
+      "signature": "87bde1a7db36ce3c0ba39450a7ba4801125ace6e4a3b2078244791eccbf0a730",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/tests/test_codeql_source_scope.py:test_rename_into_ignored_tree_keeps_source_scan: Literal test-owned HOME/PATH environment runs extracted workflow shell with a private gh stub and jq; no RAPTOR CLI or provider execution."
     },
     {
       "path": ".github/tests/test_collect_native_notices.py",
@@ -5529,6 +5577,14 @@
       "purpose": ".github/tests/test_native_build_inventory.py:<module>: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
     },
     {
+      "path": ".github/tests/test_nightly_marker_selection.py",
+      "scope": "test_nightly_marker_phases_are_disjoint_and_complete",
+      "signature": "19163c8ef32f576276b2fe67c2a7d6192ca4006ed73f20adcd59316c186be4ad",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": ".github/tests/test_nightly_marker_selection.py:test_nightly_marker_phases_are_disjoint_and_complete: Existing run_standalone_cli owns each miniature pytest process; fixture roots and reports are test-owned."
+    },
+    {
       "path": ".github/tests/test_nightly_semgrep_routing.py",
       "scope": "_jobs",
       "signature": "9cde3efd119bed20566b5d18eaa59997c34483ad8bd8e58b4dc0d5d20e0e99d6",
@@ -6385,14 +6441,6 @@
       "purpose": ".github/tests/test_sbom_checksums.py:<module>: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
     },
     {
-      "path": ".github/tests/test_sbom_checksums.py",
-      "scope": "test_manifest_covers_image_original_notices_and_partial_reports",
-      "signature": "1871e86b23222bbebc993e5a0f5033de90247cb56bcc587b21b2c8b777e2e9a0",
-      "count": 2,
-      "contract": "non-cli-probe",
-      "purpose": ".github/tests/test_sbom_checksums.py:test_manifest_covers_image_original_notices_and_partial_reports: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
-    },
-    {
       "path": ".github/tests/test_sca_gate_file_shapes.py",
       "scope": "_load_file_shapes",
       "signature": "5daf1b8c6029c1a7aacaeda02cc5b28f5f00618e574d36f9fce04410f80e3247",
@@ -6898,11 +6946,27 @@
     },
     {
       "path": ".github/tests/test_wall_budget_marker.py",
-      "scope": "_run_nested",
-      "signature": "e7cf7f1cfeda08556d7e9f531f2ccb536c7ae65ef0ae7cf6102c31b00e298787",
+      "scope": "TestWallBudgetWorkerReports.test_malformed_marker_preserves_worker_setup_error",
+      "signature": "19e94df98731baaf8d628bda094bad5767d0e30a593f9008882e15120a20b9e6",
       "count": 1,
       "contract": "non-cli-probe",
-      "purpose": ".github/tests/test_wall_budget_marker.py:_run_nested: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+      "purpose": ".github/tests/test_wall_budget_marker.py:TestWallBudgetWorkerReports.test_malformed_marker_preserves_worker_setup_error: Nested pytest exercises root report hooks with explicit owned HOME/registry/XDG, LLM tripwire and worker plugins; it is not internal CLI bootstrap."
+    },
+    {
+      "path": ".github/tests/test_wall_budget_marker.py",
+      "scope": "TestWallBudgetWorkerReports.test_valid_worker_marker_keeps_report_budget",
+      "signature": "d2630d7139383fba60296ee3c7127d3e5a1a1d8a9178811f1daa6cb38ccee48c",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/tests/test_wall_budget_marker.py:TestWallBudgetWorkerReports.test_valid_worker_marker_keeps_report_budget: Nested pytest exercises root report hooks with explicit owned HOME/registry/XDG, LLM tripwire and worker plugins; it is not internal CLI bootstrap."
+    },
+    {
+      "path": ".github/tests/test_wall_budget_marker.py",
+      "scope": "_run_nested",
+      "signature": "5a7769ad7e3c8f6544b7f553e9408654590340ce537a2a22de03fd7204a82c18",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": ".github/tests/test_wall_budget_marker.py:_run_nested: Nested pytest exercises root report hooks with explicit owned HOME/registry/XDG, LLM tripwire and worker plugins; it is not internal CLI bootstrap."
     },
     {
       "path": ".github/tests/test_wrapper_fixture_collection.py",
@@ -16417,6 +16481,14 @@
       "purpose": "core/hash/tests/test_startup.py:test_study_help_does_not_load_configuration: delegates through reviewed helper(s) _python; producer source and this exact caller are pinned."
     },
     {
+      "path": "core/http/tests/test_anonymous_https.py",
+      "scope": "https_endpoint",
+      "signature": "41b1717eeccb845d3c941ff48c67175a6e63eed674de94432f507c5c43d4449a",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "core/http/tests/test_anonymous_https.py:https_endpoint: OpenSSL creates a captive fixture certificate under tmp_path with a literal PATH-only environment; no RAPTOR CLI or external service."
+    },
+    {
       "path": "core/http/tests/test_egress_backend.py",
       "scope": "TestSeatbeltParentProxy.test_real_seatbelt_child_uses_parent_proxy_allowlist",
       "signature": "06d468f09cae47cb965df20cf5fd4463c7005d6e4bfb0ebe016a8959499fc390",
@@ -18675,50 +18747,42 @@
     {
       "path": "core/run/tests/test_frida_wrapper_signals.py",
       "scope": "TestGracefulSignalDisposition.test_sigterm_with_clean_child_exit_completes",
-      "signature": "96a21b3ffe3f8cbaeef6589215239bd507361c4db731b1e73f2cfe7457a23000",
+      "signature": "88f391b0767e957dffd8e7b1c1d6473ffad859830a640472d48afa0f7e9f396c",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestGracefulSignalDisposition.test_sigterm_with_clean_child_exit_completes: Owned copied wrapper, lifecycle logger and stand-in interpreter; real signal protocol, no ambient framework bootstrap."
+      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestGracefulSignalDisposition.test_sigterm_with_clean_child_exit_completes: Copied wrapper uses a test-owned lifecycle logger and shell interpreter stand-in; ExitStack, reaper and inherited lifeline/completion pipes own detached groups through signal assertions."
     },
     {
       "path": "core/run/tests/test_frida_wrapper_signals.py",
       "scope": "TestGracefulSignalDisposition.test_sigterm_with_failing_child_fails_once",
-      "signature": "96a21b3ffe3f8cbaeef6589215239bd507361c4db731b1e73f2cfe7457a23000",
+      "signature": "88f391b0767e957dffd8e7b1c1d6473ffad859830a640472d48afa0f7e9f396c",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestGracefulSignalDisposition.test_sigterm_with_failing_child_fails_once: Owned copied wrapper, lifecycle logger and stand-in interpreter; real signal protocol, no ambient framework bootstrap."
+      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestGracefulSignalDisposition.test_sigterm_with_failing_child_fails_once: Copied wrapper uses a test-owned lifecycle logger and shell interpreter stand-in; ExitStack, reaper and inherited lifeline/completion pipes own detached groups through signal assertions."
     },
     {
       "path": "core/run/tests/test_frida_wrapper_signals.py",
       "scope": "TestPatchVerifyDisposition.test_sigterm_with_verdict_exit_completes",
-      "signature": "c107d4b645495cb27473081f5ee94213791a2f7349378751a1b740ea6ebe3936",
+      "signature": "ba74fb15cba9481fdefc2c7d12062e0f3a457a50bac61b770d924ad5060ed29f",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestPatchVerifyDisposition.test_sigterm_with_verdict_exit_completes: Owned copied wrapper, lifecycle logger and stand-in interpreter; real signal protocol, no ambient framework bootstrap."
+      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestPatchVerifyDisposition.test_sigterm_with_verdict_exit_completes: Copied wrapper uses a test-owned lifecycle logger and shell interpreter stand-in; ExitStack, reaper and inherited lifeline/completion pipes own detached groups through signal assertions."
     },
     {
       "path": "core/run/tests/test_frida_wrapper_signals.py",
       "scope": "TestProcessGroupKill.test_grandchild_killed_on_sigterm",
-      "signature": "76792ea3c89e6051f2bd67ca7dd438df6996244adc20eaa2f6aaa470bfcea092",
+      "signature": "88f391b0767e957dffd8e7b1c1d6473ffad859830a640472d48afa0f7e9f396c",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestProcessGroupKill.test_grandchild_killed_on_sigterm: delegates through reviewed helper(s) _reap_stub_tree; producer source and this exact caller are pinned."
+      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestProcessGroupKill.test_grandchild_killed_on_sigterm: Copied wrapper uses a test-owned lifecycle logger and shell interpreter stand-in; ExitStack, reaper and inherited lifeline/completion pipes own detached groups through signal assertions."
     },
     {
       "path": "core/run/tests/test_frida_wrapper_signals.py",
-      "scope": "TestProcessGroupKill.test_grandchild_killed_on_sigterm",
-      "signature": "96a21b3ffe3f8cbaeef6589215239bd507361c4db731b1e73f2cfe7457a23000",
+      "scope": "_owned_wrapper",
+      "signature": "08a8434f4612b3e53f5a52fff141c8821023226b9312c2ccd9a7f8a7bdbe1cc2",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:TestProcessGroupKill.test_grandchild_killed_on_sigterm: Owned copied wrapper, lifecycle logger and stand-in interpreter; real signal protocol, no ambient framework bootstrap."
-    },
-    {
-      "path": "core/run/tests/test_frida_wrapper_signals.py",
-      "scope": "_reap_stub_tree",
-      "signature": "3b800496da76194fb0da3b9d3da09db07de90bb6aa0239385d925e0307c491fb",
-      "count": 1,
-      "contract": "owned-custom-launch",
-      "purpose": "core/run/tests/test_frida_wrapper_signals.py:_reap_stub_tree: Owned copied wrapper, lifecycle logger and stand-in interpreter; real signal protocol, no ambient framework bootstrap."
+      "purpose": "core/run/tests/test_frida_wrapper_signals.py:_owned_wrapper: Copied wrapper uses a test-owned lifecycle logger and shell interpreter stand-in; ExitStack, reaper and inherited lifeline/completion pipes own detached groups through signal assertions."
     },
     {
       "path": "core/run/tests/test_hook_finalize_precedence.py",
@@ -28465,6 +28529,14 @@
       "purpose": "core/testing/tests/test_availability_probe_fixture_scope.py:test_unmodified_probe_control: delegates through reviewed helper(s) _seed; producer source and this exact caller are pinned."
     },
     {
+      "path": "core/testing/tests/test_census_loader_ownership.py",
+      "scope": "census",
+      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "core/testing/tests/test_census_loader_ownership.py:census: Private census module is published within module_registry_scope; actual loader predicates operate on scoped cache/path views, not CLI launch metadata."
+    },
+    {
       "path": "core/testing/tests/test_cli_import_lifetime.py",
       "scope": "test_review_parser_child_preserves_parent",
       "signature": "a51038d1233e7c363740028bf4c07b8472b9c8f5b199a3c94d2731aa54620294",
@@ -28506,6 +28578,14 @@
     },
     {
       "path": "core/testing/tests/test_cli_launch_ownership.py",
+      "scope": "stdin_budget_native",
+      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "core/testing/tests/test_cli_launch_ownership.py:stdin_budget_native: Actual stdin-budget native test module is published with monkeypatch-owned registry identity; standalone environment and registry/cache owner cover real CLI loading and main execution."
+    },
+    {
+      "path": "core/testing/tests/test_cli_launch_ownership.py",
       "scope": "test_agent_runner_owns_live_launch_state_without_entering_kernel_profiles",
       "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
       "count": 1,
@@ -28519,14 +28599,6 @@
       "count": 1,
       "contract": "owned-custom-launch",
       "purpose": "core/testing/tests/test_cli_launch_ownership.py:test_agent_runner_owns_live_launch_state_without_entering_kernel_profiles.capture: Actual child boundary controls check independent live HOME/scratch and authority absence; loaders are scoped and parent state is restored."
-    },
-    {
-      "path": "core/testing/tests/test_cli_launch_ownership.py",
-      "scope": "test_copied_lifecycle_hook_owns_stale_parent_launch",
-      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
-      "count": 1,
-      "contract": "owned-custom-launch",
-      "purpose": "core/testing/tests/test_cli_launch_ownership.py:test_copied_lifecycle_hook_owns_stale_parent_launch: Actual child boundary controls check independent live HOME/scratch and authority absence; loaders are scoped and parent state is restored."
     },
     {
       "path": "core/testing/tests/test_cli_launch_ownership.py",
@@ -28559,6 +28631,14 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "core/testing/tests/test_composite_registry_ownership.py:test_composite_owner_without_conftests: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": "core/testing/tests/test_dead_pid_helper_ownership.py",
+      "scope": "_helper.spawn",
+      "signature": "aa852a073882dc60bdcb53c198cc4f86c31fab7029caf878419f230e6ecaf245",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "core/testing/tests/test_dead_pid_helper_ownership.py:_helper.spawn: Owned stdlib-only sleeping/exit child exercises native reaper faults; fallback reap_on_exit retains cleanup on assertion/error/interrupt."
     },
     {
       "path": "core/testing/tests/test_egress_fixture_lifetime.py",
@@ -28903,6 +28983,38 @@
       "count": 2,
       "contract": "non-cli-probe",
       "purpose": "core/testing/tests/test_jail_fixture_ownership.py:test_singleton_fixture_preserves_live_borrowed_worker: delegates through reviewed helper(s) _attach_resources; producer source and this exact caller are pinned."
+    },
+    {
+      "path": "core/testing/tests/test_joern_process_fixture_ownership.py",
+      "scope": "_start",
+      "signature": "94f04c886e37375010a9a080adb7a27ab82482bf51c9afdcff40704d1685fcc2",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "core/testing/tests/test_joern_process_fixture_ownership.py:_start: Owned stdlib-only native children and survivor groups exercise ExitStack/pidfd cleanup; no Joern runtime or framework CLI is launched."
+    },
+    {
+      "path": "core/testing/tests/test_joern_process_fixture_ownership.py",
+      "scope": "test_cleanup_error_still_reaps_other_owned_children",
+      "signature": "8211ad217ce3fc58295e8b133410a8081e8bb809ea52d9927b5eb6d38086984f",
+      "count": 2,
+      "contract": "non-cli-probe",
+      "purpose": "core/testing/tests/test_joern_process_fixture_ownership.py:test_cleanup_error_still_reaps_other_owned_children: Owned stdlib-only native children and survivor groups exercise ExitStack/pidfd cleanup; no Joern runtime or framework CLI is launched."
+    },
+    {
+      "path": "core/testing/tests/test_joern_process_fixture_ownership.py",
+      "scope": "test_native_fixture_reaps_real_leader_and_closes_streams",
+      "signature": "8211ad217ce3fc58295e8b133410a8081e8bb809ea52d9927b5eb6d38086984f",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "core/testing/tests/test_joern_process_fixture_ownership.py:test_native_fixture_reaps_real_leader_and_closes_streams: Owned stdlib-only native children and survivor groups exercise ExitStack/pidfd cleanup; no Joern runtime or framework CLI is launched."
+    },
+    {
+      "path": "core/testing/tests/test_joern_process_fixture_ownership.py",
+      "scope": "test_survivor_startup_failure_still_cleans_private_group.spawn",
+      "signature": "ed5f16d592d8f1024ea4f75d1e66495fc1fb428a38bc4cb056ab240bf1f0ef7f",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "core/testing/tests/test_joern_process_fixture_ownership.py:test_survivor_startup_failure_still_cleans_private_group.spawn: Owned stdlib-only native children and survivor groups exercise ExitStack/pidfd cleanup; no Joern runtime or framework CLI is launched."
     },
     {
       "path": "core/testing/tests/test_llm_hosts_tripwire.py",
@@ -29255,6 +29367,22 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "core/testing/tests/test_registry_resource_owners.py:test_registry_and_evidence_owner: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
+    },
+    {
+      "path": "core/testing/tests/test_remaining_import_path_ownership.py",
+      "scope": "summary_native",
+      "signature": "17738dab3d6dc14d88776054512de0307b04a94d1b91fc896c1e645cde8bf97b",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "core/testing/tests/test_remaining_import_path_ownership.py:summary_native: Private summary test module is registry-owned; summary CLI loader state and test-owned signing directory span writer/reader calls and restore by identity."
+    },
+    {
+      "path": "core/testing/tests/test_remaining_import_path_ownership.py",
+      "scope": "test_coverage_body_retains_path",
+      "signature": "7e5faee6193fe2db10483e9b927861ce748056d0d9d654e825d3cab567940a74",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "core/testing/tests/test_remaining_import_path_ownership.py:test_coverage_body_retains_path: Private summary test module is registry-owned; summary CLI loader state and test-owned signing directory span writer/reader calls and restore by identity."
     },
     {
       "path": "core/testing/tests/test_remaining_module_fixture_scope.py",
@@ -30178,11 +30306,35 @@
     },
     {
       "path": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py",
+      "scope": "test_immediate_byte_array_decay_has_bounded_source_contract",
+      "signature": "1dc7d5b32d8341dc4fd9e4898ad38762a80df0a243c5998be83fc014b432ff63",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py:test_immediate_byte_array_decay_has_bounded_source_contract: New source cases use the existing _run_rule native Coccinelle helper and confined runner; target/rule paths are test-owned, not RAPTOR CLI launches."
+    },
+    {
+      "path": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py",
       "scope": "test_initialization_and_observer_contracts",
       "signature": "c6fde5b78936672aca75b013b1c9be706dc8f85a445a193c3fee568a0a065735",
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py:test_initialization_and_observer_contracts: delegates through reviewed helper(s) _run_rule; producer source and this exact caller are pinned."
+    },
+    {
+      "path": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py",
+      "scope": "test_sibling_initialisers_preserve_object_and_copy_identity",
+      "signature": "1dc7d5b32d8341dc4fd9e4898ad38762a80df0a243c5998be83fc014b432ff63",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py:test_sibling_initialisers_preserve_object_and_copy_identity: New source cases use the existing _run_rule native Coccinelle helper and confined runner; target/rule paths are test-owned, not RAPTOR CLI launches."
+    },
+    {
+      "path": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py",
+      "scope": "test_zero_byte_transfers_and_initializers_preserve_copy_extent",
+      "signature": "1dc7d5b32d8341dc4fd9e4898ad38762a80df0a243c5998be83fc014b432ff63",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "engine/coccinelle/tests/test_copy_to_user_uninit_rule.py:test_zero_byte_transfers_and_initializers_preserve_copy_extent: New source cases use the existing _run_rule native Coccinelle helper and confined runner; target/rule paths are test-owned, not RAPTOR CLI launches."
     },
     {
       "path": "engine/coccinelle/tests/test_copy_user_size_mismatch_rule.py",
@@ -32135,6 +32287,14 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": "engine/coccinelle/tests/test_mmap_leak_err_rule.py:test_unchecked_and_nonlocal_mapping_storage_need_separate_review: delegates through reviewed helper(s) _run_rule; producer source and this exact caller are pinned."
+    },
+    {
+      "path": "engine/coccinelle/tests/test_negative_errno_unsigned_return_rule.py",
+      "scope": "test_conditional_errno_contract",
+      "signature": "00f9c51021907e5b8d7a9aa7505b9d1efbf5281d67adb4e6bf8870f5b20b0e3a",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "engine/coccinelle/tests/test_negative_errno_unsigned_return_rule.py:test_conditional_errno_contract: Conditional-errno cases use the existing imported native rule runner with owned source/rule paths; no framework bootstrap."
     },
     {
       "path": "engine/coccinelle/tests/test_negative_errno_unsigned_return_rule.py",
@@ -38566,7 +38726,15 @@
       "signature": "1de2aefa433cf02bb91846b70701969ec61265772a0a8451bf71d49cf946de54",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget._load_module: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
+      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget._load_module: Context-managed standalone environment and registry/cache owner span actual bootstrap plus main(); borrowed state restores before owned directories retire. Native budget/solver assertions are unchanged."
+    },
+    {
+      "path": "packages/exploit_feasibility/tests/test_smt_path.py",
+      "scope": "TestStdinBudget._load_module",
+      "signature": "58b7394953ef92e7bc5ed1b562d7f10eee0ab4582ab3a547bd3bfadbdd689e7f",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget._load_module: Context-managed standalone environment and registry/cache owner span actual bootstrap plus main(); borrowed state restores before owned directories retire. Native budget/solver assertions are unchanged."
     },
     {
       "path": "packages/exploit_feasibility/tests/test_smt_path.py",
@@ -38574,7 +38742,7 @@
       "signature": "b607d4be2da54fdc4c31ce15d68d05366577cc121dc3c7bac6f5914f97061240",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget._load_module: scoped test loader/library entry; registry fixture now restores authorization and scratch caches together; parser/path assertions remain native."
+      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget._load_module: Context-managed standalone environment and registry/cache owner span actual bootstrap plus main(); borrowed state restores before owned directories retire. Native budget/solver assertions are unchanged."
     },
     {
       "path": "packages/exploit_feasibility/tests/test_smt_path.py",
@@ -38582,7 +38750,7 @@
       "signature": "92c691f1805789c4fdd43b37bf176896e405d58394a4ed4eaa59d24d569c2006",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget.test_over_budget_stdin_refused: delegates through reviewed helper(s) self._load_module; producer source and this exact caller are pinned."
+      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget.test_over_budget_stdin_refused: Context-managed standalone environment and registry/cache owner span actual bootstrap plus main(); borrowed state restores before owned directories retire. Native budget/solver assertions are unchanged."
     },
     {
       "path": "packages/exploit_feasibility/tests/test_smt_path.py",
@@ -38590,7 +38758,7 @@
       "signature": "92c691f1805789c4fdd43b37bf176896e405d58394a4ed4eaa59d24d569c2006",
       "count": 1,
       "contract": "owned-in-process",
-      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget.test_small_stdin_still_validates: delegates through reviewed helper(s) self._load_module; producer source and this exact caller are pinned."
+      "purpose": "packages/exploit_feasibility/tests/test_smt_path.py:TestStdinBudget.test_small_stdin_still_validates: Context-managed standalone environment and registry/cache owner span actual bootstrap plus main(); borrowed state restores before owned directories retire. Native budget/solver assertions are unchanged."
     },
     {
       "path": "packages/exploit_feasibility/tests/test_smt_verbs.py",
@@ -40706,6 +40874,14 @@
     },
     {
       "path": "packages/ghidra/tests/test_worker_lifetime.py",
+      "scope": "_check_main_lifetime",
+      "signature": "55d7ddb1ee009207f2cf406bc15327a57ad745dd56a5102f02814a9ba7d6e82a",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": "packages/ghidra/tests/test_worker_lifetime.py:_check_main_lifetime: Existing standalone child owner now spans shared _check_main_lifetime; explicit short_socket_dir owns pathname sockets even under long temporary roots; real worker/session close assertions remain."
+    },
+    {
+      "path": "packages/ghidra/tests/test_worker_lifetime.py",
       "scope": "test_borrowed_session_close_keeps_the_callers_jvm_attachment",
       "signature": "0d641aca1c47d1b8e4b6e852b7218b62267a3bf4d399cd33a4b9a883aa882c2e",
       "count": 1,
@@ -40723,10 +40899,18 @@
     {
       "path": "packages/ghidra/tests/test_worker_lifetime.py",
       "scope": "test_main_releases_the_handler_and_its_session",
-      "signature": "c4fe9dd6e1f8a99e1e499a1c133d26796f2382d5ad57267933b4cb2567313eca",
+      "signature": "759a0ed89bd0acb3e6476226414848229801a4ba65460fae5b69a3e2e635f895",
       "count": 1,
       "contract": "standalone",
-      "purpose": "packages/ghidra/tests/test_worker_lifetime.py:test_main_releases_the_handler_and_its_session: standard launch owner; custom signing homes are explicit where artefacts cross processes."
+      "purpose": "packages/ghidra/tests/test_worker_lifetime.py:test_main_releases_the_handler_and_its_session: Existing standalone child owner now spans shared _check_main_lifetime; explicit short_socket_dir owns pathname sockets even under long temporary roots; real worker/session close assertions remain."
+    },
+    {
+      "path": "packages/ghidra/tests/test_worker_lifetime.py",
+      "scope": "test_path_lifetime_uses_short_socket_under_long_tmpdir",
+      "signature": "dbab9a4719703e168a8155ff5b4a85f802c73261ddd13d54418583554507e7b4",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": "packages/ghidra/tests/test_worker_lifetime.py:test_path_lifetime_uses_short_socket_under_long_tmpdir: Existing standalone child owner now spans shared _check_main_lifetime; explicit short_socket_dir owns pathname sockets even under long temporary roots; real worker/session close assertions remain."
     },
     {
       "path": "packages/ghidra/tests/test_worker_lifetime.py",
