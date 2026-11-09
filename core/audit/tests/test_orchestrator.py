@@ -1764,8 +1764,17 @@ class TestCheckFindingGates:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestGateEnforcement:
     """Test G1/G2 gate enforcement in _commit_outcome."""
+
+    @pytest.fixture(autouse=True)
+    def _no_witness_synthesis(self, monkeypatch):
+        # The gate transition is under test, not the later attempt to
+        # synthesise an executable witness for a gate-demoted dark row.
+        monkeypatch.setattr(
+            "core.audit.orchestrator._run_dark_verification", lambda *a, **k: None,
+        )
 
     def test_finding_without_hypothesis_demoted_by_gate(self, tmp_path: Path):
         """G1: finding without hypothesis gets demoted to suspicious.
@@ -1789,7 +1798,7 @@ class TestGateEnforcement:
                 evidence_tool="semgrep:sql-injection",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -1812,7 +1821,7 @@ class TestGateEnforcement:
                 evidence_tool="",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -1849,7 +1858,7 @@ class TestGateEnforcement:
                 evidence_tool="llm",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False,
             batch_sloc_threshold=0,
@@ -1884,7 +1893,7 @@ class TestGateEnforcement:
                 body="ok",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -1912,7 +1921,7 @@ class TestGateEnforcement:
                 evidence_tool="",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
