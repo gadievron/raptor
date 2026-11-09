@@ -3394,6 +3394,7 @@ def _verify_entries_fold(
 
     from .context import fallback_span_end
     from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
+    from .source_anchor import SOURCE_ANCHOR_PREFIX, hash_source_spans, parse_source_anchor
 
     # Fold-local origin-run row cache (see the note above
     # ``_origin_journal_fingerprint``): created here, passed down
@@ -3607,6 +3608,12 @@ def _verify_entries_fold(
                 (cur[0],
                  fallback_span_end(
                      cur[0], (current_raw_ends or {}).get(key, cur[1]))))
+        if isinstance(entry.source_hash, str) and entry.source_hash.startswith(SOURCE_ANCHOR_PREFIX):
+            if parse_source_anchor(entry.source_hash) is None or target_path is None or not spans:
+                reuse_blocked["source_binding"] = reuse_blocked.get("source_binding", 0) + 1
+                if reuse_stats is not None:
+                    reuse_stats.setdefault(key, "source_binding")
+                continue
         if entry.source_hash and entry.source_hash.startswith("bin:"):
             # Binary items: the hash anchors the BINARY's content +
             # the function's address/size. A rebuilt binary (or a
@@ -3727,13 +3734,29 @@ def _verify_entries_fold(
             # construction: hash the WINDOW, report the span.
             span_counts.append(len(entry_spans))
             flat_spans.extend(windows)
-        all_hashes = hash_spans(resolved, flat_spans)
+        # Two bounded full-file reads per file with bound rows, not per row.
+        # Local version stamps guard this read interval; only the digest is
+        # persisted, so moving identical source does not invalidate it.
+        has_bound_rows = any(parse_source_anchor(item[0].source_hash) is not None for item in items)
+        if has_bound_rows:
+            all_hashes, source_digest = hash_source_spans(target_path, file_path, flat_spans)
+        else:
+            all_hashes, source_digest = hash_spans(resolved, flat_spans), None
         hash_idx = 0
         for (entry, key, entry_spans, _windows, verified_row), n_spans in zip(
                 items, span_counts):
             candidates = all_hashes[hash_idx:hash_idx + n_spans]
             hash_idx += n_spans
             stored = entry.source_hash
+            bound_parts = parse_source_anchor(stored)
+            if bound_parts is not None:
+                if source_digest is None or source_digest != bound_parts[0]:
+                    stale += 1
+                    reuse_blocked["source_binding"] = reuse_blocked.get("source_binding", 0) + 1
+                    if reuse_stats is not None:
+                        reuse_stats.setdefault(key, "source_binding")
+                    continue
+                stored = bound_parts[1]
             computable = [h for h in candidates if h]
             if not computable:
                 # Every candidate span unverifiable: the recorded span

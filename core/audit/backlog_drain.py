@@ -73,7 +73,7 @@ import logging
 import math
 import random
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, TYPE_CHECKING
@@ -594,9 +594,11 @@ def plan_rows(
     return plans
 
 
-def _read_snippet(target_path: Path, file: str, line: int) -> str:
-    """Bounded source window for the synthesis prompt (best-effort —
-    the engine's positive control re-reads the real file).
+def _read_snippet(target_path: Path, file: str, line: int) -> tuple[str, int]:
+    """Return the raw bounded window and its 1-based source origin.
+
+    The origin describes the excerpt, not the claim occurrence. Admission
+    checks the window before dispatch; positive control reads the real file.
 
     Containment-checked capped read (the row's path is
     hostile-artifact data; ``_is_bad_path`` at intake is only the
@@ -610,30 +612,14 @@ def _read_snippet(target_path: Path, file: str, line: int) -> str:
         max_chars=4 * _SNIPPET_CHAR_CAP, newline="",
     )
     if not text:
-        return ""
+        return "", 0
     lines = split_lines(text)
     if not lines:
-        return ""
+        return "", 0
     centre = min(max(line, 1), len(lines))
     start = max(0, centre - 1 - _SNIPPET_BEFORE_LINES)
     window = "\n".join(lines[start:centre + _SNIPPET_AFTER_LINES])
-    return window[:_SNIPPET_CHAR_CAP]
-
-
-def _journal_bytes(run_dir: Path) -> int:
-    """Total on-disk journal size (main file + shards) — the landed
-    check: ``append_journal_for_outcome`` is best-effort by contract
-    (it swallows write failures), and a row may leave the backlog
-    only when its journal entry actually landed."""
-    from core.coverage.journal import JOURNAL_FILENAME, journal_shard_paths
-    total = 0
-    for p in [Path(run_dir) / JOURNAL_FILENAME,
-              *journal_shard_paths(Path(run_dir))]:
-        try:
-            total += p.stat().st_size
-        except OSError:
-            continue
-    return total
+    return window[:_SNIPPET_CHAR_CAP], start + 1
 
 
 def _refuse_live_run(run_dir: Path) -> None:
@@ -1470,6 +1456,9 @@ def drain(
         is_self_match_synth_receipt,
         synthesize_verification_rule,
     )
+    from .claim_verification import ClaimVerification
+    from .refutation_source import capture_source_identity
+    from .synthesis_admission import bind_synthesis_request
 
     synth_config = _SynthConfig(
         target_path=target_path,
@@ -1534,7 +1523,17 @@ def drain(
             line=row.line,
             review_result={"hypothesis": row.title},
         )
-        snippet = _read_snippet(target_path, row.file, row.line)
+        snippet, snippet_start = _read_snippet(target_path, row.file, row.line)
+        bound = bind_synthesis_request(outcome, synth_config, {"mechanism": row.title}, snippet,
+                                       excerpt_line_start=snippet_start or None)
+        if bound is None:
+            record["action"] = "not-attempted"
+            record["reason"] = "source input could not be bound to the target file"
+            report.add_row(record)
+            continue
+        request, snippet = bound
+        record["verification_scope"] = asdict(request.binding)
+        record["excerpt_line_start"] = snippet_start or None
         dispatched_sites.add((row.file, row.function))
         try:
             synth = synthesize_verification_rule(
@@ -1586,6 +1585,33 @@ def drain(
             )
             if synth.rule_id:
                 record["rule_id"] = _cap(synth.rule_id, _ID_CAP)
+            _bump_attempts(row)
+            changed = True
+            report.attempted += 1
+            report.add_row(record)
+            continue
+
+        current_source = capture_source_identity(target_path, row.file) if request.source_identity else None
+        verification = ClaimVerification({"mechanism": row.title}, (synth.stamp,), binding=request.binding)
+        reason = verification.scope_rejection(file=outcome.file, function=outcome.function,
+            line_start=outcome.line, hypothesis=outcome.hypothesis, source_identity=current_source)
+        if reason is None and (outcome.review_result or {}).get("hypothesis") != row.title:
+            reason = "claim-revised"
+        if reason:
+            try:
+                from .check_trace import record_claim_scope_rejection, record_source_invalidation
+
+                if reason == "source-version-drift":
+                    record_source_invalidation(run_dir, request, source_identity_after=current_source,
+                        prior_receipts=(synth.stamp,), prior_outcomes=(), phase="backlog_synthesis")
+                else:
+                    record_claim_scope_rejection(run_dir, request.binding, reason=reason,
+                        receipts=(synth.stamp,), attempted_scope={"file": outcome.file,
+                            "function": outcome.function, "line_start": outcome.line,
+                            "hypothesis": outcome.hypothesis})
+            except Exception:
+                logger.warning("could not record backlog synthesis admission rejection", exc_info=True)
+            record.update(action="attempted", receipt=synth.stamp, reason=reason, journal="not-appended")
             _bump_attempts(row)
             changed = True
             report.attempted += 1
@@ -1649,19 +1675,41 @@ def drain(
                 },
             },
         )
-        before = _journal_bytes(run_dir)
-        from core.coverage.journal import PRODUCER_BACKLOG_DRAIN
+        from core.coverage.journal import PRODUCER_BACKLOG_DRAIN, ReviewJournalEntry, flush_journal
+        from copy import deepcopy
 
         from .collector import append_journal_for_outcome
-        append_journal_for_outcome(
+        # The writer may annotate its input. Its acknowledgement must match
+        # the request as submitted, not a subsequently mutated expectation.
+        expected_entry = (
+            run_id, str(run_dir.resolve()), row.file, row.function, row.line, row.line, "suspicious",
+            PRODUCER_BACKLOG_DRAIN, deepcopy(journal_outcome.hypotheses),
+            [journal_outcome.evidence_tool] if journal_outcome.evidence_tool else [],
+            journal_outcome.body, (journal_outcome.review_result or {}).get("cwe"),
+        )
+        appended = append_journal_for_outcome(
             out_dir=run_dir,
             target_path=target_path,
             run_id=run_id,
             outcome=journal_outcome,
             gap={"line_start": row.line, "line_end": row.line},
             producer=PRODUCER_BACKLOG_DRAIN,
+            verification_scope=request.binding,
         )
-        if _journal_bytes(run_dir) > before:
+        acknowledged = isinstance(appended, ReviewJournalEntry) and (
+            appended.run_id, appended.run_path, appended.file, appended.function, appended.line_start,
+            appended.line_end, appended.verdict, appended.producer, appended.hypotheses,
+            appended.evidence_tools, appended.body, appended.cwe,
+        ) == expected_entry
+        record["journal"] = "foreign-acknowledgement" if isinstance(appended, ReviewJournalEntry) else "not-acknowledged"
+        if acknowledged:
+            try:
+                flush_journal(run_dir, strict=True)
+            except Exception:
+                logger.warning("could not flush acknowledged backlog journal entry", exc_info=True)
+                record["journal"] = "flush-failed"
+                acknowledged = False
+        if acknowledged:
             removed_sites += _remove_site(artifact, row)
             changed = True
             record["action"] = "witnessed"
@@ -1671,11 +1719,11 @@ def drain(
             record["journal"] = "appended"
             report.witnessed += 1
         else:
-            # The write path swallowed a failure — the row must not
-            # leave the backlog on an unlanded entry.
+            # A failed/foreign acknowledgement or flush does not retire
+            # this row, even if another writer grew the same journal.
             record["action"] = "attempted"
             record["receipt"] = synth.stamp
-            record["reason"] = "journal write did not land — row stays dark"
+            record["reason"] = "journal write was not acknowledged and flushed — row stays dark"
             _bump_attempts(row)
             changed = True
             report.attempted += 1
@@ -1718,7 +1766,6 @@ def drain(
 
     # The report payload IS the dataclass (field names are the
     # schema), plus a schema tag, a timestamp, and a rounded spend.
-    from dataclasses import asdict
     payload = asdict(report)
     payload["schema"] = 1
     payload["ts"] = datetime.now(timezone.utc).isoformat()

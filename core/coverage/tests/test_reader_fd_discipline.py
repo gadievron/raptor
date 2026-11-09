@@ -276,3 +276,18 @@ class TestJournalReader:
             f"reader peaked at {peak} bytes on a 30 MB line under a "
             "64 KiB budget — the line was materialised before the cap"
         )
+
+
+@pytest.mark.parametrize("kind", ["missing", "fifo", "symlink"])
+def test_strict_flush_refuses_missing_or_nonregular_journal(tmp_path, kind):
+    from core.coverage.journal import flush_journal, JOURNAL_FILENAME
+
+    path = tmp_path / JOURNAL_FILENAME
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "symlink":
+        foreign = tmp_path / "foreign"
+        foreign.write_text("owned unrelated data")
+        path.symlink_to(foreign)
+    with pytest.raises(OSError, match="could not be opened for flush"):
+        flush_journal(tmp_path, strict=True)
