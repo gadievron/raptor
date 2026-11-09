@@ -115,15 +115,15 @@ class TestSuccess:
         assert out == b"\x01\x02\xff"
 
     def test_gzip_body_decompressed_when_content_encoding_declared(self):
-        """If urllib3's auto-decode misses on a response that DECLARES
-        Content-Encoding: gzip, the fallback in _fetch_once decodes it."""
+        """Decode exactly the declared encoding through the real HTTP reader."""
+        import io
+        import urllib3
         body = gzip.compress(b'{"hello": "world"}')
-        # decode_content=True in urllib3 normally decompresses, but to
-        # force the fallback path we lie via the stub: stream() returns
-        # the raw gzipped bytes as if urllib3 didn't decode.
-        client, _ = _client_with_mock_pool(
-            _stub_response(body, content_encoding="gzip"),
+        actual = urllib3.response.HTTPResponse(
+            body=io.BytesIO(body), status=200,
+            headers={"Content-Encoding": "gzip"}, preload_content=False,
         )
+        client, _ = _client_with_mock_pool(actual)
         result = client.get_json("https://example.com/api")
         assert result == {"hello": "world"}
 
@@ -1650,7 +1650,7 @@ class TestHostInNoProxy:
         assert _host_in_no_proxy("example.com", ("example.com",))
         assert _host_in_no_proxy("a.example.com", ("example.com",))
         assert _host_in_no_proxy("a.example.com", (".example.com",))
-        assert _host_in_no_proxy("example.com", ("example.com:443",))
+        assert _host_in_no_proxy("example.com", ("example.com:443",), 443)
         assert not _host_in_no_proxy("notexample.com", ("example.com",))
         assert not _host_in_no_proxy("example.com", ())
         assert _host_in_no_proxy("169.254.169.254", ("169.254.169.254",))
@@ -1729,9 +1729,8 @@ class TestBoundedDrainOnAbort:
         assert resp.closed
         assert resp.released
 
-    def test_small_remainder_fully_drained_for_reuse(self):
-        """A remainder inside the budget is drained to EOF — the
-        connection stays reusable (not closed)."""
+    def test_small_partial_remainder_is_closed_without_more_reads(self):
+        """Even a small unread remainder can stall; close rather than drain."""
         resp = self._HostileResponse(remainder_bytes=2048)
         pool = MagicMock()
         pool.request.return_value = resp
@@ -1739,8 +1738,8 @@ class TestBoundedDrainOnAbort:
         with pytest.raises(SizeLimitExceeded):
             client.request("GET", "https://example.com/big",
                            max_bytes=512, retries=0)
-        assert resp.bytes_drained == 2048
-        assert not resp.closed
+        assert resp.bytes_drained == 0
+        assert resp.closed
         assert resp.released
 
 

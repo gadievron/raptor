@@ -1,6 +1,6 @@
 """HTTP client interface — single chokepoint for outbound HTTP from RAPTOR.
 
-Two backends ship today:
+Two general-purpose backends ship today:
 
   - :class:`~core.http.urllib_backend.UrllibClient` — urllib3-backed
     with connection pooling, bounded size, gzip-decompress, and
@@ -15,7 +15,19 @@ Two backends ship today:
     call where the threat model includes "compromised parser
     exfiltrates to attacker host".
 
-Callers depend on the :class:`HttpClient` Protocol only — concrete
+An additional :class:`~core.http.anonymous.AnonymousOriginClient` offers a
+narrower read-only API: anonymous GET/HEAD requests to exact HTTPS origins.
+It reuses EgressClient, refuses credential-bearing request headers, has no
+cookie jar, and exposes per-response and optional aggregate body/request
+budgets. Redirects are returned for the caller to re-authorise. Browser/CLI
+adoption is separate.
+
+For forwarding anonymous resource bodies, ``core.http.headers`` provides
+``anonymous_resource_headers``. It copies only resource/CORS metadata,
+excluding cookies, origin state and transport framing. It is not a document
+proxy and does not rewrite response origins or content encodings.
+
+General-purpose callers depend on the :class:`HttpClient` Protocol — concrete
 backend swap is one factory call, no consumer churn.
 
 Constants below are defaults. Callers may override per-call timeouts
@@ -35,7 +47,7 @@ if TYPE_CHECKING:
 # bombs and pathological response shapes.
 DEFAULT_MAX_BYTES = 50 * 1024 * 1024   # 50MB; covers wheels and source archives
 DEFAULT_TIMEOUT = 30                   # seconds (per-attempt connect+read)
-DEFAULT_TOTAL_TIMEOUT = 600            # seconds (whole-call deadline incl retries)
+DEFAULT_TOTAL_TIMEOUT = 600            # seconds (retry/body deadline; setup uses I/O timeouts)
 # Default count of retries beyond the first attempt — i.e. the default
 # call makes up to (1 + DEFAULT_RETRIES) total attempts. Sized so the
 # default exactly fills the urllib backend's backoff schedule (one slot
@@ -175,6 +187,8 @@ class Response:
         in memory at all), use :meth:`HttpClient.stream_bytes`
         instead.
         """
+        if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size <= 0:
+            raise ValueError("chunk_size must be a positive integer")
         body = self.body
         for i in range(0, len(body), chunk_size):
             yield body[i:i + chunk_size]
@@ -233,8 +247,9 @@ class HttpClient(Protocol):
         would bypass caller-level address policy (e.g. the OCI
         registry SSRF gate) — callers must re-validate ``Location``
         themselves and issue a new request.
-      - ``total_timeout``: wall-clock cap on the whole retry loop in
-        seconds (default 600).
+      - ``total_timeout``: retry-loop and response-body deadline in seconds
+        (default 600). Resolver and response-header setup retain the
+        underlying backend's I/O timeout semantics.
     """
 
     def request(
