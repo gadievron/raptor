@@ -54,17 +54,22 @@ markers =
 
 def _run_nested(
     tmp_path: Path, budget: str, test_source: str,
-    phase_durations: dict[tuple[str, str], float] | None = None,
+    phase_durations: dict[tuple[str, str], float | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one nested pytest session over ``test_source`` with the
-    root conftest loaded and RAPTOR_MAX_TEST_SECONDS=``budget``."""
+    root conftest loaded and RAPTOR_MAX_TEST_SECONDS=``budget``.
+
+    Synthetic sessions default unlisted phases to zero. An explicit None
+    retains a phase's measured time for the real elapsed-time sentinel.
+    """
     (tmp_path / "pytest.ini").write_text(NESTED_INI, encoding="utf-8")
     test_file = tmp_path / "test_nested.py"
     test_file.write_text(test_source, encoding="utf-8")
-    if phase_durations:
+    if phase_durations is not None:
         # Exercise the real report/stamp/logreport/session-exit pipeline at
         # precise thresholds without waiting for those durations to elapse.
-        # Unlisted phases retain pytest's measured wall time.
+        # Incidental setup cost must not change a threshold fixture's
+        # verdict. Only explicitly measured phases retain real wall time.
         (tmp_path / "conftest.py").write_text(
             "import pytest\n"
             f"DURATIONS = {phase_durations!r}\n"
@@ -72,8 +77,9 @@ def _run_nested(
             "def pytest_runtest_makereport(item, call):\n"
             "    report = yield\n"
             "    key = (item.name, report.when)\n"
-            "    if key in DURATIONS:\n"
-            "        report.duration = DURATIONS[key]\n"
+            "    duration = DURATIONS.get(key, 0.0)\n"
+            "    if duration is not None:\n"
+            "        report.duration = duration\n"
             "    return report\n",
             encoding="utf-8",
         )
@@ -154,6 +160,38 @@ def _flagged_nodeids(stdout: str) -> set[str]:
 # elapsed-time wiring independently of the report-duration fixture.
 @pytest.mark.wall_budget(30.0)
 class TestWallBudgetMarker:
+    def test_incidental_setup_does_not_change_synthetic_verdict(self, tmp_path: Path) -> None:
+        """Unlisted phase noise must not alter a synthetic threshold case."""
+        from types import SimpleNamespace
+
+        from core.testing.module_views import module_function_view
+
+        run = subprocess.run
+
+        def inflated_setup(*args, **kwargs):
+            plugin = Path(kwargs["env"]["TMPDIR"]) / "conftest.py"
+            source = plugin.read_text(encoding="utf-8")
+            source = source.replace(
+                "    key = (item.name, report.when)\n",
+                "    key = (item.name, report.when)\n"
+                "    if report.when == 'setup':\n"
+                "        report.duration = 5.0\n",
+            )
+            plugin.write_text(source, encoding="utf-8")
+            return run(*args, **kwargs)
+
+        view = module_function_view(
+            sys.modules[__name__],
+            bindings={"subprocess": SimpleNamespace(run=inflated_setup)},
+        )
+        proc = view._run_nested(
+            tmp_path, "0.6", "def test_synthetic():\n    pass\n",
+            phase_durations={("test_synthetic", "call"): 0.1},
+        )
+        assert "1 passed" in proc.stdout, proc.stdout
+        assert proc.returncode == 0, (proc.stdout, proc.stderr)
+        assert "slow-test guard" not in proc.stdout, proc.stdout
+
     def test_guard_semantics_raise_only(self, tmp_path: Path) -> None:
         """One nested session, global budget 0.6 s:
         unmarked-over flags, marked-below-global stays governed by
@@ -193,6 +231,7 @@ class TestWallBudgetMarker:
                 ("test_unmarked_over_budget", "call"): 1.2,
                 ("test_marker_never_lowers", "call"): 0.35,
                 ("test_marked_over_own_budget", "call"): 1.5,
+                ("test_real_elapsed_time", "call"): None,
                 ("test_setup_counts", "setup"): 1.2,
                 ("test_teardown_is_excluded", "teardown"): 1.2,
             },
