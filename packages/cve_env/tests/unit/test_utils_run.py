@@ -106,13 +106,25 @@ def test_run_with_timeout_returns_when_subprocess_run_itself_hangs(
 
     from core.container import proc as proc_module
 
-    monkeypatch.setattr("core.container.proc._REAP_GRACE_S", 1.0)
+    timeout = grace = 0.05
+    monkeypatch.setattr(proc_module, "_REAP_GRACE_S", grace)
     entered = threading.Event()
     release = threading.Event()
     workers = []
+    joins = []
 
     def tracked_thread(*args, **kwargs):
         worker = threading.Thread(*args, **kwargs)
+        real_join = worker.join
+
+        def join(timeout=None):
+            # A short test deadline must start after the fake is wedged,
+            # rather than race thread scheduling on a loaded runner.
+            assert entered.wait(5), "subprocess.run was never invoked"
+            joins.append(timeout)
+            return real_join(timeout)
+
+        worker.join = join
         workers.append(worker)
         return worker
 
@@ -129,16 +141,18 @@ def test_run_with_timeout_returns_when_subprocess_run_itself_hangs(
 
     try:
         start = _time.monotonic()
-        outcome = run_with_timeout(["docker", "build", "."], timeout=1.0)
+        outcome = run_with_timeout(["docker", "build", "."], timeout=timeout)
         elapsed = _time.monotonic() - start
 
         assert entered.is_set(), "subprocess.run was never invoked"
+        assert joins == [pytest.approx(timeout + grace)]
+        assert workers[0].is_alive(), "the fake stopped before the timeout boundary"
         assert isinstance(outcome, RunOutcome)
         assert outcome.timed_out is True
         assert outcome.returncode is None
         assert elapsed < 6.0, (
             f"run_with_timeout blocked {elapsed:.1f}s on a wedged subprocess.run "
-            f"(timeout=1 + grace=1 ⇒ should abandon at ~2s). This is the docker_build "
+            f"(timeout={timeout} + grace={grace}). This is the docker_build "
             f"→ 1440s-wall hang; the daemon-thread join must bound it."
         )
     finally:
