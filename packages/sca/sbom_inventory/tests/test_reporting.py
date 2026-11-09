@@ -267,3 +267,24 @@ def test_sca_report_cannot_replace_the_secondary_sbom(tmp_path):
     assert json.loads((out / "sbom.spdx.json").read_text())["spdxVersion"] == "SPDX-2.3"
     assert json.loads((out / "sbom.cdx.json").read_text())["bomFormat"] == "CycloneDX"
     assert result.report_outputs == {} and result.sbom_summary["packages"] == 0
+
+
+def test_inventory_capture_schema_is_closed_and_persisted_without_verdicts():
+    """Pin the ten-field wire schema and both persisted capture consumers."""
+    from core.reporting.document import ReportContext
+    inventory = Inventory("fixture", "a" * 64, subject="owned", records=[
+        Record("one", "example", "1", "library", evidence={"untrusted_api_name": "arbitrary_target_function"})])
+    inventory.notice_verification = "not_verified"
+    payload = inventory_capture(inventory, inventory.records)
+    assert set(payload) == {
+        "source_format", "source_sha256", "subject", "summary", "notice_verification", "coverage",
+        "selection_sha256", "selected_records", "captured_records", "records",
+    }
+    context, _ = build_sbom_report("inspect", inventory=inventory)
+    restored = ReportContext.from_dict(json.loads(json.dumps(context.to_dict())))
+    assert restored.extensions["raptor.result"] == payload
+    assert restored.extensions["raptor.result"]["coverage"] is None
+    assert restored.extensions["raptor.sbom"]["notice_verification"] == "not_verified"
+    assert restored.findings == [] and restored.extensions["raptor.findings_available"] is False
+    assert "untrusted_api_name" not in payload
+    assert payload["records"][0]["evidence"]["untrusted_api_name"] == "arbitrary_target_function"
