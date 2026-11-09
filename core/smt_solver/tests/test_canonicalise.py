@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # core/smt_solver/tests/ -> repo root
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parents[3]))
@@ -173,3 +175,55 @@ class TestCanonicalisedFeedsParser:
         result = check_onegadget(gadget)
         assert result.unknown == []
         assert result.feasible is True
+
+
+@pytest.mark.parametrize('name', ['equals', 'exceeds', 'below', 'EQUALS'])
+@pytest.mark.parametrize('template', [
+    '{} == 1', '1 == {}', '{} + 1 == 2', '1 + {} == 2',
+    '( {} + 1 ) == 2', 'call( {} ) == 1', 'table[ {} ] == 1',
+])
+def test_word_alias_names_remain_symbolic_operands(name, template):
+    text = template.format(name)
+    assert canonicalise(text) == text
+
+
+@pytest.mark.parametrize(('alias', 'operator'), [
+    ('equals', '=='), ('exceeds', '>'), ('below', '<'),
+])
+@pytest.mark.parametrize('name', ['equals', 'exceeds', 'below'])
+def test_alias_words_can_be_operands_of_english_operators(alias, operator, name):
+    text = f'{name} {alias} {name} + 1'
+    expected = f'{name} {operator} {name} + 1'
+    assert canonicalise(text) == expected
+    assert canonicalise(expected) == expected
+
+
+@pytest.mark.parametrize('text', [
+    '(Type) equals + 1', '(unsigned int) below - 1',
+    '1 + (Type) exceeds + 1', '(Type) equals (1)',
+    '(unsigned int) below (value)',
+])
+def test_possible_cast_operands_are_not_rewritten_as_comparisons(text):
+    assert canonicalise(text) == text
+
+
+def test_call_result_can_still_use_an_alias_with_a_negative_operand():
+    assert canonicalise('call(value) equals -1') == 'call(value) == -1'
+
+
+@pytest.mark.parametrize('text', ['rax equals [rsp + 8]', '[rsp + 8] equals rax'])
+def test_memory_reference_operands_keep_english_equality(text):
+    assert canonicalise(text) == text.replace(' equals ', ' == ')
+
+
+def test_onegadget_memory_reference_alias_reaches_joint_solver():
+    pytest.importorskip('z3')
+    from packages.exploit_feasibility.context import OneGadget
+    from packages.exploit_feasibility.smt_onegadget import check_onegadget
+
+    result = check_onegadget(OneGadget(
+        offset=0x1234,
+        constraints=['rax equals [rsp + 8]', 'rax == 1', '[rsp + 8] == 2'],
+    ))
+    assert result.feasible is False
+    assert result.unknown == []

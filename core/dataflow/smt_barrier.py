@@ -76,6 +76,7 @@ from pathlib import Path
 from core.dataflow import sanitizer_cut_config as _sc_config
 from core.paths import confine
 from core.smt_solver import z3
+from core.smt_solver._validation import require_bool
 from core.smt_solver import z3_available as _z3_available
 from core.source import read_text_capped
 
@@ -213,7 +214,9 @@ class ValidatorSpec:
 
       * ``"charset"`` — whole-string anchored allowlist (`re.match(r'^[...]+$', x)`,
         `re.fullmatch(...)`, language equivalents in JS/TS/Java/Ruby).
-        ``charset`` field carries the allowed-char body of ``[...]``.
+        ``charset`` carries the allowed-char body of ``[...]``. Python
+        ``re.match`` also permits one final newline under ``$``; the
+        ``accepts_trailing_newline`` flag preserves that accepted suffix.
         Soundness via Z3 regex-intersection emptiness.
       * ``"charset_sub"`` — strip-by-substitution (`x = re.sub('[...]+', '', x)`).
         ``forbidden`` field carries the stripped-char body of ``[...]``.
@@ -224,6 +227,10 @@ class ValidatorSpec:
     charset: str = ""               # kind=="charset": whole-string allowed chars
     source_line: str = ""           # the literal diff `+` line for diagnostics
     forbidden: str = ""             # kind=="charset_sub": stripped-out chars
+    accepts_trailing_newline: bool = False  # Python re.match with $ anchoring
+
+    def __post_init__(self):
+        require_bool(self.accepts_trailing_newline, argument="accepts_trailing_newline")
 
 
 # --------------------------------------------------------------------------
@@ -624,7 +631,7 @@ def _try_charset_validator(
         return None
     return ValidatorSpec(
         kind="charset", var_name=var_name, charset=cs.group(1),
-        source_line=line.strip(),
+        source_line=line.strip(), accepts_trailing_newline=(call_kind == "match"),
     )
 
 
@@ -2872,7 +2879,8 @@ def _prove_charset(
     spec: ValidatorSpec, sink_class: str, danger: list[str],
     timeout_ms: int | None = None,
 ) -> _ProofVerdict:
-    """Z3 regex-intersection emptiness for whole-string anchored allowlists."""
+    """Z3 regex-intersection emptiness, including admitted anchor suffixes."""
+    require_bool(spec.accepts_trailing_newline, argument="accepts_trailing_newline")
     name = z3.String("name")
     char_re = _charclass_to_re(spec.charset)
     if char_re is None:
@@ -2881,6 +2889,12 @@ def _prove_charset(
             "empty charset — validator rejects all input",
         )
     validator_re = z3.Plus(char_re)
+    language_label = f"[{spec.charset}]+"
+    if spec.accepts_trailing_newline:
+        # Python's $ may stop immediately before one final newline. The
+        # source accepts that suffix even though it is outside the class.
+        validator_re = z3.Union(validator_re, z3.Concat(validator_re, z3.Re("\n")))
+        language_label += " with an optional final newline"
     s = z3.Solver()
     if timeout_ms:
         # Hard per-query bound for callers on a latency budget (the
@@ -2893,7 +2907,7 @@ def _prove_charset(
     if r == z3.unsat:
         return _ProofVerdict(
             True, None,
-            f"UNSAT: no string in [{spec.charset}]+ can contain any of "
+            f"UNSAT: no string in {language_label} can contain any of "
             f"{danger!r} -> validator provably neutralises {sink_class}",
         )
     if r == z3.sat:
@@ -2906,7 +2920,7 @@ def _prove_charset(
             ce = None
         return _ProofVerdict(
             False, ce,
-            f"SAT: validator [{spec.charset}]+ permits an input that still "
+            f"SAT: validator {language_label} permits an input that still "
             f"carries a {sink_class} danger char (counterexample: {ce!r})",
         )
     return _ProofVerdict(False, None,

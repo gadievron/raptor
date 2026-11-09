@@ -3789,3 +3789,46 @@ class TestGuardPatternWhitespaceRuns:
         assert found is not None
         m, head_start = found
         assert m.group("var") == "name" and head_start == 0
+
+
+@_requires_z3
+@pytest.mark.parametrize('quantifier', ['+', '*'])
+@pytest.mark.parametrize('call_kind', ['match', 'fullmatch'])
+def test_python_anchor_language_survives_charset_lift(quantifier, call_kind):
+    import re
+
+    pattern = f'^[a-z]{quantifier}$'
+    line = f"if not re.{call_kind}(r'{pattern}', value): return"
+    spec = sb.extract_validator_from_line(line, 'python')
+    assert spec is not None
+    assert spec.accepts_trailing_newline is (call_kind == 'match')
+    actual = getattr(re, call_kind)
+    assert bool(actual(pattern, 'a\n')) is (call_kind == 'match')
+    result = sb.prove_neutralizes(spec, 'cmdi', timeout_ms=2000)
+    assert result.sound is (call_kind == 'fullmatch')
+    if call_kind == 'match':
+        assert result.counterexample is not None
+        assert actual(pattern, result.counterexample) is not None
+        assert '\n' in result.counterexample
+
+
+@_requires_z3
+def test_final_newline_does_not_change_unrelated_character_exclusion():
+    spec = sb.extract_validator_from_line("if not re.match(r'^[a-z]+$', value): return", 'python')
+    assert spec.accepts_trailing_newline is True
+    assert sb.prove_neutralizes(spec, 'pathtrav', timeout_ms=2000).sound is True
+
+
+@pytest.mark.parametrize('flag', [0, 1, None, 'false'])
+def test_final_newline_metadata_is_not_coerced(flag):
+    with pytest.raises(ValueError, match='must be a boolean'):
+        sb.ValidatorSpec(kind='charset', var_name='value', charset='a-z',
+                         accepts_trailing_newline=flag)
+
+
+@_requires_z3
+def test_mutated_anchor_metadata_is_validated_before_query():
+    spec = sb.ValidatorSpec(kind='charset', var_name='value', charset='a-z')
+    spec.accepts_trailing_newline = 0
+    with pytest.raises(ValueError, match='must be a boolean'):
+        sb.prove_neutralizes(spec, 'cmdi')
