@@ -497,11 +497,11 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
             "truncated" if raw else "unknown",
         )
     finally:
+        parent_fds.discard(status_r)
         try:
             os.close(status_r)
         except OSError:
             pass
-        parent_fds.discard(status_r)
     parsed = _parse_setup_status(raw)
     if read_failed and parsed is None:
         # G: is only positive confirmation when the remaining channel was
@@ -1010,25 +1010,26 @@ def _teardown_target(child_pid: int, death_w: int, parent_fds: set,
     until the final sweep. If another owner already reaped it, do not
     signal cached numbers, which may now belong to unrelated processes.
     """
-    if death_w in parent_fds:
-        close_death_w(death_w)
-        parent_fds.discard(death_w)
-        deadline = time.monotonic() + grace_s
-        while time.monotonic() < deadline:
-            try:
-                status = os.waitid(os.P_PID, child_pid,
-                                   os.WEXITED | os.WNOHANG | os.WNOWAIT)
-            except InterruptedError:
-                continue
-            except (ChildProcessError, ProcessLookupError):
-                return
-            except OSError as exc:
-                logger.warning("sandbox: graceful child wait failed; forcing cleanup: %s", exc)
-                break
-            if status is not None:
-                break
-            time.sleep(0.01)
-    _kill_and_reap(child_pid)
+    def graceful_stop():
+        if death_w in parent_fds:
+            parent_fds.discard(death_w)
+            close_death_w(death_w)
+            deadline = time.monotonic() + grace_s
+            while time.monotonic() < deadline:
+                try:
+                    status = os.waitid(os.P_PID, child_pid,
+                                       os.WEXITED | os.WNOHANG | os.WNOWAIT)
+                except InterruptedError:
+                    continue
+                except (ChildProcessError, ProcessLookupError):
+                    return
+                except OSError as exc:
+                    logger.warning("sandbox: graceful child wait failed; forcing cleanup: %s", exc)
+                    break
+                if status is not None:
+                    break
+                time.sleep(0.01)
+    _retire_parent_resources(graceful_stop, lambda: _kill_and_reap(child_pid))
 
 
 def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
@@ -1128,6 +1129,24 @@ def _cleanup_stub(root_dir: str) -> None:
         pass
     if getattr(shutil.rmtree, "avoids_symlink_attacks", False):
         shutil.rmtree(root_dir, ignore_errors=True)
+
+
+def _retire_parent_resources(*callbacks) -> None:
+    """Attempt every owner without replacing an operation already unwinding."""
+    original = sys.exc_info()[1]
+    failures = []
+    for callback in callbacks:
+        try:
+            callback()
+        except BaseException as error:
+            failures.append(error)
+    if failures:
+        primary = original if original is not None else failures.pop(0)
+        for error in failures:
+            with contextlib.suppress(BaseException):
+                primary.add_note("namespace owner cleanup: " + type(error).__name__)
+        if original is None:
+            raise primary
 
 
 def _pin_bind_sources(
@@ -1782,6 +1801,23 @@ def run_sandboxed(
     # created O_EXCL before the sandbox starts; the tracer inherits
     # the fd and appends through it; inode verified at finalisation.
     _evidence_file = None
+
+    def _retire_audit_config() -> None:
+        nonlocal _audit_config_fd
+        if _audit_config_fd is not None:
+            fd, _audit_config_fd = _audit_config_fd, None
+            with contextlib.suppress(OSError):
+                os.close(fd)
+
+    def _retire_evidence(*, verify=True) -> None:
+        nonlocal _evidence_file
+        if _evidence_file is not None:
+            handle, _evidence_file = _evidence_file, None
+            if verify:
+                _evidence_mod.finalize_capture(handle)
+            else:
+                handle.close(verify=False)
+
     if audit_mode:
         if audit_run_dir is None:
             # Clean up the just-created mkdtemp stub before raising.
@@ -2034,10 +2070,11 @@ def run_sandboxed(
                 # fork try/except below would re-cleanup if reached,
                 # but it isn't reached when we raise here, so do both
                 # cleanups inline.
-                _evidence_file.close(verify=False)
-                _evidence_file = None
-                _cleanup_stub(_root_dir)
                 _audit_engaged = False
+                _retire_parent_resources(
+                    _retire_audit_config, lambda: _retire_evidence(verify=False),
+                    lambda: _cleanup_stub(_root_dir),
+                )
                 raise
         else:
             # Probe already logged the once-per-process warning with
@@ -2080,21 +2117,24 @@ def run_sandboxed(
     # pops from this set.
     _parent_fds: set = set()
 
+    def _close_parent_fd(fd: int) -> None:
+        if fd not in _parent_fds:
+            return
+        # Consume ownership before a close can release the number and raise.
+        _parent_fds.discard(fd)
+        if not close_death_w(fd):
+            os.close(fd)
+
     def _close_leftover() -> None:
-        for fd in list(_parent_fds):
-            # A registered death-pipe write end must unregister under
-            # the registry lock as it closes (close_death_w) — a bare
-            # close would leave a stale registry entry whose fd number
-            # can be reused, steering a sibling's forked child into
-            # closing an unrelated fd. Non-death fds can never collide
-            # with a registered number (both are live fds in one
-            # table), so the fallthrough close is safe.
-            if not close_death_w(fd):
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-            _parent_fds.discard(fd)
+        def close_one(fd):
+            with contextlib.suppress(OSError):
+                _close_parent_fd(fd)
+        _retire_parent_resources(*(lambda fd=fd: close_one(fd)
+                                   for fd in tuple(_parent_fds)))
+
+    def _close_scope_socket(sock) -> None:
+        with contextlib.suppress(OSError):
+            sock.close()
 
     try:
         # Sync pipes: parent⇄child handshake for newuidmap timing.
@@ -2745,25 +2785,15 @@ def run_sandboxed(
         with _DEATH_W_LOCK:
             child_pid = os.fork()
     except BaseException:
-        # Any failure before fork returns: close opened pipes, release
-        # the audit-config fd and evidence file if created, and remove
-        # the mkdtemp stub. Without this, a pipe-exhaustion OSError or
-        # import-time failure in preexec construction would leak FDs
-        # and a .raptor-sbx-* dir on every call.
-        _close_leftover()
-        if _audit_config_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(_audit_config_fd)
-            _audit_config_fd = None
-        if _evidence_file is not None:
-            _evidence_file.close(verify=False)
-            _evidence_file = None
-        for _sk in (locals().get("_unix_scope_parent_sock"),
-                    locals().get("_unix_scope_child_sock")):
-            if _sk is not None:
-                with contextlib.suppress(OSError):
-                    _sk.close()
-        _cleanup_stub(_root_dir)
+        sockets = [sock for sock in (locals().get("_unix_scope_parent_sock"),
+                                     locals().get("_unix_scope_child_sock"))
+                   if sock is not None]
+        _retire_parent_resources(
+            _close_leftover, _retire_audit_config,
+            lambda: _retire_evidence(verify=False),
+            *(lambda sock=sock: _close_scope_socket(sock) for sock in sockets),
+            lambda: _cleanup_stub(_root_dir),
+        )
         raise
     if child_pid == 0:
         # ================ CHILD ================
@@ -3813,112 +3843,123 @@ def run_sandboxed(
     # (child died before the export) or when the run's finally closes
     # the supervisor.
     _unix_scope_supervisor: list = []
-    if _unix_scope_parent_sock is not None:
-        assert _unix_scope_child_sock is not None
-        _unix_scope_child_sock.close()
-
-        def _unix_scope_receiver() -> None:
-            # array/socket are module-level imports — a lazy import in
-            # this daemon thread is the same hazard class as the spawn
-            # child's former post-fork imports: it races the import
-            # machinery against concurrent forks and fails outright in
-            # import-starved processes, killing the supervisor before
-            # it ever receives the notify fd (the child's NOTIFY filter
-            # then sits unserviced — fail-closed but undiagnosed).
-            _array = array
-            _socket_mod2 = _socket_mod
-            sp = _unix_scope_parent_sock
-            try:
-                sp.settimeout(120)
-                fds = _array.array("i")
-                try:
-                    msg, ancdata, _fl, _ad = sp.recvmsg(
-                        64, _socket_mod2.CMSG_SPACE(fds.itemsize))
-                except (OSError, TimeoutError):
-                    return
-                if not msg:
-                    return
-                for _lvl, _typ, _data in ancdata:
-                    if (_lvl == _socket_mod2.SOL_SOCKET
-                            and _typ == _socket_mod2.SCM_RIGHTS):
-                        fds.frombytes(
-                            _data[:len(_data)
-                                  - (len(_data) % fds.itemsize)])
-                if not fds:
-                    return
-                notify_fd = fds[0]
-                os.set_inheritable(notify_fd, False)
-                # Private-tmpfs device ids pinned by the child AFTER
-                # mount setup and BEFORE the target exec (payload:
-                # b"F2" + count byte + count u64 LE device ids). This
-                # pinned set is the supervisor's only private-tmpfs
-                # identity evidence — a malformed/short payload yields
-                # the EMPTY set (pathname connects then fail closed to
-                # the allowlisted instance sockets), never a live
-                # re-resolution of the child's rearrangeable view.
-                _tmpfs_devs: frozenset[int] = frozenset()
-                if len(msg) >= 3 and msg[:2] == b"F2":
-                    _want = 3 + 8 * msg[2]
-                    while len(msg) < _want:
-                        try:
-                            _more = sp.recv(_want - len(msg))
-                        except (OSError, TimeoutError):
-                            break
-                        if not _more:
-                            break
-                        msg += _more
-                    if len(msg) >= _want:
-                        _tmpfs_devs = frozenset(
-                            int.from_bytes(msg[i:i + 8], "little")
-                            for i in range(3, _want, 8))
-                if not _tmpfs_devs:
-                    logger.warning(
-                        "unix-scope: no private-tmpfs device pins "
-                        "arrived with the notify fd — pathname "
-                        "AF_UNIX connects will be limited to the "
-                        "allowlisted instance sockets (fail closed).")
-                _allowed = [p for p in ([proxy_unix_socket]
-                                        + [b[1] for b in
-                                           (extra_unix_bridges or [])])
-                            if p]
-                # The run's network policy travels WITH the supervisor:
-                # Landlock CONNECT_TCP rules and the ABI-6 abstract
-                # scope are task-scoped, so a connect the supervisor
-                # executes never evaluates them — the supervisor must
-                # re-apply the declared TCP port policy itself, and may
-                # treat abstract names as netns-scoped only when this
-                # run actually unshared a netns for the child.
-                sup = _UnixScopeSupervisor(
-                    notify_fd, allowed_socket_paths=_allowed,
-                    label=f"spawn-{child_pid}",
-                    allowed_tcp_ports=(list(allowed_tcp_ports)
-                                       if allowed_tcp_ports else None),
-                    netns_isolated=bool(block_network
-                                        and not inherit_netns),
-                    private_tmpfs_devs=_tmpfs_devs)
-                _unix_scope_supervisor.append(sup)
-                sup.serve_forever()
-            except Exception:  # noqa: BLE001 — supervisor thread must never propagate
-                logger.debug("unix-scope receiver failed", exc_info=True)
-            finally:
-                with contextlib.suppress(OSError):
-                    sp.close()
-
-        threading.Thread(target=_unix_scope_receiver,
-                         name=f"unix-scope-recv-{child_pid}",
-                         daemon=True).start()
-    if child_pid_callback is not None:
-        try:
-            child_pid_callback(child_pid)
-        except Exception:
-            logger.warning(
-                "child_pid_callback raised; continuing with the run",
-                exc_info=True,
-            )
-    # Initialised before the try so the outer finally can reference it
-    # regardless of where in the parent flow we exit.
     tracer_pid: int | None = None
+
+    def retire_scope_endpoints():
+        callbacks = [supervisor.close for supervisor in _unix_scope_supervisor]
+        if _unix_scope_parent_sock is not None:
+            def shutdown_scope_socket():
+                with contextlib.suppress(OSError):
+                    _unix_scope_parent_sock.shutdown(_socket_mod.SHUT_RDWR)
+            callbacks.extend((shutdown_scope_socket,
+                              lambda: _close_scope_socket(_unix_scope_parent_sock)))
+        if _unix_scope_child_sock is not None:
+            callbacks.append(lambda: _close_scope_socket(_unix_scope_child_sock))
+        _retire_parent_resources(*callbacks)
+
     try:
+        if _unix_scope_parent_sock is not None:
+            assert _unix_scope_child_sock is not None
+            _unix_scope_child_sock.close()
+
+            def _unix_scope_receiver() -> None:
+                # array/socket are module-level imports — a lazy import in
+                # this daemon thread is the same hazard class as the spawn
+                # child's former post-fork imports: it races the import
+                # machinery against concurrent forks and fails outright in
+                # import-starved processes, killing the supervisor before
+                # it ever receives the notify fd (the child's NOTIFY filter
+                # then sits unserviced — fail-closed but undiagnosed).
+                _array = array
+                _socket_mod2 = _socket_mod
+                sp = _unix_scope_parent_sock
+                try:
+                    sp.settimeout(120)
+                    fds = _array.array("i")
+                    try:
+                        msg, ancdata, _fl, _ad = sp.recvmsg(
+                            64, _socket_mod2.CMSG_SPACE(fds.itemsize))
+                    except (OSError, TimeoutError):
+                        return
+                    if not msg:
+                        return
+                    for _lvl, _typ, _data in ancdata:
+                        if (_lvl == _socket_mod2.SOL_SOCKET
+                                and _typ == _socket_mod2.SCM_RIGHTS):
+                            fds.frombytes(
+                                _data[:len(_data)
+                                      - (len(_data) % fds.itemsize)])
+                    if not fds:
+                        return
+                    notify_fd = fds[0]
+                    os.set_inheritable(notify_fd, False)
+                    # Private-tmpfs device ids pinned by the child AFTER
+                    # mount setup and BEFORE the target exec (payload:
+                    # b"F2" + count byte + count u64 LE device ids). This
+                    # pinned set is the supervisor's only private-tmpfs
+                    # identity evidence — a malformed/short payload yields
+                    # the EMPTY set (pathname connects then fail closed to
+                    # the allowlisted instance sockets), never a live
+                    # re-resolution of the child's rearrangeable view.
+                    _tmpfs_devs: frozenset[int] = frozenset()
+                    if len(msg) >= 3 and msg[:2] == b"F2":
+                        _want = 3 + 8 * msg[2]
+                        while len(msg) < _want:
+                            try:
+                                _more = sp.recv(_want - len(msg))
+                            except (OSError, TimeoutError):
+                                break
+                            if not _more:
+                                break
+                            msg += _more
+                        if len(msg) >= _want:
+                            _tmpfs_devs = frozenset(
+                                int.from_bytes(msg[i:i + 8], "little")
+                                for i in range(3, _want, 8))
+                    if not _tmpfs_devs:
+                        logger.warning(
+                            "unix-scope: no private-tmpfs device pins "
+                            "arrived with the notify fd — pathname "
+                            "AF_UNIX connects will be limited to the "
+                            "allowlisted instance sockets (fail closed).")
+                    _allowed = [p for p in ([proxy_unix_socket]
+                                            + [b[1] for b in
+                                               (extra_unix_bridges or [])])
+                                if p]
+                    # The run's network policy travels WITH the supervisor:
+                    # Landlock CONNECT_TCP rules and the ABI-6 abstract
+                    # scope are task-scoped, so a connect the supervisor
+                    # executes never evaluates them — the supervisor must
+                    # re-apply the declared TCP port policy itself, and may
+                    # treat abstract names as netns-scoped only when this
+                    # run actually unshared a netns for the child.
+                    sup = _UnixScopeSupervisor(
+                        notify_fd, allowed_socket_paths=_allowed,
+                        label=f"spawn-{child_pid}",
+                        allowed_tcp_ports=(list(allowed_tcp_ports)
+                                           if allowed_tcp_ports else None),
+                        netns_isolated=bool(block_network
+                                            and not inherit_netns),
+                        private_tmpfs_devs=_tmpfs_devs)
+                    _unix_scope_supervisor.append(sup)
+                    sup.serve_forever()
+                except Exception:  # noqa: BLE001 — supervisor thread must never propagate
+                    logger.debug("unix-scope receiver failed", exc_info=True)
+                finally:
+                    with contextlib.suppress(OSError):
+                        sp.close()
+
+            threading.Thread(target=_unix_scope_receiver,
+                             name=f"unix-scope-recv-{child_pid}",
+                             daemon=True).start()
+        if child_pid_callback is not None:
+            try:
+                child_pid_callback(child_pid)
+            except Exception:
+                logger.warning(
+                    "child_pid_callback raised; continuing with the run",
+                    exc_info=True,
+                )
         # Validation-time bind-source pins: the child received its own
         # copies at fork; the parent's serve no further purpose, and
         # holding them would extend the pinned inodes' lifetimes to
@@ -3926,34 +3967,26 @@ def run_sandboxed(
         if _bind_src_fds:
             for _pin_fd in _bind_src_fds.values():
                 with contextlib.suppress(OSError):
-                    os.close(_pin_fd)
-                _parent_fds.discard(_pin_fd)
+                    _close_parent_fd(_pin_fd)
         # Close the ends the child owns — parent doesn't write to them.
-        os.close(p_ready_w)
-        _parent_fds.discard(p_ready_w)
-        os.close(p_go_r)
-        _parent_fds.discard(p_go_r)
+        _close_parent_fd(p_ready_w)
+        _close_parent_fd(p_go_r)
         # Exec-status pipe: the parent only READS (status_r); close the
         # write end now (BEFORE the tracer fork below) so the tracer
         # subprocess can never inherit it and hold it open — otherwise the
         # parent's EOF-on-success read would block forever.
-        os.close(status_w)
-        _parent_fds.discard(status_w)
+        _close_parent_fd(status_w)
         # Death pipe: parent holds death_w only; close the read end now
         # (BEFORE the tracer fork) so the tracer can't inherit it.
-        os.close(death_r)
-        _parent_fds.discard(death_r)
+        _close_parent_fd(death_r)
         # Exec-pid pipe: the parent only READS (pid_r); close the write
         # end now (BEFORE the tracer fork) so only the children hold it
         # and EOF reaches the parent when they exit pre-fork.
         if pid_w is not None:
-            os.close(pid_w)
-            _parent_fds.discard(pid_w)
+            _close_parent_fd(pid_w)
         if capture_output:
-            os.close(out_w)  # type: ignore[arg-type]
-            _parent_fds.discard(out_w)
-            os.close(err_w)  # type: ignore[arg-type]
-            _parent_fds.discard(err_w)
+            _close_parent_fd(out_w)  # type: ignore[arg-type]
+            _close_parent_fd(err_w)  # type: ignore[arg-type]
 
         # Step 4: wait for child to signal "unshare done, ready for newuidmap".
         # Non-blocking + bounded deadline, same idiom as the tracer-
@@ -4061,8 +4094,7 @@ def run_sandboxed(
                     setup_category=_status[0] if _status else None,
                 )
         finally:
-            os.close(p_ready_r)
-            _parent_fds.discard(p_ready_r)
+            _close_parent_fd(p_ready_r)
 
         # Step 6: newuidmap / newgidmap.
         # Prefer raptor-gidmap-allow when available — it writes gid_map
@@ -4257,17 +4289,14 @@ def run_sandboxed(
             # in which /proc/<parent-pid>/fd exposes the nonce-
             # carrying config to same-UID processes.
             if _audit_config_fd is not None:
-                with contextlib.suppress(OSError):
-                    os.close(_audit_config_fd)
-                _audit_config_fd = None
+                _retire_audit_config()
 
             # Parent: close the write end now (tracer has its own copy).
             # Without this close, the parent's `os.read(t_ready_r, ...)`
             # below would block FOREVER on tracer death, because the
             # parent's own t_ready_w would keep the pipe write end
             # alive and EOF would never be signalled to the read.
-            os.close(t_ready_w)  # type: ignore[arg-type]
-            _parent_fds.discard(t_ready_w)
+            _close_parent_fd(t_ready_w)  # type: ignore[arg-type]
 
             # Parent: wait for tracer to signal ready. If tracer dies
             # before signalling, our read returns 0 bytes — treat as
@@ -4301,8 +4330,7 @@ def run_sandboxed(
                         continue  # spurious wakeup — keep waiting
                     break  # 1 byte (ready) or b"" (EOF — tracer died)
             finally:
-                os.close(t_ready_r)  # type: ignore[arg-type]
-                _parent_fds.discard(t_ready_r)
+                _close_parent_fd(t_ready_r)  # type: ignore[arg-type]
             if not ready:
                 # Tracer failed to attach. Reap it (capture exit code
                 # for diagnostics), kill the target child (still
@@ -4385,8 +4413,7 @@ def run_sandboxed(
         try:
             os.write(p_go_w, b"G")
         finally:
-            os.close(p_go_w)
-            _parent_fds.discard(p_go_w)
+            _close_parent_fd(p_go_w)
 
         # Step 8.9: deliver the live grandchild pid to the caller.
         # Blocks (bounded) until the intermediate has forked the
@@ -4410,10 +4437,9 @@ def run_sandboxed(
                 _exec_pid = None
             finally:
                 try:
-                    os.close(pid_r)
+                    _close_parent_fd(pid_r)
                 except OSError:
                     pass
-                _parent_fds.discard(pid_r)
             if _exec_pid is not None and _exec_pid > 0:
                 # Delivered = the caller holds a kill channel from here
                 # on. Set BEFORE invoking: a callback that kills the
@@ -4427,55 +4453,25 @@ def run_sandboxed(
                         "sandboxed run", exc_info=True,
                     )
     except BaseException:
-        # Any failure above: kill+reap the target child if it's not
-        # already dead, reap the audit tracer if forked, close
-        # remaining pipe fds, remove the stub dir, then propagate.
-        #
-        # Most nested handlers DO call _kill_and_reap(child_pid)
-        # before raising (the "child did not signal ready", uidmap
-        # missing, _run_newuidmap fail, audit-fail branches all
-        # do it). But some failure points don't — e.g., a
-        # BrokenPipeError on `os.write(p_go_w, b"G")` if the child
-        # died mid-startup, or any unexpected exception in the
-        # post-newuidmap parent flow. Route through _teardown_target
-        # (death-pipe EOF first — the go signal may already have been
-        # written, meaning the grandchild can exist and may have
-        # setsid'd out of the killable group). Both helpers are
-        # idempotent (ProcessLookupError + ChildProcessError caught)
-        # so re-reaping an already-dead child is harmless.
-        if child_pid > 0:
-            try:
-                _teardown_target(child_pid, death_w, _parent_fds)
-            except Exception:
-                logger.debug("child reap during cleanup failed",
-                             exc_info=True)
-        # If the audit-mode tracer was forked but the parent-side flow
-        # failed before reaching the final `finally:` (which has the
-        # only other call to _reap_tracer), the tracer would otherwise
-        # leak as a zombie. PTRACE_O_EXITKILL has already SIGKILL'd
-        # any remaining tracees, so the tracer's loop should terminate
-        # promptly — _reap_tracer waits 2s then SIGKILLs as backstop.
-        if tracer_pid is not None:
-            try:
-                _reap_tracer(tracer_pid)
-            except Exception:
-                logger.debug("tracer reap during cleanup failed",
-                             exc_info=True)
-        if _audit_config_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(_audit_config_fd)
-            # Mark closed so the final-finally below doesn't try to
-            # close an already-released fd. Keeps the audit lifecycle
-            # bookkeeping honest.
-            _audit_config_fd = None
-        if _evidence_file is not None:
-            # Finalise the evidence file — the inode verification
-            # inside close() fires its loud warning here too, so a
-            # tamper attempt isn't masked by an unrelated failure.
-            _evidence_mod.finalize_capture(_evidence_file)
-            _evidence_file = None
-        _close_leftover()
-        _cleanup_stub(_root_dir)
+        def retire_setup_target():
+            if child_pid > 0:
+                try:
+                    _teardown_target(child_pid, death_w, _parent_fds)
+                except Exception:
+                    logger.debug("child reap during cleanup failed", exc_info=True)
+
+        def retire_setup_tracer():
+            if tracer_pid is not None:
+                try:
+                    _reap_tracer(tracer_pid)
+                except Exception:
+                    logger.debug("tracer reap during cleanup failed", exc_info=True)
+
+        _retire_parent_resources(
+            retire_setup_target, retire_scope_endpoints, retire_setup_tracer,
+            _retire_audit_config, _retire_evidence, _close_leftover,
+            lambda: _cleanup_stub(_root_dir),
+        )
         raise
 
     # Step 15: collect output and wait. Everything from here down runs
@@ -4600,8 +4596,7 @@ def run_sandboxed(
                     for _capture_fd in _capture_ready_fds:
                         chunk = os.read(_capture_fd, 65536)
                         if not chunk:
-                            os.close(_capture_fd)
-                            _parent_fds.discard(_capture_fd)
+                            _close_parent_fd(_capture_fd)
                             fds.remove(_capture_fd)
                         elif _capture_fd == out_r:
                             out_len, discarded = _append_capture_chunk(
@@ -4632,10 +4627,9 @@ def run_sandboxed(
                 # Close any pipes we didn't drain (timeout, exception).
                 for _capture_fd in fds:
                     try:
-                        os.close(_capture_fd)
+                        _close_parent_fd(_capture_fd)
                     except OSError:
                         pass
-                    _parent_fds.discard(_capture_fd)
 
         try:
             # waitpid with a remaining timeout window. `is not None`,
@@ -4671,51 +4665,19 @@ def run_sandboxed(
                            "exit status unknown", child_pid)
             status = 9
     finally:
-        # Drain + close the exec-status pipe FIRST so status_r is reclaimed
-        # even if a cleanup step below raises — an unclosed status_r leaks
-        # one fd per timed-out call and eventually exhausts the table,
-        # breaking all subsequent sandboxing. The child is reaped by now
-        # (success: waitpid above; timeout: _kill_and_reap before the raise),
-        # so any status byte is already buffered. On timeout the target had
-        # execed (hence the timeout) → the 'G' confirmation → None.
-        setup_status = _drain_status_pipe(status_r, _parent_fds)
-        # Death pipe write end: child has exited (or been killed), no
-        # longer needed. Close it so the fd doesn't leak (registry-
-        # routed: unregisters atomically with the close).
-        if death_w in _parent_fds:
-            close_death_w(death_w)
-            _parent_fds.discard(death_w)
-        # Unix-scope supervisor: the run is over — close the notify fd
-        # so any straggler's connect(2) gets ENOSYS from the kernel
-        # (fail-closed) and the receiver thread exits.
-        for _sup in _unix_scope_supervisor:
-            _sup.close()
-        if _unix_scope_parent_sock is not None:
-            # shutdown() BEFORE close(): it wakes a receiver thread
-            # still blocked in recvmsg (close alone does not).
-            with contextlib.suppress(OSError):
-                _unix_scope_parent_sock.shutdown(_socket_mod.SHUT_RDWR)
-            with contextlib.suppress(OSError):
-                _unix_scope_parent_sock.close()
-        # Audit-mode tracer cleanup: target has exited (or been killed
-        # via timeout), so the tracer's traced set will become empty
-        # and it'll exit naturally. Wait for it to reap; if it doesn't
-        # exit promptly, kill it (PTRACE_O_EXITKILL has already done
-        # the right thing for any surviving tracees).
+        def retire_status():
+            nonlocal setup_status
+            setup_status = _drain_status_pipe(status_r, _parent_fds)
+
+        callbacks = [retire_status, lambda: _close_parent_fd(death_w),
+                     retire_scope_endpoints]
         if tracer_pid is not None:
-            _reap_tracer(tracer_pid)
-        # Release the anonymous config fd (normally already closed
-        # right after the tracer fork; this covers early-exit paths).
-        if _audit_config_fd is not None:
-            with contextlib.suppress(OSError):
-                os.close(_audit_config_fd)
-        # Finalise the evidence file AFTER the tracer is reaped so no
-        # writer shares the description any more: verify the on-disk
-        # path still names the inode created at sandbox start (loud
-        # warning on a swap), then close the held fd.
-        if _evidence_file is not None:
-            _evidence_mod.finalize_capture(_evidence_file)
-        _cleanup_stub(_root_dir)
+            callbacks.append(lambda: _reap_tracer(tracer_pid))
+        # The tracer must finish before evidence verification. Every remaining
+        # owner still retires if status, supervisor or tracer cleanup fails.
+        callbacks.extend((_retire_audit_config, _retire_evidence, _close_leftover,
+                          lambda: _cleanup_stub(_root_dir)))
+        _retire_parent_resources(*callbacks)
 
     if os.WIFEXITED(status):
         returncode = os.WEXITSTATUS(status)
