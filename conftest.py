@@ -791,6 +791,11 @@ def pytest_runtest_makereport(item, call):
         return report
     if report.when not in ("setup", "call"):
         return report
+    # Workers retain malformed-marker UsageErrors for an explicit setup
+    # failure. Preserve that report instead of parsing the invalid marker
+    # again and crashing the report/worker channel.
+    if item.stash.get(_WALL_BUDGET_ERROR_KEY, None) is not None:
+        return report
     budget = _wall_budget_seconds(item)
     if budget is None:
         return report
