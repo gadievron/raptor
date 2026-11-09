@@ -848,6 +848,8 @@ def triage_run(run_dir: Path, *,
         "caveats": [],
     }
     capture = (summary or {}).get("audit_capture")
+    if summary and (summary.get("cli_sandbox_disabled") or summary.get("floor_refusals")):
+        report["inputs"]["sandbox_execution_unavailable"] = True
     if capture is not None:
         report["inputs"]["audit_capture"] = capture
         if capture["capture_incomplete"] or capture["budget_truncated"]:
@@ -1409,6 +1411,37 @@ def _remove_stale_triage_report(run_dir: Path) -> None:
         pass
 
 
+def _required_evidence_problem(report: dict) -> str | None:
+    """Require positive, authenticated evidence before a CI gate can pass."""
+    inputs = report.get("inputs")
+    if isinstance(inputs, dict) and inputs.get("sandbox_execution_unavailable"):
+        return "sandbox execution was disabled or refused"
+    if not isinstance(inputs, dict) or not (
+        inputs.get("sandbox_summary_present") is True
+        or inputs.get("proxy_events_present") is True
+    ):
+        return "no sandbox summary or proxy-event evidence"
+    integrity = inputs.get("integrity")
+    if not isinstance(integrity, dict) or any(
+        integrity.get(name) != _INTEGRITY_VERIFIED
+        for name in ("sandbox_summary", "proxy_events", "audit_degraded")
+    ):
+        return "telemetry provenance is not fully verified"
+    posture = inputs.get("mac_key_posture")
+    # Preserve existing provenance semantics for a fresh CLI process:
+    # missing parent-memory posture does not prove prior key exposure.
+    # Known exposure already demotes integrity; never promote it here.
+    if isinstance(posture, dict) and posture.get("mac_key_hidden") is False:
+        return "telemetry signing-key posture is explicitly degraded"
+    capture = inputs.get("audit_capture")
+    if report.get("audit_degraded") or (capture is not None and (
+        not valid_audit_capture(capture)
+        or capture["capture_incomplete"] or capture["budget_truncated"]
+    )):
+        return "sandbox evidence capture is incomplete"
+    return None
+
+
 def _cli_main(argv: list | None = None) -> int:
     import argparse
     import sys
@@ -1421,12 +1454,19 @@ def _cli_main(argv: list | None = None) -> int:
             "suspicious verdicts.\n\n"
             "Examples:\n"
             "  raptor-sandbox-triage /path/to/run\n"
-            "  raptor-sandbox-triage /path/to/run --json --deep"
+            "  raptor-sandbox-triage /path/to/run --json --deep\n"
+            "  raptor-sandbox-triage /path/to/run --require-evidence --json"
         ),
         description="Rules-based triage of a completed run's sandbox "
                     "telemetry for escape/recon/credential-theft signatures.",
     )
     parser.add_argument("run_dir", help="run directory to triage")
+    parser.add_argument(
+        "--require-evidence", action="store_true",
+        help="CI gate: require present, fully authenticated sandbox evidence "
+             "and complete capture; missing or uncertain evidence exits 1. "
+             "Cannot be combined with --legacy.",
+    )
     parser.add_argument(
         "--json", action="store_true",
         help="print the full triage report as JSON on stdout "
@@ -1451,6 +1491,8 @@ def _cli_main(argv: list | None = None) -> int:
     )
     try:
         args = parser.parse_args(argv if argv is not None else sys.argv[1:])
+        if args.require_evidence and args.legacy:
+            parser.error("--require-evidence cannot be combined with --legacy")
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else 2
 
@@ -1484,6 +1526,9 @@ def _cli_main(argv: list | None = None) -> int:
             print(dumps_artifact(None, ensure_ascii=True))
         else:
             print(f"(no sandbox telemetry found for {sanitise_for_terminal(str(target))})")
+        if args.require_evidence:
+            print("error: required sandbox evidence is missing", file=sys.stderr)
+            return 1
         return 0
 
     # Resolve the rules status before optional advisory work. Ordinary
@@ -1505,6 +1550,11 @@ def _cli_main(argv: list | None = None) -> int:
             # a file inside the run dir — which the sandboxed target
             # may have write access to. Sanitise before a terminal.
             print(f"  ⚠️  {sanitise_for_terminal(caveat)}")
+    if args.require_evidence:
+        problem = _required_evidence_problem(result)
+        if problem is not None:
+            print(f"error: required sandbox evidence: {problem}", file=sys.stderr)
+            return 1
     if args.deep:
         if result["verdict"] == VERDICT_CLEAN:
             if not args.json:

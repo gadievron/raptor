@@ -989,6 +989,13 @@ libexec/raptor-sandbox-triage <run_dir> [--json] [--deep]
 # exit codes: 0 clean/no telemetry, 1 error, 2 usage, 3 notable, 4 suspicious
 ```
 
+For CI admission, add `--require-evidence`. This returns exit code **1**
+when evidence is missing, cannot be authenticated, or records incomplete
+capture. Fully verified evidence retains the normal rules verdict and
+exit code. Ordinary inspection still treats absent telemetry as no report;
+`--require-evidence` cannot be combined with `--legacy`. Advisory `--deep`
+analysis cannot make missing or incomplete evidence pass this gate.
+
 `--deep` sends the provenance-verified triage report to the configured
 default LLM, which judges each signal as attack attempt vs tool noise.
 Advisory only: the rules verdict and exit code never change.
