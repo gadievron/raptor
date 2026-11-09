@@ -308,10 +308,21 @@ class TestStatusAndAwait:
         assert got == []
         assert time.monotonic() - start < 2.0
 
-    def test_await_abort_interrupts_the_join(self, tmp_path):
+    def test_await_abort_interrupts_the_join(self, tmp_path, monkeypatch):
         # SIGTERM/environment-guard during the join must salvage
         # promptly, not after the full wait budget.
-        fut: Future = Future()  # never completes
+        import core.audit.codeql_provision as provision
+
+        # Keep a real Future timeout; only shorten this test's poll cadence.
+        monkeypatch.setattr(provision, "_AWAIT_POLL_S", 0.01)
+        waits = []
+
+        class ObservedFuture(Future):
+            def result(self, timeout=None):
+                waits.append(timeout)
+                return super().result(timeout=timeout)
+
+        fut = ObservedFuture()  # never completes
         polls = {"n": 0}
 
         def abort() -> bool:
@@ -323,6 +334,8 @@ class TestStatusAndAwait:
             fut, out_dir=tmp_path, timeout_s=900.0, should_abort=abort,
         )
         assert got == []
+        assert polls["n"] == 2
+        assert len(waits) == 1 and 0 < waits[0] <= 0.01
         assert time.monotonic() - start < 30.0
         status = load_provision_status(tmp_path)
         assert status["build_wait_stopped"] == "abort"
