@@ -1,5 +1,7 @@
 """Tests for Project and ProjectManager."""
 
+from core.testing.threads import retiring_threads
+
 import os
 import unittest
 from pathlib import Path
@@ -508,7 +510,10 @@ class TestProjectManager(unittest.TestCase):
 
             def worker(name: str, shared=shared, barrier=barrier,
                        results=results) -> None:
-                barrier.wait()
+                try:
+                    barrier.wait()
+                except threading.BrokenBarrierError:
+                    return
                 try:
                     self.mgr.create(name, self.target_a,
                                     output_dir=shared)
@@ -519,10 +524,11 @@ class TestProjectManager(unittest.TestCase):
             names = (f"racer-a-{round_no}", f"racer-b-{round_no}")
             threads = [threading.Thread(target=worker, args=(n,))
                        for n in names]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            with retiring_threads(threads, release=barrier.abort, timeout=5):
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
             oks = [n for n in names if results.get(n) == "ok"]
             self.assertEqual(
                 len(oks), 1,

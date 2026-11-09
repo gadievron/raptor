@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Robustness tests for core/sage/rowmac.py (row MAC mint/verify/stamp/strip)."""
 
+from core.testing.threads import retiring_threads
+
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
 
@@ -201,16 +203,20 @@ class TestKeyLifecycle(RowMacKeyTmpDirCase):
         lock = threading.Lock()
 
         def worker():
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             key = rowmac._load_or_create_key()
             with lock:
                 results.append(key)
 
         threads = [threading.Thread(target=worker) for _ in range(n)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         self.assertEqual(len(results), n)
         self.assertEqual(len(set(results)), 1)
