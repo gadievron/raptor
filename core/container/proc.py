@@ -201,39 +201,49 @@ def run_cli(
                 pass
         sink[key] = bytes(buf)
 
-    def _target() -> None:
-        try:
-            read_out, write_out = os.pipe()
-            read_err, write_err = os.pipe()
-        except OSError as exc:  # pragma: no cover — fd exhaustion
-            result_q.put({"oserr": exc})
-            return
+    def _run_cli_worker() -> None:
+        owned: list[int] = []
+        drainers: list[threading.Thread] = []
         sink: dict[str, bytes] = {}
         overflowed: dict[str, bool] = {}
-        drainers = [
-            threading.Thread(target=_drain,
-                             args=(read_out, sink, overflowed, "stdout"),
-                             daemon=True),
-            threading.Thread(target=_drain,
-                             args=(read_err, sink, overflowed, "stderr"),
-                             daemon=True),
-        ]
-        for t in drainers:
-            t.start()
 
-        def _finish_pipes() -> None:
+        def _finish_pipes(*, preserve_error: bool = False) -> None:
             # Close OUR write ends (the child got dup'd copies) so the
             # drainers see EOF once the child — and any fd-inheriting
             # grandchild — is gone; the join then has communicate()'s
             # exact lifetime, and the outer daemon-join bounds a
             # grandchild that holds a pipe open.
-            for fd in (write_out, write_err):
+            cleanup_error = None
+            while owned:
+                fd = owned.pop()
                 try:
                     os.close(fd)
-                except OSError:  # pragma: no cover — racy close
-                    pass
+                except BaseException as exc:
+                    if not isinstance(exc, OSError) and cleanup_error is None:
+                        cleanup_error = exc
             for t in drainers:
-                t.join()
+                try:
+                    t.join()
+                except BaseException as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
+            if cleanup_error is not None and not preserve_error:
+                raise cleanup_error
+
+        try:
+            read_out, write_out = os.pipe()
+            owned.extend((read_out, write_out))
+            read_err, write_err = os.pipe()
+            owned.extend((read_err, write_err))
+            for fd, key in ((read_out, "stdout"), (read_err, "stderr")):
+                t = threading.Thread(target=_drain,
+                                     args=(fd, sink, overflowed, key), daemon=True)
+                t.start()
+                owned.remove(fd)  # The started drainer now owns this read end.
+                drainers.append(t)
+        except BaseException:
+            _finish_pipes(preserve_error=True)
+            raise
 
         try:
             result = subprocess.run(
@@ -246,7 +256,7 @@ def run_cli(
                 check=False,
             )
         except subprocess.TimeoutExpired as exc:
-            _finish_pipes()
+            _finish_pipes(preserve_error=True)
             if exc.output is None and exc.stderr is None:
                 # fd-routed output: the exception carries none — attach
                 # the drained partials (mocked TimeoutExpired keeps its
@@ -258,14 +268,17 @@ def run_cli(
                 )
             result_q.put({"timeout": exc, "truncated": bool(overflowed)})
         except FileNotFoundError as exc:
-            _finish_pipes()
+            _finish_pipes(preserve_error=True)
             result_q.put({"fnf": exc})
         except OSError as exc:
-            _finish_pipes()
+            _finish_pipes(preserve_error=True)
             result_q.put({"oserr": exc})
         except Exception as exc:  # noqa: BLE001 — surface as OSError-class
-            _finish_pipes()
+            _finish_pipes(preserve_error=True)
             result_q.put({"oserr": exc})
+        except BaseException:
+            _finish_pipes(preserve_error=True)
+            raise
         else:
             _finish_pipes()
             stdout = getattr(result, "stdout", None)
@@ -285,8 +298,20 @@ def run_cli(
                 "truncated": bool(overflowed),
             })
 
-    worker = threading.Thread(target=_target, daemon=True)
-    worker.start()
+    def _target() -> None:
+        try:
+            _run_cli_worker()
+        except BaseException as exc:
+            # A worker must publish setup/teardown failures too. Otherwise the
+            # caller observes queue.Empty after a dead worker instead of the
+            # transport error or original interruption.
+            result_q.put({"oserr" if isinstance(exc, Exception) else "error": exc})
+
+    try:
+        worker = threading.Thread(target=_target, daemon=True)
+        worker.start()
+    except Exception as exc:
+        return RunOutcome(None, "", f"os_error: {exc}", False)
     # Daemon thread abandoned on timeout — holds FDs until process exit.
     # In long runs, monitor FD count.
     worker.join(timeout + _REAP_GRACE_S)
@@ -304,6 +329,8 @@ def run_cli(
         )
     # worker finished ⇒ result_q has exactly one item (put precedes death).
     box = result_q.get_nowait()
+    if "error" in box:
+        raise box["error"]
     if "timeout" in box:
         exc = box["timeout"]
         return RunOutcome(
