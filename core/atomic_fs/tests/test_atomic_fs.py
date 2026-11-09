@@ -77,19 +77,23 @@ class TestWriteTextAtomically:
     def test_fd_closed_when_fchmod_window_raises_baseexception(
         self, tmp_path, monkeypatch,
     ):
-        """A BaseException between ``os.open`` and the write must still
-        close the fd — every path out of the primitive closes the fd,
-        including the fchmod window before the first byte is written."""
+        """The pre-write interrupt closes its staging descriptor, even after unlink."""
+        import errno
         import os
+
         target = tmp_path / "note.md"
         target.write_text("prior\n")
-
-        opened_fds: list[int] = []
-        real_open = os.open
+        opened_fds: list[tuple[int, tuple[int, int]]] = []
+        real_open, real_close = os.open, os.close
 
         def capturing_open(*args, **kwargs):
             fd = real_open(*args, **kwargs)
-            opened_fds.append(fd)
+            try:
+                info = os.fstat(fd)
+            except BaseException:
+                real_close(fd)
+                raise
+            opened_fds.append((fd, (info.st_dev, info.st_ino)))
             return fd
 
         def interrupt(fd, mode):
@@ -97,35 +101,98 @@ class TestWriteTextAtomically:
 
         patch_module_attribute(monkeypatch, atomic_fs, "os", "open", capturing_open)
         patch_module_attribute(monkeypatch, atomic_fs, "os", "fchmod", interrupt)
-        with pytest.raises(KeyboardInterrupt):
-            write_text_atomically(target, "new\n")
-
-        # The tempfile fd (the only os.open in the window) is closed.
-        assert len(opened_fds) == 1
-        # Verify the fd was closed.  A bare os.fstat check can false-
-        # pass when a parallel xdist worker recycles the fd number
-        # between os.close and this assertion.  Guard against that by
-        # checking the inode: if fstat succeeds, the fd must NOT point
-        # at a file inside tmp_path (the tempfile was unlinked).
-        fd = opened_fds[0]
         try:
-            st = os.fstat(fd)
-        except OSError:
-            pass  # fd closed — expected
-        else:
-            tmp_inodes = {
-                p.stat().st_ino for p in tmp_path.iterdir()
-            }
-            tmp_inodes.add(target.stat().st_ino)
-            assert st.st_ino not in tmp_inodes, (
-                f"fd {fd} still points at a file in the test tree"
-            )
-        # Prior content survives and the tempfile was unlinked.
-        assert target.read_text() == "prior\n"
-        assert [
-            p for p in tmp_path.iterdir()
-            if p.name.startswith(".atomic-")
-        ] == []
+            with pytest.raises(KeyboardInterrupt):
+                write_text_atomically(target, "new\n")
+            assert len(opened_fds) == 1
+            fd, identity = opened_fds[0]
+            # The writer unlinks staging on failure, so directory contents
+            # cannot identify a leaked open file. Compare its original inode
+            # and device; a different file may legitimately reuse the number.
+            try:
+                current = os.fstat(fd)
+            except OSError as error:
+                assert error.errno == errno.EBADF
+            else:
+                assert (current.st_dev, current.st_ino) != identity, (
+                    f"original staging descriptor remains open: fd {fd}")
+            assert target.read_text() == "prior\n"
+            assert [p for p in tmp_path.iterdir() if p.name.startswith(".atomic-")] == []
+        finally:
+            # Keep a regressed writer from leaking into later tests. A number
+            # recycled for a different file is borrowed and must stay open.
+            for fd, identity in opened_fds:
+                try:
+                    current = os.fstat(fd)
+                except OSError:
+                    continue
+                if (current.st_dev, current.st_ino) == identity:
+                    real_close(fd)
+
+    @pytest.mark.parametrize('retirement', ['closed', 'leaked_unlinked', 'recycled_in_tree'])
+    def test_fd_cleanup_oracle_rejects_leaks_and_accepts_recycling(
+        self, tmp_path, monkeypatch, retirement,
+    ):
+        import errno
+        import os
+
+        operation = tmp_path / 'operation'
+        operation.mkdir()
+        real_close = os.close
+        with (operation / 'recycled').open('x+b') as replacement_owner:
+            replacement = replacement_owner.fileno()
+            info = os.fstat(replacement)
+            replacement_identity = (info.st_dev, info.st_ino)
+            owned = {}
+            calls = []
+
+            def writer(target, text):
+                staging = target.parent / '.atomic-owned-oracle'
+                fd = atomic_fs.os.open(staging, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                info = os.fstat(fd)
+                identity = (info.st_dev, info.st_ino)
+                owned[fd] = identity
+                assert identity != replacement_identity
+                os.unlink(staging)
+                assert os.fstat(fd).st_nlink == 0
+                calls.append(fd)
+                try:
+                    atomic_fs.os.fchmod(fd, 0o600)
+                finally:
+                    if retirement == 'closed':
+                        real_close(fd)
+                        owned.pop(fd)
+                    elif retirement == 'recycled_in_tree':
+                        # Atomically close the original and reuse its number, with
+                        # no interval in which another thread can acquire the slot.
+                        os.dup2(replacement, fd)
+                        owned[fd] = replacement_identity
+
+            try:
+                with monkeypatch.context() as patch:
+                    patch.setitem(globals(), 'write_text_atomically', writer)
+                    if retirement == 'leaked_unlinked':
+                        with pytest.raises(AssertionError, match='original staging descriptor'):
+                            self.test_fd_closed_when_fchmod_window_raises_baseexception(operation, patch)
+                    else:
+                        self.test_fd_closed_when_fchmod_window_raises_baseexception(operation, patch)
+                assert len(calls) == 1
+                assert os.fstat(replacement).st_ino == replacement_identity[1]
+                if retirement == 'recycled_in_tree':
+                    info = os.fstat(calls[0])
+                    assert (info.st_dev, info.st_ino) == replacement_identity
+            finally:
+                # Also reclaim the deliberately leaking control on the old oracle.
+                # A recycled number belonging to another file is never ours to close.
+                for fd, identity in owned.items():
+                    try:
+                        info = os.fstat(fd)
+                    except OSError as error:
+                        if error.errno != errno.EBADF:
+                            raise
+                        continue
+                    if (info.st_dev, info.st_ino) == identity:
+                        real_close(fd)
 
     def test_custom_tmp_prefix(self, tmp_path):
         """Callers can pass a distinct ``tmp_prefix`` so operators
