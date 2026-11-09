@@ -2197,6 +2197,23 @@ def _collect_target_names(target: ast.AST, names: set) -> None:
         _collect_target_names(target.value, names)
 
 
+def _conditional_outputs_are_chain_members(value: ast.AST, chain: set) -> bool:
+    """Every selectable value must be an already validated alias."""
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if node.id not in chain:
+                return False
+        elif isinstance(node, ast.IfExp):
+            pending.extend((node.body, node.orelse))
+        elif isinstance(node, ast.BoolOp):
+            pending.extend(node.values)
+        else:
+            return False
+    return True
+
+
 def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
     """True when a string-building operator expression OR a container
     literal inside ``value`` combines a chain member with a non-chain
@@ -2211,11 +2228,16 @@ def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
     must never join the chain as fully validated. An arbitrary call
     result also lacks a property-preserving contract: even one fully
     validated argument can be ignored or transformed into unsafe output.
-    The initial certified sanitizer binding is exempted by the caller.
+    Conditional and short-circuit results must select only validated
+    aliases. The initial certified sanitizer binding is exempted by the caller.
     """
     for sub in ast.walk(value):
         if isinstance(sub, ast.Call):
             return True
+        if isinstance(sub, (ast.IfExp, ast.BoolOp)):
+            names = {n.id for n in ast.walk(sub) if isinstance(n, ast.Name)}
+            if names & chain and not _conditional_outputs_are_chain_members(sub, chain):
+                return True
         if isinstance(sub, (ast.BinOp, ast.JoinedStr,
                             ast.Tuple, ast.List, ast.Set, ast.Dict)):
             if isinstance(sub, ast.Tuple) and isinstance(sub.ctx, ast.Store):
