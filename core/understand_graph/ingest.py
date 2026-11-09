@@ -543,6 +543,18 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
     try:
         with graph_write_txn(graph_path) as conn:
             _upsert_snapshot(conn, snap_id, target, run_dir, producer="validate")
+            from .queries import _latest_snapshot
+            # Display finding ids may repeat across targets and revisions.
+            # Resolve each kind only within this target's current producer
+            # snapshot, using the same scope as the graph read lanes.
+            finding_snapshots = {
+                kind: _latest_snapshot(conn, target, producer=producer)
+                for kind, producer in (
+                    ("scan_finding", "scan"),
+                    ("codeql_result", "codeql"),
+                    ("unchecked_flow", "understand"),
+                )
+            }
             for outcome in _list(outcomes):
                 status = str(outcome.get("status") or outcome.get("verdict") or "inconclusive")
                 finding_ref = outcome.get("finding_id") or outcome.get("finding") or ""
@@ -563,17 +575,19 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                     # TEXT: a JSON integer id (7) must equal the ref
                     # string ('7') instead of silently never joining.
                     ref = str(finding_ref)
-                    for kind in ("scan_finding", "codeql_result", "unchecked_flow"):
+                    for kind, snapshot in finding_snapshots.items():
+                        if snapshot is None:
+                            continue
                         row = conn.execute(
                             """
                             SELECT id FROM nodes
-                            WHERE kind=? AND stale=0
+                            WHERE kind=? AND stale=0 AND snapshot_id=?
                               AND (stable_key=?
                                    OR CAST(json_extract(props_json, '$.id') AS TEXT)=?
                                    OR CAST(json_extract(props_json, '$.finding_id') AS TEXT)=?)
                             LIMIT 1
                             """,
-                            (kind, stable_key(kind, ref), ref, ref),
+                            (kind, snapshot["id"], stable_key(kind, ref), ref, ref),
                         ).fetchone()
                         if row:
                             _upsert_edge(conn, snap_id, "VALIDATES", vo_id, row["id"])
