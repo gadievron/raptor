@@ -325,6 +325,32 @@ def test_request_header_overrides_are_case_insensitive_and_owned():
     assert supplied == {"user-agent": "fixture"}
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("character", ["\u0100", "\U0001f512", "\ud800"], ids=["bmp", "emoji", "surrogate"])
+def test_unencodable_request_headers_fail_before_transport(stream, character):
+    client, pool, _ = reader()
+    supplied = {"Authorization": "fixture-private-value-" + character}
+    with pytest.raises(HttpError, match="header") as error:
+        if stream:
+            client.stream_bytes("https://fixture.example/a", headers=supplied)
+        else:
+            client.get_bytes("https://fixture.example/a", headers=supplied)
+    pool.request.assert_not_called()
+    assert supplied["Authorization"] not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_latin1_request_header_values_reach_transport_unchanged(stream):
+    client, pool, _ = reader()
+    supplied = {"X-Fixture": "caf\u00e9"}
+    if stream:
+        assert b"".join(client.stream_bytes("https://fixture.example/a", headers=supplied)) == b"content"
+    else:
+        assert client.get_bytes("https://fixture.example/a", headers=supplied) == b"content"
+    assert pool.request.call_args.kwargs["headers"]["X-Fixture"] == supplied["X-Fixture"]
+    assert supplied == {"X-Fixture": "caf\u00e9"}
+
+
 @pytest.mark.parametrize("method", ["", "GET\n", "GET bad", None])
 def test_invalid_methods_are_refused_before_transport(method):
     client, pool, _ = reader()
