@@ -194,12 +194,16 @@ def _load_results(scan_dir: Path) -> Optional[dict[str, Any]]:
     ``results.deduplicated`` count tripwire then mismatches and
     recovery degrades to nothing (fail-closed), which is the intended
     outcome for that ambiguity.
+
+    These documents carry upstream model scores. Admit non-finite scores
+    explicitly; recovered-record projection drops them before serialization.
     """
     for name in ("results_verified.json", "results.json"):
         path = scan_dir / name
         if not path.is_file():
             continue
-        data = load_json(path, max_bytes=_ARTIFACT_MAX_BYTES)
+        data = load_json(
+            path, max_bytes=_ARTIFACT_MAX_BYTES, allow_non_finite=True)
         if isinstance(data, dict):
             return data
         logger.warning(
@@ -450,7 +454,9 @@ def _recover_from_checkpoints(
             # bound.
             truncated += 1
             continue
-        data = load_json(entry, max_bytes=_ARTIFACT_MAX_BYTES)
+        # Checkpoints carry the same upstream confidence as result rows.
+        data = load_json(
+            entry, max_bytes=_ARTIFACT_MAX_BYTES, allow_non_finite=True)
         if not isinstance(data, dict):
             unreadable += 1  # load_json already warned with the path
             continue
@@ -595,11 +601,8 @@ def _recovered_record(
     if (isinstance(confidence, (int, float))
             and not isinstance(confidence, bool)
             and math.isfinite(float(confidence))):
-        # Finite-only, dropped otherwise (present-only semantics): a
-        # non-finite confidence carries no signal, and a copied inf/NaN
-        # poisons the shared findings-artifact write downstream (json
-        # cannot emit it) — the stdlib parser accepts 1e999 as inf even
-        # though the non-finite LITERALS are rejected at load.
+        # Finite-only, present-only confidence metadata: never pass a
+        # non-finite score to artifact writers, whatever the row's producer.
         metadata["confidence"] = float(confidence)
 
     return {
