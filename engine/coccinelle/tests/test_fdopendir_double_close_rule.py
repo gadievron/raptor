@@ -333,3 +333,32 @@ def test_shared_receiver_changes_invalidate_both_handles(tmp_path, close_first):
     rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
     assert {row["line"] for row in rows} == expected
     assert len(rows) == len(expected)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_resource_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = ''
+    source = prefix + 'void partial(int *fds, int index) { void *dir = fdopendir(fds[index + 1]); closedir(dir); close(fds[index + 1]); }' + "\n"
+    partial_line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'void other(int fd) { void *dir = fdopendir(fd); closedir(dir); close(fd); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive"), result.errors
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["rule"] == 'fdopendir_double_close'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=partial_line, line_end=partial_line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert scoped.details["confirm_only"]
+    assert not scoped.matches
+    assert len(result.matches) == int(other_hit)

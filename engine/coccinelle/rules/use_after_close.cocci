@@ -9,6 +9,7 @@
 // caller's resource validity, aliases and implicit numeric reuse need review.
 // CWE-672: Operation on a Resource after Expiration or Release
 // @role: detection
+// raptor: confirm-only
 // Descriptor semantics: https://man7.org/linux/man-pages/man2/close.2.html
 // Rebinding semantics: https://man7.org/linux/man-pages/man2/dup.2.html
 

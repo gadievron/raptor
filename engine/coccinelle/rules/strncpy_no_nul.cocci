@@ -13,6 +13,7 @@
 // https://man7.org/linux/man-pages/man3/strncpy.3.html
 // https://man7.org/linux/man-pages/man3/strncmp.3.html
 // @role: detection
+// raptor: confirm-only
 
 @zero_preserving@
 expression DST, INDEX;

@@ -12,6 +12,7 @@
 // does not replace the descriptor. Report later releases as candidates.
 // CWE-675: Multiple Operations on Resource in Single-Operation Context
 // @role: detection
+// raptor: confirm-only
 
 @fd_self_dup@
 expression FD;

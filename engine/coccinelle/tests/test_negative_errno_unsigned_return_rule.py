@@ -1,6 +1,7 @@
 """Negative errno is not a byte count; signed and deliberate sentinel APIs differ."""
 from __future__ import annotations
 
+from collections import Counter
 import json
 from pathlib import Path
 import shutil
@@ -69,7 +70,7 @@ def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
     from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
 
     prefix = 'typedef unsigned long size_t;\n'
-    source = prefix + 'size_t partial(int failed) { return failed ? -EINVAL : 0; }' + "\n"
+    source = prefix + 'size_t partial(int failed) { return fail_count(failed); }' + "\n"
     partial_line = 1 + prefix.count("\n")
     if other_hit:
         source += 'size_t other(void) { return -EINVAL; }' + "\n"
@@ -90,3 +91,38 @@ def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
     assert scoped.details["confirm_only"]
     assert not scoped.matches
     assert len(result.matches) == int(other_hit)
+
+
+def test_conditional_errno_contract(tmp_path):
+    source = """typedef unsigned long size_t;
+typedef long ssize_t;
+size_t direct(void) { return -EIO; } /* candidate */
+size_t pair(int failed) { if (failed) return -EIO; return -ENOENT; } /* two returns */
+size_t left(int failed) { return failed ? -EINVAL : 0; } /* candidate */
+size_t right(int failed) { return failed ? 0 : -ENOMEM; } /* candidate */
+size_t both(int failed) { return failed ? -EIO : -ENOENT; } /* candidate */
+size_t wrapped(int failed) { return failed ? (((-E2BIG))) : 0; } /* candidate */
+ssize_t signed_count(int failed) { return failed ? -EINVAL : 0; }
+unsigned long syscall(int failed) { return failed ? -EINVAL : 0; }
+size_t sentinel(int failed) { return failed ? -1 : 0; }
+size_t wide_sentinel(int failed) { return failed ? SIZE_MAX : 0; }
+size_t explicit_encoding(int failed) { return failed ? (size_t)-EINVAL : 0; }
+size_t argument(int failed) { return failed ? handle(-EINVAL) : 0; }
+size_t positive(int failed) { return failed ? -(-EINVAL) : 0; }
+size_t arithmetic(int failed) { return failed ? -EINVAL + 1 : 0; }
+size_t ordinary(int failed) { return failed ? 4 : 8; }
+size_t encoded_right(int failed) { return failed ? 0 : (size_t)-EINVAL; }
+size_t argument_right(int failed) { return failed ? 0 : handle(-EINVAL); }
+size_t positive_right(int failed) { return failed ? 0 : -(-EINVAL); }
+size_t arithmetic_right(int failed) { return failed ? 0 : -EINVAL + 1; }
+size_t sentinel_right(int failed) { return failed ? 0 : -1; }
+"""
+    from engine.coccinelle.tests._rule_runner import run_rule
+
+    rows = run_rule(tmp_path, source, _RULE)
+    expected = {index for index, line in enumerate(source.splitlines(), 1) if "/* candidate */" in line}
+    expected_counts = {line: 1 for line in expected}
+    expected_counts.update({index: 2 for index, line in enumerate(source.splitlines(), 1) if "/* two returns */" in line})
+    assert Counter(row["line"] for row in rows) == expected_counts
+    assert all(row["rule"] == "negative_errno_unsigned_return" for row in rows)
+    assert len({(row["line"], row.get("col", row.get("column"))) for row in rows}) == len(rows)

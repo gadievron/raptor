@@ -19,6 +19,7 @@
 // Results consumed by assignment, arguments, return, or void discard are
 // not ignored. File-keyed aggregation avoids cross-caller native joins.
 // @role: detection
+// raptor: confirm-only
 
 @initialize:python@
 @@

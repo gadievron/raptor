@@ -11,6 +11,7 @@
 // tracked release rather than every earlier close in a straight-line chain.
 // CWE-675: Multiple Operations on Resource in Single-Operation Context
 // @role: detection
+// raptor: confirm-only
 // Descriptor semantics: https://man7.org/linux/man-pages/man2/close.2.html
 // Rebinding semantics: https://man7.org/linux/man-pages/man2/dup.2.html
 

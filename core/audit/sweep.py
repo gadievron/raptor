@@ -4630,7 +4630,13 @@ def run_consistency_check(
             else:
                 matches.append({"raw": str(match)})
 
-        outcome = "confirmed" if matches else "refuted"
+        confirm_only = is_confirm_only_coccinelle_rule(cocci_rule)
+        details: dict[str, Any] | None = None
+        if confirm_only:
+            details = {"confirm_only": True}
+            if not matches:
+                details["reason"] = "curated confirm-only rule: no match does not refute the hypothesis"
+        outcome = "confirmed" if matches else ("inconclusive" if confirm_only else "refuted")
         return license_refutation(
             SweepResult(
                 tool="coccinelle_consistency",
@@ -4639,6 +4645,7 @@ def run_consistency_check(
                 outcome=outcome,
                 matches=matches,
                 rule_id=cocci_rule,
+                details=details,
             ),
             cov,
         )

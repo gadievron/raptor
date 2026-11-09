@@ -191,3 +191,29 @@ def test_unsigned_named_typedef_does_not_prove_unsignedness(tmp_path):
         }
     """)
     assert len(results) == 1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_buffer_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    helper = ''
+    source = helper + 'int partial(void) { int table[4]; int index = 5; return table[index]; }' + "\n"
+    line = 1 + helper.count("\n")
+    if other_hit:
+        source += 'int other(int index) { int table[4]; return table[index]; }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'missing_bounds_check'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="partial", line_start=line, line_end=line, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)

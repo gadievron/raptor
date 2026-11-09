@@ -10,6 +10,7 @@
 // proofs, and the pattern does not establish a reachable heap exploit.
 // CWE-416: Use After Free
 // @role: detection
+// raptor: confirm-only
 
 @stdio_null_release@
 constant ZERO =~ "^0\([xXbB]0+\|0*\)[uUlL]*$";

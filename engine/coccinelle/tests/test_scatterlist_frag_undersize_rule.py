@@ -406,3 +406,81 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_kernel_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    source = "static int top_frag_count(struct sk_buff *skb) { return skb_shinfo(skb)->nr_frags; }\n" + _DECRYPT_BUG.replace("skb_shinfo(skb)->nr_frags + 1", "top_frag_count(skb) + 1")
+    boundary = len(source.splitlines())
+    if other_hit:
+        source += _DECRYPT_BUG.replace("verify_pkt", "other")
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > boundary
+        assert result.matches[0]["rule"] == "scatterlist_frag_undersize"
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="verify_pkt", line_start=2, line_end=boundary, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)
+
+
+@pytest.mark.integration
+def test_partial_scatterlist_chain_preserves_uncertainty_and_memo(tmp_path, monkeypatch):
+    from core.audit.cwe_dispatch import resolve_cocci_rules_for_cwe
+    from core.audit.orchestrator import OrchestratorConfig, _run_tool_chain
+    from packages.coccinelle import runner
+
+    helper = "static int top_frag_count(struct sk_buff *skb) { return skb_shinfo(skb)->nr_frags; }\n"
+    partial = _DECRYPT_BUG.replace("skb_shinfo(skb)->nr_frags + 1", "top_frag_count(skb) + 1")
+    source = helper + partial
+    (tmp_path / "partial.c").write_text(source)
+    out = tmp_path / "out"
+    out.mkdir()
+    config = OrchestratorConfig(
+        target_path=tmp_path, out_dir=out,
+        inventory={"files": [{"path": "partial.c", "language": "c",
+                             "items": [{"name": "verify_pkt", "line": 2, "line_end": len(source.splitlines())}]}]},
+    )
+    rules = [rule for rule in resolve_cocci_rules_for_cwe("CWE-787") if Path(rule).stem == "scatterlist_frag_undersize"]
+    assert len(rules) == 1
+    chain = [{"type": "coccinelle", "config": {"rule": rule}} for rule in rules]
+    original = runner._confined_default_runner
+    calls = []
+
+    def observe(*args, **kwargs):
+        execute = original(*args, **kwargs)
+
+        def invoke(argv, **options):
+            calls.append(tuple(argv))
+            return execute(argv, **options)
+
+        return invoke
+
+    monkeypatch.setattr(runner, "_confined_default_runner", observe)
+    hypothesis = "a scatterlist may have too few entries for packet fragments"
+    for _ in range(2):
+        inconclusive, errors, skipped = set(), set(), set()
+        result = _run_tool_chain(
+            chain, config=config, file_path="partial.c", function_name="verify_pkt",
+            source=source, hypothesis=hypothesis, cwe="CWE-787", line_start=2,
+            inconclusive_types=inconclusive, errored_types=errors, skipped_types=skipped,
+        )
+        assert result.source_identity is not None
+        assert not errors and not skipped
+        assert len(result.outcomes) == 1
+        assert Path(result.outcomes[0].rule_id).stem == "scatterlist_frag_undersize"
+        assert result.outcomes[0].verdict == "inconclusive"
+        assert result.refutation(file="partial.c", function="verify_pkt", line_start=2,
+                                 hypothesis=hypothesis) is None
+        assert inconclusive == {"coccinelle"}
+        assert not result
+        assert len(calls) == 1, "the second dispatch must reuse the file sweep"

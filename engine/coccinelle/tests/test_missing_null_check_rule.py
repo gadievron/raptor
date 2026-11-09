@@ -169,3 +169,29 @@ class TestVocabRendered:
             assert checked == []
         finally:
             rendered.unlink()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_buffer_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    helper = 'int *allocate_count(void) { return malloc(sizeof(int)); }\n'
+    source = helper + 'int partial(void) { int *p = allocate_count(); return *p; }' + "\n"
+    line = 1 + helper.count("\n")
+    if other_hit:
+        source += 'int other(void) { int *p = malloc(sizeof(int)); return *p; }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'missing_null_check'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="partial", line_start=line, line_end=line, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)

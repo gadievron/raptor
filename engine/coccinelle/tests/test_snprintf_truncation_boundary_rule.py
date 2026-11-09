@@ -250,3 +250,29 @@ def test_boundary_and_cursor_checks_share_production_invocation(tmp_path, monkey
     assert len(results["snprintf_truncation_boundary"].matches) == 1
     assert len(results["snprintf_advance"].matches) == 1
     assert len(invocations) == 1, invocations
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_buffer_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    helper = 'int format_count(char *dst, unsigned long size, const char *src) { return snprintf(dst, size, "%s", src); }\n'
+    source = helper + 'int partial(char *dst, unsigned long size, const char *src) { int count = format_count(dst, size, src); if (count > size) return -1; return count; }' + "\n"
+    line = 1 + helper.count("\n")
+    if other_hit:
+        source += 'int other(char *dst, unsigned long size, const char *src) { int count = snprintf(dst, size, "%s", src); if (count > size) return -1; return count; }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c")
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'snprintf_truncation_boundary'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name="partial", line_start=line, line_end=line, language="c")
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)
