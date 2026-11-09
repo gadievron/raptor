@@ -71,7 +71,7 @@ rules:
                 - pattern: fmt.Sprintf($FMT, ...)
                 - metavariable-regex:
                     metavariable: $FMT
-                    regex: '(?i)^"\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
+                    regex: '(?i)^["`]\s*(SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE|MERGE|GRANT|REVOKE)\b.*'
           - focus-metavariable: $QUERY
       # These SQL-specific methods also accept bound values. Those values
       # neither taint constant SQL text nor sanitise tainted SQL text.
