@@ -1950,10 +1950,10 @@ class TestGateEnforcement:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
 class TestSuspiciousPromotion:
     """Sweep tools should promote suspicious items when they confirm the hypothesis."""
 
-    @pytest.mark.usefixtures("_no_native_review_tools", "_no_post_review_witness_synthesis")
     def test_suspicious_with_prefilter_hit_promoted(self, tmp_path: Path):
         """Suspicious item whose source triggers prefilter gets promoted to finding."""
         target = tmp_path / "target"
@@ -2025,9 +2025,9 @@ class TestSuspiciousPromotion:
                 hypothesis="",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
-            sweep_validate_findings=True, batch_sloc_threshold=0,
+            prefilter=True, sweep_validate_findings=True, batch_sloc_threshold=0,
             # Hermetic: with Joern installed, the post-resolution
             # channel settles the unverifiable suspicious verdicts as
             # "dark" (no tool could confirm or refute) — and spends
@@ -2038,6 +2038,7 @@ class TestSuspiciousPromotion:
             joern_overrides={"enabled": False},
         )
         result = run_orchestrator(config, review_fn)
+        assert result.reviewed == 2
         assert result.sweep_promoted == 0
         assert result.findings == 0
         # Demotion gate may convert suspicious→clean when Joern is available
@@ -2079,11 +2080,12 @@ class TestSuspiciousPromotion:
                 hypothesis="buffer overflow via strcpy",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
-            sweep_validate_findings=False, batch_sloc_threshold=0,
+            prefilter=True, sweep_validate_findings=False, batch_sloc_threshold=0,
         )
         result = run_orchestrator(config, review_fn)
+        assert result.reviewed == 1
         assert result.sweep_promoted == 0
         assert result.findings == 0
 
@@ -2142,11 +2144,12 @@ class TestSuspiciousPromotion:
                 },
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             target_path=target, out_dir=out, resume=False,
-            sweep_validate_findings=True, batch_sloc_threshold=0,
+            prefilter=True, sweep_validate_findings=True, batch_sloc_threshold=0,
         )
         result = run_orchestrator(config, review_fn)
+        assert result.reviewed == 1
         assert result.sweep_promoted == 0, (
             "should not promote when LLM has a specific counter-hypothesis"
         )
