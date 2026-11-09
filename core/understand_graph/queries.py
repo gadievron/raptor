@@ -198,6 +198,22 @@ def attack_paths(
     form that can be handed to /validate, /threat-model, or operator output.
     """
     context_map, stale = build_context_map(db_path, target_path)
+    paths = _paths_from_context(
+        context_map, stale, source=source, sink=sink,
+        unchecked_only=unchecked_only, by_cwe=by_cwe,
+    )
+    return paths[:max(1, int(limit or 50))]
+
+
+def _paths_from_context(
+    context_map: dict[str, Any],
+    stale: set[str],
+    *,
+    source: Optional[str] = None,
+    sink: Optional[str] = None,
+    unchecked_only: bool = False,
+    by_cwe: Optional[str] = None,
+) -> list[dict[str, Any]]:
     if not context_map:
         return []
 
@@ -259,7 +275,7 @@ def attack_paths(
         str(p.get("entry", {}).get("id") or ""),
         str(p.get("sink", {}).get("id") or ""),
     ))
-    return out[:max(1, int(limit or 50))]
+    return out
 
 
 def graph_diff(
@@ -586,14 +602,18 @@ def coverage_residual(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Return attack paths that have NOT been validated."""
-    paths = attack_paths(db_path, target_path)
+    # The path builder already constructs the full ordered projection.
+    # Apply the existing output cap after filtering validation, otherwise
+    # validated top-ranked paths hide unresolved paths beyond the cap.
+    context_map, stale = build_context_map(db_path, target_path)
+    paths = _paths_from_context(context_map, stale)
     if not paths:
         return []
     # Bind validation to the snapshot which actually produced these paths,
     # not a separately selected latest snapshot or a reused display sink id.
     snapshot_id = paths[0].get("evidence", {}).get("snapshot_id")
     if not snapshot_id:
-        return paths
+        return paths[:50]
 
     def _do(conn):
         # Exact graph join, never substring-in-key: a VALIDATES edge
@@ -644,7 +664,7 @@ def coverage_residual(
 
     validated_pairs = query_graph(db_path, _do)
     if not validated_pairs:
-        return paths
+        return paths[:50]
 
     def _path_validated(path: dict[str, Any]) -> bool:
         return (
@@ -652,7 +672,7 @@ def coverage_residual(
             str(path.get("sink", {}).get("id") or ""),
         ) in validated_pairs
 
-    return [p for p in paths if not _path_validated(p)]
+    return [p for p in paths if not _path_validated(p)][:50]
 
 
 def scan_dedup_chains(
