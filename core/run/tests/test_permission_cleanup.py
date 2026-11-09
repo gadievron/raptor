@@ -103,7 +103,21 @@ def test_expired_restricted_tree_is_reclaimed(tmp_path, monkeypatch, mode, kind)
         (tree / "locked").chmod(mode)
         os.utime(tree, (old, old))
         if kind == "temp":
+            # Mode bits alone do not establish unreadability for privileged
+            # identities. Probe the owned fixture's actual traversal ability.
+            unreadable = False
+            try:
+                with os.scandir(tree / "locked") as entries:
+                    for entry in entries:
+                        entry.stat(follow_symlinks=False)
+            except PermissionError:
+                unreadable = True
             removed = tmp_reaper.reap_stale_tmp()
+            if unreadable:
+                assert tree not in removed
+                assert tree.exists()
+                (tree / "locked").chmod(0o700)
+                removed = tmp_reaper.reap_stale_tmp()
         elif kind == "failed-run":
             removed = tmp_reaper.reap_stale_runs(tmp_path)
         elif kind == "dead-pid":
@@ -147,3 +161,26 @@ def test_common_removal_does_not_repair_permissions_on_normal_tree(
 
     monkeypatch.setattr(os, "chmod", unexpected)
     assert rmtree_hardened(tree)
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o500, 0o555])
+def test_age_based_cleanup_retains_recent_descendants_until_stale(tmp_path, mode):
+    old = time.time() - 60 * 86400
+    with restricted_tree(tmp_path / "raptor_decomp_recent", mode) as tree:
+        (tree / "locked").chmod(0o700)
+        for parent, dirs, names in os.walk(tree):
+            for name in names:
+                os.utime(os.path.join(parent, name), (old, old))
+            os.utime(parent, (old, old))
+        payload = tree / "locked" / "nested" / "payload"
+        os.utime(payload, None)
+        (tree / "locked").chmod(mode)
+        os.utime(tree, (old, old))
+        assert tree not in tmp_reaper.reap_stale_tmp()
+        assert tree.exists()
+        (tree / "locked").chmod(0o700)
+        assert tree not in tmp_reaper.reap_stale_tmp()
+        assert payload.exists()
+        os.utime(payload, (old, old))
+        assert tree in tmp_reaper.reap_stale_tmp()
+        assert not tree.exists()
