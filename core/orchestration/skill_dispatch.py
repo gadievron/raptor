@@ -27,6 +27,7 @@ what the prompt says, and what happens with the artefacts afterwards
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
@@ -44,6 +45,7 @@ from core.llm.cc_proxy_hosts import (
 )
 from core.sandbox import run_untrusted_networked
 from core.sandbox.errors import SandboxSetupError as _SandboxSetupError
+from core.source.streams import preserving_stream_error
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
@@ -1138,170 +1140,164 @@ def run_skill_dispatch(
         # has no forwarder (the child would have no network at all).
         # The prompt can embed operator context and excerpts of the
         # scanned source, so it must not persist on disk: it goes into
-        # a 0600 tempfile (mkstemp) that is unlinked before the child
-        # is spawned — the only remaining reference is the open fd the
-        # spawn backend dup2s onto the child's stdin, and the inode
-        # dies when both sides close it.
+        # an anonymous 0600 temporary file. The spawn backend dup2s
+        # its descriptor onto stdin; setup and dispatch share ownership
+        # so write, flush and rewind failures also close the file.
         stdin_kwargs: dict
-        prompt_fh = None
-        if cc_proxy_creds is not None:
-            fd, tmp_prompt_path = tempfile.mkstemp(prefix="cc-prompt-")
-            try:
-                os.unlink(tmp_prompt_path)
-                prompt_fh = os.fdopen(fd, "w+b")
-            except OSError:
-                os.close(fd)
-                raise
-            prompt_fh.write(prompt.encode("utf-8"))
-            prompt_fh.flush()
-            prompt_fh.seek(0)
-            stdin_kwargs = {"stdin": prompt_fh}
-        else:
-            stdin_kwargs = {"input": prompt}
-        try:
-            # Sandboxed Claude Code dispatch with restrict_reads=True.
-            # See cc_dispatch.py for rationale; this site adds
-            # str(_RAPTOR_DIR) on top of the calibrated/default
-            # readable_paths so the LLM-directed Bash tool can invoke
-            # libexec helpers (which live under RAPTOR_DIR), plus the
-            # caller's context_dirs holding prior phases' artefacts.
-            # target + run_dir are auto-allowlisted via the
-            # target=/output= positional args; $HOME secrets stay
-            # denied.
-            #
-            # System prompt (when the config carries one) rides a 0600
-            # tempfile + --system-prompt-file — never in the child's
-            # world-readable /proc/<pid>/cmdline (see
-            # build_cc_command's hygiene contract). Spawn AND wait stay
-            # inside the CM; the file path joins readable_paths because
-            # TMPDIR is outside the sandbox's read allowlist.
-            with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
-                proc = run_untrusted_networked(
-                    build_cc_command(
-                        dispatch_config,
-                        system_prompt_file=_sys_prompt_path,
-                    ),
-                    text=True,
-                    # The sandbox runner's capture defaults to FALSE:
-                    # without this kwarg the CompletedProcess carries
-                    # stdout=None/stderr=None and every failure-path
-                    # consumer below (_child_failure_tail,
-                    # _persist_child_tail, the timeout partial
-                    # capture) persisted EMPTY tails — a multi-minute
-                    # billed child exited nonzero and the run dir held
-                    # nothing diagnosable. The CC child in -p mode
-                    # emits its result/error narrative at exit (no
-                    # live progress stream is lost), and the fork
-                    # spawn backend drains the pipes under its own
-                    # per-stream byte cap, so capture is bounded.
-                    capture_output=True,
-                    # The captured streams can quote hostile-target
-                    # bytes; the subprocess-backed lanes otherwise
-                    # decode strict and a single bad byte raises
-                    # UnicodeDecodeError in the parent — losing the
-                    # very narrative capture exists to keep. (The
-                    # fork spawn backend already decodes with
-                    # replacement; this aligns the other lanes.)
-                    errors="replace",
-                    **stdin_kwargs,
-                    timeout=timeout_s,
-                    target=str(target), output=str(run_dir),
-                    # Explicit cwd: the claude CLI treats its working
-                    # directory as a project root (CLAUDE.md, .claude
-                    # settings, workspace-trust posture). Inheriting the
-                    # parent's cwd handed the child whatever project the
-                    # OPERATOR happened to be sitting in — an untrusted
-                    # workspace whose permission rules the CLI loudly
-                    # ignores. The run dir is RAPTOR-owned, carries no
-                    # project config, and is already writable via
-                    # output=; tool grants come from --allowed-tools.
-                    cwd=str(run_dir),
-                    # env-mode children get mint_aws_credentials=True:
-                    # sandboxed — Landlock denies ~/.aws and the egress
-                    # allowlist has no IMDS route, so on IAM-role Bedrock
-                    # hosts their own AWS credential chain is dead ("Could
-                    # not load credentials from any providers", rc=1); the
-                    # parent resolves the chain and attaches frozen session
-                    # credentials at its trust boundary. Proxy-mode
-                    # children carry no credentials at all (see above).
-                    env=child_env,
-                    # Trust-marker propagation: this child is RAPTOR's own
-                    # claude binary running a skill pass on the same
-                    # operator-approved run (gated above by cc-trust +
-                    # rule-of-two). Its job is to drive libexec/ helpers
-                    # (raptor-validation-helper, raptor-run-lifecycle)
-                    # whose preamble refuses callers without CLAUDECODE /
-                    # _RAPTOR_TRUSTED — the default marker strip left the
-                    # validate post-pass child looking untrusted (rc=1,
-                    # A4). A parent that holds no marker propagates
-                    # nothing: an untrusted parent stays refused.
-                    keep_trust_markers=True,
-                    readable_paths=(
-                        [str(_RAPTOR_DIR)]
-                        + [str(d) for d in context_dirs]
-                        + _readable_paths_for_cc_dispatch(claude_bin)
-                        + ([str(_sys_prompt_path)]
-                           if _sys_prompt_path is not None else [])
-                    ),
-                    # Proxy mode: loopback-only allowlist (deny-all remote —
-                    # the child talks solely to the bridged dispatcher).
-                    proxy_hosts=_proxy_hosts_for_cc_dispatch(
-                        claude_bin, credential_mode=credential_mode,
-                    ),
-                    # Proxy mode: relay in-netns 127.0.0.1:<port> to the
-                    # dispatcher UDS so the CLI's ANTHROPIC_BASE_URL works
-                    # inside the empty network namespace.
-                    loopback_unix_bridges=(
-                        cc_proxy_creds.bridges if cc_proxy_creds else None
-                    ),
-                    caller_label=caller_label,
-                    # run_dir is a run-dir root by construction (the
-                    # lifecycle starts it above) and that is this
-                    # lane's contract: the skill pass writes the run's
-                    # own artifacts there.
-                    output_run_root_ok=True,
+        with contextlib.ExitStack() as prompt_files:
+            if cc_proxy_creds is not None:
+                prompt_fh = prompt_files.enter_context(
+                    preserving_stream_error(contextlib.closing(
+                        tempfile.TemporaryFile(mode="w+b", prefix="cc-prompt-")
+                    ))
                 )
-        except subprocess.TimeoutExpired as e:
-            lifecycle_settled = True
-            fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
-            # The exception carries the kill's partial capture — the
-            # only account of what the multi-minute child was doing
-            # when the clock ran out. Persist it like the rc!=0 and
-            # validate-failure legs (previously discarded: the arm
-            # returned without writing, and the operator got a bare
-            # timeout line).
-            _persist_child_tail(
-                run_dir, _timeout_partial_capture(e),
-                exit_label=f"timeout after {timeout_s}s",
-                duration_s=time.monotonic() - t0)
-            logger.warning("%s timed out after %ds", log_label, timeout_s)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=f"timeout after {timeout_s}s",
-                run_dir=run_dir, duration_s=time.monotonic() - t0,
-                child_exit=f"timeout after {timeout_s}s")
-        except OSError as e:
-            lifecycle_settled = True
-            fail_lifecycle(run_dir, f"launch failed: {e}")
-            logger.warning("%s failed to launch: %s", log_label, e)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=f"launch failed: {e}",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
-        except _SandboxSetupError as e:
-            # BaseException by design ("fail loud") — convert to a
-            # clean pass failure here because the callers' never-raise
-            # backstops only catch Exception, and a credential-proxy
-            # bridge that cannot engage must fail THIS pass, not crash
-            # the whole pipeline.
-            lifecycle_settled = True
-            reason = f"{_SANDBOX_SETUP_REASON_PREFIX}{e}"
-            fail_lifecycle(run_dir, reason)
-            logger.warning("%s sandbox setup failed: %s", log_label, e)
-            return SkillDispatchResult(
-                ran=False, skipped_reason=reason,
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
-        finally:
-            if prompt_fh is not None:
-                prompt_fh.close()
+                prompt_fh.write(prompt.encode("utf-8"))
+                prompt_fh.flush()
+                prompt_fh.seek(0)
+                stdin_kwargs = {"stdin": prompt_fh}
+            else:
+                stdin_kwargs = {"input": prompt}
+            try:
+                # Sandboxed Claude Code dispatch with restrict_reads=True.
+                # See cc_dispatch.py for rationale; this site adds
+                # str(_RAPTOR_DIR) on top of the calibrated/default
+                # readable_paths so the LLM-directed Bash tool can invoke
+                # libexec helpers (which live under RAPTOR_DIR), plus the
+                # caller's context_dirs holding prior phases' artefacts.
+                # target + run_dir are auto-allowlisted via the
+                # target=/output= positional args; $HOME secrets stay
+                # denied.
+                #
+                # System prompt (when the config carries one) rides a 0600
+                # tempfile + --system-prompt-file — never in the child's
+                # world-readable /proc/<pid>/cmdline (see
+                # build_cc_command's hygiene contract). Spawn AND wait stay
+                # inside the CM; the file path joins readable_paths because
+                # TMPDIR is outside the sandbox's read allowlist.
+                with system_prompt_file_for(dispatch_config) as _sys_prompt_path:
+                    proc = run_untrusted_networked(
+                        build_cc_command(
+                            dispatch_config,
+                            system_prompt_file=_sys_prompt_path,
+                        ),
+                        text=True,
+                        # The sandbox runner's capture defaults to FALSE:
+                        # without this kwarg the CompletedProcess carries
+                        # stdout=None/stderr=None and every failure-path
+                        # consumer below (_child_failure_tail,
+                        # _persist_child_tail, the timeout partial
+                        # capture) persisted EMPTY tails — a multi-minute
+                        # billed child exited nonzero and the run dir held
+                        # nothing diagnosable. The CC child in -p mode
+                        # emits its result/error narrative at exit (no
+                        # live progress stream is lost), and the fork
+                        # spawn backend drains the pipes under its own
+                        # per-stream byte cap, so capture is bounded.
+                        capture_output=True,
+                        # The captured streams can quote hostile-target
+                        # bytes; the subprocess-backed lanes otherwise
+                        # decode strict and a single bad byte raises
+                        # UnicodeDecodeError in the parent — losing the
+                        # very narrative capture exists to keep. (The
+                        # fork spawn backend already decodes with
+                        # replacement; this aligns the other lanes.)
+                        errors="replace",
+                        **stdin_kwargs,
+                        timeout=timeout_s,
+                        target=str(target), output=str(run_dir),
+                        # Explicit cwd: the claude CLI treats its working
+                        # directory as a project root (CLAUDE.md, .claude
+                        # settings, workspace-trust posture). Inheriting the
+                        # parent's cwd handed the child whatever project the
+                        # OPERATOR happened to be sitting in — an untrusted
+                        # workspace whose permission rules the CLI loudly
+                        # ignores. The run dir is RAPTOR-owned, carries no
+                        # project config, and is already writable via
+                        # output=; tool grants come from --allowed-tools.
+                        cwd=str(run_dir),
+                        # env-mode children get mint_aws_credentials=True:
+                        # sandboxed — Landlock denies ~/.aws and the egress
+                        # allowlist has no IMDS route, so on IAM-role Bedrock
+                        # hosts their own AWS credential chain is dead ("Could
+                        # not load credentials from any providers", rc=1); the
+                        # parent resolves the chain and attaches frozen session
+                        # credentials at its trust boundary. Proxy-mode
+                        # children carry no credentials at all (see above).
+                        env=child_env,
+                        # Trust-marker propagation: this child is RAPTOR's own
+                        # claude binary running a skill pass on the same
+                        # operator-approved run (gated above by cc-trust +
+                        # rule-of-two). Its job is to drive libexec/ helpers
+                        # (raptor-validation-helper, raptor-run-lifecycle)
+                        # whose preamble refuses callers without CLAUDECODE /
+                        # _RAPTOR_TRUSTED — the default marker strip left the
+                        # validate post-pass child looking untrusted (rc=1,
+                        # A4). A parent that holds no marker propagates
+                        # nothing: an untrusted parent stays refused.
+                        keep_trust_markers=True,
+                        readable_paths=(
+                            [str(_RAPTOR_DIR)]
+                            + [str(d) for d in context_dirs]
+                            + _readable_paths_for_cc_dispatch(claude_bin)
+                            + ([str(_sys_prompt_path)]
+                               if _sys_prompt_path is not None else [])
+                        ),
+                        # Proxy mode: loopback-only allowlist (deny-all remote —
+                        # the child talks solely to the bridged dispatcher).
+                        proxy_hosts=_proxy_hosts_for_cc_dispatch(
+                            claude_bin, credential_mode=credential_mode,
+                        ),
+                        # Proxy mode: relay in-netns 127.0.0.1:<port> to the
+                        # dispatcher UDS so the CLI's ANTHROPIC_BASE_URL works
+                        # inside the empty network namespace.
+                        loopback_unix_bridges=(
+                            cc_proxy_creds.bridges if cc_proxy_creds else None
+                        ),
+                        caller_label=caller_label,
+                        # run_dir is a run-dir root by construction (the
+                        # lifecycle starts it above) and that is this
+                        # lane's contract: the skill pass writes the run's
+                        # own artifacts there.
+                        output_run_root_ok=True,
+                    )
+            except subprocess.TimeoutExpired as e:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
+                # The exception carries the kill's partial capture — the
+                # only account of what the multi-minute child was doing
+                # when the clock ran out. Persist it like the rc!=0 and
+                # validate-failure legs (previously discarded: the arm
+                # returned without writing, and the operator got a bare
+                # timeout line).
+                _persist_child_tail(
+                    run_dir, _timeout_partial_capture(e),
+                    exit_label=f"timeout after {timeout_s}s",
+                    duration_s=time.monotonic() - t0)
+                logger.warning("%s timed out after %ds", log_label, timeout_s)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=f"timeout after {timeout_s}s",
+                    run_dir=run_dir, duration_s=time.monotonic() - t0,
+                    child_exit=f"timeout after {timeout_s}s")
+            except OSError as e:
+                lifecycle_settled = True
+                fail_lifecycle(run_dir, f"launch failed: {e}")
+                logger.warning("%s failed to launch: %s", log_label, e)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=f"launch failed: {e}",
+                    run_dir=run_dir, duration_s=time.monotonic() - t0)
+            except _SandboxSetupError as e:
+                # BaseException by design ("fail loud") — convert to a
+                # clean pass failure here because the callers' never-raise
+                # backstops only catch Exception, and a credential-proxy
+                # bridge that cannot engage must fail THIS pass, not crash
+                # the whole pipeline.
+                lifecycle_settled = True
+                reason = f"{_SANDBOX_SETUP_REASON_PREFIX}{e}"
+                fail_lifecycle(run_dir, reason)
+                logger.warning("%s sandbox setup failed: %s", log_label, e)
+                return SkillDispatchResult(
+                    ran=False, skipped_reason=reason,
+                    run_dir=run_dir, duration_s=time.monotonic() - t0)
 
         if proc.returncode != 0:
             lifecycle_settled = True
