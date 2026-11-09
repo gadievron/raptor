@@ -28,27 +28,25 @@ class _Site:
         self.module = importlib.import_module(module_name)
         self.name = module_name
         self.fn = getattr(self.module, fn_name)
+        if not callable(self.fn):
+            raise TypeError(f"{module_name}.{fn_name} must be callable")
         self.override_key = override_key
         self.default_marker = default_marker
         self.bin_attr = bin_attr
 
 
 def _sites() -> list[_Site]:
-    """Called at parametrize time (module collection), so must not
-    crash if the import chain is unavailable in an xdist worker."""
-    try:
-        return [
-            _Site("core.llm.cc_proxy_hosts", "proxy_hosts_for_cc_dispatch",
-                  "proxy_hosts", "api.anthropic.com", "_resolve_claude_bin"),
-            _Site("packages.codeql.codeql_proxy_hosts", "proxy_hosts_for_codeql",
-                  "proxy_hosts", "ghcr.io", "_resolve_codeql_bin"),
-            _Site("packages.sca.resolvers._proxy_hosts", "proxy_hosts_for_pip",
-                  "pip", "pypi.org", "_resolve_bin"),
-            _Site("packages.semgrep._proxy_hosts", "proxy_hosts_for_semgrep",
-                  "hosts", "semgrep.dev", "_resolve_semgrep_bin"),
-        ]
-    except Exception:
-        return []
+    """Resolve required product providers without erasing collection errors."""
+    return [
+        _Site("core.llm.cc_proxy_hosts", "proxy_hosts_for_cc_dispatch",
+              "proxy_hosts", "api.anthropic.com", "_resolve_claude_bin"),
+        _Site("packages.codeql.codeql_proxy_hosts", "proxy_hosts_for_codeql",
+              "proxy_hosts", "ghcr.io", "_resolve_codeql_bin"),
+        _Site("packages.sca.resolvers._proxy_hosts", "proxy_hosts_for_pip",
+              "pip", "pypi.org", "_resolve_bin"),
+        _Site("packages.semgrep._proxy_hosts", "proxy_hosts_for_semgrep",
+              "hosts", "semgrep.dev", "_resolve_semgrep_bin"),
+    ]
 
 
 _SITE_IDS = [s.name for s in _sites()]
@@ -204,3 +202,41 @@ def test_every_provider_uses_the_shared_layers():
                 offenders.append(f"{rel}: calibrated layer not routed "
                                  "through core.sandbox.calibrated_hosts")
     assert offenders == [], "\n".join(offenders)
+
+
+def test_required_provider_universe_is_present():
+    sites = _sites()
+    assert {site.name for site in sites} == {
+        "core.llm.cc_proxy_hosts", "packages.codeql.codeql_proxy_hosts",
+        "packages.sca.resolvers._proxy_hosts", "packages.semgrep._proxy_hosts",
+    }
+    assert all(callable(site.fn) for site in sites)
+
+
+def test_missing_required_callable_is_hard(monkeypatch):
+    from packages.semgrep import _proxy_hosts
+    monkeypatch.delattr(_proxy_hosts, "proxy_hosts_for_semgrep")
+    with pytest.raises(AttributeError, match="proxy_hosts_for_semgrep"):
+        _sites()
+
+
+def test_noncallable_provider_is_hard(monkeypatch):
+    from packages.semgrep import _proxy_hosts
+    monkeypatch.setattr(_proxy_hosts, "proxy_hosts_for_semgrep", None)
+    with pytest.raises(TypeError, match="must be callable"):
+        _sites()
+
+
+def test_required_provider_import_error_is_hard(monkeypatch):
+    from types import SimpleNamespace
+
+    real_import = importlib.import_module
+    def importing(name):
+        if name == "packages.semgrep._proxy_hosts":
+            raise ImportError("required semgrep provider unavailable")
+        return real_import(name)
+
+    # Scope the import seam to this test module, not global importlib.
+    monkeypatch.setitem(_sites.__globals__, "importlib", SimpleNamespace(import_module=importing))
+    with pytest.raises(ImportError, match="required semgrep provider"):
+        _sites()
