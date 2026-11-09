@@ -159,9 +159,8 @@ def guard_refinement_semgrep(monkeypatch: pytest.MonkeyPatch) -> None:
 # is identical for a refused rule and a dead engine). The probe runs
 # the same executed path (run_semgrep_sweep -> runner) so a dead or
 # overloaded engine is caught by the transport guard, and a healthy
-# engine that cannot carry even this rule skips with the probe's
-# identity instead of letting the caller adjudicate on a vacuous
-# result.
+# engine that cannot carry this known-matching rule fails with the
+# probe identity rather than hiding a product verdict.
 _PROBE_RULE = (
     "rules:\n"
     "  - id: live-transport-probe\n"
@@ -174,8 +173,8 @@ _PROBE_TARGET = "import os\nos.system('x')\n"
 
 
 def skip_unless_semgrep_carries_probe(tmp_path: Path, *, context: str) -> None:
-    """Skip unless the semgrep engine carries a trivial known-matching
-    rule RIGHT NOW. Returns silently on a healthy engine so the
+    """Require the semgrep engine to carry a trivial known-matching
+    rule; skip only the guarded transport failures. Returns silently on a healthy engine so the
     caller's hard assertions stand; use only where the product surface
     has already collapsed the failure identity."""
     probe_dir = tmp_path / "live-transport-probe"
@@ -190,7 +189,7 @@ def skip_unless_semgrep_carries_probe(tmp_path: Path, *, context: str) -> None:
         rule_config=str(rule),
     )
     if result.outcome != "confirmed":
-        pytest.skip(
+        pytest.fail(
             f"semgrep engine cannot carry a trivial known-matching probe "
             f"({context}): {result.outcome} {result.errors}",
         )
@@ -383,9 +382,8 @@ def expand_function_guarded(
 # failures behind a broad except). The probe runs the same executed
 # path (expand_translation_unit -> sandboxed preprocessor) so a dead or
 # overloaded toolchain is caught by the transport guard, and a healthy
-# toolchain that cannot carry even this TU skips with the probe's
-# identity instead of letting the caller adjudicate on a vacuous
-# result.
+# toolchain that cannot carry this known-good TU fails with the
+# probe identity rather than hiding product-owned errors.
 _CPP_PROBE_SOURCE = "int main(void) { return 0; }\n"
 
 
@@ -396,8 +394,8 @@ def skip_unless_cpp_carries_probe(
     context: str,
     spy_calls: list | None = None,
 ) -> None:
-    """Skip unless the preprocessor carries a trivial known-good TU
-    RIGHT NOW. Returns silently on a healthy toolchain so the caller's
+    """Require the preprocessor to carry a trivial known-good TU;
+    skip only the guarded transport failures. Returns silently on a healthy toolchain so the caller's
     hard assertions stand; use only where the product surface has
     already collapsed the failure identity. ``spy_calls`` is the live
     legs' sandbox-spy list: entries the probe adds are removed again so
@@ -416,7 +414,7 @@ def skip_unless_cpp_carries_probe(
     if spy_calls is not None:
         del spy_calls[n_calls:]
     if not view.ok:
-        pytest.skip(
+        pytest.fail(
             f"preprocessor cannot carry a trivial known-good TU "
             f"({context}): {view.errors}",
         )
