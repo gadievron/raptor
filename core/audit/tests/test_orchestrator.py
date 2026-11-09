@@ -308,6 +308,13 @@ def _no_native_review_tools(monkeypatch):
         "core.audit.orchestrator._run_mechanical_detectors",
         lambda *a, **k: ({}, set()),
     )
+    # Proactive validation ignores config.validate and can spawn SMT tools.
+    # These contracts supply their review outcomes; native validation has
+    # dedicated tests outside the opted-in fixture users.
+    monkeypatch.setattr(
+        "core.audit.orchestrator._proactive_validate",
+        lambda outcome, *a, **k: outcome,
+    )
     from core.audit import capabilities
 
     monkeypatch.setattr(
