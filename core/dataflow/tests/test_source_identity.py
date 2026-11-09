@@ -42,8 +42,13 @@ def test_rebound_regex_root_cannot_certify_source(tmp_path: Path):
     ("import re\nre.__dict__['fullmatch'] = lambda pattern, value: True\n", "name"),
     ("import re\nsetattr(re, 'fullmatch', lambda pattern, value: True)\n", "name"),
     ("import re\nexec('re.fullmatch = lambda pattern, value: True')\n", "name"),
+    ("import re\ndef poison():\n    proxy = re\n    proxy.fullmatch = replacement\npoison()\n", "name"),
+    ("import re\ndef poison():\n    vars(re)['fullmatch'] = replacement\npoison()\n", "name"),
+    ("import re\ndef poison():\n    import re as rx\n    rx.fullmatch = replacement\npoison()\n", "name"),
+    ("import re\ndef poison():\n    global re\n    proxy = re\n    proxy.fullmatch = replacement\npoison()\n", "name"),
 ], ids=["root-rebind", "wrong-import", "parameter", "member-write", "alias-write",
-        "namespace-dict", "setattr", "dynamic-namespace"])
+        "namespace-dict", "setattr", "dynamic-namespace", "helper-alias", "helper-vars",
+        "helper-import-alias", "helper-global"])
 def test_regex_namespace_conflicts_reach_all_consumers(tmp_path: Path, prefix, parameters):
     import json
     from core.dataflow import injection_prescreen as ip
@@ -82,11 +87,12 @@ def test_regex_namespace_conflicts_reach_all_consumers(tmp_path: Path, prefix, p
 
 
 @pytest.mark.skipif(not z3_available(), reason="z3-solver not installed")
-def test_unrelated_parameter_does_not_shadow_regex_namespace(tmp_path: Path):
+@pytest.mark.parametrize("body", ["return re", "re.fullmatch = replacement"])
+def test_unrelated_parameter_does_not_shadow_regex_namespace(tmp_path: Path, body):
     from core.dataflow.source_identity import known_python_identity_conflict
 
     source = (
-        "import re\ndef unrelated(re):\n    return re\n"
+        "import re\ndef unrelated(re):\n    " + body + "\n"
         "def handle(name):\n"
         '    if not re.fullmatch(r"[a-z]+", name):\n'
         "        return\n    return open(name)\n"

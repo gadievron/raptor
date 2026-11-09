@@ -101,13 +101,6 @@ def known_python_identity_conflict(
         alias for alias, target in imports.items()
         if target in {canonical_root, canonical}
     }
-    enclosing: set[ast.AST | None] = {None}
-    ancestor: ast.AST = call
-    while ancestor in parents:
-        ancestor = parents[ancestor]
-        if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            enclosing.add(ancestor)
-
     def scope_of(node: ast.AST) -> ast.AST | None:
         child = node
         while child in parents:
@@ -119,25 +112,52 @@ def known_python_identity_conflict(
                 return parent
             child = parent
         return None
+    # Canonical imports inside helpers still refer to the same module
+    # singleton. A local binding alone must not hide their mutations.
+    local_imports: dict[ast.AST, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            owner = scope_of(node)
+            if owner is None:
+                continue
+            bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
+            aliases = {alias for alias, target in bindings.items()
+                       if target in {canonical_root, canonical}}
+            roots.update(aliases)
+            local_imports.setdefault(owner, set()).update(aliases)
+
+    def relevant_root(node: ast.AST, name: str | None) -> bool:
+        if name not in roots:
+            return False
+        owner = scope_of(node)
+        if owner is None or name not in scopes.get(owner, frozenset()):
+            return True
+        # Binding facts include closures. Keep canonical imports in any
+        # enclosing frame conservative rather than treating them as shadows.
+        frame: ast.AST | None = owner
+        while frame is not None:
+            if name in local_imports.get(frame, set()):
+                return True
+            frame = parents.get(frame)
+        return False
+
     for node in ast.walk(tree):
         if (isinstance(node, (ast.Attribute, ast.Subscript))
                 and isinstance(node.ctx, (ast.Store, ast.Del))
-                and _member_root(node) in roots):
+                and relevant_root(node, _member_root(node))):
             return "source library member is mutated"
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id in {"setattr", "delattr"} and node.args
-                and _member_root(node.args[0]) in roots):
+                and relevant_root(node, _member_root(node.args[0]))):
             return "source library member may be mutated dynamically"
-        if scope_of(node) not in enclosing:
-            continue
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in roots:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and relevant_root(node, node.id):
             parent = parents.get(node)
             if not (
                 (isinstance(parent, ast.Attribute) and parent.value is node)
                 or (isinstance(parent, ast.Call) and parent.func is node)
             ):
                 return "source library object escapes its call position"
-        if isinstance(node, ast.Attribute) and _member_root(node) in roots:
+        if isinstance(node, ast.Attribute) and relevant_root(node, _member_root(node)):
             if node.attr.startswith("__"):
                 return "source library namespace is exposed"
             parent = parents.get(node)
