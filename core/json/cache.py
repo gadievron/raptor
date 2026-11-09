@@ -513,6 +513,16 @@ class JsonCache:
                 with self._counter_lock:
                     self.misses += 1
                 return MISSING
+        now = time.time()
+        # Retain only envelopes that are useful under their stored lifetime.
+        # A miss must not displace a hot entry or keep an expired payload alive.
+        if not envelope.is_fresh(now):
+            with self._memo_lock:
+                self._memo_evict(key)
+            with self._counter_lock:
+                self.misses += 1
+            return MISSING
+        if cached is None or cached.signature != signature:
             with self._memo_lock:
                 self._memo_put(key, envelope, signature, file_size)
         # Caller may downgrade TTL relative to what was stored. Honour
@@ -544,7 +554,7 @@ class JsonCache:
             ttl_seconds=effective_ttl,
             value=envelope.value,
         )
-        if not envelope.is_fresh(time.time()):
+        if not envelope.is_fresh(now):
             with self._counter_lock:
                 self.misses += 1
             return MISSING
