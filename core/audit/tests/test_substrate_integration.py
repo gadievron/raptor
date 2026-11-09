@@ -4,9 +4,10 @@ The motivating shape for the substrate seam, run through the real
 orchestrator loop with a stub transport (canned review responses
 keyed by function — one tool-chain-eligible hypothesis per checklist
 function on both the PHP and C sides). spatch is stubbed at the
-runner boundary: available, runs clean, matches nothing — so every
-C-family dispatch mints a genuine refutation while PHP dispatches
-must skip BEFORE the runner is reached.
+runner boundary: available, runs clean, matches nothing. The curated
+confirm-only C rule stays inconclusive; PHP dispatches must skip BEFORE
+that runner is reached. Silence must not become a refutation on either
+substrate.
 
 Pinned: zero coccinelle refutations on PHP functions (and zero
 runner invocations against PHP paths), the C file still gets a real
@@ -129,7 +130,11 @@ def _review_fn(ctx, config):
 class TestPhpTreeWithStrayCFile:
 
     @pytest.fixture()
-    def run(self, tmp_path, monkeypatch):
+    def cocci_observations(self):
+        return []
+
+    @pytest.fixture()
+    def run(self, tmp_path, monkeypatch, cocci_observations):
         _reset_substrate_caches()
         target, out = _write_target(tmp_path)
         from core.audit import capabilities
@@ -153,6 +158,22 @@ class TestPhpTreeWithStrayCFile:
             return SimpleNamespace(matches=[], errors=[], returncode=0)
 
         monkeypatch.setattr(cocci_runner, "run_rule", _run_rule)
+
+        # Observe the real file sweep's authority decision; only the spatch
+        # transport is stubbed. A missing C dispatch must not pass as a
+        # conservative no-refutation result.
+        real_file_sweep = orch.run_coccinelle_file_sweep
+
+        def observed_file_sweep(**kwargs):
+            swept = real_file_sweep(**kwargs)
+            cocci_observations.append({
+                "file_path": swept.file_path,
+                "outcome": swept.outcome,
+                "confirm_only": bool((swept.details or {}).get("confirm_only")),
+            })
+            return swept
+
+        monkeypatch.setattr(orch, "run_coccinelle_file_sweep", observed_file_sweep)
 
         # No live Joern: a fresh server start plus CPG build is a
         # minutes-long, machine-dependent path (and a healthy leftover
@@ -227,12 +248,17 @@ class TestPhpTreeWithStrayCFile:
         result = run_orchestrator(config, _review_fn)
         return result, out, spatch_targets
 
-    def test_php_functions_get_zero_coccinelle_refutations(self, run):
+    def test_php_functions_get_zero_coccinelle_refutations(self, run, cocci_observations):
         result, _out, spatch_targets = run
         tc = result.tier_counters["coccinelle"]
-        # The only refutation is the C file's; both PHP dispatches
-        # substrate-skip.
-        assert tc.refuted == 1
+        # The real curated null-check rule is confirm-only: a clean scan
+        # earns a C dispatch, not proof that no null dereference exists.
+        assert tc.refuted == 0
+        assert tc.inconclusive == 1
+        assert cocci_observations
+        assert all(row == {
+            "file_path": "src/legacy.c", "outcome": "inconclusive", "confirm_only": True,
+        } for row in cocci_observations)
         assert tc.skipped_substrate == 2
         assert tc.substrate_skip_languages == {"php": 2}
         # The runner was never even invoked against PHP source.
