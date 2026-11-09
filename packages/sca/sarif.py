@@ -134,7 +134,7 @@ def write_sarif(path: Path, *, target: Path, rows: Sequence[dict[str, Any]],
     from core.atomic_fs import write_bytes_atomically
     doc = build_sarif(target=target, rows=(), generated_at=generated_at)
     run = doc["runs"][0]
-    rule_index = {}
+    rule_index: dict[str, int] = {}
     count = 0
     def encode(value):
         return dumps_artifact(value, indent=None, ensure_ascii=True).encode("ascii")
