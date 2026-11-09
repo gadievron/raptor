@@ -13,6 +13,7 @@ from core.audit.prefilter import (
     detect_language,
     run_prefilter,
 )
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
 
 
 def test_detect_language():
@@ -3211,13 +3212,14 @@ class TestPhpSqlInjectionInputShapes:
         assert _php_sql_rule_lines(tmp_path, source) == [3, 4, 5, 6]
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestPhpSqlInjectionResolution:
     """End-to-end: the in-review evidence stamp decides finding vs clean.
 
     Real ``_sweep_validate`` (prefilter stage + tool chain), real G2
-    gate, real ``_resolve_gate_demoted`` and export; only the semgrep
-    sweep is stubbed to the ``refuted`` verdict a working host books
-    for concatenated/interpolated SQL.
+    gate, real ``_resolve_gate_demoted`` and export. The semgrep sweep
+    returns ``refuted`` for concatenated/interpolated SQL; CodeQL pack
+    discovery uses the owned catalogue rather than the host installation.
     """
 
     @staticmethod
