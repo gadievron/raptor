@@ -1187,6 +1187,19 @@ With no report destination, the command creates no extra report files.
 An item marked resolved is absent from the selected current findings; that
 alone does not prove remediation or equivalent scan coverage.
 
+`check` accepts the same explicit report options. For example:
+
+```bash
+bin/raptor-sca check npm lodash 4.17.4 \
+  --report-format json --report-output package-review.json
+```
+
+The report retains the recorded verdict, advisory evidence, name-heuristic
+candidates and transitive coverage limits. An unavailable advisory lookup
+remains an unavailable verdict, with exit code 2. Report generation performs
+no extra registry or advisory queries. It captures up to 100 records per
+category with full totals; the native review retains the full list.
+
 ### Pre-Flight: Registries Reachable
 
 ```yaml

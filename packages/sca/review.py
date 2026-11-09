@@ -244,6 +244,16 @@ def _checked_main(
     sys.stdout.write(report)
     sys.stdout.flush()
 
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .review_reporting import complete_check_report
+        complete_check_report(args, dep=dep, vuln_findings=vuln_findings, typo_findings=typo_findings,
+                              slop_findings=slop_findings, verdict=verdict, exit_code=exit_code,
+                              transitive_deps=transitive_deps, transitive_findings=transitive_findings,
+                              transitive_walk_attempted=transitive_walk_attempted,
+                              transitive_walk_supported=transitive_walk_supported,
+                              seed_metadata_unverifiable=seed_metadata_unverifiable,
+                              osv_degraded=osv.degraded, failed_lookups=osv.failed_lookups,
+                              failed_dep_keys=osv.failed_dep_keys)
     return exit_code
 
 
@@ -283,7 +293,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         "what installing actually pulls in)")
     p.add_argument("--cache-root", help="override default cache root")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +446,17 @@ def _compute_verdict(
         if medium_or_higher >= 2:
             return _VERDICT_BLOCK
     return verdict
+
+
+def _recommendation(verdict: int, osv_degraded: bool) -> str:
+    if verdict == _VERDICT_BLOCK:
+        return 'Do not install. Block-class signal present (KEV-listed CVE, unfixable critical, high-EPSS critical, multiple criticals, near-typosquat, high-severity slopsquat, or compound supply-chain red flags).'
+    elif osv_degraded:
+        return 'Verdict unavailable — advisory lookups degraded or lack cached data, so this version is unvetted. Re-run with available advisory data before installing.'
+    elif verdict == _VERDICT_REVIEW:
+        return 'Investigate before installing. Findings are likely to be remediable by choosing a higher version or a different name.'
+    else:
+        return 'No mechanical signal against this version. Operator should still verify the maintainer and recent-publish history if the package is unfamiliar.'
 
 
 def _render_review_markdown(
@@ -642,34 +669,7 @@ def _render_review_markdown(
                 buf.write(f"- {span}\n")
             buf.write("</details>\n\n")
 
-    if verdict == _VERDICT_BLOCK:
-        buf.write(
-            "## Recommendation\n\n"
-            "Do not install. Block-class signal present "
-            "(KEV-listed CVE, unfixable critical, high-EPSS critical, "
-            "multiple criticals, near-typosquat, high-severity "
-            "slopsquat, or compound supply-chain red flags).\n"
-        )
-    elif osv_degraded:
-        buf.write(
-            "## Recommendation\n\n"
-            "Verdict unavailable — advisory lookups degraded "
-            "or lack cached data, so this version is unvetted. Re-run with "
-            "available advisory data before installing.\n"
-        )
-    elif verdict == _VERDICT_REVIEW:
-        buf.write(
-            "## Recommendation\n\n"
-            "Investigate before installing. Findings are likely to be "
-            "remediable by choosing a higher version or a different name.\n"
-        )
-    else:
-        buf.write(
-            "## Recommendation\n\n"
-            "No mechanical signal against this version. Operator should "
-            "still verify the maintainer and recent-publish history if "
-            "the package is unfamiliar.\n"
-        )
+    buf.write("## Recommendation\n\n" + _recommendation(verdict, osv_degraded) + "\n")
     return buf.getvalue()
 
 
