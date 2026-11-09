@@ -65,7 +65,7 @@ import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .fail_open_lang import (
     JS_LANGUAGES,
@@ -1638,7 +1638,7 @@ def _same_file_wur(source: str, tail: str) -> bool:
     streaming = (_SEGMENT_TYPE_IMPL(source) is str and str.__len__(source) >= 16 * 1024
                  and _SEGMENT_TYPE_IMPL(tail) is str and split_lines is _SEGMENT_LINES_IMPL)
     lines = iter_source_lines(source) if streaming else split_lines(source)
-    preceding = deque(maxlen=3) if streaming else None
+    preceding: deque[str] | None = deque(maxlen=3) if streaming else None
     native_match = streaming and re.compile is _WUR_COMPILE_IMPL and re.escape is _WUR_ESCAPE_IMPL
     decl_re = re.compile(rf"\b{re.escape(tail)}\s*\(")
     if native_match and tail not in source:
@@ -1650,7 +1650,7 @@ def _same_file_wur(source: str, tail: str) -> bool:
             continue
         if not decl_re.search(line):
             continue
-        window = "\n".join(preceding if preceding is not None else lines[max(0, idx - 2):idx + 1])
+        window = "\n".join(preceding if preceding is not None else cast(list[str], lines)[max(0, idx - 2):idx + 1])
         if wur_alias_in(window):
             return True
     return False
