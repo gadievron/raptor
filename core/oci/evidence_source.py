@@ -2,29 +2,40 @@
 from __future__ import annotations
 
 import os
+from contextlib import ExitStack
 from pathlib import Path
 import stat
 
 from core.oci.image_ref import parse_image_ref
+from core.source.streams import open_owned_fd, preserving_stream_error
 
 def layout_reader(layout: Path):
     """Stream regular blobs via directory FDs; never follow store symlinks."""
     def read(layer):
         flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
-        directories = []
-        try:
-            directories.append(os.open(layout, flags | os.O_DIRECTORY))
+        early_exit = None
+        with preserving_stream_error(ExitStack()) as owned:
+            directory = os.open(layout, flags | os.O_DIRECTORY)
+            owned.callback(os.close, directory)
             for component in ("blobs", "sha256"):
-                directories.append(os.open(component, flags | os.O_DIRECTORY, dir_fd=directories[-1]))
-            fd = os.open(layer.digest.removeprefix("sha256:"), flags, dir_fd=directories[-1])
-            with os.fdopen(fd, "rb") as stream:
-                if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
-                    raise ValueError("OCI blob is not a regular file")
+                directory = os.open(component, flags | os.O_DIRECTORY, dir_fd=directory)
+                owned.callback(os.close, directory)
+            fd = os.open(layer.digest.removeprefix("sha256:"), flags, dir_fd=directory)
+            stream = owned.enter_context(open_owned_fd(fd, "rb"))
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise ValueError("OCI blob is not a regular file")
+            try:
                 while chunk := stream.read(65536):
                     yield chunk
-        finally:
-            for directory in reversed(directories):
-                os.close(directory)
+            except GeneratorExit as exc:
+                # Explicit iterator close is normal teardown, so cleanup
+                # errors must surface instead of being hidden by GeneratorExit.
+                early_exit = exc
+        if early_exit is not None:
+            try:
+                raise early_exit
+            finally:
+                early_exit = None
     return read
 
 
