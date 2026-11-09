@@ -72,6 +72,8 @@ class NativeResult:
     pass_id: str = ""
     attempt_id: str = ""
     parents: list[str] | None = None
+    lifecycle_dir: Path | None = None
+    lifecycle_producer: str | None = None
 
     def build(self):
         payload = json_value(self.payload)
@@ -90,6 +92,11 @@ class NativeResult:
                                             "raptor.metadata": self.metadata or {},
                                             "raptor.result_sections": [asdict(b) for b in self.blocks or []],
                                             "raptor.accounting": {"recorded_findings": len(findings)} if findings is not None else {}})
+        if self.lifecycle_dir is not None:
+            from copy import deepcopy
+            from .lifecycle import apply_lifecycle
+            context.stages = deepcopy(context.stages)
+            apply_lifecycle(context, self.lifecycle_dir, producer_command=self.lifecycle_producer)
         document = build_document(context, blocks=[*(self.blocks or []), *result_blocks(payload)])
         document.metadata.update(self.metadata or {})
         return context, document
