@@ -30,7 +30,6 @@ def _mount_ns_usable() -> bool:
     nested userns restrictions."""
     if sys.platform != "linux":
         return False
-    sys.path.insert(0, str(REPO))
     from core.sandbox.probes import check_mount_available
     return check_mount_available()
 
