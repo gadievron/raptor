@@ -81,8 +81,24 @@ def test_named_verbs_do_not_borrow_real_anon_prefix_guards(verb):
 
 def test_guard_iterators_are_not_consumed_by_symbol_reservation():
     from packages.exploit_feasibility.smt_verbs import check_null_deref
-    result = check_null_deref("Pointer", guards=iter(["Pointer != 0"]))
-    assert result["feasible"] is False
+    guards = iter(["Pointer != 0"])
+    with pytest.raises(TypeError, match="conditions must be a sequence"):
+        check_null_deref("Pointer", guards=guards)
+    assert next(guards) == "Pointer != 0"
+
+
+@pytest.mark.parametrize("sequence_type", [list, tuple], ids=["list", "tuple"])
+def test_supported_guard_sequences_retain_constraints_and_symbol_isolation(sequence_type):
+    from packages.exploit_feasibility.smt_verbs import check_null_deref
+
+    guarded_pointer = check_null_deref("Pointer", guards=sequence_type(["Pointer != 0"]))
+    assert guarded_pointer["feasible"] is False
+    assert guarded_pointer["unknown"] == [] and guarded_pointer["model"] == {}
+
+    independent_call = check_null_deref("read_value()", guards=sequence_type(["_anon_0 != 0"]))
+    assert independent_call["feasible"] is True
+    assert independent_call["unknown"] == []
+    assert independent_call["model"]["_anon_0"] != 0
 
 
 def test_summary_arguments_remain_source_variables_instead_of_result_aliases():
