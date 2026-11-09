@@ -470,7 +470,7 @@ def test_e2e_discovers_project_alias_and_emits_project_alias_evidence(tmp_path, 
     not shutil.which("spatch"),
     reason="spatch not installed — skip real-spatch E2E",
 )
-def test_e2e_axis_dispatch_runs_multiple_rules(tmp_path):
+def test_e2e_axis_dispatch_runs_multiple_rules(tmp_path, attribute_rules):
     """When the target has both WUR and nonnull annotations, BOTH
     rules in the attrs/ axis fire — confirms the axis-dir iteration
     correctly drives all rules per axis."""
@@ -481,6 +481,9 @@ def test_e2e_axis_dispatch_runs_multiple_rules(tmp_path):
     )
 
     r = analyze(tmp_path)
+    assert set(r.rules_executed) == {
+        rule.stem for rule in attribute_rules.parent.glob("*/*.cocci")
+    }
     from packages.source_intel.analyze import KIND_NONNULL, KIND_WUR
     wur_names = {
         ev.function_name for ev in r.attrs_of_kind(KIND_WUR)
