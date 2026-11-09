@@ -1220,6 +1220,7 @@ class TestExtractAndPropagate:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestPrefilterWiring:
     """Test that the prefilter is wired into the orchestrator loop."""
 
@@ -1270,7 +1271,7 @@ class TestPrefilterWiring:
                 body="reviewed by LLM",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: prefilter wiring only — with Joern installed a
             # live server spins up for this two-function target, and a
             # loaded-host CPG build failure fails the review, whose
@@ -1298,7 +1299,7 @@ class TestPrefilterWiring:
                 body="reviewed by LLM",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: see the note on the prefilter=True siblings.
             joern_overrides={"enabled": False},
             target_path=target, out_dir=out, resume=False,
@@ -1322,7 +1323,7 @@ class TestPrefilterWiring:
                 body="reviewed",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: prefilter wiring only — with Joern installed a
             # live server spins up for this two-function target, and a
             # loaded-host CPG build failure fails the review, whose
@@ -1351,7 +1352,7 @@ class TestPrefilterWiring:
                 body="reviewed",
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
             # hermetic: prefilter wiring only — with Joern installed a
             # live server spins up for this two-function target, and a
             # loaded-host CPG build failure fails the review, whose
