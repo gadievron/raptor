@@ -297,9 +297,8 @@ def test_batch_timeout_falls_back_to_sequential(
     tmp_path: Path, monkeypatch,
 ) -> None:
     """One shared batch budget must not fabricate N failures: on
-    TimeoutExpired the pip batch falls back to per-manifest dry_run
-    (fresh full budget each), and — via the never-cache-failures
-    rule — nothing timeout-shaped is cached either."""
+    TimeoutExpired the pip batch falls back to ordered per-manifest
+    dry_run calls, each receiving the full original timeout."""
     import subprocess as _sp
 
     from packages.sca.resolvers import pip as pip_mod
@@ -312,25 +311,40 @@ def test_batch_timeout_falls_back_to_sequential(
                                             encoding="utf-8")
         projects.append(d)
 
-    resolver = pip_mod.PipResolver()
+    class OwnedPipResolver(pip_mod.PipResolver):
+        @property
+        def proxy_hosts(self):
+            return ["registry.invalid"]
+
+    resolver = OwnedPipResolver()
+    # Availability is a prerequisite, not the timeout branch under test.
+    monkeypatch.setattr(resolver, "is_available", lambda: True)
     seq_calls: list = []
+    batch_calls: list = []
 
     def _fake_dry_run(project_dir, *, timeout=120):
-        seq_calls.append(project_dir)
+        seq_calls.append((project_dir, timeout))
         return ResolverResult(
             ecosystem="PyPI", success=True, available=True,
             proposed_lockfile=None, error=None, raw_output="",
         )
 
     monkeypatch.setattr(resolver, "dry_run", _fake_dry_run)
-    monkeypatch.setattr(
-        pip_mod, "_run",
-        lambda *a, **k: (_ for _ in ()).throw(
-            _sp.TimeoutExpired(cmd="sh", timeout=1)),
-    )
+    def batch_timeout(command, **options):
+        batch_calls.append((command, options))
+        raise _sp.TimeoutExpired(cmd=command, timeout=options["timeout"])
+
+    monkeypatch.setattr(pip_mod, "_run", batch_timeout)
     results = resolver.dry_run_batch(
         projects, common_root=tmp_path, timeout=1,
     )
     assert len(results) == 2
     assert all(r.success for r in results)
-    assert seq_calls == projects
+    assert seq_calls == [(project, 1) for project in projects]
+    assert len(batch_calls) == 1
+    command, options = batch_calls[0]
+    assert command[:2] == ["sh", "-c"]
+    assert "pip-compile" in command[2]
+    assert options == {
+        "cwd": tmp_path, "timeout": 1, "proxy_hosts": ["registry.invalid"],
+    }
