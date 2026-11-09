@@ -185,10 +185,15 @@ def _is_tempfile_name(name: str) -> bool:
     """Recognize writer-owned names without claiming similar caller files.
 
     The shared atomic writer uses eight hex characters by default and
-    sixteen in its descriptor-anchored mode; both generations are owned.
+    sixteen in its descriptor-anchored mode. Compact names retain a
+    sixteen-hex destination digest and the same nonce widths.
     """
     if name.startswith(".atomic-") and name.endswith(".tmp"):
         parts = name[len(".atomic-"):-len(".tmp")].rsplit(".", 3)
+        if len(parts) == 2:
+            digest, nonce = parts
+            return (len(digest) == 16 and len(nonce) in (8, 16)
+                    and all(char in "0123456789abcdef" for char in digest + nonce))
         return (len(parts) == 4 and bool(parts[0])
                 and all(part.isascii() and part.isdigit() for part in parts[1:3])
                 and len(parts[3]) in (8, 16)
@@ -216,18 +221,13 @@ def _iter_tempfile_candidates(
     stack = [(str(root), 0)]
     while stack:
         cur, depth = stack.pop()
-        try:
-            it = os.scandir(cur)
-        except OSError:
-            continue
-        with it:
+        # An unreadable directory or unknown entry type makes this sweep
+        # incomplete. Let the owner withhold its success marker and retry.
+        with os.scandir(cur) as it:
             for entry in it:
-                try:
-                    if entry.is_dir(follow_symlinks=False):
-                        if depth + 1 < max_depth:
-                            stack.append((entry.path, depth + 1))
-                        continue
-                except OSError:
+                if entry.is_dir(follow_symlinks=False):
+                    if depth + 1 < max_depth:
+                        stack.append((entry.path, depth + 1))
                     continue
                 name = entry.name
                 if ".tmp." not in name and not (
@@ -311,7 +311,8 @@ class JsonCache:
         """Sweep orphan tempfiles left by a previously-crashed writer.
 
         Current writers (via ``core.atomic_fs``) use
-        ``.atomic-<name>.<pid>.<tid>.<rand>.tmp``; legacy writers used
+        ``.atomic-<name>.<pid>.<tid>.<rand>.tmp`` or the compact
+        ``.atomic-<digest>.<rand>.tmp`` form; legacy writers used
         ``<path>.tmp.<pid>[.<tid>]``. Either way, a writer killed
         between the open and the rename orphans the tempfile. Without this sweep, every crash leaks one
         tempfile per partial write, and the cache dir slowly fills up
@@ -353,6 +354,7 @@ class JsonCache:
                 return
         except OSError:
             pass
+        complete = True
         try:
             # Consume candidates as they arrive: an interrupted directory walk
             # must not discard completed cleanup or retain every orphan in RAM.
@@ -371,11 +373,15 @@ class JsonCache:
                     if _file_signature(current) != _file_signature(info):
                         continue
                     entry.unlink()
+                except FileNotFoundError:
+                    continue  # Another owner already removed this candidate.
                 except OSError:
-                    continue
+                    complete = False
         except OSError:
             # Do not rate-limit a walk that could not finish. A later cache
             # construction can retry; already-reclaimed files stay reclaimed.
+            return
+        if not complete:
             return
         try:
             try:
