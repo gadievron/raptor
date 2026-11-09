@@ -140,7 +140,7 @@
     "core/analysis/tests/test_peer_groups.py": "d37cab2b1aad5e67629ea588ed78a7469f8c1a3bfeb069efbd9321a0a1883001",
     "core/analysis/tests/test_reach_verdict_log.py": "2fe1d5c51f5c775033e7a1e8d7d1cef1a4da484e65e6d9c71c2b3852ea892124",
     "core/analysis/tests/test_run_feasibility_cli.py": "621c2910bec0461013095d614d0271a99a495977e83fc8ef3785d4e1fb93bf9a",
-    "core/annotations/tests/test_cli.py": "99b22e052197498f42b1865869fd33c3bf2796fa09434c92b57cef71206e41be",
+    "core/annotations/tests/test_cli.py": "185d65671f1dcd591a92d14cf5f13e2d5cf02bc9c10f55dfeb8b0625594c981d",
     "core/annotations/tests/test_cli_add_validation_order.py": "e9ed10931084046be65f4f733a47036648c263f7a379dd9c26f7eebd324eb3bd",
     "core/annotations/tests/test_provenance.py": "95d5e071b283bdd58fec03de7563b26e6a7b3dc683ba01433e066b173214127c",
     "core/ast/tests/test_raptor_enrich_context_map_ast_view.py": "0f2a6b78cd6174a5d0ed8416c3737dceca7550ebd27fdc05eec414f58f5b4b69",
@@ -8323,10 +8323,18 @@
     {
       "path": "core/annotations/tests/test_cli.py",
       "scope": "TestReviewNoteDelegationInheritsContext.test_piped_review_note_defaults_to_agent",
-      "signature": "8ffe6baf39ab87d7a90799e23a75096c8be51f944bd67291966116ef96d39b1c",
+      "signature": "4140bd60b92d6f6766bbeca6a3f73161b368a7833ecedcd720214541808111b1",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "core/annotations/tests/test_cli.py:TestReviewNoteDelegationInheritsContext.test_piped_review_note_defaults_to_agent: Reviewed _run -> standalone_cli_env -> custom TTY/group runner -> communicate/reap lifetime."
+      "purpose": "core/annotations/tests/test_cli.py:TestReviewNoteDelegationInheritsContext.test_piped_review_note_defaults_to_agent: Standalone launch environment spans the real process-group runner and delegated annotate child; provenance CLI startup variables are absent, native trust/refusal guards and non-TTY assertions remain enabled. Clean/stale parent cases verify caller restoration."
+    },
+    {
+      "path": "core/annotations/tests/test_cli.py",
+      "scope": "TestReviewNoteDelegationInheritsContext.test_piped_review_note_defaults_to_agent",
+      "signature": "6c97f1a1f79ff0dc88e89d1f8b69f55f37088a83f584ce50c075c5b315f7aa3b",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "core/annotations/tests/test_cli.py:TestReviewNoteDelegationInheritsContext.test_piped_review_note_defaults_to_agent: Standalone launch environment spans the real process-group runner and delegated annotate child; provenance CLI startup variables are absent, native trust/refusal guards and non-TTY assertions remain enabled. Clean/stale parent cases verify caller restoration."
     },
     {
       "path": "core/annotations/tests/test_cli.py",
