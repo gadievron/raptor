@@ -961,3 +961,17 @@ class TestDefinitionHeaderCatalogRebinding:
             '    render(y)\n'
         )
         assert TestModuleLevelCatalogRootDistrust()._evaluate(source).verdict == VERDICT_NO_SUPPRESS
+
+
+class TestDefinitionHeaderDynamicCatalog:
+    def test_module_default_exec_prevents_catalog_suppression(self):
+        source = (
+            'import html\n'
+            'def configure(value=exec("html = replacement")):\n'
+            '    pass\n'
+            'def handle(x):\n'
+            '    y = html.escape(x)\n'
+            '    render(y)\n'
+        )
+        result = TestModuleLevelCatalogRootDistrust()._evaluate(source)
+        assert result.verdict == VERDICT_NO_SUPPRESS

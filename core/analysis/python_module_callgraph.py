@@ -733,11 +733,17 @@ def module_dynamic_namespace(
     }
 
     def _module_reachable(node: ast.AST) -> bool:
-        cur = parents.get(node)
+        child = node
+        cur = parents.get(child)
         while cur is not None:
-            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                ast.Lambda)):
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # Defaults and decorators run in the enclosing scope;
+                # only statements in the body wait for a function call.
+                if any(child is statement for statement in cur.body):
+                    return False
+            elif isinstance(cur, ast.Lambda) and child is cur.body:
                 return False
+            child = cur
             cur = parents.get(cur)
         return True
 
