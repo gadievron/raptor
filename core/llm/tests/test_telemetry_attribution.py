@@ -8,10 +8,15 @@ from core.llm import telemetry
 
 
 @pytest.fixture(autouse=True)
-def clean_sink():
-    telemetry.set_sink(None)
-    yield
-    telemetry.set_sink(None)
+def clean_sink(monkeypatch):
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(telemetry, {"_sink": None}, lock=telemetry._sink_lock):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def test_application_caller_recorded_without_transport_frames(tmp_path):

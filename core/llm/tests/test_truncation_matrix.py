@@ -31,10 +31,15 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
-def _clean_sink():
-    set_sink(None)
-    yield
-    set_sink(None)
+def _clean_sink(monkeypatch):
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(telemetry, {"_sink": None}, lock=telemetry._sink_lock):
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _shape(kind):
