@@ -49,9 +49,11 @@ def _root_conftest():
 
 
 def _dead_pid() -> int:
+    from core.testing.processes import reap_on_exit
     proc = subprocess.Popen(["true"])
-    proc.wait(timeout=10)
-    return proc.pid
+    with reap_on_exit(proc):
+        proc.wait(timeout=10)
+        return proc.pid
 
 
 def test_emulation_gate_sweeps_dead_emu_roots(tmp_path, monkeypatch):

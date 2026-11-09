@@ -45,9 +45,11 @@ def tmp_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _owned_tempfile_na
 
 
 def _dead_pid() -> int:
+    from core.testing.processes import reap_on_exit
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
+    with reap_on_exit(proc):
+        proc.wait()
+        return proc.pid
 
 
 def _mkdir(tmp_root: Path, name: str, pid: int | None = None) -> Path:

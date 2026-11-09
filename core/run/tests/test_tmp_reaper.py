@@ -1012,9 +1012,11 @@ class TestDeadPidDirReaping:
 
     def _dead_pid(self):
         # A pid that provably cannot be alive: spawn+reap our own child.
+        from core.testing.processes import reap_on_exit
         proc = subprocess.Popen(["true"])
-        proc.wait(timeout=10)
-        return proc.pid
+        with reap_on_exit(proc):
+            proc.wait(timeout=10)
+            return proc.pid
 
     def test_dead_pid_dir_reaped_live_and_own_kept(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
@@ -1197,9 +1199,11 @@ class TestPidSuffixDirReaping:
         return d
 
     def _dead_pid(self):
+        from core.testing.processes import reap_on_exit
         proc = subprocess.Popen(["true"])
-        proc.wait(timeout=10)
-        return proc.pid
+        with reap_on_exit(proc):
+            proc.wait(timeout=10)
+            return proc.pid
 
     def test_dead_suffixed_dir_reaped_live_kept(self, tmp_path):
         from core.run.tmp_reaper import reap_dead_pid_dirs
@@ -1309,9 +1313,11 @@ class TestPidFileReaping:
 
     @staticmethod
     def _dead_pid():
+        from core.testing.processes import reap_on_exit
         proc = subprocess.Popen(["true"])
-        proc.wait(timeout=10)
-        return proc.pid
+        with reap_on_exit(proc):
+            proc.wait(timeout=10)
+            return proc.pid
 
     @staticmethod
     def _sidecar_pair(root, pid, mtime=None):
@@ -1411,9 +1417,11 @@ class TestPidLivenessAgeFloor:
 
     @staticmethod
     def _dead_pid() -> int:
+        from core.testing.processes import reap_on_exit
         proc = subprocess.Popen(["true"])
-        proc.wait(timeout=10)
-        return proc.pid
+        with reap_on_exit(proc):
+            proc.wait(timeout=10)
+            return proc.pid
 
     def _dir(self, root, pid, age_s):
         d = root / f"raptor-pytest-{pid}-sess"
@@ -1590,9 +1598,11 @@ class TestMidSweepVanish:
 
     @staticmethod
     def _dead_pid() -> int:
+        from core.testing.processes import reap_on_exit
         proc = subprocess.Popen(["true"])
-        proc.wait(timeout=10)
-        return proc.pid
+        with reap_on_exit(proc):
+            proc.wait(timeout=10)
+            return proc.pid
 
     def _dir(self, root, pid, age_s, tail="-sess"):
         d = root / f"raptor-pytest-{pid}{tail}"
