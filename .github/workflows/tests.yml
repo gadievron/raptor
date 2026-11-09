@@ -449,24 +449,13 @@ jobs:
         continue-on-error: true
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
-          # __pycache__ contents are deterministic per (Python version,
-          # source contents). An EXACT-key hit means the sources are
-          # byte-identical to the tree that built the cache, so the
-          # compile step below is skipped outright — that skip is what
-          # recovers the compile cost, and it is sound only because
-          # the pycs are checked-hash (PEP 552): import validates them
-          # by SOURCE CONTENT, so fresh-checkout mtime churn cannot
-          # stale them. Running compileall over restored pycs would
-          # recompile everything regardless of mode (its up-to-date
-          # probe compares a timestamp-shaped header), which is why
-          # the gate is on the cache step, not inside compileall.
-          # Miss or restore-keys prefix hit (cache-hit != 'true'):
-          # compile from scratch.
+          # Exact hits skip compilation. Prefix restores validate checked-hash
+          # entries and rebuild only missing, stale or malformed bytecode.
           path: |
             core/**/__pycache__
             packages/**/__pycache__
             __pycache__
-          key: pycache-v2-${{ steps.fast_venv.outputs.cache-key }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', '*.py') }}
+          key: pycache-v2-${{ steps.fast_venv.outputs.cache-key }}-${{ hashFiles('core/**/*.py', 'packages/**/*.py', '*.py', '.github/scripts/compile_checked_bytecode.py') }}
           restore-keys: |
             pycache-v2-${{ steps.fast_venv.outputs.cache-key }}-
 
@@ -477,7 +466,7 @@ jobs:
           source $VENV_PATH/bin/activate
           # checked-hash: import validates by content, so the cached
           # pycs stay valid across checkout mtime churn.
-          python -m compileall -q --invalidation-mode checked-hash core packages *.py
+          python .github/scripts/compile_checked_bytecode.py core packages *.py
 
       - name: Start LLM hostname tripwire
         run: |

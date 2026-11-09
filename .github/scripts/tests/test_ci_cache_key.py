@@ -188,7 +188,7 @@ def test_native_tool_cache_is_platform_scoped_refreshes_weekly_and_can_miss():
     assert 'ref: ${{ steps.codeql_identity.outputs.libraries_ref }}' not in workflow
 
 
-def test_bytecode_restores_are_optional_and_prefix_hits_still_recompile():
+def test_bytecode_restores_are_optional_and_prefix_hits_validate_entries():
     workflow = (ROOT / '.github/workflows/tests.yml').read_text()
     block = workflow.split('        id: pycache\n', 1)[1].split('      - name: Start LLM hostname tripwire', 1)[0]
     assert 'continue-on-error: true' in block
@@ -196,7 +196,8 @@ def test_bytecode_restores_are_optional_and_prefix_hits_still_recompile():
     assert 'steps.fast_venv.outputs.cache-key' in block
     assert "'packages/**/*.py', '*.py'" in block
     assert '\n            __pycache__\n' in block
-    assert '--invalidation-mode checked-hash' in block
+    assert "'*.py', '.github/scripts/compile_checked_bytecode.py'" in block
+    assert 'python .github/scripts/compile_checked_bytecode.py core packages *.py' in block
 
 
 def test_builder_interpreter_is_the_one_fingerprinted_before_restore():
