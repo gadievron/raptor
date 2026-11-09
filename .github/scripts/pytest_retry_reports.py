@@ -10,9 +10,21 @@ import sys
 import xml.etree.ElementTree as ET
 
 
+def _collection_skip(case):
+    # Pytest's collection reporter has no runnable node: the module address
+    # is stored in name and classname is explicitly empty. Keep this metadata
+    # distinct from runnable identities; it must never authorize a retry.
+    name = case.get("name", "")
+    skipped = case.find("skipped")
+    return (case.get("classname") == "" and bool(name)
+            and all(part.replace("-", "_").isidentifier() for part in name.split("."))
+            and len(case) == 1 and skipped is not None
+            and skipped.get("message") == "collection skipped")
+
+
 def _key(case):
     key = case.get("classname"), case.get("name")
-    if not all(key):
+    if not all(key) and not _collection_skip(case):
         raise ValueError("testcase lacks an unambiguous classname/name")
     return key
 
@@ -73,6 +85,18 @@ def merge(first, retry, output):
         raise ValueError("effective report must not overwrite raw attempts")
     root, suite, groups = _read(first)
     _, retry_suite, retried = _read(retry)
+    # A --lf run can collect the same unavailable modules again. Accept only
+    # collection skips already present in the first report, with the same
+    # reason. Keep their original rows rather than treating them as retried
+    # tests or adding them twice to the effective report.
+    for key in [key for key in retried if key[0] == ""]:
+        if key not in groups:
+            raise ValueError("unexpected collection skip on retry")
+        first_skip = groups[key][0].find("skipped")
+        retry_skip = retried[key][0].find("skipped")
+        if (first_skip.attrib, first_skip.text) != (retry_skip.attrib, retry_skip.text):
+            raise ValueError("collection skip changed on retry")
+        del retried[key]
     expected = failed_keys(groups)
     if not expected or set(retried) != expected:
         raise ValueError("retry did not cover exactly the previously failed cases")
