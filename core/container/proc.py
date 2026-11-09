@@ -332,11 +332,11 @@ def run_cli(
     if "error" in box:
         raise box["error"]
     if "timeout" in box:
-        exc = box["timeout"]
+        timeout_error = box["timeout"]
         return RunOutcome(
             returncode=None,
-            stdout=_decode(exc.stdout),
-            stderr=_decode(exc.stderr),
+            stdout=_decode(timeout_error.stdout),
+            stderr=_decode(timeout_error.stderr),
             timed_out=True,
             truncated=box.get("truncated", False),
         )
