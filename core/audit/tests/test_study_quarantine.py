@@ -1,8 +1,8 @@
 """Contradiction quarantine + receipt threading for study-triggered
-re-reviews.  The re-review sees BOTH the original assumption and the
-sourced answer (envelope-defanged, receipt attached); the resulting
-verdict embeds the answers' receipts in its evidence chain and the
-journal.  Hermetic — no LLM.
+re-reviews. The re-review sees both the original assumption and the
+sourced answer. A weaker model assessment retains its context receipts
+in diagnostic telemetry, without withdrawing the prior concern or
+borrowing refutation authority. Hermetic — no LLM.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import time
 import types
 
 from core.audit.context import _format_study_answers
+from core.audit.record import load_audit_log
 from core.audit.orchestrator import (
     OrchestratorConfig,
     OrchestratorResult,
@@ -131,7 +132,7 @@ class TestReReviewQuarantineAndThreading:
         assert sa and sa[0]["question"].startswith("Does `parse_config`")
         assert sa[0]["assumption"], "original assumption must be presented"
 
-    def test_receipts_threaded_into_verdict(
+    def test_receipts_retained_on_unverified_reassessment(
         self, tmp_path, monkeypatch,
     ) -> None:
         config, checklist, outcomes, flips = self._setup(
@@ -154,13 +155,15 @@ class TestReReviewQuarantineAndThreading:
         new_outcome = next(
             o for o in result.outcomes if o.function == "handler"
         )
-        receipts = new_outcome.review_result["study_receipts"]
+        assert new_outcome is outcomes[0] and new_outcome.status == "suspicious"
+        rows = [r for r in load_audit_log(tmp_path) if r.get("action") == "study_reassessment"]
+        assert len(rows) == 1 and rows[0]["proposed_status"] == "clean"
+        receipts = rows[0]["study_receipts"]
         assert receipts[0]["sha256"] == "abcd1234"
         assert receipts[0]["tier"] == "verbatim"
         assert receipts[0]["verified"] is True
-        # the flip (suspicious -> clean) driven by a study answer is
-        # registered on the scorecard
-        assert flips
+        assert rows[0]["adjudication"] == "unverified"
+        assert not flips
 
     def test_unresolved_answers_not_threaded(
         self, tmp_path, monkeypatch,
@@ -292,15 +295,12 @@ class TestReReviewQuarantineAndThreading:
             "Does `beta_dep` validate?"
         )
 
-        # And each re-reviewed verdict threads ITS OWN receipts.
-        shas = {
-            o.function: [
-                r["sha256"]
-                for r in o.review_result["study_receipts"]
-            ]
-            for o in result.outcomes
-        }
+        # Each diagnostic keeps its own receipts without replacing a
+        # concern or turning those context receipts into negative evidence.
+        rows = [r for r in load_audit_log(tmp_path) if r.get("action") == "study_reassessment"]
+        shas = {row["function"]: [r["sha256"] for r in row["study_receipts"]] for row in rows}
         assert shas == {"alpha": ["aaaa1111"], "beta": ["bbbb2222"]}
+        assert result.suspicious == 2 and result.clean == 0
 
 
 class TestJournalCarriesReceipts:
