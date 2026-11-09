@@ -1785,3 +1785,37 @@ def test_tier1b_containment_uses_shared_confine_chokepoint(
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
     assert "outside the repo root" in r.reasoning
     assert seen["args"] == (tmp_path, "app.py")
+
+
+@_requires_z3
+@pytest.mark.parametrize("exit_statement", ["return", "raise"])
+def test_curated_call_error_cannot_preserve_raw_binding(tmp_path: Path, exit_statement):
+    import html
+
+    with pytest.raises(TypeError):
+        html.escape(Path("<unvalidated>"))
+    line = "        safe = html.escape(raw)"
+    source = (
+        "import html\ndef handle(raw):\n    safe = raw\n    try:\n" + line
+        + "\n    except Exception:\n        pass\n    return render(safe)\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    reply = json.dumps({
+        "kind": "known_safe_call", "validator_source_line": line,
+        "variable_name": "raw", "charset": "", "forbidden": "",
+        "library_call": "html.escape",
+    })
+    result = t1.try_tier1b(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=8, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert result.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "caught" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace("        pass", "        " + exit_statement))
+    control = t1.try_tier1b(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=8, sink_class="xss",
+        language="python", complete=_fake_complete(reply),
+    )
+    assert control.status is t1.Tier0Status.SOUND

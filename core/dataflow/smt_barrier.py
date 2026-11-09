@@ -2781,6 +2781,8 @@ def _lexical_substitution_dominates(
         return False
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
+    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line):
+        return False
     if _variable_reassigned_between(tree, var_name, validator_line, sink_line):
         return False
     # Enclosing-conditional gate: ``if cond: x = re.sub('[/.]', '', x)``

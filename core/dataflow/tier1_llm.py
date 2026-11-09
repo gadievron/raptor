@@ -59,6 +59,7 @@ from core.dataflow.smt_barrier import (
     _lexical_var_reaches_sink,
     _sanitizer_tails_for_spec_kind,
     _same_function_in_order,
+    _validator_call_error_may_reach_sink,
     _validator_in_branch,
     prove_neutralizes,
     split_source_lines,
@@ -560,6 +561,13 @@ def _try_known_safe_call(
             Tier0Status.NOT_APPLICABLE,
             f"safe-call at line {validator_line} is separated from the "
             f"sink at line {sink_line} by a function boundary",
+        )
+    if tree is not None and _validator_call_error_may_reach_sink(
+        tree, validator_line, sink_line,
+    ):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            "a caught safe-call error can continue to the sink without sanitising",
         )
     # Transform-kind entries return the sanitized VALUE: the chain
     # must start from what the call's result is BOUND to, never from

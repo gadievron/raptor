@@ -4241,3 +4241,46 @@ def test_charset_guard_error_skips_protected_sink(tmp_path: Path):
         sink_uri="app.py", sink_line=6, sink_class="pathtrav",
     )
     assert result.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("handler", ["TypeError", "Exception"])
+@pytest.mark.parametrize("exit_statement", ["return", "raise"])
+def test_substitution_error_cannot_preserve_raw_binding(tmp_path: Path, handler, exit_statement):
+    import re
+
+    with pytest.raises(TypeError):
+        re.sub(r"[/\\.]+", "", Path("../unvalidated"))
+    line = r'        name = re.sub(r"[/\\.]+", "", name)'
+    source = (
+        "import re\ndef handle(name):\n    try:\n" + line
+        + "\n    except " + handler + ":\n        pass\n    return open(name)\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "does not dominate" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace("        pass", "        " + exit_statement))
+    control = sb.try_tier0(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+def test_substitution_error_skips_protected_sink(tmp_path: Path):
+    line = r'        name = re.sub(r"[/\\.]+", "", name)'
+    source = (
+        "import re\ndef handle(name):\n    try:\n" + line
+        + "\n        return open(name)\n    except TypeError:\n        pass\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + line + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=5, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.SOUND
