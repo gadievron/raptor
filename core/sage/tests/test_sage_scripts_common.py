@@ -21,7 +21,7 @@ class TestAsyncMemoryExists(unittest.TestCase):
         response.memories = [MagicMock()]
         client.list_memories = AsyncMock(return_value=response)
 
-        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:raptor-scan"))
+        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:raptor-scan"), loop_factory=asyncio.new_event_loop)
 
         self.assertTrue(result)
         client.list_memories.assert_awaited_once_with(
@@ -37,7 +37,7 @@ class TestAsyncMemoryExists(unittest.TestCase):
         response.memories = []
         client.list_memories = AsyncMock(return_value=response)
 
-        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:unknown"))
+        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:unknown"), loop_factory=asyncio.new_event_loop)
 
         self.assertFalse(result)
 
@@ -46,7 +46,7 @@ class TestAsyncMemoryExists(unittest.TestCase):
         client = MagicMock()
         client.list_memories = AsyncMock(side_effect=RuntimeError("sage unreachable"))
 
-        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:anything"))
+        result = asyncio.run(async_memory_exists(client, "raptor-agents", "agent:anything"), loop_factory=asyncio.new_event_loop)
 
         # Error → False → caller re-proposes. Duplicate memory is cheaper
         # than a missing one caused by a transient query failure.

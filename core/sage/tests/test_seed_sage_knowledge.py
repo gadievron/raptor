@@ -164,7 +164,7 @@ class TestSeedOneMemoryType(unittest.TestCase):
                                inference="inference", task="task")
         with mock.patch.object(ssk, "MemoryType", enum):
             label, status = asyncio.run(ssk._seed_one(
-                client, mem, force=True, sem=asyncio.Semaphore(1)))
+                client, mem, force=True, sem=asyncio.Semaphore(1)), loop_factory=asyncio.new_event_loop)
         self.assertEqual(status, "stored")
         return client.propose.call_args.kwargs["memory_type"]
 

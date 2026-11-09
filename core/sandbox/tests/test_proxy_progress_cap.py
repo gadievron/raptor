@@ -52,7 +52,7 @@ def test_no_progress_tunnel_dies_at_hard_ceiling():
         elapsed = asyncio.get_running_loop().time() - t0
         return reason, elapsed, relay.cancelled()
 
-    reason, elapsed, cancelled = asyncio.run(scenario())
+    reason, elapsed, cancelled = asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
     assert reason is not None and "total_timeout" in reason
     assert cancelled, "relay pair must be cancelled on sever"
     assert elapsed >= 0.2, "must not sever before the ceiling"
@@ -82,7 +82,7 @@ def test_steady_progress_extends_past_cap_then_stall_severs():
         pump_task.cancel()
         return reason, elapsed, relay.cancelled()
 
-    reason, elapsed, cancelled = asyncio.run(scenario())
+    reason, elapsed, cancelled = asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
     assert reason is not None and "no relay progress" in reason
     assert cancelled
     assert elapsed > 0.4, (
@@ -105,7 +105,7 @@ def test_natural_finish_returns_none_and_skips_the_cap():
         reason = await p._supervise_relay(relay, {"c2u": 0, "u2c": 0})
         return reason, loop.time() - t0
 
-    reason, elapsed = asyncio.run(scenario())
+    reason, elapsed = asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
     assert reason is None
     assert elapsed < 5.0
 
@@ -123,7 +123,7 @@ def test_relay_exception_propagates_and_relay_is_reaped():
         with pytest.raises(OSError, match="peer reset"):
             await p._supervise_relay(relay, {"c2u": 0, "u2c": 0})
 
-    asyncio.run(scenario())
+    asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
 
 
 def test_torn_down_supervisor_retrieves_cancelled_relay_outcome():
@@ -155,7 +155,7 @@ def test_torn_down_supervisor_retrieves_cancelled_relay_outcome():
         await asyncio.sleep(0)
         return relay
 
-    relay = asyncio.run(scenario())
+    relay = asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
     assert relay.done(), "relay pair must be torn down with the supervisor"
     # _log_traceback is the exact flag Future.__del__ keys on to decide
     # whether to hand the finalizer an 'exception was never retrieved'
@@ -187,7 +187,7 @@ def test_mid_tunnel_idle_widening_applies():
         reason = await p._supervise_relay(relay, counters)
         return reason, loop.time() - t0
 
-    reason, elapsed = asyncio.run(scenario())
+    reason, elapsed = asyncio.run(scenario(), loop_factory=asyncio.new_event_loop)
     assert reason is not None
     assert elapsed >= 0.4, "widened idle window must govern the sever point"
 

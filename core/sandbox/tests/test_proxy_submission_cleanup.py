@@ -146,7 +146,7 @@ def test_unix_lane_is_published_only_after_successful_bind(short_socket_path, mo
         def result(timeout):
             # Execute on result(), as a completed cross-thread operation:
             # coroutine failures belong to the future, not submission.
-            return asyncio.run(coroutine)
+            return asyncio.run(coroutine, loop_factory=asyncio.new_event_loop)
 
         future.result.side_effect = result
         return future
