@@ -7,13 +7,17 @@ import pytest
 
 from core.sandbox import calibrate, calibrated_hosts, egress_summary, host, proxy
 from core.sandbox.errors import SandboxSetupError
+from core.testing.logging_state import isolated_cli_logging
 
 
 @pytest.fixture
 def owned(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(calibrated_hosts, '_CACHE', {})
     monkeypatch.setattr(calibrated_hosts, '_CACHE_LOCK', threading.Lock())
-    caplog.set_level(logging.DEBUG)
+    # Own the emitting logger levels: changing the root's level later must
+    # not suppress the DEBUG advisory records this fixture observes.
+    for logger in (calibrated_hosts.logger, egress_summary.log, host.log):
+        caplog.set_level(logging.DEBUG, logger=logger.name)
     binary = tmp_path / 'tool'
     binary.write_bytes(b'owned calibration input; never executed')
     output = tmp_path / 'output'
@@ -89,6 +93,17 @@ def test_broken_messages_keep_advisory_and_cleanup_results(owned, monkeypatch, c
     records = [record for record in caplog.records if record.name in names]
     assert any('exception message unavailable' in record.getMessage() for record in records)
     assert all(record.exc_info is None for record in records)
+
+
+@pytest.mark.parametrize('route', ['calibration-failed', 'calibration-refused', 'egress', 'host-cleanup'])
+@pytest.mark.parametrize('root_level', [logging.INFO, logging.WARNING], ids=['info', 'warning'])
+def test_advisory_capture_survives_root_level_changes(
+        owned, monkeypatch, caplog, route, root_level):
+    with isolated_cli_logging():
+        logging.getLogger().setLevel(root_level)
+        test_broken_messages_keep_advisory_and_cleanup_results(
+            owned, monkeypatch, caplog, route, 'runtime',
+        )
 
 
 @pytest.mark.parametrize('route', ['calibration-failed', 'calibration-refused', 'egress', 'host-cleanup'])
