@@ -18,6 +18,8 @@
 // Covers CWE-200 / CWE-908: copy_to_user of an uninitialized stack
 // value. Classic kernel info leak vector.
 // @role: detection
+// raptor: confirm-only
+// Partial member initialisation and padding require separate analysis.
 
 // Coccinelle's default decl_init isomorphism lets T out; match
 // T out = initializer;. A declaration initializer must disqualify this

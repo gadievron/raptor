@@ -157,3 +157,34 @@ def test_initialization_and_observer_contracts(tmp_path):
     results = _run_rule(tmp_path, source)
     assert {r["line"] for r in results} == expected
     assert len(results) == len(expected), "a selected copy site must not have duplicate reports"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_data_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = 'struct packet { int first; int second; };\n'
+    source = prefix + 'void partial(void *user) { struct packet value; value.first = 1; copy_to_user(user, &value, sizeof(value)); }' + "\n"
+    line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'void other(void *user) { struct packet value; copy_to_user(user, &value, sizeof(value)); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'copy_to_user_uninit'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=line, line_end=line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)

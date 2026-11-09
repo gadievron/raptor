@@ -216,3 +216,34 @@ def test_clearing_checks_share_production_invocation(tmp_path, monkeypatch):
     assert len(results["sensitive_data_leak"].matches)==3
     assert len(results["dead_memset_free"].matches)==1
     assert len(invocations)==1, invocations
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("other_hit", [False, True], ids=["file-empty", "other-function-hit"])
+def test_partial_data_silence_is_inconclusive(tmp_path, other_hit):
+    from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
+
+    prefix = ''
+    source = prefix + 'void partial(const char *secret) { char *payload = malloc(32); memcpy(payload, secret, 32); free(payload); }' + "\n"
+    line = 1 + prefix.count("\n")
+    if other_hit:
+        source += 'void other(const char *secret) { char *password = malloc(32); memcpy(password, secret, 32); free(password); }' + "\n"
+    (tmp_path / "partial.c").write_text(source)
+    result = run_coccinelle_file_sweep(
+        target_path=tmp_path, file_path="partial.c", cocci_rule=str(_RULE), language="c",
+    )
+    assert not result.errors, result.errors
+    assert result.outcome == ("confirmed" if other_hit else "inconclusive")
+    assert len(result.matches) == int(other_hit)
+    if other_hit:
+        assert result.matches[0]["line"] > line
+        assert result.matches[0]["rule"] == 'sensitive_data_leak'
+    assert result.details["confirm_only"]
+    scoped = scope_coccinelle_result(
+        result, target_path=tmp_path, function_name="partial",
+        line_start=line, line_end=line, language="c",
+    )
+    assert scoped.outcome == "inconclusive"
+    assert not scoped.matches
+    assert scoped.details["confirm_only"]
+    assert len(result.matches) == int(other_hit)
