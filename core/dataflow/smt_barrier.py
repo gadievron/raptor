@@ -74,6 +74,7 @@ from enum import Enum
 from pathlib import Path
 
 from core.dataflow import sanitizer_cut_config as _sc_config
+from core.dataflow.source_identity import known_python_identity_conflict
 from core.paths import confine
 from core.smt_solver import z3
 from core.smt_solver._validation import require_bool
@@ -1986,6 +1987,10 @@ def validator_dominates_sink(
     fallback for ``candidate_only`` results, resolver failures, missing
     kwargs, and the gate-off path.
     """
+    if language in (None, "python") and known_python_identity_conflict(
+        source_text, validator_line, ("re.match", "re.fullmatch"),
+    ):
+        return False
     vb = _value_bound_dominates(
         file_path=file_path,
         validator_line=validator_line,
@@ -2748,6 +2753,10 @@ def substitution_dominates_sink(
     supplied, the value-bound gate is consulted first; the lexical
     no-reassignment check is the fallback.
     """
+    if language in (None, "python") and known_python_identity_conflict(
+        source_text, validator_line, ("re.sub",),
+    ):
+        return False
     vb = _value_bound_dominates(
         file_path=file_path,
         validator_line=validator_line,
