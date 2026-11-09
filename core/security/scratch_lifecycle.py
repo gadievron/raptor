@@ -133,14 +133,39 @@ def _write(node: int, name: str, value: dict) -> None:
     temporary = '.write-' + secrets.token_hex(16)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
                  0o600, dir_fd=node)
+    descriptor_owned = True
+    stream = None
     try:
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
+        # Keep the raw descriptor owned even if wrapping only partly succeeds.
+        stream = os.fdopen(fd, 'wb', closefd=False)
+        stream.write(raw)
+        stream.flush()
+        os.fsync(stream.fileno())
+        closing_stream, stream = stream, None
+        closing_stream.close()
+        descriptor_owned = False
+        os.close(fd)
         os.replace(temporary, name, src_dir_fd=node, dst_dir_fd=node)
         os.fsync(node)
-    finally:
+    except BaseException:
+        # Retire independently: a secondary close/unlink failure must not
+        # replace the write failure or prevent the other cleanup attempts.
+        if stream is not None:
+            try:
+                stream.close()
+            except BaseException:
+                pass
+        if descriptor_owned:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+        try:
+            os.unlink(temporary, dir_fd=node)
+        except BaseException:
+            pass
+        raise
+    else:
         try:
             os.unlink(temporary, dir_fd=node)
         except FileNotFoundError:
