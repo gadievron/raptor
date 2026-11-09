@@ -32,6 +32,97 @@ def report(path, rows):
     return path
 
 
+def add_collection_skip(path, module='core.tests.test_optional', reason='optional SDK unavailable'):
+    tree = ET.parse(path)
+    suite = tree.find('testsuite')
+    case = ET.SubElement(suite, 'testcase', classname='', name=module, time='0.000')
+    ET.SubElement(case, 'skipped', message='collection skipped').text = reason
+    suite.set('tests', str(int(suite.get('tests')) + 1))
+    suite.set('skipped', str(int(suite.get('skipped')) + 1))
+    tree.write(path)
+    return ET.tostring(case)
+
+
+@pytest.mark.parametrize('repeated', [False, True], ids=['omitted', 'repeated'])
+def test_collection_skips_are_retained_without_becoming_retry_targets(tmp_path, repeated):
+    first = report(tmp_path / 'first.xml', [('passed', []), ('skipped', ['skipped']),
+                                             ('retry', ['failure'])])
+    retained = add_collection_skip(first)
+    retry = report(tmp_path / 'retry.xml', [('retry', [])])
+    if repeated:
+        add_collection_skip(retry)
+    originals = first.read_bytes(), retry.read_bytes()
+    assert reports.eligible(first) == 1
+    output = tmp_path / 'effective.xml'
+    assert reports.merge(first, retry, output)
+    _, suite, groups = reports._read(output)
+    assert len(groups) == 4
+    assert suite.get('tests') == '4'
+    assert suite.get('skipped') == '2'
+    assert suite.get('failures') == '0'
+    assert ET.tostring(groups[('', 'core.tests.test_optional')][0]) == retained
+    assert (first.read_bytes(), retry.read_bytes()) == originals
+
+
+@pytest.mark.parametrize('outcome', ['failure', 'error'])
+def test_collection_skips_do_not_hide_remaining_retry_failures(tmp_path, outcome):
+    first = report(tmp_path / 'first.xml', [('retry', ['failure'])])
+    retained = add_collection_skip(first)
+    retry = report(tmp_path / 'retry.xml', [('retry', [outcome])])
+    add_collection_skip(retry)
+    output = tmp_path / 'effective.xml'
+    assert not reports.merge(first, retry, output)
+    _, suite, groups = reports._read(output)
+    assert reports.failed_keys(groups) == {('owned.tests', 'retry')}
+    assert suite.get('tests') == '2' and suite.get('skipped') == '1'
+    assert ET.tostring(groups[('', 'core.tests.test_optional')][0]) == retained
+
+
+@pytest.mark.parametrize('kind', ['unexpected', 'changed', 'duplicate'])
+def test_retry_collection_metadata_cannot_change_or_duplicate_coverage(tmp_path, kind):
+    first = report(tmp_path / 'first.xml', [('retry', ['failure'])])
+    add_collection_skip(first)
+    retry = report(tmp_path / 'retry.xml', [('retry', [])])
+    if kind == 'unexpected':
+        add_collection_skip(retry, module='core.tests.test_new')
+    else:
+        add_collection_skip(retry, reason='different reason' if kind == 'changed'
+                            else 'optional SDK unavailable')
+        if kind == 'duplicate':
+            add_collection_skip(retry)
+    output = tmp_path / 'effective.xml'
+    output.write_text('keep existing report')
+    with pytest.raises(ValueError):
+        reports.merge(first, retry, output)
+    assert output.read_text() == 'keep existing report'
+
+
+@pytest.mark.parametrize('kind', ['failure', 'error', 'passed', 'runtime-skip',
+                                 'mixed', 'missing-class', 'runnable-name'])
+def test_empty_classname_cannot_hide_a_runnable_or_failed_case(tmp_path, kind):
+    path = report(tmp_path / 'report.xml', [])
+    add_collection_skip(path)
+    tree = ET.parse(path)
+    suite = tree.find('testsuite')
+    case = suite.find('testcase')
+    if kind in {'failure', 'error', 'passed', 'runtime-skip'}:
+        case.remove(case.find('skipped'))
+        if kind != 'passed':
+            ET.SubElement(case, 'skipped' if kind == 'runtime-skip' else kind,
+                          message='ordinary runtime outcome')
+    elif kind == 'mixed':
+        ET.SubElement(case, 'failure')
+    elif kind == 'missing-class':
+        del case.attrib['classname']
+    else:
+        case.set('name', 'core.tests.test_optional::test_case')
+    suite.attrib.update({name: str(count) for name, count in
+                         reports._counts(suite.findall('testcase')).items()})
+    tree.write(path)
+    with pytest.raises(ValueError, match='unambiguous classname/name'):
+        reports.eligible(path)
+
+
 @pytest.mark.parametrize('outcomes, expected', [([], 0), (['skipped'], 0), (['failure'], 1), (['error'], 1)])
 def test_eligibility_uses_case_failures(tmp_path, outcomes, expected):
     path = report(tmp_path / 'first.xml', [('case', outcomes)])
@@ -212,6 +303,8 @@ def test_retry_case(phase_error):
 def test_existing_skip():
     pytest.skip('owned existing skip')
 '''.replace('SESSION_FAILURE', repr(session_failure)).replace('CALL_FAILURE', repr(scenario == 'call-and-teardown')))
+    (tmp_path / 'core/test_missing.py').write_text(
+        "import pytest\npytest.skip('owned module skip', allow_module_level=True)\n")
     if session_failure:
         (tmp_path / 'conftest.py').write_text('def pytest_sessionfinish(session):\n    session.exitstatus = 1\n')
     sleep = tmp_path / 'bin/sleep'
@@ -229,6 +322,7 @@ def test_existing_skip():
     artifacts = tmp_path / 'artifacts'
     assert (artifacts / 'integration-attempt-2.xml').exists() is not session_failure
     _, suite, groups = reports._read(artifacts / 'integration.xml')
-    assert len(groups) == 3
-    assert suite.get('failures') == '0' and suite.get('skipped') == '1'
+    assert len(groups) == 4
+    assert suite.get('failures') == '0' and suite.get('skipped') == '2'
+    assert groups[('', 'core.test_missing')][0].find('skipped').get('message') == 'collection skipped'
     assert (tmp_path / 'core/passed').read_text() == 'once'
