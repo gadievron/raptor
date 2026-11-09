@@ -1,6 +1,8 @@
 """The worker closes its session on the owning handler and joins it."""
 import json
+import os
 from pathlib import Path
+import socket
 import sys
 import threading
 
@@ -10,10 +12,12 @@ from core.testing.standalone_cli import run_standalone_cli
 from packages.ghidra import server_worker
 
 
-MAIN_LIFETIME = r"""import json, socket, sys, tempfile, threading
+MAIN_LIFETIME = r"""import json, socket, sys, tempfile, threading, traceback
 from pathlib import Path
 from packages.ghidra import server_worker as worker
-transport, reason = sys.argv[1:]
+transport, reason, socket_root, temporary_root = sys.argv[1:]
+if temporary_root:
+    tempfile.tempdir = temporary_root
 session = worker._Session()
 events = []
 original_close = session.close
@@ -36,7 +40,7 @@ def handler(session):
     ready.set()
     return owned
 worker._HandlerThread = handler
-with tempfile.TemporaryDirectory(prefix='gh-close-') as directory:
+with tempfile.TemporaryDirectory(prefix='gh-close-', dir=socket_root) as directory:
     if transport == 'fd':
         client, child = socket.socketpair()
         sys.argv = ['worker', '--socket-fd', str(child.detach()), '--idle-timeout', '1']
@@ -47,11 +51,16 @@ with tempfile.TemporaryDirectory(prefix='gh-close-') as directory:
     results = {}
     def serve():
         try: results['rc'] = worker.main()
-        except BaseException as error: results['error'] = type(error).__name__
+        except BaseException as error:
+            results['error'] = {'type': type(error).__name__, 'message': str(error),
+                                'errno': getattr(error, 'errno', None),
+                                'traceback': traceback.format_exc()}
+            ready.set()
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     try:
         assert ready.wait(5), results
+        assert 'error' not in results, results
         if transport == 'path': client.connect(address)
         client.settimeout(5)
         with client, client.makefile('rwb') as stream:
@@ -70,11 +79,10 @@ with tempfile.TemporaryDirectory(prefix='gh-close-') as directory:
 """
 
 
-@pytest.mark.parametrize('transport', ['fd', 'path'])
-@pytest.mark.parametrize('reason', ['shutdown', 'eof', 'idle'])
-def test_main_releases_the_handler_and_its_session(transport, reason):
+def _check_main_lifetime(transport, reason, socket_root, temporary_root=''):
     result = run_standalone_cli(
-        [sys.executable, '-c', MAIN_LIFETIME, transport, reason],
+        [sys.executable, '-c', MAIN_LIFETIME, transport, reason,
+         str(socket_root), str(temporary_root)],
         cwd=Path(server_worker.__file__).resolve().parents[2],
         capture_output=True, text=True, timeout=15,
     )
@@ -85,6 +93,25 @@ def test_main_releases_the_handler_and_its_session(transport, reason):
     assert [event[0] for event in events] == ['op', 'close'], observed
     assert events[0][1] == events[1][1], observed
     assert not observed['handler_alive'], observed
+
+
+@pytest.mark.parametrize('transport', ['fd', 'path'])
+@pytest.mark.parametrize('reason', ['shutdown', 'eof', 'idle'])
+def test_main_releases_the_handler_and_its_session(transport, reason, short_socket_dir):
+    _check_main_lifetime(transport, reason, short_socket_dir)
+
+
+@pytest.mark.parametrize('reason', ['shutdown', 'eof', 'idle'])
+def test_path_lifetime_uses_short_socket_under_long_tmpdir(tmp_path, short_socket_dir, reason):
+    temporary_root = tmp_path / ('long-' * 30)
+    temporary_root.mkdir()
+    address = str(temporary_root / 'worker.sock')
+    assert len(os.fsencode(address)) > 108
+    # Prove the inherited root cannot hold a pathname socket on this host.
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        with pytest.raises(OSError, match='AF_UNIX path too long'):
+            probe.bind(address)
+    _check_main_lifetime('path', reason, short_socket_dir, temporary_root)
 
 
 def test_handler_close_is_idempotent_and_refuses_later_work(monkeypatch):
