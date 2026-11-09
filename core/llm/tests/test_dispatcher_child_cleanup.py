@@ -38,14 +38,21 @@ def _live_member(pid, group):
 @pytest.mark.skipif(
     sys.platform != "linux", reason="Linux owned process-group and zombie checks"
 )
-@pytest.mark.parametrize("owner,name", _SITES)
 @pytest.mark.parametrize(
-    "fault", ["timeout", "io", "interrupt", "dead-leader", "bad-json", "nonzero"]
+    "owner,name,fault",
+    [
+        pytest.param(owner, name, fault, id=f"{fault}-{owner}-{name}")
+        for fault in ("timeout", "io", "interrupt", "dead-leader", "bad-json", "nonzero")
+        for owner, name in _SITES
+    ] + [
+        pytest.param(*_SITES[-1], fault, id=f"{fault}-{_SITES[-1][0]}-{_SITES[-1][1]}")
+        for fault in ("ready-eof", "ready-invalid")
+    ],
 )
 def test_integration_caller_reaps_owned_process_tree(
     owner, name, fault, tmp_path, monkeypatch
 ):
-    started, descendants, requested = [], [], []
+    started, descendants, requested, communicated = [], [], [], []
     ready = tmp_path / "owned-ready"
     original = SimpleNamespace(
         name="fixture", inject_headers={}, strip_request_headers=()
@@ -88,8 +95,22 @@ def test_integration_caller_reaps_owned_process_tree(
         # Always contain the regression itself, including when exercising
         # an old caller that omitted start_new_session. The requested option
         # is checked separately below. No generated provider script runs.
+        inherited = tuple(kwargs.get("pass_fds", ()))
+        worker_code = code
+        if name == "test_subprocess_via_anthropic_provider_no_env_key":
+            readiness_fd = int(kwargs["cmd"][-1])
+            assert inherited == (readiness_fd,)
+            signal_ready = (
+                "" if fault == "ready-eof"
+                else f"os.write({readiness_fd}, {b'!' if fault == 'ready-invalid' else b'R'!r})\n"
+            )
+            # The replacement worker must complete the same startup protocol
+            # before exercising its intended communication/exit failure.
+            prelude = "import os\n" + signal_ready + f"os.close({readiness_fd})\n"
+            worker_code = prelude + code
         process = subprocess.Popen(
-            [sys.executable, "-I", "-c", code],
+            [sys.executable, "-I", "-c", worker_code],
+            pass_fds=inherited,
             start_new_session=True,
             env={"PATH": os.defpath},
             stdout=kwargs["stdout"],
@@ -107,19 +128,22 @@ def test_integration_caller_reaps_owned_process_tree(
             # Preserve the exited leader as an unreaped group anchor. A
             # poll-before-group-kill implementation would lose that anchor.
             os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOWAIT)
-        if fault not in ("bad-json", "nonzero"):
+        real_communicate = process.communicate
 
-            def fail(*args, **kwargs):
+        def communicate(*args, **kwargs):
+            communicated.append(True)
+            if fault not in ("bad-json", "nonzero"):
                 raise failure
+            return real_communicate(*args, **kwargs)
 
-            process.communicate = fail
+        process.communicate = communicate
         return process
 
     expected = (
         json.JSONDecodeError
         if fault == "bad-json"
         else AssertionError
-        if fault == "nonzero"
+        if fault in ("nonzero", "ready-eof", "ready-invalid")
         else type(failure)
     )
     try:
@@ -130,8 +154,19 @@ def test_integration_caller_reaps_owned_process_tree(
             patcher.setattr(module.http.server, "HTTPServer", Mock(return_value=server))
             patcher.setattr(module.pytest, "importorskip", lambda *args, **kwargs: None)
             patcher.setattr(spawn, "spawn_worker", controlled_spawn)
-            with pytest.raises(expected):
+            match = (
+                "worker exited before client readiness"
+                if fault in ("ready-eof", "ready-invalid")
+                else "worker failed: rc=7"
+                if fault == "nonzero"
+                and name == "test_subprocess_via_anthropic_provider_no_env_key"
+                else None
+            )
+            with pytest.raises(expected, match=match):
                 getattr(getattr(module, owner)(), name)(None, tmp_path)
+        assert communicated == (
+            [] if fault in ("ready-eof", "ready-invalid") else [True]
+        ), "caller did not reach the intended communication failure"
         assert len(started) == 1
         process = started[0]
         assert process.returncode is not None, "caller left its child unreaped"
