@@ -4013,3 +4013,37 @@ def test_charset_chain_requires_executable_sink_read(tmp_path: Path, sink):
         sink_uri="app.py", sink_line=5, sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("middle,sink", [
+    ("", "return fs.readFileSync(raw); // name"),
+    ("", 'return fs.readFileSync(raw + "name");'),
+    ("  name = raw; // name\n", "return fs.readFileSync(name);"),
+    ("  /*\n", "name */ return fs.readFileSync(raw);"),
+], ids=["comment-decoy", "literal-decoy", "rebind-comment", "multiline-comment"])
+def test_nonpython_charset_chain_ignores_prose(tmp_path: Path, middle, sink):
+    guard = "  if (!/^[a-z]+$/.test(name)) return;"
+    source = (
+        "function handle(name, raw) {\n" + guard + "\n" + middle
+        + "  " + sink + "\n}\n"
+    )
+    sink_line = 3 + middle.count("\n")
+    (tmp_path / "app.js").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.js", sink_line=sink_line, sink_class="pathtrav",
+        language="javascript",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    control_source = (
+        "function handle(name, raw) {\n" + guard
+        + "\n  return fs.readFileSync(name);\n}\n"
+    )
+    (tmp_path / "app.js").write_text(control_source)
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.js", sink_line=3, sink_class="pathtrav",
+        language="javascript",
+    )
+    assert control.status is sb.Tier0Status.SOUND

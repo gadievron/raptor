@@ -2634,12 +2634,16 @@ def _python_chain_reaches_sink(
 
 def _lexical_var_reaches_sink(
     var: str, source_text: str, validator_line: int,
-    sink_line: int, sink_line_text: str,
+    sink_line: int, sink_line_text: str, *, language: str = "javascript",
 ) -> bool:
     r"""AST-free analogue of ``_python_chain_reaches_sink``'s rebind-KILL,
     for languages without a parsed tree (JS/TS/Java).
 
-    Returns ``True`` iff ``var`` appears at the sink line AND is not
+    Full-file language views exclude comments and literals from sink
+    membership and plain-assignment self references. ``sink_line_text``
+    remains diagnostic input; production callers supply ``language``.
+
+    Returns ``True`` iff ``var`` appears in executable sink code AND is not
     rebound between the validator and the sink. Previously the non-Python
     path was a bare ``\bvar\b`` match at the sink with NO rebind-KILL
     (a204f309): ``x = validate(raw); x = req.query.evil; sink(x)`` left
@@ -2670,7 +2674,10 @@ def _lexical_var_reaches_sink(
     modelling it lexically without breaking ``x = validate(x)`` needs
     a parser.
     """
-    if not _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
+    views = code_view_lines(source_text, language)
+    if not 0 < sink_line <= len(views):
+        return False
+    if not _re.search(rf"\b{_re.escape(var)}\b", views[sink_line - 1]):
         return False
     lines = split_source_lines(source_text)
     assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
@@ -2689,8 +2696,9 @@ def _lexical_var_reaches_sink(
                 if rhs_idents - {var}:
                     return False  # compound assign mixes taint -> KILL
                 continue
-            m = assign_re.search(text)
-            if m and not self_re.search(text[m.end():]):
+            view = views[lineno - 1]
+            m = assign_re.search(view)
+            if m and not self_re.search(view[m.end():]):
                 return False  # rebind from a non-self RHS -> KILL
     return True
 
@@ -3199,6 +3207,7 @@ def try_tier0(
     else:
         var_reaches = _lexical_var_reaches_sink(
             spec.var_name, source_text, line, sink_line, sink_line_text,
+            language=language,
         )
     if not var_reaches:
         return Tier0Result(
