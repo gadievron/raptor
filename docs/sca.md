@@ -1436,3 +1436,10 @@ actually used and the recorded drift. A missing baseline stays unavailable
 (exit 2); a capability change stays a drift signal (exit 1), not proof of
 malicious behavior. Reporting neither fetches the image again nor replaces
 the baseline. Native JSON and `--out` behavior remain unchanged.
+
+`fix-diff` accepts explicit portable report options alongside its native
+`summary.json`. The receipt records fix pointers, failures and how many CVE
+entries the discovery cap left unattempted. Finding a fix commit does not
+prove that your dependency contains it. Reporting does not start another
+agent or retry failed lookups; an empty selection is a no-op, not a clean
+vulnerability assessment.
