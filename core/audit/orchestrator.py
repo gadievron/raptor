@@ -25396,6 +25396,13 @@ def _aggregate_ihv_verdicts(
     Gates block PROMOTION, not verification — tool evidence is preserved
     for the slow path even when a gate blocks.
     """
+    try:
+        from .check_trace import record_claim_observations
+
+        record_claim_observations(config.out_dir, file=outcome.file, function=outcome.function,
+                                  line_start=outcome.line, verifications=verifications)
+    except Exception:
+        logger.warning("could not retain IHV claim observations", exc_info=True)
     if outcome.review_result is None:
         outcome.review_result = {}
 

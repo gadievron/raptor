@@ -568,3 +568,93 @@ def test_source_withdrawal_does_not_attach_to_an_independent_claim(tmp_path):
     assert sidecar["source_validation"]["invalidations"] == 1
     assert sidecar["source_validation"]["invalidated_observations"] == 0
     assert "source_applicability" not in sidecar["checks"][0]
+
+
+def _claim_summary(out, records, *, file="consumer.c", function="consumer"):
+    check_trace.record_claim_observations(out, file=file, function=function, line_start=13,
+                                         verifications=records)
+
+
+def test_claim_summary_is_context_not_check_evidence_or_resume_authority(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.orchestrator import get_reviewed_set
+    from core.audit.record import load_verified_audit_log
+
+    record = ClaimVerification({"mechanism": "a claim", "action": "orchestrator_review",
+                               "status": "clean", "key": "consumer.c:consumer:13"},
+                              ("semgrep:explicit-error-discard",))
+    _claim_summary(tmp_path, [record])
+    rows = load_verified_audit_log(tmp_path)
+    assert len(rows) == 1 and rows[0]["role"] == "unadjudicated_observation"
+    checks, quarantined, admission = check_trace._admit_check_events(rows)
+    assert checks == quarantined == [] and admission["input_records"] == 0
+    assert not get_reviewed_set(tmp_path)
+
+
+def test_claim_summary_snapshot_is_mutation_isolated(tmp_path, monkeypatch):
+    from core.audit.claim_verification import ClaimVerification
+
+    original = {"mechanism": "a claim", "counter": {"facts": ["original"]}}
+    record = ClaimVerification(original)
+    captured = []
+    monkeypatch.setattr(check_trace, "append_audit_log", lambda out, event: captured.append(event))
+    _claim_summary(tmp_path, [record])
+    original["counter"]["facts"].append("mutated")
+    view = record.hypothesis
+    view["counter"]["facts"].append("another mutation")
+    assert captured[0]["observations"]["data"]["details"][0]["hypothesis"]["counter"] == {"facts": ["original"]}
+
+
+@pytest.mark.parametrize("value,reason", [("x" * (64 * 1024), "payload_size_limit"),
+                                         (float("nan"), "payload_serialization:")])
+def test_partial_claim_payload_keeps_producer_binding(tmp_path, value, reason):
+    from dataclasses import asdict
+
+    from core.json import dumps_artifact, loads
+
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import load_verified_audit_log
+    from core.audit.verification_results import VerificationScope
+
+    binding = VerificationScope("producer.c", "producer", 7, "a claim", SourceIdentity("a" * 64, (1, 2, 3, 4, 5)))
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a claim", "extra": value}, binding=binding)])
+    event, = load_verified_audit_log(tmp_path)
+    assert event["producer_bindings"] == [loads(dumps_artifact(asdict(binding)))]
+    assert event["consumer_scope"]["file"] == "consumer.c"
+    assert event["observations"]["complete"] is False
+    assert event["observations"]["reason"].startswith(reason)
+
+
+def test_oversized_claim_metadata_is_explicitly_unavailable_and_readable(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import load_verified_audit_log
+    from core.audit.verification_results import VerificationScope
+
+    binding = VerificationScope("producer.c", "producer", 7, "x" * (128 * 1024))
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a claim"}, binding=binding)],
+                   function="x" * (16 * 1024))
+    event, = load_verified_audit_log(tmp_path)
+    assert event["producer_bindings"] is None and not event["producer_bindings_complete"]
+    assert event["consumer_scope"] is None and not event["consumer_scope_complete"]
+    assert event["metadata_omissions"] == ["producer_bindings_size_limit", "consumer_scope_size_limit"]
+    assert event["observations"]["complete"] is True
+    assert len((tmp_path / ".audit-log.jsonl").read_bytes()) < 1024 * 1024
+
+
+def test_tampered_and_cross_run_claim_summaries_are_not_authenticated(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import load_verified_audit_log
+
+    out = tmp_path / "out"
+    out.mkdir()
+    _claim_summary(out, [ClaimVerification({"mechanism": "a claim"})])
+    path = out / ".audit-log.jsonl"
+    original = path.read_text()
+    row = json.loads(original)
+    row["role"] = "supported"
+    path.write_text(original + json.dumps(row) + "\n")
+    assert len(load_verified_audit_log(out)) == 1
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / ".audit-log.jsonl").write_text(original)
+    assert load_verified_audit_log(other) == []
