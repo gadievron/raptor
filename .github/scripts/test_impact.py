@@ -58,6 +58,8 @@ from test_scope import (
     file_in_fast_tier,
     file_matches_tier,
     is_test_file,
+    resolve_test_drivers,
+    with_private_test_drivers,
     script_reference_seeds,
 )
 
@@ -119,8 +121,10 @@ def tier_test_count(
 ) -> dict[str, int]:
     """Count total non-slow test files per tier."""
     counts: dict[str, int] = defaultdict(int)
-    for p in discover_py_files(repo, extra_roots=_EXTRA_ROOTS):
-        if not is_test_file(p) or p in slow_files:
+    files = [p for p in discover_py_files(repo, extra_roots=_EXTRA_ROOTS)
+             if is_test_file(p)]
+    for p in resolve_test_drivers(files, repo):
+        if p in slow_files:
             continue
         tier = tier_for_file(p)
         if tier:
@@ -403,6 +407,8 @@ def main() -> int:
         cache_status = "miss"
     graph_time = time.monotonic() - t0
 
+    reverse_graph = with_private_test_drivers(reverse_graph, repo)
+
     # conftest.py changes affect all tests in their directory tree
     # (the repo-root conftest's tree is the whole repo).
     changed_py |= expand_conftest(changed_py, all_py)
@@ -480,6 +486,8 @@ def main() -> int:
             if file_in_fast_tier(af) and af not in all_affected:
                 candidate_tests.append(af)
         candidate_tests = sorted(set(candidate_tests))
+
+    candidate_tests = resolve_test_drivers(candidate_tests, repo)
 
     # Exclude entirely-slow test files.
     slow_files = detect_slow_files(candidate_tests, repo)
@@ -643,7 +651,9 @@ def _print_comparison(
     total_tier_dur = 0.0
     total_aff_dur = 0.0
 
-    all_py = discover_py_files(repo, extra_roots=_EXTRA_ROOTS)
+    all_py = resolve_test_drivers(
+        discover_py_files(repo, extra_roots=_EXTRA_ROOTS), repo,
+    )
 
     for tier in sorted(triggered_tiers):
         affected = len(triggered_tiers[tier])

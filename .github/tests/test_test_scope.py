@@ -78,6 +78,82 @@ class TestIsTestFile:
         assert not is_test_file(Path("core/dataflow/tests/fixtures/cvefix_cmdi_py/after/app.py"))
 
 
+class TestPrivateWorkerDrivers:
+    WORKER = Path("packages/ghidra/tests/worker_server_cases.py")
+    DRIVER = Path("packages/ghidra/tests/test_server.py")
+    RUNTIME = Path("packages/ghidra/server_worker.py")
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        sources = {
+            self.DRIVER: (
+                "from pathlib import Path\n"
+                "def short_sock_dir(): pass\n"
+                "def test_worker_cases_in_private_process():\n"
+                "    worker = Path(__file__).with_name('worker_server_cases.py')\n"
+            ),
+            self.WORKER: (
+                "from packages.ghidra.tests.test_server import short_sock_dir\n"
+                "from packages.ghidra import server_worker\n"
+                "def test_private_case(): assert server_worker.VALUE == 1\n"
+            ),
+            self.RUNTIME: "VALUE = 1\n",
+            **{Path(f"core/other/tests/test_other_{i}.py"):
+               f"def test_other_{i}(): pass\n" for i in range(4)},
+        }
+        for path, text in sources.items():
+            target = tmp_path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        return tmp_path
+
+    @pytest.mark.parametrize("changed", [WORKER, DRIVER, RUNTIME],
+                             ids=["worker", "driver", "runtime"])
+    def test_changed_inputs_select_owner(self, repo, changed):
+        result = compute_tier_dispatch([str(changed)], repo)
+        assert result["python"]["files"] == [self.DRIVER]
+        assert result["python"]["matrix"] == [
+            {"batch": 1, "files": str(self.DRIVER)},
+        ]
+
+    def test_full_dispatch_executes_owner_once(self, repo):
+        result = compute_tier_dispatch(["pyproject.toml"], repo)
+        assert result["python"]["files"].count(self.DRIVER) == 1
+        assert self.WORKER not in result["python"]["files"]
+        assert set(result["python"]["files"]) == {self.DRIVER} | {
+            Path(f"core/other/tests/test_other_{i}.py") for i in range(4)
+        }
+        matrix_files = [p for batch in result["python"]["matrix"]
+                        for p in batch["files"].split()]
+        assert matrix_files.count(str(self.DRIVER)) == 1
+        assert str(self.WORKER) not in matrix_files
+
+    @pytest.mark.parametrize("changed", [WORKER, Path("pyproject.toml")],
+                             ids=["scoped", "full"])
+    def test_missing_owner_is_an_error(self, repo, changed):
+        (repo / self.DRIVER).unlink()
+        with pytest.raises(ValueError, match="private.*driver"):
+            compute_tier_dispatch([str(changed)], repo)
+
+    def test_unregistered_worker_name_is_not_suppressed(self, repo):
+        other = Path("core/other/tests/worker_other_cases.py")
+        (repo / other).write_text("def test_other_case(): pass\n")
+        result = compute_tier_dispatch([str(other)], repo)
+        assert result["python"]["files"] == [other]
+
+    def test_private_cases_remain_test_inputs(self):
+        assert is_test_file(self.WORKER)
+
+    def test_adding_owner_edges_preserves_borrowed_graph(self, repo):
+        import test_scope as scope
+
+        existing = Path("core/other/tests/test_other_0.py")
+        graph = {self.WORKER: {existing}}
+        result = scope.with_private_test_drivers(graph, repo)
+        assert graph == {self.WORKER: {existing}}
+        assert result[self.WORKER] == {existing, self.DRIVER}
+
+
 class TestFileInDir:
     def test_direct_child(self):
         assert file_in_dir(Path("core/sandbox/tests/test_a.py"), "core/sandbox/tests")

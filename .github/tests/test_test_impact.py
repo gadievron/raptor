@@ -233,3 +233,38 @@ def test_changed_paths_decode_raw_git_names_without_creating_them(monkeypatch):
     assert test_impact.get_changed_files_from_diff("HEAD") == [
         item.decode("utf-8", "surrogateescape") for item in raw.split(b"\0") if item
     ]
+
+
+@pytest.mark.parametrize("changed", [
+    "packages/ghidra/tests/worker_server_cases.py",
+    "packages/ghidra/server_worker.py",
+], ids=["private-case", "runtime"])
+def test_private_cases_select_driver_with_fresh_or_cached_graph(
+    tmp_path, monkeypatch, capsys, changed,
+):
+    worker = "packages/ghidra/tests/worker_server_cases.py"
+    driver = "packages/ghidra/tests/test_server.py"
+    sources = {
+        driver: "def short_sock_dir(): pass\ndef test_driver(): pass\n",
+        worker: (
+            "from packages.ghidra.tests.test_server import short_sock_dir\n"
+            "from packages.ghidra import server_worker\n"
+            "def test_case(): pass\n"
+        ),
+        "packages/ghidra/server_worker.py": "VALUE = 1\n",
+    }
+    for name, source in sources.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(source)
+    monkeypatch.setattr(test_impact, "_cache_path", lambda repo: tmp_path / "graph.json")
+    monkeypatch.setattr(sys, "argv", [
+        "test_impact.py", "--repo", str(tmp_path), "--json", "--compare", changed,
+    ])
+    for cache_status in ("miss", "hit"):
+        assert test_impact.main() == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["graph_cache"] == cache_status
+        assert result["affected_tests"] == [driver]
+        assert result["comparison"]["total_affected_tests"] == 1
+        assert test_impact.tier_test_count(tmp_path, set())["python (fast)"] == 1
