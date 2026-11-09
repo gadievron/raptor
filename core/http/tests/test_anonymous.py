@@ -227,6 +227,23 @@ def test_existing_not_modified_signal_is_preserved(transport):
         reader.request("GET", "https://assets.example:8443/a")
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+def test_not_modified_releases_bytes_but_consumes_request_slot(transport, method):
+    pool, _ = transport
+    with client(max_total_bytes=32, max_requests=3) as reader:
+        for count in (1, 2):
+            response(pool, b"", status=304)
+            with pytest.raises(NotModified):
+                reader.request(method, "https://assets.example:8443/a", headers={"If-None-Match": '"fixture"'})
+            assert reader.usage == {"requests": count, "accounted_bytes": 0, "reserved_bytes": 0}
+        response(pool, b"body")
+        assert reader.request("GET", "https://assets.example:8443/a").body == b"body"
+        assert reader.usage == {"requests": 3, "accounted_bytes": 4, "reserved_bytes": 0}
+        with pytest.raises(HttpError, match="request-count"):
+            reader.request("GET", "https://assets.example:8443/a")
+    assert pool.request.call_count == 3
+
+
 def test_timeouts_are_passed_to_transport(transport):
     pool, _ = transport
     response(pool)
