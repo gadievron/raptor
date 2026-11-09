@@ -180,7 +180,7 @@ def test_workflow_uses_isolated_cache_and_complete_effective_report():
 @pytest.mark.parametrize('scenario', ['call-and-teardown', 'teardown-only', 'session-failure'])
 def test_real_workflow_retries_only_failed_cases_and_preserves_global_failures(tmp_path, scenario):
     session_failure = scenario == 'session-failure'
-    for directory in ('core', 'packages', 'engine', '.github/scripts', 'artifacts', 'bin'):
+    for directory in ('core', 'packages', 'engine', '.github/tests', '.github/scripts/tests', 'artifacts', 'bin'):
         (tmp_path / directory).mkdir(parents=True, exist_ok=True)
     (tmp_path / '.github/scripts/pytest_retry_reports.py').write_bytes(SCRIPT.read_bytes())
     (tmp_path / 'pytest.ini').write_text('[pytest]\naddopts = --import-mode=importlib\nmarkers =\n    integration: owned workflow smoke\n')
