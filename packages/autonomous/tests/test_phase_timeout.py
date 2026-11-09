@@ -102,16 +102,13 @@ class RunCommandStreamingTimeoutTests(unittest.TestCase):
 
     def _import_helper(self):
         """Import run_command_streaming with sys.path safe."""
-        path_added = False
-        if str(REPO_ROOT) not in sys.path:
-            sys.path.insert(0, str(REPO_ROOT))
-            path_added = True
-        try:
+        from unittest.mock import patch
+
+        with patch.object(sys, "path", list(sys.path)):
+            if str(REPO_ROOT) not in sys.path:
+                sys.path.insert(0, str(REPO_ROOT))
             from raptor_agentic import run_command_streaming
             return run_command_streaming
-        finally:
-            if path_added:
-                sys.path.remove(str(REPO_ROOT))
 
     def test_default_timeout_is_1800(self):
         """Backward-compat: callers that don't pass timeout get 30 min."""

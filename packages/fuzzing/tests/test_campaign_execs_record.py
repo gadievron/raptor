@@ -28,12 +28,11 @@ class CampaignExecsTests(unittest.TestCase):
 
     def _campaign_execs(self):
         import sys
-        sys.path.insert(0, str(REPO_ROOT))
-        try:
+        from unittest.mock import patch
+
+        with patch.object(sys, "path", [str(REPO_ROOT), *sys.path]):
             from raptor_fuzzing import _campaign_execs
-        finally:
-            sys.path.remove(str(REPO_ROOT))
-        return _campaign_execs
+            return _campaign_execs
 
     def test_reads_execs_done(self):
         fn = self._campaign_execs()

@@ -74,14 +74,13 @@ def test_map_grade_marked_function_stays_in_review_gap(tmp_path):
     assert gaps_view.returncode == 0, gaps_view.stderr
     assert "a.c:f1" in gaps_view.stdout
 
-    sys.path.insert(0, str(REPO_ROOT))
-    try:
+    from unittest.mock import patch
+
+    with patch.object(sys, "path", [str(REPO_ROOT), *sys.path]):
         from core.audit.gaps import compute_gaps
         from core.coverage.record import load_records
         checklist = json.loads((run / "checklist.json").read_text())
         gaps = compute_gaps(checklist, list(load_records(run)))
-    finally:
-        sys.path.remove(str(REPO_ROOT))
     assert {g["name"] for g in gaps} == {"f1", "f2"}
 
 
@@ -96,14 +95,13 @@ def test_review_mark_still_deduplicates_gap(tmp_path):
     assert "a.c:f1" not in gaps_view.stdout
     assert "a.c:f2" in gaps_view.stdout
 
-    sys.path.insert(0, str(REPO_ROOT))
-    try:
+    from unittest.mock import patch
+
+    with patch.object(sys, "path", [str(REPO_ROOT), *sys.path]):
         from core.audit.gaps import compute_gaps
         from core.coverage.record import load_records
         checklist = json.loads((run / "checklist.json").read_text())
         gaps = compute_gaps(checklist, list(load_records(run)))
-    finally:
-        sys.path.remove(str(REPO_ROOT))
     assert {g["name"] for g in gaps} == {"f2"}
 
 
