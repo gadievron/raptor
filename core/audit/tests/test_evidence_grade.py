@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from types import SimpleNamespace
 from typing import Any
 import unicodedata
@@ -1318,6 +1319,51 @@ class TestStampPartOrderClosure:
                 ))
         return violations, split_sites
 
+    @staticmethod
+    def _has_split_separator(text: str) -> bool:
+        import ast as _ast
+        import io
+        import tokenize
+
+        if '.split("+")' in text or ".split('+')" in text:
+            return True
+        # A one-character constant has one nonempty literal token. Remove
+        # escaped physical newlines before checking its possible spellings;
+        # tokenisation and AST analysis still consume the original source.
+        literal_text = text.replace("\\\n", "")
+        if not any(spelling in literal_text for spelling in (
+            '"+"', "'+'", r"\x2b", r"\x2B", r"\u002b", r"\u002B",
+            r"\U0000002b", r"\U0000002B", r"\53", r"\053", r"\N{",
+        )):
+            return False
+        if re.search(r"\bsplit\b", unicodedata.normalize("NFKC", literal_text)) is None:
+            return False
+        previous = ""
+        state = None
+        try:
+            for token in tokenize.generate_tokens(io.StringIO(text).readline):
+                if token.type in (tokenize.COMMENT, tokenize.NL, tokenize.NEWLINE):
+                    continue
+                if state == "function":
+                    if token.string == "(":
+                        state = "argument"
+                    elif token.string != ")":
+                        state = None
+                elif state == "argument":
+                    if token.type == tokenize.STRING:
+                        if _ast.literal_eval(token.string) == "+":
+                            return True
+                    elif token.string != "(":
+                        state = None
+                if (previous == "." and token.type == tokenize.NAME
+                        and unicodedata.normalize("NFKC", token.string) == "split"):
+                    state = "function"
+                previous = token.string
+        except (tokenize.TokenError, SyntaxError, ValueError):
+            # Let the full parser handle malformed source and literals.
+            return True
+        return False
+
     @classmethod
     def _census(cls) -> tuple:
         import ast as _ast
@@ -1326,7 +1372,9 @@ class TestStampPartOrderClosure:
         split_sites = 0
         for path in cls._runtime_modules():
             text = path.read_text(encoding="utf-8", errors="replace")
-            if '.split("+")' not in text and ".split('+')" not in text:
+            # The AST accepts whitespace, escaped separators and NFKC
+            # attribute names. Text filtering must admit all those forms.
+            if not cls._has_split_separator(text):
                 continue
             rel = path.relative_to(cls._REPO_ROOT)
             for scope in cls._scopes(_ast.parse(text)):
@@ -1334,6 +1382,41 @@ class TestStampPartOrderClosure:
                 violations.extend(v)
                 split_sites += s
         return violations, split_sites
+
+    @pytest.mark.parametrize("splitter", [
+        'ev.split ("+")',
+        'ev.split(\n    "+"\n)',
+        r'ev.split("\x2b")',
+        r'ev.split("\N{PLUS SIGN}")',
+        'ev.ｓｐｌｉｔ("+")',
+        'ev.split("" "+")',
+        'ev.split("' + "\\\n" + '+")',
+        '(ev.split)("+")',
+        '(ev. # fixture formatting\nsplit("+"))',
+        r'ev.split("\53")',
+        r'ev.split("\053")',
+        r'ev.split("\u002b")',
+        r'ev.split("\U0000002B")',
+        'ev.split("""+""")',
+    ], ids=["spaced", "multiline", "hex-separator", "named-separator", "nfkc-name",
+            "adjacent-literals", "continued-literal", "parenthesised-method", "comment-gap",
+            "short-octal", "long-octal", "short-unicode", "long-unicode", "triple-quoted"])
+    def test_census_admits_ast_split_spellings(self, tmp_path, splitter):
+        path = tmp_path / "consumer.py"
+
+        class FixtureCensus(TestStampPartOrderClosure):
+            _REPO_ROOT = tmp_path
+
+            @classmethod
+            def _runtime_modules(cls):
+                return [path]
+
+        for reordered in (False, True):
+            parts = f"sorted({splitter})" if reordered else splitter
+            path.write_text(f"def f(ev):\n    return '+'.join({parts})\n", encoding="utf-8")
+            violations, split_sites = FixtureCensus._census()
+            assert split_sites == 1
+            assert bool(violations) is reordered
 
     def test_no_runtime_consumer_reorders_stamp_parts(self):
         violations, split_sites = self._census()
