@@ -22,7 +22,7 @@ from core.atomic_fs.fs_lock import sidecar_flock
 from core.hash import sha256_string
 from core.json import load_json, loads
 from core.project import registry_home, sessions
-from core.project.session_titles import context_title, request_title
+from core.project.session_titles import context_title, request_title, state_directory
 from core.startup import codex_environment as environment
 
 _BUDGET = .75
@@ -184,19 +184,21 @@ class _Client:
         return title
 
 
-def _synchronize(channel, session_id, desired, directory, deadline):
+def _synchronize(channel, session_id, desired, directory, deadline, *, legacy_directory=None):
     """Read native feedback, apply shared policy, then recheck before writing."""
     client = _Client(channel, deadline)
     client.call('initialize', {'clientInfo': {'name': 'raptor-session-title', 'version': '1'}})
     client.send({'method': 'initialized'})
     current = client.title(session_id)
-    requested = request_title(directory, 'codex', session_id, desired, current)
+    requested = request_title(directory, 'codex', session_id, desired, current,
+                              legacy_directory=legacy_directory)
     if requested is None:
         return
     latest = client.title(session_id)
     if latest != current:
         # Preserve a manual rename observed while this hook was deciding.
-        request_title(directory, 'codex', session_id, desired, latest)
+        request_title(directory, 'codex', session_id, desired, latest,
+                      legacy_directory=legacy_directory)
         return
     client.call('thread/name/set', {'threadId': session_id, 'name': requested})
 
@@ -248,7 +250,7 @@ def update_title(session_id) -> None:
         desired = _desired(context)
         if desired is None:
             return
-        directory = registry_home.sessions_dir() / '.titles'
+        directory = state_directory()
         # Pin and validate the shared state directory before its lock is opened.
         with environment._directory(directory, create=True):
             lock = directory / f'codex-{sha256_string(session_id)}.transaction.lock'
@@ -260,7 +262,8 @@ def update_title(session_id) -> None:
                 from websockets.exceptions import WebSocketException
                 try:
                     with channel:
-                        _synchronize(channel, session_id, desired, directory, deadline)
+                        _synchronize(channel, session_id, desired, directory, deadline,
+                                     legacy_directory=registry_home.sessions_dir() / '.titles')
                 except WebSocketException:
                     logger.debug('Optional Codex title transport closed', exc_info=True)
     except (OSError, ValueError, TypeError, KeyError, RuntimeError, ImportError):

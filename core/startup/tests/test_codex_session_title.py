@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import runpy
+import shutil
 import socket
 import sys
 import tempfile
@@ -102,6 +103,38 @@ def test_independent_threads_do_not_share_manual_state(tmp_path):
         synchronize(channel, tmp_path / 'titles')
     assert first.name == 'Manual'
     assert second.name == 'raptor · fixture · target'
+
+
+@pytest.mark.skipif(not hasattr(os, 'O_PATH'), reason='Linux protected-launch metadata')
+def test_protected_resume_keeps_native_title_managed(tmp_path, monkeypatch):
+    from core.startup.install_guard import prepare_session_registry
+    original = tmp_path / 'registry'
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(original))
+    prepare_session_registry('codex', owned_root=tmp_path / 'launch-one')
+    first_registry = os.environ['RAPTOR_REGISTRY_HOME']
+    channel = Channel()
+    synchronize(channel, title.state_directory())
+    synchronize(channel, title.state_directory())
+    shutil.rmtree(tmp_path / 'launch-one')
+    monkeypatch.setenv('RAPTOR_REGISTRY_HOME', str(original))
+    prepare_session_registry('codex', owned_root=tmp_path / 'launch-two')
+    assert os.environ['RAPTOR_REGISTRY_HOME'] != first_registry
+    synchronize(channel, title.state_directory(), 'raptor · changed · next')
+    assert channel.name == 'raptor · changed · next'
+    stored = next(title.state_directory().glob('*.json'))
+    assert load_json(stored)['manual'] is False
+
+
+def test_codex_imports_existing_request_proof(tmp_path):
+    from core.project.session_titles import request_title
+    legacy = tmp_path / 'legacy'
+    previous = 'raptor · fixture · target'
+    request_title(legacy, 'codex', 'thread-one', previous, None)
+    request_title(legacy, 'codex', 'thread-one', previous, previous)
+    channel = Channel(name=previous)
+    title._synchronize(channel, channel.identity, 'raptor · changed · next', tmp_path / 'persistent',
+                       time.monotonic() + .75, legacy_directory=legacy)
+    assert channel.name == 'raptor · changed · next'
 
 
 @pytest.mark.parametrize('reply', [
@@ -216,7 +249,7 @@ def test_invalid_or_foreign_owner_never_opens_transport(authenticated, monkeypat
         monkeypatch.setenv('RAPTOR_SESSION_TOKEN', 'forged')
     monkeypatch.setattr(title, '_connect', lambda *args: pytest.fail('must not connect'))
     title.update_title('thread-one')
-    assert not (registry_home.sessions_dir() / '.titles').exists()
+    assert not title.state_directory().exists()
 
 
 @pytest.mark.parametrize('failure', [OSError('unavailable'), ValueError('refused'),
@@ -230,7 +263,7 @@ def test_optional_transport_errors_do_not_interrupt_hook(authenticated, monkeypa
 
 
 def test_busy_transaction_lock_skips_without_connecting(authenticated, monkeypatch):
-    directory = registry_home.sessions_dir() / '.titles'
+    directory = title.state_directory()
     directory.mkdir(mode=0o700)
     lock = directory / f'codex-{sha256_string("thread-one")}.transaction.lock'
     monkeypatch.setattr(title, '_connect', lambda *args: pytest.fail('busy title must be skipped'))
@@ -242,7 +275,7 @@ def test_busy_transaction_lock_skips_without_connecting(authenticated, monkeypat
 def test_symlink_title_directory_cannot_redirect_hook_writes(authenticated, tmp_path, monkeypatch):
     destination = tmp_path / 'elsewhere'
     destination.mkdir(mode=0o700)
-    (registry_home.sessions_dir() / '.titles').symlink_to(destination, target_is_directory=True)
+    title.state_directory().symlink_to(destination, target_is_directory=True)
     monkeypatch.setattr(title, '_connect', lambda *args: pytest.fail('unsafe state directory'))
     assert title.update_title('thread-one') is None
     assert not list(destination.iterdir())
