@@ -7,7 +7,6 @@ No Claude Code, no LLM — pure Python.
 import argparse
 import contextlib
 import os
-import stat as _stat
 import sys
 from typing import Any
 from datetime import datetime, timezone
@@ -18,6 +17,8 @@ from core.json import save_json as _save_summary_json
 from core.run.output import unique_run_suffix
 from core.run.scratch import temporary_text
 from core.security.log_sanitisation import sanitise_for_terminal
+from core.source.gated import open_regular_gated
+from core.source.streams import preserving_stream_error
 
 from .oplock import OpLockContention, project_op_lock
 from .project import DEFAULT_OUTPUT_BASE, ProjectManager, _URL_SCHEME_RE
@@ -100,7 +101,7 @@ def _stream_threat_model_json(json_path: Path, project_out: Path) -> int:
       anywhere else on disk.
     * ``O_NOFOLLOW`` — refuses symlinks at the final path
       component (the in-tree TOCTOU swap-to-symlink scenario).
-    * ``fstat`` + ``S_ISREG`` — refuses FIFOs, sockets, char/
+    * ``O_NONBLOCK`` + ``fstat`` + ``S_ISREG`` — refuses FIFOs, sockets, char/
       block devices. Catches the "swap to named pipe" (blocks
       operator's terminal indefinitely) and "swap to /dev/zero"
       (infinite output) attacks that ``O_NOFOLLOW`` doesn't
@@ -131,19 +132,11 @@ def _stream_threat_model_json(json_path: Path, project_out: Path) -> int:
         )
         return 1
     try:
-        fd = os.open(str(json_path), os.O_RDONLY | os.O_NOFOLLOW)
-    except OSError as e:
+        stream = open_regular_gated(json_path, follow_symlinks=False)
+    except (OSError, ValueError) as e:
         print(f"✗ {json_path}: {e}", file=sys.stderr)
         return 1
-    with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
-        if not _stat.S_ISREG(st.st_mode):
-            print(
-                f"✗ {json_path} is not a regular file "
-                f"(refusing to stream device/fifo/socket)",
-                file=sys.stderr,
-            )
-            return 1
+    with preserving_stream_error(stream) as f:
         remaining = _JSON_OUT_BYTE_CAP
         while remaining > 0:
             chunk = f.read(min(remaining, 65536))

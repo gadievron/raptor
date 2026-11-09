@@ -690,31 +690,18 @@ def _read_license_full(path: Path, byte_cap: int) -> str:
     ``core.security.capped_read.read_capped``: that helper
     fail-closes to None on oversize.)
     """
-    import os
-    import stat
+    from core.source.gated import open_regular_gated
+    from core.source.streams import preserving_stream_error
+
     try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY
-            | os.O_NOFOLLOW
-            | getattr(os, "O_NONBLOCK", 0),
-        )
+        stream = open_regular_gated(path, follow_symlinks=False)
+    except (OSError, ValueError):
+        return ""
+    try:
+        with preserving_stream_error(stream) as fobj:
+            return fobj.read(byte_cap).decode("utf-8", errors="replace")
     except OSError:
         return ""
-    try:
-        fobj = os.fdopen(fd, "rb")
-    except Exception:
-        os.close(fd)
-        return ""
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return ""
-        buf = fobj.read(byte_cap)
-        return buf.decode("utf-8", errors="replace")
-    except OSError:
-        return ""
-    finally:
-        fobj.close()
 
 
 def _follow_license_indirection(

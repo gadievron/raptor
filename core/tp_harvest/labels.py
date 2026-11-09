@@ -23,15 +23,13 @@ convention — never distributed, see the corpus README).
 
 from __future__ import annotations
 
-import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from core.audit.corpus.label import FunctionLabel, SourcePin
-from core.json import save_json
+from core.json import append_jsonl, save_json
 from core.tp_harvest.records import HarvestRecord
 
 PROVENANCE_PUBLIC = "public"
@@ -225,11 +223,4 @@ def append_backlog_pointer(backlog_path: Path, record: HarvestRecord) -> None:
     ``tp-harvest/`` before writing anything).
     """
     backlog_path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(
-        str(backlog_path),
-        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
-        0o644,
-    )
-    line = json.dumps(backlog_pointer(record), sort_keys=True) + "\n"
-    with os.fdopen(fd, "a", encoding="utf-8") as fh:
-        fh.write(line)
+    append_jsonl(backlog_path, backlog_pointer(record), sort_keys=True)

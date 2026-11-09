@@ -37,12 +37,14 @@ import logging
 import os
 import stat as _stat
 from collections import deque
+from collections.abc import Iterator
 from typing import Any, TYPE_CHECKING
 
 from core.json.utils import _loads, _reject_non_finite
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import BinaryIO
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ def _append_jsonl_bytes(
         | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
     )
     fd = os.open(str(path), flags, mode)
+    write_failed = False
     try:
         if not _stat.S_ISREG(os.fstat(fd).st_mode):
             raise OSError(
@@ -132,8 +135,28 @@ def _append_jsonl_bytes(
                     f"short write to {path}: os.write returned {n}",
                 )
             written += n
+    except BaseException:
+        write_failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            if not write_failed:
+                raise
+
+
+def _iter_jsonl_lines(stream: BinaryIO, remaining: int | None) -> Iterator[bytes]:
+    """Read physical lines without extending an admitted byte extent."""
+    if remaining is None:
+        yield from stream
+        return
+    while remaining > 0:
+        line = stream.readline(remaining)
+        if not line:
+            return
+        remaining -= len(line)
+        yield line
 
 
 def load_jsonl(
@@ -164,7 +187,9 @@ def load_jsonl(
 
     - ``max_total_bytes``: ``fstat`` size gate on the opened fd BEFORE
       any read; an oversize trail loads as ``[]`` with a warning —
-      nothing is buffered.
+      nothing is buffered. Reads stop at the admitted initial byte extent,
+      so concurrent appends cannot extend bounded read or parse work. This
+      bounds the extent rather than providing an atomic file snapshot.
     - ``max_line_bytes``: an over-long line is skipped like a
       malformed one. The check runs after the line is materialised,
       so pair it with ``max_total_bytes`` for a hard memory bound.
@@ -251,8 +276,10 @@ def load_jsonl(
         )
         return []
     discard_first_partial_line = False
+    read_budget = None
     if max_total_bytes is not None:
         size = st.st_size
+        read_budget = min(size, max_total_bytes)
         if size > max_total_bytes:
             if not oversize_tail:
                 try:
@@ -299,18 +326,19 @@ def load_jsonl(
         try:
             oversize_lines = 0
             invalid_lines = 0
+            lines = _iter_jsonl_lines(f, read_budget)
             if discard_first_partial_line:
                 # The tail seek lands mid-line; everything up to and
                 # including the first newline belongs to a record
                 # whose head is beyond the budget. Bounded: at most
                 # ``max_total_bytes`` bytes remain past the seek.
-                f.readline()
+                next(lines, None)
             # File iteration splits on ``\n`` only; ``splitlines`` on
             # each chunk restores the bare-``\r`` separators the old
             # text-mode universal-newlines read accepted (foreign
             # writers only — no RAPTOR writer emits them). CRLF and
             # plain-``\n`` chunks yield exactly one segment each.
-            for raw_bytes in f:
+            for raw_bytes in lines:
                 for line_bytes in raw_bytes.splitlines():
                     if (
                         max_line_bytes is not None
