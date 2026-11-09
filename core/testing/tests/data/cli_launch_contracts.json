@@ -46,7 +46,7 @@
     ".github/scripts/tests/test_hide_modules.py": "1c0c11d28941c03ec0f6c0e24cc28e8cbd4e434e5e07d3784e7c2e946811cc03",
     ".github/scripts/tests/test_macos_test_scope.py": "2076d1a9ab51b848c0acebeaa995ce07f888bdca94511f84b695bd992e76956d",
     ".github/scripts/tests/test_preflight_scope.py": "60bdad2178e4c65922b30e75f94083f3d5895376131b8816f332a41299e7ab3f",
-    ".github/scripts/tests/test_pytest_retry_reports.py": "0fb298a0630b11c17db2eefea04c5a5293711d6f5e4492e57d2b1bf4798299e6",
+    ".github/scripts/tests/test_pytest_retry_reports.py": "72b8ddc31b6564e33737fc029efed6dfe790030fc5ad0e68ac2a1b6cf03505cf",
     ".github/scripts/tests/test_repo_invariant_scope.py": "9a85c515eca543069f45b17e08d990a6062814defe481fe8d97d07dde3468a4b",
     ".github/scripts/tests/test_ruff_scope.py": "686e1b39cb745d7fdb37c4e34d50ba686105a574cfdc6f707e0fe29ece0b1551",
     ".github/scripts/tests/test_sandbox_wrapper_scope.py": "cc291184ea1c46d719a151491ac63ce03626d2664bf9014456f1b4a35c39b2b8",
@@ -446,7 +446,7 @@
     "core/sage/tests/test_sage_mcp_guard_tools.py": "957d7f8ccd6e150cf2de48c53e3bafc1bf18625b4b626fabb5665a7b6e3d616c",
     "core/sage/tests/test_sage_mcp_wrapper_reexec.py": "b1276d1ac9c89c59beb66f6eadf0a7c656432cbff8fdc9ff6c6e8ce01a8cf88e",
     "core/sage/tests/test_sage_setup_migration.py": "eb48cb38fd152f3c97e9748be4702f2c7e3d77b33a5d220949611fbccc9ebd5f",
-    "core/sage/tests/test_sage_setup_reauthorize.py": "65565b3c5632d75c628a7f06c8e2997f0b2dc7880504466182a043e8ff06dfa4",
+    "core/sage/tests/test_sage_setup_reauthorize.py": "3fb4eef487c05551b658d1b7d36e4db5549e03fbec1da660ca3cd48a90752bc8",
     "core/sage/tests/test_sage_setup_reexec_quoting.py": "a49dc67bd214bbbf76c183d6e70f1a83c0a9a787dd941938261f2ec39aa54f97",
     "core/sage/tests/test_sage_setup_teardown_resilience.py": "ea6098661c421eb46cff942cf2cfce08173c805a50e87d5669eeeb85816a3f25",
     "core/sage/tests/test_seed_sage_knowledge.py": "458b1730b51ef3a0bc37c577db7058b9d08ec1ba8088a4a05b699c48e29d3b7e",
@@ -539,6 +539,7 @@
     "core/sandbox/tests/test_seatbelt_shim_env_strip.py": "4848a267c713c01cd9e7e03b10d96b0a0e9b8483ad907f0a6e52b0e4c4596f7b",
     "core/sandbox/tests/test_seccomp_child_no_postfork_imports.py": "360fbacb13911144ce0f31015512c2dba2a38a7c62c815988261f00767bb2f06",
     "core/sandbox/tests/test_signal_broadcast_deny.py": "1f4078808d0cd2677d5481ec6fe0ae3b46206bf3bfe37bdd110b1fc4a7fac1cc",
+    "core/sandbox/tests/test_signal_mirror_dumpability.py": "0a21cde1b77517b46a65d970a6d4ae80612251c2e326016f4afe3814b5a8d210",
     "core/sandbox/tests/test_spawn_audit.py": "2642ee85da980d3005f8a86345042b7a0170b8959f3af1b972c56c633e9ad0b3",
     "core/sandbox/tests/test_spawn_cleanup_query_errors.py": "ed4675fc20541afffcaabdf9192bf3d6de67d195649e89f4d5992f741718faa8",
     "core/sandbox/tests/test_spawn_lifecycle_hardening.py": "455dd68100f55f912f567aba2dd2c367c6381edf6f4eb119f9d50e31c7780436",
@@ -594,7 +595,7 @@
     "core/startup/tests/test_process_init.py": "dc517bc5675fc53172be5b888738156ff9ae39f0dc533a55250400495223ae2a",
     "core/startup/tests/test_python_import_acceptance.py": "a6a37cd5cda3654444acbde9456b767e70b6f1aa0a2b4c7d550e3cb6514b2c9e",
     "core/startup/tests/test_session_init_env_file.py": "6d3174466144d270a7869c2cfd2c5bec46d41fff7c6f3561ae3cead891f08f39",
-    "core/startup/tests/test_session_title.py": "8d16faf0114f1f22c41d2c2df68217baca4f0e1a6f558670bc1bef6643079125",
+    "core/startup/tests/test_session_title.py": "48fc3bcede5296dd5c13296749f0eeb5ad5fc3fa57d04b322260c23d7db45d17",
     "core/symbolic/tests/conftest.py": "92c8ec2ba36928b0dabf2bb1808b1cfcd1fcc85850c1fb2a7aef4ff96f276c9b",
     "core/symbolic/tests/test_availability.py": "6fcbd4156bcb41d619b8e3d0d5e2d904e96bc66d8f3083466ca84c8ec3457210",
     "core/symbolic/tests/test_constraints.py": "e22ddd48773f41937f554736cd204c9db2ab649ba7410a8371ee7adb72e542fe",
@@ -22514,6 +22515,22 @@
     },
     {
       "path": "core/sage/tests/test_sage_setup_reauthorize.py",
+      "scope": "TestFirstCaptureToolsLane.test_capture_tempfile_failure_records_nothing",
+      "signature": "b5281b803802d3d5909a5df99be18f7fe4259c6ac3eccb8fce143d21bb1a1399",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "core/sage/tests/test_sage_setup_reauthorize.py:TestFirstCaptureToolsLane.test_capture_tempfile_failure_records_nothing: Exact new call through _AuthorizeBootPayloadCase._run: extracted native authorize_boot_payload Bash function, owned TMPDIR/payload/stamp, fake capture/backend and real consent/refusal logic. This is not a framework-launcher bootstrap; borrowed session values are not globally stripped."
+    },
+    {
+      "path": "core/sage/tests/test_sage_setup_reauthorize.py",
+      "scope": "TestFirstCaptureToolsLane.test_capture_tempfile_write_failure_records_nothing",
+      "signature": "b5281b803802d3d5909a5df99be18f7fe4259c6ac3eccb8fce143d21bb1a1399",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "core/sage/tests/test_sage_setup_reauthorize.py:TestFirstCaptureToolsLane.test_capture_tempfile_write_failure_records_nothing: Exact new call through _AuthorizeBootPayloadCase._run: extracted native authorize_boot_payload Bash function, owned TMPDIR/payload/stamp, fake capture/backend and real consent/refusal logic. This is not a framework-launcher bootstrap; borrowed session values are not globally stripped."
+    },
+    {
+      "path": "core/sage/tests/test_sage_setup_reauthorize.py",
       "scope": "TestFirstCaptureToolsLane.test_no_tools_capture_keeps_the_plain_first_install",
       "signature": "5bfa997644c57dba1211ccdf56c2089348984213bf6db92a966d82e824429542",
       "count": 1,
@@ -22530,11 +22547,27 @@
     },
     {
       "path": "core/sage/tests/test_sage_setup_reauthorize.py",
+      "scope": "TestFirstCaptureToolsLane.test_retired_parent_tmpdir_does_not_own_capture",
+      "signature": "b5281b803802d3d5909a5df99be18f7fe4259c6ac3eccb8fce143d21bb1a1399",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "core/sage/tests/test_sage_setup_reauthorize.py:TestFirstCaptureToolsLane.test_retired_parent_tmpdir_does_not_own_capture: Exact new call through _AuthorizeBootPayloadCase._run: extracted native authorize_boot_payload Bash function, owned TMPDIR/payload/stamp, fake capture/backend and real consent/refusal logic. This is not a framework-launcher bootstrap; borrowed session values are not globally stripped."
+    },
+    {
+      "path": "core/sage/tests/test_sage_setup_reauthorize.py",
       "scope": "TestFirstCaptureToolsLane.test_reviewer_failure_refuses_not_silently_stamps",
       "signature": "8089963250a7ccce172120c8c0feb35dcbab7751f33f3a561402f885cef931c3",
       "count": 1,
       "contract": "owned-custom-launch",
       "purpose": "core/sage/tests/test_sage_setup_reauthorize.py:TestFirstCaptureToolsLane.test_reviewer_failure_refuses_not_silently_stamps: delegates through reviewed helper(s) self._run; producer source and this exact caller are pinned."
+    },
+    {
+      "path": "core/sage/tests/test_sage_setup_reauthorize.py",
+      "scope": "TestFirstCaptureToolsLane.test_stamp_tempfile_failure_preserves_existing_authorization",
+      "signature": "0269c859d055632a1ae4ca2ef419cbc05c7777093d75d8f0087761a88b7989d9",
+      "count": 2,
+      "contract": "owned-custom-launch",
+      "purpose": "core/sage/tests/test_sage_setup_reauthorize.py:TestFirstCaptureToolsLane.test_stamp_tempfile_failure_preserves_existing_authorization: Exact new call through _AuthorizeBootPayloadCase._run: extracted native authorize_boot_payload Bash function, owned TMPDIR/payload/stamp, fake capture/backend and real consent/refusal logic. This is not a framework-launcher bootstrap; borrowed session values are not globally stripped."
     },
     {
       "path": "core/sage/tests/test_sage_setup_reauthorize.py",
@@ -25729,6 +25762,14 @@
       "purpose": "core/sandbox/tests/test_signal_broadcast_deny.py:TestSeccompLayerAlone.test_broadcast_denied_targeted_intact: delegates through reviewed helper(s) self._run_under_filter; producer source and this exact caller are pinned."
     },
     {
+      "path": "core/sandbox/tests/test_signal_mirror_dumpability.py",
+      "scope": "test_native_mirror_retains_signal_without_core_dump",
+      "signature": "258c8726bd521ef985b3810132b68bf22cecfcccec443f43d76ac139096fa695",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": "Owned standalone interpreter imports the real signal-mirroring helper, forks one owned native child, and reaps it on success or timeout. Preserve actual SIGABRT/SIGSEGV/SIGXCPU wait status and no-core evidence; substituting a crash wrapper would erase this boundary."
+    },
+    {
       "path": "core/sandbox/tests/test_spawn_audit.py",
       "scope": "TestAuditModeTracerDeath.test_exitkill_takes_effect_on_tracer_death",
       "signature": "95f3d3099491c1cf79143c3d8fbac22f6a8994b1e65f51d1d902980ea82a1ffd",
@@ -27903,6 +27944,22 @@
       "count": 1,
       "contract": "owned-custom-launch",
       "purpose": "core/startup/tests/test_session_title.py:test_hook_entrypoint_emits_native_protocol_and_invalid_input_is_optional: Fresh literal HOME/scratch/registry; missing session is deliberately a no-op."
+    },
+    {
+      "path": "core/startup/tests/test_session_title.py",
+      "scope": "test_hook_entrypoint_help_retains_trust_guard",
+      "signature": "3ae7e77cc40d769a6969bfd22af6b5fc3fa47572663d6a4c38a58e883a535ffa",
+      "count": 1,
+      "contract": "owned-session-or-refusal",
+      "purpose": "core/startup/tests/test_session_title.py:test_hook_entrypoint_help_retains_trust_guard: Same literal owned home/scratch environment with dispatch marker removed; real native trust refusal must remain2 with empty stdout."
+    },
+    {
+      "path": "core/startup/tests/test_session_title.py",
+      "scope": "test_hook_entrypoint_help_retains_trust_guard",
+      "signature": "68b3d6af8bac242dc81c0aa8e9d4d91a92c1e92f723611fdcd4acdb96637f851",
+      "count": 1,
+      "contract": "owned-custom-launch",
+      "purpose": "core/startup/tests/test_session_title.py:test_hook_entrypoint_help_retains_trust_guard: Literal owned HOME/TMPDIR and PATH-only input plus explicit trust marker; actual session-title help must not consume malformed hook input or resolve state."
     },
     {
       "path": "core/symbolic/tests/conftest.py",
@@ -45061,7 +45118,7 @@
     "libexec/raptor-llm-scorecard": "159f124e3865b5652a62c302cb339f592436a51f9301e4a7365361af17faa219",
     "libexec/raptor-openant": "f2a197ec4b6cb2402998975e53357b60a084dea2b4e392893aceca25163d9a1b",
     "libexec/raptor-sage-mcp": "172942da085fb332d5fcf0adec73b133dd3d2a16683e13f614a22ed51cd5ad66",
-    "libexec/raptor-sage-setup": "b9336863ae729c5cf141cafb76c6999e462f84a2c181daebfd5f6b5d00e8d89f",
+    "libexec/raptor-sage-setup": "cf0e6b1ac435c29449a29be4cdb4223a643230f2f6d618467f53970b18b42611",
     "libexec/raptor-threat-model": "948e0532cd21376b9b665cd60d01c00e28ac2c071b71cc99d2f82342b55f0c15"
   }
 }
