@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json.utils import JsonBudgetExceededError, _parse_finite_float, _reject_non_finite
+from core.source.streams import owned_fd, preserving_stream_error
 
 __all__ = [
     "JsonBudgetExceededError",  # canonical home: core.json.utils
@@ -101,7 +102,7 @@ def load_json_bounded(path: str | Path, *, max_bytes: int) -> Any:
         | getattr(os, "O_CLOEXEC", 0)
     )
     fd = os.open(str(p), flags)
-    try:
+    with owned_fd(fd, close_fd=lambda descriptor: os.close(descriptor)):
         st = os.fstat(fd)
         if not _stat.S_ISREG(st.st_mode):
             msg = (
@@ -117,15 +118,8 @@ def load_json_bounded(path: str | Path, *, max_bytes: int) -> Any:
             )
             logger.warning("%s", msg)
             raise JsonBudgetExceededError(msg)
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
+        with preserving_stream_error(os.fdopen(fd, "rb", closefd=False)) as fh:
             raw = fh.read(max_bytes + 1)
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
     if len(raw) > max_bytes:
         msg = (
             f"JSON file {p} grew past the {max_bytes}-byte budget "
