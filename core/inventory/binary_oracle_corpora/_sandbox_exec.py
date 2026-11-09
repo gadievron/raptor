@@ -30,14 +30,12 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _LABEL = "binary-oracle-corpus"
+_RESOLVER_CONFIG = Path("/etc/resolv.conf")
 
 
 def _raise_if_failed(proc, cmd, check: bool):
@@ -105,6 +103,13 @@ def run_build_step(
         "text": True,
         "timeout": timeout,
     }
+    if network and _RESOLVER_CONFIG.is_file():
+        # /etc may contain a symlink into /run, which is private after
+        # pivot_root. Bind only the canonical file at its namespace path,
+        # read-only, so the existing /etc symlink remains valid.
+        resolver = str(_RESOLVER_CONFIG.resolve())
+        kwargs["etc_overlay"] = {resolver: resolver}
+
     if writable_paths:
         kwargs["writable_paths"] = [str(p) for p in writable_paths]
 
