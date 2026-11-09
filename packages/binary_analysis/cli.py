@@ -281,6 +281,8 @@ def _add_trace_args(parser: argparse.ArgumentParser, *, include_out: bool) -> No
     parser.add_argument("--unsafe-attach", action="store_true", help="Allow attach mode outside the sandbox")
     parser.add_argument("--host", help="Remote frida-server host[:port]")
     parser.add_argument("--usb", action="store_true", help="Use the first USB-connected device")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
 
 
 
@@ -685,7 +687,25 @@ def _run_runtime(args: argparse.Namespace) -> int:
         unsafe_attach=args.unsafe_attach,
         host=args.host,
         usb=args.usb,
+        report_args=_forward_trace_report_args(args),
     ), env=RaptorConfig.get_safe_env())
+
+
+def _forward_trace_report_args(args):
+    options = getattr(args, "_report_options", None)
+    if options is None:
+        return []
+    if not options.enabled:
+        return ["--no-report"]
+    if not (args.report_format or args.report_output):
+        return []
+    forwarded = []
+    for format_name in options.formats:
+        forwarded.extend(["--report-format", format_name])
+    if options.output is not None:
+        # The Frida sandbox may change cwd; preserve the caller's selection.
+        forwarded.extend(["--report-output", str(options.output.expanduser().resolve())])
+    return forwarded
 
 
 def _frida_trace_command(
@@ -697,6 +717,7 @@ def _frida_trace_command(
     unsafe_attach: bool,
     host: str | None,
     usb: bool,
+    report_args: list[str] | None = None,
 ) -> list[str]:
     cmd = [
         str(_repo_root() / "libexec" / "raptor-frida"),
@@ -717,6 +738,8 @@ def _frida_trace_command(
         cmd.extend(["--host", host])
     if usb:
         cmd.append("--usb")
+    if report_args:
+        cmd.extend(report_args)
     return cmd
 
 
@@ -791,6 +814,7 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
             unsafe_attach=args.unsafe_attach,
             host=args.host,
             usb=args.usb,
+            report_args=_forward_trace_report_args(args),
         ),
     )
     if phase["status"] != "completed":
@@ -1326,6 +1350,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
+    if args.command in {"runtime", "trace-parser"}:
+        from core.reporting.options import options_from_args
+        args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
