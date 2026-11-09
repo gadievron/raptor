@@ -49,7 +49,7 @@ def test_supported_cpp_qualifiers_retain_a_complete_literal_tuple(location, spec
     assert reply['status'] == 'checked' and len(reply['calls']) == 1, reply
     assert reply['calls'][0]['arguments'] == {'Value': 65536, 'Step': 65536}
     assert reply['calls'][0]['verdict'] == 'violation'
-    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v10'
+    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v11'
 
 
 @pytest.mark.parametrize('void', [False, True])
@@ -120,11 +120,24 @@ def test_worker_from_before_shared_frame_admission_cannot_promote(tmp_path, monk
     (tmp_path / 'record.cpp').write_text(text)
     reply = check_literal_calls(text, 'Read', 'check-overflow', CLAIM, 'ilp32', [2], 'cpp')
     assert reply['calls'][0]['verdict'] == 'violation'
-    reply['binding']['query_contract'] = 'common-width-literal-frame-v4'
+    reply['binding']['query_contract'] = 'common-width-literal-frame-v10'
     monkeypatch.setattr(condition_smt, '_run_z3_child', lambda *a, **kw: deepcopy(reply))
     result = evaluate_caller_gate(tmp_path, 'record.cpp', 'Read', 'check-overflow', CLAIM,
                                   source=text, def_span=(1, 1), integer_abi='ilp32')
     assert result.action == 'hold' and 'binding mismatched' in result.reason
+
+
+def test_literal_caller_requires_non_narrowing_callee_list_initialisation():
+    pytest.importorskip('tree_sitter_cpp')
+    pytest.importorskip('z3')
+    for kind, expected in [('unsigned char', 'unavailable'), ('unsigned', 'checked')]:
+        text = source().replace('return Value*Step;', kind + ' Total{Value*Step};return 0;')
+        reply = check_literal_calls(text, 'Read', 'check-overflow', CLAIM, 'ilp32', [2], 'cpp')
+        assert reply['status'] == expected, reply
+        if expected == 'checked':
+            assert reply['calls'][0]['verdict'] == 'violation'
+        else:
+            assert reply['calls'] == []
 
 
 @pytest.mark.parametrize('arguments,expected', [('65536,65536', 'finding'), ('4,16', 'suspicious')])
@@ -166,5 +179,5 @@ def test_native_qualified_literal_caller_receipt(tmp_path, arguments, action):
     result = evaluate_caller_gate(tmp_path, 'record.cpp', 'Read', 'check-overflow', CLAIM,
                                   source=text, def_span=(1, 1), integer_abi='ilp32')
     assert result.action == action, result.reason
-    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v10'
+    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v11'
     assert result.details['proof_scope'] == 'caller-entry-source-model'

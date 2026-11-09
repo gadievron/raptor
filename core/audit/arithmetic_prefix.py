@@ -175,11 +175,47 @@ class PrefixIntegerModel:
         self._domains[key] = result
         return result
 
+    def list_initialization_allowed(self, value, kind, depth=0):
+        """Check C++ scalar list conversions without solving the expression.
+
+        The selected operation may itself overflow. Its surrounding static
+        conversion must be admissible without assuming that operation safe.
+        """
+        if self.language != "cpp" or value.type != "initializer_list":
+            return True
+        if kind is None or depth > _MAX_DEPTH:
+            return False
+        children = [child for child in value.named_children if child.type != "comment"]
+        if len(children) > 1:
+            return False  # a scalar cannot consume multiple list elements
+        if not children:
+            return True
+        child = children[0]
+        if child.type == "initializer_list":
+            return self.list_initialization_allowed(child, kind, depth + 1)
+        incoming = self.expression_kind(child)
+        if incoming is None:
+            return False
+        minimum = -(1 << (kind.width - 1)) if kind.signed else 0
+        maximum = (1 << (kind.width - (1 if kind.signed else 0))) - 1
+        atom = source_integer_atom(child, self.data)
+        if atom is not None:
+            low = high = integer_literal_value(atom)
+        else:
+            # A runtime interval is not a C++ constant expression.
+            # Admit a nonconstant only if its entire type fits.
+            low = -(1 << (incoming.width - 1)) if incoming.signed else 0
+            high = (1 << (incoming.width - (1 if incoming.signed else 0))) - 1
+        return minimum <= low <= high <= maximum
+
     def initialization_defined(self, value, kind, depth=0):
         if kind is None or depth > _MAX_DEPTH:
             return False
         if value.type == "initializer_list":
-            return all(self.initialization_defined(child, kind, depth + 1) for child in value.named_children if child.type != "comment")
+            if not self.list_initialization_allowed(value, kind, depth):
+                return False
+            children = [child for child in value.named_children if child.type != "comment"]
+            return all(self.initialization_defined(child, kind, depth + 1) for child in children)
         domain = self.value_domain(value)
         if domain is None:
             return False

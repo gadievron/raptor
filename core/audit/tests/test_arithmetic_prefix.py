@@ -131,16 +131,17 @@ def test_supported_prefix_keeps_real_source_smt_verdicts(prefix):
                                      source=source(prefix, guard='Value<=10 && Step<=10'),
                                      hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
     assert result.outcome == 'refuted', result.details
-    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v23'
+    assert result.details['source_scope']['query_contract'] == 'common-width-integer-operands-v25'
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'refuted'])
-def test_worker_from_before_prefix_definedness_contract_cannot_be_reused(monkeypatch, outcome):
+@pytest.mark.parametrize('contract', ['common-width-integer-operands-v23', 'common-width-integer-operands-v24'])
+def test_worker_from_before_prefix_definedness_contract_cannot_be_reused(monkeypatch, outcome, contract):
     text = source('int Ignored=(int)1e100;')
     _, selected = source_for_function(text, 'record.c', 'Read')
     binding = source_binding(selected, 'Read', verb='check-overflow', integer_abi='ilp32',
                              hypothesis='integer overflow in `Value + Step`')
-    binding['query_contract'] = 'common-width-integer-operands-v13'
+    binding['query_contract'] = contract
     old = sweep.SweepResult(tool='smt', file_path='record.c', function_name='Read', rule_id='smt:check-overflow',
                             outcome=outcome, details={'source_scope': binding}, matches=[{'model': {}}])
     monkeypatch.setattr('core.audit.subproc_json.run_json_child', lambda *a, **kw: asdict(old))
@@ -153,6 +154,94 @@ def test_worker_from_before_prefix_definedness_contract_cannot_be_reused(monkeyp
 def test_initializer_nesting_declines_at_the_model_limit():
     prefix = 'int Ignored=' + '{' * 70 + '0' + '}' * 70 + ';'
     assert bind(prefix).guard_status == 'unavailable'
+
+
+def test_cpp_scalar_list_initialisation_needs_a_non_narrowing_conversion():
+    for prefix in ('unsigned char Ignored{256};', 'unsigned char Ignored{Extra};',
+                   'unsigned Ignored{Extra};', 'int Ignored{1,2};',
+                   'unsigned char Ignored{Extra & 1};', 'unsigned Ignored{-1};'):
+        result = bind(prefix, language='cpp', extra='int Extra')
+        assert result.guard_status == 'unavailable', (prefix, result)
+        assert result.type_status == 'unavailable'
+    for prefix in ('unsigned char Ignored{255};', 'unsigned Ignored{0};',
+                   'int Ignored{Extra};', 'long Ignored{Extra};', 'int Ignored{};'):
+        assert bind(prefix, language='cpp', extra='int Extra').guard_status == 'bound', prefix
+    # Copy-initialisation retains C++'s ordinary modulo conversion.
+    assert bind('unsigned char Ignored=Extra;', language='cpp', extra='int Extra').guard_status == 'bound'
+    assert bind('unsigned char Ignored={Extra};', extra='int Extra').guard_status == 'bound'
+    assert bind('unsigned char Ignored{Extra};', language='cpp', extra='unsigned char Extra').guard_status == 'bound'
+
+
+def test_cpp_narrowing_list_stops_before_native_overflow_but_valid_list_dispatches(monkeypatch):
+    pytest.importorskip('tree_sitter_cpp')
+    pytest.importorskip('z3')
+    from packages.exploit_feasibility import smt_verbs
+    actual = smt_verbs.check_overflow
+    calls = []
+
+    def observed(*args, **kwargs):
+        calls.append((args, kwargs))
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(smt_verbs, 'check_overflow', observed)
+    for prefix, expected in [('unsigned char Ignored{256};', 'inconclusive'),
+                             ('unsigned char Ignored{255};', 'refuted')]:
+        result = sweep._run_smt_verb_inner(
+            file_path='record.cpp', function_name='Read', verb='check-overflow',
+            source=source(prefix, guard='Value<=10 && Step<=10'),
+            hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
+        assert result.outcome == expected, result.details
+        assert len(calls) == (1 if expected == 'refuted' else 0)
+
+
+def test_cpp_scalar_list_initialisation_also_gates_array_access_proofs():
+    pytest.importorskip('tree_sitter_cpp')
+    pytest.importorskip('z3')
+    from core.audit.array_bounds import check_array_bounds
+
+    for literal, expected in [('256', None), ('255', True)]:
+        text = ('int Read(unsigned Index){int Data[4]={0};'
+                'unsigned char Ignored{' + literal + '};return Data[Index];}')
+        result = check_array_bounds(text, 'Data[Index]', language='cpp', integer_abi='ilp32')
+        assert result['violation'] is expected, result
+        if expected is True:
+            assert result['witness_index'] >= 4
+        else:
+            assert result['array_bounds_status'] == 'unavailable'
+
+
+def test_cpp_target_list_and_braced_return_need_non_narrowing_types():
+    pytest.importorskip('tree_sitter_cpp')
+    pytest.importorskip('z3')
+    cases = [
+        ('unsigned', 'unsigned char Total{Value+Step};return 0;', 'inconclusive'),
+        ('unsigned char', 'return {Value+Step};', 'inconclusive'),
+        ('unsigned', 'unsigned Total{Value+Step};return 0;', 'confirmed'),
+        ('unsigned', 'return {Value+Step};', 'confirmed'),
+        ('unsigned char', 'return Value+Step;', 'confirmed'),
+    ]
+    for return_type, statement, expected in cases:
+        text = source('', statement=statement).replace('unsigned Read(', return_type + ' Read(', 1)
+        result = sweep._run_smt_verb_inner(
+            file_path='record.cpp', function_name='Read', verb='check-overflow', source=text,
+            hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
+        assert result.outcome == expected, (text, result.details)
+        if expected == 'confirmed':
+            assert result.details['witness_validated'] is True
+            assert result.details['mathematical_result'] > 4294967295
+
+
+def test_cpp_valid_target_list_keeps_signed_overflow_counterexamples():
+    pytest.importorskip('tree_sitter_cpp')
+    pytest.importorskip('z3')
+    text = ('int Read(int Value,int Step){if(Value>0 && Step>0){'
+            'int Total{Value+Step};return 0;}return 0;}')
+    result = sweep._run_smt_verb_inner(
+        file_path='record.cpp', function_name='Read', verb='check-overflow', source=text,
+        hypothesis='integer overflow in `Value + Step`', integer_abi='ilp32')
+    assert result.outcome == 'confirmed', result.details
+    assert result.details['witness_validated'] is True
+    assert result.details['mathematical_result'] > 2147483647
 
 
 @pytest.mark.parametrize('abi', ['ilp32', 'lp64', 'i16'])
@@ -171,12 +260,13 @@ def test_all_primitive_initializer_domains_match_the_declared_target_storage(abi
 
 
 @pytest.mark.parametrize('outcome', ['confirmed', 'refuted'])
-def test_array_worker_from_the_previous_guard_contract_is_rejected(monkeypatch, outcome):
+@pytest.mark.parametrize('contract', ['common-width-array-guards-v10', 'common-width-array-guards-v11'])
+def test_array_worker_from_the_previous_guard_contract_is_rejected(monkeypatch, outcome, contract):
     text = 'int Read(int Index){int Data[4]={0}; return Data[Index];}'
     _, selected = source_for_function(text, 'record.c', 'Read')
     hypothesis = 'out-of-bounds read at Data[Index]'
     binding = source_binding(selected, 'Read', verb='check-array-bounds', integer_abi='ilp32', hypothesis=hypothesis)
-    binding['query_contract'] = 'common-width-array-guards-v3'
+    binding['query_contract'] = contract
     old = sweep.SweepResult(tool='smt', file_path='record.c', function_name='Read', rule_id='smt:check-array-bounds',
                             outcome=outcome, details={'source_scope': binding}, matches=[{'model': {}}])
     monkeypatch.setattr('core.audit.subproc_json.run_json_child', lambda *a, **kw: asdict(old))
