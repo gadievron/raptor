@@ -1,11 +1,10 @@
 """The signed manifest binds exact evidence bytes without following foreign paths."""
-import hashlib
 import importlib.util
 from pathlib import Path
-import shutil
-import subprocess
 
 import pytest
+
+from core.hash import sha256_bytes, sha256_file
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location("write_sbom_checksums", ROOT / ".github/scripts/write_sbom_checksums.py")
@@ -19,7 +18,7 @@ def evidence(tmp_path):
     root.mkdir()
     raw = b'{"schemaVersion":2}'
     (root / "manifest.json").write_bytes(raw)
-    (root / "image-digest.txt").write_text("sha256:" + hashlib.sha256(raw).hexdigest() + "\n")
+    (root / "image-digest.txt").write_text("sha256:" + sha256_bytes(raw) + "\n")
     (root / "prepared").mkdir()
     (root / "prepared/notice with spaces.txt").write_bytes(b"Original notice\r\n")
     return root
@@ -30,16 +29,23 @@ def test_manifest_covers_image_original_notices_and_partial_reports(evidence):
     manifest = (evidence / SCRIPT.MANIFEST).read_text()
     header, records = manifest.split("\n", 1)
     assert header == "# OCI image: " + (evidence / "image-digest.txt").read_text().strip()
-    assert hashlib.sha256(b"Original notice\r\n").hexdigest() + "  prepared/notice with spaces.txt\n" in manifest
-    checker = shutil.which("sha256sum")
-    if checker:
-        # Metadata is checked above; strict checkers differ on comment support.
-        result = subprocess.run([checker, "--check", "--strict"], input=records.encode(),
-                                cwd=evidence, capture_output=True)
-        assert result.returncode == 0, result.stderr
-        (evidence / "prepared/notice with spaces.txt").write_bytes(b"Changed")
-        assert subprocess.run([checker, "--check", "--strict"], input=records.encode(),
-                              cwd=evidence, capture_output=True).returncode != 0
+    assert sha256_bytes(b"Original notice\r\n") + "  prepared/notice with spaces.txt\n" in manifest
+    entries = [line.split("  ", 1) for line in records.splitlines()]
+    assert len(entries) == 3
+    assert {name for _, name in entries} == {
+        "manifest.json", "image-digest.txt", "prepared/notice with spaces.txt",
+    }
+    # Use the shared streaming hash API, independent of platform CLI dialect.
+    # Explicit chunk size keeps this lint-tier test free of config imports.
+    assert all(
+        sha256_file(evidence / name, chunk_size=4096) == digest
+        for digest, name in entries
+    )
+    (evidence / "prepared/notice with spaces.txt").write_bytes(b"Changed")
+    assert [
+        name for digest, name in entries
+        if sha256_file(evidence / name, chunk_size=4096) != digest
+    ] == ["prepared/notice with spaces.txt"]
 
 
 @pytest.mark.parametrize("problem", ["symlink", "directory-link", "fifo", "newline", "backslash", "digest", "missing-manifest", "size", "total", "entries", "existing", "signature"])
