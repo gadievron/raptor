@@ -311,6 +311,45 @@ def test_oversized_request_is_rejected_before_transport_and_channel_still_works(
     assert peer.host._rpc({'cmd': 'ping'}, timeout=5) == {'ok': True}
 
 
+def test_oversized_spawn_stdin_is_rejected_before_hex_encoding(peers, monkeypatch):
+    peer = peers.create()
+    monkeypatch.setattr(mod, '_DAEMON_STDIN_CAP', 8, raising=False)
+
+    class EncodingForbidden(bytes):
+        def hex(self, *args, **kwargs):
+            pytest.fail('oversized stdin was copied into a hexadecimal request')
+
+    with pytest.raises(mod.HostRPCError, match='stdin_bytes=9 exceeds 8'):
+        peer.host.spawn(['owned-command'], stdin_bytes=EncodingForbidden(b'x' * 9))
+    assert not peer.requests
+    assert peer.host._rpc({'cmd': 'ping'}, timeout=5) == {'ok': True}
+
+
+def test_spawn_stdin_cap_counts_bytes_in_a_wide_memoryview(peers, monkeypatch):
+    peer = peers.create()
+    monkeypatch.setattr(mod, '_DAEMON_STDIN_CAP', 8)
+    with memoryview(b'x' * 12).cast('I') as data:
+        assert len(data) == 3 and data.nbytes == 12
+        with pytest.raises(mod.HostRPCError, match='stdin_bytes=12 exceeds 8'):
+            peer.host.spawn(['owned-command'], stdin_bytes=data)
+    assert not peer.requests
+    assert peer.host._rpc({'cmd': 'ping'}, timeout=5) == {'ok': True}
+
+
+@pytest.mark.parametrize('data', [b'', b'\x00\xffowned!', bytearray(b'\x00\xffowned!'),
+                                 memoryview(b'\x00\xffowned!').cast('I')],
+                         ids=['empty', 'exact-cap-bytes', 'exact-cap-bytearray', 'exact-cap-view'])
+def test_spawn_stdin_at_cap_retains_the_existing_wire_value(peers, monkeypatch, data):
+    peer = peers.create()
+    monkeypatch.setattr(mod, '_DAEMON_STDIN_CAP', 8, raising=False)
+    result = peer.host.spawn(['owned-command'], stdin_bytes=data)
+    assert result['stdout'] == result['stderr'] == b''
+    request, = peer.requests
+    assert request['cmd'] == 'spawn' and request['argv'] == ['owned-command']
+    assert request['stdin_hex'] == bytes(data).hex()
+    assert not peer.host._broken
+
+
 def test_local_serialization_error_preserves_channel(peers):
     peer = peers.create()
     with pytest.raises(TypeError):

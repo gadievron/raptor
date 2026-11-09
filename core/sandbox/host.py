@@ -76,6 +76,7 @@ from core.security.log_sanitisation import sanitise_exception_message, sanitise_
 from core.sandbox._daemon import (
     _MAX_REPLY_FRAME_BYTES,
     _MAX_FRAME_BYTES as _DAEMON_REQUEST_CAP,
+    _MAX_STDIN_BYTES as _DAEMON_STDIN_CAP,
 )
 
 log = logging.getLogger(__name__)
@@ -529,6 +530,13 @@ class SandboxHost:
         timeout: float = 30.0,
     ) -> dict:
         """One-shot exec inside the sandbox."""
+        # The daemon applies this same input cap. Reject before hex() can
+        # allocate a doubled copy or an invalid request can occupy the RPC.
+        with memoryview(stdin_bytes) as data:
+            stdin_size = data.nbytes
+        if stdin_size > _DAEMON_STDIN_CAP:
+            raise HostRPCError(
+                f"stdin_bytes={stdin_size} exceeds {_DAEMON_STDIN_CAP}")
         response = self._rpc({
             "cmd": "spawn",
             "argv": argv,
