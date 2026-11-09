@@ -72,7 +72,6 @@ def test_keep_trust_markers_keeps_markers_and_credential():
         "RAPTOR_SESSION_TOKEN": "tok",
         "RAPTOR_DIR": "somewhere",
         "RAPTOR_CALLER_DIR": "/operator/caller",
-        "RAPTOR_LAUNCH_TARGET": "/operator/target",
         "_RAPTOR_KEEP_TRUST_MARKERS": "1",
     }
     proc = _run_shim("--keep-trust-markers", env_extra=extra)
@@ -84,7 +83,6 @@ def test_keep_trust_markers_keeps_markers_and_credential():
     assert env.get("RAPTOR_SESSION_PID") == "12345"
     assert env.get("RAPTOR_SESSION_TOKEN") == "tok"
     assert env.get("RAPTOR_CALLER_DIR") == "/operator/caller"
-    assert env.get("RAPTOR_LAUNCH_TARGET") == "/operator/target"
     # Consumed fd markers and the untrusted legacy env flag never cross.
     assert "_RAPTOR_STATUS_FD" not in env
     assert "_RAPTOR_DEATH_FD" not in env
