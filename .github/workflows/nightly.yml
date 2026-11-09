@@ -317,8 +317,9 @@ jobs:
           # core/package Semgrep consumers continue to run in this job.
           # Keep shared module fixtures on one worker and retain seeded
           # module ordering. Use two workers on the existing runner;
-          # no extra toolchain installs.
-          python -m pytest -n 2 --dist loadfile --no-loadscope-reorder -m slow core packages engine .github/tests .github/scripts/tests \
+          # no extra toolchain installs. Mixed slow/integration cases belong
+          # to the integration phase so they execute once per nightly.
+          python -m pytest -n 2 --dist loadfile --no-loadscope-reorder -m "slow and not integration" core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py -q --durations=25 \
             --junitxml="$RUNNER_TEMP/slow.xml"
@@ -342,8 +343,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           source $VENV_PATH/bin/activate
+          # Keep the same roots as the slow phase: mixed-marker cases in
+          # the CI checker suites must retain an integration owner too.
           rc=0
-          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --cache-clear -m integration core packages engine \
+          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --cache-clear -m integration core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
@@ -365,7 +368,7 @@ jobs:
           echo ""
           sleep 60
           retry_rc=0
-          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --lf --last-failed-no-failures=none -m integration core packages engine \
+          python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --lf --last-failed-no-failures=none -m integration core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
             --deselect=packages/semgrep/tests/test_runner.py::TestSandboxMetadataIntegration --ignore=packages/codeql/tests/test_pack_dependency_resolution.py --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml" \

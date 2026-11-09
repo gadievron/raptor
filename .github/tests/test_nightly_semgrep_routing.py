@@ -100,7 +100,7 @@ def test_engine_cases_are_excluded_from_both_broad_lanes_and_retry():
     for command in broad:
         assert "--ignore=engine/semgrep/tests" in command
         assert "--deselect=" + metadata_case in command
-    assert {command[command.index("-m") + 1] for command in broad} == {"slow", "integration"}
+    assert {command[command.index("-m") + 1] for command in broad} == {"slow and not integration", "integration"}
 
 
 @pytest.mark.parametrize("body,success", [
