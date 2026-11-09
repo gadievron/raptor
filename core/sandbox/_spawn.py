@@ -76,6 +76,7 @@ import time
 import traceback
 import warnings
 from collections.abc import Callable, Iterable, Sequence
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
@@ -3962,8 +3963,9 @@ def run_sandboxed(
                     def close_received(fd):
                         with contextlib.suppress(OSError):
                             os.close(fd)
-                    callbacks = ([sup.close] if sup is not None else
-                                 [lambda fd=fd: close_received(fd) for fd in fds])
+                    callbacks: list[Callable[[], object]] = (
+                        [sup.close] if sup is not None else
+                        [partial(close_received, fd) for fd in fds])
                     callbacks.append(lambda: _close_scope_socket(sp))
                     _retire_parent_resources(*callbacks)
 

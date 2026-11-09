@@ -16,9 +16,9 @@ def retire_parent_resources(*callbacks: Callable[[], object]) -> None:
             failures.append(error)
     if failures:
         primary = original if original is not None else failures.pop(0)
-        for error in failures:
+        for cleanup_error in failures:
             with contextlib.suppress(BaseException):
-                primary.add_note("parent owner cleanup: " + type(error).__name__)
+                primary.add_note("parent owner cleanup: " + type(cleanup_error).__name__)
         if original is None:
             raise primary
 

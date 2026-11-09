@@ -7,6 +7,7 @@ are the producer protocol, not a heuristic prefix match.
 """
 
 import hashlib
+from typing import TypedDict, cast
 
 from core.json import dumps_canonical
 
@@ -64,6 +65,17 @@ def capture_loss_status(record: dict) -> tuple[bool, bool]:
     return incomplete, malformed
 
 
+class _AuditCapture(TypedDict):
+    version: int
+    records: int
+    summaries: int
+    by_type: dict[str, int]
+    capture_incomplete: bool
+    budget_truncated: bool
+    dropped_by_category: dict[str, int]
+    malformed_records: int
+
+
 def partition_audit_records(records: list[dict]) -> tuple[list[dict], dict | None]:
     """Keep event order/identity, aggregate control records without raw text.
 
@@ -72,8 +84,8 @@ def partition_audit_records(records: list[dict]) -> tuple[list[dict], dict | Non
     notices alone do not establish actual drops. An unfinished control
     sequence is unconfirmed capture, including marker-only streams.
     """
-    events = None
-    capture = {
+    events: list[dict] | None = None
+    capture: _AuditCapture = {
         "version": 1, "records": 0, "summaries": 0, "by_type": {},
         "capture_incomplete": False, "budget_truncated": False,
         "dropped_by_category": {}, "malformed_records": 0,
@@ -119,7 +131,10 @@ def partition_audit_records(records: list[dict]) -> tuple[list[dict], dict | Non
         return records, None
     if last_control != "audit_summary":
         capture["capture_incomplete"] = True
-    return events, capture
+    # TypedDict describes the builder; the existing API returns this same
+    # ordinary dictionary without copying its counters or changing identity.
+    # A recognised control creates events before setting last_control.
+    return cast(list[dict], events), cast(dict[str, object], capture)
 
 
 def valid_audit_capture(capture: object) -> bool:

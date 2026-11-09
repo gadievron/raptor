@@ -1088,8 +1088,8 @@ def _retire_request_target(proc):
                 failures.append(exc)
     if failures:
         primary = original if original is not None else failures.pop(0)
-        for exc in failures:
-            primary.add_note("target cleanup: " + type(exc).__name__)
+        for cleanup_error in failures:
+            primary.add_note("target cleanup: " + type(cleanup_error).__name__)
         if original is None:
             raise primary
 
