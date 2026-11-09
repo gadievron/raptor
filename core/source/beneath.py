@@ -63,7 +63,7 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import IO
 
-from core.source.streams import adopt_fd
+from core.source.streams import adopt_fd, retire_unreturned_stream
 
 __all__ = ["open_regular_beneath", "open_dir_beneath"]
 
@@ -313,7 +313,7 @@ def open_regular_beneath(
                 # The return cannot complete if root retirement fails; the
                 # stream has not reached its caller and remains ours.
                 try:
-                    out.close()
+                    retire_unreturned_stream(out, lambda value: os.close(value))
                 except BaseException:
                     pass
                 raise
