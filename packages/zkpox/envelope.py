@@ -212,11 +212,6 @@ def tle_decrypt(ciphertext: bytes) -> bytes:
                 proxy_hosts=[_DRAND_HOST])
 
 
-def require_sealing_tools() -> None:
-    """Fail before expensive proving if delivery dependencies are absent."""
-    require(_which_age(), "age")
-    require(_which_tle(), "tle")
-
 
 def seal(witness: bytes, vendor_pubkey: str, *, duration: str = "90d", aad: bytes = _AAD) -> Envelope:
     """High-level: produce the three layered ciphertexts for a witness.

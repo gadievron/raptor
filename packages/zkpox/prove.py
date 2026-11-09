@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.sandbox import run_untrusted
-from .proving_deps import SP1_JIT_FILE_LIMIT_MB
 
 
 
@@ -134,7 +133,6 @@ def run(
             tool_paths=[str(bin_path.parent)],
             caller_label="zkpox-prove",
             capture_output=True, text=True, timeout=timeout,
-            limits={"max_file_mb": SP1_JIT_FILE_LIMIT_MB} if mode == "prove" else None,
         )
     finally:
         shutil.rmtree(sandbox_workdir, ignore_errors=True)

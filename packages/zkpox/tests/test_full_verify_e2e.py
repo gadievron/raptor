@@ -137,7 +137,6 @@ def test_production_cli_roundtrip(tmp_path):
 def test_real_delivery_openings(positive, positive_private, tmp_path, monkeypatch):
     from argparse import Namespace
     import time
-    from packages.zkpox import cli, envelope
     from packages.zkpox.disclosure import vendor_envelope_from
     monkeypatch.setenv('PATH', str(BUILD) + os.pathsep + os.environ.get('PATH', ''))
     pair = envelope.gen_age_keypair()
@@ -181,8 +180,6 @@ def test_real_delivery_openings(positive, positive_private, tmp_path, monkeypatc
 
 def test_runtime_file_limit_preflight(tmp_path):
     from core.sandbox import run_untrusted
-    from packages.zkpox.proving_deps import SP1_JIT_FILE_LIMIT_MB
-    for limit,accepted in ((10240,False),(SP1_JIT_FILE_LIMIT_MB,True)):
         result=run_untrusted([str(BUILD/'zkpox-prove'),'--check-runtime'],output=str(tmp_path),
             tool_paths=[str(BUILD)],limits={'max_file_mb':limit},capture_output=True,text=True,
             timeout=20,caller_label='zkpox-runtime-preflight')
