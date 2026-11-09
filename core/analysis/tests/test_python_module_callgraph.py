@@ -750,3 +750,26 @@ class TestClosureBindingScopes:
         lambdas = sorted((node for node in scopes if isinstance(node, ast.Lambda)), key=lambda node: node.col_offset)
         assert 'int' in scopes[lambdas[0]]
         assert 'int' not in scopes[lambdas[1]]
+
+
+class TestBuiltinNamespaceUncertainty:
+    def test_exposed_namespaces_invalidate_identity(self):
+        from core.analysis.python_module_callgraph import module_dynamic_namespace
+
+        sources = (
+            'import builtins\nbuiltins.int = replacement\n',
+            'import builtins as runtime\nsetattr(runtime, "staticmethod", replacement)\n',
+            '__builtins__["int"] = replacement\n',
+            'from builtins import __dict__ as namespace\nnamespace["int"] = replacement\n',
+            'def replace():\n    import builtins as local_runtime\n    local_runtime.int = replacement\n',
+            'import builtins\nnamespace = vars(builtins)\n',
+        )
+        for source in sources:
+            whole, names = module_dynamic_namespace(ast.parse(source))
+            assert whole, (source, names)
+
+    def test_unexposed_namespace_and_imported_values_are_not_namespace_escapes(self):
+        from core.analysis.python_module_callgraph import module_dynamic_namespace
+
+        for source in ('import builtins\n', 'from builtins import int\n', 'import html\n'):
+            assert module_dynamic_namespace(ast.parse(source)) == (False, frozenset())
