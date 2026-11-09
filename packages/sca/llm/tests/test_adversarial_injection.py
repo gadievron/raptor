@@ -50,18 +50,13 @@ def _load_fixture(name: str) -> str:
 
 
 def _all_fixtures() -> list[tuple[str, str]]:
-    """Return (name, content) for every injection fixture.
-
-    Called at parametrize time (module collection), so must not
-    crash if the filesystem state is unavailable in an xdist worker.
-    """
-    try:
-        pairs = []
-        for p in sorted(_FIXTURES_DIR.glob("*.txt")):
-            pairs.append((p.stem, p.read_text(encoding="utf-8")))
-        return pairs
-    except Exception:
-        return []
+    """Load required checked-in inputs; discovery defects must stay visible."""
+    pairs = [
+        (p.stem, p.read_text(encoding="utf-8"))
+        for p in sorted(_FIXTURES_DIR.glob("*.txt"))
+    ]
+    assert pairs, f"Required injection fixtures missing from {_FIXTURES_DIR}"
+    return pairs
 
 
 # ------------------------------------------------------------------ stubs
@@ -282,3 +277,29 @@ class TestSchemaRejection:
             schema_cls=InstallHookVerdict,
         )
         assert result.model is None
+
+
+class TestRequiredFixtureDiscovery:
+    def test_checked_in_universe_is_present(self):
+        assert {name for name, _ in _all_fixtures()} >= {
+            "base64", "english", "markdown_comment", "rot13",
+            "string_concat", "unicode_tags",
+        }
+
+    def test_invalid_utf8_is_not_an_empty_matrix(self, monkeypatch, tmp_path):
+        (tmp_path / "english.txt").write_text("valid", encoding="utf-8")
+        (tmp_path / "broken.txt").write_bytes(b"\xff")
+        monkeypatch.setitem(_all_fixtures.__globals__, "_FIXTURES_DIR", tmp_path)
+        with pytest.raises(UnicodeDecodeError):
+            _all_fixtures()
+
+    def test_valid_fixture_contents_are_retained(self, monkeypatch, tmp_path):
+        (tmp_path / "english.txt").write_text("valid", encoding="utf-8")
+        (tmp_path / "unicode.txt").write_text("café", encoding="utf-8")
+        monkeypatch.setitem(_all_fixtures.__globals__, "_FIXTURES_DIR", tmp_path)
+        assert _all_fixtures() == [("english", "valid"), ("unicode", "café")]
+
+    def test_missing_universe_is_hard(self, monkeypatch, tmp_path):
+        monkeypatch.setitem(_all_fixtures.__globals__, "_FIXTURES_DIR", tmp_path / "missing")
+        with pytest.raises(AssertionError, match="injection fixtures"):
+            _all_fixtures()
