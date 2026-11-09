@@ -539,9 +539,23 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
-    # ZKPoX CLI: reproduction details and verifier diagnostics are bounded
-    # and escaped before terminal output; JSON uses ASCII-escaped encoding.
-    "packages/zkpox/cli.py",
+    # Native hook JSON; title components are bounded and terminal-sanitised.
+    "core/startup/session_title.py",
+    "packages/sca/sbom_inventory/cli.py",
+    "packages/sca/sbom_inventory/output.py",
+    # Corpus CLI progress/failures are bounded terminal text. Replay record
+    # assembly is structured JSON data, audited separately below.
+    "core/audit/corpus/actor_identity.py",
+    "core/audit/corpus/receipt_replay.py",
+    # Offline corpus evidence tables: result paths and stored model/regime
+    # strings are terminal-sanitised; structured JSON is written via save_json.
+    "core/audit/corpus/verification_report.py",
+    # Standalone container-build helper: _term caps metadata names and uses
+    # json.dumps(ensure_ascii=True) to escape terminal controls and Unicode.
+    ".devcontainer/install-python-notices.py",
+    # rr lifecycle CLI: captured target/tool diagnostics and path-bearing errors
+    # are bounded and terminal-sanitised; only LF layout is retained.
+    "packages/binary_analysis/rr_cli.py",
     # Cleanup records include operator/target-influenced paths. Terminal-only
     # output uses the canonical bounded sanitizer, loaded from this checkout.
     "core/security/scratch_lifecycle.py",
