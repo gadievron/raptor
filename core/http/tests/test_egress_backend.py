@@ -6,7 +6,7 @@ Seatbelt child-to-parent proxy route without external network access.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 
 import os
 import ssl
@@ -133,21 +133,17 @@ class TestProxyManagerHasNoBypass:
 
 
 # ---------------------------------------------------------------------------
-# https-only validation
+# URL scheme validation
 # ---------------------------------------------------------------------------
 
-class TestHttpsOnly:
+class TestSupportedSchemes:
 
     @patch("core.sandbox.proxy.get_proxy")
-    def test_http_url_rejected(self, mock_get_proxy):
-        """EgressClient narrows _ALLOWED_SCHEMES to https only — the
-        underlying proxy is HTTPS-CONNECT-only and http:// requests
-        would forward-proxy and fail. Reject at the validator with a
-        clear message instead."""
+    def test_unsupported_scheme_rejected(self, mock_get_proxy):
         mock_get_proxy.return_value = MagicMock(port=12345)
-        client = EgressClient(["example.com"])
-        with pytest.raises(HttpError, match="scheme 'http'"):
-            client.get_json("http://example.com/api")
+        with closing(EgressClient(["example.com"])) as client:
+            with pytest.raises(HttpError, match="scheme 'ftp'"):
+                client.get_json("ftp://example.com/api")
 
 
 # ---------------------------------------------------------------------------
