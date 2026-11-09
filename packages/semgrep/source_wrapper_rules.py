@@ -84,12 +84,12 @@ XPATH_SINK_BLOCKS: Sequence[dict] = (
 )
 
 #: Origin: engine/semgrep/rules/injection/sql-taint.yaml
-#: (raptor.injection.sql.taint.java). Plain sink patterns — the sync
-#: test asserts each appears verbatim in the origin rule.
+#: (raptor.injection.sql.taint.java). Statement spellings used by the
+#: focused block below; never project these as whole-call sinks.
 SQLI_SINKS: Sequence[str] = (
     "(Statement $STMT).executeQuery($Q)",
-    "(Statement $STMT).executeUpdate($Q)",
-    "(Statement $STMT).execute($Q)",
+    "(Statement $STMT).executeUpdate($Q, ...)",
+    "(Statement $STMT).execute($Q, ...)",
 )
 
 #: Structured sink blocks mirrored from the same origin rule (focus
@@ -97,6 +97,12 @@ SQLI_SINKS: Sequence[str] = (
 #: The sync test asserts every pattern string below appears verbatim
 #: in the origin rule file.
 SQLI_SINK_BLOCKS: Sequence[dict] = (
+    {
+        "patterns": [
+            {"pattern-either": [{"pattern": pattern} for pattern in SQLI_SINKS]},
+            {"focus-metavariable": "$Q"},
+        ],
+    },
     {
         "patterns": [
             {"pattern-either": [
@@ -190,10 +196,10 @@ def _taint_rule(rule_id: str, message: str, cwe: str,
         "pattern-sources": [
             {"pattern-either": [{"pattern": p} for p in sources]},
         ],
-        "pattern-sinks": [
-            {"pattern-either": [{"pattern": p} for p in sinks]},
-            *sink_blocks,
-        ],
+        "pattern-sinks": (
+            ([{"pattern-either": [{"pattern": p} for p in sinks]}] if sinks else [])
+            + list(sink_blocks)
+        ),
         "metadata": {
             "cwe": [cwe],
             "provenance": "mechanical-source-summary",
@@ -239,7 +245,7 @@ def generate_rules_yaml(summaries: Iterable) -> str | None:
             "raptor.generated.source-wrapper.sqli",
             "Untrusted data from a project source-wrapper flows into SQL "
             "execution. Use parameterised queries.",
-            "CWE-89", sources, SQLI_SINKS, (),
+            "CWE-89", sources, (), (),
             sink_blocks=SQLI_SINK_BLOCKS,
         ),
     ]}
