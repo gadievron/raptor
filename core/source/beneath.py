@@ -204,20 +204,31 @@ def _walk_beneath(root_fd: int, parts: tuple[str, ...]) -> int | None:
     instead of redirecting the walk.
     """
     fd = -1
+    result = None
     try:
         for comp in parts[:-1]:
             nxt = os.open(comp, _O_DIR_FLAGS,
                           dir_fd=(fd if fd >= 0 else root_fd))
-            if fd >= 0:
-                os.close(fd)
+            previous = fd
             fd = nxt
-        return os.open(parts[-1], _O_FILE_FLAGS,
-                       dir_fd=(fd if fd >= 0 else root_fd))
+            if previous >= 0:
+                os.close(previous)
+        result = os.open(parts[-1], _O_FILE_FLAGS,
+                         dir_fd=(fd if fd >= 0 else root_fd))
+        if fd >= 0:
+            previous, fd = fd, -1
+            os.close(previous)
+        opened, result = result, None
+        return opened
     except OSError:
         return None
     finally:
-        if fd >= 0:
-            os.close(fd)
+        for owned in (result, fd):
+            if owned is not None and owned >= 0:
+                try:
+                    os.close(owned)
+                except BaseException:
+                    pass  # Retain the primary walk failure/refusal.
 
 
 def open_regular_beneath(
@@ -267,6 +278,7 @@ def open_regular_beneath(
     except OSError:
         return None
     fd: int | None = None
+    out = None
     try:
         if not stat.S_ISDIR(os.fstat(root_fd).st_mode):
             return None
@@ -280,15 +292,27 @@ def open_regular_beneath(
         if fd is None:
             return None
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
-            fd = None
             return None
         out = os.fdopen(fd, mode, **kwargs)
         fd = None  # fdopen owns it now
         return out
     except OSError:
-        if fd is not None:
-            os.close(fd)
         return None
     finally:
-        os.close(root_fd)
+        if fd is not None:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass  # Preserve failed validation or stream wrapping.
+        try:
+            os.close(root_fd)
+        except BaseException:
+            if out is not None:
+                # The return cannot complete if root retirement fails; the
+                # stream has not reached its caller and remains ours.
+                try:
+                    out.close()
+                except BaseException:
+                    pass
+                raise
+            # No stream is being returned: retain the refusal/primary error.

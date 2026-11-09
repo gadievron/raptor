@@ -105,12 +105,18 @@ def open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
         return None
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
             return None
-        return os.fdopen(fd, mode, **kwargs)
+        stream = os.fdopen(fd, mode, **kwargs)
+        fd = -1  # Ownership transferred only after successful wrapping.
+        return stream
     except OSError:
-        os.close(fd)
         return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass  # Preserve the refusal or failed validation/wrapping.
 
 
 def read_text_capped(
