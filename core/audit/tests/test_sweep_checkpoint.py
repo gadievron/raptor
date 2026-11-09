@@ -20,6 +20,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.threads import retiring_threads
+
 import core.audit.sweep_checkpoint as sc
 from core.audit.orchestrator import _memoized_sweep_step
 from core.audit.sweep import SweepResult
@@ -546,16 +548,20 @@ def test_concurrent_writers_all_records_line_atomic(
     barrier = threading.Barrier(n)
 
     def _write(i: int) -> None:
-        barrier.wait()
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            return
         cp.record(_key(rule=f"rule-{i}"), _result())
 
     threads = [
         threading.Thread(target=_write, args=(i,)) for i in range(n)
     ]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
     lines = (
         (tmp_path / CHECKPOINT_FILENAME).read_text().strip().splitlines()
     )
