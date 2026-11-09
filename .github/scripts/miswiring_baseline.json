@@ -4,6 +4,9 @@
     "artifacts:orphan_reader::*-metadata.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::*.active.json": {
+      "note": "CI LLM tripwire context files: llm_tripwire._publish writes each worker/PID context to a .next file and atomically replaces its generated .active.json path. llm_connections.active_tests reads those published files with glob('*.active.json'); the indexer does not connect the rename destination to the glob reader."
+    },
     "artifacts:orphan_reader::*.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -27,6 +30,9 @@
     },
     "artifacts:orphan_reader::*exploit*context*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:orphan_reader::.active.json": {
+      "note": "Normalized suffix of the generated CI LLM tripwire worker/PID context path. llm_tripwire._publish publishes it by replacing a written .next file, and llm_connections.active_tests consumes the matching *.active.json files; atomic-rename publication is not modeled as a writer."
     },
     "artifacts:orphan_reader::.raptor.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -57,9 +63,6 @@
     },
     "artifacts:orphan_reader::checkpoint-*-groups.json": {
       "note": "glob-reader/concrete-writer false positive: run_corpus._clear_resume_state sweeps finished-run resume sidecars via glob(\"checkpoint-*-groups.json\"); the writers spell the concrete names (literal checkpoint-sec-groups.json / checkpoint-bf-groups.json paths and f\"checkpoint-{mode}-groups.json\", all written through _checkpoint_write), which the artifact indexer keys separately from the glob pattern, so the reader looks orphaned; twin of the baselined *.osv.json entry"
-    },
-    "artifacts:orphan_reader::codeql-pack.lock.yml": {
-      "note": "external input: CodeQL CLI generates the lock file during pack resolution; RAPTOR reads it to check pack freshness"
     },
     "artifacts:orphan_reader::codeql-workspace.yml": {
       "note": "external-input pattern: _codeql_workspace_root walks up from a pack root looking for the CodeQL workspace manifest; the file is part of the CodeQL installation, not written by repo python"
@@ -115,6 +118,9 @@
     "artifacts:orphan_reader::layer0-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::license_identifications.json": {
+      "note": "Committed source corpus at packages/sca/data/license_identifications.json. sbom_license_evidence.py reads versioned license-identification rules shipped with RAPTOR; this is not a run artifact and has no runtime producer."
+    },
     "artifacts:orphan_reader::lifecycle.log": {
       "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
     },
@@ -132,9 +138,6 @@
     },
     "artifacts:orphan_reader::probe-dump.txt": {
       "note": "written by the embedded EbpfProbeDump Ghidra post-script (Java source lives as a string in packages/ghidra/ebpf_probe.py), not by repo Python; ghidra_decode builds the path, hands it to the sandboxed analyzeHeadless invocation, and reads the dump back for ground-truth comparison, so the indexer only ever sees the read"
-    },
-    "artifacts:orphan_reader::project.json": {
-      "note": "legacy in-run-dir project marker: nothing in the repo writes a literal project.json today (the registry stores <name>.json; exports embed .project.json) — the readers are the pin-less legacy-dir shape probes (core/concepts/study.py, libexec/raptor-study-prep) kept so pre-pin operator dirs still promote. Previously suppressed as ambiguous only because the study-prep probe shared a function with a tempfile writer; the merge-promote refactor made that function read-only and surfaced the pre-existing orphan-reader shape."
     },
     "artifacts:orphan_reader::raptor-audit-cfg-*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -160,6 +163,9 @@
     "artifacts:orphan_reader::study-discards.json": {
       "note": "writer exists (core/concepts/study.py writes it via save_json; core/audit/orchestrator.py reads) — the artifact indexer does not resolve the substrate writer call through the path variable, so the read looks orphaned"
     },
+    "artifacts:orphan_reader::summary.jsonl": {
+      "note": "External CodeQL C/C++ extractor output: CodeQL writes diagnostic/extractors/cpp/summary.jsonl during database creation. packages/codeql/database_manager.py::report_cpp_extraction reads its invocation counts for new and cached databases; no in-repo writer is expected. Validated against diagnostic files emitted by CodeQL 2.23.8 and 2.27.3."
+    },
     "artifacts:orphan_reader::trajectory-*.json": {
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
     },
@@ -171,6 +177,9 @@
     },
     "artifacts:write_only_artifact::-manifest.json": {
       "note": "seed-harvest corpus manifest (packages/frida/seeds.py writes <seeds>-manifest.json): operator-facing harvest accounting, deliberately written NEXT TO the corpus dir so AFL never ingests it as a seed; consumed by the operator reviewing a harvest, production code uses extract_seeds' return value"
+    },
+    "artifacts:write_only_artifact::-models.json": {
+      "note": "CI LLM tripwire generates a private per-worker models.json and exports its path through RAPTOR_CONFIG. The normal core.llm configuration loader and inherited subprocesses read that environment-selected path; the reader has no literal generated filename for the artifact indexer to pair with this writer."
     },
     "artifacts:write_only_artifact::-postfix.json": {
       "note": "raptor-recall-measure cvefix-manifest output: generated fp-only twin manifest ({cve}-postfix.json); same operator hand-off as the -prefix recall manifest — consumed via the --manifest path flag, no literal filename at the read site"
@@ -199,9 +208,6 @@
     "artifacts:write_only_artifact::.osv.json": {
       "note": "f\"{cve_id}.osv.json\" writer key (packages/cve_diff cli via save_json) normalised without its prefix; the reader is cross_check.py's load_json_bounded on the same f-string name — twin of the baselined orphan_reader::*.osv.json glob entry"
     },
-    "artifacts:write_only_artifact::.project.json": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
     "artifacts:write_only_artifact::.reason.json": {
       "note": "durable operator/audit record by design: <part>.reason.json preserves the quarantine reason next to the quarantined part for operator triage; no production reader intended"
     },
@@ -216,9 +222,6 @@
     },
     "artifacts:write_only_artifact::adversarial-matrix.json": {
       "note": "operator-facing run artifact from --adversarial (adversarial_test.write_matrix); surfaced when the atomic-write idiom became visible to the writer classifier"
-    },
-    "artifacts:write_only_artifact::agentic-report.md": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::aggregation.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -242,12 +245,6 @@
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::bench_report.md": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::binary-analysis-report.md": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::bug-chains.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::candidates.json": {
@@ -279,6 +276,9 @@
     },
     "artifacts:write_only_artifact::cocci.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::compiler-review-candidates.json": {
+      "note": "Operator-facing compiler leads retained for independent corroboration. Deliberately excluded from automatic findings and paid analysis; documented in docs/static-analysis.md."
     },
     "artifacts:write_only_artifact::compiler.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -370,6 +370,9 @@
     "artifacts:write_only_artifact::failures.txt": {
       "note": "feature-matrix run artifact (core/sandbox/scripts/feature-matrix/bin/report.py): flat failure/divergence list for operators and the weekly workflow's artifact upload; consumed outside production code by design."
     },
+    "artifacts:write_only_artifact::findings-import.json": {
+      "note": "Bounded indirect reader: packages/exploitability_validation/report.py calls _load_report_json on findings-import.json to recover findings-driven report scope; libexec/raptor-validation-helper writes the marker. The artifact census does not recognize this loader spelling."
+    },
     "artifacts:write_only_artifact::findings.jsonl": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -403,11 +406,20 @@
     "artifacts:write_only_artifact::hash-pin.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::hosts-before.txt": {
+      "note": "Deliberate recovery record from the Linux CI hostname tripwire: preserve the original hosts file for diagnosis or manual recovery if the listener is killed. Normal shutdown restores the in-memory original in serve's finally block, so this backup intentionally has no automated production reader."
+    },
+    "artifacts:write_only_artifact::inventory.csv": {
+      "note": "Deliberate user-facing export: sbom inspect writes the selected inventory as formula-safe CSV for spreadsheet and downstream consumers. CLI comparison reads inventory.json, not this derived presentation."
+    },
     "artifacts:write_only_artifact::io-correlation.json": {
       "note": "operator/LLM-facing output: packages/frida cli._maybe_correlate_io writes the ingest-payload/call-argument correlation report after a run and prints its path for the operator to inspect; no in-repo literal-name production reader by design (tests assert the file, the CLI only echoes the path)"
     },
     "artifacts:write_only_artifact::jazzer-corpus.json": {
       "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged — same posture as crate-corpus.json / generated-corpus.json"
+    },
+    "artifacts:write_only_artifact::ledger.json": {
+      "note": "Constant/path indirection: core/engagement/ledger.py load_ledger and set_artifact_status read LEDGER_FILENAME through ledger_path and load_json. The engagement report also lists this existing artifact; its mention is not a new write-only data flow."
     },
     "artifacts:write_only_artifact::matches.jsonl": {
       "note": "variant-sweep output (replay_sweep.write_report, library API driven by run_sweep consumers): ranked sweep matches for operator review; the path is printed at the end of the run, same class as suppressions.jsonl"
@@ -427,17 +439,11 @@
     "artifacts:write_only_artifact::openant-report.md": {
       "note": "operator-facing output: /openant standalone run writes a markdown summary next to the JSON findings; consumed by the operator reviewing results, no in-repo production reader by design"
     },
-    "artifacts:write_only_artifact::openant_findings.json": {
-      "note": "variable-path read false positive: raptor_agentic.py writes openant_findings.json then passes the Path to run_validation_phase(openant_findings_path=...) which reads it via load_json, and core/project/findings_utils.load_findings_from_dir reads it as the standalone-/openant fallback via its size-gated loader; the detector cannot trace either path indirection"
-    },
     "artifacts:write_only_artifact::patch-verify.json": {
       "note": "operator/LLM-facing output: the frida runtime regression oracle writes both runs' evidence as patch-verify.json and prints its path; the machine-consumed verdict rides the CLI exit code and the in-process return value, so no in-repo literal-name production reader exists by design (tests read the file back)"
     },
     "artifacts:write_only_artifact::payloads.json": {
       "note": "sanwit witness data file: written by core/audit/sanwit and read by the generated PHP probe inside the sandbox - the reader is not Python, so the census cannot see it"
-    },
-    "artifacts:write_only_artifact::phase2-classifications.json": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::pipeline-summary.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -450,6 +456,9 @@
     },
     "artifacts:write_only_artifact::pr-comment.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::prep-profile.json": {
+      "note": "Operator-facing diagnostic report: core.audit.prep_profile.PrepProfile.write emits per-step inclusive timings, errors, and cache observations at audit finalization, replacing the report on resume. docs/audit.md documents this output for inspection; it intentionally has no production reader and does not drive scheduling, spend, or verdict decisions."
     },
     "artifacts:write_only_artifact::protocol-state.json": {
       "note": "operator-facing run artifact: protocol_state channel prepass receipts (core/audit/protocol_state.py), consumed via /review and manual triage — no production reader by design (the audit-log artifact pattern)"
@@ -502,6 +511,12 @@
     "artifacts:write_only_artifact::source-binary-map.json": {
       "note": "operator/LLM-facing output: Stage A source-to-binary map summary written by raptor-validation-helper for the validation skill stages"
     },
+    "artifacts:write_only_artifact::source-wrappers.sarif": {
+      "note": "False positive through a returned-path helper: run_source_wrapper_stage writes both normal and failed source-wrappers.sarif reports via _write_stage_report, returns those paths in source_wrapper_sarifs, and main concatenates them into sarif_inputs for merge_sarif and generate_scan_metrics. The artifact indexer does not connect the helper return/list composition to these production consumers."
+    },
+    "artifacts:write_only_artifact::source.json": {
+      "note": "Deliberate operator-facing provenance sidecar: core/project/merge.py records each preserved report-history bundle source_run, imported posture and a warning that digests do not authenticate verdicts. No runtime consumer is intended; this metadata must not grant report or verdict authority."
+    },
     "artifacts:write_only_artifact::stderr.log": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -511,8 +526,8 @@
     "artifacts:write_only_artifact::study-stale.json": {
       "note": "operator-facing mirror of the staleness quarantine; the machine-consumed re-derive signal rides the reading list (pending items drained on the next study pass)"
     },
-    "artifacts:write_only_artifact::summary.json": {
-      "note": "variant-sweep output (replay_sweep.write_report, library API driven by run_sweep consumers): per-rule totals + errors for operator review (\"see summary.json\" is printed when a sweep records errors)"
+    "artifacts:write_only_artifact::summary.md": {
+      "note": "Deliberate user-facing output: sbom inspect writes a sanitised Markdown summary for humans and CI artifact viewers; subsequent inspection/comparison derives from inventory.json rather than reparsing rendered prose."
     },
     "artifacts:write_only_artifact::summary.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -547,13 +562,28 @@
     "artifacts:write_only_artifact::upgrade-impact.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::upgrade-plan.json": {
+      "note": "Deliberate user-facing output: sbom plan exports its versioned read-only upgrade proposals and advisory coverage to external CI/review consumers. It is a final report, not an internal pipeline input."
+    },
+    "artifacts:write_only_artifact::upgrade-plan.md": {
+      "note": "Deliberate user-facing output: sbom plan writes a sanitised Markdown upgrade report for operators and CI artifact viewers; no production reader reparses rendered prose."
+    },
+    "artifacts:write_only_artifact::upgrade-verification.json": {
+      "note": "Deliberate operator-facing output: sbom verify-plan exports its versioned comparison and evidence-availability report for external CI and review consumers. Inputs are the saved plan and scan artifacts; the completed verification is not reparsed internally."
+    },
+    "artifacts:write_only_artifact::upgrade-verification.md": {
+      "note": "Deliberate operator-facing output: sbom verify-plan writes a sanitised Markdown report for humans and CI artifact viewers. Production comparisons use structured plan and scan inputs rather than reparsing rendered prose."
+    },
+    "artifacts:write_only_artifact::uv-container-binding.json": {
+      "note": "Final operator-facing byte-matching receipt exported in container-sbom alongside original OCI documents and the publisher signature bundle/verifier result. External reviewers consume it; no runtime reader is intended. Its status explicitly requires separate signature verification and does not claim compiled dependency membership."
+    },
+    "artifacts:write_only_artifact::uv-publisher-attestation.jsonl": {
+      "note": "False positive: uv_provenance.prepare writes the public publisher bundle, then the Verify and retain uv publisher attestation step in dockerhub-publish.yml reads it through gh attestation verify --bundle uv-publisher-attestation.jsonl. The Python artifact indexer does not connect this external CLI reader. Retained in container-sbom for offline verification."
+    },
     "artifacts:write_only_artifact::validate-against.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::validation-error.json": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
-    "artifacts:write_only_artifact::validation.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::verification.json": {
@@ -570,6 +600,9 @@
     },
     "artifacts:write_only_artifact::warm.md": {
       "note": "raptor-recall-measure warm subcommand output: operator-facing would-suppress report, also printed to stdout at the end of the run"
+    },
+    "artifacts:write_only_artifact::weakness-chains.json": {
+      "note": "output artefact consumed by report generation and /review"
     },
     "artifacts:write_only_artifact::web-context-map.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -591,6 +624,9 @@
     },
     "artifacts:write_only_artifact::web_scan_report.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::witness-backlog.json": {
+      "note": "Constant/loader indirection: core/audit/backlog_drain.py load_backlog reads BACKLOG_FILENAME with bounded strict load_json; validation reports additionally read it through _load_report_json. The validation helper is a writer, not the only consumer."
     },
     "artifacts:write_only_artifact::wrappers.json": {
       "note": "provenance sidecar of the source-wrapper stage: records the mechanically-derived wrapper vocabulary for the run; the in-run consumer receives the same names in-process via the stage's return value (extra_source_patterns), same class as suppressions.jsonl"
@@ -648,6 +684,9 @@
     },
     "dead:dead_function:packages/zkpox/anchor.py:load_ed25519_secret_pem": {
       "note": "zkpox public API: loads a persisted signing key for repeat anchoring; consumed by operator CLI"
+    },
+    "dead:dead_method:core/analysis/binary_oracle.py:_OwnedOutputReader.readinto": {
+      "note": "RawIOBase protocol — called by Python IO layer, not by name"
     },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
