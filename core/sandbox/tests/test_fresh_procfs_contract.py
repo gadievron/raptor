@@ -1324,6 +1324,55 @@ def test_payload_executors_derive_contract_flag_from_helper():
         "reader")
 
 
+def _branded_mount_records(mountinfo, target, host_mountinfo):
+    """Exclude only the caller's exact bind, never a shared path component."""
+    import re
+
+    def fields(line):
+        return [re.sub(r"\\([0-7]{3})", lambda m: chr(int(m[1], 8)), word)
+                for word in line.split()]
+
+    # A bind root is relative to its host filesystem, not necessarily '/'.
+    hosts = [fields(line) for line in host_mountinfo.splitlines()]
+    origin = max((row for row in hosts
+                  if target.is_relative_to(Path(row[4]))),
+                 key=lambda row: len(Path(row[4]).parts))
+    root = Path(origin[3]) / target.relative_to(origin[4])
+    hits = []
+    for line in mountinfo.splitlines():
+        row = fields(line)
+        assert len(row) >= 10 and row[0].isdigit(), (
+            f"invalid mountinfo probe record: {line!r}")
+        branded = {i for i, word in enumerate(row) if 'raptor' in word.lower()}
+        if not branded:
+            continue
+        caller_bind = (row[2] == origin[2] and Path(row[3]) == root
+                       and Path(row[4]) == target)
+        if not caller_bind or branded - {3, 4}:
+            hits.append(line)
+    return hits
+
+
+@pytest.mark.parametrize('host_root,host_point', [('/', '/'), ('/volume', '/tmp')])
+def test_branded_mount_records_preserve_exact_caller_bind(host_root, host_point):
+    target = Path('/tmp/pytest-of-raptor/caller space')
+    root = Path(host_root) / target.relative_to(host_point)
+    encode = lambda value: str(value).replace(' ', r'\040')
+    host = f'1 0 8:1 {host_root} {host_point} rw - ext4 /dev/test rw'
+    caller = f'2 1 8:1 {encode(root)} {encode(target)} rw - ext4 /dev/test rw'
+    neutral = '4 1 0:1 / /proc rw - proc proc rw'
+    assert _branded_mount_records(caller + '\n' + neutral, target, host) == []
+    leaks = [
+        caller.replace(encode(root), encode(root) + '-sibling', 1),
+        caller.replace(encode(target), encode(target) + '-sibling'),
+        caller.replace('/dev/test', '/dev/raptor-device'),
+        caller.replace('8:1', '8:2'),
+        '3 1 8:1 /raptor-checkout /opt/tools ro - ext4 /dev/test ro',
+    ]
+    for leak in leaks:
+        assert _branded_mount_records(caller + '\n' + leak, target, host) == [leak]
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
 def test_no_branded_names_in_target_view(tmp_path):
@@ -1332,13 +1381,15 @@ def test_no_branded_names_in_target_view(tmp_path):
     RAPTOR checkout path bound in (the pid1-shim grant is an
     unshare-lane Landlock rule, not a mount-ns bind), and no
     framework-identity env values."""
-    import re as _re
+    import shlex
+
+    host_mountinfo = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     marker = tmp_path / "brand-probe"
     _run_untrusted_or_skip(
         ["sh", "-c",
          f"{{ ls -a /tmp; echo ---MI---; "
-         f"grep -io 'raptor[^ ]*' /proc/self/mountinfo; "
-         f"echo ---ENV---; env; }} > {marker}"],
+         f"cat /proc/self/mountinfo; "
+         f"echo ---ENV---; env; }} > {shlex.quote(str(marker))}"],
         tmp_path,
     )
     if not marker.exists():
@@ -1346,19 +1397,15 @@ def test_no_branded_names_in_target_view(tmp_path):
     text = marker.read_text(encoding="utf-8")
     listing, _, rest = text.partition("---MI---")
     mi_block, _, envblock = rest.partition("---ENV---")
-    # The caller-chosen target/output ancestry is target-visible by
-    # definition (here: pytest's own basetemp components) — only
-    # entries OUTSIDE that ancestry count as leaks.
-    own_components = set(tmp_path.parts) | set(Path(__file__).parts)
-    hits = [ln for ln in listing.split()
-            if _re.search(r"raptor", ln, _re.IGNORECASE)
-            and ln not in own_components]
+    # Only the declared caller bind's ancestry belongs in the private /tmp.
+    caller_tmp_entry = (tmp_path.relative_to('/tmp').parts[0]
+                        if tmp_path.is_relative_to('/tmp') else None)
+    hits = [name for name in listing.splitlines()
+            if 'raptor' in name.lower() and name != caller_tmp_entry]
     assert not hits, (
         f"framework-named entries visible in the sandbox /tmp: {hits}")
-    mi_hits = [ln for ln in mi_block.split()
-               if ln and ln not in own_components
-               and not any(c in ln for c in own_components
-                           if "raptor" in c.lower())]
+    assert mi_block.strip(), "mountinfo probe produced no records"
+    mi_hits = _branded_mount_records(mi_block.strip(), tmp_path, host_mountinfo)
     assert not mi_hits, (
         f"framework-named mount sources visible in mountinfo: "
         f"{mi_hits[:6]}")
