@@ -15,16 +15,22 @@ raptor-run-lifecycle is a logging stub, with python3 PATH-stubbed.
 
 from __future__ import annotations
 
-import contextlib
+from contextlib import ExitStack, contextmanager
 import os
+import selectors
+import shlex
 import shutil
 import signal
 import stat
 import subprocess
+import sys
 import time
 from pathlib import Path
 
 import pytest
+
+from core.testing.processes import reap_on_exit
+from core.testing.streams import pipe_streams
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -133,54 +139,57 @@ def _read_pid(path: Path) -> int | None:
         return None
 
 
-def _reap_stub_tree(proc: subprocess.Popen, pid_file: Path) -> None:
-    """Best-effort janitor for the spawned wrapper tree, registered
-    right after the spawn so a failing assertion (or any other
-    exception exit) cannot leak the stub processes (wrapper →
-    python3 stub → sleep grandchild).
+_LIFELINE_WATCHER = """
+import os
+import signal
+import sys
 
-    Verified pids only: the roots are the live ``Popen`` handle's pid
-    and the stub-recorded grandchild pid, descendants come from a
-    ``pgrep -P`` walk of those roots, nothing with pid <= 1 is ever
-    signaled, and every kill is gated on a kill-0 liveness probe
-    immediately before it.
+while os.read(int(sys.argv[1]), 1):
+    pass
+group = os.getpgrp()
+assert group > 1
+os.killpg(group, signal.SIGKILL)
+"""
+
+
+@contextmanager
+def _owned_wrapper(args, *, stub: Path, **kwargs):
+    """Own the wrapper and detached stub groups through inherited pipes.
+
+    The watcher stays in the stub's group, so it can signal that live group
+    after the test closes its lifeline. It stays idle during native signal
+    assertions. Completion EOF proves every inheriting process released its
+    pipe, including a stub launched through setsid.
     """
-    pids: list[int] = []
-    if proc.pid is not None and proc.pid > 1:
-        pids.append(proc.pid)
-    recorded = _read_pid(pid_file)
-    if recorded is not None and recorded > 1 and recorded not in pids:
-        pids.append(recorded)
-    # Collect the whole tree BEFORE killing anything: killing a parent
-    # first would orphan still-running children before pgrep sees them.
-    seen = set(pids)
-    frontier = list(pids)
-    while frontier:
-        parent = frontier.pop()
-        res = subprocess.run(
-            ["pgrep", "-P", str(parent)],
-            capture_output=True, text=True, check=False,
+    original = stub.read_text(encoding="utf-8")
+    with ExitStack() as cleanup:
+        cleanup.callback(stub.write_text, original, encoding="utf-8")
+        lifetime_read, lifetime_write = cleanup.enter_context(pipe_streams())
+        done_read, done_write = cleanup.enter_context(pipe_streams())
+        prelude = (f"{shlex.quote(sys.executable)} -I -c "
+                   f"{shlex.quote(_LIFELINE_WATCHER)} "
+                   f"{lifetime_read.fileno()} &\n")
+        shebang, body = original.split("\n", 1)
+        stub.write_text(shebang + "\n" + prelude + body, encoding="utf-8")
+        process = subprocess.Popen(
+            args, start_new_session=True,
+            pass_fds=(lifetime_read.fileno(), done_write.fileno()), **kwargs,
         )
-        for token in res.stdout.split():
-            try:
-                child = int(token)
-            except ValueError:
-                continue
-            if child > 1 and child not in seen:
-                seen.add(child)
-                pids.append(child)
-                frontier.append(child)
-    for pid in pids:
-        if pid <= 1:
-            continue
         try:
-            os.kill(pid, 0)  # liveness gate: only verified-live pids
-        except OSError:
-            continue
-        with contextlib.suppress(OSError):
-            os.kill(pid, signal.SIGKILL)
-    with contextlib.suppress(subprocess.TimeoutExpired):
-        proc.wait(timeout=10)
+            with reap_on_exit(process, process_group=True):
+                try:
+                    lifetime_read.close()
+                    done_write.close()
+                    yield process
+                finally:
+                    lifetime_write.close()
+        finally:
+            lifetime_read.close()
+            done_write.close()
+            with selectors.DefaultSelector() as completion:
+                completion.register(done_read, selectors.EVENT_READ)
+                assert completion.select(10), "stub tree kept completion pipe open"
+            assert os.read(done_read.fileno(), 1) == b"", "unexpected completion payload"
 
 
 class TestGracefulSignalDisposition:
@@ -199,20 +208,21 @@ class TestGracefulSignalDisposition:
             "wait $!\n"
             "exit 0\n"
         ))
-        proc = subprocess.Popen(
+        with _owned_wrapper(
             ["bash", str(root / "libexec" / "raptor-frida"),
              "--target", "someprocess", "--template", "syscalls"],
             env=env, cwd=str(tmp_path),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        assert _wait_for(marker.is_file), "child never started"
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=30)
+            stub=tmp_path / "stub-bin" / "python3",
+        ) as proc:
+            assert _wait_for(marker.is_file), "child never started"
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=30)
 
-        log = (root / "lifecycle.log").read_text().splitlines()
-        assert any(line.startswith("start ") for line in log)
-        assert any(line.startswith("complete ") for line in log), log
-        assert not any(line.startswith("fail ") for line in log), log
+            log = (root / "lifecycle.log").read_text().splitlines()
+            assert any(line.startswith("start ") for line in log)
+            assert any(line.startswith("complete ") for line in log), log
+            assert not any(line.startswith("fail ") for line in log), log
 
     def test_sigterm_with_failing_child_fails_once(self, tmp_path):
         """Child exits nonzero after TERM → exactly one fail record,
@@ -227,27 +237,28 @@ class TestGracefulSignalDisposition:
             "wait $!\n"
             "exit 17\n"
         ))
-        proc = subprocess.Popen(
+        with _owned_wrapper(
             ["bash", str(root / "libexec" / "raptor-frida"),
              "--target", "someprocess", "--template", "syscalls"],
             env=env, cwd=str(tmp_path),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        assert _wait_for(marker.is_file), "child never started"
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=30)
+            stub=tmp_path / "stub-bin" / "python3",
+        ) as proc:
+            assert _wait_for(marker.is_file), "child never started"
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=30)
 
-        log = (root / "lifecycle.log").read_text().splitlines()
-        fails = [line for line in log if line.startswith("fail ")]
-        assert len(fails) == 1, log
-        assert "TERM" in fails[0]
-        assert not any(line.startswith("complete ") for line in log)
+            log = (root / "lifecycle.log").read_text().splitlines()
+            fails = [line for line in log if line.startswith("fail ")]
+            assert len(fails) == 1, log
+            assert "TERM" in fails[0]
+            assert not any(line.startswith("complete ") for line in log)
 
 
 @pytest.mark.skipif(shutil.which("setsid") is None,
                     reason="setsid required for group kill")
 class TestProcessGroupKill:
-    def test_grandchild_killed_on_sigterm(self, tmp_path, request):
+    def test_grandchild_killed_on_sigterm(self, tmp_path):
         """SIGTERM to the wrapper must reach the child's descendants
         (the instrumented target), not just the direct child."""
         root = _make_fake_tree(tmp_path, "raptor-frida")
@@ -260,29 +271,27 @@ class TestProcessGroupKill:
             f'echo $! > "{pid_file}"\n'
             "wait\n"
         ))
-        proc = subprocess.Popen(
+        with _owned_wrapper(
             ["bash", str(root / "libexec" / "raptor-frida"),
              "--target", "someprocess", "--template", "syscalls"],
             env=env, cwd=str(tmp_path),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        # Registered before the first assertion: an assertion or
-        # exception exit must reap the tree, not leak it.
-        request.addfinalizer(lambda: _reap_stub_tree(proc, pid_file))
-        # Readiness = pid-file CONTENT, not existence: `echo $! > f`
-        # creates the file before writing it, and reading the empty
-        # window raised int("") — ValueError under load.
-        assert _wait_for(lambda: _read_pid(pid_file) is not None), (
-            "grandchild never started"
-        )
-        grandchild = _read_pid(pid_file)
-        assert grandchild is not None
-        assert _pid_alive(grandchild)
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=30)
-        assert _wait_for(lambda: not _pid_alive(grandchild)), (
-            "instrumented-target stand-in survived the wrapper kill"
-        )
+            stub=tmp_path / "stub-bin" / "python3",
+        ) as proc:
+            # Readiness = pid-file CONTENT, not existence: `echo $! > f`
+            # creates the file before writing it, and reading the empty
+            # window raised int("") — ValueError under load.
+            assert _wait_for(lambda: _read_pid(pid_file) is not None), (
+                "grandchild never started"
+            )
+            grandchild = _read_pid(pid_file)
+            assert grandchild is not None
+            assert _pid_alive(grandchild)
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=30)
+            assert _wait_for(lambda: not _pid_alive(grandchild)), (
+                "instrumented-target stand-in survived the wrapper kill"
+            )
 
 
 class TestDashDashPassthrough:
@@ -353,16 +362,17 @@ class TestPatchVerifyDisposition:
             "wait $!\n"
             "exit 1\n"
         ))
-        proc = subprocess.Popen(
+        with _owned_wrapper(
             ["bash", str(root / "libexec" / "raptor-frida-patch-verify"),
              "--before", str(before)],
             env=env, cwd=str(tmp_path),
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        assert _wait_for(marker.is_file), "child never started"
-        proc.send_signal(signal.SIGTERM)
-        proc.wait(timeout=30)
+            stub=tmp_path / "stub-bin" / "python3",
+        ) as proc:
+            assert _wait_for(marker.is_file), "child never started"
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=30)
 
-        log = (root / "lifecycle.log").read_text().splitlines()
-        assert any(line.startswith("complete ") for line in log), log
-        assert not any(line.startswith("fail ") for line in log), log
+            log = (root / "lifecycle.log").read_text().splitlines()
+            assert any(line.startswith("complete ") for line in log), log
+            assert not any(line.startswith("fail ") for line in log), log
