@@ -34,7 +34,7 @@ def _origin(url: str, *, declaration: bool = False) -> Origin:
     if not isinstance(url, str) or not url or len(url) > 65536 or any(
         ord(character) <= 32 or ord(character) == 127 for character in url
     ):
-        raise ValueError("expected an absolute HTTPS URL without whitespace or controls")
+        raise ValueError("expected an absolute HTTP(S) URL without whitespace or controls")
     # Inspect the authority before urllib3 normalises percent-escaped hosts
     # or treats a backslash as a path separator (behaviour differs by version).
     authority = url.partition("://")[2].split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
@@ -43,13 +43,13 @@ def _origin(url: str, *, declaration: bool = False) -> Origin:
     try:
         parsed = parse_url(url)
     except (LocationParseError, ValueError):
-        raise ValueError("invalid HTTPS URL") from None
-    if parsed.scheme != "https" or not parsed.host or parsed.auth is not None:
-        raise ValueError("expected an absolute HTTPS URL without embedded credentials")
+        raise ValueError("invalid HTTP(S) URL") from None
+    if parsed.scheme not in ("http", "https") or not parsed.host or parsed.auth is not None:
+        raise ValueError("expected an absolute HTTP(S) URL without embedded credentials")
     host = parsed.host.removeprefix("[").removesuffix("]")
     if any(character in host for character in ("%", "\\", "*")):
         raise ValueError("origin must name one exact host")
-    port = 443 if parsed.port is None else parsed.port
+    port = (443 if parsed.scheme == "https" else 80) if parsed.port is None else parsed.port
     if not 1 <= port <= 65535:
         raise ValueError("origin port must be between 1 and 65535")
     if declaration and (
@@ -57,7 +57,7 @@ def _origin(url: str, *, declaration: bool = False) -> Origin:
         or parsed.query is not None or parsed.fragment is not None
     ):
         raise ValueError("declare an origin without a path, query or fragment")
-    return "https", host, port
+    return parsed.scheme, host, port
 
 
 def _positive_integer(value: int, name: str) -> None:
@@ -66,7 +66,7 @@ def _positive_integer(value: int, name: str) -> None:
 
 
 class AnonymousOriginClient:
-    """Read-only, credential-free requests to an immutable set of HTTPS origins.
+    """Read-only, credential-free requests to an immutable set of HTTP(S) origins.
 
     ``max_bytes`` is a required per-response cap. Requests have no automatic
     retries and never follow redirects; callers re-authorise each hop by
@@ -99,7 +99,7 @@ class AnonymousOriginClient:
             raise ValueError("allowed_origins must be an iterable of origin URLs")
         origins = frozenset(_origin(url, declaration=True) for url in allowed_origins)
         if not origins:
-            raise ValueError("at least one exact HTTPS origin is required")
+            raise ValueError("at least one exact HTTP(S) origin is required")
         _positive_integer(max_bytes, "max_bytes")
         _positive_integer(timeout, "timeout")
         _positive_integer(total_timeout, "total_timeout")

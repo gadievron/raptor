@@ -298,7 +298,9 @@ def _host_in_no_proxy(host: str, entries: tuple[str, ...], port: int | None = No
     return False
 
 
-def _new_proxy_manager(proxy_url: str) -> urllib3.ProxyManager:
+def _new_proxy_manager(
+    proxy_url: str, *, manager_class: type[urllib3.ProxyManager] = urllib3.ProxyManager,
+) -> urllib3.ProxyManager:
     """ProxyManager with the same secure defaults as the direct pool.
 
     Basic-auth userinfo in the proxy URL (``http://user:pass@corp:8080``)
@@ -326,7 +328,7 @@ def _new_proxy_manager(proxy_url: str) -> urllib3.ProxyManager:
             (parsed.scheme, netloc, parsed.path, parsed.query,
              parsed.fragment)
         )
-    return urllib3.ProxyManager(
+    return manager_class(
         proxy_url,
         retries=False, cert_reqs="CERT_REQUIRED",
         ca_certs=ca_certs,
@@ -518,12 +520,10 @@ class UrllibClient:
     the ``_http`` constructor arg — typically a ``urllib3.ProxyManager``
     pointing at a chokepoint proxy.
 
-    Subclasses may also tighten ``_ALLOWED_SCHEMES`` to restrict
-    accepted URL schemes — UrllibClient accepts http and https
-    (the latter for production, the former for tests/dev paths
-    hitting localhost stubs); EgressClient narrows to https only
-    because its proxy is HTTPS-CONNECT-only and http requests
-    can't be served through it cleanly.
+    Subclasses may tighten ``_ALLOWED_SCHEMES`` to restrict accepted URLs.
+    UrllibClient and EgressClient accept HTTP and HTTPS. EgressClient
+    tunnels both through the enforcement proxy; ordinary operator proxies
+    retain their standard urllib3 forwarding behaviour.
     """
 
     _ALLOWED_SCHEMES = ("http", "https")

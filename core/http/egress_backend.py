@@ -1,6 +1,6 @@
 """Egress-allowlisted backend for :class:`core.http.HttpClient`.
 
-Routes outbound HTTPS through the in-process proxy at
+Routes outbound HTTP(S) through the in-process proxy at
 :mod:`core.sandbox.proxy`. The proxy enforces a hostname allowlist —
 CONNECT to anything outside the registered hosts is refused — closing
 the gap that direct urlopen leaves open: a parser compromise can't
@@ -115,14 +115,8 @@ def seatbelt_parent_proxy_url() -> str | None:
 class EgressClient(UrllibClient):
     """HttpClient backend that routes via :mod:`core.sandbox.proxy`.
 
-    Restricts URLs to https only — the underlying proxy is
-    HTTPS-CONNECT-only, so an http:// request would forward-proxy as
-    ``GET http://host/`` and fail at the proxy. Rejecting at the
-    validator gives the caller a clear immediate error rather than
-    a confusing late one.
+    Both HTTP and HTTPS use CONNECT through the enforcement proxy.
     """
-
-    _ALLOWED_SCHEMES = ("https",)  # type: ignore[assignment]
 
     def __init__(
         self,
@@ -147,7 +141,8 @@ class EgressClient(UrllibClient):
         # carrying its own CONNECT tunnel, well within the in-process
         # proxy's 64-tunnel cap.
         from core.http.urllib_backend import _new_proxy_manager
-        proxy_pool = _new_proxy_manager(proxy_url)
+        from core.http._connect import ConnectProxyManager
+        proxy_pool = _new_proxy_manager(proxy_url, manager_class=ConnectProxyManager)
         logger.debug(
             "core.http.EgressClient: routing via egress proxy at %s",
             proxy_url,

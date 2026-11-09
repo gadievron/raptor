@@ -126,7 +126,7 @@ def test_bad_header_shapes_refused(transport, headers):
 
 
 @pytest.mark.parametrize("origins", [
-    [], "https://assets.example", ["http://assets.example"],
+    [], "https://assets.example", ["ftp://assets.example"],
     ["https://assets.example/path"], ["https://assets.example/?query"],
     ["https://assets.example/#fragment"], ["https://*.example"],
     ["https://assets.example:0"], ["https://assets.example:65536"],
@@ -362,3 +362,19 @@ def test_invalid_origin_traceback_does_not_echo_embedded_credentials(transport):
     assert "fixture-secret" not in str(error.value)
     assert "fixture-secret" not in "".join(traceback.format_exception(error.value))
     assert not created
+
+
+def test_http_default_port_is_canonical_and_scheme_remains_distinct(transport):
+    pool, created = transport
+    response(pool)
+    with AnonymousOriginClient([
+        "http://ASSETS.example", "http://assets.example:80",
+        "https://assets.example:80",
+    ], max_bytes=32) as reader:
+        assert reader.allowed_origins == frozenset({
+            ("http", "assets.example", 80), ("https", "assets.example", 80),
+        })
+        assert reader.request("GET", "http://assets.example:80/a").body == b"asset"
+        with pytest.raises(HttpError, match="permissions"):
+            reader.request("GET", "https://assets.example/a")
+    assert created == [("assets.example",)]
