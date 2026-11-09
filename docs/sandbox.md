@@ -887,25 +887,17 @@ relax the UDP deny. If the profile expects seccomp but libseccomp is
 unavailable, construction refuses with `SandboxSetupError` — the
 Landlock-only fallback cannot close the UDP egress path without it.
 
-Seccomp-less profiles (`network-only`) do not trigger this refusal:
-they accepted reduced isolation at profile selection, so the fallback
-engages Landlock TCP deny without the UDP block. The operator chose
-that trade-off explicitly.
+A seccomp-less profile such as `network-only` can enforce the network
+block through a working network namespace. If that namespace is
+unavailable, the TCP-only fallback is refused: selecting a profile does
+not accept open UDP egress on behalf of a caller requesting a network
+block. This also applies after a runtime namespace failure.
 
-`degraded_net_deny=False` remains the explicit per-call acceptance of
-open network on the fallback.
-
-**Degraded-host escape hatches.** When the refusal fires (no
-namespaces AND no working seccomp), the operator has several options:
-
-- Fix the environment: enable user namespaces (`sysctl
-  kernel.unprivileged_userns_clone=1`), or install/fix libseccomp.
-- `degraded_net_deny=False` per-call: explicitly accept that UDP
-  egress is open on this fallback.
-- `profile="network-only"`: accept the weaker posture (Landlock TCP
-  deny, UDP open) without a per-call opt-out.
-- Docker hosts: run with `--privileged` (enables namespaces) or
-  ensure libseccomp is installed in the image.
+To resolve the refusal, enable network namespaces, or select a
+seccomp-enabled profile with working libseccomp. Callers that explicitly
+accept open networking on the fallback can pass
+`degraded_net_deny=False`. A containment-floor waiver does not waive the
+required UDP filter.
 
 Trusted tool execution (`run_trusted()`, profile `none`) is never
 affected — those profiles do not request network blocking.

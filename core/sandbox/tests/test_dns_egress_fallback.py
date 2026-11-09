@@ -62,12 +62,62 @@ def test_missing_seccomp_refuses_full_profile(fallback, monkeypatch, waived):
     assert not fallback
 
 
-def test_network_only_accepts_without_udp_block(fallback):
-    """network-only has no seccomp — the gate returns early and the
-    Landlock TCP deny engages without a UDP block."""
+@pytest.mark.parametrize("ports", [None, [443]])
+@pytest.mark.parametrize("waived", [False, True])
+def test_network_only_refuses_tcp_only_fallback(fallback, monkeypatch, ports, waived):
+    """Profile selection does not waive the requested network block."""
+    if waived:
+        monkeypatch.setenv("RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "1")
+    with pytest.raises(SandboxSetupError, match="UDP/DNS block"):
+        with context.sandbox(block_network=True, profile="network-only",
+                             allowed_tcp_ports=ports):
+            pass
+    assert not fallback
+
+
+
+@pytest.mark.parametrize("profile", [None, "", "none", "full", "debug"])
+@pytest.mark.parametrize("available", [False, True])
+def test_udp_gate_requires_a_filter_capable_profile(monkeypatch, profile, available):
+    monkeypatch.setattr(context, "check_seccomp_available", lambda: available)
+    if profile in ("full", "debug") and available:
+        context._require_degraded_udp_filter(profile)
+    else:
+        with pytest.raises(SandboxSetupError, match="UDP/DNS block"):
+            context._require_degraded_udp_filter(profile)
+
+
+def test_network_only_keeps_namespace_network_isolation(fallback, monkeypatch):
+    monkeypatch.setattr(context, "check_net_available", lambda: True)
     with context.sandbox(block_network=True, profile="network-only"):
         pass
     assert fallback[-1]["seccomp_block_udp"] is False
+
+
+@pytest.mark.parametrize("profile", ["full", "network-only"])
+def test_explicit_network_optout_accepts_seccomp_less_fallback(fallback, profile):
+    with context.sandbox(block_network=True, profile=profile, degraded_net_deny=False):
+        pass
+    assert fallback[-1]["seccomp_block_udp"] is False
+
+
+def test_network_only_unavailable_native_route_refuses_before_plain_dispatch(fallback, monkeypatch):
+    from core.sandbox import _spawn
+    monkeypatch.setattr(context, "check_net_available", lambda: True)
+    attempts = []
+
+    def fail_spawn(*args, **kwargs):
+        attempts.append(True)
+        raise OSError("owned namespace failure")
+
+    monkeypatch.setattr(_spawn, "run_sandboxed", fail_spawn)
+    with pytest.raises(SandboxSetupError, match="UDP/DNS block"):
+        context.run(["true"], block_network=True, profile="network-only",
+                    capture_output=True)
+    assert not attempts  # The owned native-capability probe refuses this route.
+    # Only context construction prepared a preexec; demotion refused
+    # before a weaker preexec or plain subprocess could be dispatched.
+    assert len(fallback) == 1
 
 
 def test_explicit_network_optout_keeps_existing_semantics(fallback):

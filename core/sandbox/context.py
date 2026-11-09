@@ -1385,19 +1385,20 @@ def _nproc_eagain_retry_decision(
 def _require_degraded_udp_filter(seccomp_profile: str | None) -> None:
     """Refuse a TCP-only Landlock fallback when seccomp cannot block UDP.
 
-    Seccomp-less profiles (network-only, none) accepted the reduced
-    isolation at profile selection \N{em dash} the gate only fires when a
-    seccomp-enabled profile cannot engage its filter.
+    A profile without seccomp cannot supply the missing UDP layer.
+    Profile selection does not waive block_network; callers accepting
+    unrestricted fallback networking must use degraded_net_deny=False.
+    Explicitly disabled runs are handled before this gate.
     """
-    if not seccomp_profile or seccomp_profile == "none":
-        return
-    if not check_seccomp_available():
+    if (not seccomp_profile or seccomp_profile == "none"
+            or not check_seccomp_available()):
         from .errors import SandboxSetupError
         raise SandboxSetupError(
             "Sandbox: network namespace unavailable; Landlock only "
             "restricts TCP, and the required seccomp UDP/DNS block "
             "cannot engage \N{em dash} refusing network-blocked execution.",
-            "Enable network namespaces, or install working libseccomp. "
+            "Enable network namespaces, or select a seccomp-enabled "
+            "profile with working libseccomp. "
             "degraded_net_deny=False explicitly accepts open egress "
             "on this fallback; a containment-floor waiver does not "
             "waive the required UDP/DNS filter.",
