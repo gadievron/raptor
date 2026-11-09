@@ -17,10 +17,11 @@ from pathlib import Path
 
 import pytest
 
-try:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-except IndexError:                                      # pragma: no cover
-    pass
+if __name__ == "__main__":
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+    except IndexError:                                      # pragma: no cover
+        pass
 
 from core.llm import egress
 from core.llm.config import LLMConfig, ModelConfig
