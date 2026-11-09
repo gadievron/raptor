@@ -315,6 +315,17 @@ def main(argv: Sequence[str]) -> int:
     # Emit candidates.json regardless of whether we apply.
     candidates_path = out_dir / "candidates.json"
     save_json(candidates_path, [asdict(c) for c in candidates])
+    self_test_exit = apply_exit = None
+
+    def report_completion(mode, *, changes=(), exit_code=0, patch_path=None):
+        if args._report_options.enabled and args._report_options.output is not None:
+            from .harden_reporting import complete_harden_report
+            complete_harden_report(args, target=target, out_dir=out_dir, candidates=candidates,
+                                   changes=changes, mode=mode, exit_code=exit_code, patch_path=patch_path,
+                                   osv=osv, target_kind=target_kind, target_kind_reason=target_kind_reason,
+                                   library_mode=library_mode, excluded_surfaces=excluded_surfaces,
+                                   ecosystem_allowlist=ecosystem_allowlist,
+                                   self_test_exit=self_test_exit, apply_exit=apply_exit)
 
     # --check: gate-mode for CI. Don't apply, don't emit a patch — just
     # report whether there's anything that *could* be applied with the
@@ -347,12 +358,15 @@ def main(argv: Sequence[str]) -> int:
                 f"network/OSV recovers.",
                 file=sys.stderr,
             )
+            report_completion("check only", exit_code=2)
             return 2
         if actionable:
             print(f"raptor-sca fix --harden --check: {actionable} candidate(s) would be "
                   f"applied; rerun without --check to apply.")
+            report_completion("check only", exit_code=1)
             return 1
         print("raptor-sca fix --harden --check: project is hardened (no actionable candidates).")
+        report_completion("check only")
         return 0
 
     # Apply: turn each "promoted" candidate into an UpgradeChange.
@@ -388,14 +402,18 @@ def main(argv: Sequence[str]) -> int:
             library_mode=library_mode,
             exclude=args.exclude,
         )
+        self_test_exit = rc
         if rc != 0:
+            report_completion("self-test failed", changes=changes, exit_code=rc, patch_path=patch_path)
             return rc
 
     if args.apply:
         from .patch_apply import apply_patch_to_target
         rc = apply_patch_to_target(target, patch_path,
                                     caller_label="raptor-sca fix --harden")
+        apply_exit = rc
         if rc != 0:
+            report_completion("apply failed", changes=changes, exit_code=rc, patch_path=patch_path)
             return rc
 
     _write_report(out_dir / "report.md", candidates, changes,
@@ -415,6 +433,8 @@ def main(argv: Sequence[str]) -> int:
             f"when the network/OSV recovers.",
             file=sys.stderr,
         )
+    mode = "proposed export" if not args.apply else ("apply completed" if patch_path is not None else "no patch to apply")
+    report_completion(mode, changes=changes, patch_path=patch_path)
     return 0
 
 
@@ -1853,7 +1873,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                    help="(accepted for orthogonality with `fix`; "
                         "this mode does not consult an LLM)")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
 
 
 def _configure_logging(verbose: int) -> None:
