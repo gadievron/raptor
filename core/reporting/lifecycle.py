@@ -26,16 +26,22 @@ def input_digest(data):
         return None
 
 
-def apply_lifecycle(context, directory: Path, *, scope=None, metadata=None):
+def apply_lifecycle(context, directory: Path, *, scope=None, metadata=None, producer_command: str | None = None):
+    """Bind recorded identities; producer aliases require explicit adapter input."""
     metadata = load_run_metadata(directory) if metadata is None else metadata
     identity = metadata.get("reporting_identity") if isinstance(metadata, dict) else None
     if scope is not None:
         context.extensions["raptor.scope"] = scope
-    if not valid_identity(identity) or metadata.get("command") != context.kind:
+    expected_command = context.kind if producer_command is None else producer_command
+    if not isinstance(expected_command, str) or not expected_command:
+        raise ValueError("Lifecycle producer command must be a nonempty string")
+    if not valid_identity(identity) or metadata.get("command") != expected_command:
         context.diagnostics.append("Lifecycle identity unavailable for this producer; pass/attempt lineage is unknown")
         return context
     context.run_id, context.pass_id, context.attempt_id = (identity[k] for k in ("run_id", "pass_id", "attempt_id"))
     context.extensions["raptor.lifecycle"] = deepcopy(identity)
+    if producer_command is not None:
+        context.extensions["raptor.lifecycle.producer_command"] = producer_command
     if identity.get("adopted_on_resume"):
         context.diagnostics.append("Legacy identity adopted on resume; prior pass/attempt lineage remains unknown")
     manifest = metadata.get("manifest") or {}
