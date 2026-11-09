@@ -24,10 +24,13 @@ _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _import_raptor():
-    if "raptor" not in sys.modules:
-        sys.path.insert(0, str(_RAPTOR_ROOT))
-    import raptor
-    return raptor
+    from unittest.mock import patch
+
+    with patch.object(sys, "path", list(sys.path)):
+        if "raptor" not in sys.modules:
+            sys.path.insert(0, str(_RAPTOR_ROOT))
+        import raptor
+        return raptor
 
 
 # ---------------------------------------------------------------------------

@@ -29,10 +29,13 @@ _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _import_agentic():
-    if str(_RAPTOR_ROOT) not in sys.path:
-        sys.path.insert(0, str(_RAPTOR_ROOT))
-    import raptor_agentic
-    return raptor_agentic
+    from unittest.mock import patch
+
+    with patch.object(sys, "path", list(sys.path)):
+        if str(_RAPTOR_ROOT) not in sys.path:
+            sys.path.insert(0, str(_RAPTOR_ROOT))
+        import raptor_agentic
+        return raptor_agentic
 
 
 # Child probe: read PR_GET_PDEATHSIG (prctl op 2) back and exit with

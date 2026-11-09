@@ -531,14 +531,17 @@ def _load_env_twin():
     import sys
     from pathlib import Path
 
-    pkg = Path(__file__).resolve().parents[4] / "cve_env"
-    if not pkg.is_dir():
-        pytest.skip("cve_env package not present in this checkout")
-    if str(pkg) not in sys.path:
-        sys.path.insert(0, str(pkg))
-    from cve_env.infra import service_health as env_sh
+    from unittest.mock import patch
 
-    return env_sh
+    with patch.object(sys, "path", list(sys.path)):
+        pkg = Path(__file__).resolve().parents[4] / "cve_env"
+        if not pkg.is_dir():
+            pytest.skip("cve_env package not present in this checkout")
+        if str(pkg) not in sys.path:
+            sys.path.insert(0, str(pkg))
+        from cve_env.infra import service_health as env_sh
+
+        return env_sh
 
 
 def test_health_result_substrate_stays_in_sync_with_cve_env_twin():

@@ -51,10 +51,13 @@ def monkeypatch(_user_state_in_tmp):
 
 
 def _import_agentic():
-    if str(_RAPTOR_ROOT) not in sys.path:
-        sys.path.insert(0, str(_RAPTOR_ROOT))
-    import raptor_agentic
-    return raptor_agentic
+    from unittest.mock import patch
+
+    with patch.object(sys, "path", list(sys.path)):
+        if str(_RAPTOR_ROOT) not in sys.path:
+            sys.path.insert(0, str(_RAPTOR_ROOT))
+        import raptor_agentic
+        return raptor_agentic
 
 
 @pytest.fixture(scope="module", autouse=True)
