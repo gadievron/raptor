@@ -132,6 +132,7 @@ def test_capture_captures_oversize_manifest_refusal(tmp_path: Path) -> None:
     assert isinstance(f, ParseFailure)
     assert f.path == lock
     assert "size=" in f.reason
+    assert "grew past max" not in f.reason
 
 
 # ---------------------------------------------------------------------------
@@ -316,30 +317,48 @@ def test_capture_captures_symlink_escape_refusal(tmp_path: Path) -> None:
 def test_capture_captures_grew_past_max_refusal(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """The fstat-vs-read race arm: the size gate passes but the read
-    returns more bytes. Simulated by lying at ``os.fstat`` (the race
-    itself is not reproducible deterministically) — the checks live
-    in ``core.security.capped_read``, which fstats the opened fd."""
+    """Grow the opened inode after admission, before its bounded read."""
     import os
+    from core.security import capped_read
+    from core.testing.module_bindings import patch_module_attribute
     from packages.sca.parsers import _safe_read
 
     real = tmp_path / "grown.xml"
-    real.write_bytes(b"x" * 64)
-    real_fstat = os.fstat
+    real.write_bytes(b"x" * 8)
+    identity = real.stat()
+    borrowed_fstat = os.fstat
+    real_fstat = capped_read.os.fstat
+    observed_sizes = []
 
-    def lying_fstat(fd: int) -> os.stat_result:
+    def grow_after_fstat(fd: int) -> os.stat_result:
         st = real_fstat(fd)
-        # Lie: report a size under the cap.
-        return os.stat_result(
-            (st.st_mode, st.st_ino, st.st_dev, st.st_nlink,
-             st.st_uid, st.st_gid, 8, st.st_atime, st.st_mtime,
-             st.st_ctime))
+        if (st.st_dev, st.st_ino) == (identity.st_dev, identity.st_ino):
+            observed_sizes.append(st.st_size)
+            with real.open("ab") as writer:
+                writer.write(b"x" * 56)
+        return st
 
-    monkeypatch.setattr(os, "fstat", lying_fstat)
+    patch_module_attribute(
+        monkeypatch, capped_read, "os", "fstat", grow_after_fstat,
+    )
     with capture_parse_failures() as failures:
         assert _safe_read.read_bounded(real, max_bytes=8) is None
+    assert observed_sizes == [8]
+    assert real.stat().st_size == 64
+    assert os.fstat is borrowed_fstat
     assert len(failures) == 1
     assert "grew past max" in failures[0].reason
+
+
+def test_growth_capture_with_private_reader_binding(tmp_path, monkeypatch):
+    """The fault must reach the reader even with a consumer-owned OS view."""
+    from core.security import capped_read
+    from core.testing.module_bindings import patch_module_attribute
+
+    patch_module_attribute(
+        monkeypatch, capped_read, "os", "fstat", capped_read.os.fstat,
+    )
+    test_capture_captures_grew_past_max_refusal(tmp_path, monkeypatch)
 
 
 def test_capture_captures_cannot_read_refusal(tmp_path: Path) -> None:

@@ -37,6 +37,17 @@ class _FakeProc:
         self.stderr = stderr
 
 
+def _successful_git_call(cmd, *, stash_returncode=0):
+    """Model git's worktree creation at the mocked process boundary."""
+    if cmd[:3] == ["git", "stash", "create"]:
+        return _FakeProc(returncode=stash_returncode)
+    if cmd[:3] == ["git", "worktree", "add"]:
+        Path(cmd[-2]).mkdir(parents=True)
+    elif cmd[:3] == ["git", "worktree", "remove"]:
+        assert Path(cmd[-1]).is_dir()
+    return _FakeProc(returncode=0)
+
+
 def _make_target(tmp_path: Path) -> Path:
     """Materialise the bare minimum of a "git checkout" the
     self-test pre-flight checks for: a ``.git`` directory."""
@@ -77,10 +88,7 @@ def test_self_test_routes_git_calls_through_run_untrusted(
 
     def fake_run_untrusted(cmd, **kwargs):
         recorded.append({"cmd": cmd, **kwargs})
-        # stash create returns an empty stdout → worktree_ref = HEAD
-        if cmd[:3] == ["git", "stash", "create"]:
-            return _FakeProc(returncode=0, stdout="", stderr="")
-        return _FakeProc(returncode=0)
+        return _successful_git_call(cmd)
 
     # ``plan`` runs after the patch is applied — we don't want it
     # to actually walk a real project. Stub to an empty list.
@@ -91,19 +99,6 @@ def test_self_test_routes_git_calls_through_run_untrusted(
         "core.sandbox.context.run_untrusted", fake_run_untrusted,
     )
     monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
-
-    # ``worktree.exists()`` returns False because we never actually
-    # made one — the cleanup path simply skips git worktree remove.
-    # Force it to True via a side-channel: create the worktree dir
-    # ourselves so the cleanup branch fires.
-    real_mkdtemp = __import__("tempfile").mkdtemp
-
-    def mkdtemp_and_seed(*a, **kw):
-        path = Path(real_mkdtemp(*a, **kw))
-        (path / "wt").mkdir(exist_ok=True)
-        return str(path)
-
-    monkeypatch.setattr("tempfile.mkdtemp", mkdtemp_and_seed)
 
     rc = _run_self_test(
         target=target,
@@ -130,6 +125,8 @@ def test_self_test_routes_git_calls_through_run_untrusted(
         ["git", "apply", "-"],
         ["git", "worktree", "remove"],
     ], f"expected the four sandboxed git calls; got {cmds}"
+    worktree = Path(recorded[1]["cmd"][-2])
+    assert not worktree.exists()
 
     # Every call must hand the sandbox a target, an output tempdir,
     # writable_paths covering only target/.git, and a caller_label
@@ -165,6 +162,17 @@ def test_self_test_routes_git_calls_through_run_untrusted(
     assert "diff --git" in apply_call["input"]
 
 
+def test_git_cleanup_with_private_scratch_binding(tmp_path, monkeypatch):
+    """The git fake must create the worktree, independent of tempfile views."""
+    from core.run import scratch
+    from core.testing.module_bindings import patch_module_attribute
+
+    patch_module_attribute(
+        monkeypatch, scratch, "tempfile", "mkdtemp", scratch.tempfile.mkdtemp,
+    )
+    test_self_test_routes_git_calls_through_run_untrusted(tmp_path, monkeypatch)
+
+
 def test_self_test_does_not_use_unsandboxed_subprocess_run(
     tmp_path: Path, monkeypatch,
 ):
@@ -184,25 +192,15 @@ def test_self_test_does_not_use_unsandboxed_subprocess_run(
         )
 
     def fake_run_untrusted(cmd, **kwargs):
-        if cmd[:3] == ["git", "stash", "create"]:
-            return _FakeProc(returncode=0, stdout="", stderr="")
-        return _FakeProc(returncode=0)
+        return _successful_git_call(cmd)
 
     def fake_plan(**kwargs):
         return []
-
-    real_mkdtemp = __import__("tempfile").mkdtemp
-
-    def mkdtemp_and_seed(*a, **kw):
-        path = Path(real_mkdtemp(*a, **kw))
-        (path / "wt").mkdir(exist_ok=True)
-        return str(path)
 
     monkeypatch.setattr(
         "core.sandbox.context.run_untrusted", fake_run_untrusted,
     )
     monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
-    monkeypatch.setattr("tempfile.mkdtemp", mkdtemp_and_seed)
     monkeypatch.setattr(subprocess, "run", raising_run)
 
     rc = _run_self_test(
@@ -237,26 +235,15 @@ def test_self_test_clean_tree_stash_rc1_is_not_an_error(
 
     def fake_run_untrusted(cmd, **kwargs):
         recorded.append({"cmd": cmd, **kwargs})
-        if cmd[:3] == ["git", "stash", "create"]:
-            # Real clean-tree behaviour: rc 1, no stdout, no stderr.
-            return _FakeProc(returncode=1, stdout="", stderr="")
-        return _FakeProc(returncode=0)
+        return _successful_git_call(cmd, stash_returncode=1)
 
     def fake_plan(**kwargs):
         return []
-
-    real_mkdtemp = __import__("tempfile").mkdtemp
-
-    def mkdtemp_and_seed(*a, **kw):
-        path = Path(real_mkdtemp(*a, **kw))
-        (path / "wt").mkdir(exist_ok=True)
-        return str(path)
 
     monkeypatch.setattr(
         "core.sandbox.context.run_untrusted", fake_run_untrusted,
     )
     monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
-    monkeypatch.setattr("tempfile.mkdtemp", mkdtemp_and_seed)
 
     rc = _run_self_test(
         target=target,
