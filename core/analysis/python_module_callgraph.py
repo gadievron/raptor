@@ -164,6 +164,13 @@ class PyModuleCallGraph:
     # every catalog identity is refused (see module_dynamic_namespace).
     namespace_unprovable: bool = False
 
+    _scope_bindings: dict[ast.AST, frozenset[str]] = field(default_factory=dict)
+
+    def binding_names(self, function: ast.AST) -> frozenset[str]:
+        """Identities bound in this function or its enclosing function frames."""
+        names = self._scope_bindings.get(function)
+        return names if names is not None else local_binding_names(function)
+
     @property
     def entry(self) -> PyCallGraphNode:
         return self.entry_node
@@ -471,6 +478,50 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
     else:
         _walk(fn_ast)
     return frozenset(out)
+
+
+def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
+    """Bound identities visible in each function, including closure frames.
+
+    Class namespaces do not become method closure frames. Explicit globals
+    bypass enclosing function frames, including for nested descendants.
+    Definition headers retain their enclosing scope rather than their body.
+    """
+    scopes: dict[ast.AST, frozenset[str]] = {}
+    pending: list[tuple[ast.AST, frozenset[str]]] = [(tree, frozenset())]
+    while pending:
+        node, enclosing = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            globals_: set[str] = set()
+            body = node.body if not isinstance(node, ast.Lambda) else [node.body]
+            statements: list[ast.AST] = list(body)
+            while statements:
+                statement = statements.pop()
+                if isinstance(statement, ast.Global):
+                    globals_.update(statement.names)
+                elif not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                                ast.ClassDef, ast.Lambda)):
+                    statements.extend(ast.iter_child_nodes(statement))
+            visible = (enclosing | local_binding_names(node)) - globals_
+            scopes[node] = visible
+            pending.extend((statement, visible) for statement in body)
+            pending.extend((expr, enclosing) for expr in _definition_header_expressions(node))
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            targets = frozenset(
+                target.id for generator in node.generators
+                for target in ast.walk(generator.target) if isinstance(target, ast.Name)
+            )
+            comprehension = enclosing | targets
+            for index, generator in enumerate(node.generators):
+                pending.append((generator.iter, enclosing if index == 0 else comprehension))
+                pending.extend((condition, comprehension) for condition in generator.ifs)
+            values = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
+            pending.extend((value, comprehension) for value in values)
+        else:
+            # In particular, class bodies retain the enclosing function
+            # environment without contributing class-local assignments.
+            pending.extend((child, enclosing) for child in ast.iter_child_nodes(node))
+    return scopes
 
 
 def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
@@ -1003,6 +1054,9 @@ def build_python_module_callgraph(
         return None
 
     fn_records = _collect_functions(tree)
+    scope_bindings = function_scope_bindings(tree)
+    for record in fn_records:
+        record._local_bindings = scope_bindings.get(record.ast_node)
     by_name: dict[str, list[_FunctionRecord]] = {}
     for fr in fn_records:
         by_name.setdefault(fr.qualified_name, []).append(fr)
@@ -1147,6 +1201,7 @@ def build_python_module_callgraph(
         ),
         import_map=module_import_map(tree),
         namespace_unprovable=dyn_whole,
+        _scope_bindings=scope_bindings,
     )
 
 
@@ -1156,6 +1211,7 @@ __all__ = [
     "PyModuleCallGraph",
     "build_python_module_callgraph",
     "local_binding_names",
+    "function_scope_bindings",
     "module_distrusted_roots",
     "module_import_map",
     "module_dynamic_namespace",

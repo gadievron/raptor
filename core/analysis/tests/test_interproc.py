@@ -770,3 +770,10 @@ class TestShadowedCalleeNoBinding:
         bindings = self._bindings(src)
         assert len(bindings) == 1
         assert next(iter(bindings)).callable == "esc"
+
+
+class TestClosureSyntheticBindingIdentity:
+    def test_enclosing_parameter_does_not_select_module_helper_summary(self):
+        source = ('import html\ndef esc(value):\n    return html.escape(value)\n'
+                  'def outer(esc):\n    def handle(x):\n        y = esc(x)\n        render(y)\n    return handle\n')
+        assert TestShadowedCalleeNoBinding()._bindings(source) == frozenset()

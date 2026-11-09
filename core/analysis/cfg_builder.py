@@ -218,6 +218,9 @@ class PythonCFG:
     # object, not the catalog identity the spelling suggests. Empty
     # for hand-built CFGs (consumers treat absence as no distrust).
     shadowed_roots: frozenset[str] = frozenset()
+    # Function-frame bindings only, excluding module identities. Summary
+    # joins must distinguish a closure slot from a module-level helper.
+    lexical_bindings: frozenset[str] = frozenset()
     # True when a dynamic route (star-import, exec/eval, sys.modules,
     # escaping globals()/vars()) makes the WHOLE module's name
     # resolution unprovable — the catalog guard refuses every written
@@ -1191,20 +1194,22 @@ def build_python_cfg(
     # never becomes an import-time dependency of CFG construction for
     # non-Python callers.
     from core.analysis.python_module_callgraph import (
-        local_binding_names,
+        function_scope_bindings,
         module_dynamic_namespace,
         module_shadowed_identity_roots,
     )
     from core.analysis.python_module_callgraph import module_import_map
     dyn_whole, dyn_names = module_dynamic_namespace(tree)
+    lexical_bindings = function_scope_bindings(tree)[func]
     return replace(
         cfg,
         shadowed_roots=(
-            local_binding_names(func)
+            lexical_bindings
             | module_shadowed_identity_roots(tree)
             | dyn_names
         ),
         namespace_unprovable=dyn_whole,
+        lexical_bindings=lexical_bindings,
         trusted_import_roots=frozenset(
             root for root, src in module_import_map(tree).items()
             if src == root

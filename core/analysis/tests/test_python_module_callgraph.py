@@ -726,3 +726,27 @@ class TestDefinitionHeaderDynamicNamespace:
         for source in deferred:
             whole, names = module_dynamic_namespace(ast.parse(source))
             assert not whole and not names, (source, whole, names)
+
+
+class TestClosureBindingScopes:
+    def test_closure_parameter_blocks_module_helper_edge(self):
+        graph = _build('def esc(value):\n    return value\ndef outer(esc):\n    def handle(x):\n        return esc(x)\n    return handle\n')
+        assert 'esc' not in _successor_names(graph, 'outer.handle')
+
+    def test_class_skips_locals_but_retains_enclosing_function_frame(self):
+        from core.analysis.python_module_callgraph import function_scope_bindings
+
+        tree = ast.parse('def outer(html):\n    class Handler:\n        other = replacement\n        def handle(x):\n            return html.escape(x)\n')
+        scopes = function_scope_bindings(tree)
+        handle = next(node for node in scopes if isinstance(node, ast.FunctionDef) and node.name == 'handle')
+        assert 'html' in scopes[handle]
+        assert 'other' not in scopes[handle]
+
+    def test_comprehension_lambda_has_target_but_first_iterable_does_not(self):
+        from core.analysis.python_module_callgraph import function_scope_bindings
+
+        tree = ast.parse('values = [(lambda: int(value)) for int in (lambda: int(value))()]')
+        scopes = function_scope_bindings(tree)
+        lambdas = sorted((node for node in scopes if isinstance(node, ast.Lambda)), key=lambda node: node.col_offset)
+        assert 'int' in scopes[lambdas[0]]
+        assert 'int' not in scopes[lambdas[1]]

@@ -975,3 +975,51 @@ class TestDefinitionHeaderDynamicCatalog:
         )
         result = TestModuleLevelCatalogRootDistrust()._evaluate(source)
         assert result.verdict == VERDICT_NO_SUPPRESS
+
+
+class TestClosureCatalogIdentity:
+    def test_enclosing_parameter_and_nonlocal_are_not_module_imports(self):
+        for declaration in ('', '        nonlocal html\n'):
+            source = (
+                'import html\n'
+                'def outer(html):\n'
+                '    def handle(x):\n' + declaration +
+                '        y = html.escape(x)\n'
+                '        render(y)\n'
+                '    return handle\n'
+            )
+            result = TestModuleLevelCatalogRootDistrust()._evaluate(source)
+            assert result.verdict == VERDICT_NO_SUPPRESS, (declaration, result)
+
+    def test_explicit_global_bypasses_enclosing_parameter(self):
+        source = (
+            'import html\n'
+            'def outer(html):\n'
+            '    def handle(x):\n'
+            '        global html\n'
+            '        y = html.escape(x)\n'
+            '        render(y)\n'
+            '    return handle\n'
+        )
+        import ast
+
+        from core.analysis.python_module_callgraph import function_scope_bindings
+
+        scopes = function_scope_bindings(ast.parse(source))
+        handle = next(node for node in scopes
+                      if isinstance(node, ast.FunctionDef) and node.name == 'handle')
+        assert 'html' not in scopes[handle]
+        # Existing module policy distrusts globals declarations even when
+        # this body only reads the name; lexical resolution does not relax it.
+        assert TestModuleLevelCatalogRootDistrust()._evaluate(source).verdict == VERDICT_NO_SUPPRESS
+
+    def test_class_namespace_is_not_a_method_closure(self):
+        source = (
+            'import html\n'
+            'class Handler:\n'
+            '    html = replacement\n'
+            '    def handle(x):\n'
+            '        y = html.escape(x)\n'
+            '        render(y)\n'
+        )
+        assert TestModuleLevelCatalogRootDistrust()._evaluate(source).verdict == VERDICT_SUPPRESS
