@@ -830,7 +830,8 @@ class TestOnRealRepo:
         per call on a CI runner — on every invocation. The graph is a
         pure function of the tree, and the tree does not change while
         this class runs, so every test after the first re-derived the
-        same value. Share one graph and each distinct full-file discovery;
+        same value. Reuse the graph's Python-file snapshot as well as
+        each distinct full-file discovery;
         the closure walk, tier mapping and batching still run in every test.
         Discovery results are copied so a caller cannot mutate the snapshot.
         """
@@ -839,10 +840,17 @@ class TestOnRealRepo:
         references = whole_repo_import_graph[3]
         cached = (whole_repo_import_graph[1], whole_repo_import_graph[2])
         real_build_graph = _ts.build_graph
+        real_discover = _ts.discover_py_files
+        discovered = tuple(whole_repo_import_graph[0])
         real_tier_files = _ts._discover_tier_files
         real_fast_files = _ts._discover_fast_tier_files
         tier_files = {}
         fast_files = None
+
+        def _discover_cached(repo_arg, extra_roots=()):
+            if repo_arg == repo and not extra_roots:
+                return list(discovered)
+            return real_discover(repo_arg, extra_roots=extra_roots)
 
         def _tier_files_cached(config, repo_arg):
             if repo_arg != repo:
@@ -869,6 +877,7 @@ class TestOnRealRepo:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(_ts, "build_graph", _build_graph_cached)
+            mp.setattr(_ts, "discover_py_files", _discover_cached)
             mp.setattr(_ts, "_discover_tier_files", _tier_files_cached)
             mp.setattr(_ts, "_discover_fast_tier_files", _fast_files_cached)
             yield
