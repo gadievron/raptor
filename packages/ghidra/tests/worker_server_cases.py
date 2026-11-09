@@ -83,6 +83,7 @@ class TestWorkerWatchdog:
         seen = {}
         # Exercise deadline calculation without starting a persistent JVM worker.
         handler = object.__new__(server_worker._HandlerThread)
+        handler._closing = False
         handler._requests = SimpleNamespace(put=lambda request: None)
 
         class _Probe:

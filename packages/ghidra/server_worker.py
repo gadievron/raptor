@@ -328,23 +328,57 @@ class _HandlerThread:
         import queue
         self._session = session
         self._requests: "queue.Queue" = queue.Queue()
+        self._closing = False
+        self._close_error: BaseException | None = None
         self._thread = threading.Thread(
             target=self._loop, name="ghidra-op-handler", daemon=True,
         )
         self._thread.start()
 
     def _loop(self) -> None:
-        while True:
-            req, box, done = self._requests.get()
+        try:
+            while True:
+                pending = self._requests.get()
+                if pending is None:
+                    return
+                req, box, done = pending
+                try:
+                    box["result"] = _handle(self._session, req)
+                except BaseException as e:  # noqa: BLE001 — one error channel
+                    box["error"] = e
+                finally:
+                    done.set()
+        finally:
+            # Close Java objects on their owning thread, then let that thread
+            # detach before interpreter/JVM shutdown waits for attachments.
             try:
-                box["result"] = _handle(self._session, req)
-            except BaseException as e:  # noqa: BLE001 — one error channel
-                box["error"] = e
-            finally:
-                done.set()
+                self._session.close()
+            except BaseException as error:
+                self._close_error = error
+            try:
+                # Retire this handler's JNI attachment, not a borrowed caller's.
+                # Ping-only workers must not import the optional Java bridge.
+                bridge = sys.modules.get("jpype")
+                if bridge is not None and bridge.isJVMStarted():
+                    bridge.java.lang.Thread.detach()
+            except BaseException as error:
+                if self._close_error is None:
+                    self._close_error = error
+
+    def close(self, *, preserve_error: bool = False) -> None:
+        if not self._closing:
+            self._closing = True
+            self._requests.put(None)
+        # The parent sandbox's existing worker lifetime bounds native cleanup.
+        # Do not detach a still-running Java owner or remove its working copy.
+        self._thread.join()
+        if self._close_error is not None and not preserve_error:
+            raise self._close_error
 
     def run(self, req: dict) -> dict:
         """Run one op under its hard deadline; raise _OpHung past it."""
+        if self._closing:
+            raise RuntimeError("handler is closed")
         op = str(req.get("op") or "")
         deadline = _OP_DEADLINE_S.get(op, 240)
         if op == "decompile":
@@ -456,7 +490,7 @@ def main() -> int:
             _log("peer closed or shutdown — exiting")
             return 0
         finally:
-            session.close()
+            handler.close(preserve_error=sys.exc_info()[0] is not None)
 
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     srv.bind(args.socket_path)
@@ -486,7 +520,7 @@ def main() -> int:
                 _log("idle timeout on connection — exiting")
                 return 0
     finally:
-        session.close()
+        handler.close(preserve_error=sys.exc_info()[0] is not None)
 
 
 if __name__ == "__main__":
