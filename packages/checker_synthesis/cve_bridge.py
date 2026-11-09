@@ -434,14 +434,18 @@ def cli_main(argv: list[str] | None = None) -> int:
                         help="RuleLibrary directory (default: out/rule-library)")
     parser.add_argument("--no-promote", action="store_true",
                         help="Synthesise and report only; skip library promotion")
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args(argv)
+    args._report_options = options_from_args(args, parser)
 
     output_dir = Path(args.output_dir)
     repo_root = Path(args.repo).resolve()
+    out_dir = Path(args.out) if args.out else output_dir / "checkers-bridge"
     if not repo_root.is_dir():
         print(f"error: repo not found: {repo_root}", file=sys.stderr)
+        _complete_bridge_report(args, None, out_dir, 2, "Repository input is unavailable")
         return 2
-    out_dir = Path(args.out) if args.out else output_dir / "checkers-bridge"
 
     # Provenance gate runs before the LLM is built: a refusal must not
     # depend on LLM availability.
@@ -449,6 +453,7 @@ def cli_main(argv: list[str] | None = None) -> int:
         load_cve_run(output_dir)
     except ProvenanceError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        _complete_bridge_report(args, None, out_dir, 2, "Public CVE provenance was refused")
         return 2
 
     llm = _build_llm()
@@ -459,6 +464,7 @@ def cli_main(argv: list[str] | None = None) -> int:
             "and retry.",
             file=sys.stderr,
         )
+        _complete_bridge_report(args, None, out_dir, 3, "LLM synthesis was unavailable")
         return 3
 
     report = synthesise_checker_from_cve(
@@ -471,6 +477,13 @@ def cli_main(argv: list[str] | None = None) -> int:
     )
     # ensure_ascii: terminal lane — JSON escapes C0 but passes C1
     # controls raw without it; stays valid JSON for consumers.
-    print(json.dumps(report.to_dict(), indent=2, ensure_ascii=True,
-                     default=str))
+    native = report.to_dict()
+    print(json.dumps(native, indent=2, ensure_ascii=True, default=str))
+    _complete_bridge_report(args, native, out_dir, 0)
     return 0
+
+
+def _complete_bridge_report(args, native, out_dir, status, error=None):
+    if args._report_options.enabled and (args.report_format or args.report_output):
+        from .reporting import complete_bridge_report
+        complete_bridge_report(args, native, out_dir, status, error=error)
