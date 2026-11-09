@@ -127,6 +127,8 @@ that conversation's name alone.
 Naming is optional. Missing transport, unsupported client versions, a busy
 lock or a slow server leave the existing name in place. RAPTOR does not start
 another server, resume a thread or change command approval to obtain a title.
+With Codex 0.167, standard local RAPTOR sessions keep their existing
+conversation name. Use `/rename` to set it manually.
 `--no-daemon` remains supported; versions without an accessible control
 listener simply keep their existing names. Remote-server naming is unsupported.
 

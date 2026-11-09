@@ -103,7 +103,7 @@ def test_selection_errors_do_not_launch_another_cli(launch,clis,args,message):
 def test_codex_model_resume_and_passthrough(launch):
     result,payload=launch(['codex'],['--codex','-c','-m','test-model','--','--sandbox','read-only'])
     assert result.returncode==0,result.stderr
-    assert payload['args']==['resume','--last','--model','test-model','--sandbox','read-only']
+    assert payload['args']==['resume','--last','--no-daemon','--model','test-model','--sandbox','read-only']
 
 
 @pytest.mark.parametrize('resume_flag', ['-c', '--continue'])
@@ -112,7 +112,26 @@ def test_targetless_resume_does_not_publish_an_empty_target(launch, resume_flag)
         'RAPTOR_LAUNCH_TARGET': '/stale/inherited/target',
     })
     assert result.returncode == 0, result.stderr
-    assert payload['args'] == ['resume', '--last']
+    assert payload['args'] == ['resume', '--last', '--no-daemon']
+    assert payload['target'] is None
+
+
+@pytest.mark.parametrize('native_args', [
+    ['--no-daemon'],
+    ['--remote', 'unix:///fixture/control.sock'],
+    ['--remote=unix:///fixture/control.sock'],
+], ids=['embedded', 'remote-pair', 'remote-equals'])
+def test_targetless_resume_preserves_explicit_backend(launch, native_args):
+    result, payload = launch(['codex'], ['--codex', '-c', '--', *native_args])
+    assert result.returncode == 0, result.stderr
+    assert payload['args'] == ['resume', '--last', *native_args]
+    assert payload['target'] is None
+
+
+def test_targetless_resume_backend_precedes_native_argument_separator(launch):
+    result, payload = launch(['codex'], ['--codex', '-c', '--', '--', '--remote'])
+    assert result.returncode == 0, result.stderr
+    assert payload['args'] == ['resume', '--last', '--no-daemon', '--', '--remote']
     assert payload['target'] is None
 
 
