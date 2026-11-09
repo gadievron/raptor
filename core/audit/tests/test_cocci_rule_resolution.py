@@ -20,6 +20,8 @@ from core.audit.cwe_dispatch import (
     cocci_rules_for_cwe,
     resolve_cocci_rules_for_cwe,
 )
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
+
 from core.audit.orchestrator import (
     TierCounters,
     _cwe_fallback_chain,
@@ -79,8 +81,11 @@ class TestResolution:
 
 
 class TestChainEmission:
-    def test_cwe_chain_carries_resolved_rule_path(self):
+    def test_cwe_chain_carries_resolved_rule_path(self, codeql_chain_catalogue):
         chain = _cwe_fallback_chain("CWE-415")
+        assert [e["config"]["query"] for e in chain if e["type"] == "codeql"] == [
+            str(codeql_chain_catalogue["cpp/use-after-free"]),
+        ]
         entries = _cocci_entries(chain)
         assert entries
         for e in entries:

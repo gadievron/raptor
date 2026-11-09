@@ -13,6 +13,10 @@ no LLM, no subprocesses.
 
 from __future__ import annotations
 
+import pytest
+
+from core.audit.tests.codeql_catalogue import codeql_chain_catalogue as codeql_chain_catalogue
+
 from core.audit.api_boundary import (
     api_boundary_applicable,
     extract_contract,
@@ -800,6 +804,7 @@ void a(struct bitmap *m) {
         ) == "bitmap_free"
 
 
+@pytest.mark.usefixtures("codeql_chain_catalogue")
 class TestDispatchWiring:
     def test_chain_builder_emits_api_boundary_step(self):
         from core.audit.orchestrator import _hypothesis_to_tool_chain
@@ -829,7 +834,7 @@ class TestDispatchWiring:
         chain = _hypothesis_to_tool_chain(HYP_SINGLE_CALL, "bitmap.c")
         assert any(e["type"] == "api_boundary" for e in chain)
 
-    def test_cwe_route_gated_on_caller_conditional_phrasing(self):
+    def test_cwe_route_gated_on_caller_conditional_phrasing(self, codeql_chain_catalogue):
         from core.audit.orchestrator import _cwe_fallback_chain
 
         conditional = _cwe_fallback_chain("CWE-416", HYP_SINGLE_CALL)
@@ -838,6 +843,10 @@ class TestDispatchWiring:
             "CWE-416", "use after free of buf in the parse loop",
         )
         assert not any(e["type"] == "api_boundary" for e in in_body)
+        for chain in (conditional, in_body):
+            assert [e["config"]["query"] for e in chain if e["type"] == "codeql"] == [
+                str(codeql_chain_catalogue["cpp/use-after-free"]),
+            ]
 
     def test_tool_chain_runs_channel(self, tmp_path):
         from core.audit.orchestrator import (
