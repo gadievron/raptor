@@ -110,6 +110,7 @@ def split_call_arguments(text: str) -> tuple[str, ...] | None:
     if _requires_translation_normalisation(text):
         return None
     closing = {"(": ")", "[": "]", "{": "}"}
+    stack: list[str]
     stack, parts = [], []
     start = index = 0
     seen_token = False
