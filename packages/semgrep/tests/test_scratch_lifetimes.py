@@ -95,7 +95,7 @@ def test_sidecar_setup_failure_removes_invocation_scratch(tmp_path, monkeypatch,
     def fail(*args, **kwargs):
         raise error("sidecar creation failed")
 
-    monkeypatch.setattr(runner, "NamedTemporaryFile", fail)
+    monkeypatch.setattr(runner, "write_temp_text", fail)
     with pytest.raises(error):
         runner.run_rule(tmp_path, "local-rule.yaml")
     assert list(Path(runner._sandbox_scratch_parent()).iterdir()) == []

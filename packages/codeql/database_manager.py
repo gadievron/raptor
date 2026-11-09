@@ -16,7 +16,6 @@ import stat
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
@@ -35,6 +34,7 @@ if __name__ == "__main__":
 from core.atomic_fs import rmtree_hardened
 from core.build.build_detector import BuildSystem
 from core.config import RaptorConfig
+from core.run.scratch import write_temp_text
 from core.git import get_safe_git_env
 from packages.codeql.temp_env import temporary_command
 
@@ -1715,13 +1715,11 @@ class DatabaseManager:
                 #    unsandboxed and follows symlinks).
                 tmp_dir = self.db_root / "tmp"
                 tmp_dir.mkdir(parents=True, exist_ok=True)
-                fd, script_name = tempfile.mkstemp(
-                    prefix=".raptor_codeql_build_", suffix=".sh", dir=str(tmp_dir),
+                build_script = write_temp_text(
+                    f"#!/bin/bash\n{build_cmd}\n",
+                    prefix=".raptor_codeql_build_", suffix=".sh", dir=tmp_dir,
                 )
-                os.close(fd)
-                build_script = Path(script_name)
                 try:
-                    build_script.write_text(f"#!/bin/bash\n{build_cmd}\n", encoding="utf-8")
                     # 0o500 (read+execute, no write) for parity with
                     # `build_detector.py:871`'s synthesised-script mode
                     # — TOCTOU mitigation: a separate process can't
