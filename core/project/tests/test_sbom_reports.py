@@ -124,3 +124,24 @@ def test_malformed_baseline_metadata_does_not_create_selection_changes():
     current = ReportContext("project", "demo")
     changes, blocks = sbom_evidence_delta(baseline, current)
     assert changes == [] and "comparison unavailable" in blocks[0].text
+
+
+def test_project_capture_schema_survives_persistence_and_consumers(tmp_path):
+    """The vocabulary exception describes a fixed report record, not target APIs."""
+    import json
+    from core.project.sbom_reports import sbom_blocks
+    context = capture(tmp_path)
+    rows, notes = capture_sbom_reports([tmp_path], {str(tmp_path): context}, {str(tmp_path): True})
+    assert not notes and len(rows) == 1
+    assert set(rows[0]) == {
+        "selection", "run", "producer", "snapshot_id", "source_sha256", "source_format", "summary",
+        "selected_records", "captured_records", "selection_sha256", "notice_verification", "imported", "state", "scope",
+    }
+    project = ReportContext("project", "demo", extensions={"raptor.sbom_reports": rows})
+    restored = ReportContext.from_dict(json.loads(json.dumps(project.to_dict())))
+    restored_rows = restored.extensions["raptor.sbom_reports"]
+    assert restored.snapshot_id == project.snapshot_id
+    assert restored_rows[0]["imported"] is True
+    assert restored_rows[0]["notice_verification"] == "not_verified"
+    assert sbom_blocks(restored_rows)[1].rows == sbom_blocks(rows)[1].rows
+    assert sbom_evidence_delta(project, restored)[0] == []
