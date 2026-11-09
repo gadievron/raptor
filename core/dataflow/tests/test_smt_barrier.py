@@ -1011,12 +1011,8 @@ def test_try_tier0_not_applicable_when_validator_var_not_at_sink(tmp_path: Path)
 
 
 @_requires_z3
-def test_try_tier0_sound_when_validated_var_threads_through_assignment(tmp_path: Path):
-    """Whoogle-shape: validated ``name`` flows through
-    ``cfg = os.path.join(BASE, name)`` to the sink ``open(cfg)``.
-    Chain tracking must accept this (the validator's constraint applies
-    to ``cfg`` via ``name``).  Pre-fix the literal var-at-sink check
-    rejected this — the most common real-world Tier 0 case."""
+def test_try_tier0_declines_uncontracted_path_join(tmp_path: Path):
+    """An ordinary call dependency has no property-preserving contract."""
     (tmp_path / "app.py").write_text(
         "def f(name):\n"                                                # line 1
         '    if not re.match(r"^[A-Za-z0-9_+-]+$", name):\n'           # line 2
@@ -1036,8 +1032,8 @@ def test_try_tier0_sound_when_validated_var_threads_through_assignment(tmp_path:
         fix_diff=diff, repo_root=tmp_path,
         sink_uri="app.py", sink_line=5, sink_class="pathtrav",
     )
-    assert r.status is sb.Tier0Status.SOUND
-    assert "UNSAT" in r.reasoning
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in r.reasoning
 
 
 def test_chain_grows_through_multi_step_assignment():
@@ -1047,7 +1043,7 @@ def test_chain_grows_through_multi_step_assignment():
     tree = _ast_mod.parse(
         "def f(name):\n"
         '    if not re.match(r"^[a-z]+$", name): return\n'
-        "    cfg = os.path.join(BASE, name)\n"           # cfg derived from name
+        "    cfg = name\n"           # cfg derived from name
         "    safe_path = cfg + '.cfg'\n"                  # safe_path derived from cfg
         "    return open(safe_path)\n"                    # sink uses safe_path
     )
@@ -1166,9 +1162,8 @@ def test_chain_augassign_with_taint_kills():
     ) is False
 
 
-def test_chain_rebind_from_chain_member_survives():
-    """Boost value preserved: rebinding from ANOTHER chain member is
-    still the validated value."""
+def test_chain_rebind_from_unknown_method_declines():
+    """A method return needs its own property-preserving contract."""
     import ast as _ast_mod
     tree = _ast_mod.parse(
         "def serve(request):\n"
@@ -1181,7 +1176,7 @@ def test_chain_rebind_from_chain_member_survives():
     )
     assert sb._python_chain_reaches_sink(
         tree, "name", 3, 7, "    return open(os.path.join('/data', y))",
-    ) is True
+    ) is False
 
 
 def test_chain_validator_line_binding_not_killed():
@@ -2044,7 +2039,7 @@ def test_chain_concat_with_constant_still_grows():
     tree = _ast_mod.parse(
         "def f(name):\n"
         '    if not re.match(r"^[a-z]+$", name): return\n'
-        "    cfg = os.path.join(BASE, name)\n"
+        "    cfg = name\n"
         "    safe_path = cfg + '.cfg'\n"
         "    return open(safe_path)\n"
     )
@@ -4045,5 +4040,35 @@ def test_nonpython_charset_chain_ignores_prose(tmp_path: Path, middle, sink):
         fix_diff="+" + guard + "\n", repo_root=tmp_path,
         sink_uri="app.js", sink_line=3, sink_class="pathtrav",
         language="javascript",
+    )
+    assert control.status is sb.Tier0Status.SOUND
+
+
+@_requires_z3
+@pytest.mark.parametrize("expression,helper", [
+    ("choose(raw, name)", "def choose(raw, ignored):\n    return raw\n"),
+    ("transform(name)", 'def transform(ignored):\n    return "../raw"\n'),
+    ("os.path.join(name, raw)", ""),
+], ids=["ignored-validated-argument", "arbitrary-return", "raw-join-component"])
+@pytest.mark.parametrize("target", ["path", "name"], ids=["new-binding", "rebind"])
+def test_charset_chain_declines_unknown_call_returns(tmp_path: Path, expression, helper, target):
+    guard = '    if not re.fullmatch(r"[a-z]+", name):'
+    source = (
+        "import re\nimport os\n" + helper + "def handle(name, raw):\n"
+        + guard + "\n        return\n    " + target + " = " + expression
+        + "\n    return open(" + target + ")\n"
+    )
+    sink_line = len(source.splitlines())
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in result.reasoning
+    (tmp_path / "app.py").write_text(source.replace(target + " = " + expression, target + " = name"))
+    control = sb.try_tier0(
+        fix_diff="+" + guard + "\n", repo_root=tmp_path,
+        sink_uri="app.py", sink_line=sink_line, sink_class="pathtrav",
     )
     assert control.status is sb.Tier0Status.SOUND

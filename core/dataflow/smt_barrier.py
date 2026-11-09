@@ -2208,16 +2208,14 @@ def _operator_mixes_taint(value: ast.AST, chain: set) -> bool:
     raw element verbatim to whatever consumes ``p`` (``''.join(p)``),
     and a select over a mixed container (``{...: safe, ...: raw}[k]``)
     may BE the raw member — so a target bound to a mixed container
-    must never join the chain as fully validated.  Call-ARGUMENT
-    mixing (``os.path.join(BASE, name)``) is deliberately NOT flagged:
-    the chain's documented contract accepts derivations through calls
-    (the whoogle archetype), and distinguishing a module constant
-    from a tainted local inside an argument list needs real taint
-    tracking — Tier 2's job.  Operator mixing is the shape the
-    charset proof actually breaks on: the mixed-in non-chain
-    operand's characters reach the sink unvalidated.
+    must never join the chain as fully validated. An arbitrary call
+    result also lacks a property-preserving contract: even one fully
+    validated argument can be ignored or transformed into unsafe output.
+    The initial certified sanitizer binding is exempted by the caller.
     """
     for sub in ast.walk(value):
+        if isinstance(sub, ast.Call):
+            return True
         if isinstance(sub, (ast.BinOp, ast.JoinedStr,
                             ast.Tuple, ast.List, ast.Set, ast.Dict)):
             if isinstance(sub, ast.Tuple) and isinstance(sub.ctx, ast.Store):
@@ -2353,14 +2351,12 @@ def _nested_scope_escaping_rebinds(scope_root: ast.AST) -> frozenset:
 
 
 def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
-    """Callee-name tails identifying the sanitizing binding on the
-    validator line for a mechanical :class:`ValidatorSpec` kind.
-    ``charset_sub``'s binding is always an ``re.sub`` rebind;
-    guard-shaped kinds bind nothing themselves, so any call-valued
-    binding on the guard line (e.g. a walrus normalising the guarded
-    value, which the guard then constrains) keeps the exemption
-    (``None`` = any call)."""
-    return frozenset({"sub"}) if kind == "charset_sub" else None
+    """Identify the certified binding for a mechanical validator.
+
+    Substitution binds the result of ``re.sub``. Guard-shaped validators
+    certify a pre-existing value and exempt no call-result bindings.
+    """
+    return frozenset({"sub"}) if kind == "charset_sub" else frozenset()
 
 
 def _bind_chain_target(
@@ -2445,21 +2441,14 @@ def _python_chain_reaches_sink(
     sink_line: int, sink_line_text: str,
     *, sanitizer_call_tails: frozenset | None = None,
 ) -> bool:
-    """Intra-procedural data-dependency chain: ``True`` iff some variable
-    reachable from ``start_var`` (via assignments between validator and
-    sink) appears at ``sink_line_text``.
+    """Track validated aliases and admitted derivations to an executable read.
 
-    Why this exists: the previous "validator's var must literally appear
-    at the sink line" check rejected the standard pattern where the
-    validated value threads through a derived expression
-    (``cfg = os.path.join(BASE, name); open(cfg)``) — the sink line
-    references ``cfg``, not ``name``, but ``cfg`` carries ``name``'s
-    constraint.  Chain tracking accepts that case while still rejecting
-    the original Bug 15 scenario (validator for ``x``, sink for
-    unrelated ``y`` in the same function) — ``y`` never appears as a
-    chain member.
+    Assignment dependency alone is insufficient: an arbitrary call may
+    ignore its validated argument or return unrelated unsafe output.
+    Ordinary call-result assignments therefore cannot grow this chain;
+    only the initially certified sanitizer binding has a call exemption.
 
-    Chain growth: any Assign/AnnAssign/AugAssign between validator and
+    Chain growth: an Assign/AnnAssign between validator and
     sink whose RHS references a chain variable adds its target name(s)
     to the chain — element-wise through tuple/list destructuring
     (:func:`_bind_chain_target`: ``a, b = safe, x`` grows only ``a``;
@@ -2469,8 +2458,8 @@ def _python_chain_reaches_sink(
     validated ``name`` with the unvalidated ``raw``, so ``cmd`` never
     joins the chain (and a chain-member target is killed); container
     literals mixing chain and non-chain names count as mixing too.
-    Mixing through call ARGUMENTS is not modeled (see the helper's
-    docstring).
+    Unknown call results never join: an input dependency does not
+    prove that the return preserves the validated property.
 
     Validator-line exemption is per-NODE, never per-line: only the
     binding whose value IS the sanitizer call
@@ -2585,7 +2574,9 @@ def _python_chain_reaches_sink(
             }
             target_names: set = set()
             _collect_target_names(node.target, target_names)
-            if rhs_names - chain:
+            if rhs_names - chain or any(
+                isinstance(sub, ast.Call) for sub in ast.walk(node.value)
+            ):
                 chain -= target_names
             continue
         targets = (list(node.targets) if isinstance(node, ast.Assign)

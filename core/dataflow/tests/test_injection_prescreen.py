@@ -43,6 +43,7 @@ def test_prescreen_declines_charset_after_shared_budget_expiry():
 
 
 # Line numbers (1-based) are load-bearing for the AST dominance checks.
+# Direct aliasing keeps these guard controls independent of call-return contracts.
 # The refuting charset is DOTLESS: '.' is a pathtrav danger char ('.'
 # builds '..' segments), so dot-admitting charsets must decline.
 GUARD_APP = """\
@@ -54,7 +55,7 @@ def handler(request):
     name = request.args.get('name')
     if not re.match(r'^[A-Za-z0-9_+-]+$', name):
         return None
-    cfg = os.path.join('/etc/app', name)
+    cfg = name
     open(cfg)
 """
 GUARD_SOURCE_LINE = 6
@@ -215,7 +216,7 @@ class TestGuardFormRefutation:
         app = GUARD_APP.replace(
             "re.match(r'^[A-Za-z0-9_+-]+$', name)",
             "re.fullmatch(r'[A-Za-z0-9_.]+', name)",
-        ).replace("os.path.join('/etc/app', name)", "'ls ' + name")
+        ).replace("cfg = name", "cfg = 'ls ' + name")
         repo = _write_app(tmp_path, app)
         verdict = prescreen_finding(
             paths=[_guard_path()], repo_root=repo,
@@ -272,8 +273,8 @@ class TestLiftabilityConservatism:
         # Python's $ under re.match tolerates one trailing newline and
         # "\n" is a cmdi danger char — the same guard that soundly
         # refutes pathtrav must NOT refute cmdi.
-        app = GUARD_APP.replace("os.path.join('/etc/app', name)",
-                                "'ls ' + name")
+        app = GUARD_APP.replace("cfg = name",
+                                "cfg = 'ls ' + name")
         repo = _write_app(tmp_path, app)
         assert prescreen_finding(
             paths=[_guard_path()], repo_root=repo,
@@ -495,7 +496,7 @@ def handler(request):
     if request.strict:
         if not re.match(r'^[A-Za-z0-9_+-]+$', name):
             return None
-    cfg = os.path.join('/etc/app', name)
+    cfg = name
     open(cfg)
 """
 BRANCH_GUARD_VALIDATOR_LINE = 8
