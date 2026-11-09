@@ -167,7 +167,6 @@ class TestOwnerPidGatedRead:
     stay refused (O_NOFOLLOW keeps the lstat semantics)."""
 
     def test_fifo_marker_none_not_hung(self, tmp_path: Path):
-        import signal as _signal
 
         from core.run.tmp_ownership import _owner_pid
 
@@ -180,13 +179,10 @@ class TestOwnerPidGatedRead:
             msg = "_owner_pid blocked on a planted FIFO"
             raise AssertionError(msg)
 
-        old = _signal.signal(_signal.SIGALRM, _on_alarm)
-        _signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             assert _owner_pid(marker) is None
-        finally:
-            _signal.alarm(0)
-            _signal.signal(_signal.SIGALRM, old)
 
     def test_symlinked_marker_refused(self, tmp_path: Path):
         from core.run.tmp_ownership import _owner_pid

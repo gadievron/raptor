@@ -1191,7 +1191,6 @@ class TestDomainBugPatterns:
         ~9 s wall on CI runners and min-of-3 triples that, past the
         default tier budget; the three milder sibling pins in this
         class stay default-tier as the always-on sentinels."""
-        import signal
         import time
 
         from core.concepts.audit_bridge import (
@@ -1305,12 +1304,12 @@ class TestDomainBugPatterns:
             msg = "admitted-hint evaluation exceeded the alarm bound"
             raise AssertionError(msg)
 
-        old = signal.signal(signal.SIGALRM, _on_alarm)
+        from core.testing.signals import alarm_after
+
         # Up to 3 measured runs + 3 reference runs; one measured run is
         # already ~9 s wall on slow CI cores, so the hang net covers
         # the whole min-of-3 schedule with load headroom.
-        signal.alarm(120)
-        try:
+        with alarm_after(120, _on_alarm):
             # CPU time of THIS thread, not wall clock: the evaluation
             # is single-threaded in-process regex work (no-thread
             # tripwire on this machinery lives in
@@ -1346,9 +1345,6 @@ class TestDomainBugPatterns:
             dt = _best_cpu_until_below(
                 measured_work, 24.0 * ref_dt, clock=time.thread_time,
             )
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
         # Loose absolute floor on the denominator: the reference
         # measures 0.209 s on the authoring host, so even a far
         # faster core clears 5 ms by orders of magnitude — but a
@@ -1411,7 +1407,6 @@ class TestDomainBugPatterns:
         escape-atom span "aab\\D*z" are admitted and measure
         ~0.3-0.4 s each at the clamp (bare-engine best-of-5 on one
         host) — both under the constructed admitted worst."""
-        import signal
         import time
 
         from core.concepts.audit_bridge import (
@@ -1435,9 +1430,9 @@ class TestDomainBugPatterns:
             msg = "milder-shape evaluation exceeded the alarm bound"
             raise AssertionError(msg)
 
-        old = signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             # CPU time of THIS thread, not wall clock: the evaluation
             # is single-threaded in-process regex work (the no-thread
             # tripwire on the superset product path lives in
@@ -1457,9 +1452,6 @@ class TestDomainBugPatterns:
             dt = _best_cpu_until_below(
                 measured_work, 5.0, clock=time.thread_time,
             )
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
         # Two directions: not tighter, because the two admitted shapes
         # legitimately cost ~0.3-0.4 s CPU each at the clamp on one
         # host and per-core throughput varies across hosts — slower
@@ -1483,7 +1475,6 @@ class TestDomainBugPatterns:
         to a substring scan, so the single ``domain_slice_hash`` call
         the staleness gate makes per journal row returns promptly
         (pre-refusal this call outlived a 15 s bound)."""
-        import signal
         import threading
         import time
 
@@ -1523,9 +1514,9 @@ class TestDomainBugPatterns:
             real_start(thread, *args, **kwargs)
 
         monkeypatch.setattr(threading.Thread, "start", _recording_start)
-        old = signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             # CPU time of THIS thread, not wall clock: the recompute
             # is single-threaded in-process work (tripwire above), so
             # thread CPU time IS its cost and a loaded host's
@@ -1541,9 +1532,6 @@ class TestDomainBugPatterns:
                 samples.append(time.thread_time() - t0)
                 assert digest is not None
             dt = min(samples)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
         assert not spawned, "measured slice recompute spawned threads"
         # Two directions: not tighter, because forty demoted hints
         # still buy real work — forty substring scans over an
@@ -1567,7 +1555,6 @@ class TestDomainBugPatterns:
         demotes every one, so the single ``domain_slice_hash`` call
         returns promptly. Red if the top-level scanner is neutralized
         back to a raw split."""
-        import signal
         import time
 
         from core.concepts import audit_bridge as ab
@@ -1587,9 +1574,9 @@ class TestDomainBugPatterns:
             msg = "bypass-list slice recompute exceeded the alarm"
             raise AssertionError(msg)
 
-        old = signal.signal(signal.SIGALRM, _on_alarm)
-        signal.alarm(30)
-        try:
+        from core.testing.signals import alarm_after
+
+        with alarm_after(30, _on_alarm):
             # CPU time of THIS thread, not wall clock: the recompute
             # is single-threaded in-process work (the no-thread
             # tripwire on this same product path lives in
@@ -1607,9 +1594,6 @@ class TestDomainBugPatterns:
                 samples.append(time.thread_time() - t0)
                 assert digest is not None
             dt = min(samples)
-        finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, old)
         # Two directions: not tighter, because forty demoted hints
         # still buy real work — forty substring scans over an
         # at-clamp lowered source plus the render, canonicalise and

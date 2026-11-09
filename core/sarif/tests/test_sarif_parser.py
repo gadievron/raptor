@@ -207,13 +207,10 @@ class TestLoadSarif(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "planted.sarif"
             os.mkfifo(path)
-            old = signal.signal(signal.SIGALRM, _on_alarm)
-            signal.alarm(30)
-            try:
+            from core.testing.signals import alarm_after
+
+            with alarm_after(30, _on_alarm):
                 self.assertIsNone(load_sarif(path))
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old)
 
     def test_symlink_to_regular_still_loads(self):
         # Keep-direction: run-dir artifacts are legitimately reached

@@ -803,13 +803,10 @@ class TestLoadJsonWithCommentsSwapWindow(unittest.TestCase):
                 os.mkfifo(p)
 
             _arm_swap_hook(p, _swap_to_fifo)
-            old = signal.signal(signal.SIGALRM, _on_alarm)
-            signal.alarm(30)
-            try:
+            from core.testing.signals import alarm_after
+
+            with alarm_after(30, _on_alarm):
                 self.assertIsNone(load_json_with_comments(p))
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old)
 
 
 class TestReDatabaseMaxBytes(unittest.TestCase):
