@@ -20,7 +20,7 @@ from typing import Self
 from urllib3.exceptions import LocationParseError
 from urllib3.util import parse_url
 
-from core.http import DEFAULT_TIMEOUT, DEFAULT_TOTAL_TIMEOUT, HttpError, Response, SizeLimitExceeded
+from core.http import DEFAULT_TIMEOUT, DEFAULT_TOTAL_TIMEOUT, HttpError, NotModified, Response, SizeLimitExceeded
 from core.http.egress_backend import EgressClient
 
 Origin = tuple[str, str, int]
@@ -133,7 +133,8 @@ class AnonymousOriginClient:
         """Snapshot requests, accounted body bytes and in-flight reservations.
 
         Failed requests consume their reservation because their partial body
-        length is unknown. This conservative body budget is not a count of
+        length is unknown. NotModified consumes a request slot but no body
+        bytes. This conservative body budget is not a count of
         wire bytes, TLS overhead or decompressed browser memory.
         """
         with self._budget_lock:
@@ -200,6 +201,9 @@ class AnonymousOriginClient:
                 raise HttpError("anonymous response unexpectedly changed origin")
             charged = len(result.body)
             return result
+        except NotModified:
+            charged = 0
+            raise
         finally:
             with self._budget_lock:
                 self._reserved_bytes -= cap
