@@ -660,3 +660,11 @@ receipt is not adopted by a new map export, and a skipped or failed active
 phase stays visible. Reporting does not run analysis, tracing or fuzzing again.
 Choose destinations outside imported runtime/fuzz directories and individual
 active-phase output directories to preserve their native evidence.
+
+`binary runtime` and `binary trace-parser` forward portable report options to
+the existing Frida capture. `--report-format json` stores a receipt in that
+capture's output directory; an explicit `--report-output` is resolved from
+the caller's working directory before the child starts. The destination must
+remain writable under the existing child sandbox. These options do not
+request another trace or change attach/spawn consent. `--no-report` disables
+the portable receipt while retaining native capture artifacts.
