@@ -536,3 +536,100 @@ def test_failed_rejection_recording_cannot_restore_confirmation(tmp_path, monkey
     assert out.status == "suspicious" and not out.evidence_tool
     assert result.immediate_verified == 0
     assert out.review_result["ihv_tools"] == [STRONG]
+
+
+def test_aggregation_retains_all_input_observations_in_signed_trail(tmp_path):
+    from core.audit.record import load_verified_audit_log
+
+    records = [
+        ClaimVerification({"mechanism": "unproven race", "cwe": "CWE-362"}, (WEAK,)),
+        ClaimVerification({"mechanism": "discarded error", "cwe": "CWE-252"}, (STRONG,)),
+        ClaimVerification({"mechanism": "a proposed refutation"}, refuted=True),
+        ClaimVerification({"mechanism": "an untested theory"}),
+    ]
+    out, result, _ = aggregate(tmp_path, records)
+    assert out.status == "finding" and out.hypothesis == "discarded error"
+    events = [e for e in load_verified_audit_log(tmp_path / "out")
+              if e.get("action") == "ihv_claim_observations"]
+    assert len(events) == 1
+    event = events[0]
+    observations = event["observations"]["data"]["details"]
+    assert [row["hypothesis"] for row in observations] == [r.hypothesis for r in records]
+    assert event["role"] == "unadjudicated_observation"
+    assert observations[0]["receipt_labels"] == [WEAK]
+    assert observations[1]["receipt_labels"] == [STRONG]
+    assert observations[2]["proposed_refutation"] is True
+    assert event["producer_bindings"] == [None] * 4, "do not invent producer scope"
+    assert result.immediate_verified == 1
+
+
+def test_claim_observation_proposal_is_not_a_scoped_refutation(tmp_path):
+    record = ClaimVerification({"mechanism": "unsupported withdrawal"}, refuted=True)
+    out, result, _ = aggregate(tmp_path, [record], status="suspicious")
+    assert out.status == "suspicious" and not out.review_result.get("immediate_verified")
+    assert result.immediate_verified == 0
+
+
+def test_claim_snapshot_keeps_stale_producer_binding(tmp_path):
+    from dataclasses import asdict
+
+    from core.json import dumps_artifact, loads
+
+    from core.audit.record import load_verified_audit_log
+    from core.audit.refutation_source import capture_source_identity
+    from core.audit.verification_results import VerificationScope
+
+    path = tmp_path / "record.c"
+    path.write_text("int Read(void) { return 0; }\n")
+    identity = capture_source_identity(tmp_path, path.name)
+    binding = VerificationScope(path.name, "Read", 0, "discarded error", identity)
+    path.write_text("int Read(void) { return 1; }\n")
+    out, result, _ = aggregate(tmp_path, [ClaimVerification(
+        {"mechanism": "discarded error"}, (STRONG,), binding=binding)], status="suspicious")
+    event = next(e for e in load_verified_audit_log(tmp_path / "out")
+                 if e.get("action") == "ihv_claim_observations")
+    assert event["producer_bindings"] == [loads(dumps_artifact(asdict(binding)))]
+    assert event["producer_bindings"][0]["source_identity"] != loads(dumps_artifact(
+        asdict(capture_source_identity(tmp_path, path.name))))
+    assert out.status == "suspicious" and result.immediate_verified == 0
+
+
+def test_claim_snapshot_write_failure_does_not_change_verdict(tmp_path, monkeypatch, caplog):
+    from core.audit import check_trace
+
+    reached = []
+
+    def unavailable(*args, **kwargs):
+        reached.append(kwargs)
+        raise OSError("scripted observation write failure")
+
+    monkeypatch.setattr(check_trace, "append_audit_log", unavailable)
+    out, result, _ = aggregate(tmp_path, [ClaimVerification({"mechanism": "race"}, (WEAK,))],
+                               status="suspicious")
+    assert len(reached) == 1
+    assert out.status == "suspicious" and result.immediate_verified == 0
+    assert "could not record IHV claim observations" in caplog.text
+
+
+def test_claim_reporter_failure_cannot_change_aggregation(tmp_path, monkeypatch, caplog):
+    from core.audit import check_trace
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("scripted reporter failure")
+
+    monkeypatch.setattr(check_trace, "record_claim_observations", unavailable)
+    out, result, _ = aggregate(tmp_path, [ClaimVerification({"mechanism": "race"}, (WEAK,))],
+                               status="suspicious")
+    assert out.status == "suspicious" and result.immediate_verified == 0
+    assert "could not retain IHV claim observations" in caplog.text
+
+
+def test_claim_reporter_does_not_swallow_cancellation(tmp_path, monkeypatch):
+    from core.audit import check_trace
+
+    def cancelled(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(check_trace, "record_claim_observations", cancelled)
+    with pytest.raises(KeyboardInterrupt):
+        aggregate(tmp_path, [ClaimVerification({"mechanism": "race"}, (WEAK,))])

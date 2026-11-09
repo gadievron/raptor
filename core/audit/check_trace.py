@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
+from typing import TYPE_CHECKING
 
 from core.json import dumps_artifact, dumps_canonical, loads, save_json
 
 from .record import append_audit_log, load_verified_audit_log
 from .verification_results import SOURCE_CHANGED_REASON, SOURCE_INPUT_REASON, SOURCE_INPUT_RULE, SOURCE_VALIDATION_TOOL
+
+if TYPE_CHECKING:
+    from .claim_verification import ClaimVerification
+
 
 logger = logging.getLogger(__name__)
 CHECK_RESULTS_FILENAME = "verification-checks.json"
@@ -43,6 +49,52 @@ def _snapshot(result, request=None) -> dict:
         return {"complete": True, "data": loads(text)}
     except Exception as exc:
         return {"complete": False, "reason": f"payload_serialization:{type(exc).__name__}"}
+
+
+def record_claim_observations(
+    out_dir: Path | None, *, file: str, function: str, line_start: int,
+    verifications: Iterable["ClaimVerification"],
+) -> None:
+    """Retain aggregation inputs, without admitting their labels as evidence.
+
+    Producer bindings remain separate from consumer context. Completeness
+    flags describe serialization only, never scope validity or proof. The
+    bounded payload and metadata keep the event below the trail reader limit.
+    """
+    if out_dir is None:
+        return
+    try:
+        records = tuple(verifications)
+        observations = [{"hypothesis": record.hypothesis,
+                         "receipt_labels": list(record.receipts),
+                         "proposed_refutation": record.refuted} for record in records]
+        bindings = [asdict(record.binding) if record.binding is not None else None for record in records]
+        omissions = []
+
+        def metadata(value, byte_limit, name):
+            try:
+                if len(dumps_artifact(value, indent=None).encode("utf-8")) <= byte_limit:
+                    return value
+                omissions.append(f"{name}_size_limit")
+            except Exception as exc:
+                omissions.append(f"{name}_serialization:{type(exc).__name__}")
+            return None
+
+        producer_bindings = metadata(bindings, 128 * 1024, "producer_bindings")
+        consumer = metadata({"file": file, "function": function, "line_start": line_start},
+                            16 * 1024, "consumer_scope")
+        append_audit_log(Path(out_dir), {
+            "action": "ihv_claim_observations", "schema_version": 1, "id": uuid4().hex,
+            "role": "unadjudicated_observation", "observation_count": len(records),
+            "consumer_scope": consumer, "consumer_scope_complete": consumer is not None,
+            "producer_bindings": producer_bindings,
+            "producer_bindings_complete": producer_bindings is not None,
+            "observations": _snapshot(SimpleNamespace(details=observations)),
+            "metadata_omissions": omissions,
+        })
+    except Exception:
+        # Reporting does not change the existing adjudication or buy a retry.
+        logger.warning("could not record IHV claim observations", exc_info=True)
 
 
 def record_check_observation(out_dir, results, *, tool, verdict, rule_id, reason="", result=None, request=None) -> None:
