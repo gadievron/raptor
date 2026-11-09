@@ -1,6 +1,7 @@
 """Ownership and error precedence for file and archive streams."""
 from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
+import io
 import os
 from typing import IO, ContextManager, TypeVar
 
@@ -86,3 +87,50 @@ def open_owned_fd(fd: int, mode: str, **kwargs) -> Iterator[IO]:
         stream = os.fdopen(fd, mode, closefd=False, **kwargs)
         with preserving_stream_error(closing(stream)) as owned:
             yield owned
+
+
+def adopt_fd(fd: int, mode: str, close_fd: Callable[[int], None] | None = None, /, **kwargs) -> IO:
+    """Consume a descriptor into a returned stream, including setup failure.
+
+    Native fdopen may dispose of its FileIO before raising. Transfer through
+    the standard opener protocol so its caller never retries that descriptor.
+    Preserve fdopen's integer name and explicit borrowed-close behaviour.
+    """
+    transferred = False
+    stream = None
+
+    def take_descriptor(_path, _flags):
+        nonlocal transferred
+        transferred = True
+        return fd
+
+    try:
+        closefd = kwargs.pop('closefd', True)
+        if not closefd:
+            # A borrowed native wrapper cannot dispose of the raw descriptor
+            # on construction failure. Retain the historical caller option.
+            stream = os.fdopen(fd, mode, closefd=False, **kwargs)
+            transferred = True
+            return stream
+        # fdopen ignores an opener when its file argument is a descriptor.
+        kwargs.pop('opener', None)
+        stream = io.open('<owned-descriptor>', mode, opener=take_descriptor, **kwargs)
+        raw = stream.buffer if isinstance(stream, io.TextIOWrapper) else stream
+        if isinstance(raw, (io.BufferedReader, io.BufferedWriter, io.BufferedRandom)):
+            raw = raw.raw
+        if not isinstance(raw, io.FileIO):
+            raise TypeError("native stream has no FileIO owner")
+        raw.name = fd
+        return stream
+    except BaseException:
+        if stream is not None:
+            try:
+                stream.close()
+            except BaseException:
+                pass
+        if not transferred:
+            try:
+                (os.close if close_fd is None else close_fd)(fd)
+            except BaseException:
+                pass
+        raise

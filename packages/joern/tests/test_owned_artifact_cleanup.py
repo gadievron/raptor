@@ -139,13 +139,17 @@ def test_failed_stream_acquisition_closes_source_descriptor(
 
     failure = error("fdopen failed")
 
-    def fail(*args, **kwargs):
+    def fail(fd, mode, close_fd):
+        try:
+            close_fd(fd)
+        except BaseException:
+            pass
         raise failure
 
     try:
         with monkeypatch.context() as fault:
             patch_module_attribute(fault, _os_fault_consumer, "os", "open", track)
-            patch_module_attribute(fault, _os_fault_consumer, "os", "fdopen", fail)
+            fault.setattr(_os_fault_consumer, "adopt_fd", fail)
             with pytest.raises(error) as caught:
                 if operation == "digest":
                     artifacts.graph_digest(source)

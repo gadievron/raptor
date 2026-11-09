@@ -63,6 +63,8 @@ import stat
 from pathlib import Path, PurePosixPath
 from typing import IO
 
+from core.source.streams import adopt_fd
+
 __all__ = ["open_regular_beneath", "open_dir_beneath"]
 
 _O_DIR_FLAGS = (
@@ -293,8 +295,8 @@ def open_regular_beneath(
             return None
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
-        out = os.fdopen(fd, mode, **kwargs)
-        fd = None  # fdopen owns it now
+        transferred_fd, fd = fd, None
+        out = adopt_fd(transferred_fd, mode, lambda value: os.close(value), **kwargs)
         return out
     except OSError:
         return None
