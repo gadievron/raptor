@@ -33,6 +33,52 @@ def owned_fd(tmp_path):
                 os.close(fd)
 
 
+@pytest.mark.parametrize("primary_type", [None, RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("cleanup_type", [None, OSError, RuntimeError])
+def test_raw_owner_consumes_once_and_preserves_primary(owned_fd, primary_type, cleanup_type):
+    fd, _ = owned_fd
+    primary = primary_type("raw operation failed") if primary_type else None
+    cleanup = cleanup_type("raw close failed") if cleanup_type else None
+    closed = []
+
+    def close(descriptor):
+        os.close(descriptor)
+        closed.append(descriptor)
+        if cleanup is not None:
+            raise cleanup
+
+    def consume():
+        with streams.owned_fd(fd, close_fd=close) as descriptor:
+            assert descriptor == fd
+            if primary is not None:
+                raise primary
+
+    expected = primary if primary is not None else cleanup
+    if expected is None:
+        consume()
+    else:
+        with pytest.raises(type(expected)) as caught:
+            consume()
+        assert caught.value is expected
+    assert closed == [fd]
+    assert_closed(fd)
+
+
+def test_default_raw_closer_uses_current_consumer_binding(owned_fd, monkeypatch):
+    fd, _ = owned_fd
+    real_close = os.close
+    closed = []
+
+    def close(descriptor):
+        real_close(descriptor)
+        closed.append(descriptor)
+
+    with streams.owned_fd(fd):
+        patch_module_attribute(monkeypatch, streams, "os", "close", close)
+    assert closed == [fd]
+    assert_closed(fd)
+
+
 @pytest.mark.parametrize("error_type", [OSError, RuntimeError, KeyboardInterrupt, SystemExit])
 def test_failed_adoption_consumes_descriptor(owned_fd, monkeypatch, error_type):
     fd, _ = owned_fd

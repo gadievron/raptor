@@ -41,6 +41,7 @@ from collections.abc import Iterator
 from typing import Any, TYPE_CHECKING
 
 from core.json.utils import _loads, _reject_non_finite
+from core.source.streams import owned_fd, preserving_stream_error
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -249,6 +250,16 @@ def load_jsonl(
     # allocation-identical to the historical one.
     records: list[Any] | deque[Any]
     records = deque(maxlen=max_records) if max_records is not None else []
+    # Refused setup keeps its historical best-effort close policy.
+    setup_refused = False
+
+    def close_reader_fd(descriptor: int) -> None:
+        try:
+            os.close(descriptor)
+        except OSError:
+            if not setup_refused:
+                raise
+
     # O_NONBLOCK: trail paths live inside run dirs a sandboxed child
     # can write — without it, the open of a planted reader-less FIFO
     # blocks forever. No-op on the regular files the fstat gate below
@@ -261,132 +272,121 @@ def load_jsonl(
         # "nothing trustworthy to read".
         logger.debug("load_jsonl: cannot open %s", path, exc_info=True)
         return []
-    try:
-        st = os.fstat(fd)
-    except OSError:
-        st = None
-    if st is None or not _stat.S_ISREG(st.st_mode):
+    with owned_fd(fd, close_fd=close_reader_fd):
         try:
-            os.close(fd)
+            st = os.fstat(fd)
         except OSError:
-            pass
-        logger.warning(
-            "load_jsonl: refusing non-regular trail %s "
-            "(planted FIFO/device at the trail path?)", path,
-        )
-        return []
-    discard_first_partial_line = False
-    read_budget = None
-    if max_total_bytes is not None:
-        size = st.st_size
-        read_budget = min(size, max_total_bytes)
-        if size > max_total_bytes:
-            if not oversize_tail:
+            st = None
+        if st is None or not _stat.S_ISREG(st.st_mode):
+            setup_refused = True
+            logger.warning(
+                "load_jsonl: refusing non-regular trail %s "
+                "(planted FIFO/device at the trail path?)", path,
+            )
+            return []
+        discard_first_partial_line = False
+        read_budget = None
+        if max_total_bytes is not None:
+            size = st.st_size
+            read_budget = min(size, max_total_bytes)
+            if size > max_total_bytes:
+                if not oversize_tail:
+                    setup_refused = True
+                    logger.warning(
+                        "load_jsonl: refusing oversize trail %s "
+                        "(%d bytes > max_total_bytes=%d)",
+                        path, size, max_total_bytes,
+                    )
+                    return []
                 try:
-                    os.close(fd)
+                    os.lseek(fd, size - max_total_bytes, os.SEEK_SET)
                 except OSError:
-                    pass
+                    setup_refused = True
+                    logger.warning(
+                        "load_jsonl: oversize trail %s is not seekable — "
+                        "nothing read (%d bytes > max_total_bytes=%d)",
+                        path, size, max_total_bytes,
+                    )
+                    return []
+                discard_first_partial_line = True
                 logger.warning(
-                    "load_jsonl: refusing oversize trail %s "
-                    "(%d bytes > max_total_bytes=%d)",
-                    path, size, max_total_bytes,
+                    "load_jsonl: trail %s is over budget (%d bytes > "
+                    "max_total_bytes=%d) — reading the newest %d bytes "
+                    "only; older records are NOT loaded",
+                    path, size, max_total_bytes, max_total_bytes,
                 )
-                return []
+        appended_total = 0
+        try:
+            f = os.fdopen(fd, "rb", closefd=False)
+        except OSError:
+            setup_refused = True
+            logger.debug("load_jsonl: cannot read %s", path, exc_info=True)
+            return records if isinstance(records, list) else list(records)
+        with preserving_stream_error(f):
             try:
-                os.lseek(fd, size - max_total_bytes, os.SEEK_SET)
+                oversize_lines = 0
+                invalid_lines = 0
+                lines = _iter_jsonl_lines(f, read_budget)
+                if discard_first_partial_line:
+                    # The tail seek lands mid-line; everything up to and
+                    # including the first newline belongs to a record
+                    # whose head is beyond the budget. Bounded: at most
+                    # ``max_total_bytes`` bytes remain past the seek.
+                    next(lines, None)
+                # File iteration splits on ``\n`` only; ``splitlines`` on
+                # each chunk restores the bare-``\r`` separators the old
+                # text-mode universal-newlines read accepted (foreign
+                # writers only — no RAPTOR writer emits them). CRLF and
+                # plain-``\n`` chunks yield exactly one segment each.
+                for raw_bytes in lines:
+                    for line_bytes in raw_bytes.splitlines():
+                        if (
+                            max_line_bytes is not None
+                            and len(line_bytes) > max_line_bytes
+                        ):
+                            oversize_lines += 1
+                            continue
+                        try:
+                            raw = line_bytes.decode("utf-8")
+                        except UnicodeDecodeError:
+                            invalid_lines += 1
+                            continue
+                        line = raw.strip()
+                        if not line:
+                            continue
+                        try:
+                            records.append(
+                                _loads(line, parse_constant=_reject_non_finite))
+                            appended_total += 1
+                        except ValueError:
+                            # json.JSONDecodeError (both backends) and the
+                            # non-finite rejection are ValueError subclasses.
+                            continue
+                        except RecursionError:
+                            # Python <= 3.13's stdlib parser is recursive,
+                            # so a deeply-nested line raises RecursionError
+                            # instead of a decode error — same best-effort
+                            # skip, or the foreign writer's bomb line kills
+                            # the whole trail.
+                            continue
             except OSError:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+                logger.debug("load_jsonl: read failed for %s", path, exc_info=True)
+            if oversize_lines:
                 logger.warning(
-                    "load_jsonl: oversize trail %s is not seekable — "
-                    "nothing read (%d bytes > max_total_bytes=%d)",
-                    path, size, max_total_bytes,
+                    "load_jsonl: skipped %d line(s) over max_line_bytes=%d in %s",
+                    oversize_lines, max_line_bytes, path,
                 )
-                return []
-            discard_first_partial_line = True
-            logger.warning(
-                "load_jsonl: trail %s is over budget (%d bytes > "
-                "max_total_bytes=%d) — reading the newest %d bytes "
-                "only; older records are NOT loaded",
-                path, size, max_total_bytes, max_total_bytes,
-            )
-    appended_total = 0
-    try:
-        f = os.fdopen(fd, "rb")
-    except OSError:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        logger.debug("load_jsonl: cannot read %s", path, exc_info=True)
-        return records if isinstance(records, list) else list(records)
-    with f:
-        try:
-            oversize_lines = 0
-            invalid_lines = 0
-            lines = _iter_jsonl_lines(f, read_budget)
-            if discard_first_partial_line:
-                # The tail seek lands mid-line; everything up to and
-                # including the first newline belongs to a record
-                # whose head is beyond the budget. Bounded: at most
-                # ``max_total_bytes`` bytes remain past the seek.
-                next(lines, None)
-            # File iteration splits on ``\n`` only; ``splitlines`` on
-            # each chunk restores the bare-``\r`` separators the old
-            # text-mode universal-newlines read accepted (foreign
-            # writers only — no RAPTOR writer emits them). CRLF and
-            # plain-``\n`` chunks yield exactly one segment each.
-            for raw_bytes in lines:
-                for line_bytes in raw_bytes.splitlines():
-                    if (
-                        max_line_bytes is not None
-                        and len(line_bytes) > max_line_bytes
-                    ):
-                        oversize_lines += 1
-                        continue
-                    try:
-                        raw = line_bytes.decode("utf-8")
-                    except UnicodeDecodeError:
-                        invalid_lines += 1
-                        continue
-                    line = raw.strip()
-                    if not line:
-                        continue
-                    try:
-                        records.append(
-                            _loads(line, parse_constant=_reject_non_finite))
-                        appended_total += 1
-                    except ValueError:
-                        # json.JSONDecodeError (both backends) and the
-                        # non-finite rejection are ValueError subclasses.
-                        continue
-                    except RecursionError:
-                        # Python <= 3.13's stdlib parser is recursive,
-                        # so a deeply-nested line raises RecursionError
-                        # instead of a decode error — same best-effort
-                        # skip, or the foreign writer's bomb line kills
-                        # the whole trail.
-                        continue
-        except OSError:
-            logger.debug("load_jsonl: read failed for %s", path, exc_info=True)
-        if oversize_lines:
-            logger.warning(
-                "load_jsonl: skipped %d line(s) over max_line_bytes=%d in %s",
-                oversize_lines, max_line_bytes, path,
-            )
-        if invalid_lines:
-            logger.warning(
-                "load_jsonl: skipped %d invalid-UTF-8 line(s) in %s",
-                invalid_lines, path,
-            )
-        evicted = appended_total - len(records)
-        if evicted:
-            logger.warning(
-                "load_jsonl: retained only the newest %d of %d "
-                "record(s) in %s (max_records bound); older records "
-                "are NOT loaded",
-                len(records), appended_total, path,
-            )
+            if invalid_lines:
+                logger.warning(
+                    "load_jsonl: skipped %d invalid-UTF-8 line(s) in %s",
+                    invalid_lines, path,
+                )
+            evicted = appended_total - len(records)
+            if evicted:
+                logger.warning(
+                    "load_jsonl: retained only the newest %d of %d "
+                    "record(s) in %s (max_records bound); older records "
+                    "are NOT loaded",
+                    len(records), appended_total, path,
+                )
     return records if isinstance(records, list) else list(records)

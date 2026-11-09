@@ -1,5 +1,5 @@
 """Ownership and error precedence for file and archive streams."""
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing, contextmanager
 import os
 from typing import IO, ContextManager, TypeVar
@@ -48,6 +48,30 @@ def preserving_stream_error(resource: ContextManager[_T]) -> Iterator[_T]:
 
 
 @contextmanager
+def owned_fd(
+    fd: int, *, close_fd: Callable[[int], None] | None = None,
+) -> Iterator[int]:
+    """Consume a raw descriptor, preserving an active operation error.
+
+    Wrappers must borrow it with ``closefd=False``. A custom closer owns
+    the consumer's I/O policy and must consume the descriptor exactly once.
+    Without one, resolve this module's closer at cleanup time.
+    """
+    failed = False
+    try:
+        yield fd
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            (os.close if close_fd is None else close_fd)(fd)
+        except BaseException:
+            if not failed:
+                raise
+
+
+@contextmanager
 def open_owned_fd(fd: int, mode: str, **kwargs) -> Iterator[IO]:
     """Consume an open descriptor through stream adoption and teardown.
 
@@ -56,19 +80,9 @@ def open_owned_fd(fd: int, mode: str, **kwargs) -> Iterator[IO]:
     closure are independent; an active operation error keeps precedence.
     ``closefd`` is managed here and cannot be supplied by callers.
     """
-    failed = False
-    try:
+    with owned_fd(fd):
         if "closefd" in kwargs:
             raise TypeError("open_owned_fd manages descriptor closure")
         stream = os.fdopen(fd, mode, closefd=False, **kwargs)
         with preserving_stream_error(closing(stream)) as owned:
             yield owned
-    except BaseException:
-        failed = True
-        raise
-    finally:
-        try:
-            os.close(fd)
-        except BaseException:
-            if not failed:
-                raise
