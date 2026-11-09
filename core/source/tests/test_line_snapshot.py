@@ -62,7 +62,8 @@ def test_foreign_source_is_eager_and_not_retained():
     snapshot = lines.SourceLineSnapshot(source)
     assert calls == ["\n"]
     del source
-    gc.collect()
+    if reference() is not None:
+        gc.collect()
     assert reference() is None
     assert snapshot.get() == ["adapter"]
 
@@ -76,7 +77,8 @@ def test_eager_snapshot_does_not_keep_provider_alive():
     reference = weakref.ref(provider)
     snapshot = lines.SourceLineSnapshot("source", provider)
     del provider
-    gc.collect()
+    if reference() is not None:
+        gc.collect()
     assert reference() is None
     assert snapshot.get() == ["adapter"]
 
