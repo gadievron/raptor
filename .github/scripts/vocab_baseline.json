@@ -659,10 +659,10 @@
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 70,
+    "count": 71,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary",
-    "reviewed": "2026-10-31"
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier.",
+    "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
     "count": 12,
@@ -1787,6 +1787,12 @@
     "count": 11,
     "kind": "literal",
     "note": "campaign triage entry/report field names (integrity, completeness, signature counts and metadata); these are internal record-schema keys, not a learned function-name vocabulary"
+  },
+  "core/project/sbom_reports.py::capture_sbom_reports": {
+    "count": 14,
+    "kind": "literal",
+    "note": "Closed project SBOM presentation-record schema: selected run/output identity, producer, snapshot/source/selection fingerprints, bounded record counts, summary, notice-verification status, imported/completion state and scope. These fixed persisted JSON field names describe committed captures; they are not learned function identifiers or detection vocabularies.",
+    "reviewed": "2026-11-09"
   },
   "core/recall/cvefix_manifest.py::fp_twin": {
     "count": 10,
@@ -3170,6 +3176,12 @@
   "packages/sca/sbom_import.py::_PURL_ECO_MAP": {
     "count": 15,
     "kind": "literal"
+  },
+  "packages/sca/sbom_inventory/reporting.py::inventory_capture": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed offline SBOM capture-record schema: source identity, subject, summary, notice-verification/coverage, selection fingerprint and selected/captured record counts with bounded records. These fixed JSON field names serialize typed inventory evidence; they do not enumerate function identifiers or drive matching.",
+    "reviewed": "2026-11-09"
   },
   "packages/sca/sbom_license_evidence.py::declaration_from_metadata": {
     "count": 10,
