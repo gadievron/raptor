@@ -55,11 +55,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     cache_root = Path(args.cache_root) if args.cache_root else sca_cache_root()
     store_dir = cache_root / "fingerprints"
 
+    args._report_capture = {} if args._report_options.enabled and args._report_options.output is not None else None
     if args.check:
-        return _cmd_check(fp_input, args, store_dir=store_dir)
-    if args.save:
-        return _cmd_save(fp_input, args, store_dir=store_dir)
-    return _cmd_print(fp_input, args)
+        status = _cmd_check(fp_input, args, store_dir=store_dir)
+    elif args.save:
+        status = _cmd_save(fp_input, args, store_dir=store_dir)
+    else:
+        status = _cmd_print(fp_input, args)
+    if args._report_capture is not None:
+        from .fingerprint_reporting import complete_fingerprint_report
+        complete_fingerprint_report(args, fp_input, store_dir, status)
+    return status
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +76,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _cmd_print(fp_input, args: argparse.Namespace) -> int:
     """Default: compute the fingerprint, print as JSON."""
     fp = _fingerprint(fp_input, args)
+    _record(args, fingerprint=fp)
     if fp is None:
         print(
             f"raptor-sca fingerprint: could not fingerprint "
@@ -86,6 +93,7 @@ def _cmd_save(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
     from core.binary import save_fingerprint
 
     fp = _fingerprint(fp_input, args)
+    _record(args, fingerprint=fp)
     if fp is None:
         print(
             f"raptor-sca fingerprint: could not fingerprint "
@@ -95,6 +103,7 @@ def _cmd_save(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
         return 3
     ref = args.ref or str(fp_input[1])
     written = save_fingerprint(store_dir, ref, fp)
+    _record(args, baseline_written=str(written) if written is not None else None)
     if written is None:
         print(
             f"raptor-sca fingerprint: store write failed under "
@@ -121,6 +130,7 @@ def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
     from core.binary import detect_drift, load_fingerprint
 
     fp = _fingerprint(fp_input, args)
+    _record(args, fingerprint=fp)
     if fp is None:
         print(
             f"raptor-sca fingerprint: could not fingerprint "
@@ -130,6 +140,7 @@ def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
         return 3
     ref = args.ref or str(fp_input[1])
     baseline = load_fingerprint(store_dir, ref)
+    _record(args, baseline=baseline)
     if baseline is None:
         print(
             f"raptor-sca fingerprint: no baseline for {ref!r}; "
@@ -139,6 +150,7 @@ def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
         return 2
 
     drift = detect_drift(baseline, fp)
+    _record(args, drift=drift)
     if drift.is_empty():
         print(f"no drift detected for {ref}")
         return 0
@@ -306,7 +318,19 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
             "stdout / --out when drift is detected."
         ),
     )
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
+
+
+def _record(args, **values):
+    capture = getattr(args, "_report_capture", None)
+    if capture is not None:
+        capture.update(values)
 
 
 if __name__ == "__main__":
