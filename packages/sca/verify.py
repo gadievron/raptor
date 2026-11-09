@@ -252,6 +252,11 @@ def _verify_in_output(target, proposed, out_dir, args, http, cache) -> int:
     if not delta_md.endswith("\n"):
         sys.stdout.write("\n")
     sys.stdout.flush()
+    if args._report_options.enabled and args._report_options.output is not None:
+        from .verify_reporting import complete_verify_report
+        complete_verify_report(args, target=target, proposed=proposed, applied=applied, delta=delta,
+                               summary=summary, osv_degraded=osv_degraded, exit_code=exit_code,
+                               before_findings=before_findings, after_findings=after.findings_path, out_dir=out_dir)
     return exit_code
 
 
@@ -285,7 +290,13 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--no-epss", action="store_true")
     p.add_argument("--cache-root")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    return p.parse_args(argv)
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
+    args = p.parse_args(argv)
+    args._report_options = options_from_args(args, p)
+    if args.report_format and args.report_output is None:
+        p.error("--report-format requires --report-output for this command")
+    return args
 
 
 def _resolve_out(explicit: str | None) -> Path:
