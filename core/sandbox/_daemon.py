@@ -1416,6 +1416,14 @@ def _handle_probe(payload: dict) -> dict:
     bindings_out: dict[str, Any] = {}
     for k, v in bindings.items():
         if isinstance(v, int):
+            # The arithmetic bit budget can exceed Python's decimal encoding
+            # limit. Refuse the result before JSON output tears down the RPC.
+            try:
+                str(v)
+            except ValueError:
+                return {"ok": False,
+                        "error": "integer binding exceeds response encoding limit",
+                        "steps_completed": steps_completed}
             bindings_out[k] = {"type": "int", "value": v, "hex": hex(v)}
         elif isinstance(v, (bytes, bytearray)):
             bindings_out[k] = {"type": "bytes",
