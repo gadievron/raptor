@@ -66,7 +66,7 @@ def owned():
         patch_module_attribute(setup, ctx, "subprocess", "Popen", create)
         setup.setattr(ctx, "_TEARDOWN_SWEEP_GRACE_S", 1.0)
         setup.setattr(ctx, "_TEARDOWN_KILL_GRACE_S", 2.0, raising=False)
-        def invoke(**options):
+        def invoke(*, max_capture_bytes=None, **options):
             ready_r, ready_w = os.pipe()
             descriptors.extend([ready_r, ready_w])
             state.ready_r = ready_r
@@ -95,7 +95,8 @@ def owned():
             kwargs.update(options)
             state.kwargs = kwargs
             return ctx._run_teardown_first_timeout(
-                [sys.executable, "-P", "-c", script], kwargs, holder, True)
+                [sys.executable, "-P", "-c", script], kwargs, holder, True,
+                max_capture_bytes=max_capture_bytes)
         state.invoke = invoke
         yield state
 
@@ -391,6 +392,100 @@ def test_failed_pipe_close_does_not_skip_siblings_and_retains_the_open_owner(own
     assert raised.value is primary and primary.sandbox_pipes == tuple(retained)
     assert primary.sandbox_cleanup_pending
     assert not retained[0].closed
+
+
+@pytest.mark.parametrize("error", [OSError, KeyboardInterrupt, Cancelled])
+def test_final_close_failure_cannot_turn_into_success(owned, monkeypatch, error):
+    owned.mode[0] = "done"
+    primary = error("owned final pipe close")
+    calls = []
+
+    def configure(proc):
+        actual = proc.stdout
+
+        class PipeView:
+            def __getattr__(self, name):
+                return getattr(actual, name)
+
+            def close(self):
+                calls.append(actual.closed)
+                if actual.closed:
+                    raise primary
+                actual.close()
+
+        proc.stdout = PipeView()
+
+    owned.configure[0] = configure
+    with pytest.raises(error) as raised:
+        owned.invoke()
+    assert raised.value is primary
+    proc = owned.processes[0][0]
+    assert proc.returncode == 0
+    assert calls[0] is False and calls[1:] == [True, True, True]
+    assert proc.stdout.closed and proc.stderr.closed
+
+
+@pytest.mark.parametrize("error", [OSError, KeyboardInterrupt, Cancelled])
+def test_capped_final_close_retains_the_unclosed_owner(owned, error):
+    owned.mode[0] = "done"
+    primary = error("owned bounded pipe close")
+
+    def configure(proc):
+        actual = proc.stdout
+
+        class PipeView:
+            def __getattr__(self, name):
+                return getattr(actual, name)
+
+            def close(self):
+                raise primary
+
+        proc.stdout = PipeView()
+
+    owned.configure[0] = configure
+    with pytest.raises(error) as raised:
+        owned.invoke(max_capture_bytes=97)
+    proc = owned.processes[0][0]
+    assert raised.value is primary
+    assert proc.returncode == 0 and proc.stderr.closed
+    assert not proc.stdout.closed
+    assert primary.sandbox_cleanup_pending
+    assert primary.sandbox_pipes == (proc.stdout,)
+    assert owned.holder == [None]
+
+
+@pytest.mark.parametrize("error", [OSError, KeyboardInterrupt, Cancelled])
+def test_check_failure_survives_secondary_pipe_close_failure(owned, monkeypatch, error):
+    owned.mode[0] = "exit7"
+    secondary = error("owned secondary pipe close")
+
+    def configure(proc):
+        real_communicate = proc.communicate
+        actual = proc.stdout
+
+        class PipeView:
+            def __getattr__(self, name):
+                return getattr(actual, name)
+
+            def close(self):
+                raise secondary
+
+        def communicate(*args, **kwargs):
+            result = real_communicate(*args, **kwargs)
+            proc.stdout = PipeView()
+            return result
+
+        monkeypatch.setattr(proc, "communicate", communicate)
+
+    owned.configure[0] = configure
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        owned.invoke(check=True)
+    assert raised.value.returncode == 7
+    assert raised.value.stdout == b"prefixsuffix"
+    assert raised.value.stderr == b"err"
+    assert not raised.value.sandbox_cleanup_pending
+    assert any(type(secondary).__name__ in note for note in raised.value.__notes__)
+    assert owned.holder == [None]
 
 
 def test_spawn_failure_does_not_consume_the_callers_death_channel(owned, tmp_path):

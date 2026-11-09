@@ -343,12 +343,20 @@ def _run_teardown_first_timeout(
     bounded = (BoundedCommunicator(max(0, int(max_capture_bytes)))
                if max_capture_bytes is not None else None)
     proc = subprocess.Popen(cmd, start_new_session=start_new_session, **pk)
+    primary_failure: BaseException | None = None
     try:
         if bounded is not None:
             bounded.attach(proc)
         out, err = (bounded.communicate(input=inp, timeout=timeout) if bounded is not None
                     else proc.communicate(input=inp, timeout=timeout))
+        result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+        if bounded is not None:
+            setattr(result, "_capture_limit_snapshot", (bounded.cap, out, err))
+        if check:
+            result.check_returncode()
+        _close_teardown_streams(proc)
     except BaseException as failure:
+        primary_failure = failure
         if bounded is not None:
             try:
                 bounded.stop_input()
@@ -360,26 +368,31 @@ def _run_teardown_first_timeout(
     finally:
         # Popen owns only PIPE streams; caller-supplied file objects are
         # not proc.stdin/stdout/stderr and must remain open.
-        _close_teardown_streams(proc)
-    result = subprocess.CompletedProcess(cmd, proc.returncode, out, err)
-    if bounded is not None:
-        setattr(result, "_capture_limit_snapshot", (bounded.cap, out, err))
-    if check:
-        result.check_returncode()
+        if primary_failure is not None:
+            _close_teardown_streams(proc, failure=primary_failure)
     return result
 
 
-def _close_teardown_streams(proc) -> tuple:
-    """Close all owned streams, retaining any handle still open on failure."""
+def _close_teardown_streams(proc, *, failure: BaseException | None = None) -> tuple:
+    """Attempt every close; preserve an active failure or raise the first one."""
     pending = []
+    errors = []
     for stream in (proc.stdin, proc.stdout, proc.stderr):
         if stream is None:
             continue
         try:
             stream.close()
-        except BaseException:
+        except BaseException as exc:
+            errors.append(exc)
             if not stream.closed:
                 pending.append(stream)
+    if errors:
+        primary = failure if failure is not None else errors[0]
+        for cleanup_error in errors:
+            if cleanup_error is not primary:
+                primary.add_note("sandbox stream cleanup: " + type(cleanup_error).__name__)
+        if failure is None:
+            raise primary
     return tuple(pending)
 
 
@@ -470,7 +483,7 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
         else:
             confirmed = True
             break
-    pending_pipes = _close_teardown_streams(proc)
+    pending_pipes = _close_teardown_streams(proc, failure=failure)
     setattr(failure, "sandbox_cleanup_pending",
             death_close_pending or not confirmed or bool(pending_pipes))
     if not confirmed:
