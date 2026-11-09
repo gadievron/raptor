@@ -77,14 +77,17 @@ needs_pidns = pytest.mark.usefixtures("pidns_available")
 
 
 @pytest.fixture
-def restore_signal_handlers():
-    """Snapshot/restore TERM+INT handlers around in-process supervisor
-    calls (``_supervise_ns_init`` installs its own)."""
-    saved = {s: signal.getsignal(s)
-             for s in (signal.SIGTERM, signal.SIGINT)}
-    yield
-    for sig, handler in saved.items():
-        signal.signal(sig, handler)
+def restore_signal_handlers(monkeypatch):
+    'Snapshot/restore TERM+INT handlers around in-process supervisor\ncalls (``_supervise_ns_init`` installs its own).'
+    from contextlib import ExitStack
+
+    with ExitStack() as restore:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            restore.callback(signal.signal, sig, signal.getsignal(sig))
+        try:
+            yield
+        finally:
+            monkeypatch.undo()
 
 
 def _close_quietly(*fds: int) -> None:
