@@ -1451,3 +1451,9 @@ class TestDefinitionHeaderShadowedJoin:
             '    return esc(x)\n'
         )
         assert ('html.escape', 0) not in summaries['handle'].return_sanitizers_for_param(0)
+
+
+class TestClosureSanitizerSummaryIdentity:
+    def test_enclosing_parameter_does_not_inherit_catalog_chain(self):
+        _, summaries = _summaries('import html\ndef outer(html):\n    def handle(x):\n        return html.escape(x)\n    return handle\n')
+        assert ('html.escape', 0) not in summaries['outer.handle'].return_sanitizers_for_param(0)

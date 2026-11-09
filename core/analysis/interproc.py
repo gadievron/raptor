@@ -268,7 +268,7 @@ def synthetic_sanitizer_bindings(
     # may not reach, and the enforced sanitizer-cut would consume the
     # forged clean-wrapper binding. Any local definition refuses the
     # join (an ambiguous binding only ever loses suppression power).
-    local_bindings = local_binding_names(fn_ast)
+    local_bindings = local_binding_names(fn_ast) | getattr(cfg, "lexical_bindings", frozenset())
 
     bindings: list[SanitizerBinding] = []
     for node in cfg.nodes():

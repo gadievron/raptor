@@ -58,7 +58,6 @@ from core.analysis.cfg_builder import (
 from core.analysis.dataflow import reaching_defs
 from core.analysis.python_module_callgraph import (
     PyModuleCallGraph,
-    local_binding_names,
 )
 
 # ---------------------------------------------------------------------------
@@ -1097,7 +1096,7 @@ def _compute_one_summary(
     # name-keyed callee join (see local_binding_names) — plus the
     # module-scope distrusted roots that poison external-identity
     # stamps (see module_distrusted_roots).
-    _local_bindings = local_binding_names(fn_ast)
+    _local_bindings = cg.binding_names(fn_ast)
     _distrusted_roots = cg.distrusted_roots
     max_inner = 4 * max(1, len(list(cfg.nodes())))
     for _ in range(max_inner):
