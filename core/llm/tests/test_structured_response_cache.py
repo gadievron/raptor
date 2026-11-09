@@ -13,6 +13,8 @@ calls, then exercises the cache via the real public API
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -306,14 +308,18 @@ def test_concurrent_same_key_dedupes_to_one_provider_call(
     results: list = []
 
     def worker():
-        barrier.wait()                       # release all 8 at once
+        try:
+            barrier.wait()                       # release all 8 at once
+        except threading.BrokenBarrierError:
+            return
         results.append(client.generate_structured("p", schema))
 
     threads = [threading.Thread(target=worker) for _ in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert fake.calls == 1, (
         f"expected dedup to 1 call, got {fake.calls}"
@@ -337,14 +343,18 @@ def test_concurrent_distinct_keys_run_in_parallel(tmp_path: Path) -> None:
     barrier = threading.Barrier(8)
 
     def worker(i: int):
-        barrier.wait()
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            return
         client.generate_structured(f"distinct-prompt-{i}", schema)
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=barrier.abort, timeout=5):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert fake.calls == 8
 

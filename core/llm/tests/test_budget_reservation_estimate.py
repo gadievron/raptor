@@ -13,6 +13,8 @@ No real LLM calls — providers are stubbed.
 
 from __future__ import annotations
 
+from core.testing.threads import retiring_threads
+
 import threading
 import time
 
@@ -213,7 +215,10 @@ class TestReservationDispatch:
         lock = threading.Lock()
 
         def worker(i: int) -> None:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             try:
                 client.generate(f"prompt-{i}", call_class="stress")
                 res = "ok"
@@ -225,10 +230,11 @@ class TestReservationDispatch:
                 outcomes.append(res)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert outcomes.count("ok") == 6, outcomes
         assert outcomes.count("budget") == 2, outcomes
@@ -252,7 +258,10 @@ class TestReservationDispatch:
         lock = threading.Lock()
 
         def worker(i: int) -> None:
-            barrier.wait()
+            try:
+                barrier.wait()
+            except threading.BrokenBarrierError:
+                return
             try:
                 client.generate(f"prompt-{i}", call_class="stress")
                 res = "ok"
@@ -262,10 +271,11 @@ class TestReservationDispatch:
                 results.append(res)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=barrier.abort, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         admitted = results.count("ok")
         cap = client.config.max_cost_per_scan
