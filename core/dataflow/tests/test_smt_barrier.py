@@ -2213,7 +2213,7 @@ def test_try_tier0_declined_when_python_guard_branch_wrapped(tmp_path: Path):
         "    if strict:\n"                                      # line 2
         "        if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"  # line 3 = guard
         "            raise ValueError()\n"                      # line 4
-        "    return open(BASE + name)\n"                        # line 5 = sink
+        "    return open(name)\n"                        # line 5 = sink
     )
     diff = (
         "@@ -1,3 +1,5 @@\n"
@@ -2221,7 +2221,7 @@ def test_try_tier0_declined_when_python_guard_branch_wrapped(tmp_path: Path):
         "     if strict:\n"
         "+        if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
         "+            raise ValueError()\n"
-        "     return open(BASE + name)\n"
+        "     return open(name)\n"
     )
     r = sb.try_tier0(
         fix_diff=diff, repo_root=tmp_path,
@@ -2241,7 +2241,7 @@ _TRAVERSAL_DIFF = (
     " def f(name):\n"
     "+    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
     "+        raise ValueError()\n"
-    "     return open(BASE + name)\n"
+    "     return open(name)\n"
 )
 
 
@@ -2257,7 +2257,7 @@ def test_try_tier0_refuses_sink_uri_escaping_repo_root(tmp_path: Path):
         "def f(name):\n"
         "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
         "        raise ValueError()\n"
-        "    return open(BASE + name)\n",
+        "    return open(name)\n",
         encoding="utf-8",
     )
     r = sb.try_tier0(
@@ -2299,7 +2299,7 @@ def test_try_tier0_inner_dotdot_resolving_inside_still_reads(tmp_path: Path):
         "def f(name):\n"
         "    if not re.match(r'^[A-Za-z0-9_]+$', name):\n"
         "        raise ValueError()\n"
-        "    return open(BASE + name)\n",
+        "    return open(name)\n",
         encoding="utf-8",
     )
     r = sb.try_tier0(
@@ -3745,7 +3745,7 @@ def test_find_validator_line_prefers_sink_function_occurrence():
         "    name = request.args.get('name')\n"
         "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"   # line 8
         "        return None\n"
-        "    open('/etc/app/' + name)\n"                        # line 10
+        "    open(name)\n"                        # line 10
     )
     spec = sb.ValidatorSpec(
         kind="charset", var_name="name", charset="A-Za-z0-9_+-",
@@ -3770,7 +3770,7 @@ def test_try_tier0_sound_when_first_occurrence_is_in_another_function(
         "    name = request.args.get('name')\n"
         "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
         "        return None\n"
-        "    open('/etc/app/' + name)\n"
+        "    open(name)\n"
     )
     (tmp_path / "app.py").write_text(src)
     diff = "+    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
@@ -3909,8 +3909,15 @@ def test_large_forbidden_range_does_not_invent_hyphen_removal(tmp_path: Path):
         fix_diff="+" + line + "\n", repo_root=tmp_path,
         sink_uri="app.py", sink_line=5, sink_class="cmdi_argv",
     )
-    assert result.status is sb.Tier0Status.DECLINED
-    assert result.counterexample == "-"
+    # The generic sink fallback declines argv construction. Exercise
+    # the finite-set proof directly so this regression reaches the
+    # range model independently of that stronger source-admission gate.
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE
+    spec = sb.extract_validator("+" + line + "\n")
+    assert spec is not None
+    proof = sb.prove_neutralizes(spec, "cmdi_argv")
+    assert not proof.sound
+    assert proof.counterexample == "-"
 
     # Explicitly stripping the surviving hyphen restores the valid proof.
     safe_line = line.replace(chr(0x1401) + "]", chr(0x1401) + r"\-]")
@@ -3919,7 +3926,10 @@ def test_large_forbidden_range_does_not_invent_hyphen_removal(tmp_path: Path):
         fix_diff="+" + safe_line + "\n", repo_root=tmp_path,
         sink_uri="app.py", sink_line=5, sink_class="cmdi_argv",
     )
-    assert control.status is sb.Tier0Status.SOUND
+    assert control.status is sb.Tier0Status.NOT_APPLICABLE
+    safe_spec = sb.extract_validator("+" + safe_line + "\n")
+    assert safe_spec is not None
+    assert sb.prove_neutralizes(safe_spec, "cmdi_argv").sound
 
 
 @_requires_z3
