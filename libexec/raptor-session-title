@@ -29,7 +29,7 @@ import core.startup.process_init  # noqa: E402,F401
 def main():
     try:
         from core.startup.session_title import main as hook_main
-        return hook_main()
+        return hook_main(sys.argv[1:])
     except (Exception, SystemExit):
         return 0
 
