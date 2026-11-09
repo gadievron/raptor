@@ -3515,7 +3515,10 @@ class TestRefutationGateWirePoint:
     """Refutation gates demote findings/suspicious via the orchestrator wire point."""
 
     @pytest.fixture(autouse=True)
-    def _hermetic_tool_layer(self, monkeypatch):
+    def _hermetic_tool_layer(
+        self, monkeypatch, _no_native_review_tools,
+        _no_post_review_witness_synthesis,
+    ):
         """These tests pin gate WIRING, not sweep behaviour.
 
         Left unstubbed, the outcome depends on which external tools
@@ -3527,14 +3530,9 @@ class TestRefutationGateWirePoint:
         against.
         """
         import core.audit.orchestrator as _orch
-        from core.audit import capabilities
 
         monkeypatch.setattr(_orch, "_run_tool_chain", lambda *a, **k: [])
 
-        monkeypatch.setattr(
-            capabilities, "probe_capabilities",
-            lambda **kwargs: capabilities.AuditCapabilities(),
-        )
         # Gate wiring has no study assertions. Avoid a background preparation
         # subprocess for the planted source function.
         monkeypatch.setattr(
@@ -3547,16 +3545,6 @@ class TestRefutationGateWirePoint:
         # startup is stubbed. Gate wiring must not start that fallback lane.
         monkeypatch.setattr(
             _orch, "_resolve_joern_evidence_raw", lambda *a, **k: ({}, None),
-        )
-        # Same boundary, prep side: the sandboxed mechanical-detector
-        # prep is ~5s of real detector runs per test on fixtures whose
-        # findings these gate-wiring assertions never read. Full
-        # variadic signature + the real (dict, set) contract, so the
-        # stub executes rather than dying into the phase's blanket
-        # except.
-        monkeypatch.setattr(
-            _orch, "_run_mechanical_detectors",
-            lambda *args, **kwargs: ({}, set()),
         )
 
     def test_race_in_single_threaded_demoted_to_clean(self, tmp_path: Path):
@@ -3601,7 +3589,8 @@ class TestRefutationGateWirePoint:
                 review_result={"cwe": "CWE-362"},
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
+            prefilter=True, sweep_validate_findings=True,
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
             immediate_verify=False,
@@ -3661,7 +3650,8 @@ class TestRefutationGateWirePoint:
                 review_result={"cwe": "CWE-362"},
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
+            prefilter=True, sweep_validate_findings=True,
             # hermetic: findings survive to post-loop — without the pin,
             # config.validate (default True) dispatches the real validation
             # pipeline on hosts with a Claude CLI (live spend, minutes).
@@ -3732,7 +3722,8 @@ class TestRefutationGateWirePoint:
                 review_result={"cwe": "CWE-362"},
             )
 
-        config = OrchestratorConfig(
+        config = _review_contract_config(
+            prefilter=True, sweep_validate_findings=True,
             target_path=target, out_dir=out, resume=False,
             batch_sloc_threshold=0,
             immediate_verify=False,
@@ -7735,7 +7726,7 @@ def _presweep_config(target: Path, out: Path, **kw):
         "joern_overrides": {"enabled": False},
     }
     defaults.update(kw)
-    return OrchestratorConfig(**defaults)
+    return _review_contract_config(**defaults)
 
 
 def _clean_review_fn(ctx, config):
@@ -7746,6 +7737,7 @@ def _clean_review_fn(ctx, config):
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestPresweepSubmittedAtServerStart:
     """The pre-sweep future is submitted before prep runs (ordering
     probe) and adopted by prep — never resubmitted; an empty-gaps run
@@ -7850,6 +7842,7 @@ class TestPresweepSubmittedAtServerStart:
 
 
 @pytest.mark.slow
+@pytest.mark.usefixtures("_no_native_review_tools")
 class TestPerPassWallClockPhases:
     """Prep sub-passes and post-loop passes book wall time into the
     run ledger (cost-breakdown.json's phases block)."""
