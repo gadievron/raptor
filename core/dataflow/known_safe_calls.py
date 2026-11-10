@@ -150,7 +150,9 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("python",),
         input_arg_kind="transform",
+        requires_exact_str=True,
         soundness_note=(
+            "For an exact builtin str using defaults, "
             "markupsafe.escape escapes &, <, >, \", ' and returns Markup "
             "(SafeString equivalent).  Standard XSS-safe escaper used "
             "across Jinja2 / Flask."
@@ -177,8 +179,9 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="cmdi",
         languages=("python",),
         input_arg_kind="transform",
+        requires_exact_str=True,
         soundness_note=(
-            "shlex.quote returns a shell-escaped string safe to "
+            "For an exact builtin str using defaults, shlex.quote returns a shell-escaped string safe to "
             "interpolate into a shell command (single-quoted, with "
             "embedded single quotes escaped).  Sound for shell=True "
             "subprocess invocations ONLY — quoting does not neutralize "
