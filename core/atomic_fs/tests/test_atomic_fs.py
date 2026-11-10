@@ -313,10 +313,13 @@ class TestAdversarial:
             _th.Thread(target=writer, args=(chr(ord("a") + i),))
             for i in range(8)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=60):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         # No writer should have blown up.
         assert errs == [], f"concurrent writers failed: {errs}"
