@@ -1272,3 +1272,103 @@ class TestEnclosingCreationIdentity:
         index = JavaConstIndex(source, (1, 1))
         assert index.ok
         assert index.receiver_type("receiver") is None
+
+
+class TestStringValueOfIdentity:
+    @pytest.mark.parametrize("case,expected", [
+        ("imported-owned", False), ("same-package", False),
+        ("own-class", False), ("literal-owned", True),
+        ("implicit-jdk", True), ("imported-jdk", True),
+        ("unrelated-package", True),
+    ])
+    def test_actual_consumer_requires_jdk_identity_for_builtin(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        imports = ""
+        name = "T"
+        method = ('public static java.lang.String valueOf(java.lang.String ignored) '
+                  '{ return System.getenv("OWNED"); }')
+        if case == "literal-owned":
+            method = ('public static java.lang.String valueOf(java.lang.String ignored) '
+                      '{ return "owned-literal"; }')
+        member = ""
+        if case in ("imported-owned", "literal-owned", "unrelated-package"):
+            (tmp_path / "owned").mkdir()
+            (tmp_path / "owned/String.java").write_text(
+                'package owned; public class String { ' + method + ' }')
+            if case != "unrelated-package":
+                imports = "import owned.String;\n"
+        elif case == "same-package":
+            (tmp_path / "String.java").write_text('class String { ' + method + ' }')
+        elif case == "own-class":
+            name, member = "String", method + "\n"
+        elif case == "imported-jdk":
+            imports = "import java.lang.String;\n"
+        source = (imports + f"class {name} {{\n" + member
+                  + 'void m(java.io.PrintWriter out) {\n'
+                  + 'java.lang.String value=String.valueOf("fixed");\n'
+                  + 'out.println(value);\n}\n}\n')
+        caller = tmp_path / f"{name}.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, len(source.splitlines())), str(caller), str(tmp_path))
+        sink_line = source.splitlines().index("out.println(value);") + 1
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+        if case == "literal-owned":
+            value_line = next(i + 1 for i, line in enumerate(source.splitlines())
+                              if "value=String.valueOf" in line)
+            rhs = index.rhs_at(value_line, "value")
+            assert rhs is not None
+            assert fold_expr_at(reaching_defs(graph), sink, rhs, index) == "owned-literal"
+
+    def test_context_free_builtin_does_not_ignore_explicit_owned_import(self):
+        from core.analysis.cfg_builder_java import _get_parser
+
+        source = ('import owned.String; class T { java.lang.String m() { '
+                  'return String.valueOf("fixed"); } }')
+        tree = _get_parser().parse(source.encode())
+        stack = [tree.root_node]
+        calls = []
+        while stack:
+            node = stack.pop()
+            if node.type == "method_invocation":
+                calls.append(node)
+            stack.extend(node.named_children)
+        assert len(calls) == 1
+        assert fold_expr(calls[0], lambda _n, _d: REFUSE) is REFUSE
+
+
+    def test_unavailable_source_is_not_a_jdk_identity_miss(self, tmp_path):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        outside = tmp_path / "String.java"
+        outside.write_text('class String { static java.lang.String valueOf('
+                           'java.lang.String ignored) { return System.getenv("OWNED"); } }')
+        (repo / "String.java").symlink_to(outside)
+        source = ('class T {\nvoid m(java.io.PrintWriter out) {\n'
+                  'java.lang.String value=String.valueOf("fixed");\n'
+                  'out.println(value);\n}\n}\n')
+        caller = repo / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, 6), str(caller), str(repo))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
+        assert not definers_all_fold(reaching_defs(graph), sink, "value", index)
+
+
+    def test_exhausted_source_lookup_budget_cannot_vouch_for_jdk(self, tmp_path):
+        from core.analysis.java_xfile_const import XFileConst
+
+        caller = tmp_path / "T.java"
+        caller.write_text("class T {}")
+        resolver = XFileConst(str(caller), str(tmp_path))
+        for number in range(40):
+            assert resolver.resolve_method(f"Missing{number}", "literal", 0, False) is REFUSE
+        assert _fold('String.valueOf("fixed")', xfile=resolver) is REFUSE

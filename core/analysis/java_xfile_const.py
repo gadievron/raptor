@@ -155,6 +155,7 @@ class XFileConst:
             and self._root.is_dir()
         self._imports: dict[str, str] = {}
         self._class_cache: dict[str, tuple[Any, Path] | None] = {}
+        self._class_refusals: set[str] = set()
         # simple class name -> does ANY <Simple>.java exist under the
         # root (the JDK tier's miss proof; see resolve_field).
         self._simple_name_cache: dict[str, bool] = {}
@@ -260,11 +261,19 @@ class XFileConst:
             if declaring_root is not None and declaring is not None:
                 result = (declaring_root, declaring)
         except _Refused:
+            self._class_refusals.add(chain)
             result = None
         except Exception:  # noqa: BLE001 — refusal direction
+            self._class_refusals.add(chain)
             result = None
         self._class_cache[chain] = result
         return result
+
+    def source_class_may_exist(self, chain: str) -> bool:
+        """A located source or refused lookup cannot vouch for a JDK miss."""
+        if chain not in self._class_cache and len(self._class_cache) >= _MAX_CLASS_CACHE:
+            return True
+        return self._locate_class(chain) is not None or chain in self._class_refusals
 
     # ---- restricted folding over a declaring class ----------------------
 
