@@ -25025,7 +25025,7 @@ def _extract_all_hypotheses(
     return result
 
 
-def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> bool:
+def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase, material_admission=None) -> bool:
     """Persist a scoped refutation before granting it verdict authority."""
     if not isinstance(results, ToolChainResult):
         return False
@@ -25038,6 +25038,8 @@ def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> 
         source_identity=capture_source_identity(config.target_path, outcome.file),
     ):
         return False
+    if material_admission is not None:
+        receipt = replace(receipt, material_admission=material_admission)
     existing = getattr(outcome, "claim_refutations", ()) or ()
     if not isinstance(existing, (tuple, list)):
         existing = ()
@@ -25177,9 +25179,14 @@ def _verify_hypotheses_immediate(
     outcome.review_result["review_claims"] = record_intake(outcome.review_result.get("review_claims"), revisions)
 
     for hyp, claim_revision in zip(hypotheses, revisions):
-        verifications.append(ClaimVerification(hyp, claim_revision=claim_revision))
         mechanism = hyp["mechanism"]
+        material_admission = _claim_material_admission(outcome, mechanism)
+        verifications.append(ClaimVerification(hyp, claim_revision=claim_revision, material_admission=material_admission))
         hyp_cwe = hyp.get("cwe", cwe) or cwe
+        material_reason = _claim_material_rejection(outcome, mechanism, hyp, admission=material_admission)
+        if material_reason:
+            _note_ambiguous_claim_material(outcome, mechanism, config, phase="ihv", reason=material_reason)
+            continue
 
         # Step 1a: prep-phase mechanical correlation (free, instant)
         mech_tool = _correlated_mech_detector_tool(
@@ -25214,7 +25221,7 @@ def _verify_hypotheses_immediate(
             # Cap exhaustion = untested (not refuted) — don't increment.
             verification = _try_bound_ihv_synthesis(
                 outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
-                claim_revision=claim_revision,
+                claim_revision=claim_revision, material_admission=verifications[-1].material_admission,
             )
             if verification is not None:
                 verifications[-1] = verification
@@ -25230,7 +25237,7 @@ def _verify_hypotheses_immediate(
             # Cap exhaustion = untested (not refuted) — don't increment.
             verification = _try_bound_ihv_synthesis(
                 outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
-                claim_revision=claim_revision,
+                claim_revision=claim_revision, material_admission=verifications[-1].material_admission,
             )
             if verification is not None:
                 verifications[-1] = verification
@@ -25301,6 +25308,7 @@ def _verify_hypotheses_immediate(
             )
         elif _retain_claim_refutation(
             outcome, tools_confirmed, config, hypothesis=mechanism, phase="ihv",
+            material_admission=verifications[-1].material_admission,
         ):
             verifications[-1] = verifications[-1].with_observation(refuted=True)
 
@@ -25334,7 +25342,8 @@ def _get_llm_client(config: OrchestratorConfig):
     return observed_client(getattr(config, "llm_client", None), purpose="verification")
 
 
-def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter, *, claim_revision=None):
+def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter, *, claim_revision=None,
+                             material_admission=None):
     """Bind the immediate synthesis request before spending an attempt.
 
     The existing aggregator rechecks this binding after synthesis and
@@ -25342,13 +25351,24 @@ def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesi
     """
     if synthesis_counter is None:
         return None
+    if material_admission is None:
+        material_admission = _claim_material_admission(outcome, hyp["mechanism"])
+    material_reason = _claim_material_rejection(outcome, hyp["mechanism"], hyp, admission=material_admission)
+    if material_reason:
+        _note_ambiguous_claim_material(outcome, hyp["mechanism"], config, phase="ihv_synthesis", reason=material_reason)
+        return None
     bound = _bind_synthesis_request(outcome, config, hyp, source)
     if bound is None:
         return None
     request, snippet = bound
+    material_reason = _claim_material_rejection(outcome, hyp["mechanism"], hyp, admission=material_admission)
+    if material_reason:
+        _note_ambiguous_claim_material(outcome, hyp["mechanism"], config, phase="ihv_synthesis", reason=material_reason)
+        return None
     if not synthesis_counter.try_reserve():
         return None
-    snapshot = ClaimVerification(hyp, binding=request.binding, claim_revision=claim_revision)
+    snapshot = ClaimVerification(hyp, binding=request.binding, claim_revision=claim_revision,
+                                 material_admission=material_admission)
     stamp = _try_ihv_synthesis(outcome, config, result, snapshot.hypothesis, cwe, snippet)
     if stamp:
         return snapshot.with_observation((stamp,), binding=request.binding)
@@ -25456,6 +25476,14 @@ def _aggregate_ihv_verdicts(
     Gates block PROMOTION, not verification — tool evidence is preserved
     for the slow path even when a gate blocks.
     """
+    # Observe current declarations before any reporting/context callbacks.
+    # Untracked legacy producers keep their own frozen claim, while this
+    # snapshot can still reject a later change in the assessment being graded.
+    material_at_admission: dict[int, tuple[str, tuple[str, ...]] | None] = {
+        id(record): (record.material_admission if record.material_admission is not None
+                     else _claim_material_admission(outcome, record.hypothesis.get("mechanism")))
+        for record in verifications
+    }
     try:
         from .check_trace import record_claim_observations
 
@@ -25480,7 +25508,9 @@ def _aggregate_ihv_verdicts(
     for support in proposals:
         verification = support.verification
         mechanism = verification.hypothesis["mechanism"]
-        reason = verification.scope_rejection(
+        admission = material_at_admission[id(verification)]
+        submitted = verification.hypothesis if verification.material_admission is not None else None
+        reason = _claim_material_rejection(outcome, mechanism, submitted, admission=admission) or verification.scope_rejection(
             file=outcome.file, function=outcome.function, line_start=outcome.line,
             hypothesis=mechanism, source_identity=current_source,
         )
@@ -25492,6 +25522,7 @@ def _aggregate_ihv_verdicts(
         else:
             admitted = _admit_ihv_synth_receipts(support, outcome, config)
             if admitted is not None:
+                material_at_admission[id(admitted.verification)] = admission
                 supports.append(admitted)
     if tools:
         outcome.review_result["ihv_tools"] = tools
@@ -25527,10 +25558,14 @@ def _aggregate_ihv_verdicts(
         current_source = capture_source_identity(config.target_path, candidate.file) if (
             verification.binding is not None and verification.binding.source_identity is not None
         ) else None
-        reason = verification.scope_rejection(
+        admission = material_at_admission[id(verification)]
+        submitted = hyp if verification.material_admission is not None else None
+        reason = (_claim_material_rejection(outcome, hyp["mechanism"], submitted, admission=admission)
+                  or _claim_material_rejection(candidate, hyp["mechanism"], submitted, admission=admission)
+                  or verification.scope_rejection(
             file=candidate.file, function=candidate.function, line_start=candidate.line,
             hypothesis=candidate.hypothesis, source_identity=current_source,
-        )
+        ))
         if reason is None and candidate.review_result.get("hypothesis") != hyp["mechanism"]:
             reason = "claim-revised"
         if reason:
@@ -25579,9 +25614,22 @@ def _aggregate_ihv_verdicts(
         blocked_review["ihv_hypotheses_confirmed"] = outcome.review_result["ihv_hypotheses_confirmed"]
         return blocked
     current_source = capture_source_identity(config.target_path, outcome.file)
-    refuted_count = sum(v.refuted and claims_refuted(
-        outcome, [v.hypothesis["mechanism"]], source_identity=current_source,
-    ) for v in verifications)
+    refuted_count = 0
+    for verification in verifications:
+        if not verification.refuted:
+            continue
+        claim = verification.hypothesis
+        mechanism = claim["mechanism"]
+        submitted = claim if verification.material_admission is not None else None
+        reason = _claim_material_rejection(outcome, mechanism, submitted,
+                                           admission=material_at_admission[id(verification)])
+        if reason:
+            outcome.review_result["ihv_gate_blocked"] = reason
+            _record_ihv_scope_rejection(verification, outcome, config, hypothesis=mechanism,
+                                        reason=reason, current_source=current_source)
+            continue
+        if claims_refuted(outcome, [mechanism], source_identity=current_source):
+            refuted_count += 1
     if refuted_count == len(hypotheses) and hypotheses:
         outcome.status = "clean"
         outcome.review_result["immediate_verified"] = True
@@ -30656,6 +30704,44 @@ def _primary_hypothesis_entry(
     return entries[0]
 
 
+def _claim_material_admission(outcome, hypothesis) -> tuple[str, tuple[str, ...]] | None:
+    """Capture rejection-only material context; an empty tuple is known absence."""
+    from .claims import hypothesis_material_key
+
+    selected = _primary_hypothesis_entry(outcome, hypothesis)
+    if selected is None:
+        return None
+    review = outcome.review_result or {}
+    default_cwe = review.get("cwe_class") or review.get("cwe") or ""
+    if not isinstance(default_cwe, str):
+        return None
+    if not selected:
+        return default_cwe, ()
+    key = hypothesis_material_key(selected, default_cwe=default_cwe)
+    return (default_cwe, key) if key is not None else None
+
+
+def _claim_material_rejection(outcome, hypothesis, submitted=None, *, admission=None) -> str | None:
+    """Narrow admission without borrowing stale premises or expanding proof."""
+    from .claims import hypothesis_material_key
+
+    selected = _primary_hypothesis_entry(outcome, hypothesis)
+    if selected is None:
+        return "ambiguous-claim-material"
+    if admission is not None:
+        default_cwe, expected = admission
+        observed = hypothesis_material_key(selected, default_cwe=default_cwe) if selected else ()
+        if observed != expected:
+            return "claim-material-revised"
+    if submitted is not None and selected:
+        review = outcome.review_result or {}
+        default_cwe = review.get("cwe_class") or review.get("cwe") or ""
+        key = hypothesis_material_key(submitted, default_cwe=default_cwe)
+        if key is None or key != hypothesis_material_key(selected, default_cwe=default_cwe):
+            return "claim-material-revised"
+    return None
+
+
 def _note_ambiguous_claim_material(outcome, hypothesis, config, *, phase, reason="ambiguous-claim-material"):
     """Retain a deferral reason without claiming refutation or dispatch."""
     if outcome.review_result is None:
@@ -31309,6 +31395,8 @@ def _dispatch_secondary_hypotheses(
     mechanism specificity. Dispatches are counted in tier telemetry
     under ``secondary_sweep``.
     """
+    from copy import deepcopy
+
     for i, outcome in enumerate(result.outcomes):
         if outcome.status not in ("finding", "suspicious"):
             continue
@@ -31325,7 +31413,7 @@ def _dispatch_secondary_hypotheses(
             or ""
         ).strip().lower()
 
-        secondary = []
+        secondary: list[tuple[dict[str, Any], tuple[str, tuple[str, ...]]]] = []
         seen_mechanisms = {primary} if primary else set()
         for h in hypotheses:
             if not isinstance(h, dict):
@@ -31339,15 +31427,20 @@ def _dispatch_secondary_hypotheses(
             if norm in seen_mechanisms:
                 continue
             seen_mechanisms.add(norm)
-            secondary.append(h)
+            admission = _claim_material_admission(outcome, mechanism)
+            material_reason = _claim_material_rejection(outcome, mechanism, h, admission=admission)
+            if admission is None or material_reason:
+                _note_ambiguous_claim_material(outcome, mechanism, config, phase="secondary_sweep", reason=material_reason or "ambiguous-claim-material")
+                continue
+            secondary.append((deepcopy(h), admission))
         if not secondary:
             continue
 
         ranked = sorted(
             secondary,
-            key=lambda h: (
-                (h.get("confidence") or "").lower() == "high",
-                _mechanism_specificity(h.get("mechanism", "")),
+            key=lambda item: (
+                (item[0].get("confidence") or "").lower() == "high",
+                _mechanism_specificity(item[0].get("mechanism", "")),
             ),
             reverse=True,
         )[:_MAX_REFUTED_DISPATCHES_PER_FN]
@@ -31365,10 +31458,14 @@ def _dispatch_secondary_hypotheses(
         fallback_cwe = _effective_cwe(outcome, result.tier_counters)
 
         promoted = False
-        for h in ranked:
+        for h, admission in ranked:
             if promoted:
                 break
             mechanism = h.get("mechanism", "")
+            material_reason = _claim_material_rejection(outcome, mechanism, h, admission=admission)
+            if material_reason:
+                _note_ambiguous_claim_material(outcome, mechanism, config, phase="secondary_sweep", reason=material_reason)
+                continue
 
             # Per-hypothesis CWE: the secondary mechanism may belong to
             # a different class than the review-level tag.
@@ -31431,6 +31528,10 @@ def _dispatch_secondary_hypotheses(
                 result.tier_counters, "secondary_sweep",
                 "confirmed" if confirmed else "inconclusive",
             )
+            material_reason = _claim_material_rejection(outcome, mechanism, h, admission=admission)
+            if material_reason:
+                _note_ambiguous_claim_material(outcome, mechanism, config, phase="secondary_sweep_result", reason=material_reason)
+                continue
             if not confirmed:
                 try:
                     from .cwe_dispatch import dark_verify_applicable as _dva
@@ -31501,6 +31602,10 @@ def _dispatch_secondary_hypotheses(
                 _queue_premise_study_question(config, outcome, h)
                 continue
 
+            material_reason = _claim_material_rejection(outcome, mechanism, h, admission=admission)
+            if material_reason:
+                _note_ambiguous_claim_material(outcome, mechanism, config, phase="secondary_sweep_result", reason=material_reason)
+                continue
             tool = "+".join(high_prec)
             if outcome.review_result is not None:
                 outcome.review_result.setdefault(

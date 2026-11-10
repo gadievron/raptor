@@ -6,6 +6,19 @@ from typing import Any
 from uuid import uuid4
 
 
+MaterialAdmission = tuple[str, tuple[str, ...]]
+
+
+def validate_material_admission(admission: object) -> None:
+    """Validate immutable rejection context, never checker evidence."""
+    if admission is not None and not (
+        isinstance(admission, tuple) and len(admission) == 2
+        and isinstance(admission[0], str) and isinstance(admission[1], tuple)
+        and all(isinstance(value, str) for value in admission[1])
+    ):
+        raise TypeError("material admission must contain immutable declared material")
+
+
 @dataclass(frozen=True, init=False)
 class ClaimRevision:
     """One fixed statement in an explicitly linked claim history.
