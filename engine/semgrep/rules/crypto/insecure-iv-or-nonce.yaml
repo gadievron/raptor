@@ -17,19 +17,34 @@ rules:
   # cryptography.hazmat AEAD classes: inline `AESGCM(k).encrypt(b"...", ...)`
   # and the two-step variable-instance shape `a = AESGCM(k)` ... `a.encrypt(b"...", ...)`.
   - id: raptor.crypto.nonce.literal.python
-    message: Nonce is a constant literal. Use os.urandom() or library defaults. Verify randomness.
+    message: >-
+      Candidate: encryption is passed a literal nonce. Review nonce uniqueness
+      for each key and the actual encryption calls. These APIs require an
+      explicit nonce; a literal alone does not establish reuse.
     languages: [python]
     severity: HIGH
     patterns:
       - pattern-either:
-          - pattern: $AEAD($K).encrypt($NONCE, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESGCM($K).encrypt($NONCE, ...)
           - pattern: |
-              $A = $AEAD($K)
+              $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
               ...
               $A.encrypt($NONCE, ...)
-      - metavariable-regex:
-          metavariable: $AEAD
-          regex: "^(AESGCM|ChaCha20Poly1305|AESCCM|AESOCB3)$"
+          - pattern: cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K).encrypt($NONCE, ...)
+          - pattern: |
+              $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
+              ...
+              $A.encrypt($NONCE, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESCCM($K).encrypt($NONCE, ...)
+          - pattern: |
+              $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
+              ...
+              $A.encrypt($NONCE, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K).encrypt($NONCE, ...)
+          - pattern: |
+              $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
+              ...
+              $A.encrypt($NONCE, ...)
       - metavariable-pattern:
           metavariable: $NONCE
           patterns:
