@@ -396,7 +396,7 @@ def read_default_max_cost_usd() -> float | None:
         return None
     try:
         cap = float(val)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(cap) or cap <= 0:
         return None
@@ -407,7 +407,7 @@ def read_throttle_cooldown_s() -> float:
     """Read ``throttle_cooldown_s`` from tuning.json.  Defaults to 30."""
     try:
         return float(_read_tuning().get("throttle_cooldown_s", 30))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, OverflowError):
         return 30.0
 
 
