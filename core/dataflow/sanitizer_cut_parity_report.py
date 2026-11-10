@@ -39,7 +39,6 @@ from core.dataflow.sanitizer_cut_parity import (
     ParitySummary,
     aggregate_parity,
     build_parity_record,
-    render_parity_report,
     value_bound_verdict_for,
 )
 
@@ -211,21 +210,21 @@ def build_baseline_summary() -> ParitySummary:
     return aggregate_parity(build_baseline_records())
 
 
-def render_baseline_report() -> str:
-    summary = build_baseline_summary()
-    body = render_parity_report(
-        summary, title="Sanitizer-cut parity — first baseline report",
-    )
-    note = (
-        "\n> **Baseline, not the gating window.** This report is "
-        "generated from a small synthetic fixture set "
-        "(`core/dataflow/sanitizer_cut_parity_report.py`) to prove the "
-        "telemetry machinery end-to-end and expose the value-bound "
-        "gate's current coverage. The Phase 16 gate is decided on the "
-        "real horizon window collected from `/agentic` runs via the "
-        "shadow log.\n"
-    )
-    return body + note
+def render_baseline_report(
+    summary: ParitySummary | None = None, *, format: str = "markdown",
+) -> str:
+    """Render supplied measurements; the legacy no-argument call builds once.
+
+    Capture with ``build_baseline_summary`` once before requesting several
+    formats. Presentation never changes the caller's sanitizer-cut setting.
+    """
+    from core.reporting.renderers import render_document
+    from .parity_document import build_parity_document
+
+    captured = build_baseline_summary() if summary is None else summary
+    document = build_parity_document(captured, title="Sanitizer-cut parity — first baseline report",
+                                     synthetic_baseline=True)
+    return render_document(document, format).content.decode()
 
 
 __all__ = [
