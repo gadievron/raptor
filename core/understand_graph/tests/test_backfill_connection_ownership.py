@@ -33,6 +33,7 @@ def _exercise(tmp_path, stage, error, after):
                 raise failure
             result = self.connection.execute(sql, *args)
             if error and selected:
+                result.close()
                 raise failure
             return result
 
