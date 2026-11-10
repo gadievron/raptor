@@ -369,6 +369,7 @@ class TestUntallyKeepsSpend:
 
 @pytest.mark.slow
 class TestEndToEndReconciliation:
+    @pytest.mark.usefixtures("_no_layer_disagreement_review")
     def test_failed_attempt_spend_reaches_breakdown_and_summary(
         self, tmp_path,
     ):

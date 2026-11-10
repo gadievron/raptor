@@ -16039,6 +16039,9 @@ def _check_budget(
     # drain/report path with a resume hint.
     if _environment_stop_booked(config, result):
         return True
+    # A raised client budget error remains terminal even without a live ledger.
+    if result.terminated_by == "llm_budget_exceeded":
+        return True
     if (
         not skip_max_seconds
         and config.max_seconds

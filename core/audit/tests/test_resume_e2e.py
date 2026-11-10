@@ -190,6 +190,7 @@ def _review_loop_only():
             mp.setattr(capabilities, "probe_capabilities",
                        lambda *a, **kw: capabilities.AuditCapabilities())
             mp.setattr(orchestrator, "_study_consumer", lambda *a, **kw: None)
+            mp.setattr(orchestrator, "_check_layer_disagreement", lambda *a, **kw: None)
             yield
 
 

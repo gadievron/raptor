@@ -252,3 +252,17 @@ def invariant_unit_worker(monkeypatch, request):
         return original(tag, args, **kwargs)
 
     monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)
+
+
+@pytest.fixture
+def _no_layer_disagreement_review(monkeypatch):
+    """Keep first-review contracts separate from disagreement reconsideration.
+
+    Knowledge history makes a canned result non-empty, so mechanical evidence
+    can legitimately schedule another review. These callers exercise the
+    initial review and recall seams; disagreement tests retain the real path.
+    """
+    monkeypatch.setattr(
+        "core.audit.orchestrator._check_layer_disagreement",
+        lambda *a, **k: None,
+    )
