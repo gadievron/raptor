@@ -42,6 +42,7 @@ contract.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from dataclasses import dataclass, field
@@ -153,6 +154,17 @@ def last_activity_age_s(run_dir: Path) -> float | None:
     return max(0.0, time.time() - latest)
 
 
+def _finite_number(value: Any) -> float | None:
+    """Convert display metadata without discarding independent evidence."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
+
+
 def _read_lifecycle(digest: RunDigest) -> None:
     from core.run.metadata import load_run_metadata
     meta = load_run_metadata(digest.run_dir)
@@ -163,9 +175,7 @@ def _read_lifecycle(digest: RunDigest) -> None:
     digest.timestamp = str(meta.get("timestamp") or "")
     end = meta.get("end_timestamp")
     digest.end_timestamp = str(end) if end else None
-    dur = meta.get("duration_seconds")
-    if isinstance(dur, (int, float)) and not isinstance(dur, bool):
-        digest.duration_seconds = float(dur)
+    digest.duration_seconds = _finite_number(meta.get("duration_seconds"))
     target = meta.get("target_path")
     if isinstance(target, str) and target:
         digest.target_path = target
@@ -189,10 +199,9 @@ def _read_spend(digest: RunDigest) -> None:
         )
         booked, note = resolve_prior_spend(digest.run_dir)
         cfg = load_run_config(digest.run_dir) or {}
-        cap = cfg.get("max_cost_usd")
-        if isinstance(cap, (int, float)) and not isinstance(cap, bool) \
-                and cap > 0:
-            digest.max_cost_usd = float(cap)
+        cap = _finite_number(cfg.get("max_cost_usd"))
+        if cap is not None and cap > 0:
+            digest.max_cost_usd = cap
     except Exception:  # noqa: BLE001 — layer readers degrade to absent
         logger.debug("digest: spend layer unreadable", exc_info=True)
         return
@@ -226,6 +235,7 @@ def _telemetry_ts(value: Any) -> str | None:
 
 def _read_telemetry(digest: RunDigest) -> None:
     from core.llm.telemetry import TELEMETRY_FILENAME
+    from core.run.resume import spend_value
     path = digest.run_dir / TELEMETRY_FILENAME
     if not path.is_file():
         return
@@ -236,9 +246,9 @@ def _read_telemetry(digest: RunDigest) -> None:
         if not isinstance(rec, dict):
             continue
         event = rec.get("event")
-        cost = rec.get("cost_usd")
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-            live_cost += max(0.0, float(cost))
+        cost = spend_value(rec.get("cost_usd"))
+        if cost is not None:
+            live_cost += cost
         if event == "call":
             digest.llm_calls += 1
         elif event == "attempt_failed":
