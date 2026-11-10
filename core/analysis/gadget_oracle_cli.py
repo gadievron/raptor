@@ -50,6 +50,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-chains", type=int, default=20,
         help="Chains rendered in the human summary (default 20)",
     )
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(parser)
     return parser
 
 
@@ -146,7 +148,17 @@ def _print_summary(report: dict, max_chains: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    from core.reporting.options import ReportOptions, options_from_args
+    from core.analysis.gadget_reporting import prepare
+    options = options_from_args(args, parser)
+    if not (args.report_format or args.report_output or args.no_report):
+        options = ReportOptions(enabled=False)
+    try:
+        prepare(options, Path(args.target), Path(args.out) if args.out else None)
+    except ValueError as exc:
+        parser.error(str(exc))
     from core.analysis.gadget_oracle import (
         ARTIFACT_NAME,
         php_grammar_available,
@@ -193,6 +205,8 @@ def main(argv: list[str] | None = None) -> int:
         print(dumps_artifact(report, ensure_ascii=True))
     else:
         _print_summary(report, max(args.max_chains, 0))
+    from core.analysis.gadget_reporting import emit
+    emit(report, target, Path(args.out) if args.out else None, options)
     return 0
 
 
