@@ -87,6 +87,41 @@ def test_invalid_call_operand_is_rejected_before_allocation(monkeypatch, native,
     assert model.anon_var_map == {} and model.axioms == []
 
 
+@pytest.mark.parametrize("side", ["leading", "trailing", "both"])
+def test_raw_call_operand_limit_precedes_lexical_work(monkeypatch, side):
+    call = "probe(Data)"
+    padding = " " * (paths._MAX_CONDITION_CHARS + 1 - len(call))
+    text = padding + call if side == "leading" else call + padding
+    if side == "both":
+        midpoint = len(padding) // 2
+        text = padding[:midpoint] + call + padding[midpoint:]
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("over-limit raw operand reached lexical work")
+
+    monkeypatch.setattr(paths, "mask_non_code", forbidden)
+    variables = {}
+    model = paths.CallOperandModel()
+    with pytest.raises(ValueError, match="character limit"):
+        paths.make_call_operand(text, variables, profile=BV_C_UINT8, model=model)
+    assert variables == {} and model.anon_var_map == {} and model.axioms == []
+
+
+@pytest.mark.parametrize("length", [paths._MAX_CONDITION_CHARS - 1, paths._MAX_CONDITION_CHARS],
+                         ids=["below-limit", "at-limit"])
+def test_in_limit_padded_call_operand_retains_its_occurrence(native, length):
+    call = "probe(Data)"
+    padding = " " * (length - len(call))
+    midpoint = len(padding) // 2
+    text = padding[:midpoint] + call + padding[midpoint:]
+    variables = {}
+    model = paths.CallOperandModel()
+    value = paths.make_call_operand(text, variables, profile=BV_C_UINT8, model=model)
+    assert value.size() == BV_C_UINT8.width
+    assert model.anon_var_map == {str(value): call} and model.axioms == []
+    assert variables[str(value)].eq(value)
+
+
 def test_operand_theory_does_not_acquire_mutation_segment_ownership(native):
     model = paths.CallOperandModel(axioms=[("unowned operand theory", native.BoolVal(False))])
     result = paths.check_verb_feasibility([], [paths.PathCondition("Value = 2", 0)], {},

@@ -1668,9 +1668,9 @@ def make_call_operand(
     Explicit mutation and ambiguous address/bitwise argument syntax require
     a state-effect model and decline before allocating a call occurrence.
     """
-    text = text.strip()
     if len(text) > _MAX_CONDITION_CHARS:
         raise ValueError("call operand exceeds the condition character limit")
+    text = text.strip()
     effect_text, lexical_complete = mask_non_code(text)
     if not lexical_complete or _ASSIGNMENT_SHAPED_RE.search(effect_text) or _call_may_expose_state(effect_text):
         raise ValueError("call operand has unmodeled scalar state effects")
