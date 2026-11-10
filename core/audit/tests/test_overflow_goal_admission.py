@@ -71,4 +71,4 @@ def test_confined_overflow_worker_preserves_a_positive_closed_goal():
         hypothesis='integer overflow in `Value` times `Count`', integer_abi='ilp32')
     assert result.outcome == 'confirmed', result.errors
     assert result.matches and not result.errors
-    assert result.details['source_scope']['goal_contract'] == 'closed-overflow-objective-v1'
+    assert result.details['source_scope']['goal_contract'] == 'closed-overflow-objective-v2'

@@ -162,7 +162,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         # explicit claim, operation, guard, type and variable-identity contract.
         from .integer_abi import integer_abi_record
         binding["query_contract"] = "common-width-integer-operands-v25"
-        binding["goal_contract"] = "closed-overflow-objective-v1"
+        binding["goal_contract"] = "closed-overflow-objective-v2"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-comparison":
         from .integer_abi import integer_abi_record

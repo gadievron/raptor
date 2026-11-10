@@ -226,7 +226,8 @@ def parse_overflow_claim(hypothesis: str) -> ArithmeticClaim | None:
     # Use the original token span, retaining all surrounding qualifications.
     # Individual code quotes and English operator aliases remain expressions.
     goal = hypothesis[:start] + "`arithmetic`" + hypothesis[end:]
-    return claim if parse_integer_goal(goal, OVERFLOW_GOALS) is not None else None
+    requested = parse_integer_goal(goal, OVERFLOW_GOALS)
+    return claim if requested in {"overflow", claim.operator} else None
 
 
 def has_integer_overflow_subject(hypothesis: str) -> bool:

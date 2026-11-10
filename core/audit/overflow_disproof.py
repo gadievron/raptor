@@ -77,7 +77,7 @@ def _request(
 
 def _binding(request):
     return {
-        "query_contract": "source-overflow-disproof-v2",
+        "query_contract": "source-overflow-disproof-v3",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8", "surrogatepass")
         ).hexdigest(),

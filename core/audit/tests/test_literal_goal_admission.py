@@ -25,7 +25,7 @@ def test_negated_array_goal_cannot_be_confirmed_by_a_literal_tuple():
 def test_positive_literal_goal_retains_a_validated_tuple(goal):
     reply = check_literal_calls(SOURCE, 'Read', 'check-array-bounds', goal, 'lp64', [2])
     assert reply['status'] == 'checked'
-    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v13'
+    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v14'
     assert len(reply['calls']) == 1
     call = reply['calls'][0]
     assert call['verdict'] == 'violation' and call['arguments'] == {'Index': 4}
