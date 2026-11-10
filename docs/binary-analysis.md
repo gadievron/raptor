@@ -700,3 +700,10 @@ plan status and outstanding prerequisites. Verification steps are requirements,
 not passed tests. Exporting neither repeats planning or ranking nor builds, runs
 or validates the generated candidate. Source and build scripts remain referenced
 artifacts rather than copied report content.
+
+Graph queries also accept report flags. For example,
+`/binary graph RUN_DIR --evidence --report-format json` keeps native JSON on
+stdout and exports a metadata receipt with up to 100 returned records. Counts
+apply to the selected query, not the whole program. Raw evidence properties
+and free-form evidence summaries stay in native JSON rather than the report.
+No second graph query runs for export.
