@@ -3377,6 +3377,10 @@ def _format_glance_prompt(ctx: dict[str, Any]) -> str:
     summary = _glance_caller_contract_line(ctx.get("caller_contract"))
     if summary:
         parts.append(summary)
+    if mode == "quality":
+        obligations = _format_injected_hypotheses(ctx.get("injected_hypotheses"))
+        if obligations:
+            parts.append(obligations)
     parts.append(question)
     return "\n".join(parts)
 

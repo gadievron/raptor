@@ -7224,6 +7224,21 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         logger.debug("consistency prepass seeding failed",
                      exc_info=True)
 
+    # Source arithmetic discovery is QUALITY-only and hint-tier. It does
+    # not stamp a finding or bypass the normal source-bound SMT oracle.
+    if config.mode == "quality":
+        try:
+            from .arithmetic_seeds import seed_arithmetic_hypotheses
+
+            n_arithmetic_seeds = seed_arithmetic_hypotheses(
+                gaps, _gap_source_texts(), mode=config.mode,
+                integer_abi=getattr(config, "integer_abi", None),
+            )
+            if n_arithmetic_seeds:
+                logger.info("source arithmetic: %d review obligations seeded", n_arithmetic_seeds)
+        except Exception:
+            logger.debug("source arithmetic seeding failed", exc_info=True)
+
     # Context-map sink seeding: the map phase records sink details
     # whose reachability prose can state a finding in all but name
     # (a redirect sink noting client-controllable headers reaching
