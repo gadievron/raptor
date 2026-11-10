@@ -2766,6 +2766,11 @@ def _lexical_var_reaches_sink(
 
         if native_value_epoch_unverified(source_text, var, validator_line, sink_line, language=language):
             return False
+        if language in {"javascript", "typescript", "tsx"}:
+            from core.analysis.validator_value_scope import native_object_input_unverified
+
+            if native_object_input_unverified(source_text, var, validator_line, language=language):
+                return False
     return _lexical_epoch_preserved(var, views, validator_line, sink_line)
 
 
