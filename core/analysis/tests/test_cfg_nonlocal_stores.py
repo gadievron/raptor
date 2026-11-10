@@ -61,6 +61,14 @@ def test_every_builder_module_has_a_scope_discipline_leg():
 # ---------------------------------------------------------------------------
 
 
+def _python_path_control(source):
+    # Preserve the scope/write shape while using an unconditional catalogue
+    # profile; HTML calls now require a separately established input contract.
+    return (source.replace("import html", "import werkzeug")
+            .replace("html.escape(", "werkzeug.utils.secure_filename(")
+            .replace("render(", "open("))
+
+
 _PY_GLOBAL = '''
 import html
 def handle(x):
@@ -483,20 +491,20 @@ class TestGateEndToEnd:
 
     def test_python_global_rebinding_does_not_suppress(self):
         from core.analysis.sanitizer_cut import evaluate_finding
-        cfg = build_python_cfg(_PY_GLOBAL, "handle")
-        sink = next(n for n in cfg.nodes() if "render" in n.calls)
+        cfg = build_python_cfg(_python_path_control(_PY_GLOBAL), "handle")
+        sink = next(n for n in cfg.nodes() if "open" in n.calls)
         result = evaluate_finding(
             cfg, [cfg.entry], sink,
-            cwe="CWE-79", language="python",
+            cwe="CWE-22", language="python",
             source_symbols=["x"], sink_arg="cfg",
         )
         assert not result.suppress
         # The local twin still suppresses.
-        cfg2 = build_python_cfg(_PY_LOCAL, "handle")
-        sink2 = next(n for n in cfg2.nodes() if "render" in n.calls)
+        cfg2 = build_python_cfg(_python_path_control(_PY_LOCAL), "handle")
+        sink2 = next(n for n in cfg2.nodes() if "open" in n.calls)
         result2 = evaluate_finding(
             cfg2, [cfg2.entry], sink2,
-            cwe="CWE-79", language="python",
+            cwe="CWE-22", language="python",
             source_symbols=["x"], sink_arg="cfg",
         )
         assert result2.suppress
@@ -549,15 +557,15 @@ class TestGateEndToEnd:
         from core.analysis.taint_summaries import build_taint_summaries
 
         src = (
-            "import html\n"
+            "import werkzeug\n"
             "def _clean(s):\n"
             "    global tmp\n"
-            "    tmp = html.escape(s)\n"
+            "    tmp = werkzeug.utils.secure_filename(s)\n"
             "    other()\n"
             "    return tmp\n"
             "def handler(x):\n"
             "    y = _clean(x)\n"
-            "    render(y)\n"
+            "    open(y)\n"
         )
 
         def gate(source: str, sink_line: int):
@@ -569,11 +577,11 @@ class TestGateEndToEnd:
             )
             cfg = build_python_cfg(source, "handler")
             bindings = synthetic_sanitizer_bindings(
-                cfg, fn_ast, summaries, "CWE-79", "python")
+                cfg, fn_ast, summaries, "CWE-22", "python")
             sink = next(n for n in cfg.nodes() if n.lineno == sink_line)
             return evaluate_finding(
                 cfg, [cfg.entry_node], sink,
-                cwe="CWE-79", language="python",
+                cwe="CWE-22", language="python",
                 source_symbols=["x"], sink_arg="y",
                 extra_bindings=bindings,
             )

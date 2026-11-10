@@ -76,3 +76,10 @@ class TestBaselineSummary:
         assert "Safe to remove lexical (Phase 16 gate): NO" in report
 
 
+
+
+def test_structural_fixture_profiles_are_explicit():
+    records = {record.finding_id: record for record in build_baseline_records()}
+    for name in ("sanitizer_cut_safe", "sanitizer_cut_wrong_variable", "sanitizer_cut_helper"):
+        assert records[name].cwe == "CWE-22"
+    assert records["validator_guard_safe"].cwe == "CWE-79"

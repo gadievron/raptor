@@ -181,10 +181,10 @@ def test_python_path_unchanged_by_may_escape_check():
     safe straight-line case still suppresses — Phase 10 doesn't
     accidentally downgrade Python verdicts."""
     src = (
-        "import html\n"
+        "import werkzeug\n"
         "def handle(x):\n"
-        "    y = html.escape(x)\n"
-        "    render(y)\n"
+        "    y = werkzeug.utils.secure_filename(x)\n"
+        "    open(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
     assert cfg is not None
@@ -192,7 +192,7 @@ def test_python_path_unchanged_by_may_escape_check():
     sink_node = next(n for n in cfg.nodes() if n.lineno == 4)
     result = evaluate_finding(
         cfg, [cfg.entry_node], sink_node,
-        cwe="CWE-79", language="python",
+        cwe="CWE-22", language="python",
         source_symbols=["x"], sink_arg="y",
     )
     assert result.verdict == VERDICT_SUPPRESS, \
@@ -288,10 +288,10 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
     exercises the evaluate_finding hook directly; Phase 11 wires
     it for real on CPPCFG."""
     src = (
-        "import html\n"
+        "import werkzeug\n"
         "def handle(x):\n"
-        "    y = html.escape(x)\n"
-        "    render(y)\n"
+        "    y = werkzeug.utils.secure_filename(x)\n"
+        "    open(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
     assert cfg is not None
@@ -348,7 +348,7 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
     wrap = WrapGraph(cfg)
     result = evaluate_finding(
         wrap, [_swap(cfg.entry_node)], stamped,
-        cwe="CWE-79", language="python",
+        cwe="CWE-22", language="python",
         source_symbols=["x"], sink_arg="y",
     )
     assert result.verdict == VERDICT_CANDIDATE_ONLY, (
@@ -361,16 +361,16 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
 def test_evaluate_finding_no_downgrade_when_no_may_escape():
     """Regression: the unstamped CFG still suppresses cleanly."""
     src = (
-        "import html\n"
+        "import werkzeug\n"
         "def handle(x):\n"
-        "    y = html.escape(x)\n"
-        "    render(y)\n"
+        "    y = werkzeug.utils.secure_filename(x)\n"
+        "    open(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
     sink = next(n for n in cfg.nodes() if n.lineno == 4)
     result = evaluate_finding(
         cfg, [cfg.entry_node], sink,
-        cwe="CWE-79", language="python",
+        cwe="CWE-22", language="python",
         source_symbols=["x"], sink_arg="y",
     )
     assert result.verdict == VERDICT_SUPPRESS
