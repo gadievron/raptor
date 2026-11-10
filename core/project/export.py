@@ -688,6 +688,14 @@ _PRIVILEGED_FILE_NAMES = frozenset({
     "review-journal.jsonl",           # per-run review journal
     "review-journal-index.json",      # project journal index
     "verified-outcomes.jsonl",        # oracle-verified outcome sidecar
+    "validation-outcomes.json",       # graph outcome replay input
+    # Canonical analysis memory is derived, not locally earned evidence
+    # when restored from an unsigned archive. Keep SQLite opaque, including
+    # recovery sidecars that must not attach to a newly created local store.
+    "raptor.graph.sqlite",
+    "raptor.graph.sqlite-wal",
+    "raptor.graph.sqlite-shm",
+    "raptor.graph.sqlite-journal",
     "iris-taint-specs-refined.json",  # per-run IRIS refined specs
     # Cached Ghidra database: the FIRST candidate context injection,
     # status, sync address anchoring, and decompile read. Export

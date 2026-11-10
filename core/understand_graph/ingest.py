@@ -1259,6 +1259,7 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
     * **Per-run best-effort** — one malformed run directory costs its
       own artefacts, never the runs after it in timestamp order.
     """
+    from core.project.export import _QUARANTINE_DIR_NAME
     from core.run.metadata import RUN_METADATA_FILE
     from .evidence import (
         _rows as evidence_rows,
@@ -1303,7 +1304,8 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
     for child in sorted(project_dir.iterdir()):
         if not child.is_dir():
             continue
-        if child.name in ("graph", "annotations"):
+        # Retained import history is opaque evidence, never a producer run.
+        if child.name in ("graph", "annotations", _QUARANTINE_DIR_NAME):
             continue
         run_meta = load_json(child / RUN_METADATA_FILE)
         ts = ""
