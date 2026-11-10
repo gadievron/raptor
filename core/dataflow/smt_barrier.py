@@ -1314,6 +1314,10 @@ def _lexical_validator_in_branch(
     :func:`_validator_in_branch`: True when the validator line is
     conditionally executed relative to the sink.
 
+    Java first applies a native syntax veto for unsupported control
+    ownership, including multiline braceless conditional parents.
+    A passing veto is not a replacement for the checks below.
+
     Tracks a stack of ``{`` blocks tagged conditional by the keyword
     preceding the brace.  The validator is branch-wrapped when a
     conditional block open at the validator line has closed again
@@ -1364,6 +1368,13 @@ def _lexical_validator_in_branch(
     """
     if java_unicode_unverified(source_text, language=language):
         return True  # Unknown control structure cannot establish dominance.
+    if language == "java":
+        from core.analysis.java_guard_scope import java_guard_scope_unverified
+
+        if java_guard_scope_unverified(
+            source_text, validator_line, sink_line, guard_shaped=guard_shaped,
+        ):
+            return True
     lines = split_source_lines(source_text)
     if not (0 < validator_line <= len(lines) and 0 < sink_line <= len(lines)):
         return True
