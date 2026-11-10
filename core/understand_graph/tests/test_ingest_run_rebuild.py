@@ -12,6 +12,7 @@ containment refusal.
 """
 
 import json
+from contextlib import closing
 
 import pytest
 
@@ -54,7 +55,7 @@ def _write_malformed_run(run_dir, target, ts):
 
 
 def _node_count(graph_path):
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         return conn.execute(
             "SELECT COUNT(*) AS c FROM nodes WHERE stale=0"
         ).fetchone()["c"]
@@ -98,7 +99,7 @@ def test_ingest_run_atomic_on_mid_ingest_crash(tmp_path, monkeypatch):
 
     graph_path = run_dir / "graph" / "raptor.graph.sqlite"
     if graph_path.exists():
-        with open_graph(graph_path) as conn:
+        with closing(open_graph(graph_path)) as conn, conn:
             snaps = conn.execute(
                 "SELECT COUNT(*) AS c FROM snapshots").fetchone()["c"]
         assert snaps == 0, "partial understand snapshot survived the crash"
