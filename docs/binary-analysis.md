@@ -687,3 +687,9 @@ report summaries go to stderr. Counts and analysis caveats remain visible when
 detail is truncated. Asymmetries are review leads, never confirmed findings;
 consistent clusters remain unexamined. Use the native JSON for complete check
 matrices and disproof recipes.
+
+`/binary hunt RUN_DIR --anchor parse --report-format json` exports the captured
+query views. When anchor and caller queries run together, their populations stay
+separate: overlapping observations are not counted as additional findings.
+Degraded scans and native truncation warnings remain visible. Exporting adds no
+extra hunt; native `--json` still prints one JSON record per query on stdout.

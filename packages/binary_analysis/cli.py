@@ -200,6 +200,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Transitive caller depth (clamped to the documented cap)",
     )
     hunt_p.add_argument("--json", action="store_true", help="Emit compact JSON")
+    add_report_arguments(hunt_p)
 
     siblings_p = sub.add_parser(
         "siblings",
@@ -992,6 +993,7 @@ def _hunt_run_dir_for_binary(args: argparse.Namespace, target: Path) -> Path | N
     except (OpLockContention, ProjectArgvError) as e:
         print(f"raptor-binary: {e}", file=sys.stderr)
         return None
+    _capture_map_lifecycle(args, out_dir)
     # Same failure shape as map: an analyse crash must fail the run
     # (not strand it permanently "running") and surface a scrubbed
     # one-liner, never a raw traceback.
@@ -1108,8 +1110,10 @@ def _run_hunt(args: argparse.Namespace) -> int:
         for payload in results:
             print(json.dumps(payload, sort_keys=True, ensure_ascii=True,
                              default=str))
-        return 0
-    _print_hunt_summary(results)
+    else:
+        _print_hunt_summary(results)
+    from .hunt_reporting import complete_hunt_report
+    complete_hunt_report(args, results, run_dir)
     return 0
 
 
@@ -1366,7 +1370,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser", "corpus", "siblings"}:
+    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
