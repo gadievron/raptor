@@ -427,14 +427,14 @@ def test_failed_token_read_closes_descriptor(monkeypatch, fault):
 
     read_fd, write_fd = os.pipe()
     try:
-        os.write(write_fd, b"\xff")
-    finally:
-        os.close(write_fd)
+        try:
+            os.write(write_fd, b"\xff")
+        finally:
+            os.close(write_fd)
 
-    def read(fd, size):
-        raise OSError("injected token read failure")
+        def read(fd, size):
+            raise OSError("injected token read failure")
 
-    try:
         with monkeypatch.context() as patcher:
             if fault == "read":
                 patcher.setattr(sys.modules[__name__], "os", SimpleNamespace(
