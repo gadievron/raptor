@@ -25,6 +25,7 @@ from packages.codeql.dataflow_validator import (
 
 # The refuting charset is DOTLESS: '.' is a pathtrav danger char ('.'
 # builds '..' segments), so dot-admitting charsets must decline.
+# Keep the checked value in a direct alias; calls need their own transfer contract.
 GUARD_APP = """\
 import os
 import re
@@ -34,7 +35,7 @@ def handler(request):
     name = request.args.get('name')
     if not re.match(r'^[A-Za-z0-9_+-]+$', name):
         return None
-    cfg = os.path.join('/etc/app', name)
+    cfg = name
     open(cfg)
 """
 
@@ -80,6 +81,15 @@ class TestPrescreenHook:
         assert any("charset validator at app.py:7" in b
                    for b in result.barriers)
         assert result.smt_paths_checked == 1
+        llm.generate_structured.assert_not_called()
+
+    def test_uncertified_call_result_does_not_refute(self, guard_repo):
+        source = GUARD_APP.replace("    cfg = name\n",
+                                   "    cfg = os.path.join('/etc/app', name)\n")
+        (guard_repo / "app.py").write_text(source, encoding="utf-8")
+        llm = _exploding_llm()
+        result = DataflowValidator(llm)._injection_prescreen(_dataflow(), guard_repo)
+        assert result is None
         llm.generate_structured.assert_not_called()
 
     def test_refutation_requires_every_alternative(self, guard_repo):
