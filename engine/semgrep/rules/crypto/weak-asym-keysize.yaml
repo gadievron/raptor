@@ -8,11 +8,11 @@ rules:
 
   - id: raptor.crypto.rsa.small-key.java
     message: RSA key size too small. Use >= 2048 bits. Verify by regenerating keys and updating tests.
-    languages: [java, kotlin]
+    languages: [java]
     severity: HIGH
     patterns:
       - pattern: |
-          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("RSA", ...);
+          java.security.KeyPairGenerator $KPG = java.security.KeyPairGenerator.getInstance("RSA", ...);
           ...
           $KPG.initialize($N, ...);
       - metavariable-comparison:
@@ -22,15 +22,57 @@ rules:
       cwe: ["CWE-326"]
       asvs: ["V3.11"]
 
+  - id: raptor.crypto.rsa.small-key.kotlin
+    message: RSA key size too small. Use >= 2048 bits. Verify by regenerating keys and updating tests.
+    languages: [kotlin]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: |
+              val $KPG = java.security.KeyPairGenerator.getInstance("RSA", ...)
+              ...
+              $KPG.initialize($N, ...)
+          - pattern: |
+              var $KPG = java.security.KeyPairGenerator.getInstance("RSA", ...)
+              ...
+              $KPG.initialize($N, ...)
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
   - id: raptor.crypto.dsa.small-key.java
     message: DSA key size too small. Use >= 2048 bits (or prefer EdDSA/ECDSA). Verify by regenerating keys.
-    languages: [java, kotlin]
+    languages: [java]
     severity: HIGH
     patterns:
       - pattern: |
-          KeyPairGenerator $KPG = KeyPairGenerator.getInstance("DSA", ...);
+          java.security.KeyPairGenerator $KPG = java.security.KeyPairGenerator.getInstance("DSA", ...);
           ...
           $KPG.initialize($N, ...);
+      - metavariable-comparison:
+          metavariable: $N
+          comparison: $N < 2048
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.dsa.small-key.kotlin
+    message: DSA key size too small. Use >= 2048 bits (or prefer EdDSA/ECDSA). Verify by regenerating keys.
+    languages: [kotlin]
+    severity: HIGH
+    patterns:
+      - pattern-either:
+          - pattern: |
+              val $KPG = java.security.KeyPairGenerator.getInstance("DSA", ...)
+              ...
+              $KPG.initialize($N, ...)
+          - pattern: |
+              var $KPG = java.security.KeyPairGenerator.getInstance("DSA", ...)
+              ...
+              $KPG.initialize($N, ...)
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048
@@ -83,6 +125,9 @@ rules:
     severity: HIGH
     patterns:
       - pattern: rsa.GenerateKey($R, $N)
+      - pattern-inside: |
+          import "crypto/rsa"
+          ...
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048
