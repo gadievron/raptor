@@ -6,6 +6,8 @@ import re
 import stat
 from pathlib import Path
 
+from core.source.streams import owned_fd
+
 LANGUAGE_MAP = {
     '.py': 'python',
     '.js': 'javascript',
@@ -117,14 +119,13 @@ def _read_probe_head(filepath: str, nbytes: int) -> bytes | None:
         fd = os.open(filepath, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError:
         return None
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+    with owned_fd(fd, close_fd=os.close):
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            return os.read(fd, nbytes)
+        except OSError:
             return None
-        return os.read(fd, nbytes)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
 
 
 def _parse_shebang(head: bytes) -> str | None:
