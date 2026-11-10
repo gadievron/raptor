@@ -51,14 +51,16 @@ def test_progress_caller_retires_backend_and_client(name, stage, error, monkeypa
 
 
 @pytest.mark.parametrize("kind", ["progress", "keepalive"])
-@pytest.mark.parametrize("stage", ["bind", "listen", "getsockname", "Thread", "start"])
+@pytest.mark.parametrize("stage", ["bind", "listen", "getsockname", "server"])
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 def test_backend_setup_failure_closes_listener(kind, stage, error, monkeypatch):
     module = progress if kind == "progress" else keepalive
     listener = socket.socket()
     failure = error("injected backend setup failure")
+    reached = []
 
     def fail(*args, **kwargs):
+        reached.append(stage)
         raise failure
 
     class Listener:
@@ -69,26 +71,21 @@ def test_backend_setup_failure_closes_listener(kind, stage, error, monkeypatch):
             listener.close()
 
     def server(*args, **kwargs):
+        assert stage == "server", "selected native setup fault was not reached"
         fail()
 
-    threads = SimpleNamespace(**vars(threading))
-    fake_thread = Mock(ident=None)
-    fake_thread.start.side_effect = failure
-    threads.Thread = fail if stage == "Thread" else Mock(return_value=fake_thread)
     sockets = SimpleNamespace(**vars(socket))
     sockets.socket = lambda *a, **kw: Listener()
     try:
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "socket", sockets)
             patcher.setattr(module, "SocketServer", server, raising=False)
-            patcher.setattr(module, "threading", threads, raising=False)
-            # The original keepalive case imports threading inside its body.
-            patcher.setattr(threading, "Thread", threads.Thread)
             with pytest.raises(error, match="injected backend setup failure"):
                 if kind == "progress":
                     progress._echo_upstream()
                 else:
                     keepalive.test_established_tunnel_enables_keepalive_on_both_legs(patcher)
+        assert reached == [stage], "selected setup fault was not exercised"
         assert listener.fileno() == -1, "backend setup left listener open"
     finally:
         listener.close()
