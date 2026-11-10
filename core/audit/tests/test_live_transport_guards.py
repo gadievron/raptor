@@ -1591,6 +1591,11 @@ def _stmt_order(
 
 
 class TestSemgrepSurfaceFences:
+    def test_pycryptodome_nonce_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/semgrep/tests/test_pycryptodome_nonce_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_pycryptodome_nonce_imports_and_arguments"}
+
     def test_aead_nonce_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_aead_nonce_precision.py")
         assert _callers_of(calls, "run") == set()
