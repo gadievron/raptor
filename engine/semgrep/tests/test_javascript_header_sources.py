@@ -107,6 +107,20 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
             ("collection.find(local.query);", False),
             ("collection.find(local.params);", False),
             ("collection.find({}, req.body);", False),
+            ("collection.find(ctx.query);", True),
+            ("collection.find(ctx.params);", True),
+            ("collection.find(context.query);", True),
+            ("collection.find(c.params);", True),
+            ("collection.find(ctx.request.body);", True),
+            ("collection.find({}, ctx.query);", False),
+            ("collection.find({}, ctx.params);", False),
+            ("collection.find(ctx);", False),
+            ("const query = ctx.query; collection.find(query);", True),
+            ("const params = ctx.params; collection.find(params);", True),
+            ("collection.find({...ctx.query});", True),
+            ("collection.find({...ctx.params});", True),
+            ("const data = ctx.query; collection.find(ctx);", False),
+            ("collection.find({}, ctx.request.body);", False),
         ])
     lines = []
     expected = set()

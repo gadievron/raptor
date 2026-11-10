@@ -12,6 +12,15 @@ rules:
     severity: CRITICAL
     mode: taint
     pattern-sources:
+      # Koa query and route maps are complete filter values too.
+      - patterns:
+          - pattern-either:
+              - pattern: $CTX.query
+              - pattern: $CTX.params
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: '(?i)^(c|ctx|context)$'
+        exact: true
       # Query and route maps can be passed directly as filter objects.
       # Exact sources keep the request receiver outside the tainted value.
       - patterns:
