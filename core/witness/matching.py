@@ -82,6 +82,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Iterable
 
+from core.source.streams import owned_fd, preserving_stream_error
 from core.witness.types import Witness, WitnessOutcome, WitnessSource
 
 logger = logging.getLogger(__name__)
@@ -287,6 +288,15 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
         | getattr(os, "O_NONBLOCK", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
+    adopted = False
+
+    def close_hash(value: int) -> None:
+        try:
+            os.close(value)
+        except OSError:
+            if adopted:
+                raise
+
     try:
         p = Path(binary_path)
         fd = os.open(str(p), flags)
@@ -297,38 +307,40 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
         )
         return None
     try:
-        st = os.fstat(fd)
-        if not _stat_mod.S_ISREG(st.st_mode):
-            logger.debug(
-                "witness matching: finding binary %s is not a "
-                "regular file — treating as unhashable", binary_path,
-            )
-            return None
-        if st.st_size > _MAX_BINARY_HASH_BYTES:
-            logger.debug(
-                "witness matching: finding binary %s exceeds the "
-                "%d-byte hash bound — treating as unhashable",
-                binary_path, _MAX_BINARY_HASH_BYTES,
-            )
-            return None
-        memo_key = (str(p), st.st_mtime, st.st_size)
-        cached = _binary_hash_memo.get(memo_key)
-        if cached:
-            return cached
-        h = hashlib.sha256()
-        with os.fdopen(fd, "rb") as f:
-            fd = -1  # fdopen owns it now
-            remaining = _MAX_BINARY_HASH_BYTES
-            while chunk := f.read(min(1 << 20, remaining + 1)):
-                if len(chunk) > remaining:
-                    logger.debug(
-                        "witness matching: finding binary %s grew beyond the "
-                        "%d-byte hash bound — treating as unhashable",
-                        binary_path, _MAX_BINARY_HASH_BYTES,
-                    )
-                    return None
-                h.update(chunk)
-                remaining -= len(chunk)
+        with owned_fd(fd, close_fd=close_hash):
+            st = os.fstat(fd)
+            if not _stat_mod.S_ISREG(st.st_mode):
+                logger.debug(
+                    "witness matching: finding binary %s is not a "
+                    "regular file — treating as unhashable", binary_path,
+                )
+                return None
+            if st.st_size > _MAX_BINARY_HASH_BYTES:
+                logger.debug(
+                    "witness matching: finding binary %s exceeds the "
+                    "%d-byte hash bound — treating as unhashable",
+                    binary_path, _MAX_BINARY_HASH_BYTES,
+                )
+                return None
+            memo_key = (str(p), st.st_mtime, st.st_size)
+            cached = _binary_hash_memo.get(memo_key)
+            if cached:
+                return cached
+            h = hashlib.sha256()
+            stream = os.fdopen(fd, "rb", closefd=False)
+            adopted = True
+            with preserving_stream_error(stream) as f:
+                remaining = _MAX_BINARY_HASH_BYTES
+                while chunk := f.read(min(1 << 20, remaining + 1)):
+                    if len(chunk) > remaining:
+                        logger.debug(
+                            "witness matching: finding binary %s grew beyond the "
+                            "%d-byte hash bound — treating as unhashable",
+                            binary_path, _MAX_BINARY_HASH_BYTES,
+                        )
+                        return None
+                    h.update(chunk)
+                    remaining -= len(chunk)
         digest = h.hexdigest()
         _binary_hash_memo[memo_key] = digest
         return digest
@@ -338,12 +350,6 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
             binary_path, exc_info=True,
         )
         return None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
 
 
 def best_match_for_finding(
