@@ -85,7 +85,10 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
         if "ctx" not in unicodedata.normalize("NFKC", source).lower():
             continue
         for node in ast.walk(tree):
-            if isinstance(node, (ast.Assign, ast.AugAssign)):
+            if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                # A bare annotation declares a type, not a runtime value.
+                if isinstance(node, ast.AnnAssign) and node.value is None:
+                    continue
                 targets = (
                     node.targets if isinstance(node, ast.Assign)
                     else [node.target]
@@ -96,7 +99,7 @@ def _scan() -> tuple[dict[str, set[str]], dict[str, set[str]]]:
                         writes.setdefault(key, set()).add(path.name)
                     if (
                         _is_ctx_name(t)
-                        and isinstance(node, ast.Assign)
+                        and isinstance(node, (ast.Assign, ast.AnnAssign))
                         and isinstance(node.value, ast.Dict)
                     ):
                         for k in node.value.keys:
@@ -252,6 +255,20 @@ class TestContextScanPrefilter:
         )
         writes, reads = _scan()
         assert writes == reads == {"field": {"sample.py"}}
+
+    def test_annotated_initializers_are_producers_but_bare_annotations_are_not(self, tmp_path, monkeypatch):
+        monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
+        (tmp_path / "sample.py").write_text(
+            "ctx: dict[str, object] = {'line_start': 1}\n"
+            "ctx['source']: str = 'code'\n"
+            "ctx['unassigned']: str\n"
+            "other_ctx: dict[str, object]\n"
+            "ordinary: dict[str, object] = {'not_context': 1}\n"
+            "value = (ctx.get('line_start'), ctx.get('source'))\n",
+            encoding="utf-8",
+        )
+        writes, reads = _scan()
+        assert writes == reads == {"line_start": {"sample.py"}, "source": {"sample.py"}}
 
     def test_unrelated_source_does_not_walk_the_tree(self, tmp_path, monkeypatch):
         monkeypatch.setitem(globals(), "_AUDIT", tmp_path)
