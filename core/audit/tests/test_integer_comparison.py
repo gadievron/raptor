@@ -95,9 +95,9 @@ def test_unknown_subject_or_compound_claim_declines(claim):
     ("int Read(unsigned Value){return Value==-1;}", "Value == -1"),
     ("int Read(long Value,unsigned Limit){return Value<Limit;}", "Value < Limit"),
 ])
-def test_unsupported_mixed_signed_conversions_decline(source, expression):
+def test_unconstrained_mixed_signed_comparisons_do_not_invent_constancy(source, expression):
     result = check_integer_comparison(source, f"comparison is always false: `{expression}`", language="c", integer_abi="lp64")
-    assert result["matches_claim"] is None
+    assert result["matches_claim"] is False
 
 
 @pytest.mark.parametrize("phase", ["entry", "contrary"])
@@ -134,5 +134,61 @@ def test_comparison_cannot_extend_an_expired_shared_query_budget():
     with query_budget(0):
         result = check_integer_comparison("int Read(unsigned Value){return Value<0;}",
                                           "comparison is always false: `Value < 0`", language="c", integer_abi="lp64")
+    assert result["matches_claim"] is None
+    assert not result["entry_witness_validated"]
+
+
+@pytest.mark.parametrize("abi,language,truth", [
+    pytest.param("lp64", "c", True, id="lp64-c"),
+    pytest.param("llp64", "c", False, id="llp64-c"),
+    pytest.param("lp64", "cpp", True, id="lp64-cpp"),
+    pytest.param("llp64", "cpp", False, id="llp64-cpp"),
+])
+def test_mixed_signed_comparison_uses_each_target_conversion(abi, language, truth):
+    source = "int Read(long Value,unsigned Limit){if(Value == -1 && Limit == 1){if(Value < Limit)return 1;}return 0;}"
+    claim = f"comparison is always {'true' if truth else 'false'}: `Value < Limit`"
+    result = check_integer_comparison(source, claim, language=language, integer_abi=abi)
+    assert result["matches_claim"] is True, result
+    assert result["constant_truth"] is truth
+    assert result["entry_witness_validated"] is True
+    assert result["entry_witness"] == {"Value": -1, "Limit": 1}
+    assert result["source_operation"]["comparison_width"] == (64 if abi == "lp64" else 32)
+    assert result["source_operation"]["comparison_signed"] is truth
+
+
+@pytest.mark.parametrize("relation,expected", [(">", True), ("<", None)])
+def test_entry_guards_use_c_conversions_and_never_admit_an_infeasible_prefix(relation, expected):
+    source = f"int Read(int Value,unsigned Limit){{if(Value {relation} Limit && Value == -1 && Limit == 1){{if(Value < 0)return 1;}}return 0;}}"
+    result = check_integer_comparison(source, "comparison is always true: `Value < 0`", language="c", integer_abi="lp64")
+    assert result["matches_claim"] is expected, result
+    assert result["entry_witness_validated"] is (expected is True)
+    if expected:
+        assert result["entry_witness"] == {"Value": -1, "Limit": 1}
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+def test_negative_int_literal_converts_to_unsigned_for_the_comparison(language):
+    result = check_integer_comparison("int Read(unsigned Value){if(Value > -1)return 1;return 0;}",
+                                      "comparison is always false: `Value > -1`", language=language, integer_abi="lp64")
+    assert result["matches_claim"] is True, result
+    assert result["source_operation"]["comparison_signed"] is False
+
+
+def test_wider_guard_parameter_does_not_widen_the_selected_comparison():
+    result = check_integer_comparison("int Read(unsigned Value,long Wide){if(Wide==1){if(Value<0)return 1;}return 0;}",
+                                      "comparison is always false: `Value < 0`", language="c", integer_abi="lp64")
+    assert result["matches_claim"] is True, result
+    assert result["source_operation"]["comparison_width"] == 32
+    assert result["source_operation"]["parameter_promotions"]["Wide"] == {"width": 64, "signed": True}
+    assert result["entry_witness"]["Wide"] == 1
+
+
+def test_independent_conversion_replay_rejects_a_forged_entry_guard(monkeypatch):
+    from core.audit import integer_comparison as checker
+
+    monkeypatch.setattr(checker, "format_vars", lambda *a, **kw: {"Value": -1, "Limit": 0})
+    source = "int Read(long Value,unsigned Limit){if(Value==-1 && Limit==1){if(Value<Limit)return 1;}return 0;}"
+    result = checker.check_integer_comparison(source, "comparison is always false: `Value < Limit`",
+                                              language="c", integer_abi="llp64")
     assert result["matches_claim"] is None
     assert not result["entry_witness_validated"]
