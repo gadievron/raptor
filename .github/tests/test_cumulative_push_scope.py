@@ -1,6 +1,7 @@
 """Exercise the shipped push resolver and changed-file shell together."""
 
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +18,113 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE, BEFORE, HEAD = "a" * 40, "b" * 40, "c" * 40
 WORKFLOWS = {"tests.yml": "changes", "codeql.yml": "changes",
              "lint.yml": "command-metadata", "sandbox-wrappers.yml": "scope"}
+
+
+@pytest.fixture
+def resolver():
+    path = ROOT / ".github/scripts/ci_push_base.py"
+    spec = importlib.util.spec_from_file_location("owned_push_timing", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("phase,endpoint", [
+    ("checkpoint-run", "repos/private/sentinel/actions/workflows/tests.yml/runs?branch=secret"),
+    ("jobs", "repos/private/sentinel/actions/runs/123/jobs?filter=all"),
+    ("compare", "repos/private/sentinel/compare/secret-base...secret-head"),
+], ids=["runs", "jobs", "compare"])
+def test_api_timing_discloses_only_phase(resolver, monkeypatch, phase, endpoint):
+    calls = []
+    ticks = iter([10.0, 10.375])
+    output = io.StringIO()
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout='{"ok": true}')
+
+    monkeypatch.setattr(resolver, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(resolver, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(resolver, "sys", SimpleNamespace(stderr=output))
+    assert resolver._api(endpoint) == {"ok": True}
+    assert calls == [(["gh", "api", endpoint], {
+        "capture_output": True, "text": True, "timeout": 20, "check": True,
+    })]
+    assert output.getvalue() == f"Push checkpoint {phase}: 0.375s\n"
+
+
+@pytest.mark.parametrize("stage", ["clock-start", "clock-end", "format", "stderr"])
+@pytest.mark.parametrize("observer_error", [RuntimeError, KeyboardInterrupt], ids=["error", "interrupt"])
+@pytest.mark.parametrize("primary", ["success", "json-error", "api-error"])
+def test_api_outcome_survives_observer_failure(resolver, monkeypatch, stage, observer_error, primary):
+    endpoint = "repos/private/sentinel/compare/base...head"
+    calls = []
+    primary_error = subprocess.CalledProcessError(7, ["gh", "api", endpoint])
+    clock_calls = 0
+
+    class BadFormat(float):
+        def __format__(self, spec):
+            raise observer_error("format observer")
+
+    class EndTick:
+        def __sub__(self, other):
+            return BadFormat(0.375)
+
+    class Sink(io.StringIO):
+        def write(self, text):
+            if stage == "stderr":
+                raise observer_error("stderr observer")
+            return super().write(text)
+
+    def clock():
+        nonlocal clock_calls
+        clock_calls += 1
+        if stage == ("clock-start" if clock_calls == 1 else "clock-end"):
+            raise observer_error("clock observer")
+        return 10.0 if clock_calls == 1 else EndTick() if stage == "format" else 10.375
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if primary == "api-error":
+            raise primary_error
+        return SimpleNamespace(stdout="invalid JSON" if primary == "json-error" else '{"ok": true}')
+
+    monkeypatch.setattr(resolver, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(resolver, "time", SimpleNamespace(monotonic=clock))
+    monkeypatch.setattr(resolver, "sys", SimpleNamespace(stderr=Sink()))
+    if primary == "success":
+        assert resolver._api(endpoint) == {"ok": True}
+    elif primary == "json-error":
+        with pytest.raises(json.JSONDecodeError) as error:
+            resolver._api(endpoint)
+        assert error.value.doc == "invalid JSON"
+    else:
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            resolver._api(endpoint)
+        assert error.value is primary_error
+    assert calls == [(["gh", "api", endpoint], {
+        "capture_output": True, "text": True, "timeout": 20, "check": True,
+    })]
+
+
+@pytest.mark.parametrize("primary_error", [KeyboardInterrupt("primary"), SystemExit(9)],
+                         ids=["keyboard-interrupt", "system-exit"])
+def test_primary_interrupt_survives_diagnostic_failure(resolver, monkeypatch, primary_error):
+    ticks = iter([10.0, 10.375])
+
+    def run(*args, **kwargs):
+        raise primary_error
+
+    class Sink:
+        def write(self, text):
+            raise RuntimeError("diagnostic failed")
+
+    monkeypatch.setattr(resolver, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(resolver, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    monkeypatch.setattr(resolver, "sys", SimpleNamespace(stderr=Sink()))
+    with pytest.raises(type(primary_error)) as error:
+        resolver._api("repos/private/sentinel/compare/base...head")
+    assert error.value is primary_error
 
 
 def job_block(source, name):

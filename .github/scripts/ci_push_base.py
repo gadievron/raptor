@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import time
 from urllib.parse import quote
 
 CHECKPOINT_STEP = "Record verified push scope v1"
@@ -28,11 +30,29 @@ CHECKPOINT_JOBS = {
 
 
 def _api(endpoint):
-    response = subprocess.run(
-        ["gh", "api", endpoint], capture_output=True, text=True,
-        timeout=20, check=True,
-    )
-    return json.loads(response.stdout)
+    try:
+        started = time.monotonic()
+    except BaseException:
+        # An optional observer must never prevent the API operation.
+        started = None
+    try:
+        response = subprocess.run(
+            ["gh", "api", endpoint], capture_output=True, text=True,
+            timeout=20, check=True,
+        )
+        return json.loads(response.stdout)
+    finally:
+        if started is not None:
+            try:
+                phase = ("compare" if "/compare/" in endpoint else
+                         "jobs" if "/jobs?" in endpoint else "checkpoint-run")
+                print(f"Push checkpoint {phase}: {time.monotonic() - started:.3f}s",
+                      file=sys.stderr)
+            except BaseException:
+                # Confine observer failures here, preserving the original
+                # API/JSON outcome, including interrupts. No endpoint or
+                # response contents enter the diagnostic.
+                pass
 
 
 def _sha(value):
