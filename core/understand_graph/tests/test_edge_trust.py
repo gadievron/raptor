@@ -278,12 +278,11 @@ class TestVerifiedMechanicalCallEdges:
         (to hide deletions) breaks the token — no lane."""
         db = tmp_path / "g.sqlite"
         _seed_callgraph_snapshot(db, edges=[("a.c", "f", "a.c", "g")])
-        raw = sqlite3.connect(db)
-        raw.execute(
-            "UPDATE snapshots SET props_json='{\"edge_count\": 0}' "
-            "WHERE id='snap-cg'")
-        raw.commit()
-        raw.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.execute(
+                "UPDATE snapshots SET props_json='{\"edge_count\": 0}' "
+                "WHERE id='snap-cg'")
+            raw.commit()
         assert verified_mechanical_call_edges(db, "snap-cg") is None
 
     def test_llm_tier_row_is_excluded(self, tmp_path):
@@ -322,10 +321,9 @@ class TestVerifiedMechanicalCallEdges:
             ("a.c", "main", "a.c", "parse"),
             ("a.c", "parse", "", "strcpy"),
         ])
-        raw = sqlite3.connect(db)
-        raw.execute("UPDATE nodes SET name='evil' WHERE name='strcpy'")
-        raw.commit()
-        raw.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.execute("UPDATE nodes SET name='evil' WHERE name='strcpy'")
+            raw.commit()
         lane = verified_mechanical_call_edges(db, "snap-cg")
         assert lane is not None
         assert lane["complete"] is False
@@ -340,10 +338,9 @@ class TestVerifiedMechanicalCallEdges:
             ("a.c", "main", "a.c", "parse"),
             ("a.c", "parse", "", "strcpy"),
         ])
-        raw = sqlite3.connect(db)
-        raw.execute("DELETE FROM edges WHERE id='e-1-snap-cg'")
-        raw.commit()
-        raw.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.execute("DELETE FROM edges WHERE id='e-1-snap-cg'")
+            raw.commit()
         lane = verified_mechanical_call_edges(db, "snap-cg")
         assert lane is not None
         assert lane["complete"] is False
@@ -360,20 +357,19 @@ class TestVerifiedMechanicalCallEdges:
             ("a.c", "main", "a.c", "parse"),
             ("a.c", "parse", "", "strcpy"),
         ])
-        raw = sqlite3.connect(db)
-        raw.row_factory = sqlite3.Row
-        survivor = raw.execute(
-            "SELECT * FROM edges WHERE id='e-0-snap-cg'").fetchone()
-        raw.execute("DELETE FROM edges WHERE id='e-1-snap-cg'")
-        raw.execute(
-            "INSERT INTO edges (id, src_id, dst_id, kind, snapshot_id, "
-            "provenance, integrity) VALUES ('e-dup', ?, ?, 'CALLS', "
-            "'snap-cg', 'mechanical', ?)",
-            (survivor["src_id"], survivor["dst_id"],
-             survivor["integrity"]),
-        )
-        raw.commit()
-        raw.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.row_factory = sqlite3.Row
+            survivor = raw.execute(
+                "SELECT * FROM edges WHERE id='e-0-snap-cg'").fetchone()
+            raw.execute("DELETE FROM edges WHERE id='e-1-snap-cg'")
+            raw.execute(
+                "INSERT INTO edges (id, src_id, dst_id, kind, snapshot_id, "
+                "provenance, integrity) VALUES ('e-dup', ?, ?, 'CALLS', "
+                "'snap-cg', 'mechanical', ?)",
+                (survivor["src_id"], survivor["dst_id"],
+                 survivor["integrity"]),
+            )
+            raw.commit()
         lane = verified_mechanical_call_edges(db, "snap-cg")
         assert lane is not None
         assert lane["complete"] is False
@@ -401,14 +397,13 @@ class TestVerifiedMechanicalCallEdges:
         verified lane of its own. Denial, never a verdict."""
         db = tmp_path / "g.sqlite"
         _seed_callgraph_snapshot(db, edges=[("a.c", "f", "a.c", "g")])
-        raw = sqlite3.connect(db)
-        raw.execute(
-            "INSERT INTO snapshots (id, target_path, producer, "
-            "created_at, props_json, integrity) VALUES ('snap-forged', "
-            "'/target', 'callgraph', '2099-01-01T00:00:00+00:00', "
-            "'{\"edge_count\": 0}', 'deadbeef')")
-        raw.commit()
-        raw.close()
+        with closing(sqlite3.connect(db)) as raw:
+            raw.execute(
+                "INSERT INTO snapshots (id, target_path, producer, "
+                "created_at, props_json, integrity) VALUES ('snap-forged', "
+                "'/target', 'callgraph', '2099-01-01T00:00:00+00:00', "
+                "'{\"edge_count\": 0}', 'deadbeef')")
+            raw.commit()
         assert verified_mechanical_call_edges(db, "snap-cg") is None
         assert verified_mechanical_call_edges(db, "snap-forged") is None
 
