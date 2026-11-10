@@ -149,6 +149,12 @@ def native_object_input_unverified(source: str, name: str, validator_line: int,
         tree = _syntax._native_source_tree(source, language)
         if tree is None:
             return True
+        from .validator_input_binding import adjacent_native_string_input
+
+        # A new local lexical binding immediately before the guard has
+        # its own primitive value, independent of older/scoped objects.
+        if adjacent_native_string_input(source, name, validator_line, language=language) is not None:
+            return False
         encoded_name = name.encode("utf-8")
         object_values = {"object", "array", "function_expression", "arrow_function",
                          "generator_function", "class", "new_expression", "regex"}
