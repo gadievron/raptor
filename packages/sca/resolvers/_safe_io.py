@@ -70,27 +70,28 @@ def read_regular_bytes(
         return None
     raw_failed = False
     try:
-        if not _stat.S_ISREG(os.fstat(fd).st_mode):
-            logger.warning(
-                "sca.resolvers: refusing %s — replaced by a "
-                "non-regular file between stat and open", path,
-            )
-            return None
-        pending_io: OSError | None = None
         try:
-            with preserving_stream_error(os.fdopen(fd, "rb", closefd=True)) as fh:
-                fd = -1
-                try:
-                    raw = fh.read(max_bytes + 1)
-                except OSError as exc:
-                    pending_io = exc
-            if pending_io is not None:
-                raise pending_io
-        finally:
-            pending_io = None
-    except OSError as e:
-        logger.warning("sca.resolvers: cannot read %s: %s", path, e)
-        return None
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                logger.warning(
+                    "sca.resolvers: refusing %s — replaced by a "
+                    "non-regular file between stat and open", path,
+                )
+                return None
+            pending_io: OSError | None = None
+            try:
+                with preserving_stream_error(os.fdopen(fd, "rb", closefd=True)) as fh:
+                    fd = -1
+                    try:
+                        raw = fh.read(max_bytes + 1)
+                    except OSError as exc:
+                        pending_io = exc
+                if pending_io is not None:
+                    raise pending_io
+            finally:
+                pending_io = None
+        except OSError as e:
+            logger.warning("sca.resolvers: cannot read %s: %s", path, e)
+            return None
     except BaseException:
         raw_failed = True
         raise
