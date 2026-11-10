@@ -787,8 +787,19 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert 'Coverage (persistent store)' not in stdout
     assert 'old.c' not in stdout and 'old-dependency.json' not in stdout
     assert metrics['total_findings'] == expected_count
-    assert metrics['findings_by_tool'] == ({'semgrep': expected_count, 'codeql': 0}
-                                           if has_codeql_reports else {'semgrep': expected_count})
+    expected_tools = {'semgrep': expected_count}
+    if has_codeql_reports:
+        expected_tools['codeql'] = 0
+    if metadata_state in ('missing', 'incompatible', 'incompatible-path'):
+        # Recovery loss is disclosed even when it contributes no findings.
+        expected_tools['semgrep-python-sql'] = 0
+        recovery = json.loads((out / 'python-sql.sarif').read_text())['runs'][0]
+        assert recovery['results'] == []
+        notifications = recovery['invocations'][0]['toolExecutionNotifications']
+        assert notifications
+        assert all(note['properties']['coverage_limitation'] for note in notifications)
+        assert metrics['tool_coverage_limitations']['semgrep-python-sql'] > 0
+    assert metrics['findings_by_tool'] == expected_tools
     if has_codeql_reports:
         record = json.loads((out / 'coverage-codeql.json').read_text())
         assert record['files_examined'] == ['Other.java', 'source.py']

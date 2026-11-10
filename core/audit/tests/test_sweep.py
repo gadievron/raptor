@@ -2589,13 +2589,17 @@ class TestNegativeControlCache:
         return calls
 
     @staticmethod
-    def _result(findings=(), errors=(), returncode=0):
+    def _result(findings=(), errors=(), returncode=0, *,
+                files_examined=(), files_failed=(), skipped_rules=()):
         import types
 
         return types.SimpleNamespace(
             findings=list(findings),
             errors=list(errors),
             returncode=returncode,
+            files_examined=list(files_examined),
+            files_failed=list(files_failed),
+            skipped_rules=list(skipped_rules),
         )
 
     def _clear_cache(self):
@@ -2652,10 +2656,14 @@ class TestNegativeControlCache:
         # separates them, so the second language re-runs the control).
         # Real generated-shape rule files: the cpp leg re-languages a
         # copy for the control run instead of scanning vacuously.
-        from core.audit.sweep import _rule_matches_negative_control
+        from core.audit.sweep import (
+            _rule_matches_negative_control, negative_control_fixture,
+        )
         self._clear_cache()
+        fixture = negative_control_fixture("format string", "a.cpp")
+        assert fixture is not None
         calls = self._install_runner(monkeypatch, [
-            self._result(findings=[]),          # cpp rule: no match
+            self._result(files_examined=[str(fixture)]),  # witnessed cpp no-match
             self._result(findings=[{"line": 3}]),  # c rule: matches
         ])
         cpp_rule = self._rule_file(tmp_path, "cpp")
@@ -2674,6 +2682,36 @@ class TestNegativeControlCache:
         assert _rule_matches_negative_control(
             c_rule, "format string", "a.c",
         )
+        assert calls["n"] == 2
+        self._clear_cache()
+
+    @pytest.mark.parametrize("coverage", ["missing", "other", "failed", "skipped"])
+    def test_unwitnessed_empty_control_not_cached(self, monkeypatch, coverage):
+        from core.audit import sweep
+        self._clear_cache()
+        fixture = sweep.negative_control_fixture("format string", "a.c")
+        assert fixture is not None
+        examined = [] if coverage == "missing" else [
+            str(fixture.with_name("other.c")) if coverage == "other" else str(fixture),
+        ]
+        calls = self._install_runner(monkeypatch, [
+            self._result(
+                files_examined=examined,
+                files_failed=[str(fixture)] if coverage == "failed" else [],
+                skipped_rules=["hypothesis-check"] if coverage == "skipped" else [],
+            ),
+            self._result(files_examined=[str(fixture)]),
+        ])
+        assert sweep._rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        ) is None
+        assert sweep._negative_control_cache == {}
+        assert sweep._rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        ) is False
+        assert sweep._rule_matches_negative_control(
+            "rule.yaml", "format string", "a.c",
+        ) is False
         assert calls["n"] == 2
         self._clear_cache()
 
