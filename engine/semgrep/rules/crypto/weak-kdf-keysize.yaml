@@ -1,10 +1,23 @@
 rules:
   - id: raptor.crypto.pbkdf2.small-key.java
     message: PBKDF2 derived key size too small. Use >= 128 bits. Verify with test vectors.
-    languages: [java, kotlin]
+    languages: [java]
     severity: MEDIUM
     patterns:
-      - pattern: new PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
+      - pattern: new javax.crypto.spec.PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
+      - metavariable-comparison:
+          metavariable: $KEYLEN
+          comparison: $KEYLEN < 128
+    metadata:
+      cwe: ["CWE-326"]
+      asvs: ["V3.11"]
+
+  - id: raptor.crypto.pbkdf2.small-key.kotlin
+    message: PBKDF2 derived key size too small. Use >= 128 bits. Verify with test vectors.
+    languages: [kotlin]
+    severity: MEDIUM
+    patterns:
+      - pattern: javax.crypto.spec.PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
       - metavariable-comparison:
           metavariable: $KEYLEN
           comparison: $KEYLEN < 128
@@ -17,7 +30,9 @@ rules:
     languages: [python]
     severity: MEDIUM
     patterns:
-      - pattern: hashlib.pbkdf2_hmac($ALG, $PW, $SALT, $ITERS, $DKLEN)
+      - pattern-either:
+          - pattern: hashlib.pbkdf2_hmac($ALG, $PW, $SALT, $ITERS, $DKLEN)
+          - pattern: hashlib.pbkdf2_hmac(..., dklen=$DKLEN, ...)
       - metavariable-comparison:
           metavariable: $DKLEN
           comparison: $DKLEN < 16
