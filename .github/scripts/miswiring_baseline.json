@@ -418,6 +418,9 @@
   "artifacts:write_only_artifact::jazzer-corpus.json": {
    "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged \u2014 same posture as crate-corpus.json / generated-corpus.json"
   },
+  "artifacts:write_only_artifact::knowledge-results.json": {
+   "note": "Operator diagnostic/export of knowledge-request processing, context delivery/omission/failure, material bindings and cycle/call provenance. Produced by AuditKnowledgeRuntime.write_artifacts during progress and drain; events mirror to audit-log.jsonl. Live objects drive review scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
+  },
   "artifacts:write_only_artifact::ledger.json": {
    "note": "Constant/path indirection: core/engagement/ledger.py load_ledger and set_artifact_status read LEDGER_FILENAME through ledger_path and load_json. The engagement report also lists this existing artifact; its mention is not a new write-only data flow."
   },
@@ -684,6 +687,15 @@
   },
   "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
    "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
+  },
+  "dead:dead_method:core/http/_connect.py:ConnectProxyManager._new_pool": {
+   "note": "urllib3 PoolManager.connection_from_pool_key dynamically calls self._new_pool. This override strips forward-proxy settings from HTTP pools and attaches destination-bound CONNECT configuration; exercised by real HTTP CONNECT integration tests."
+  },
+  "dead:dead_method:core/http/_connect.py:ConnectProxyManager._proxy_requires_url_absolute_form": {
+   "note": "urllib3 PoolManager.urlopen dynamically calls self._proxy_requires_url_absolute_form. Returning False keeps origin-form request targets inside CONNECT tunnels, including redirects; exercised by the real HTTP CONNECT integration tests."
+  },
+  "dead:dead_method:core/http/_connect.py:ConnectProxyManager.connection_from_host": {
+   "note": "urllib3 PoolManager.connection_from_url and PoolManager.urlopen dynamically dispatch self.connection_from_host. This override bypasses ProxyManager forward-proxy pooling so CONNECT HTTP pools remain destination-bound; exercised by the real HTTP CONNECT integration tests."
   },
   "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.async_auth_flow": {
    "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() \u2014 no in-repo caller names them (same pattern as any httpx.Auth override)"
