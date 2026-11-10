@@ -1633,13 +1633,13 @@ def _python_operator_dispatch(node: ast.AST) -> bool:
 
     This is a negative effect boundary, not a transfer or purity contract.
     """
-    return isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp))
+    return isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.IfExp))
 
 
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
     return _python_operator_dispatch(node) or isinstance(
-        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript)
+        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While)
     ) or bool(
         getattr(node, "decorator_list", [])
     ) or any(_python_operator_dispatch(part)
@@ -2838,6 +2838,18 @@ def _python_chain_reaches_sink(
             _collect_target_names(node.target, target_names)
             chain -= target_names
             continue
+        # The RHS runs before its target bindings. Parent-first AST order
+        # must not capture an external slot before a nested condition or
+        # protocol dispatch has had a chance to rebind it.
+        if not at_validator and any(
+            _python_possible_call(part) or _python_suspension(part)
+            for part in _walk_same_scope(ast.Expr(value=node.value))
+        ):
+            for var in list(chain):
+                if var not in local_slots:
+                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
+                if not local_slots[var]:
+                    chain.discard(var)
         targets = (list(node.targets) if isinstance(node, ast.Assign)
                    else [node.target])
         grows: set = set()
