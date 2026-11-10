@@ -37,6 +37,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         return _FOUNDATION_IDS, "Initial construct selection unavailable: source has parse errors; fixed foundation only."
     arithmetic = False
     comparison = False
+    shift = False
     stack = [tree.root_node]
     visited = 0
     while stack:
@@ -50,17 +51,21 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+", b"-", b"*", b"/", b"%")
                 comparison = comparison or token in (b"<", b">", b"<=", b">=", b"==", b"!=")
+                shift = shift or token in (b"<<", b">>")
         elif node.type == "assignment_expression":
             operator = node.child_by_field_name("operator")
             if operator is not None:
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+=", b"-=", b"*=", b"/=", b"%=")
+                shift = shift or token in (b"<<=", b">>=")
         stack.extend(node.children)
     selected: tuple[str, ...] = _FOUNDATION_IDS
     if arithmetic or comparison:
         selected += ("c.integer-usual-conversions",)
     if arithmetic:
         selected += ("c.integer-definedness",)
+    if shift:
+        selected += ("c.integer-shift",)
     return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
 
 

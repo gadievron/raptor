@@ -49,6 +49,28 @@ def test_usual_conversions_include_promotion_prerequisite():
     assert "Shifts, casts and assignments" in core
 
 
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.integer-shift")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == [
+        "c.integer-promotion", "c.integer-conversion", "c.integer-shift"]
+    core = answer.entries[-1].render_core()
+    for condition in ("promoted left type", "negative count", "nonnegative left value",
+                      "representable in the result type", "implementation-defined",
+                      "do not apply the usual", "evaluate the left lvalue once", "6.5.7"):
+        assert condition in core
+    assert answer.entries[-1].required_target_facts
+    assert answer.missing_facts == (("language edition",) if edition is None else ())
+
+
+@pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
+                         ids=["other-c-edition", "cpp"])
+def test_shift_entry_does_not_guess_language_mode(context):
+    answer = lookup("owned", "shift", context, entry_id="c.integer-shift")
+    assert answer.status == "unsupported" and answer.entries == ()
+
+
 @pytest.mark.parametrize("topic", ["does the caller enforce a bound", "", "x" * 513])
 def test_unavailable_topic_is_explicit_without_generic_word_matches(topic):
     answer = lookup("r", topic, ReferenceContext("c", "c11"))
