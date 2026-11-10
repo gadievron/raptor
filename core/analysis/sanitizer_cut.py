@@ -1773,7 +1773,9 @@ def evaluate_finding(
     # degrades — rare, and the module it binds may itself be a
     # repo-local shadow). Flow-insensitive by design: an ambiguous
     # identity can only lose suppression power, never gain it.
-    if matched_bindings:
+    cpp_site_identities = (language in {"c", "cpp"}
+                           and getattr(graph, "untrusted_call_sites", None) is not None)
+    if matched_bindings and not cpp_site_identities:
         local_roots: set = set(getattr(graph, "params", ()) or ())
         for _n in graph.nodes():
             local_roots.update(getattr(_n, "defs", ()) or ())
@@ -1826,6 +1828,14 @@ def evaluate_finding(
     # which sees the full local-binding vocabulary.)
     if extra_bindings:
         matched_bindings = matched_bindings | frozenset(extra_bindings)
+    # C/C++ source definitions, macros and positional object shadows cannot
+    # acquire library authority through either direct or supplied bindings.
+    untrusted_sites = getattr(graph, "untrusted_call_sites", frozenset())
+    if untrusted_sites:
+        matched_bindings = frozenset(
+            binding for binding in matched_bindings
+            if (binding.callable, binding.lineno) not in untrusted_sites
+        )
     if not matched_bindings:
         return SanitizerCutResult(
             suppress=False,

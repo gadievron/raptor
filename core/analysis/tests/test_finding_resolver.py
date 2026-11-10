@@ -22,7 +22,6 @@ from core.analysis.finding_resolver import (
 )
 from core.analysis.sanitizer_cut import (
     VERDICT_CANDIDATE_ONLY,
-    VERDICT_SUPPRESS,
     evaluate_finding,
 )
 from core.testing.treesitter import requires_ts
@@ -264,7 +263,7 @@ class TestEndToEnd:
         )
         assert result.verdict == VERDICT_CANDIDATE_ONLY
 
-    def test_safe_straight_line_gate_emits_suppress(self, tmp_path):
+    def test_untyped_straight_line_gate_retains_candidate(self, tmp_path):
         src_file = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
         finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
         resolved = resolve_finding(finding)
@@ -275,7 +274,8 @@ class TestEndToEnd:
             source_symbols=resolved.source_symbols,
             sink_arg=resolved.sink_arg,
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.suppress and result.value_bound_bindings
 
 
 # ---------------------------------------------------------------------------
