@@ -2,6 +2,7 @@
 
 import hashlib
 import sys
+from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -64,7 +65,7 @@ def test_agentic_envelope_and_production_grouping(project):
     assert groups[0]["finding_ids"] == ["F0", "F1"]
     assert groups[0]["criterion"] == "graph_path_hint"
     assert len(findings) == 2 and all("suppressed" not in f for f in findings)
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM edges WHERE kind='AFFECTS'").fetchone()[0] == 2
 
 
@@ -175,7 +176,7 @@ def test_fuzz_execution_writes_persistent_evidence(project, monkeypatch):
     corpus.mkdir()
     orch.execute(plan, out_dir=root / "fuzz", corpus_dir=corpus, binary_understand=False)
     assert (root / "fuzz" / "fuzzing-result.json").is_file()
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM snapshots WHERE producer='fuzz'").fetchone()[0] == 1
 
 
@@ -201,7 +202,7 @@ def test_producers_idempotent_imported_and_rebuildable(project):
         assert ingest_fuzz_evidence(fuzz, str(target)) == graph
         assert ingest_sca_evidence(sca, str(target)) == graph
         assert ingest_threat_model(root, str(target)) == graph
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         for lane in ("web", "fuzz", "sca", "threat-model"):
             assert conn.execute("SELECT count(*) FROM snapshots WHERE producer=?", (lane,)).fetchone()[0] == 1
         assert conn.execute("SELECT count(*) FROM edges WHERE provenance='imported'").fetchone()[0] >= 4

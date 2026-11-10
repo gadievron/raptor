@@ -3,6 +3,7 @@
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -27,7 +28,7 @@ def _web(run, findings, outcomes):
 
 
 def _lane_state(graph, run, lane):
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         snapshot = conn.execute(
             "SELECT id, props_json FROM snapshots WHERE producer_run=? AND producer=?",
             (str(run.resolve()), lane),
@@ -142,7 +143,7 @@ def test_agentic_groups_only_the_requested_snapshot_with_reused_ids(project):
         finding.update(file_path="different.py", function="different")
     assert agentic_graph_groups(run, str(target), changed) == []
     # Preserve historical memory rather than deleting it to hide the bug.
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM snapshots WHERE producer='scan' AND producer_run=?",
                             (str(run.resolve()),)).fetchone()[0] == 2
     # Replaying the original request must still query its exact snapshot.
@@ -255,10 +256,10 @@ def test_empty_generic_scan_does_not_manufacture_an_sca_rebuild(project):
     run.mkdir()
     save_json(run / ".raptor-run.json", {"command": "scan", "target_path": str(target)})
     save_json(run / "findings.json", [])
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         before = conn.execute("SELECT count(*) FROM nodes").fetchone()[0]
     assert rebuild_graph(root) is None
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM nodes").fetchone()[0] == before
 
 
