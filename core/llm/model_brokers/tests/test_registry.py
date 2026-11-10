@@ -1,6 +1,8 @@
 """Registry validation and wiring across credential/routing boundaries."""
 
+import errno
 import json
+from contextlib import ExitStack, contextmanager
 import os
 import runpy
 import subprocess
@@ -13,6 +15,8 @@ import pytest
 
 import core.llm.model_brokers as broker_registry
 from core.config import RaptorConfig
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.pipes import pipes_for_setup
 from core.llm.model_brokers import MODEL_BROKERS, ModelBroker, load_model_brokers, read_broker_key
 
 _EXAMPLE_BROKER = ModelBroker(
@@ -356,20 +360,43 @@ def test_python_rules_win_even_if_catalog_validation_is_bypassed(monkeypatch):
     assert auth.build_rules(creds)["openai"].upstream_base_url == "https://api.openai.com"
 
 
+def _close_token_pipe_end(fd, identity):
+    try:
+        current = os.fstat(fd)
+    except OSError as error:
+        if error.errno == errno.EBADF:
+            return
+        raise
+    if (current.st_dev, current.st_ino) == identity:
+        os.close(fd)
+
+
+@contextmanager
+def _owned_token_pipe():
+    with ExitStack() as cleanup:
+        with pipes_for_setup(1) as pairs:
+            for fd in pairs[0]:
+                current = os.fstat(fd)
+                cleanup.callback(_close_token_pipe_end, fd,
+                                 (current.st_dev, current.st_ino))
+        yield pairs[0]
+
+
 def test_spawn_strips_broker_keys_even_from_explicit_env(monkeypatch):
     from core.llm.dispatcher.spawn import spawn_worker
+    from core.llm.dispatcher import spawn as spawn_module
 
-    read_fd, write_fd = os.pipe()
-    os.close(write_fd)
-    dispatcher = Mock()
-    dispatcher.allocate_worker.return_value = ("/test-socket", read_fd)
-    popen = Mock()
-    monkeypatch.setattr("subprocess.Popen", popen)
-    env = {broker.api_key_env: "parent-secret" for broker in MODEL_BROKERS}
-    env["PATH"] = "/usr/bin"
-    spawn_worker(dispatcher, ["example-worker"], label="test", env=env)
-    child_env = popen.call_args.kwargs["env"]
-    assert not ({b.api_key_env for b in MODEL_BROKERS} & child_env.keys())
-    assert child_env["RAPTOR_LLM_SOCKET"] == "/test-socket"
-    assert child_env["PATH"] == "/usr/bin"
-    assert all(env[b.api_key_env] == "parent-secret" for b in MODEL_BROKERS)
+    with _owned_token_pipe() as (read_fd, write_fd):
+        os.close(write_fd)
+        dispatcher = Mock()
+        dispatcher.allocate_worker.return_value = ("/test-socket", read_fd)
+        popen = Mock()
+        patch_module_attribute(monkeypatch, spawn_module, "subprocess", "Popen", popen)
+        env = {broker.api_key_env: "parent-secret" for broker in MODEL_BROKERS}
+        env["PATH"] = "/usr/bin"
+        spawn_worker(dispatcher, ["example-worker"], label="test", env=env)
+        child_env = popen.call_args.kwargs["env"]
+        assert not ({b.api_key_env for b in MODEL_BROKERS} & child_env.keys())
+        assert child_env["RAPTOR_LLM_SOCKET"] == "/test-socket"
+        assert child_env["PATH"] == "/usr/bin"
+        assert all(env[b.api_key_env] == "parent-secret" for b in MODEL_BROKERS)
