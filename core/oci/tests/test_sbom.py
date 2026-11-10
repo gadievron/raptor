@@ -9,6 +9,7 @@ regressions when format quirks shift.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 import struct
 from pathlib import Path
 
@@ -272,15 +273,14 @@ def _make_rpmdb_sqlite(packages: list) -> bytes:
     with tempfile.NamedTemporaryFile(delete=False, suffix=".sqlite") as fp:
         path = Path(fp.name)
     try:
-        conn = sqlite3.connect(str(path))
-        conn.execute("CREATE TABLE Packages (hnum INTEGER, blob BLOB)")
-        for i, (name, ver, rel) in enumerate(packages):
-            blob = _make_rpm_header(name, ver, rel)
-            conn.execute(
-                "INSERT INTO Packages VALUES (?, ?)", (i, blob),
-            )
-        conn.commit()
-        conn.close()
+        with closing(sqlite3.connect(str(path))) as conn:
+            conn.execute("CREATE TABLE Packages (hnum INTEGER, blob BLOB)")
+            for i, (name, ver, rel) in enumerate(packages):
+                blob = _make_rpm_header(name, ver, rel)
+                conn.execute(
+                    "INSERT INTO Packages VALUES (?, ?)", (i, blob),
+                )
+            conn.commit()
         return path.read_bytes()
     finally:
         try:
