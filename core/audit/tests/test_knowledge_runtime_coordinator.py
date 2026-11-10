@@ -1,5 +1,9 @@
 """Owner reservations retain full-unit exclusion and bounded knowledge work."""
 
+from dataclasses import replace
+
+import pytest
+
 from core.audit.knowledge_runtime import AuditKnowledgeRuntime
 from core.audit.orchestrator import StudyQueue
 
@@ -56,3 +60,33 @@ def test_panel_allowance_exhaustion_ends_waiting(tmp_path):
     assert not runtime.ready_continuations(admission=lambda: True, required_calls=3)
     assert runtime.wake_interval() is None
     assert not runtime.has_pending_work()
+
+
+@pytest.mark.parametrize("action", ["complete", "fail"])
+@pytest.mark.parametrize("unowned", ["retired", "copied"])
+def test_unowned_completion_cannot_release_newer_reservation(tmp_path, action, unowned):
+    runtime, ctx = _runtime(tmp_path)
+    try:
+        first, = runtime.ready_continuations(admission=lambda: True)
+        assert runtime.fail(first, "first_attempt_failed")
+        runtime._register(runtime._origin(ctx), ctx, {
+            "language_reference_requests": [{"topic": "integer conversion"}]})
+        second, = runtime.ready_continuations(admission=lambda: True)
+        assert second.packet.pass_id != first.packet.pass_id
+        candidate = first if unowned == "retired" else replace(second)
+        if unowned == "copied":
+            assert candidate == second and candidate is not second
+        before = runtime.events()
+        if action == "complete":
+            assert runtime.complete(candidate, dict(ctx)) is False
+        else:
+            assert runtime.fail(candidate, "late_failure") is False
+        assert runtime.events() == before
+        assert not runtime.ready_continuations(admission=lambda: True)
+        assert runtime.enrich_context(dict(ctx), second)
+        assert runtime.complete(second, dict(ctx))
+        completed = [event for event in runtime.events() if event["event"] == "continuation_completed"]
+        assert len(completed) == 1 and completed[0]["pass_id"] == second.packet.pass_id
+        assert not runtime.ready_continuations(admission=lambda: True)
+    finally:
+        runtime.close()
