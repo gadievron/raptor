@@ -171,6 +171,7 @@ def prepare_protection(metadata: Path) -> None:
     read(metadata, require_sealed=False)
     directory = _open_directory(metadata.parent)
     target = None
+    failed = False
     try:
         target = os.open(metadata.name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
         _private(os.fstat(directory), True)
@@ -197,10 +198,20 @@ def prepare_protection(metadata: Path) -> None:
                 raise OSError('could not write launch scratch metadata')
             offset += written
         os.ftruncate(target, len(data))
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if target is not None:
-            os.close(target)
-        os.close(directory)
+        cleanup_error: BaseException | None = None
+        for descriptor in (target, directory):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
 
 
 def allocate(base: Path, pid: int, *, protected: bool = False) -> Path:
