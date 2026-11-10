@@ -91,3 +91,51 @@ def test_stage_omits_locations_already_reported_by_the_plain_pass(tmp_path, scan
     results = json.loads(Path(paths[0]).read_text())['runs'][0]['results']
     assert len(summary.result_locations) == 1
     assert [row['locations'][0]['physicalLocation']['region']['startLine'] for row in results] == [3]
+
+
+def test_recovery_provenance_survives_scan_merge_exclusion_and_suppression(tmp_path, scanner):
+    from core.sarif import emit
+    from core.sarif.parser import merge_sarif
+    from packages.semgrep.nosemgrep import annotate_sarif
+
+    root, out = tmp_path / 'target', tmp_path / 'out'
+    root.mkdir(); out.mkdir()
+    for name in ('subject.py', 'excluded.py', 'ignored.py'):
+        (root / name).write_text('def subject(cursor, int):\n    cursor.execute(int(input()))  # nosemgrep\n')
+    plain = out / 'plain.sarif'
+    plain.write_text(json.dumps(emit.document([emit.run('semgrep', [], [emit.result(
+        'ordinary', 'ordinary match', [emit.location('subject.py', emit.source_region(1))],
+    )])], schema_uri=emit.SCHEMA_URI_SCHEMASTORE)))
+    plain.with_suffix('.json').write_text(json.dumps({
+        'version': '1.79.0', 'paths': {'scanned': [str(root / name) for name in ('subject.py', 'excluded.py')]},
+        'errors': [],
+    }))
+    calls = []
+
+    def recover(target, files, **kwargs):
+        calls.append(files)
+        assert target == root
+        return python_sql.SqlRecoveryResult('complete', matches=tuple({
+            'file': name, 'line': 2, 'column': 5, 'line_end': 2, 'column_end': 33,
+            'rule_id': python_sql.RULE_ID, 'message': 'lead', 'level': 'error',
+            'source_sha256': 'a' * 64,
+        } for name in files), selected=2, prepared=2)
+
+    with scoped_function_imports(scanner, ['run_python_sql_stage'], {'core.detectors.python_sql': python_sql}) as owned:
+        getattr(owned, 'core.detectors.python_sql').recover_python_sql = recover
+        paths, _ = scanner.run_python_sql_stage(root, out, [str(python_sql.RULE_SOURCE)], [str(plain)])
+    assert len(calls) == 1 and set(calls[0]) == {'subject.py', 'excluded.py'}
+    merged = merge_sarif([str(plain), *paths])
+    filtered, dropped = scanner.filter_sarif_by_exclude_globs(merged, ['excluded.py'])
+    assert dropped == 1
+    assert annotate_sarif(filtered, str(root)) >= 1
+    rows = [row for run in filtered['runs'] for row in run['results']]
+    assert len(rows) == 2 and {row['ruleId'] for row in rows} == {'ordinary', python_sql.RULE_ID}
+    recovered = next(row for row in rows if row['ruleId'] == python_sql.RULE_ID)
+    assert recovered['properties']['source_sha256'] == 'a' * 64
+    assert recovered['properties']['prepared_view'] == 'python-builtin-int'
+    assert recovered['properties']['nosemgrep']['suppressed'] is True
+    physical = recovered['locations'][0]['physicalLocation']
+    assert physical['artifactLocation']['uri'] == 'subject.py'
+    assert physical['region']['startLine'] == 2 and physical['region']['startColumn'] == 5
+    assert sum(len(run['results']) for run in merged['runs']) == 3
