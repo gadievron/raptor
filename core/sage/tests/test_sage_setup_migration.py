@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 class TestSageSetupMigration(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
         self.checkout = Path(self.tempdir.name)
         (self.checkout / "libexec").mkdir()
         (self.checkout / "core" / "sage").mkdir(parents=True)

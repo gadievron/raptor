@@ -2955,6 +2955,7 @@ class TestFindingSourceHashes(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "src.c"
         self.path.write_text(
             "\n".join(f"line {i}" for i in range(1, 61)) + "\n",
@@ -2993,6 +2994,7 @@ class TestComputeFindingSourceHash(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.path = Path(self.tmp.name) / "src.c"
         self.lines = [f"line {i}" for i in range(1, 81)]
         self._write(self.lines)
