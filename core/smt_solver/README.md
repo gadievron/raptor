@@ -263,3 +263,10 @@ mask. The query and independent source/caller replay use the actual promoted
 bitwise operation. Signed narrow inputs may expose promoted bits through sign
 extension; unsigned narrow inputs do not. A mask below the extent is a safe
 bound, while a mask equal to the extent can still select an invalid index.
+
+The signed-update checker also accepts standalone builtin `+=`, `-=`, and
+`*=` with atomic operands. Overflow is checked in the usual arithmetic
+conversion result, not the left storage width; a narrow unsigned left operand
+can therefore participate in promoted signed overflow. Repeated operands
+share one pre-update value. Later storage conversion is outside this claim,
+and bounded unknown results remain inconclusive.

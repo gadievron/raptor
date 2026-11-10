@@ -419,7 +419,16 @@ def _operations(source, language, abi):
                 f"Potential signed {'increment' if op == '++' else 'decrement'} overflow in `{op + name if prefix else name + op}`.",
                 {'binding_status': 'candidate'})
                for target, name, op, prefix in update_candidates(source, language=language, integer_abi=abi)]
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates
+    from .integer_update import compound_update_candidates
+    compound_candidates = []
+    for target, lhs, op, rhs, types, frame in compound_update_candidates(source, language=language, integer_abi=abi):
+        if not _range_can_wrap((lhs, rhs), op[0], types, abi, frame):
+            continue
+        mechanism = f"Potential signed compound overflow in `{lhs} {op} {rhs}`."
+        if len(mechanism) <= 300:
+            compound_candidates.append((target, op, (lhs, rhs), 'signed-compound-overflow', mechanism,
+                                        {'binding_status': 'candidate'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
