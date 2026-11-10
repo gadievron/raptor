@@ -31,7 +31,7 @@ def test_worker_routes_only_a_real_fault_to_a_scoped_positive_receipt(safe):
     assert result.outcome == ('inconclusive' if safe else 'confirmed')
     assert result.rule_id == 'smt:' + VERB
     assert result.details['source_scope']['function'] == 'Read'
-    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v4'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v5'
     assert result.details['oracle_scope'] == 'integer-division-fault'
     assert bool(result.matches) is not safe
 
@@ -95,4 +95,4 @@ def test_real_confined_worker_preserves_a_negative_literal_fault_subject():
     assert result.details['fault_kind'] == 'signed-division-overflow'
     assert result.details['model']['Value'] == -(1 << 31)
     assert result.details['witness_validated'] is True
-    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v4'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v5'
