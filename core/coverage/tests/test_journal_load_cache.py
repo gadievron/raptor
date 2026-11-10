@@ -1206,10 +1206,13 @@ class TestThreadSafety:
         threads = [threading.Thread(target=appender)] + [
             threading.Thread(target=loader) for _ in range(4)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=done.set, timeout=60):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=60)
         assert not errors, errors
         assert len(journal_shard_paths(tmp_path)) > 1
         assert len(load_entries(tmp_path)) == total
