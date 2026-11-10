@@ -737,3 +737,17 @@ def test_resource_escape_cannot_select_raw_spelling(tmp_path):
     src = _src(r'app\t.properties', '"alg"')
     result = _resolver(tmp_path, src).resolve_call(_get_call(src))
     assert result.refusal == 'dynamic_resource'
+
+
+@pytest.mark.parametrize('uncertain', [True, False])
+def test_other_candidate_must_be_understood_before_unique_resolution(tmp_path, uncertain):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    (tmp_path / 'conf').mkdir()
+    (tmp_path / 'conf' / 'app.properties').write_text(
+        'alg=M\\\nD5\n' if uncertain else 'other=value\n')
+    src = _src('app.properties', '"alg"')
+    result = _resolver(tmp_path, src).resolve_call(_get_call(src))
+    if uncertain:
+        assert result.refusal == 'grammar_unsupported'
+    else:
+        assert result.resolved and result.value == 'SHA-256'
