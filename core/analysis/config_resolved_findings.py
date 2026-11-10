@@ -257,13 +257,13 @@ def run_config_resolved_stage(
             # resolver's locate() cannot see (and vice versa).
             if any(part in _SKIP_DIR_PARTS for part in rel_parts):
                 continue
-            java_files.append(p)
             if len(java_files) >= _FILE_CAP:
                 stats["file_cap_hit"] += 1
                 logger.warning(
                     "config-resolved stage: file cap (%d) reached — "
                     "remaining Java files not scanned", _FILE_CAP)
                 break
+            java_files.append(p)
         for p in java_files:
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
@@ -282,14 +282,23 @@ def run_config_resolved_stage(
     sarif_path = out_dir / "config-resolved.sarif"
     try:
         document = to_sarif(findings, str(repo_path))
+        notifications = []
         if stats["files_unreadable"]:
+            notifications.append({
+                "level": "warning",
+                "message": {"text": f"{stats['files_unreadable']} Java source file(s) could not be read"},
+                "properties": {"coverage_limitation": "unreadable_sources"},
+            })
+        if stats["file_cap_hit"]:
+            notifications.append({
+                "level": "warning",
+                "message": {"text": "Java source file budget exhausted; remaining eligible files were not examined"},
+                "properties": {"coverage_limitation": "source_file_budget"},
+            })
+        if notifications:
             document["runs"][0]["invocations"] = [{
                 "executionSuccessful": True,
-                "toolExecutionNotifications": [{
-                    "level": "warning",
-                    "message": {"text": f"{stats['files_unreadable']} Java source file(s) could not be read"},
-                    "properties": {"coverage_limitation": "unreadable_sources"},
-                }],
+                "toolExecutionNotifications": notifications,
             }]
         save_json(sarif_path, document)
     except OSError as e:
