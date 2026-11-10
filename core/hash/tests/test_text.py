@@ -58,3 +58,57 @@ def test_adapted_backend_before_private_import_is_not_trusted(constructor):
     exec(compile(Path(original.__file__).read_text(), original.__file__, 'exec'), namespace)
     assert namespace['_NATIVE_SHA256'] is None
     assert namespace['try_sha256_ascii']('x' * 300000, hashlib) is None
+
+
+@pytest.mark.parametrize('kind', ['object', 'str-subclass'])
+def test_native_constructor_metadata_is_not_compared(kind, tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import run_standalone_cli
+
+    root = Path(__file__).resolve().parents[3]
+    code = """
+import _hashlib
+import hashlib
+from pathlib import Path
+from core.hash import text
+calls = []
+class Metadata:
+    def __eq__(self, other):
+        calls.append('eq')
+        raise RuntimeError('metadata callback')
+class TextMetadata(str):
+    def __eq__(self, other):
+        calls.append('eq')
+        raise RuntimeError('metadata callback')
+previous = _hashlib.openssl_sha256.__module__
+try:
+    _hashlib.openssl_sha256.__module__ = Metadata() if sys.argv[1] == 'object' else TextMetadata('_hashlib')
+    namespace = {'__name__': text.__name__, '__package__': text.__package__}
+    exec(compile(Path(text.__file__).read_text(), text.__file__, 'exec'), namespace)
+    assert namespace['_NATIVE_SHA256'] is None
+    source = 'a' * 300000
+    assert namespace['try_sha256_ascii'](source, hashlib) is None
+    from core.coverage import journal_mac
+    from core.json import dumps_canonical
+    from core.testing.module_views import module_function_view
+    consumer = module_function_view(journal_mac, bindings={
+        'try_sha256_ascii': namespace['try_sha256_ascii'],
+    })
+    row = {'body': source, journal_mac.TOKEN_KEY: 'excluded-token'}
+    expected = hashlib.sha256(dumps_canonical({'body': source}).encode('utf-8')).hexdigest()
+    assert consumer.row_sha256(row) == expected
+    assert calls == []
+finally:
+    _hashlib.openssl_sha256.__module__ = previous
+"""
+    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path / 'config'),
+               XDG_CACHE_HOME=str(tmp_path / 'cache'), XDG_DATA_HOME=str(tmp_path / 'data'))
+    result = run_standalone_cli(
+        [sys.executable, '-I', '-c', f'import sys; sys.path.insert(0, {str(root)!r})\n' + code, kind],
+        cwd=tmp_path, env=env, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

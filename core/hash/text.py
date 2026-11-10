@@ -22,6 +22,7 @@ except ImportError:
     pass
 else:
     if (type(_openssl_sha256) is BuiltinFunctionType
+            and type(_openssl_sha256.__module__) is type("")
             and _openssl_sha256.__module__ == "_hashlib"
             and _openssl_sha256.__name__ == "openssl_sha256"):
         _NATIVE_SHA256 = _openssl_sha256
