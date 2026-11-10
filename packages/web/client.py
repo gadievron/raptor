@@ -25,6 +25,7 @@ import requests
 import urllib3
 from typing_extensions import Self
 
+from core.http.hosts import canonical_transport_host
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
 
@@ -92,12 +93,6 @@ _pin_install_lock = threading.Lock()
 _pin_local = threading.local()
 _original_getaddrinfo = None
 
-# Trailing label separators (ASCII dot plus the IDNA/UTS46 dot
-# variants U+3002, U+FF0E, U+FF61): a fully-qualified spelling of a
-# hostname names the same host, so pins must fold it away.
-_HOST_DOT_VARIANTS = ".。．｡"
-
-
 def _canonical_pin_host(host: object) -> str:
     """Fold a hostname into the one canonical form pins are keyed on.
 
@@ -115,28 +110,7 @@ def _canonical_pin_host(host: object) -> str:
     resolvable host (``None``, non-ASCII bytes, IDNA-invalid unicode) —
     "" never appears as a pin key, so the wrapper treats it as a miss.
     """
-    if host is None:
-        return ""
-    if isinstance(host, (bytes, bytearray)):
-        try:
-            text = bytes(host).decode("ascii")
-        except UnicodeDecodeError:
-            return ""
-    else:
-        text = str(host)
-    text = text.rstrip(_HOST_DOT_VARIANTS).lower()
-    if not text or text.isascii():
-        return text
-    try:
-        import idna
-        return idna.encode(text, uts46=True).decode("ascii")
-    except Exception:
-        # IDNA2008-invalid unicode hostname: no canonical ASCII form
-        # exists, so no pin can be keyed for it. Callers that VALIDATE
-        # (block_private_ips) fail closed on ""; the lookup wrapper
-        # falls through to live resolution, which the transport layer
-        # rejects for the same reason.
-        return ""
+    return canonical_transport_host(host)
 
 
 def _pinning_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003

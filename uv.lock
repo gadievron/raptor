@@ -2807,6 +2807,7 @@ version = "3.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "defusedxml" },
+    { name = "idna" },
     { name = "instructor" },
     { name = "openai" },
     { name = "packaging" },
@@ -2929,6 +2930,7 @@ requires-dist = [
     { name = "google-genai", marker = "extra == 'llm'", specifier = "==2.4.0" },
     { name = "h2", marker = "extra == 'h2'", specifier = "==4.4.1" },
     { name = "httpx", marker = "extra == 'sage'", specifier = "==0.28.1" },
+    { name = "idna", specifier = "==3.19" },
     { name = "instructor", specifier = "==1.15.4" },
     { name = "jsonschema", marker = "extra == 'jsonschema'", specifier = "==4.23.0" },
     { name = "openai", specifier = "==2.30.0" },
