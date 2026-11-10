@@ -1636,20 +1636,30 @@ def _python_operator_dispatch(node: ast.AST) -> bool:
     return isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.IfExp))
 
 
+def _python_iteration_dispatch(node: ast.AST) -> bool:
+    """Iterator acquisition may reenter user code.
+
+    A generator expression acquires its outer iterator at creation; this
+    does not assert that its deferred element, filters or later clauses run.
+    """
+    return isinstance(node, (ast.For, ast.ListComp, ast.SetComp,
+                             ast.DictComp, ast.GeneratorExp))
+
+
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
-    return _python_operator_dispatch(node) or isinstance(
-        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While, ast.For)
+    return _python_operator_dispatch(node) or _python_iteration_dispatch(node) or isinstance(
+        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While)
     ) or bool(
         getattr(node, "decorator_list", [])
-    ) or any(_python_operator_dispatch(part)
+    ) or any(_python_operator_dispatch(part) or _python_iteration_dispatch(part)
              or isinstance(part, (ast.Call, ast.Attribute, ast.Subscript))
              for value in _python_definition_headers(node) for part in ast.walk(value))
 
 
 def _python_evaluation_dispatch(node: ast.AST) -> bool:
     """Protocol dispatch may precede a same-row consumed name read."""
-    return _python_operator_dispatch(node) or (
+    return _python_operator_dispatch(node) or _python_iteration_dispatch(node) or (
         isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     )
 
