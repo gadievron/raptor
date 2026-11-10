@@ -138,6 +138,8 @@ class TestBrowserEngineLive(unittest.TestCase):
 
             self.assertIsNotNone(proof)
             self.assertEqual(proof.parameter, "#fragment")
+            # The encoded fragment must preserve the execution payload.
+            self.assertIn("onerror", unquote(proof.payload))
 
     def test_plain_page_has_no_dom_sink(self):
         with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
@@ -147,14 +149,6 @@ class TestBrowserEngineLive(unittest.TestCase):
         with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
             self.assertIsNone(engine.render("https://evil.example/"))
 
-    def test_fragment_payload_survives_url_encoding(self):
-        """prove_xss quotes the fragment; the fixture decodes it — the
-        canary must round-trip exactly (regression for quote/decode
-        mismatches)."""
-        with BrowserEngine(self.base, allow_unsandboxed_chromium=_INNER_WAIVER) as engine:
-            proof = engine.prove_xss(f"{self.base}/dom-sink", None)
-            self.assertIsNotNone(proof)
-            self.assertIn("onerror", unquote(proof.payload))
 
 
 if __name__ == "__main__":
