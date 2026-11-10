@@ -3028,7 +3028,31 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             requires_mount=bool(target or output), seccomp_profile=seccomp_profile,
         )
         if error is not None:
-            raise _strict_gate_refuse(error)
+            try:
+                raise _strict_gate_refuse(error)
+            finally:
+                # A proxy lane may already exist before strict preflight.
+                # Refusal never reaches the later context-exit owner.
+                from ._retirement import retire_parent_resources
+
+                def _retire_refused_unix_lane() -> None:
+                    if proxy_instance is not None and _proxy_unix_path:
+                        proxy_instance.unbind_unix(_proxy_unix_path)
+
+                def _retire_refused_tcp_lane() -> None:
+                    if proxy_instance is not None and _proxy_tcp_lane_port is not None:
+                        proxy_instance.close_tcp_lane(_proxy_tcp_lane_port)
+
+                def _retire_refused_lane_dir() -> None:
+                    if _proxy_lane_dir is not None:
+                        import shutil as _shutil
+                        _shutil.rmtree(_proxy_lane_dir, ignore_errors=True)
+
+                retire_parent_resources(
+                    _retire_refused_unix_lane,
+                    _retire_refused_tcp_lane,
+                    _retire_refused_lane_dir,
+                )
 
     if effectively_disabled and not state._cli_sandbox_disabled:
         logger.info("Sandbox disabled for this call")
