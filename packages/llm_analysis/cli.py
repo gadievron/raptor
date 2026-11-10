@@ -1,6 +1,7 @@
 """Argument parsing for /analyze without initialising analysis providers."""
 
 import argparse
+from pathlib import Path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -218,5 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
              "packages/llm_analysis/context_toolloop.py for the "
              "vocabulary, caps, and refusal accounting). Default off.",
     )
+
+    # Keep --help usable before any core/provider import. Validation and
+    # publication use the shared ReportOptions implementation in main().
+    ap.add_argument("--report-format", action="append", metavar="FORMAT", help="Report format (markdown, json, html, xml); repeat for multiple outputs")
+    ap.add_argument("--report-output", type=Path, metavar="PATH", help="Report file (one format) or directory")
+    ap.add_argument("--no-report", action="store_true", help="Disable full report files; keep the operator summary and evidence")
 
     return ap

@@ -4717,6 +4717,11 @@ def main() -> None:
 
     ap = build_parser()
     args = ap.parse_args()
+    from core.reporting.options import ReportOptions, options_from_args
+    from packages.llm_analysis.reporting import prepare as prepare_report, emit as emit_report
+    report_options = options_from_args(args, ap)
+    if not (args.report_format or args.report_output or args.no_report):
+        report_options = ReportOptions(enabled=False)
 
     if not args.sarif and not args.findings:
         ap.error("Either --sarif or --findings is required")
@@ -4755,6 +4760,16 @@ def main() -> None:
     else:
         # Collision-prevention via unique_run_suffix — see core/run/output.py.
         out_dir = RaptorConfig.get_out_dir() / f"autonomous_v2_{unique_run_suffix('_')}"
+
+    report_inputs = [Path(path) for path in (args.sarif or [])]
+    if args.findings:
+        report_inputs.append(Path(args.findings))
+    if args.checklist:
+        report_inputs.append(Path(args.checklist))
+    try:
+        prepare_report(report_options, out_dir, report_inputs, repo_path)
+    except ValueError as exc:
+        ap.error(str(exc))
 
     # P9 execution-oracle gate. Explicit per-run flags win in both
     # directions; else the project's 'dynamic' trust marker; else off.
@@ -4867,8 +4882,10 @@ def main() -> None:
                     checklist=checklist,
                 )
                 if result:
+                    emit_report(result, out_dir, report_inputs, repo_path, report_options)
                     return
         print("\n  Orchestration skipped — check model/API key configuration")
+        emit_report(report, out_dir, report_inputs, repo_path, report_options, orchestration_skipped=True)
         return
 
     if report.get('mode') != 'prep_only':
@@ -4914,6 +4931,8 @@ def main() -> None:
         print(f"LLM cost: ${report['llm_stats']['total_cost']:.4f}")
         print(f"Output: {out_dir}")
         print("=" * 70)
+
+    emit_report(report, out_dir, report_inputs, repo_path, report_options)
 
 
 if __name__ == "__main__":
