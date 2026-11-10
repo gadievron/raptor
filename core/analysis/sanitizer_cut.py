@@ -268,6 +268,7 @@ def _may_escape_nodes_on_path(
     sources: Iterable,
     sink,
     excluded: set,
+    additional_nodes: frozenset = frozenset(),
 ) -> list:
     """The ``may_escape`` nodes lying on a source→sink path — the
     evidence set behind :func:`_may_escape_on_path`. The
@@ -320,7 +321,7 @@ def _may_escape_nodes_on_path(
             rqueue.append(prev)
 
     # On-path = forward ∩ backward. Collect may_escape hits.
-    return [n for n in backward if getattr(n, "may_escape", False)]
+    return [n for n in backward if getattr(n, "may_escape", False) or n in additional_nodes]
 
 
 def _propagate_taint(
@@ -2017,8 +2018,26 @@ def evaluate_finding(
         # different physical line of a multi-line statement is NOT
         # exempt) and any field store / arraycopy / untracked array
         # keeps the downgrade.
+        additional_escapes: set = set()
+        if language in {"c", "cpp"}:
+            # A fresh returned buffer can escape through a bare pointer or
+            # an alias without syntactic indirection. No callee-effect/type
+            # facts establish that later unknown calls preserve its bytes.
+            after_clean = _bfs_reachable_excluding(
+                graph, {binding.node for binding in proof_value_bindings}, set(),
+            )
+            for node in after_clean:
+                calls = set(getattr(node, "calls", ()))
+                if node == sink:
+                    # Only the designated sink call is the endpoint; nested
+                    # calls in the same payload have unordered effects.
+                    if len(calls) > 1 or len(getattr(node, "call_sites", ())) > 1:
+                        additional_escapes.add(node)
+                elif calls - proof_callables:
+                    additional_escapes.add(node)
         escape_nodes = _may_escape_nodes_on_path(
             graph, sources_set, sink, excluded=set(),
+            additional_nodes=frozenset(additional_escapes),
         )
         if escape_nodes and array_index is not None and all(
             array_index.exempt_line(getattr(n, "lineno", 0))
@@ -2031,7 +2050,7 @@ def evaluate_finding(
                 reason=(
                     "candidate_only: value-bound vertex-cut held but "
                     "a node on a source→sink path is may_escape "
-                    "(indirection or bulk-copy detected); cleaned "
+                    "(indirection, bulk-copy or unmodelled C/C++ call effects); cleaned "
                     "value's identity at the sink is unprovable "
                     "without alias analysis"
                 ),

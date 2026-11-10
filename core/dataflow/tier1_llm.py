@@ -661,6 +661,10 @@ def _try_known_safe_call(
     input_type_evidence = None
     call_form_evidence = None
     unverified_contracts = set(entry.source_contracts)
+    if language in {"c", "cpp"} and entry.input_arg_kind == "transform":
+        # The lexical chain tracks names, not bytes or pointer aliases.
+        # Allocation by the callee does not establish integrity to the sink.
+        unverified_contracts.add("mutable_buffer_integrity_to_sink")
     if known_safe_calls.EXACT_STR_DEFAULT_CALL in unverified_contracts:
         if language == "python":
             from core.dataflow.string_type_evidence import exact_str_default_call_evidence
