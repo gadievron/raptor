@@ -530,89 +530,15 @@ def parity_criterion_met(summary: ParitySummary) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _fmt_rate(r: RateWithCI) -> str:
-    pct = r.rate * 100
-    return (
-        f"{pct:5.1f}% ({r.successes}/{r.total}) "
-        f"[{r.low * 100:.1f}–{r.high * 100:.1f}]"
-    )
-
-
 def render_parity_report(
     summary: ParitySummary, *, title: str = "Sanitizer-cut parity report",
+    format: str = "markdown",
 ) -> str:
-    """Render a :class:`ParitySummary` as a markdown report. Used to
-    produce the committed first parity report and any subsequent
-    window reports."""
-    met = parity_criterion_met(summary)
-    lines: list[str] = []
-    lines.append(f"# {title}")
-    lines.append("")
-    lines.append(
-        f"- Records in window: **{summary.total}** "
-        f"({summary.labelled_total} labelled — "
-        f"{summary.should_suppress_total} should_suppress, "
-        f"{summary.should_not_suppress_total} should_not_suppress)"
-    )
-    lines.append(
-        f"- Rate criterion (noise-suppression ≥, bug-hiding ≤): "
-        f"**{'MET' if summary.rate_criterion_met else 'NOT MET'}**"
-    )
-    lines.append(
-        f"- No-regression guard (lexical-only suppressions = "
-        f"{summary.lexical_only}): "
-        f"**{'MET' if summary.no_lexical_regression else 'NOT MET'}**"
-    )
-    lines.append(
-        f"- **Safe to remove lexical (Phase 16 gate): "
-        f"{'YES' if met else 'NO'}**"
-    )
-    lines.append("")
-    lines.append("## Suppression rates (Wilson 95% CI)")
-    lines.append("")
-    lines.append("| Method | Noise-suppression ↑ | Bug-hiding ↓ |")
-    lines.append("|--------|---------------------|--------------|")
-    lines.append(
-        f"| Lexical | {_fmt_rate(summary.lexical.noise_suppression)} "
-        f"| {_fmt_rate(summary.lexical.bug_hiding)} |"
-    )
-    lines.append(
-        f"| Value-bound | {_fmt_rate(summary.value_bound.noise_suppression)} "
-        f"| {_fmt_rate(summary.value_bound.bug_hiding)} |"
-    )
-    lines.append("")
-    lines.append("Noise-suppression: fraction of genuinely-safe findings "
-                 "correctly suppressed (higher is better).")
-    lines.append("Bug-hiding: fraction of real findings wrongly suppressed "
-                 "(lower is better).")
-    lines.append("")
-    lines.append("## Agreement matrix (all records)")
-    lines.append("")
-    lines.append("| | Value-bound suppress | Value-bound keep |")
-    lines.append("|---|---|---|")
-    lines.append(
-        f"| **Lexical suppress** | {summary.both_suppress} "
-        f"| {summary.lexical_only} |"
-    )
-    lines.append(
-        f"| **Lexical keep** | {summary.value_bound_only} "
-        f"| {summary.neither} |"
-    )
-    if summary.by_kind:
-        lines.append("")
-        lines.append("## By proposal kind")
-        lines.append("")
-        lines.append("| Kind | both | lexical-only | value-bound-only | neither |")
-        lines.append("|------|-----:|-------------:|-----------------:|--------:|")
-        for kind in sorted(summary.by_kind):
-            row = summary.by_kind[kind]
-            lines.append(
-                f"| {kind} | {row['both_suppress']} "
-                f"| {row['lexical_only']} | {row['value_bound_only']} "
-                f"| {row['neither']} |"
-            )
-    lines.append("")
-    return "\n".join(lines)
+    """Render a captured summary through the shared reporting engine."""
+    from core.reporting.renderers import render_document
+    from .parity_document import build_parity_document
+
+    return render_document(build_parity_document(summary, title=title), format).content.decode()
 
 
 __all__ = [
