@@ -28,9 +28,11 @@ import sqlite3
 import subprocess
 import time
 from collections import Counter
+from contextlib import closing
 from pathlib import Path
 
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 from core.config import RaptorConfig
 from core.json import load_json
 from core.dataflow import cvefix_walk
@@ -629,7 +631,7 @@ def synthesize_from_results(
     if search_path is None:
         search_path = _default_search_path()
     con = sqlite3.connect(Path(results_db).resolve().as_uri() + "?mode=ro", uri=True)
-    try:
+    with preserving_stream_error(closing(con)):
         sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
                "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
         params: tuple = ()
@@ -638,11 +640,9 @@ def synthesize_from_results(
             params = tuple(languages)
         sql += " ORDER BY cve_id DESC" if newest_first else " ORDER BY cve_id"
         rows = con.execute(sql, params).fetchall()
-    finally:
-        con.close()
 
     syn = sqlite3.connect(str(synth_db))
-    try:
+    with preserving_stream_error(closing(syn)):
         syn.execute(_SCHEMA)
         done = {(r[0], r[1]) for r in syn.execute("SELECT fix_hash, cwe FROM synth_results")}
         todo = [r for r in rows if (r[0], r[2]) not in done]
@@ -678,8 +678,6 @@ def synthesize_from_results(
                 tag = f"({backend})" if backend else ""
                 log(f"  [{n}/{len(todo)}] {cve_id} {cwe} {lang}: {status}{tag}{suffix}")
         report, errors = _aggregate(syn)
-    finally:
-        syn.close()
     if errors:
         log(f"pipeline errors (excluded from rate): {errors}")
     return report
