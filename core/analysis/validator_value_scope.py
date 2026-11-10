@@ -134,3 +134,46 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
         return False
     except Exception:  # noqa: BLE001 -- unverified syntax cannot preserve an epoch
         return True
+
+
+def native_object_input_unverified(source: str, name: str, validator_line: int,
+                                    *, language: str) -> bool:
+    """Refuse visible JS object bindings that need a coercion/transfer contract.
+
+    No observed object is not positive primitive-type evidence. Prior writes
+    are conservatively inspected without choosing a reaching definition.
+    """
+    if language not in {"javascript", "typescript", "tsx"} or validator_line <= 0:
+        return True
+    try:
+        tree = _syntax._native_source_tree(source, language)
+        if tree is None:
+            return True
+        encoded_name = name.encode("utf-8")
+        object_values = {"object", "array", "function_expression", "arrow_function",
+                         "generator_function", "class", "new_expression", "regex"}
+        pending = [tree.root_node]
+        visited = 0
+        while pending:
+            node = pending.pop()
+            visited += 1
+            if visited > _syntax._MAX_NODES:
+                return True
+            pending.extend(node.named_children)
+            if node.start_point[0] + 1 > validator_line:
+                continue
+            target = _write_target(node)
+            if target is None or not _target_mentions(target, encoded_name):
+                continue
+            if node.type in {"function_declaration", "generator_function_declaration",
+                             "class_declaration", "enum_declaration"}:
+                return True
+            value = node.child_by_field_name("value" if node.type == "variable_declarator" else "right")
+            while value is not None and value.type == "parenthesized_expression":
+                children = [child for child in value.named_children if child.type != "comment"]
+                value = children[0] if len(children) == 1 else None
+            if value is not None and value.type in object_values:
+                return True
+        return False
+    except Exception:  # noqa: BLE001 -- unverified native input cannot authorise a proof
+        return True
