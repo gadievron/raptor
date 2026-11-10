@@ -182,7 +182,9 @@ class AuditKnowledgeRuntime:
             if origin.source_identity is not None and foundation_required_for_file(origin.file):
                 foundation_id = "foundation:" + uuid5(UUID(self._foundation_namespace),
                     repr((self._key(origin), origin.source_identity))).hex
-                initial_answers = foundation_answers(ctx.get("language"), request_id=foundation_id)
+                from .orchestrator import _raw_ihv_review_source
+                initial_answers = foundation_answers(ctx.get("language"), request_id=foundation_id,
+                    source=_raw_ihv_review_source(ctx.get("source"), origin.line_start), file=origin.file)
                 owned_references = (*owned_references, *initial_answers)
             # These immutable answers have stable identities across the unit's
             # panel. Shared compatibility fields never establish delivery.
