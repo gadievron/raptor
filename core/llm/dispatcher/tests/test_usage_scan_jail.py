@@ -793,30 +793,34 @@ class TestStartupAttribution:
         from core.llm.dispatcher import _usage_scan_child as child_mod
         from core.sandbox import landlock as landlock_mod
 
-        parent_sock, worker_sock = socket.socketpair()
-        wfd = worker_sock.detach()  # main() adopts sole ownership
-        monkeypatch.setattr(child_mod, "_close_inherited_fds",
-                            lambda keep_fd: None)
-        monkeypatch.setattr(child_mod, "_SOCK_FD", wfd)
+        with ExitStack() as resources:
+            parent_sock, worker_sock = socket.socketpair()
+            resources.callback(parent_sock.close)
+            resources.callback(worker_sock.close)
+            wfd = worker_sock.fileno()  # keep ownership through fault setup
+            monkeypatch.setattr(child_mod, "_close_inherited_fds",
+                                lambda keep_fd: None)
+            monkeypatch.setattr(child_mod, "_SOCK_FD", wfd)
 
-        def boom() -> bool:
-            raise RuntimeError("forced by test")
+            def boom() -> bool:
+                raise RuntimeError("forced by test")
 
-        monkeypatch.setattr(landlock_mod, "check_landlock_available",
-                            boom)
-        try:
-            rc = child_mod.main(["prog", str(wfd)])
-            assert rc == 1
-            parent_sock.settimeout(5.0)
-            header = _recv_exact(parent_sock, FRAME_HEADER.size)
-            length, frame_id = FRAME_HEADER.unpack(header)
-            payload = json.loads(_recv_exact(parent_sock, length))
-            assert frame_id == READY_FRAME_ID
-            assert payload["ready"] is False
-            assert "startup failed at landlock probe" in payload["error"]
-            assert "RuntimeError: forced by test" in payload["error"]
-        finally:
-            parent_sock.close()
+            monkeypatch.setattr(landlock_mod, "check_landlock_available",
+                                boom)
+            try:
+                wfd = worker_sock.detach()  # main() adopts sole ownership
+                rc = child_mod.main(["prog", str(wfd)])
+                assert rc == 1
+                parent_sock.settimeout(5.0)
+                header = _recv_exact(parent_sock, FRAME_HEADER.size)
+                length, frame_id = FRAME_HEADER.unpack(header)
+                payload = json.loads(_recv_exact(parent_sock, length))
+                assert frame_id == READY_FRAME_ID
+                assert payload["ready"] is False
+                assert "startup failed at landlock probe" in payload["error"]
+                assert "RuntimeError: forced by test" in payload["error"]
+            finally:
+                parent_sock.close()
 
     def test_rlimit_failures_are_best_effort_and_reported(
         self, monkeypatch,
