@@ -19,6 +19,7 @@ class CommandCapability:
 
 
 CAPABILITIES = (
+    CommandCapability("llm-scorecard summary/compare", "scorecard-summary/scorecard-compare", "explicit companion export", "native stdout; export quick view on stderr", "single captured read and native dashboard/comparison payload; policy and spend calculations retained"),
     CommandCapability("llm-scorecard samples", "scorecard-samples", "explicit companion export", "native typed sample view; export quick summary on stderr", "retained samples and read integrity only; no policy update or model call"),
     CommandCapability("panel-replay", "panel-replay", "explicit companion export; native --out retained", "native stdout and mechanical stderr quick view", "offline estimator comparison; no verdict mutation or model calls"),
     CommandCapability("scan", "triage", "automatic", "terminal and summary.md"),

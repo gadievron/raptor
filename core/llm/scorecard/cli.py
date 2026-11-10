@@ -559,6 +559,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
     stats = sc.get_stats(freshness_half_life_days=hl)
     if not stats:
         print("scorecard is empty — no LLM calls recorded yet.")
+        from .read_report import emit
+        emit(args, "summary", {"cells_total": 0, "models_total": 0}, stats)
         return 0
 
     models = set()
@@ -645,7 +647,7 @@ def cmd_summary(args: argparse.Namespace) -> int:
     }
     most_used = max(calls_per_model.items(), key=lambda x: x[1], default=(None, 0))
 
-    if getattr(args, "json", False):
+    if getattr(args, "json", False) or getattr(args, "_report_options", None) is not None:
         out = {
             "cells_total": len(stats),
             "models_total": len(models),
@@ -665,8 +667,11 @@ def cmd_summary(args: argparse.Namespace) -> int:
             ),
             "recent_cells_7d": recent,
         }
-        print(_dumps_json_lane(out))
-        return 0
+        from .read_report import emit
+        emit(args, "summary", out, stats)
+        if getattr(args, "json", False):
+            print(_dumps_json_lane(out))
+            return 0
 
     print(f"scorecard summary ({args.path}):")
     print(f"  cells: {len(stats)} across {len(models)} model(s)")
@@ -915,7 +920,7 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
 def cmd_compare(args: argparse.Namespace) -> int:
     sc = ModelScorecard(args.path)
     all_stats = sc.get_stats()
-    if getattr(args, "json", False):
+    if getattr(args, "json", False) or getattr(args, "_report_options", None) is not None:
         by_dc_a = {s.decision_class: s for s in all_stats if s.model == args.model_a}
         by_dc_b = {s.decision_class: s for s in all_stats if s.model == args.model_b}
         out = {
@@ -929,8 +934,11 @@ def cmd_compare(args: argparse.Namespace) -> int:
                 for dc in sorted(set(by_dc_a) & set(by_dc_b))
             ],
         }
-        print(_dumps_json_lane(out))
-        return 0
+        from .read_report import emit
+        emit(args, "compare", out, all_stats)
+        if getattr(args, "json", False):
+            print(_dumps_json_lane(out))
+            return 0
     print(_render_compare(
         all_stats, all_stats,
         model_a=args.model_a, model_b=args.model_b,
@@ -1367,6 +1375,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_sum.set_defaults(handler=cmd_summary)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p_sum)
 
     # recommend — the actionable payoff
     p_rec = sub.add_parser(
@@ -1417,6 +1427,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument("model_a", type=str)
     p_cmp.add_argument("model_b", type=str)
     p_cmp.set_defaults(handler=cmd_compare)
+    add_report_arguments(p_cmp)
 
     # samples
     p_smp = sub.add_parser(
@@ -1429,7 +1440,6 @@ def _build_parser() -> argparse.ArgumentParser:
         help="restrict to a specific model (default: all models with data)",
     )
     p_smp.set_defaults(handler=cmd_samples)
-    from core.reporting.options import add_report_arguments
     add_report_arguments(p_smp)
 
     # pin
@@ -1573,13 +1583,17 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(_sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.subcommand == "samples":
+    if args.subcommand in {"samples", "summary", "compare"}:
         from core.reporting.options import options_from_args
-        from .sample_completion import prepare
         args._report_options = options_from_args(args, parser) if args.report_format or args.report_output or args.no_report else None
         if args._report_options is not None:
             try:
-                prepare(args._report_options, args.path)
+                if args.subcommand == "samples":
+                    from .sample_completion import prepare
+                    prepare(args._report_options, args.path)
+                else:
+                    from .read_report import prepare as prepare_read
+                    prepare_read(args._report_options, args.path, args.subcommand)
             except ValueError as exc:
                 parser.error(str(exc))
     if getattr(args, "handler", None) is None:
