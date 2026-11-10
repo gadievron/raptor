@@ -75,7 +75,7 @@ from core.dataflow.smt_barrier import (
 from core.inventory.languages import LANGUAGE_MAP
 from core.logging import get_logger
 from core.smt_solver import z3_available as _z3_available
-from core.source import read_contained
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
 
 logger = get_logger()
 
@@ -283,8 +283,15 @@ def _language_for_path(sink_file: str) -> str | None:
 def _read_source(repo_root: Path, rel_path: str) -> str | None:
     """Read a repo file with containment (SARIF-derived paths are
     target-controlled — refuse anything resolving outside the root)
-    and the shared size cap (bounds a planted multi-hundred-MB file)."""
-    return read_contained(repo_root, rel_path)
+    and the shared size cap. Only complete, exact UTF-8 text is eligible
+    for source-wide identity checks; prefixes and replacement text decline."""
+    got = read_contained_bytes(repo_root, rel_path, DEFAULT_MAX_SOURCE_CHARS)
+    if got is None or got[1]:
+        return None
+    try:
+        return got[0].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
 
 
 def _line_text(source_text: str, line: int) -> str:

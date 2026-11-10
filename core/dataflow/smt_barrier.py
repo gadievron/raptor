@@ -3148,15 +3148,20 @@ def try_tier0(
             f"post-fix source not readable at {sink_uri!r}",
             spec=spec,
         )
-    # Capped read (shared default): a truncated read can only make
-    # the validator line unfindable below — NOT_APPLICABLE, falling
-    # through to Tier 2 — never prove a barrier from missing text.
+    # Source-wide binding checks cannot establish identity from a prefix.
+    # Refuse an incomplete read even when validator and sink are visible.
     got = read_text_capped(src_path)
     if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"could not read source {sink_uri!r}",
             spec=spec,
+        )
+    if got[1]:
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            "source read was truncated; whole-source proof unavailable",
+            spec=spec, extras={"unverified_source_profile": "truncated_source"},
         )
     source_text = got[0]
     if java_unicode_unverified(source_text, language=language):
