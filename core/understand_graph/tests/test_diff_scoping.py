@@ -10,6 +10,7 @@ project cadence (every standalone /scan auto-ingests).
 
 import hashlib
 import json
+from contextlib import closing
 
 from core.json import save_json
 from core.understand_graph import (
@@ -81,7 +82,7 @@ def _write_scan_run(run_dir, target):
 
 def _bump_created_at(graph_path, producer, stamp):
     """Force a deterministic created_at ordering for one producer."""
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         conn.execute(
             "UPDATE snapshots SET created_at=? WHERE producer=?",
             (stamp, producer),
@@ -125,7 +126,7 @@ def test_default_diff_compares_understand_pair_across_interleaved_scan(tmp_path)
     # Second understand snapshot: same run dir (same graph DB), new
     # checklist hash — a fresh snapshot with one extra flow.
     _write_understand_run(run1, target, extra_flow=True)
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         conn.execute(
             "UPDATE snapshots SET created_at=? WHERE producer='understand' "
             "AND created_at > '2026-01-01T00:00:01'",
@@ -159,7 +160,7 @@ def test_single_explicit_endpoint_defaults_within_its_producer(tmp_path):
     _bump_created_at(graph_path, "understand", "2026-01-01T00:00:00+00:00")
     _bump_created_at(graph_path, "scan", "2026-01-02T00:00:00+00:00")
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         scan_snap = conn.execute(
             "SELECT id FROM snapshots WHERE producer='scan'"
         ).fetchone()["id"]
@@ -179,7 +180,7 @@ def test_explicit_snapshot_pair_stays_unrestricted(tmp_path):
     _write_scan_run(run_dir, target)
     assert ingest_scan_findings(run_dir, str(target)) is not None
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         rows = conn.execute(
             "SELECT id, producer FROM snapshots ORDER BY producer"
         ).fetchall()
@@ -204,7 +205,7 @@ def test_unchecked_reads_the_nested_evidence_key(tmp_path):
     target = tmp_path / "target"
     run_dir = tmp_path / "run"
     graph_path = _write_understand_run(run_dir, target)
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         snap = conn.execute(
             "SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
@@ -261,7 +262,7 @@ def test_explicit_older_head_defaults_base_backwards_in_time(tmp_path):
     _bump_created_at(graph_path, "understand", "2026-01-01T00:00:00+00:00")
 
     _write_understand_run(run_dir, target, extra_flow=True)
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         conn.execute(
             "UPDATE snapshots SET created_at=? WHERE producer='understand' "
             "AND created_at > '2026-01-01T00:00:01'",
@@ -274,7 +275,7 @@ def test_explicit_older_head_defaults_base_backwards_in_time(tmp_path):
     run2 = tmp_path / "run2"
     _write_understand_run(run2, target, extra_flow=True)  # seeds artifacts
     assert _ingest_run(run2, str(target), graph_path=graph_path) is not None
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         conn.execute(
             "UPDATE snapshots SET created_at=? WHERE producer='understand' "
             "AND created_at > '2026-01-02T00:00:01'",
