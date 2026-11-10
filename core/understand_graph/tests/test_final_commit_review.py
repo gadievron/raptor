@@ -1,6 +1,7 @@
 """Adversarial checks for the final #810 deployment-preparation changes."""
 
 import hashlib
+from contextlib import closing
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -30,7 +31,7 @@ def _run(root, target):
 
 
 def _affects(graph):
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         return conn.execute("SELECT count(*) FROM edges WHERE kind='AFFECTS'").fetchone()[0]
 
 
@@ -174,5 +175,5 @@ def test_localhost_uri_does_not_bypass_symlink_containment(project):
     (target / 'escape.py').symlink_to(outside)
     save_json(run / 'scanner.sarif', _sarif('file://localhost' + str(target / 'escape.py')))
     ingest_agentic_findings(run, str(target))
-    with open_graph(graph) as conn:
+    with closing(open_graph(graph)) as conn, conn:
         assert conn.execute("SELECT count(*) FROM nodes WHERE kind='scan_finding'").fetchone()[0] == 0
