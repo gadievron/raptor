@@ -2660,8 +2660,8 @@ def run_sandboxed(
         t_ready_r = t_ready_w = None
         if _audit_engaged:
             t_ready_r, t_ready_w = os.pipe()
-            os.set_inheritable(t_ready_w, True)
             _parent_fds.update({t_ready_r, t_ready_w})
+            os.set_inheritable(t_ready_w, True)
 
         # Capture proxy bridge functions as local references BEFORE the
         # fork. After pivot_root the RAPTOR source tree is invisible in
