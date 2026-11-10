@@ -231,3 +231,11 @@ query deadline. A wider numerator does not widen the denominator's earlier
 arithmetic; an overflowing, undecided or unreachable subexpression earns no
 receipt. For example, `Count > 0` makes `Count-1` defined while still admitting
 a zero divisor at `Count == 1`.
+
+Invariant-preservation receipts describe a mathematical transition assuming the
+supplied invariant held before that transition. They do not establish its
+initialisation, source reachability or C integer semantics. Preserved sites,
+including functions with no relevant mutations, are diagnostic observations;
+they cannot refute a source-level claim or justify clean conversion. Concrete
+transition witnesses remain diagnostic too. Historical invariant refutation
+records cannot regain authority through a channel alias or `:witness` suffix.

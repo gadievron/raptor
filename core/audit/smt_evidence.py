@@ -27,6 +27,9 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
 
 
 _DIAGNOSTIC_ORACLE_SCOPES = {
+    # An inductive transition model does not establish its base case,
+    # source reachability or C integer semantics, even with a witness.
+    "invariant-preservation": "assumed-invariant-transition",
     "check-integer-conversion": "source-unsigned-conversion",
     # Predicate truth alone does not establish an unintended coding defect.
     "check-integer-comparison": "source-integer-comparison",

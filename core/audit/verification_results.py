@@ -21,6 +21,16 @@ class ProbeOutcome:
     reason: str = ""
 
 
+def _non_refuting_probe(check: ProbeOutcome) -> bool:
+    # Older invariant records use their dispatch type rather than "smt".
+    # The rule namespace also keeps diagnostic receipts scoped when a
+    # caller records an alias for the originating channel.
+    return check.tool == "smt_invariant" or (
+        (check.tool == "smt" or isinstance(check.rule_id, str) and check.rule_id.startswith("smt:"))
+        and is_non_refuting_smt_rule(check.rule_id)
+    )
+
+
 @dataclass(frozen=True)
 class VerificationScope:
     """The exact claim occurrence and source snapshot submitted to a check.
@@ -102,7 +112,7 @@ class ClaimRefutation:
             file, function, line_start or 0, hypothesis,
         ) and bool(self.checks) and all(
             isinstance(check, ProbeOutcome) and check.verdict == "refuted" and check.rule_id
-            and not (check.tool == "smt" and is_non_refuting_smt_rule(check.rule_id))
+            and not _non_refuting_probe(check)
             for check in self.checks
         )
 
@@ -265,7 +275,7 @@ class ToolChainResult(list[str]):
             return ()  # conflicting observations need adjudication
         return tuple(outcome for outcome in self.outcomes
                      if outcome.verdict == "refuted" and outcome.rule_id
-                     and not (outcome.tool == "smt" and is_non_refuting_smt_rule(outcome.rule_id)))
+                     and not _non_refuting_probe(outcome))
 
     def refutation_record(self, *, file, function, line_start, hypothesis) -> dict | None:
         receipt = self.refutation(file=file, function=function, line_start=line_start, hypothesis=hypothesis)

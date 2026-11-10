@@ -184,14 +184,14 @@ class TestDispatchWiring:
         assert confirmed == ["smt:invariant-preservation"]
         assert counters["smt_invariant"].confirmed == 1
 
-    def test_tool_chain_refutes_preserved_invariant(self, tmp_path):
+    def test_tool_chain_retains_preservation_as_inconclusive(self, tmp_path):
         from core.audit.orchestrator import (
             OrchestratorConfig,
             TierCounters,
             _run_tool_chain,
         )
 
-        # A refutation must identify the same source the checker sees.
+        # Keep the mathematical observation bound to the same source.
         (tmp_path / "a.c").write_text("len = size;\n")
         counters = {"smt_invariant": TierCounters()}
         confirmed = _run_tool_chain(
@@ -205,7 +205,9 @@ class TestDispatchWiring:
             tier_counters=counters,
         )
         assert confirmed == []
-        assert counters["smt_invariant"].refuted == 1
+        assert counters["smt_invariant"].refuted == 0
+        assert counters["smt_invariant"].inconclusive == 1
+        assert confirmed.outcomes[0].verdict == "inconclusive"
 
     def test_confirmation_is_detection_role(self):
         from core.audit.orchestrator import _is_detection_only

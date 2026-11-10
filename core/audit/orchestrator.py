@@ -23743,7 +23743,9 @@ def _run_tool_chain(
                     config, file_path, function_name, inv_res,
                 )
                 _inv_oc = _observe_sweep(SimpleNamespace(
-                    outcome={"violable": "confirmed", "preserved": "refuted"}.get(inv_res.outcome, "inconclusive"),
+                    # Preservation is an inductive step under a supplied
+                    # invariant, not proof that the invariant held on entry.
+                    outcome="confirmed" if inv_res.outcome == "violable" else "inconclusive",
                     rule_id="smt:invariant-preservation", reason=inv_res.reason,
                 ))
                 if _inv_oc == "confirmed":
@@ -23755,16 +23757,6 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "smt_invariant", "confirmed",
-                        )
-                elif _inv_oc == "refuted":
-                    logger.info(
-                        "invariant preserved %s:%s — %s (%s)",
-                        file_path, function_name,
-                        inv_res.invariant, inv_res.reason,
-                    )
-                    if tier_counters:
-                        _increment_tier_dict(
-                            tier_counters, "smt_invariant", "refuted",
                         )
                 else:
                     logger.info(
