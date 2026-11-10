@@ -260,6 +260,21 @@ def _close_inherited_death_w_post_fork() -> None:
     _LIVE_DEATH_W.clear()
 
 
+def _after_fork_child_cleanup(
+    _sweep: Callable[[], object] = _close_inherited_death_w_post_fork,
+    _exit: Callable[[int], NoReturn] = os._exit,
+) -> None:
+    """Stop a child if its inherited-writer sweep raises."""
+    # Retain both callables before fork, preserving registration ownership.
+    try:
+        _sweep()
+    except BaseException:
+        # Python ignores at-fork callback exceptions and otherwise resumes
+        # the child. Do not continue with uncertain inherited pipe ownership.
+        # The captured _exit needs no imports, locks or logging.
+        _exit(126)
+
+
 # Structural closure: run the sweep in EVERY child forked by this
 # process — os.fork(), os.forkpty(), and multiprocessing's fork start
 # method all route through the at-fork hooks. Without this, the
@@ -291,7 +306,7 @@ def _close_inherited_death_w_post_fork() -> None:
 # not-yet-closed one inside close_death_w — that the sweep misses,
 # the transient pre-fix behaviour. _spawn's own fork below keeps
 # fork-under-lock for the exact snapshot at the cohort-owning site.
-os.register_at_fork(after_in_child=_close_inherited_death_w_post_fork)
+os.register_at_fork(after_in_child=_after_fork_child_cleanup)
 
 
 def _scrub_env_image_values(names: Iterable[bytes]) -> None:
