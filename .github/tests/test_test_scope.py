@@ -646,6 +646,60 @@ def mini_repo(tmp_path_factory) -> Path:
     return repo
 
 
+class TestIncompleteImportGraph:
+    @pytest.fixture
+    def repo(self, tmp_path):
+        sources = {
+            "core/example/model.py": "VALUE = 1\n",
+            "core/example/bridge.py": "import core.example.model\n",
+            "core/example/tests/test_model.py": "import core.example.bridge\n",
+            "core/other/tests/test_other.py": "def test_other(): pass\n",
+            "core/sandbox/tests/test_sandbox.py": "def test_sandbox(): pass\n",
+            ".github/tests/test_ci.py": "def test_ci(): pass\n",
+        }
+        for name, body in sources.items():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body)
+        return tmp_path
+
+    @pytest.mark.parametrize("broken", [
+        "core/example/bridge.py", "core/example/tests/test_model.py",
+    ], ids=["intermediate", "consumer"])
+    def test_parse_failure_forces_complete_dispatch(self, repo, broken, capsys):
+        (repo / broken).write_text("def broken(:\n")
+        result = compute_tier_dispatch(["core/example/model.py"], repo)
+        assert _is_full_dispatch(result)
+        assert result["_scope"]["full"]
+        assert result["python"]["files"] == [
+            Path("core/example/tests/test_model.py"),
+            Path("core/other/tests/test_other.py"),
+        ]
+        assert result["sandbox"]["files"] == [Path("core/sandbox/tests/test_sandbox.py")]
+        assert result["ci_lint"]["files"] == [Path(".github/tests/test_ci.py")]
+        assert result["python"]["matrix"]
+        assert result["_stats"]["closure"] == result["_stats"]["total"]
+        assert "1 parse failures" in capsys.readouterr().out
+
+    def test_valid_graph_remains_scoped(self, repo):
+        result = compute_tier_dispatch(["core/example/model.py"], repo)
+        assert not _is_full_dispatch(result)
+        assert result["python"]["files"] == [Path("core/example/tests/test_model.py")]
+        assert not result["sandbox"]["run"]
+        assert not result["ci_lint"]["run"]
+
+    def test_non_graph_input_does_not_parse_broken_tree(self, repo, monkeypatch):
+        (repo / "core/example/bridge.py").write_text("def broken(:\n")
+
+        def unexpected_graph(*args, **kwargs):
+            pytest.fail("metadata-only input must not construct a graph")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
+        result = compute_tier_dispatch(["docs/guide.md"], repo)
+        assert not _active(result)
+        assert not _is_full_dispatch(result)
+
+
 class TestDispatchFailsOpen:
     """Simulation harness for the PR shapes that must never dispatch
     zero tiers: deleted / renamed imported modules, data-only changes,
@@ -808,10 +862,9 @@ class TestDispatchFailsOpen:
     def test_dangling_symlink_tree_still_dispatches(self, tmp_path):
         # A dangling .py symlink anywhere under a scan root used to
         # crash graph construction (FileNotFoundError), reddening the
-        # dispatch job for EVERY PR against that tree. It must instead
-        # be inert for unrelated changes, and a PR that touches the
-        # symlink itself fails toward full dispatch (not a regular
-        # file on disk — same as a deletion).
+        # dispatch job for EVERY PR against that tree. An incomplete
+        # graph now fails toward full dispatch without crashing, even
+        # when the unreadable graph member was not directly changed.
         (tmp_path / "core/pkgb").mkdir(parents=True)
         (tmp_path / "core/pkgb/mod.py").write_text("V = 1\n")
         (tmp_path / "core/pkgb/tests").mkdir()
@@ -826,10 +879,10 @@ class TestDispatchFailsOpen:
         except OSError:
             pytest.skip("platform cannot create symlinks")
 
-        # Unrelated edit: no crash, scoped dispatch.
+        # Unrelated edit: no crash, but the graph is incomplete.
         result = compute_tier_dispatch(["core/pkgb/mod.py"], tmp_path)
         assert Path("core/pkgb/tests/test_mod.py") in result["python"]["files"]
-        assert not _is_full_dispatch(result)
+        assert _is_full_dispatch(result)
 
         # The symlink itself changed: cannot be mapped, full dispatch.
         result = compute_tier_dispatch(["core/pkgb/dangling.py"], tmp_path)
