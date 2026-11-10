@@ -1282,9 +1282,14 @@ def _handle_probe(payload: dict) -> dict:
     target_argv = payload.get("target_argv")
     if not target_argv:
         return {"ok": False, "error": "target_argv required"}
+    if not isinstance(steps, list):
+        return {"ok": False, "error": "steps must be a list"}
     if len(steps) > _MAX_STEPS:
         return {"ok": False,
                 "error": f"steps={len(steps)} exceeds {_MAX_STEPS}"}
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            return {"ok": False, "error": f"step {i} not an object"}
     try:
         per_recv_timeout = _cap("per_recv_timeout",
                                 payload.get("per_recv_timeout", 3.0),
@@ -1321,8 +1326,6 @@ def _handle_probe(payload: dict) -> dict:
         t0 = time.monotonic()
         for i, step in enumerate(steps):
             _check_request_channel()
-            if not isinstance(step, dict):
-                return {"ok": False, "error": f"step {i} not an object"}
             if "compute" in step:
                 try:
                     v = _safe_eval(step["compute"], bindings)
