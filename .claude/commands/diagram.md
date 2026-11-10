@@ -12,11 +12,11 @@ Diagrams are auto-generated at the end of `/validate` and `/understand --map`/`-
 ## Usage
 
 ```
-/diagram <out-dir> [--target <name>] [--stdout] [--force]
+/diagram <out-dir> [--target <name>] [--stdout] [--force] [--report-format FORMAT] [--report-output PATH] [--no-report]
 ```
 
 It renders everything it can find in the directory. Use `--stdout` for a
-read-only preview, or `--force` if you really do want to overwrite an existing
+read-only preview (unless you also request a portable export), or `--force` if you really do want to overwrite an existing
 `diagrams.md`.
 
 ## What gets rendered
@@ -56,10 +56,10 @@ Writes `diagrams.md` into the target directory next to the existing JSON files. 
 ## Execution
 
 ```bash
-libexec/raptor-render-diagrams <out-dir> [--target <name>] [--stdout] [--force]
+libexec/raptor-render-diagrams <out-dir> [--target <name>] [--stdout] [--force] [--report-format FORMAT] [--report-output PATH] [--no-report]
 ```
 
-Parse `$ARGUMENTS` for `<out-dir>` and `--target`, then run the command. Show the output path.
+Forward `$ARGUMENTS`, including the listed switches, to the command. Display its mechanical summary and output paths. Do not spend model calls regenerating or summarising the captured diagrams.
 
 ## When to run
 
@@ -69,3 +69,25 @@ After any of:
 - `/validate` (produces `attack-surface.json`, `attack-tree.json`, `attack-paths.json`)
 
 Point it at the same output directory. It picks up whatever JSON is there: no configuration needed.
+
+## Portable exports
+
+`/diagram RUN_DIR --stdout --report-format json` keeps the native preview on
+stdout and writes a portable companion. Repeat `--report-format` for Markdown,
+JSON or XML outputs; multiple formats need a directory destination. The companion
+freezes Mermaid source, textual fallbacks, provenance and section warnings from
+the same render. It can be rendered offline after original inputs change.
+
+`--no-report` disables portable companions, while retaining the command's native
+diagram output. `--force` still applies to an existing native `diagrams.md`; it
+does not permit a report destination to replace source JSON or graph data.
+
+Large native output can yield a partial companion. The receipt flags incomplete
+capture explicitly; native diagram output remains available.
+
+The CLI prints a mechanical diagram count on stderr even without a portable
+export or with `--no-report`. `--stdout` remains native Markdown only.
+
+If the companion cannot record all source references, export is declined and
+prior portable files stay untouched. The native render and its count remain
+available.

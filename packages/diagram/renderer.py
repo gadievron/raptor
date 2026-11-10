@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from core.artifacts.provenance import provenance_of
 from core.atomic_fs import write_text_atomically
@@ -188,29 +189,20 @@ def _graph_path_for_directory(out_dir: Path, target: str | None) -> Path | None:
 
 
 def render_directory(out_dir: Path, target: str | None = None, *, artifact_loader=None,
-                     allow_graph_fallback: bool = True) -> str:
+                     allow_graph_fallback: bool = True,
+                     source_observer: Callable[[Path], None] | None = None) -> str:
     out_dir = Path(out_dir)
-    load_artifact = artifact_loader or _load_json
+    native_loader = artifact_loader or _load_json
+    def load_artifact(path):
+        if source_observer is not None:
+            source_observer(Path(path))
+        return native_loader(path)
     sections: list[str] = []
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    # Escape backticks in `target`. Pre-fix `target` was
-    # interpolated raw between backticks: `f" for `{target}`"`.
-    # An operator-supplied `--target` value containing a `` ` ``
-    # broke the markdown inline-code span and either:
-    #   * leaked the rest of the header line into raw markdown
-    #     rendering (a target like `` weird`name `` produced
-    #     `for `weird`name`` — the `name` rendered as bold/code
-    #     depending on what followed)
-    #   * matched another later `` ` `` in the document and
-    #     swallowed prose into a code span until the next
-    #     unmatched backtick
-    # `target` flows from the `--target` CLI flag in
-    # `libexec/raptor-render-diagrams` and is operator-controlled.
-    # Escape backticks to backslash-backtick so markdown renders them as
-    # literal characters; doesn't break valid targets that don't
-    # contain backticks.
-    safe_target = (target or "").replace("`", "\\`")
+    # Shared inline escaping keeps operator labels inside the heading slot,
+    # including backticks, control bytes and autofetch markup.
+    safe_target = md_inline(target or "")
     target_str = f" for `{safe_target}`" if target else ""
     sections.append(f"# Security Diagrams{target_str}\n\n_Generated {now}_\n")
 
@@ -325,6 +317,8 @@ def render_directory(out_dir: Path, target: str | None = None, *, artifact_loade
             graph_path = (_graph_path_for_directory(out_dir, graph_target)
                           if graph_target else None)
             if graph_target and graph_path and graph_path.exists():
+                if source_observer is not None:
+                    source_observer(graph_path)
                 data, stale = build_context_map(graph_path, graph_target)
                 if data and _served_target_matches(
                         (data.get("meta") or {}).get("target"),
@@ -550,8 +544,15 @@ def _load_disproven(path: Path, *, loader=None) -> list | None:
     return unwrap_list(data, keys=("disproven",))
 
 
-def render_and_write(out_dir: Path, target: str | None = None) -> Path:
-    content = render_directory(out_dir, target)
+def render_and_write(out_dir: Path, target: str | None = None, *,
+                     source_observer: Callable[[Path], None] | None = None,
+                     rendered_observer: Callable[[str], None] | None = None) -> Path:
+    if source_observer is None:
+        content = render_directory(out_dir, target)
+    else:
+        content = render_directory(out_dir, target, source_observer=source_observer)
+    if rendered_observer is not None:
+        rendered_observer(content)
     output_path = out_dir / "diagrams.md"
     # Atomic: diagrams.md is re-rendered and consumed by other tools —
     # a crash mid-write left a half-written report in place.

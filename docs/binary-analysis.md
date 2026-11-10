@@ -707,3 +707,7 @@ stdout and exports a metadata receipt with up to 100 returned records. Counts
 apply to the selected query, not the whole program. Raw evidence properties
 and free-form evidence summaries stay in native JSON rather than the report.
 No second graph query runs for export.
+
+`/binary diagram RUN_DIR` forwards the same portable report controls as
+`/diagram`. Native preview and overwrite protection stay in place. Diagram
+companions retain captured Mermaid source for offline rendering.
