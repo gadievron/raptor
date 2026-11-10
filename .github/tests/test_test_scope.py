@@ -1337,6 +1337,30 @@ def test_workflow_rebalance_preserves_selected_cases(tmp_path, monkeypatch):
 
 
 class TestSharedFixtureInventory:
+
+    @pytest.mark.parametrize("source,leaf", [
+        ("VALUE = {'row': call(Path(__file__).parent / 'fixtures' / 'nested')}\n", "nested"),
+        ("def factory(base=Path(__file__).parent / 'fixtures' / 'nested'):\n    return base\n", "nested"),
+        ("VALUE = [(Path(__file__).parent / 'fixtures' / 'nested') for borrowed in rows]\n", "nested"),
+        ("FIXTURE = Path(__file__).parent / 'fixtur\\x65s' / 'nested'\n", "nested"),
+        ("VALUE = call('fixtures', 123)\n", ""),
+    ], ids=["mapping-call", "function-default", "comprehension", "escaped-path", "leaf-fallback"])
+    def test_nested_path_syntax_and_fallback_keep_tree_read_only(self, tmp_path, source, leaf):
+        from test_scope import _extract_fixture_dirs
+
+        test = tmp_path / "core/pkg/tests/test_shapes.py"
+        test.parent.mkdir(parents=True)
+        fixture = test.parent / "fixtures"
+        (fixture / "nested").mkdir(parents=True)
+        test.write_text(source)
+        tree = ast.parse(source)
+        before = ast.dump(tree, include_attributes=True)
+        result = _extract_fixture_dirs(test.relative_to(tmp_path), tmp_path,
+                                       source=source, source_tree=tree)
+        assert set(result) == {fixture / leaf}
+        assert ast.dump(tree, include_attributes=True) == before
+        assert test.read_text() == source
+
     def test_all_consumers_and_nested_directories_are_retained(self, tmp_path):
         from test_scope import build_data_file_map
 

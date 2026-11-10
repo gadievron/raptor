@@ -36,7 +36,7 @@ import json
 import math
 import os
 import sys
-from collections import defaultdict
+from collections import defaultdict, deque
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -491,8 +491,16 @@ def _extract_fixture_dirs(
 
     # Collect BinOp / nodes that are NOT the left child of another /.
     # This gives us only the outermost (longest) chain, not sub-chains.
-    divisions = [node for node in ast.walk(source_tree)
-                 if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
+    divisions = []
+    pending = deque([source_tree])
+    while pending:
+        node = pending.popleft()
+        # Parsed names and constants cannot contain path divisions.
+        if isinstance(node, (ast.Name, ast.Constant)):
+            continue
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            divisions.append(node)
+        pending.extend(ast.iter_child_nodes(node))
     inner_lefts = {id(node.left) for node in divisions}
 
     for node in divisions:
