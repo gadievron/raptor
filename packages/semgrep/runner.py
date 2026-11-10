@@ -260,10 +260,10 @@ def _scope_version() -> tuple[int, ...] | None:
             else:
                 future = Future()
                 owner = True
-                # Keep only one in-flight entry. A concurrent context switch
-                # may probe independently, without an identity-keyed map.
-                if _SCOPE_PROBE_PENDING is None:
-                    _SCOPE_PROBE_PENDING = (key, future)
+                # Advertise only the currently selected identity's flight.
+                # Existing waiters retain older futures; identity-checked
+                # cleanup cannot clear this newer coordination entry.
+                _SCOPE_PROBE_PENDING = (key, future)
     if key is None:
         return _probe_scope_version(None)
     assert future is not None
