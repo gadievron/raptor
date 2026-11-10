@@ -38,9 +38,12 @@ def fake_creds() -> CredentialStore:
 
 
 def _dead_pid() -> int:
+    from core.testing.processes import reap_on_exit
+
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    proc.wait()
-    return proc.pid
+    with reap_on_exit(proc):
+        proc.wait()
+        return proc.pid
 
 
 def _owned_dir(prefix: str, pid: int) -> Path:
