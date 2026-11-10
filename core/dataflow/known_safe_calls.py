@@ -17,9 +17,9 @@ see mutation through an alias.  A sanitizer returning a mutable
 container would let ``alias = clean_list; alias += [tainted]``
 re-taint the "sanitized" value while every name-level check still
 holds (the exclusivity condition would certify over the alias
-mutation).  Every current entry satisfies the invariant; reviewers
-must reject mutable-container-returning candidates or land
-alias-aware tracking first.
+mutation). Conditional entries remain candidates until their output
+contracts are established; a recognised name does not establish this
+invariant. Reviewers must require immutable output or alias-aware tracking.
 
 Lookup contract:
   ``find(library_call: str, sink_class: str, language: str)`` returns
@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 
 EXACT_STR_DEFAULT_CALL = "exact_builtin_str_default_call"
+DOMPURIFY_PROFILE = "dompurify_instance_config_and_immutable_output"
 DEFAULT_POSITIONAL_CALL = "single_positional_default_call"
 PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 
@@ -227,10 +228,13 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("javascript", "typescript"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({DOMPURIFY_PROFILE}),
         soundness_note=(
             "DOMPurify.sanitize is the canonical XSS sanitiser for "
             "user-supplied HTML; output is safe to assign to innerHTML.  "
-            "Default config; custom configs are caller's responsibility."
+            "Requires a reviewed instance/configuration profile with immutable "
+            "output. Local default call syntax does not establish persistent "
+            "configuration, hooks or the return mode."
         ),
     ),
     # ------------------------------------------------------------------

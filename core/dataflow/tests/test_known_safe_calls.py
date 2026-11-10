@@ -156,3 +156,11 @@ def test_bleach_declares_default_configuration_contract():
     entry = ksc.find("bleach.clean", "xss", "python")
     assert entry is not None
     assert entry.source_contracts == frozenset({ksc.DEFAULT_POSITIONAL_CALL})
+
+
+@pytest.mark.parametrize("language", ["javascript", "typescript"])
+def test_dompurify_requires_an_immutable_instance_profile(language):
+    entry = ksc.find("DOMPurify.sanitize", "xss", language)
+    assert entry is not None
+    assert entry.source_contracts == frozenset({ksc.DOMPURIFY_PROFILE})
+    assert ksc.DEFAULT_POSITIONAL_CALL not in entry.source_contracts
