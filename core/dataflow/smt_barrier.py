@@ -77,6 +77,7 @@ from pathlib import Path
 
 from core.dataflow import sanitizer_cut_config as _sc_config
 from core.dataflow.source_identity import (
+    canonical_python_call_spans, python_call_span,
     known_python_identity_conflict, known_python_origin_conflict,
 )
 from core.paths import confine
@@ -1665,6 +1666,7 @@ def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
 def _rebound_in_loop_containing_sink(
     tree: ast.AST, var_name: str, validator_line: int, sink_line: int,
     *, sanitizer_call_tails: frozenset | None = None,
+    sanitizer_call_spans: frozenset | None = None,
 ) -> bool:
     """True iff ``var_name`` is rebound anywhere inside a loop whose
     span contains the sink line (the validator's own sanitizing
@@ -1694,7 +1696,7 @@ def _rebound_in_loop_containing_sink(
             if line is None:
                 continue
             if line == validator_line and _is_sanitizing_binding_node(
-                    node, sanitizer_call_tails):
+                    node, sanitizer_call_tails, call_spans=sanitizer_call_spans):
                 continue
             if _node_rebinds_var(node, var_name):
                 return True
@@ -2288,6 +2290,7 @@ def _value_preserves_chain_identity(value: ast.AST, chain: set) -> bool:
 
 def _is_sanitizer_call_value(
     value: ast.AST | None, tails: frozenset | None,
+    *, call_spans: frozenset | None = None,
 ) -> bool:
     """True iff ``value`` IS the sanitizer call's result expression —
     an :class:`ast.Call` whose callee tail is one of ``tails`` (any
@@ -2295,9 +2298,14 @@ def _is_sanitizer_call_value(
     search: a value that merely CONTAINS the call
     (``[escape(x), x]``, ``{...}[flag]``, ``escape(x) + raw``) mixes
     raw input around the sanitized result, so it must never earn the
-    validator-binding exemption."""
+    validator-binding exemption. A supplied source-span whitelist
+    replaces tail-only matching; an empty whitelist exempts no call.
+    """
     if not isinstance(value, ast.Call):
         return False
+    if call_spans is not None:
+        span = python_call_span(value)
+        return span is not None and span in call_spans
     if tails is None:
         return True
     func = value.func
@@ -2310,6 +2318,7 @@ def _is_sanitizer_call_value(
 
 def _is_sanitizing_binding_node(
     node: ast.AST, tails: frozenset | None,
+    *, call_spans: frozenset | None = None,
 ) -> bool:
     """True iff ``node`` is a binding statement whose bound value IS
     the sanitizer call (Assign / AnnAssign / walrus).  Used to scope
@@ -2317,7 +2326,7 @@ def _is_sanitizing_binding_node(
     whole-LINE exemption certified any trailing same-line rebind
     (``p = safe_join(base, fn); p = fn``) as still validated."""
     if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
-        return _is_sanitizer_call_value(getattr(node, "value", None), tails)
+        return _is_sanitizer_call_value(getattr(node, "value", None), tails, call_spans=call_spans)
     return False
 
 
@@ -2417,10 +2426,15 @@ def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
     return frozenset({"sub"}) if kind == "charset_sub" else frozenset()
 
 
+def _sanitizer_spans_for_spec_kind(tree: ast.AST, line: int, kind: str) -> frozenset:
+    return (canonical_python_call_spans(tree, line, frozenset({"re.sub"}))
+            if kind == "charset_sub" else frozenset())
+
+
 def _bind_chain_target(
     target: ast.AST, value: ast.AST, chain: set,
     grows: set, kills: set, *, at_validator: bool,
-    tails: frozenset | None,
+    tails: frozenset | None, call_spans: frozenset | None = None,
 ) -> None:
     """Chain grow/kill decision for ONE assignment target bound to
     ``value``, element-wise through tuple/list structure (mirroring
@@ -2454,7 +2468,7 @@ def _bind_chain_target(
             for t_elt, v_elt in zip(target.elts, value.elts):
                 _bind_chain_target(
                     t_elt, v_elt, chain, grows, kills,
-                    at_validator=at_validator, tails=tails,
+                    at_validator=at_validator, tails=tails, call_spans=call_spans,
                 )
             return
         names: set = set()
@@ -2465,7 +2479,7 @@ def _bind_chain_target(
     _collect_target_names(target, names)
     if not names:
         return  # Attribute / Subscript target: mutation, not a rebind
-    if at_validator and _is_sanitizer_call_value(value, tails):
+    if at_validator and _is_sanitizer_call_value(value, tails, call_spans=call_spans):
         return  # the sanitizing binding itself — the chain's seed
     # Load-context names only: a walrus TARGET inside the RHS
     # (``y = (x := raw)``) is a simultaneous rebind, not a read of
@@ -2522,6 +2536,7 @@ def _python_chain_reaches_sink(
     tree: ast.AST, start_var: str, validator_line: int,
     sink_line: int, sink_line_text: str,
     *, sanitizer_call_tails: frozenset | None = None,
+    sanitizer_call_spans: frozenset | None = None,
 ) -> bool:
     """Track validated aliases and admitted derivations to an executable read.
 
@@ -2534,6 +2549,10 @@ def _python_chain_reaches_sink(
     outputs are all validated aliases. Tuple/list destructuring pairs
     targets with values; constructing a container does not certify it.
     Operators and calls require separate transfer contracts.
+
+    Source consumers supply the qualified call's exact span whitelist;
+    an empty whitelist grants no exemption. Tail matching remains only
+    for legacy model callers without a source association.
 
     Validator-line exemption is per-NODE, never per-line: only the
     binding whose value IS the sanitizer call
@@ -2622,7 +2641,8 @@ def _python_chain_reaches_sink(
                 node.lineno == validator_line
                 and isinstance(node, ast.NamedExpr)
                 and _is_sanitizer_call_value(node.value,
-                                             sanitizer_call_tails)
+                                             sanitizer_call_tails,
+                                             call_spans=sanitizer_call_spans)
             ):
                 continue
             for var in list(chain):
@@ -2647,6 +2667,7 @@ def _python_chain_reaches_sink(
             _bind_chain_target(
                 t, node.value, chain, grows, kills,
                 at_validator=at_validator, tails=sanitizer_call_tails,
+                call_spans=sanitizer_call_spans,
             )
         # Simultaneous-assignment semantics: every element pair was
         # evaluated against the PRE-statement chain; kill wins when a
@@ -2661,6 +2682,7 @@ def _python_chain_reaches_sink(
         if not _rebound_in_loop_containing_sink(
             tree, var, validator_line, sink_line,
             sanitizer_call_tails=sanitizer_call_tails,
+            sanitizer_call_spans=sanitizer_call_spans,
         )
     }
     # Nested-scope escape kill: a nested function rebinding a chain
@@ -2817,6 +2839,7 @@ def _lexical_substitution_dominates(
     return not _rebound_in_loop_containing_sink(
         tree, var_name, validator_line, sink_line,
         sanitizer_call_tails=frozenset({"sub"}),
+        sanitizer_call_spans=_sanitizer_spans_for_spec_kind(tree, validator_line, "charset_sub"),
     )
 
 
@@ -3270,6 +3293,7 @@ def try_tier0(
                 chain_tree, spec.var_name, line, sink_line, sink_line_text,
                 sanitizer_call_tails=_sanitizer_tails_for_spec_kind(
                     spec.kind),
+                sanitizer_call_spans=_sanitizer_spans_for_spec_kind(chain_tree, line, spec.kind),
             )
     else:
         var_reaches = _lexical_var_reaches_sink(

@@ -60,6 +60,8 @@ from core.dataflow.smt_barrier import (
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
     _sanitizer_tails_for_spec_kind,
+    _sanitizer_spans_for_spec_kind,
+    _is_sanitizer_call_value,
     _same_function_in_order,
     _validator_call_error_may_reach_sink,
     _validator_in_branch,
@@ -72,6 +74,7 @@ from core.dataflow.smt_barrier import (
     extract_validator as _mechanical_extract,
 )
 from core.dataflow.source_identity import (
+    canonical_python_call_spans,
     known_python_identity_conflict, known_python_origin_conflict,
 )
 from core.paths import confine
@@ -328,42 +331,13 @@ def _line_invokes_library_call(
     return False
 
 
-def _value_calls_tail(value, tail: str) -> bool:
-    """True iff ``value``'s subtree contains a call whose callee name
-    (bare or attribute) is ``tail``.  Pre-filter only — binding
-    decisions use :func:`_value_is_call_result` (the value must BE the
-    call, not merely contain it)."""
-    import ast
-    return any(
-        isinstance(c, ast.Call)
-        and isinstance(c.func, (ast.Name, ast.Attribute))
-        and (c.func.id if isinstance(c.func, ast.Name)
-             else c.func.attr) == tail
-        for c in ast.walk(value)
-    )
+def _value_is_call_result(value, tail: str, *, call_spans: frozenset | None = None) -> bool:
+    """Require the complete call result and its source-associated identity."""
+    return _is_sanitizer_call_value(value, frozenset({tail}), call_spans=call_spans)
 
 
-def _value_is_call_result(value, tail: str) -> bool:
-    """True iff ``value`` IS a call to ``tail`` — not merely contains
-    one.  The subtree form credited containers and selects that mix
-    the raw input around the sanitized element
-    (``p = [escape(x), x]``, ``p = q, r = escape(x), x``,
-    ``{...: escape(x), ...: x}[flag]``) with a fully-sanitized
-    binding (false SOUND).  Parentheses/annotations are transparent at
-    the AST level; anything else refuses — refusing costs yield,
-    never soundness."""
-    import ast
-    if not isinstance(value, ast.Call):
-        return False
-    func = value.func
-    if isinstance(func, ast.Name):
-        return func.id == tail
-    if isinstance(func, ast.Attribute):
-        return func.attr == tail
-    return False
-
-
-def _paired_transform_targets(target, value, tail: str) -> set[str]:
+def _paired_transform_targets(target, value, tail: str,
+                              *, call_spans: frozenset | None = None) -> set[str]:
     """Names whose paired value IS the transform call, matched
     element-wise through tuple/list structure.
 
@@ -380,7 +354,7 @@ def _paired_transform_targets(target, value, tail: str) -> set[str]:
     costs yield, never soundness."""
     import ast
     if isinstance(target, ast.Name):
-        return {target.id} if _value_is_call_result(value, tail) else set()
+        return {target.id} if _value_is_call_result(value, tail, call_spans=call_spans) else set()
     if isinstance(target, (ast.Tuple, ast.List)):
         if (
             isinstance(value, (ast.Tuple, ast.List))
@@ -389,7 +363,7 @@ def _paired_transform_targets(target, value, tail: str) -> set[str]:
         ):
             out: set[str] = set()
             for t_elt, v_elt in zip(target.elts, value.elts):
-                out |= _paired_transform_targets(t_elt, v_elt, tail)
+                out |= _paired_transform_targets(t_elt, v_elt, tail, call_spans=call_spans)
             return out
         return set()
     # Starred / Attribute / Subscript: nothing the chain can follow.
@@ -439,7 +413,7 @@ def _lexical_binding_segments(line: str) -> list[str]:
 
 def _transform_binding_targets(
     tree, source_text: str, validator_line: int, library_call: str,
-    *, language: str | None = None,
+    *, language: str | None = None, call_spans: frozenset | None = None,
 ) -> set[str]:
     """Plain-Name targets the transform call's result is bound to on
     the claimed line — empty when the result is discarded or bound to
@@ -448,6 +422,8 @@ def _transform_binding_targets(
     tail = library_call.rsplit(".", maxsplit=1)[-1]
     targets: set[str] = set()
     if tree is not None:
+        if call_spans is None:
+            call_spans = canonical_python_call_spans(tree, validator_line, frozenset({library_call}))
         for node in ast.walk(tree):
             if getattr(node, "lineno", None) != validator_line:
                 continue
@@ -458,13 +434,11 @@ def _transform_binding_targets(
             value = getattr(node, "value", None)
             if value is None:
                 continue
-            if not _value_calls_tail(value, tail):
-                continue
             node_targets = (list(node.targets)
                             if isinstance(node, ast.Assign)
                             else [node.target])
             for t in node_targets:
-                targets |= _paired_transform_targets(t, value, tail)
+                targets |= _paired_transform_targets(t, value, tail, call_spans=call_spans)
         return targets
     if language in {"java", "javascript", "typescript", "tsx"}:
         from core.analysis.validator_call_binding import native_transform_binding_targets
@@ -602,12 +576,15 @@ def _try_known_safe_call(
     # sentinel-returning validator leaves the raw input live and must
     # be classed transform; see the KnownSafeCall docstring and the
     # werkzeug.security.safe_join precedent).
+    call_spans = (canonical_python_call_spans(tree, validator_line, frozenset({entry.library_call}))
+                  if tree is not None else frozenset())
     chain_vars: set[str] = (
         {spec.variable_name} if spec.variable_name else set()
     )
     if entry.input_arg_kind == "transform":
         chain_vars = _transform_binding_targets(
-            tree, source_text, validator_line, spec.library_call, language=language,
+            tree, source_text, validator_line, spec.library_call,
+            language=language, call_spans=call_spans,
         )
         if not chain_vars:
             return Tier0Result(
@@ -630,7 +607,7 @@ def _try_known_safe_call(
         chain_ok = any(
             _python_chain_reaches_sink(
                 tree, var, validator_line, sink_line, sink_line_text,
-                sanitizer_call_tails=tail_set,
+                sanitizer_call_tails=tail_set, sanitizer_call_spans=call_spans,
             )
             for var in chain_vars
         )
@@ -901,6 +878,7 @@ def try_tier1b(
                 tree, mech.var_name, validator_line, sink_line, sink_line_text,
                 sanitizer_call_tails=_sanitizer_tails_for_spec_kind(
                     mech.kind),
+                sanitizer_call_spans=_sanitizer_spans_for_spec_kind(tree, validator_line, mech.kind),
             )
         else:
             chain_ok = _lexical_var_reaches_sink(

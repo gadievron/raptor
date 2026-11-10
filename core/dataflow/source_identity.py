@@ -19,6 +19,49 @@ def _parts(node: ast.AST) -> tuple[str, ...] | None:
     return (node.id, *reversed(parts))
 
 
+PythonCallSpan = tuple[int, int, int, int]
+
+
+def python_call_span(node: ast.AST | None) -> PythonCallSpan | None:
+    """Raw AST coordinates for a complete call, never an inferred span."""
+    if not isinstance(node, ast.Call) or node.end_lineno is None or node.end_col_offset is None:
+        return None
+    return node.lineno, node.col_offset, node.end_lineno, node.end_col_offset
+
+
+def canonical_python_call_spans(
+    tree: ast.AST, call_line: int, library_calls: frozenset[str],
+) -> frozenset[PythonCallSpan]:
+    """Locate one qualified call using the existing source import map.
+
+    This is syntax association, not library-origin or input-type evidence.
+    Failed or ambiguous association returns an empty whitelist: callers
+    must not turn it into the legacy unrestricted-call fallback.
+    """
+    if not library_calls:
+        return frozenset()
+    from core.analysis.python_module_callgraph import module_import_map
+
+    try:
+        imports = module_import_map(tree)
+        calls = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or node.lineno != call_line:
+                continue
+            written = _parts(node.func)
+            if written is None:
+                continue
+            resolved = ".".join((imports.get(written[0], written[0]), *written[1:]))
+            if resolved in library_calls:
+                calls.append(node)
+        if len(calls) != 1:
+            return frozenset()
+        span = python_call_span(calls[0])
+        return frozenset({span}) if span is not None else frozenset()
+    except (AttributeError, RecursionError, TypeError, ValueError):
+        return frozenset()
+
+
 def _member_root(node: ast.AST) -> str | None:
     while isinstance(node, (ast.Attribute, ast.Subscript)):
         node = node.value
