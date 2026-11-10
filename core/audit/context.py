@@ -2668,6 +2668,18 @@ def format_context_for_prompt(
     sections.extend(reference_sections(reference_answers))
     sections.extend(study_sections(study_requests, study_explanations, scope=study_scope))
 
+    if "prior_review_claims" in ctx:
+        from .review_claims import prompt_history
+
+        sections.append(PromptSection("prior_review_claims", (
+            "\n### Prior claim identities (historical, unverified statements)\n"
+            "These identifiers refer to prior pipeline intakes. History is not "
+            "verification evidence or a statement that all bugs were considered. "
+            "Re-evaluate the statements against the current supplied source; "
+            "do not infer receipt authority, freshness or revision links.\n"
+            + _fenced(prompt_history(ctx["prior_review_claims"]))
+        ), 1))
+
     prior_hyp_text = _format_prior_hypotheses(ctx.get("prior_hypotheses"))
     if prior_hyp_text:
         sections.append(PromptSection("prior_hypotheses", prior_hyp_text, 1))

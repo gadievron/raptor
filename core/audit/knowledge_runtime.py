@@ -186,6 +186,10 @@ class AuditKnowledgeRuntime:
                                          "pass_id": origin.pass_id})
                 self.notify()
                 raise
+            from .review_claims import begin_review
+            # Pipeline-owned: a model cannot supply the original source stamp.
+            outcome.review_result = dict(outcome.review_result or {})
+            outcome.review_result["review_claims"] = begin_review(origin, attempt_id)
             current = capture_source_identity(self.target_root, origin.file)
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
