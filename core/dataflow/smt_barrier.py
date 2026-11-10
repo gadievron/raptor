@@ -1701,11 +1701,37 @@ def _python_collection_key_dispatch(node: ast.AST) -> bool:
     return False
 
 
+def _python_match_dispatch(node: ast.AST) -> bool:
+    """Pattern comparison and guard truth conversion may re-enter Python.
+
+    Identity-only patterns merely avoid this negative boundary. Subject
+    evaluation and capture bindings still require their existing checks.
+    """
+    if not isinstance(node, ast.Match):
+        return False
+    if any(case.guard is not None for case in node.cases):
+        return True
+    pending = [case.pattern for case in node.cases]
+    while pending:
+        pattern = pending.pop()
+        if isinstance(pattern, ast.MatchAs):
+            if pattern.pattern is not None:
+                pending.append(pattern.pattern)
+        elif isinstance(pattern, ast.MatchSingleton):
+            if not any(pattern.value is value for value in (None, True, False)):
+                return True
+        elif isinstance(pattern, ast.MatchOr):
+            pending.extend(pattern.patterns)
+        else:
+            return True
+    return False
+
+
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
-            or _python_collection_key_dispatch(node)) or isinstance(
+            or _python_collection_key_dispatch(node) or _python_match_dispatch(node)) or isinstance(
         node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While,
                ast.With, ast.FormattedValue, ast.Import, ast.ImportFrom)
     ) or bool(
@@ -1721,7 +1747,8 @@ def _python_evaluation_dispatch(node: ast.AST) -> bool:
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or isinstance(node, (ast.With, ast.FormattedValue, ast.Import, ast.ImportFrom))
             or _python_unpack_assignment(node)
-            or _python_unpack_load(node) or _python_collection_key_dispatch(node)) or (
+            or _python_unpack_load(node) or _python_collection_key_dispatch(node)
+            or _python_match_dispatch(node)) or (
         isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     )
 
