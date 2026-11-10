@@ -50,6 +50,9 @@ import logging
 import os
 import zipfile
 from collections.abc import Callable
+from contextlib import closing
+
+from core.source.streams import preserving_stream_error
 
 from .eocd import DEFAULT_MAX_ENTRIES, bomb_shaped_reason, peek_eocd
 from .safe_member import (
@@ -197,7 +200,7 @@ def extract_files_from_zip(
         # empty result.
         raise ZipOpenError(f"not a readable zip archive: {e}") from e
 
-    try:
+    with preserving_stream_error(closing(zf)):
         total_bytes = 0
         for i, info in enumerate(zf.infolist()):
             # In-memory cap. EOCD pre-flight catches the common bomb
@@ -273,8 +276,6 @@ def extract_files_from_zip(
             found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break
-    finally:
-        zf.close()
     return found
 
 
