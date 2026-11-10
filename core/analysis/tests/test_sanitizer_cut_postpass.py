@@ -815,6 +815,52 @@ class TestMultiCandidateWitness:
 
 
 class TestCappedReads:
+    def test_file_growth_after_metadata_probe_refuses(self, tmp_path, monkeypatch):
+        import os
+        import sys
+        import core.analysis.sanitizer_cut_postpass as scp
+
+        target = (tmp_path / "growing.java").resolve()
+        target.write_text("class A {}")
+        monkeypatch.setattr(scp, "_MAX_SOURCE_READ_BYTES", 64)
+        previous = sys.getprofile()
+        if previous is not None:
+            pytest.skip("profiling hook already owned")
+        grew = []
+
+        def grow_after_metadata(frame, event, arg):
+            path_probe = (
+                event == "return" and frame.f_code is Path.stat.__code__
+                and frame.f_locals.get("self") == target
+                and frame.f_back.f_code.co_name == "_read_source_capped"
+            )
+            descriptor_probe = (
+                event == "c_return" and arg is os.fstat
+                and frame.f_globals.get("__name__") == "core.security.capped_read"
+                and frame.f_locals.get("path") == target
+            )
+            if not grew and (path_probe or descriptor_probe):
+                target.write_bytes(b"x" * 65)
+                grew.append(True)
+
+        try:
+            sys.setprofile(grow_after_metadata)
+            result = scp._read_source_capped(target)
+        finally:
+            sys.setprofile(previous)
+        assert grew, "owned source must grow after the actual metadata probe"
+        assert result is None
+
+    @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+    def test_symlink_and_newline_read_semantics(self, tmp_path, newline):
+        import core.analysis.sanitizer_cut_postpass as scp
+
+        source = tmp_path / "source.java"
+        source.write_bytes(("class A {}" + newline).encode())
+        alias = tmp_path / "alias.java"
+        alias.symlink_to(source)
+        assert scp._read_source_capped(alias) == "class A {}\n"
+
     def test_oversized_file_reads_as_unreadable(self, tmp_path,
                                                 monkeypatch):
         import core.analysis.sanitizer_cut_postpass as scp
