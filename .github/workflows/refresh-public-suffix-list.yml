@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   test:
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -28,10 +29,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.14'
-      - run: python -m unittest discover -s core/domains/tests
+      - name: Install pinned test runner
+        run: python -m pip install pytest==9.1.1
+      - run: python -m pytest -q core/domains/tests
 
   refresh:
-    if: github.event_name != 'pull_request' && (github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch')
+    if: github.repository == 'gadievron/raptor' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -44,10 +47,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: '3.14'
+      - name: Install pinned test runner
+        run: python -m pip install pytest==9.1.1
       - name: Download and validate list
         run: python .github/scripts/refresh_public_suffix_list.py
       - name: Test refreshed boundaries
-        run: python -m unittest discover -s core/domains/tests
+        run: python -m pytest -q core/domains/tests
       - name: Open or update refresh PR
         env:
           GH_TOKEN: ${{ github.token }}

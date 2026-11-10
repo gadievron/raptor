@@ -39,15 +39,8 @@ concurrency:
 
 jobs:
   refresh:
-    # These sources are public and deterministic — the lists are identical no
-    # matter who runs the refresh, and forks consume the merged result from
-    # upstream. So the weekly cron runs only on the canonical repo (otherwise
-    # every active fork runs its own copy and fails at the PR step, since gh
-    # defaults the base repo to the upstream parent on a fork). A fork that
-    # wants fresh data without syncing can still trigger it manually via
-    # workflow_dispatch; the gh commands below pin --repo so that lands a PR
-    # on the fork itself.
-    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
+    # Upstream maintenance only, including manual dispatch.
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

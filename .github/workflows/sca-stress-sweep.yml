@@ -64,7 +64,8 @@ env:
 
 jobs:
   sweep:
-    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
+    # Upstream maintenance only, including manual dispatch.
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     # Base-image layer scanning joined the sweep (blob redirects +
     # distro matching), and CI runners start cold every week — the

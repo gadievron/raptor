@@ -65,14 +65,8 @@ env:
 
 jobs:
   self-bump:
-    # The self-bump target version is determined by upstream releases —
-    # identical for any runner, and forks consume the merged bump from
-    # upstream. So the cron runs only on the canonical repo (otherwise every
-    # active fork runs its own copy and fails at the PR step, since gh defaults
-    # the base repo to the upstream parent on a fork). A fork can still bump on
-    # demand via workflow_dispatch; the gh commands pin --repo so the PR lands
-    # on the fork itself.
-    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
+    # Upstream maintenance only, including manual dispatch.
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
