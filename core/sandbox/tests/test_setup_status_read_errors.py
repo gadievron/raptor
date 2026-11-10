@@ -8,6 +8,7 @@ from core.sandbox import _spawn
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.pipes import pipes_for_setup
 
 
 @pytest.mark.parametrize('prefix', [b'G:', b'G', b'', b'G:X:exec failed', b'M:mount failed'])
@@ -54,11 +55,15 @@ def test_successful_or_nonblocking_drain_preserves_confirmation(monkeypatch, tai
 
 
 def test_real_pipe_confirmation_followed_by_exec_failure():
-    read_fd, write_fd = os.pipe()
-    owned = {read_fd}
-    try:
+    with pipes_for_setup(1) as pairs:
+        read_fd, write_fd = pairs[0]
+        owned = {read_fd}
         os.write(write_fd, b'G:X:exec failed')
-    finally:
+    try:
         os.close(write_fd)
-    assert _spawn._drain_status_pipe(read_fd, owned) == ('X', 'exec failed')
-    assert not owned
+        assert _spawn._drain_status_pipe(read_fd, owned) == ('X', 'exec failed')
+        assert not owned
+    finally:
+        if read_fd in owned:
+            owned.remove(read_fd)
+            os.close(read_fd)
