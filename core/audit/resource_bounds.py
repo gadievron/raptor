@@ -49,6 +49,7 @@ import logging
 import os
 import re
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -1382,15 +1383,16 @@ def run_resource_bounds_check(
     collection_pairs = learned_collection_pairs(domain_model)
 
     best: BoundEvidence | None = None
+    site_results: list[dict[str, Any]] = []
     for site in sites:
         if deadline is not None and time.monotonic() >= deadline:
-            if best is not None:
-                return best
-            return _inconclusive(
+            partial = _inconclusive(
                 REASON_BUDGET_EXHAUSTED,
-                f"budget of {budget_s}s exhausted before adjudicating "
-                f"{function_name}",
+                f"budget of {budget_s}s exhausted before completing "
+                f"the accumulation-site scan of {function_name}",
             )
+            partial.bound_search = {"site_results": site_results, "sites_complete": False}
+            return partial
         res = _adjudicate_site(
             site, source, file_path, function_name, language,
             segment_lines=segment_lines,
@@ -1407,16 +1409,29 @@ def run_resource_bounds_check(
             # overran the documented budget unbounded.
             deadline=deadline,
         )
+        site_results.append(deepcopy(res.to_dict()))
         if res.outcome == "confirmed":
+            # Existence needs one confirmed site; refutation requires all.
+            res.bound_search = {
+                **(res.bound_search or {}),
+                "site_results": site_results,
+                "sites_complete": len(site_results) == len(sites),
+            }
             return res
         if best is None or (
-            best.outcome == "inconclusive" and res.outcome == "refuted"
+            best.outcome == "refuted" and res.outcome == "inconclusive"
         ):
             best = res
-    return best if best is not None else _inconclusive(
-        REASON_HYPOTHESIS_UNBINDABLE,
-        f"no adjudicable site in {function_name}",
-    )
+    if best is None:
+        return _inconclusive(
+            REASON_HYPOTHESIS_UNBINDABLE,
+            f"no adjudicable site in {function_name}",
+        )
+    if best.bound_search is None:
+        best.bound_search = {}
+    best.bound_search["site_results"] = site_results
+    best.bound_search["sites_complete"] = True
+    return best
 
 
 def run_resource_bounds_prepass(
