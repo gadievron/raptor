@@ -2691,11 +2691,17 @@ def _lexical_var_reaches_sink(
     This is a local write filter, not callee-effect or alias analysis.
     The sink row is included conservatively: without a call-column
     binding, a write sharing that row cannot reuse the earlier value.
-    Validator-row ordering and exact sink argument binding need separate
-    source checks; a passing lexical filter is not sufficient by itself.
+    Native source checks reject trailing validator-row writes. Exact
+    call binding still needs separate source evidence; a passing local
+    filter is not sufficient by itself.
     """
     if java_unicode_unverified(source_text, language=language):
         return False
+    if language in {"java", "javascript", "typescript", "tsx"}:
+        from core.analysis.validator_value_scope import validator_row_epoch_unverified
+
+        if validator_row_epoch_unverified(source_text, var, validator_line, language=language):
+            return False
     views = code_view_lines(source_text, language)
     if not 0 < sink_line <= len(views):
         return False

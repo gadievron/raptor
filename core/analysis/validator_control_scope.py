@@ -40,6 +40,29 @@ def _owner(node, owners):
     return None
 
 
+def _native_source_tree(source: str, language: str):
+    """Return the exact native syntax tree, or None for an unverified profile."""
+    if language not in {"java", "javascript", "typescript", "tsx"}:
+        return None
+    if language == "java" and java_unicode_unverified(source, language="java"):
+        return None
+    try:
+        if language == "java":
+            from core.analysis.cfg_builder_java import _get_parser
+
+            parser = _get_parser()
+        else:
+            from core.inventory.lexical_view import _parser_for
+
+            parser = _parser_for(language)
+        if parser is None:
+            return None
+        tree = parser.parse(source.encode("utf-8"))
+        return tree if tree is not None and not tree.root_node.has_error else None
+    except Exception:  # noqa: BLE001 -- syntax unavailability cannot authorise a proof
+        return None
+
+
 def validator_control_scope_unverified(source: str, validator_line: int, sink_line: int,
                                         *, guard_shaped: bool, language: str) -> bool:
     """Refuse unsupported or bypassing syntax around a source validator.
@@ -62,18 +85,8 @@ def validator_control_scope_unverified(source: str, validator_line: int, sink_li
     else:
         return True
     try:
-        if language == "java":
-            from core.analysis.cfg_builder_java import _get_parser
-
-            parser = _get_parser()
-        else:
-            from core.inventory.lexical_view import _parser_for
-
-            parser = _parser_for(language)
-        if parser is None:
-            return True
-        tree = parser.parse(source.encode("utf-8"))
-        if tree is None or tree.root_node.has_error:
+        tree = _native_source_tree(source, language)
+        if tree is None:
             return True
         validators = []
         sinks = []
