@@ -21,14 +21,24 @@ import subprocess
 import sys
 from unittest import mock
 
+import pytest
+
+import core.config as config
+from core.testing.module_state import isolated_module_state
+
 from core.config import (
-    _RAPTOR_DIR_OVERRIDE_NOTICED,
     RaptorConfig,
     pin_raptor_dir,
     pin_raptor_dir_in_environ,
 )
 
 _OWN = str(RaptorConfig.REPO_ROOT)
+
+
+@pytest.fixture(autouse=True)
+def _owned_override_notice_cache():
+    with isolated_module_state(config, {"_RAPTOR_DIR_OVERRIDE_NOTICED": set()}):
+        yield
 
 
 class TestPinRaptorDir:
@@ -49,7 +59,7 @@ class TestPinRaptorDir:
 
     def test_override_notice_once_per_ambient_value(self, tmp_path, caplog):
         other = str(tmp_path / "other-checkout")
-        _RAPTOR_DIR_OVERRIDE_NOTICED.discard(other)
+        config._RAPTOR_DIR_OVERRIDE_NOTICED.discard(other)
         with caplog.at_level(logging.INFO, logger="core.config"):
             pin_raptor_dir({"RAPTOR_DIR": other})
             pin_raptor_dir({"RAPTOR_DIR": other})
