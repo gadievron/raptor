@@ -3255,12 +3255,32 @@ def try_tier0(
             language=language,
         )
     if not var_reaches:
+        # A native edge slice is not an identity transfer. Report only a
+        # conditional mathematical diagnostic until source/type/slot
+        # authority is established; never turn this branch into SOUND.
+        diagnostic = None
+        if language == "python" and spec.kind == "charset":
+            from core.dataflow.string_slice_diagnostic import slice_model_diagnostic
+
+            intervals = tuple(
+                (ord(atom[1]), ord(atom[2] if atom[0] == "range" else atom[1]))
+                for atom in _iter_charclass_atoms(spec.charset)
+            )
+            diagnostic = slice_model_diagnostic(
+                source_text, line, sink_line, spec.var_name, intervals,
+                allows_empty=spec.allows_empty,
+                optional_final_lf=spec.accepts_trailing_newline,
+                forbidden=tuple(ord(char) for char in (danger_chars_for(sink_class) or ())),
+            )
+        detail = (f"; conditional slice model: {diagnostic['status']} "
+                  "(not source-bound)" if diagnostic else "")
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"validator constrains {spec.var_name!r} but no chain member "
             f"reaches the sink line at {sink_uri}:{sink_line} — the "
-            f"validated value may not be what reaches the sink",
+            f"validated value may not be what reaches the sink" + detail,
             spec=spec,
+            extras={"smt_slice_model": diagnostic} if diagnostic else {},
         )
     verdict = prove_neutralizes(spec, sink_class)
     if verdict.sound:
