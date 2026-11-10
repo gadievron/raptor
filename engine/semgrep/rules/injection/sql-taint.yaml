@@ -169,6 +169,14 @@ rules:
       implicit_ellipsis: false
       go_deeper_expr: false
     pattern-sources:
+      # Whole query objects can supply SQL option fields through spreads.
+      # Exact matching keeps the request receiver itself untainted.
+      - patterns:
+          - pattern: $REQ.query
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: '(?i)^(req|request)$'
+        exact: true
       - pattern-either:
           # Express — receiver-name anchored: bare $REQ.query/.params/
           # .body/.headers sources match those field names on any local

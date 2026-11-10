@@ -201,6 +201,16 @@ for _source in ('req.params.sql', 'req.body.sql', 'req.headers["x-query"]',
         (f'connection.query({_source});', True),
         (f'connection.query("SELECT $1", [{_source}]);', False),
     ])
+# Whole Express query objects remain sources when spread into SQL options.
+_MATRICES["javascript"][2].extend([
+    ('connection.query({...req.query});', True),
+    ('connection.query({text: "SELECT 1", ...req.query});', True),
+    ('connection.query("SELECT $1", [{...req.query}]);', False),
+    ('connection.query({text: "SELECT $1", values: [req.query]});', False),
+    ('search.query({...req.query});', False),
+    ('connection.query(req);', False),
+])
+
 _MATRICES["typescript"] = (
     "injection/sql-taint.yaml", "raptor.injection.sql.taint.javascript",
     _MATRICES["javascript"][2],
