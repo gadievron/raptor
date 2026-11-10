@@ -702,6 +702,9 @@ class JsonCache:
         except (OverflowError, ValueError, TypeError) as e:
             msg = f"non-numeric ttl_seconds: {ttl_raw!r}"
             raise ValueError(msg) from e
+        if (ttl == TTL_FOREVER and isinstance(ttl_raw, float)
+                and ttl_raw != TTL_FOREVER):
+            raise ValueError("fractional ttl_seconds cannot select TTL_FOREVER")
         written_raw = data["written_at"]
         try:
             written_at = float(written_raw)
