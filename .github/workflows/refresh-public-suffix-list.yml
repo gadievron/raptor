@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install pinned test runner
-        run: python -m pip install pytest==9.1.1
+        run: python -m pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
       - run: python -m pytest -q core/domains/tests
 
   refresh:
@@ -48,7 +48,7 @@ jobs:
         with:
           python-version: '3.14'
       - name: Install pinned test runner
-        run: python -m pip install pytest==9.1.1
+        run: python -m pip install "$(grep -oE 'pytest==[0-9.]+' pyproject.toml)"
       - name: Download and validate list
         run: python .github/scripts/refresh_public_suffix_list.py
       - name: Test refreshed boundaries
