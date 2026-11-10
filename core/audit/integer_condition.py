@@ -119,7 +119,10 @@ def check_integer_condition(source, hypothesis, *, language, integer_abi=None):
             result = check_integer_disjunction(source, hypothesis, language=language, integer_abi=integer_abi)
         if result['comparison_status'] == 'unavailable':
             from .integer_chain_condition import check_integer_chain_condition
-            return check_integer_chain_condition(source, hypothesis, language=language, integer_abi=integer_abi)
+            result = check_integer_chain_condition(source, hypothesis, language=language, integer_abi=integer_abi)
+        if result['comparison_status'] == 'unavailable':
+            from .integer_negated_condition import check_integer_negated_condition
+            return check_integer_negated_condition(source, hypothesis, language=language, integer_abi=integer_abi)
         return result
     frame = _frame(source, integer_abi, language) if wanted is not None else None
     if frame is None:

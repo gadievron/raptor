@@ -330,12 +330,26 @@ def _operations(source, language, abi):
                 can_reach_minus_one = operand_kinds[1].signed if divisor is None else divisor == -1
                 if can_reach_minimum and can_reach_minus_one:
                     kinds.append(("signed-division-overflow", "Potential division overflow"))
+        negated_site = None
+        if op in _COMPARISONS:
+            from .integer_negated_condition import negated_comparison_site
+            negated_site = negated_comparison_site(target, selected_data, language=language, integer_abi=abi)
         for claim_kind, subject in kinds:
-            mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
+            site, site_op = target, op
+            expression = f"{atoms[0]} {op} {atoms[1]}"
+            if negated_site is not None:
+                direction = 'false' if truth else 'true'
+                subject, claim_kind = 'Condition is always ' + direction, 'constant-condition-' + direction
+                expression = '!(' + expression + ')'
+                site, site_op = negated_site, '!'
+            mechanism = f"{subject} in `{expression}`."
             if len(mechanism) <= 300:
                 destination = deferred_guards if guard_implied else deferred_wraps if op in {"+", "-", "*"} else result
                 extra = {"binding_status": "candidate", "candidate_basis": "controlling-comparison-range"} if guard_implied else {}
-                destination.append((target, op, atoms, claim_kind, mechanism, extra))
+                if negated_site is not None:
+                    extra = {**extra, "binding_status": "candidate",
+                             "candidate_basis": "negated-controlling-comparison-range" if guard_implied else "negated-type-comparison-range"}
+                destination.append((site, site_op, atoms, claim_kind, mechanism, extra))
     for target, array, index in accesses:
         from .array_bounds import array_access_candidate
         mechanism = f"Potential out-of-bounds read at `{array}[{index}]`."
