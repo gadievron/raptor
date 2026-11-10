@@ -99,13 +99,16 @@ def open_dir_beneath(root: Path, rel: Path, *, create: bool = False, mode: int =
                 except FileExistsError:
                     pass
             child = os.open(component, _O_DIR_FLAGS, dir_fd=fd)
-            os.close(fd)
-            fd = child
+            previous, fd = fd, child
+            os.close(previous)
         if not stat.S_ISDIR(os.fstat(fd).st_mode):
             raise OSError(errno.ENOTDIR, "not a directory")
         return fd
     except BaseException:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            pass  # Preserve the walk error after consuming the owned descriptor.
         raise
 
 # openat2(2) — asm-generic syscall table (all post-2011 architectures;
