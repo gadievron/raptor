@@ -164,3 +164,36 @@ def test_unrelated_class_method_name_does_not_shadow_global_function():
     prefix = "struct Other { char *g_shell_quote(const char *); };\n"
     _, result = _check(prefix, language="cpp")
     assert result.suppress
+
+
+@pytest.mark.parametrize("nested,before", [
+    (True, "    using ::g_shell_quote;\n"),
+    (False, "    using namespace own;\n    using ::g_shell_quote;\n"),
+], ids=["namespaced-target", "namespace-directive"])
+def test_explicit_block_global_selection_can_clear_lookup_uncertainty(nested, before):
+    graph, result = _check(OWN_NAMESPACE, before, language="cpp", nested=nested)
+    assert result.suppress and result.verdict == VERDICT_SUPPRESS
+    assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+
+
+@pytest.mark.parametrize("prefix", [
+    "char *g_shell_quote(const char *raw) { return (char *)raw; }\n",
+    "#define g_shell_quote(x) (x)\n",
+    "char *::g_shell_quote(const char *raw) { return (char *)raw; }\n",
+], ids=["global-source-body", "macro", "qualified-global-body"])
+def test_explicit_global_selection_cannot_override_known_source_conflicts(prefix):
+    graph, result = _check(prefix, before="    using ::g_shell_quote;\n", language="cpp", nested=True)
+    assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+    assert not result.suppress
+
+
+def test_expired_global_selection_cannot_clear_namespaced_lookup():
+    _, result = _check(OWN_NAMESPACE, before="    { using ::g_shell_quote; }\n",
+                       language="cpp", nested=True)
+    assert not result.suppress
+
+
+def test_later_global_selection_cannot_rewrite_earlier_call():
+    _, result = _check(OWN_NAMESPACE, between="    using ::g_shell_quote;\n",
+                       language="cpp", nested=True)
+    assert not result.suppress

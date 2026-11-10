@@ -908,8 +908,8 @@ def _declarator_is_function(decl) -> bool:
 def _identity_alias_names(node) -> frozenset[str]:
     """Names introduced by non-object declarations; identity evidence only.
 
-    ``*`` is an impossible identifier reserved for unresolved unqualified
-    namespace lookup. It never vouches for a local value store.
+    ``*`` marks unresolved unqualified namespace lookup; ``::name`` records
+    an explicit global selection. Neither marker is a local-value binding.
     """
     if node.type == "using_declaration":
         if any(child.type == "namespace" for child in node.children):
@@ -919,7 +919,11 @@ def _identity_alias_names(node) -> frozenset[str]:
         if qualified is not None and qualified.child_by_field_name("scope") is not None:
             name = qualified.child_by_field_name("name")
             return frozenset({_node_text(name)}) if name is not None else frozenset({"*"})
-        return frozenset()  # using ::name preserves global qualification
+        if qualified is not None and _node_text(qualified).startswith("::"):
+            name = qualified.child_by_field_name("name")
+            if name is not None:
+                return frozenset({"::" + _node_text(name)})
+        return frozenset()
     if node.type == "alias_declaration" or node.type in (
         _LOCAL_SCOPE_BARRIERS - {_FN_DEFINITION, _LAMBDA_EXPR}
     ):
@@ -1062,6 +1066,8 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
             name = _resolve_callable_name(inner)
             if not scoped and not in_function and name:
                 bindings.add(name)
+                if name.startswith("::") and "::" not in name[2:]:
+                    bindings.add(name[2:])
             if cur == fn_def:
                 target_scoped = scoped or bool(name and "::" in name)
         if cur.type == _DECLARATION and not scoped and not in_function:
@@ -1085,8 +1091,9 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
             unqualified = bool(name and "::" not in name and "." not in name)
             if name and (name in bindings or local.vouches(name, cur.start_byte)
                          or imported.vouches(name, cur.start_byte)
-                         or (unqualified and (target_scoped or local.vouches("*", cur.start_byte)
-                                             or imported.vouches("*", cur.start_byte)))):
+                         or (unqualified and not local.vouches("::" + name, cur.start_byte)
+                             and (target_scoped or local.vouches("*", cur.start_byte)
+                                  or imported.vouches("*", cur.start_byte)))):
                 conflicts.add((name, cur.start_point[0] + 1))
         pending.extend(cur.named_children)
     return frozenset(conflicts)
