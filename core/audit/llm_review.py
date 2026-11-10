@@ -1436,11 +1436,13 @@ def make_review_fn(
         # can be formatted concurrently by panel members with different caps.
         delivered_claim_context: list[dict] = []
         delivered_caller_context: list[list[dict]] = []
+        delivered_knowledge_context: list[dict[str, list[dict]]] = []
         prompt = format_context_for_prompt(
             ctx, budget_limit=budget,
             patterns_in_system=patterns_in_system,
             claim_delivery_sink=delivered_claim_context.append,
             caller_delivery_sink=delivered_caller_context.append,
+            knowledge_delivery_sink=delivered_knowledge_context.append,
         )
         t0 = time.monotonic()
 
@@ -1515,6 +1517,9 @@ def make_review_fn(
                 result["claim_review_delivery"] = delivered_claim_context[0]
             if delivered_caller_context:
                 result["caller_context_delivery"] = delivered_caller_context[0]
+            if delivered_knowledge_context:
+                result["language_reference_delivery"] = delivered_knowledge_context[0]["language_reference_delivery"]
+                result["source_study_delivery"] = delivered_knowledge_context[0]["source_study_delivery"]
             if isinstance(result.get("body"), str):
                 result["body"] = defang_model_body(result["body"])
 

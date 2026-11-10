@@ -1189,6 +1189,7 @@ def format_context_for_prompt(
     patterns_in_system: bool = False,
     *, claim_delivery_sink: Callable[[dict], None] | None = None,
     caller_delivery_sink: Callable[[list[dict]], None] | None = None,
+    knowledge_delivery_sink: Callable[[dict[str, list[dict]]], None] | None = None,
 ) -> str:
     """Format a context slice as text for the LLM prompt.
 
@@ -1236,6 +1237,27 @@ def format_context_for_prompt(
     study_explanations = context_explanations(ctx.get("study_explanations"))
     study_scope = (ctx.get("file", ""), ctx.get("function", ""), ctx.get("line_start", 0))
 
+    def deliver_knowledge_context(kept, *, omission_reason=None):
+        from copy import deepcopy
+
+        reference_rows = reference_delivery(
+            reference_answers, kept, omission_reason=omission_reason or "reference_too_large",
+        ) if reference_answers else []
+        study_rows = study_delivery(
+            study_requests, study_explanations, kept, scope=study_scope,
+            omission_reason=omission_reason or "explanation_too_large",
+        ) if study_requests else []
+        # Capture before publishing borrowed rows into a shared panel context.
+        # A renderer or callback may overwrite those compatibility fields.
+        snapshot = deepcopy({"language_reference_delivery": reference_rows,
+                             "source_study_delivery": study_rows})
+        if reference_answers:
+            ctx["language_reference_delivery"] = reference_rows
+        if study_requests:
+            ctx["source_study_delivery"] = study_rows
+        if knowledge_delivery_sink is not None:
+            knowledge_delivery_sink(snapshot)
+
     def deliver_caller_context(kept, *, omission_reason="caller_context_too_large"):
         from copy import deepcopy
 
@@ -1246,14 +1268,7 @@ def format_context_for_prompt(
             caller_delivery_sink(deepcopy(rows))
 
     if ctx.get("triage_bucket") == "glance":
-        if reference_answers:
-            ctx["language_reference_delivery"] = reference_delivery(
-                reference_answers, [], omission_reason="glance_packet",
-            )
-        if study_requests:
-            ctx["source_study_delivery"] = study_delivery(
-                study_requests, study_explanations, [], scope=study_scope, omission_reason="glance_packet",
-            )
+        deliver_knowledge_context([], omission_reason="glance_packet")
         if caller_requests:
             deliver_caller_context([], omission_reason="glance_packet")
         return _format_glance_prompt(ctx)
@@ -3030,10 +3045,7 @@ def format_context_for_prompt(
             }
         if ctx.get("cross_entry_analysis"):
             ctx["cross_entry_rendered"] = any(s.label == "cross_entry_analysis" for s in kept)
-        if reference_answers:
-            ctx["language_reference_delivery"] = reference_delivery(reference_answers, kept)
-        if study_requests:
-            ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, kept, scope=study_scope)
+        deliver_knowledge_context(kept)
         if caller_requests:
             deliver_caller_context(kept)
         deliver_claim_context(kept, source_elided=any(item.label == "source" for item in report.elisions))
@@ -3041,10 +3053,7 @@ def format_context_for_prompt(
 
     if ctx.get("cross_entry_analysis"):
         ctx["cross_entry_rendered"] = True
-    if reference_answers:
-        ctx["language_reference_delivery"] = reference_delivery(reference_answers, sections)
-    if study_requests:
-        ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, sections, scope=study_scope)
+    deliver_knowledge_context(sections)
     if caller_requests:
         deliver_caller_context(sections)
     deliver_claim_context(sections)

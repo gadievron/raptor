@@ -68,7 +68,7 @@ class AuditKnowledgeRuntime:
         self._source_answers: dict[str, list[SubjectExplanation]] = {}
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
-        self._contexts: dict[str, list[dict]] = {}
+        self._knowledge_deliveries: dict[str, list[dict[str, list[dict]]]] = {}
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
@@ -179,8 +179,6 @@ class AuditKnowledgeRuntime:
                     self._calls[key] = self._calls.get(key, 0) + 1
                 if getattr(review_fn, "_knowledge_observed_client_contract", None) is not True:
                     self._unknown_calls.add(key)
-                if reservation is not None:
-                    self._contexts.setdefault(reservation.packet.pass_id, []).append(ctx)
                 self._events.append({"event": "review_attempt", "attempt_id": attempt_id, "origin": asdict(origin)})
             try:
                 from .knowledge_calls import owned_call_scope
@@ -205,6 +203,12 @@ class AuditKnowledgeRuntime:
             outcome.review_result["review_claims"] = history
             current = capture_source_identity(self.target_root, origin.file)
             if reservation is not None:
+                knowledge_delivery = {field: deepcopy(outcome.review_result[field])
+                    for field in ("language_reference_delivery", "source_study_delivery")
+                    if isinstance(outcome.review_result.get(field), list)}
+                if knowledge_delivery:
+                    with self._lock:
+                        self._knowledge_deliveries.setdefault(reservation.packet.pass_id, []).append(knowledge_delivery)
                 delivered = outcome.review_result.get("caller_context_delivery")
                 if isinstance(delivered, list):
                     with self._lock:
@@ -541,8 +545,6 @@ class AuditKnowledgeRuntime:
                 missing_answers.append(answer)
         ctx["caller_context_requests"] = caller_requests
         ctx["caller_context_answers"] = (*reservation.packet.caller_contexts, *missing_answers)
-        with self._lock:
-            self._contexts.setdefault(reservation.packet.pass_id, []).append(ctx)
         return True
 
     def can_publish(self, reservation: KnowledgeReservation) -> bool:
@@ -583,33 +585,26 @@ class AuditKnowledgeRuntime:
         return True
 
     def _delivery(self, reservation: KnowledgeReservation, ctx: dict | None) -> tuple[str, ...]:
+        # Only records frozen from completed owned invocations count. Shared
+        # context fields may belong to another renderer or a later re-entry.
         with self._lock:
-            contexts = list(self._contexts.get(reservation.packet.pass_id, ()))
-        if ctx is not None and all(ctx is not prior for prior in contexts):
-            contexts.append(ctx)
+            assessments = deepcopy(self._knowledge_deliveries.get(reservation.packet.pass_id, ()))
         allowed = ({a.request_id for a in reservation.packet.references}
                    | {a.request_id for a in reservation.packet.explanations}
                    | {a.request_id for a in reservation.packet.caller_contexts})
         delivered = set()
         rows = []
-        seen = set()
-        for context in contexts:
-            if id(context) in seen:
-                continue
-            seen.add(id(context))
-            for field in ("language_reference_delivery", "source_study_delivery"):
-                value = context.get(field)
-                if not isinstance(value, list):
-                    continue
-                for row in value:
+        for assessment in assessments:
+            for field, records in assessment.items():
+                for row in records:
                     if isinstance(row, dict) and row.get("request_id") in allowed:
-                        rows.append({"field": field, **deepcopy(row)})
+                        rows.append({"field": field, **row})
                         if row.get("delivered") is True:
                             delivered.add(row["request_id"])
         with self._lock:
             caller_deliveries = deepcopy(self._caller_deliveries.get(reservation.packet.pass_id, ()))
-        for assessment in caller_deliveries:
-            for row in assessment:
+        for caller_assessment in caller_deliveries:
+            for row in caller_assessment:
                 if isinstance(row, dict) and row.get("request_id") in allowed:
                     rows.append({"field": "caller_context_delivery", **row})
                     if row.get("delivered") is True:
@@ -624,7 +619,7 @@ class AuditKnowledgeRuntime:
         with self._lock:
             self._active.pop(reservation.packet.pass_id, None)
             self._active_units.pop(self._key(reservation.origin), None)
-            self._contexts.pop(reservation.packet.pass_id, None)
+            self._knowledge_deliveries.pop(reservation.packet.pass_id, None)
             self._caller_deliveries.pop(reservation.packet.pass_id, None)
         self.notify()
 
