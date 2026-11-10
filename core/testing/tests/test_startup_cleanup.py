@@ -12,6 +12,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view, scoped_function_imports
+
 _HELPERS = ("holder", "audit", "lifecycle", "wrapper")
 _MODULES = {
     "holder": "core.atomic_fs.tests.test_fs_lock_bounded",
@@ -116,6 +119,8 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
             process.stdout = StartupStream(process.stdout)
         return process
 
+    wrapper_view = None
+
     def invoke():
         if helper == "holder":
             return owned.enter_context(module._spawn_holder(tmp_path / "lock", tmp_path))
@@ -126,13 +131,26 @@ def test_readiness_setup_owns_child_until_return(helper, fault, tmp_path, monkey
                 module, "TestSessionEndLivenessProof"
             )._spawn_claude_shaped_stub(tmp_path)
         if helper == "wrapper":
-            return module.TestStallKillAddressesTheGroup()._wrapper_with_grandchild()
+            return wrapper_view._owned_wrapper(
+                module.TestStallKillAddressesTheGroup()
+            )
         return module._kill_at("controlled", tmp_path / "out", tmp_path)
 
     try:
         with monkeypatch.context() as patcher:
-            # Also catches the wrapper's function-local subprocess import.
-            patcher.setattr(subprocess, "Popen", popen)
+            if helper == "wrapper":
+                wrapper_view = module_function_view(
+                    module,
+                    bindings={
+                        "_owned_wrapper": module.TestStallKillAddressesTheGroup._wrapper_with_grandchild,
+                    },
+                )
+                imports = owned.enter_context(scoped_function_imports(
+                    wrapper_view, ("_owned_wrapper",), {"subprocess": subprocess}
+                ))
+                patch_module_attribute(patcher, imports, "subprocess", "Popen", popen)
+            else:
+                patch_module_attribute(patcher, module, "subprocess", "Popen", popen)
             if helper == "holder":
                 real_read = os.read
 
