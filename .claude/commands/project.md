@@ -53,6 +53,17 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `unset <key> [<name>]` | Remove a setting |
 | `get <key> [<name>]` | Print one setting's bare value (exit 1 when unset) |
 
+For `threat-model report [<name>]`, forward repeatable
+`--report-format markdown|json|xml`, `--report-output <path>`, and `--no-report`.
+These controls apply to the report action only. Portable companions default to
+the project's `threat-model-reports/` directory; the canonical model and editable
+Markdown are retained. Relative report destinations use the operator's working
+directory. `--json` keeps native JSON on stdout, with portable summaries on stderr.
+Display the mechanical threat/control/evidence counts and quality or drift notes
+to the operator. `--no-report` keeps those counts and marks prior report files as
+unrefreshed. Recorded statuses and provenance flags are model claims; exporting
+does not perform fresh validation or authentication.
+
 ## Trust markers — consumer doctrine
 
 **Trust markers** are operator assertions persisted on the project (never
