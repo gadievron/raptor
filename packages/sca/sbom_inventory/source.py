@@ -11,6 +11,7 @@ import zipfile
 from core.json.projection import project_object
 from core.source.beneath import open_regular_beneath
 from core.source.gated import open_regular_gated
+from core.source.streams import preserving_stream_error
 from core.zip import bomb_shaped_reason, is_safe_member, peek_eocd
 
 MAX_DOCUMENT_BYTES = 96 * 1024 * 1024
@@ -29,6 +30,8 @@ class Source:
         self.bundle = path.is_dir() or path.suffix.lower() == ".zip"
 
     def __enter__(self):
+        self._lifetime = preserving_stream_error(self.stack)
+        self._lifetime.__enter__()
         try:
             if self.bundle and not self.path.is_dir():
                 stream = self.stack.enter_context(open_regular_gated(self.path))
@@ -45,12 +48,12 @@ class Source:
                 if any(not is_safe_member(item, max_size=MAX_DOCUMENT_BYTES) for item in entries):
                     raise ValueError("unsafe or oversized evidence ZIP member")
             return self
-        except BaseException:
-            self.stack.close()
+        except BaseException as error:
+            self._lifetime.__exit__(type(error), error, error.__traceback__)
             raise
 
     def __exit__(self, *args):
-        return self.stack.__exit__(*args)
+        return self._lifetime.__exit__(*args)
 
     def contains(self, name):
         if self.archive is not None:
