@@ -149,6 +149,8 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_p.add_argument("--device", help="Operator-supplied device path for ioctl harnesses")
     harness_p.add_argument("--ioctl-code", help="Operator-supplied ioctl/control code, for example 0x222003")
     harness_p.add_argument("--json", action="store_true", help="Emit compact JSON")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(harness_p)
 
     corpus_p = sub.add_parser(
         "corpus",
@@ -1223,6 +1225,8 @@ def _run_harness(args: argparse.Namespace) -> int:
         # binary verbatim. Still valid JSON, still one line.
         print(json.dumps(spec, sort_keys=True, ensure_ascii=True,
                          default=str))
+        from .harness_reporting import complete_harness_report
+        complete_harness_report(args, spec, run_dir)
         return 0
     # Ingress names come from the hostile binary's symbols/plist and
     # spec['reason'] embeds recovered boundary names verbatim — same
@@ -1241,6 +1245,8 @@ def _run_harness(args: argparse.Namespace) -> int:
         # from disk here — scrub like the sibling spec fields above.
         print(f"Source: {sanitise_for_terminal(str(spec['generated']['source']))}")
         print(f"Build: {sanitise_for_terminal(str(spec['generated']['build_script']))}")
+    from .harness_reporting import complete_harness_report
+    complete_harness_report(args, spec, run_dir)
     return 0
 
 
@@ -1370,7 +1376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt"}:
+    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt", "harness"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
