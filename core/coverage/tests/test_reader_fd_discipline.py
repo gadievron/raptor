@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import core.coverage.journal as _mock_consumer_os
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import run_in_process_group as _run_memory_process
 
 
 import os
@@ -211,6 +212,40 @@ class TestWriterFifoRefusal:
         assert len(load_entries(tmp_path)) == 1
 
 
+def _run_journal_memory_proof(tmp_path):
+    """Keep a borrowed tracing session out of the reader's peak measurement."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.coverage.tests.test_reader_fd_discipline import TestJournalReader
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    TestJournalReader().test_budget_holds_at_line_granularity(owned, patch)
+print("journal-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "journal-memory-proof-ok", result.stdout
+
+
 class TestJournalReader:
     def test_fifo_journal_refused_without_blocking(self, tmp_path):
         os.mkfifo(tmp_path / "review-journal.jsonl")
@@ -233,6 +268,10 @@ class TestJournalReader:
         assert load_entries(tmp_path) == []
 
     def test_budget_holds_at_line_granularity(self, tmp_path, monkeypatch):
+        if tracemalloc.is_tracing():
+            _run_journal_memory_proof(tmp_path)
+            return
+
         # A file that grows past the size gate after the open (raced
         # writer) used to be re-capped only BETWEEN lines: one huge
         # line materialised whole before the budget fired. Simulate
