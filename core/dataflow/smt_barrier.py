@@ -1668,8 +1668,10 @@ def _python_unpack_assignment(node: ast.AST) -> bool:
 
 
 def _python_unpack_load(node: ast.AST) -> bool:
-    """An iterable display/call unpack can dispatch before a later read."""
-    return isinstance(node, ast.Starred) and isinstance(node.ctx, ast.Load)
+    """Iterable or mapping expansion can dispatch before a later read."""
+    return (isinstance(node, ast.Starred) and isinstance(node.ctx, ast.Load)) or (
+        isinstance(node, ast.Dict) and any(key is None for key in node.keys)
+    )
 
 
 def _python_possible_call(node: ast.AST) -> bool:
