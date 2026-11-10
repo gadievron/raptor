@@ -256,24 +256,9 @@ Mermaid subset. Static HTML retains textual equivalents when no safe visual back
 is available. Diagram rendering never changes finding counts, fetches assets, or
 reruns analysis.
 
-## Migration census
+## Other reporting workflows
 
-| Command boundary | Integration and remaining compatibility work |
-|---|---|
-| Scan; both CodeQL entry points | Final SARIF adapter, summary, portable reports, early failures |
-| Validation, disk and native orchestrator | Common capture/writer, stage envelopes, portable enrichment and separate unverified groups |
-| Agentic | Common capture/writer, portable phase enrichment, outcomes and captured diagrams |
-| Project report | Frozen selection, merge decisions, annotations, native exports, optional explicit baseline |
-| SCA scan and render | One portable domain builder for MD/HTML/JSON/XML; KEV, EPSS, reachability, licenses, health and evidence |
-| Web | Redacted native capture, verification state, partial/empty outcomes |
-| Fuzz result | Native result with crash metrics; no fabricated vulnerability population |
-| OpenAnt | Normal, forecast, skipped, interrupted results; primary findings separate from recovered hints |
-| Audit run/resume/report | Portable detailed reports, completeness/residue, grouped findings and evidence; canonical JSON retained |
-| Engagement report | Portable detailed reports preserving attestation, coverage strata, divergence, survivor and residual data |
-| Describe | Explicit file exports; directory/archive/binary paths keep default stdout contracts |
-| Binary report | Explicit captured-JSON exports; default existing-report display retained |
-
-Additional reporting boundaries include SCA fix/check/upgrade/diff/verify/health/
+Reports are also available for SCA fix/check/upgrade/diff/verify/health/
 bump/triage/fix-diff and fingerprint views; binary map/investigate/hunt/harness/
 siblings/corpus/graph/runtime; native understand views; CVE checking and diff;
 project threat-model reports; exploitation evidence; recall, scorecard and replay
@@ -295,8 +280,7 @@ absence limitations. Trust-corpus and parity reports describe measurements, not
 new vulnerability verdicts; the synthetic parity baseline is not the real gating
 window. Multiple requested formats share one captured result.
 
-Developer precision harnesses retain their native Markdown/JSON measurement
-artifacts and gate contracts. Help, completion, transport servers, interactive
+Help, completion, transport servers, interactive
 shells, credential/configuration operations and acknowledgement-only mutations
 do not create empty reports. Domain evidence serializers also remain native;
 portable reports complement SARIF, OSV, SBOM and workflow records.
