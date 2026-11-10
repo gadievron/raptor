@@ -874,27 +874,42 @@ def load_sarif(sarif_path: Path, *, metadata: dict | None = None) -> dict[str, A
         | getattr(os, "O_NONBLOCK", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
+    from core.source.streams import owned_fd, preserving_stream_error
+
+    adopted = False
+
+    def close_sarif(value):
+        try:
+            os.close(value)
+        except OSError:
+            # Validation cleanup is best-effort; an adopted read still
+            # requires a successful close before publishing its metadata.
+            if adopted:
+                raise
+
     try:
         fd = os.open(str(sarif_path), flags)
     except OSError as e:
         logger.warning("SARIF: could not read %s: %s", sarif_path, e)
         return None
     try:
-        st = os.fstat(fd)
-        if not stat_mod.S_ISREG(st.st_mode):
-            logger.error(
-                "SARIF: not a regular file: %s", sarif_path,
-            )
-            return None
-        if st.st_size > max_size:
-            logger.error(
-                "SARIF: file too large (%.0f MiB): %s",
-                st.st_size / 1024 / 1024, sarif_path,
-            )
-            return None
-        with os.fdopen(fd, "rb") as f:
-            fd = -1  # fdopen owns it now
-            raw = f.read(max_size + 1)
+        with owned_fd(fd, close_fd=close_sarif):
+            st = os.fstat(fd)
+            if not stat_mod.S_ISREG(st.st_mode):
+                logger.error(
+                    "SARIF: not a regular file: %s", sarif_path,
+                )
+                return None
+            if st.st_size > max_size:
+                logger.error(
+                    "SARIF: file too large (%.0f MiB): %s",
+                    st.st_size / 1024 / 1024, sarif_path,
+                )
+                return None
+            stream = os.fdopen(fd, "rb", closefd=False)
+            adopted = True
+            with preserving_stream_error(stream) as f:
+                raw = f.read(max_size + 1)
         if len(raw) > max_size:
             # Race: file grew between fstat and read.
             logger.error(
@@ -906,12 +921,6 @@ def load_sarif(sarif_path: Path, *, metadata: dict | None = None) -> dict[str, A
     except OSError as e:
         logger.warning("SARIF: could not read %s: %s", sarif_path, e)
         return None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
 
     try:
         # core.json.loads: shared backend (orjson when installed) —
