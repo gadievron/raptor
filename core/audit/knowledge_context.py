@@ -36,9 +36,21 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
     sections = []
     emitted = set()
     for label, answer in zip(_labels(answers), answers, strict=True):
-        if not answer.entries or label in emitted:
+        if label in emitted:
             continue
         emitted.add(label)
+        if not answer.entries:
+            sections.append(PromptSection(
+                label,
+                "\n### Language-reference limitation (context, not proof)\n"
+                "No reviewed rule material was supplied for this request. "
+                "Preserve this limitation; do not infer applicability or safety.\n"
+                + wrap_untrusted(dumps_display({"answer_status": answer.status,
+                                               "resolution_reason": answer.reason}),
+                                 kind="reference_resolution", origin="language-reference"),
+                2,
+            ))
+            continue
         sections.append(PromptSection(
             label,
             "\n### Language reference (context, not proof)\n"
@@ -72,6 +84,7 @@ def reference_delivery(
             "answer_status": answer.status,
             "pack_version": answer.pack_version,
             "delivered": delivered,
+            "limitation_delivered": not answer.entries and label in labels,
             "entries": [{"id": entry.entry_id, "version": entry.version}
                         for entry in answer.entries],
             "missing_facts": list(answer.missing_facts),
