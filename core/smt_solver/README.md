@@ -202,3 +202,13 @@ are required. This catches impossible bit combinations inside an otherwise
 plausible result interval. The observation remains diagnostic and non-refuting;
 it does not prove unintended bug intent. Mask candidate preparation is bounded
 and solver-free, and follows prior leads within the same discovery limits.
+
+Fixed local-array reads also admit one affine index such as `Data[Index+1]`
+or `Data[Index-1]`, with an immutable builtin parameter and a small nonnegative
+integer literal. The actual source tree must match the complete read goal.
+Index arithmetic uses its promoted type: unsigned results wrap modulo that
+width, while signed arithmetic must already satisfy the existing prefix
+checker. Unproved signed arithmetic remains unsupported even when a more
+precise path model might establish it. Both direct witnesses and literal-caller
+tuples independently replay the computed index; the parameter value alone is
+not a bounds witness. Discovery remains a solver-free candidate stage.

@@ -32,7 +32,7 @@ def _nodes(node):
         stack.extend(reversed(item.named_children))
 
 
-def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None):
+def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None, selected_value=None):
     """Collect conjunctions with known branch polarity and unchanged names."""
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -54,6 +54,11 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
                 stack.extend(reversed(item.named_children))
 
     prefix = PrefixIntegerModel(data, language, abi)
+    # Selected atomic operations are normally bound separately. An array
+    # access with a compound index must also establish that value's own
+    # definedness, sharing this binder's existing check/time budget.
+    if selected_value is not None and prefix.value_domain(selected_value) is None:
+        return GuardPremises("unavailable")
 
     condition_work = 0
 

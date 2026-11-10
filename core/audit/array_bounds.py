@@ -17,8 +17,9 @@ from core.smt_solver.path_feasibility import PathCondition, check_path_feasibili
 from core.smt_solver.sizeof_model import builtin_integer_sizeof
 
 from .arithmetic_operation import _INTEGER_LITERAL_RE, _unwrap
+from .array_index import affine_access_claim, evaluate_array_index, index_expression, source_index
 from .arithmetic_guards import guards_for_operation
-from .arithmetic_types import has_builtin_integer_type, integer_type, model_for_integer_terms
+from .arithmetic_types import common_integer_type, has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .function_execution_frame import ordinary_function_frame
 from .integer_goal import ARRAY_READ_GOALS, parse_integer_goal
@@ -58,12 +59,17 @@ class ArrayAccess:
     domains: tuple[str, ...] = ()
     types: tuple[tuple[str, str], ...] = ()
     parameters: tuple[tuple[str, str], ...] = ()
+    index_operator: str = ""
+    index_offset: int = 0
 
 
 def parse_array_access_claim(hypothesis):
     """One unambiguous atomic object[index] reference, preserving case."""
     if not isinstance(hypothesis, str) or len(hypothesis) > 8192 or _WRITE_CLAIM.search(hypothesis):
         return None
+    affine = affine_access_claim(hypothesis)
+    if affine is not None:
+        return affine[0], affine[1]
     for quoted in re.finditer(r"`([^`\r\n]*)`", hypothesis):
         text = quoted.group(1)
         if "[" in text and _ACCESS.fullmatch(text.strip()) is None:
@@ -115,6 +121,8 @@ def array_access_candidate(source, hypothesis, *, language, integer_abi=None):
 def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_only):
     abi = resolve_integer_abi(integer_abi)
     claim = parse_array_access_claim(hypothesis)
+    affine = affine_access_claim(hypothesis)
+    index_operator, index_offset = affine[2:] if affine is not None else ("", 0)
     if abi is None or claim is None or language not in {"c", "cpp"} or len(source) > _MAX_SOURCE_CHARS:
         return ArrayAccess("unavailable", "target ABI, atomic access claim, or supported source unavailable")
     try:
@@ -176,7 +184,9 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     if language == "cpp":
         indices = target.child_by_field_name("indices")
         index = _unwrap(indices.named_children[0]) if indices is not None and len(indices.named_children) == 1 else None
-    if array is None or index is None or array.type != "identifier" or index.type != "identifier" or (text(array), text(index)) != claim:
+    index_shape = source_index(index, data)
+    if (array is None or array.type != "identifier" or index_shape is None
+            or (text(array), index_shape[0]) != claim or index_shape[1:] != (index_operator, index_offset)):
         return ArrayAccess("unavailable", "claim does not bind one atomic source access")
     statement = target.parent
     while statement is not None and statement.type == "parenthesized_expression":
@@ -251,8 +261,9 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
                 return ArrayAccess("unavailable", "other return effects are unsupported")
     premises = ()
     if not candidate_only:
+        extra = {'selected_value': index} if index_operator else {}
         guards = guards_for_operation(body, target, data, [claim[1]],
-                                      language=language, integer_abi=abi)
+                                      language=language, integer_abi=abi, **extra)
         if guards.status == "unavailable":
             return ArrayAccess("unavailable", "reaching guards unavailable")
         premises = guards.premises
@@ -265,13 +276,15 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     if model.status != "bound" or any(declarations[name][1].type != "parameter_declaration" for name, _ in model.types):
         return ArrayAccess("unavailable", "immutable builtin parameter types required")
     kind = integer_type(dict(model.types)[claim[1]], abi)
+    if index_operator and common_integer_type([claim[1], str(index_offset)], model.types, abi) is None:
+        return ArrayAccess("unavailable", "affine index literal conversion is unsupported")
     return ArrayAccess("candidate" if candidate_only else "bound",
                        reason="source candidate; reaching prefix unverified" if candidate_only else "",
                        object_name=claim[0], index=claim[1], extent=extent,
                        line=target.start_point[0] + 1, column=target.start_point[1] + 1,
                        profile=model.profile, width=kind.promoted_width, signed=kind.promoted_signed,
                        premises=premises, domains=model.domains, types=model.types,
-                       parameters=tuple(parameter_types))
+                       parameters=tuple(parameter_types), index_operator=index_operator, index_offset=index_offset)
 
 
 def _solve_access(access):
@@ -283,9 +296,12 @@ def _solve_access(access):
             return entry, None
     variables = {}
     index = make_var(access.index, variables, profile=profile)
+    if access.index_operator:
+        offset = z3.BitVecVal(access.index_offset, access.width)
+        index = index + offset if access.index_operator == '+' else index - offset
     outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
                     ge(index, z3.BitVecVal(access.extent, access.width), access.signed))
-    result = check_verb_feasibility([(f"{access.index} < 0 OR {access.index} >= {access.extent}", outside)],
+    result = check_verb_feasibility([(f"{index_expression(access)} < 0 OR {index_expression(access)} >= {access.extent}", outside)],
                                     guards, variables, profile=profile, reduce_constraints=False)
     return None, result
 
@@ -293,7 +309,8 @@ def _solve_access(access):
 def _valid_witness(access, model, abi):
     if validate_integer_witness(model, access.parameters, access.premises, abi) is None:
         return False
-    return model[access.index] < 0 or model[access.index] >= access.extent
+    index = evaluate_array_index(access, model, abi)
+    return index is not None and (index < 0 or index >= access.extent)
 
 
 def has_array_read_goal(hypothesis):
@@ -339,6 +356,6 @@ def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
         if not _valid_witness(access, model, integer_abi):
             details.update(violation=None, reason="witness does not satisfy the source obligation")
             return details
-        details.update(model=model, witness_index=model[access.index],
-                       obligation=f"{access.index} < 0 OR {access.index} >= {access.extent}")
+        details.update(model=model, witness_index=evaluate_array_index(access, model, integer_abi),
+                       obligation=f"{index_expression(access)} < 0 OR {index_expression(access)} >= {access.extent}")
     return details

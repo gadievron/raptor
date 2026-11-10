@@ -13,6 +13,7 @@ from ._util import IDENTIFIER_RE
 from .arithmetic_claim import parse_overflow_claim
 from .arithmetic_operation import ArithmeticOperation, _unwrap, bind_arithmetic_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type
+from .array_index import affine_access_claim, evaluate_array_index
 from .array_bounds import ArrayAccess, bind_array_access, has_array_read_goal, parse_array_access_claim
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "common-width-literal-frame-v14",
+        "query_contract": "common-width-literal-frame-v15",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -208,7 +209,9 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
                  "verdict": "guard-excluded"}
         if validate_integer_witness(assignment, parameters, obligation.premises, abi) is not None:
             if verb == "check-array-bounds":
-                index = assignment[obligation.index]
+                index = evaluate_array_index(obligation, assignment, abi)
+                if index is None:
+                    continue
                 violation = index < 0 or index >= obligation.extent
                 check.update(verdict="violation" if violation else "safe", witness_index=index)
             else:
@@ -249,8 +252,12 @@ def literal_call_witness_valid(reply, call, verb, hypothesis, integer_abi):
             if (claim != (obligation.object_name, obligation.index) or obligation.index not in values
                     or dict(obligation.parameters) != dict(parameters)):
                 return False
-            index = values[obligation.index]
-            return (type(obligation.extent) is int and obligation.extent > 0
+            affine = affine_access_claim(hypothesis)
+            expected = affine[2:] if affine is not None else ('', 0)
+            if (obligation.index_operator, obligation.index_offset) != expected:
+                return False
+            index = evaluate_array_index(obligation, values, integer_abi)
+            return (index is not None and type(obligation.extent) is int and obligation.extent > 0
                     and (index < 0 or index >= obligation.extent)
                     and type(call.get("witness_index")) is int and call["witness_index"] == index)
         claim = parse_overflow_claim(hypothesis)
