@@ -342,12 +342,27 @@ class TestCliFlag:
 
 class TestBoundedTeardown:
     @pytest.mark.slow  # deliberately wedged child + bounded-detach deadline, ~5s by construction
-    def test_wedged_child_detach_cannot_lose_metadata(self, tmp_path):
+    def test_wedged_child_detach_cannot_lose_metadata(self, tmp_path, monkeypatch):
         """frida's detach has no timeout; a frida-core race can block a
         child detach unboundedly — which sat BEFORE the metadata write
         and lost the whole run's evidence. Teardown must be bounded."""
         import json
         import threading
+
+        from core.testing.threads import retiring_threads
+
+        entered = threading.Event()
+        released = threading.Event()
+        finished = threading.Event()
+        workers = []
+        real_thread = threading.Thread
+
+        def owned_thread(*args, **kwargs):
+            worker = real_thread(*args, **kwargs)
+            workers.append(worker)
+            return worker
+
+        patch_module_attribute(monkeypatch, runner, "threading", "Thread", owned_thread)
 
         class _WedgedSession:
             pid = 999
@@ -360,7 +375,11 @@ class TestBoundedTeardown:
                 return _FakeScript()
 
             def detach(self):
-                time.sleep(60)   # unbounded in real frida
+                entered.set()
+                try:
+                    released.wait(timeout=60)  # retain the original deadman bound
+                finally:
+                    finished.set()
 
         device = _FakeDevice()
         real_attach = device.attach
@@ -375,19 +394,24 @@ class TestBoundedTeardown:
             _wait_for(lambda: "child-added" in device.handlers)
             device.handlers["child-added"](SimpleNamespace(pid=999))
 
-        threading.Thread(target=_fire_child, daemon=True).start()
+        child = owned_thread(target=_fire_child, daemon=True)
 
         cfg = _cfg(tmp_path, follow_children=True)
         cfg.duration_sec = 0.3
-        start = time.monotonic()
-        result = run(cfg, frida_mod_override=_fake_frida(device))
-        elapsed = time.monotonic() - start
+        with retiring_threads(workers, release=released.set, timeout=5):
+            child.start()
+            start = time.monotonic()
+            result = run(cfg, frida_mod_override=_fake_frida(device))
+            elapsed = time.monotonic() - start
 
-        assert result.ok
-        # Bounded: duration (0.3s) + detach join cap (5s) + slack —
-        # never the 60s wedge.
-        assert elapsed < 15
-        # The evidence contract: metadata survived the wedge.
-        meta = json.loads((tmp_path / "metadata.json").read_text())
-        assert meta["ok"] is True
-        assert meta["children_observed"] == 1
+            assert result.ok
+            assert entered.is_set(), "child detach never reached the wedge"
+            assert not finished.is_set(), "detach finished before metadata was checked"
+            # Bounded: duration (0.3s) + detach join cap (5s) + slack —
+            # never the unbounded wedge.
+            assert elapsed < 15
+            # The evidence contract: metadata survived the wedge.
+            meta = json.loads((tmp_path / "metadata.json").read_text())
+            assert meta["ok"] is True
+            assert meta["children_observed"] == 1
+        assert finished.is_set(), "test-owned detach did not retire"
