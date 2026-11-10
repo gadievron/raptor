@@ -7741,12 +7741,18 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 # subprocess in parallel with the target child.
                 # Engaged only when the operator asked for audit
                 # AND we have the prerequisites (libseccomp + ptrace);
-                # any failure path falls back cleanly to the bare
+                # pre-execution setup failures can fall back to the bare
                 # subprocess.run below. mount-ns absent is acceptable
                 # — Landlock + seccomp + ptrace are sufficient for
                 # observe semantics; the THREAT_MODEL.md
                 # Landlock-only-mode warning still applies.
                 _audit_landlock_engaged = False
+                _audit_execution_committed = False
+
+                def _mark_audit_execution_committed():
+                    nonlocal _audit_execution_committed
+                    _audit_execution_committed = True
+
                 if nonlocal_audit_mode:
                     try:
                         from . import _landlock_audit as _la
@@ -7961,9 +7967,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     stdout=kwargs.get("stdout"),
                                     stderr=kwargs.get("stderr"),
                                     start_new_session=_start_new_session,
+                                    execution_committed_callback=_mark_audit_execution_committed,
                                 ))
                                 _audit_landlock_engaged = True
                             except (RuntimeError, OSError) as _la_err:
+                                if _audit_execution_committed:
+                                    raise
                                 # Environmental tracer-fork failures
                                 # fall through to plain subprocess.run
                                 # (recorded at the no-audit bottleneck
@@ -8020,6 +8029,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 "PTRACE_SEIZE (Yama scope <= 1), or "
                                 "run without audit mode.")
                     except ImportError:
+                        if _audit_execution_committed:
+                            raise
                         # Sandbox helpers missing — let the bare
                         # path run.
                         if _audit_no_engage_reason is None:
