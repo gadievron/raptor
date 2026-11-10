@@ -377,25 +377,20 @@ def _scan_inventory(
                 # skip the rest (the file count still ticks; the
                 # LOC contribution is bounded).
                 try:
-                    # O_NOFOLLOW: defence in depth — even though we
-                    # already ruled out symlinks via lstat, between
-                    # lstat and open a TOCTOU swap could substitute
-                    # a symlink. O_NOFOLLOW refuses to open one.
-                    fd = os.open(
-                        str(fp), os.O_RDONLY | os.O_NOFOLLOW,
-                    )
-                    try:
-                        with os.fdopen(fd, "rb") as fh:
-                            n = 0
-                            remaining = _MAX_FILE_BYTES_FOR_LOC
-                            while remaining > 0:
-                                chunk = fh.read(min(remaining, 65536))
-                                if not chunk:
-                                    break
-                                n += chunk.count(b"\n")
-                                remaining -= len(chunk)
-                    except Exception:  # noqa: BLE001
+                    from core.source.contained import open_regular
+
+                    stream = open_regular(fp, "rb")
+                    if stream is None:
                         continue
+                    with stream as fh:
+                        n = 0
+                        remaining = _MAX_FILE_BYTES_FOR_LOC
+                        while remaining > 0:
+                            chunk = fh.read(min(remaining, 65536))
+                            if not chunk:
+                                break
+                            n += chunk.count(b"\n")
+                            remaining -= len(chunk)
                     total_lines += n
                     ext_lines[ext] = ext_lines.get(ext, 0) + n
                 except OSError:

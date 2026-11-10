@@ -32,6 +32,7 @@ from typing import Any
 from core.json import load_json
 from core.paths import confine
 from core.source.lines import split_lines
+from core.security.capped_read import read_capped_text
 
 logger = logging.getLogger(__name__)
 
@@ -208,11 +209,8 @@ def enrich_with_crypto_inventory(
                 "the target root — skipped",
             )
             continue
-        try:
-            if not full.is_file() or full.stat().st_size > _MAX_FILE_BYTES:
-                continue
-            text = full.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = read_capped_text(full, _MAX_FILE_BYTES, universal_newlines=True)
+        if text is None:
             continue
         scanned += 1
         spans = spans_by_file.get(fp)

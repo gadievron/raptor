@@ -289,3 +289,18 @@ def test_read_capped_anchors_child_to_directory_fd(tmp_path):
         assert read_capped(Path('absent'), 6, dir_fd=directory) is None
     finally:
         os.close(directory)
+
+
+@pytest.mark.parametrize("strict", [False, True])
+def test_text_universal_newlines_is_opt_in_and_keeps_byte_cap(tmp_path, strict):
+    path = tmp_path / "source.c"
+    path.write_bytes(b"a\r\nb\r")
+    assert read_capped_text(path, 5, raise_on_refusal=strict) == "a\r\nb\r"
+    assert read_capped_text(
+        path, 5, universal_newlines=True, raise_on_refusal=strict,
+    ) == path.read_text()
+    if strict:
+        with pytest.raises(CappedReadRefused):
+            read_capped_text(path, 4, universal_newlines=True, raise_on_refusal=True)
+    else:
+        assert read_capped_text(path, 4, universal_newlines=True) is None

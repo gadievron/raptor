@@ -337,8 +337,8 @@ def load_audit_log_disclosed(
             unreadable.append(p.name)
             continue
         try:
-            probe_fd = os.open(
-                str(p), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            from core.atomic_fs import open_hardened_read
+            probe_fd = open_hardened_read(p)
         except OSError:
             unreadable.append(p.name)
             continue

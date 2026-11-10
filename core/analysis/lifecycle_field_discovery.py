@@ -23,6 +23,9 @@ import re
 from pathlib import Path
 from typing import Any
 
+from core.paths import confine
+from core.security.capped_read import read_capped_text
+
 from .lifecycle_collector import collect_field_sites_from_source
 from .lifecycle_model import ReadSite, StateField, WriteSite
 
@@ -285,21 +288,11 @@ def discover_state_fields(
         if extractor is None:
             continue
 
-        full_path = target / file_path
-        if not full_path.is_file():
+        full_path = confine(target, file_path)
+        if full_path is None:
             continue
-
-        try:
-            # Checklist-listed files are hostile input; the regex
-            # extractors run over the whole text, so cap the read
-            # (skip = fewer discovered fields, the refusal direction).
-            if full_path.stat().st_size > _MAX_SOURCE_BYTES:
-                logger.debug(
-                    "field discovery: skipping %s (> %d bytes)",
-                    file_path, _MAX_SOURCE_BYTES)
-                continue
-            source = full_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        source = read_capped_text(full_path, _MAX_SOURCE_BYTES, universal_newlines=True)
+        if source is None:
             continue
 
         source_lines = source.splitlines()

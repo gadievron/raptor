@@ -5,7 +5,6 @@ import os
 import platform
 import pytest
 import sys
-import types
 from pathlib import Path
 
 # core/hash/tests/test_hash.py -> repo root
@@ -336,9 +335,13 @@ class TestSha256TreeFstatBoundedRead:
 
         def clamped_fstat(fd):
             st = real_fstat(fd)
-            return types.SimpleNamespace(st_size=min(st.st_size, 4096))
+            fields = list(st)
+            fields[6] = min(st.st_size, 4096)
+            return os.stat_result(fields)
 
-        monkeypatch.setattr(os, "fstat", clamped_fstat)
+        import core.hash as hash_module
+        from core.testing.module_bindings import patch_module_attribute
+        patch_module_attribute(monkeypatch, hash_module, "__os", "fstat", clamped_fstat)
         digest = sha256_tree(tmp_path)
 
         expected = hashlib.sha256()
@@ -366,9 +369,13 @@ class TestSha256TreeFstatBoundedRead:
 
         def inflated_fstat(fd):
             st = real_fstat(fd)
-            return types.SimpleNamespace(st_size=st.st_size + 4096)
+            fields = list(st)
+            fields[6] = st.st_size + 4096
+            return os.stat_result(fields)
 
-        monkeypatch.setattr(os, "fstat", inflated_fstat)
+        import core.hash as hash_module
+        from core.testing.module_bindings import patch_module_attribute
+        patch_module_attribute(monkeypatch, hash_module, "__os", "fstat", inflated_fstat)
         digest = sha256_tree(tmp_path)
         assert len(digest) == 64
 
