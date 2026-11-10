@@ -119,6 +119,7 @@ from pathlib import Path
 
 from . import seatbelt
 from ._fork_safe_warn import warn_post_fork
+from ._retirement import retire_parent_resources as _retire_parent_resources
 from .preexec import _make_preexec_fn
 
 logger = logging.getLogger(__name__)
@@ -1225,138 +1226,10 @@ def run_sandboxed(cmd: list[str], *,
     # 5. Audit mode: start log streamer BEFORE the workload to capture
     #    kernel sandbox events. Stop after workload exits.
     audit_streamer = None
-    if audit_mode and audit_run_dir:
-        from . import seatbelt_audit
-        try:
-            # require_scope: the streamer must not attribute ANY
-            # host-wide Sandbox.kext event to this run until the
-            # workload's PID is registered (right after the Popen
-            # below). `log stream` is a host-wide feed — without the
-            # scope gate, every kext event on the machine (sibling
-            # RAPTOR runs, unrelated sandboxed apps, an attacker's
-            # deliberate sandbox-exec noise on a shared host) would
-            # be nonce-stamped into this run's JSONL and flow into
-            # denial summaries, triage, and calibration-derived
-            # allowlists.
-            audit_streamer = seatbelt_audit.start_log_streamer(
-                Path(audit_run_dir),
-                observe_mode=bool(observe_mode),
-                observe_nonce=observe_nonce,
-                # Mandatory scope gate: the kext sender predicate
-                # alone admits every sandboxed process on the host —
-                # only records attributable to OUR workload's process
-                # tree may be nonce-stamped into this run's JSONL.
-                # The shim PID is registered right after Popen below.
-                require_scope=True,
-                # audit_required is a fail-closed contract: the
-                # warm-up attachment gate failing must raise (caught
-                # below, converted to SandboxSetupError) rather than
-                # proceed best-effort with an unproven log-stream
-                # attachment and a healthy-looking zero-record
-                # summary.
-                warm_up_required=bool(audit_required),
-            )
-        except Exception as exc:
-            logger.warning(
-                "seatbelt audit log streamer failed to start: %s",
-                exc, exc_info=True,
-            )
-            # F064: write the audit-degraded marker so operators
-            # inspecting the run dir can distinguish "audit ran,
-            # found nothing" from "audit was requested but the log
-            # streamer failed to attach." Mirrors the Linux pattern
-            # at _spawn.py and the existing context.py:1328 wire.
-            from . import summary as _summary_mod
-            _summary_mod.record_audit_degraded(
-                Path(audit_run_dir),
-                reason=(
-                    f"audit_mode=True but seatbelt log streamer failed "
-                    f"to start: {type(exc).__name__}: {exc}"
-                ),
-                instructions=(
-                    "check the macOS unified log subsystem is reachable "
-                    "(log show / log stream); verify the user has rights "
-                    "to read kernel-sandbox events; or run without "
-                    "audit_mode on hosts where the streamer cannot attach"
-                ),
-            )
-            if audit_required:
-                # Fail closed BEFORE spawning the workload: the caller
-                # demanded audit evidence and macOS has no other audit
-                # tier to fall back to. Marker above is kept — it
-                # documents the refused degradation.
-                from .errors import SandboxSetupError
-                msg = (
-                    f"audit_required=True but the seatbelt log "
-                    f"streamer failed to start "
-                    f"({type(exc).__name__}: {exc}) — refusing to "
-                    f"run the target unaudited."
-                )
-                raise SandboxSetupError(
-                    msg,
-                    "check the macOS unified log subsystem (log show "
-                    "/ log stream), or drop audit_required= to accept "
-                    "marker-recorded degradation.",
-                ) from exc
+    status_r = status_w = death_r = death_w = None
+    _status_bytes = b""
+    _launched = False
 
-    # 5b. Status + death pipes for the seatbelt shim.
-    #     status: the inner shim writes one readiness byte after the profile
-    #             applies; its absence => fail loud (sandbox did not engage).
-    #     death:  the outer shim watches it; when THIS orchestrator process
-    #             dies (incl. SIGKILL/OOM/crash), every write-end copy closes,
-    #             the outer shim reads EOF and SIGKILLs the sandbox group.
-    #     Both are passed via pass_fds (subprocess clears CLOEXEC on those) so
-    #     status_w reaches the inner shim and death_r reaches the outer shim.
-    #     We hold death_w for the whole synchronous run, so EOF (=> teardown)
-    #     fires only when this process actually dies — never on a healthy run.
-    status_r, status_w = os.pipe()
-    try:
-        death_r, death_w = os.pipe()
-    except OSError:
-        os.close(status_r)
-        os.close(status_w)
-        raise
-    child_env["_RAPTOR_STATUS_FD"] = str(status_w)
-    child_env["_RAPTOR_DEATH_FD"] = str(death_r)
-    # Grant-path identity pins for the watcher shim (see step 0d).
-    # Consumed by the shim like the fd markers: verified in the child
-    # branch before exec, polled by the watcher for the whole run,
-    # stripped from the environment before anything sandboxed starts.
-    # No new disclosure: every pinned path already appears verbatim in
-    # the profile text riding argv. Pop-then-set: only THIS spawn
-    # layer may mint pins — a caller-supplied env dict carrying the
-    # key must never steer the watcher's kill decision (same
-    # no-env-authority rule as the keep-trust key).
-    child_env.pop("_RAPTOR_GRANT_PINS", None)
-    if _grant_pins:
-        import json as _json
-        child_env["_RAPTOR_GRANT_PINS"] = _json.dumps(_grant_pins)
-    # The seatbelt shim is RAPTOR's own dispatch helper and refuses to run
-    # without a trust marker (guards against a human/attacker invoking the
-    # internal script directly). THIS code path is the trusted invoker, so
-    # assert the marker explicitly instead of depending on bin/raptor having
-    # exported it into the ambient env — get_safe_env() preserves it when set,
-    # but a direct API or test caller (no bin/raptor, no CLAUDECODE) would
-    # otherwise trip the gate and every macOS sandbox run would fail loud.
-    # The marker authorizes the OUTER (unsandboxed) shim ONLY: the shim strips
-    # it — and the fd markers — from the environment before exec'ing
-    # sandbox-exec, so nothing _RAPTOR_* ever crosses into the sandboxed
-    # target's env. See raptor-seatbelt-shim's child branch.
-    child_env["_RAPTOR_TRUSTED"] = "1"
-
-    # 6. Run.
-    #
-    # Popen + communicate rather than subprocess.run: run()'s own
-    # timeout path SIGKILLs only the DIRECT child — the seatbelt shim,
-    # detached in its own session — while the sandbox-exec process
-    # group the shim forked (deliberately placed in a separate pgrp so
-    # the shim can killpg it) survived, and the shim's death-pipe
-    # teardown died with the shim. A hostile target that simply hung
-    # past its timeout kept running on the operator host, unaudited,
-    # after the log streamer was stopped. Owning the Popen lets the
-    # timeout path fire the DESIGNED teardown channel first — closing
-    # death_w makes the still-alive shim killpg the sandbox group and
-    # exit — with a killpg of the shim's own session as the backstop.
     # Parent-copy fd closes, exactly once per NUMBER: the teardown
     # path closes death_w to fire the shim's death-pipe watcher, and
     # the outer finally closes it again as the lifecycle owner. The
@@ -1367,8 +1240,8 @@ def run_sandboxed(cmd: list[str], *,
     # lands on a live unrelated fd.
     _closed_parent_fds: set[int] = set()
 
-    def _close_parent_fd_once(fd: int) -> None:
-        if fd in _closed_parent_fds:
+    def _close_parent_fd_once(fd: int | None) -> None:
+        if fd is None or fd in _closed_parent_fds:
             return
         _closed_parent_fds.add(fd)
         try:
@@ -1376,150 +1249,293 @@ def run_sandboxed(cmd: list[str], *,
         except OSError:
             pass
 
-    def _teardown_shim_tree(process) -> None:
-        """Kill the shim and its sandbox subtree on timeout/abort."""
-        # 0. Snapshot the process table FIRST, while the tree is still
-        #    alive: a fork+setsid descendant has left both kill groups
-        #    below, but its ppid chain back to the shim is intact until
-        #    its ancestors die — after the kills it reparents to
-        #    launchd and a fresh snapshot can no longer attribute it.
-        try:
-            _live_table = _ps_snapshot()
-        except Exception:
-            _live_table = None
-        # 1. Death-pipe EOF: the shim's watcher loop (0.1s poll) reads
-        #    EOF and SIGKILLs the sandbox process group + child, then
-        #    exits. This reaches the sandbox-exec pgrp, which is NOT
-        #    in the shim's own process group.
-        _close_parent_fd_once(death_w)
-        try:
-            process.wait(timeout=5)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-        # 2. Backstop: SIGKILL the shim's whole session-leader group
-        #    (start_new_session=True → pgid == shim pid; killpg cannot
-        #    reach this orchestrator). Without a new session the shim
-        #    shares our pgrp — fall back to killing just the shim.
-        if start_new_session:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass
-        try:
-            process.kill()
-        except OSError:
-            pass
-        # 3. Post-wait descendant sweep, independent of process group:
-        #    catches setsid escapees the two killpg's above cannot
-        #    reach. The shim is dead by now, so the status channel is
-        #    drainable — the G report lets the sweep attribute sandbox
-        #    process-group members even though their ppid link to the
-        #    (dead) shim is gone. Best-effort with logging — teardown
-        #    must never raise over sweep failure.
-        try:
-            _grp = _parse_group_report(_harvest_status())
-            _sweep_descendants(process.pid, live_snapshot=_live_table,
-                               extra_pgids=(_grp,) if _grp else ())
-        except Exception:
-            logger.warning(
-                "macOS sandbox teardown: descendant sweep failed",
-                exc_info=True,
-            )
-        # 4. The abort exception — not a cleanup crash — must reach
-        #    the caller: after this teardown returns, the re-raise
-        #    unwinds through Popen.__exit__, which re-closes whatever
-        #    file objects are still on .stdout/.stderr/.stdin. A pipe
-        #    fd invalidated behind the file object's back (observed
-        #    on a darwin CI host: EBADF out of __exit__'s
-        #    stdout.close() on the fail-closed audit-scoping refusal,
-        #    replacing the SandboxSetupError the caller was owed)
-        #    turns that close into a crash that masks the refusal.
-        #    Close each stream via its file object exactly once with
-        #    OSError suppressed, then detach the attribute so
-        #    __exit__ skips it. The abort paths never return output,
-        #    so nothing downstream reads these streams.
-        for _attr in ("stdout", "stderr", "stdin"):
-            _stream = getattr(process, _attr, None)
-            if _stream is not None:
-                try:
-                    _stream.close()
-                except OSError:
-                    pass
-                setattr(process, _attr, None)
-
-    # Status-channel harvest: close our write end, then drain the read
-    # end to EOF. Idempotent (memoised) because both the normal path
-    # (which needs the sandbox-group report BEFORE its backstop sweep)
-    # and the finally (exception paths) call it. The drain can only
-    # block while another write-end copy lives — the watcher shim
-    # holds one for its P/G reports — and every route here has the
-    # shim already reaped (Popen.__exit__ waits; the teardown paths
-    # kill it), so EOF is guaranteed.
+    # Harvest only after a launched shim has been reaped. Preparation
+    # failures have no writer to report; close their endpoints without a read.
     _status_state: dict = {"done": False, "data": b""}
 
     def _harvest_status() -> bytes:
         if _status_state["done"]:
             return _status_state["data"]
         _status_state["done"] = True
-        try:
-            os.close(status_w)
-        except OSError:
-            pass
         data = b""
+        read_fd = status_r
         try:
-            while True:
-                chunk = os.read(status_r, 4096)
-                if not chunk:
-                    break
-                data += chunk
+            _close_parent_fd_once(status_w)
+            if read_fd is not None:
+                while True:
+                    chunk = os.read(read_fd, 4096)
+                    if not chunk:
+                        break
+                    data += chunk
         except OSError:
             pass
-        try:
-            os.close(status_r)
-        except OSError:
-            pass
+        finally:
+            _close_parent_fd_once(status_r)
         _status_state["data"] = data
         return data
 
-    _popen_stdin = subprocess.PIPE if input is not None else stdin
-    # Loader-variable quarantine: the seatbelt shim is an UNSANDBOXED
-    # trusted dispatcher carrying _RAPTOR_TRUSTED — DYLD_*/LD_* from a
-    # caller-supplied env dict must not inject code into it. The shim
-    # re-applies the quarantined pairs before exec'ing sandbox-exec so
-    # the target-side semantics are unchanged (SIP may still strip
-    # DYLD_* across the protected sandbox-exec binary, exactly as it
-    # did pre-quarantine).
-    from ._env_quarantine import quarantine_loader_env
-    child_env = quarantine_loader_env(child_env)
-    # Last-moment pin re-verify before spawn (step 0d): the parent
-    # itself wrote into output above (fake-home layout, .tmp scratch)
-    # — those makedirs follow symlinks, so a swap in the capture→spawn
-    # window would have steered THIS process's writes as well as the
-    # child's grant. Refuse rather than hand a tampered path a live
-    # sandbox. From here the watcher shim owns the check.
-    for _pin in _grant_pins:
-        _pin_err = _grant_pin_mismatch(
-            _pin["path"], _pin["dev"], _pin["ino"], _pin["btime"])
-        if _pin_err:
-            # The status/death pipes were already created — close all
-            # four ends before raising (this refusal predates the
-            # try/finally that owns their lifecycle).
-            for _fd in (status_r, status_w, death_r, death_w):
-                try:
-                    os.close(_fd)
-                except OSError:
-                    pass
-            from .errors import SandboxSetupError
-            raise SandboxSetupError(
-                f"sandbox grant-path pin violated before spawn: "
-                f"{_pin['path']} {_pin_err}",
-                "a granted target/output/writable path changed "
-                "identity between validation and spawn (symlink or "
-                "rename swap). Re-create the directory and re-run; "
-                "never point grants at attacker-writable parents.",
-                setup_category="P",
+    def _finish_parent_status() -> None:
+        nonlocal _status_bytes
+        if _launched:
+            _status_bytes = _harvest_status()
+        else:
+            _retire_parent_resources(
+                lambda: _close_parent_fd_once(status_w),
+                lambda: _close_parent_fd_once(status_r),
             )
+
+    def _stop_audit_streamer() -> None:
+        if audit_streamer is not None:
+            try:
+                audit_streamer.stop()
+            except Exception:
+                # Pre-fix this swallowed failures at DEBUG level
+                # — operators rarely run with debug logging on,
+                # so audit-streamer stop failures went invisible.
+                # The streamer holds OS resources (kqueue fd,
+                # spawn-helper subprocess, log-rotation handles);
+                # silent failure here means those resources leak
+                # over the lifetime of a long-running session.
+                # Bump to WARNING so the next sandbox invocation
+                # surfaces the leak hint to the operator. Still
+                # catches Exception (don't propagate to mask the
+                # original sandbox-launch outcome) — the goal is
+                # visibility, not failure-propagation.
+                logger.warning(
+                    "seatbelt audit streamer stop failed — "
+                    "resources may have leaked from this sandbox call",
+                    exc_info=True,
+                )
+
     try:
+        if audit_mode and audit_run_dir:
+            from . import seatbelt_audit
+            try:
+                # require_scope: the streamer must not attribute ANY
+                # host-wide Sandbox.kext event to this run until the
+                # workload's PID is registered (right after the Popen
+                # below). `log stream` is a host-wide feed — without the
+                # scope gate, every kext event on the machine (sibling
+                # RAPTOR runs, unrelated sandboxed apps, an attacker's
+                # deliberate sandbox-exec noise on a shared host) would
+                # be nonce-stamped into this run's JSONL and flow into
+                # denial summaries, triage, and calibration-derived
+                # allowlists.
+                audit_streamer = seatbelt_audit.start_log_streamer(
+                    Path(audit_run_dir),
+                    observe_mode=bool(observe_mode),
+                    observe_nonce=observe_nonce,
+                    # Mandatory scope gate: the kext sender predicate
+                    # alone admits every sandboxed process on the host —
+                    # only records attributable to OUR workload's process
+                    # tree may be nonce-stamped into this run's JSONL.
+                    # The shim PID is registered right after Popen below.
+                    require_scope=True,
+                    # audit_required is a fail-closed contract: the
+                    # warm-up attachment gate failing must raise (caught
+                    # below, converted to SandboxSetupError) rather than
+                    # proceed best-effort with an unproven log-stream
+                    # attachment and a healthy-looking zero-record
+                    # summary.
+                    warm_up_required=bool(audit_required),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "seatbelt audit log streamer failed to start: %s",
+                    exc, exc_info=True,
+                )
+                # F064: write the audit-degraded marker so operators
+                # inspecting the run dir can distinguish "audit ran,
+                # found nothing" from "audit was requested but the log
+                # streamer failed to attach." Mirrors the Linux pattern
+                # at _spawn.py and the existing context.py:1328 wire.
+                from . import summary as _summary_mod
+                _summary_mod.record_audit_degraded(
+                    Path(audit_run_dir),
+                    reason=(
+                        f"audit_mode=True but seatbelt log streamer failed "
+                        f"to start: {type(exc).__name__}: {exc}"
+                    ),
+                    instructions=(
+                        "check the macOS unified log subsystem is reachable "
+                        "(log show / log stream); verify the user has rights "
+                        "to read kernel-sandbox events; or run without "
+                        "audit_mode on hosts where the streamer cannot attach"
+                    ),
+                )
+                if audit_required:
+                    # Fail closed BEFORE spawning the workload: the caller
+                    # demanded audit evidence and macOS has no other audit
+                    # tier to fall back to. Marker above is kept — it
+                    # documents the refused degradation.
+                    from .errors import SandboxSetupError
+                    msg = (
+                        f"audit_required=True but the seatbelt log "
+                        f"streamer failed to start "
+                        f"({type(exc).__name__}: {exc}) — refusing to "
+                        f"run the target unaudited."
+                    )
+                    raise SandboxSetupError(
+                        msg,
+                        "check the macOS unified log subsystem (log show "
+                        "/ log stream), or drop audit_required= to accept "
+                        "marker-recorded degradation.",
+                    ) from exc
+
+        # 5b. Status + death pipes for the seatbelt shim.
+        #     status: the inner shim writes one readiness byte after the profile
+        #             applies; its absence => fail loud (sandbox did not engage).
+        #     death:  the outer shim watches it; when THIS orchestrator process
+        #             dies (incl. SIGKILL/OOM/crash), every write-end copy closes,
+        #             the outer shim reads EOF and SIGKILLs the sandbox group.
+        #     Both are passed via pass_fds (subprocess clears CLOEXEC on those) so
+        #     status_w reaches the inner shim and death_r reaches the outer shim.
+        #     We hold death_w for the whole synchronous run, so EOF (=> teardown)
+        #     fires only when this process actually dies — never on a healthy run.
+        status_r, status_w = os.pipe()
+        death_r, death_w = os.pipe()
+        child_env["_RAPTOR_STATUS_FD"] = str(status_w)
+        child_env["_RAPTOR_DEATH_FD"] = str(death_r)
+        # Grant-path identity pins for the watcher shim (see step 0d).
+        # Consumed by the shim like the fd markers: verified in the child
+        # branch before exec, polled by the watcher for the whole run,
+        # stripped from the environment before anything sandboxed starts.
+        # No new disclosure: every pinned path already appears verbatim in
+        # the profile text riding argv. Pop-then-set: only THIS spawn
+        # layer may mint pins — a caller-supplied env dict carrying the
+        # key must never steer the watcher's kill decision (same
+        # no-env-authority rule as the keep-trust key).
+        child_env.pop("_RAPTOR_GRANT_PINS", None)
+        if _grant_pins:
+            import json as _json
+            child_env["_RAPTOR_GRANT_PINS"] = _json.dumps(_grant_pins)
+        # The seatbelt shim is RAPTOR's own dispatch helper and refuses to run
+        # without a trust marker (guards against a human/attacker invoking the
+        # internal script directly). THIS code path is the trusted invoker, so
+        # assert the marker explicitly instead of depending on bin/raptor having
+        # exported it into the ambient env — get_safe_env() preserves it when set,
+        # but a direct API or test caller (no bin/raptor, no CLAUDECODE) would
+        # otherwise trip the gate and every macOS sandbox run would fail loud.
+        # The marker authorizes the OUTER (unsandboxed) shim ONLY: the shim strips
+        # it — and the fd markers — from the environment before exec'ing
+        # sandbox-exec, so nothing _RAPTOR_* ever crosses into the sandboxed
+        # target's env. See raptor-seatbelt-shim's child branch.
+        child_env["_RAPTOR_TRUSTED"] = "1"
+
+        # 6. Run.
+        #
+        # Popen + communicate rather than subprocess.run: run()'s own
+        # timeout path SIGKILLs only the DIRECT child — the seatbelt shim,
+        # detached in its own session — while the sandbox-exec process
+        # group the shim forked (deliberately placed in a separate pgrp so
+        # the shim can killpg it) survived, and the shim's death-pipe
+        # teardown died with the shim. A hostile target that simply hung
+        # past its timeout kept running on the operator host, unaudited,
+        # after the log streamer was stopped. Owning the Popen lets the
+        # timeout path fire the DESIGNED teardown channel first — closing
+        # death_w makes the still-alive shim killpg the sandbox group and
+        # exit — with a killpg of the shim's own session as the backstop.
+        def _teardown_shim_tree(process) -> None:
+            """Kill the shim and its sandbox subtree on timeout/abort."""
+            # 0. Snapshot the process table FIRST, while the tree is still
+            #    alive: a fork+setsid descendant has left both kill groups
+            #    below, but its ppid chain back to the shim is intact until
+            #    its ancestors die — after the kills it reparents to
+            #    launchd and a fresh snapshot can no longer attribute it.
+            try:
+                _live_table = _ps_snapshot()
+            except Exception:
+                _live_table = None
+            # 1. Death-pipe EOF: the shim's watcher loop (0.1s poll) reads
+            #    EOF and SIGKILLs the sandbox process group + child, then
+            #    exits. This reaches the sandbox-exec pgrp, which is NOT
+            #    in the shim's own process group.
+            _close_parent_fd_once(death_w)
+            try:
+                process.wait(timeout=5)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
+            # 2. Backstop: SIGKILL the shim's whole session-leader group
+            #    (start_new_session=True → pgid == shim pid; killpg cannot
+            #    reach this orchestrator). Without a new session the shim
+            #    shares our pgrp — fall back to killing just the shim.
+            if start_new_session:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+            try:
+                process.kill()
+            except OSError:
+                pass
+            # 3. Post-wait descendant sweep, independent of process group:
+            #    catches setsid escapees the two killpg's above cannot
+            #    reach. The shim is dead by now, so the status channel is
+            #    drainable — the G report lets the sweep attribute sandbox
+            #    process-group members even though their ppid link to the
+            #    (dead) shim is gone. Best-effort with logging — teardown
+            #    must never raise over sweep failure.
+            try:
+                _grp = _parse_group_report(_harvest_status())
+                _sweep_descendants(process.pid, live_snapshot=_live_table,
+                                   extra_pgids=(_grp,) if _grp else ())
+            except Exception:
+                logger.warning(
+                    "macOS sandbox teardown: descendant sweep failed",
+                    exc_info=True,
+                )
+            # 4. The abort exception — not a cleanup crash — must reach
+            #    the caller: after this teardown returns, the re-raise
+            #    unwinds through Popen.__exit__, which re-closes whatever
+            #    file objects are still on .stdout/.stderr/.stdin. A pipe
+            #    fd invalidated behind the file object's back (observed
+            #    on a darwin CI host: EBADF out of __exit__'s
+            #    stdout.close() on the fail-closed audit-scoping refusal,
+            #    replacing the SandboxSetupError the caller was owed)
+            #    turns that close into a crash that masks the refusal.
+            #    Close each stream via its file object exactly once with
+            #    OSError suppressed, then detach the attribute so
+            #    __exit__ skips it. The abort paths never return output,
+            #    so nothing downstream reads these streams.
+            for _attr in ("stdout", "stderr", "stdin"):
+                _stream = getattr(process, _attr, None)
+                if _stream is not None:
+                    try:
+                        _stream.close()
+                    except OSError:
+                        pass
+                    setattr(process, _attr, None)
+
+        _popen_stdin = subprocess.PIPE if input is not None else stdin
+        # Loader-variable quarantine: the seatbelt shim is an UNSANDBOXED
+        # trusted dispatcher carrying _RAPTOR_TRUSTED — DYLD_*/LD_* from a
+        # caller-supplied env dict must not inject code into it. The shim
+        # re-applies the quarantined pairs before exec'ing sandbox-exec so
+        # the target-side semantics are unchanged (SIP may still strip
+        # DYLD_* across the protected sandbox-exec binary, exactly as it
+        # did pre-quarantine).
+        from ._env_quarantine import quarantine_loader_env
+        child_env = quarantine_loader_env(child_env)
+        # Last-moment pin re-verify before spawn (step 0d): the parent
+        # itself wrote into output above (fake-home layout, .tmp scratch)
+        # — those makedirs follow symlinks, so a swap in the capture→spawn
+        # window would have steered THIS process's writes as well as the
+        # child's grant. Refuse rather than hand a tampered path a live
+        # sandbox. From here the watcher shim owns the check.
+        for _pin in _grant_pins:
+            _pin_err = _grant_pin_mismatch(
+                _pin["path"], _pin["dev"], _pin["ino"], _pin["btime"])
+            if _pin_err:
+                from .errors import SandboxSetupError
+                raise SandboxSetupError(
+                    f"sandbox grant-path pin violated before spawn: "
+                    f"{_pin['path']} {_pin_err}",
+                    "a granted target/output/writable path changed "
+                    "identity between validation and spawn (symlink or "
+                    "rename swap). Re-create the directory and re-run; "
+                    "never point grants at attacker-writable parents.",
+                    setup_category="P",
+                )
         with subprocess.Popen(
             sandbox_cmd,
             env=child_env,
@@ -1532,6 +1548,7 @@ def run_sandboxed(cmd: list[str], *,
             start_new_session=start_new_session,
             pass_fds=(status_w, death_r, *tuple(pass_fds or ())),
         ) as _process:
+            _launched = True
             try:
                 # Register the workload root with the audit streamer's
                 # scope gate: everything the sandboxed workload does
@@ -1615,38 +1632,14 @@ def run_sandboxed(cmd: list[str], *,
             sandbox_cmd, _retcode, _stdout, _stderr,  # type: ignore[arg-type]
         )
     finally:
-        # Close our copies and drain the status channel (idempotent —
-        # the normal path already harvested before its backstop
-        # sweep, and the abort paths already closed death_w; the
-        # once-per-number guard keeps this pass from re-closing a
-        # freed number that something else has since been handed).
-        # _harvest_status closes status_w first: with our write end
-        # gone and the shim reaped, the drain returns the accumulated
-        # bytes then EOF, never blocks.
-        for _fd in (death_r, death_w):
-            _close_parent_fd_once(_fd)
-        _status_bytes = _harvest_status()
-        if audit_streamer is not None:
-            try:
-                audit_streamer.stop()
-            except Exception:
-                # Pre-fix this swallowed failures at DEBUG level
-                # — operators rarely run with debug logging on,
-                # so audit-streamer stop failures went invisible.
-                # The streamer holds OS resources (kqueue fd,
-                # spawn-helper subprocess, log-rotation handles);
-                # silent failure here means those resources leak
-                # over the lifetime of a long-running session.
-                # Bump to WARNING so the next sandbox invocation
-                # surfaces the leak hint to the operator. Still
-                # catches Exception (don't propagate to mask the
-                # original sandbox-launch outcome) — the goal is
-                # visibility, not failure-propagation.
-                logger.warning(
-                    "seatbelt audit streamer stop failed — "
-                    "resources may have leaked from this sandbox call",
-                    exc_info=True,
-                )
+        # Every owner is registered before retirement can fail. No numeric
+        # endpoint is closed twice, and preparation errors remain primary.
+        _retire_parent_resources(
+            lambda: _close_parent_fd_once(death_r),
+            lambda: _close_parent_fd_once(death_w),
+            _finish_parent_status,
+            _stop_audit_streamer,
+        )
 
     # 6b. Fail-loud signal for context.py (mirrors the Linux exec-status
     #     pipe's result._setup_status contract):
