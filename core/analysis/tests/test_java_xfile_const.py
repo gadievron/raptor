@@ -559,3 +559,46 @@ class TestJdkNamespaceIdentity:
         # stays blind-resolvable.
         assert r.resolve_field("DataSource", "X", True) is REFUSE
         assert r.resolve_field("ResultSet", "X", True) is TAINT_FREE
+
+
+class TestSourceReadBoundary:
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_declaration_symlink_stays_within_root(self, tmp_path, outside):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        target = (tmp_path if outside else repo) / "owned-declaration.txt"
+        target.write_text(CFG_CLASS)
+        (repo / "Cfg.java").symlink_to(target)
+        caller = repo / "T.java"
+        value, _ = _xfold((repo, caller), "Cfg.SAFE")
+        assert (value is REFUSE) if outside else (value == "safe-const")
+
+    def test_unreadable_candidate_prevents_uniqueness_proof(self, xroot):
+        root, _ = xroot
+        other = root / "other"
+        other.mkdir()
+        (other / "Cfg.java").symlink_to(root / "missing-owned.txt")
+        value, _ = _xfold(xroot, "Cfg.SAFE")
+        assert value is REFUSE
+
+    @pytest.mark.parametrize("overflow", [False, True])
+    def test_declaring_source_byte_budget(self, xroot, monkeypatch, overflow):
+        from core.analysis import java_xfile_const as stage
+
+        root, _ = xroot
+        source = CFG_CLASS.encode("utf-8")
+        monkeypatch.setattr(stage, "_MAX_SOURCE_BYTES", len(source) + 16)
+        (root / "app" / "Cfg.java").write_bytes(source + b" " * (16 + int(overflow)))
+        value, _ = _xfold(xroot, "Cfg.SAFE")
+        assert (value is REFUSE) if overflow else (value == "safe-const")
+
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_write_absence_requires_contained_sources(self, tmp_path, outside):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        target = (tmp_path if outside else repo) / "owned-writer.txt"
+        target.write_text('class W { void w() { System.setProperty("other", "v"); } }')
+        (repo / "W.java").symlink_to(target)
+        _, resolver = _xfold((repo, repo / "T.java"), 'System.getProperty("untouched")')
+        assert resolver.tf_property_key_ok("untouched") is (not outside)
+        assert not resolver.tf_property_key_ok("other")

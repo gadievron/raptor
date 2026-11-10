@@ -35,6 +35,8 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
@@ -43,6 +45,14 @@ logger = logging.getLogger(__name__)
 _MAX_DECLARING_CANDIDATES = 8
 _MAX_FIELD_DEPTH = 4
 _MAX_CLASS_CACHE = 32
+_MAX_SOURCE_BYTES = DEFAULT_MAX_SOURCE_CHARS
+
+
+def _read_java_source(root: Path, path: Path) -> str | None:
+    content = read_contained_bytes(root, path.absolute(), _MAX_SOURCE_BYTES)
+    if content is None or content[1]:
+        return None
+    return content[0].decode("utf-8", errors="replace")
 
 
 def _parser():
@@ -124,8 +134,10 @@ class XFileConst:
         # from them, and JDK resolution reads no tree files.
         if self._parser is not None:
             try:
-                text = self._file.read_text(encoding="utf-8",
-                                            errors="replace")
+                text = _read_java_source(
+                    self._root or self._file.absolute().parent, self._file)
+                if text is None:
+                    raise _Refused("current source unavailable")
                 tree = self._parser.parse(
                     text.encode("utf-8", errors="replace"))
                 from core.analysis.cfg_builder_java import build_import_map
@@ -159,11 +171,13 @@ class XFileConst:
             declaring_root = None
             for f in candidates:
                 try:
-                    text = f.read_text(encoding="utf-8", errors="replace")
+                    text = _read_java_source(self._root, f)
+                    if text is None:
+                        raise _Refused("declaring source unavailable")
                     tree = self._parser.parse(
                         text.encode("utf-8", errors="replace"))
-                except (OSError, ValueError):
-                    continue
+                except (OSError, ValueError) as exc:
+                    raise _Refused("declaring source unavailable") from exc
                 pkg = _package_of(tree.root_node)
                 if package and pkg != package:
                     continue
@@ -171,12 +185,13 @@ class XFileConst:
                     # Unqualified name: accept only the current file's
                     # own package (same-package visibility rule).
                     try:
-                        cur = self._file.read_text(
-                            encoding="utf-8", errors="replace")
+                        cur = _read_java_source(self._root, self._file)
+                        if cur is None:
+                            raise _Refused("current source unavailable")
                         cur_pkg = _package_of(self._parser.parse(
                             cur.encode("utf-8", errors="replace")).root_node)
-                    except Exception:  # noqa: BLE001
-                        cur_pkg = ""
+                    except Exception as exc:  # noqa: BLE001 — cannot prove package
+                        raise _Refused("current source unavailable") from exc
                     if pkg != cur_pkg:
                         continue
                 if declaring is not None:
@@ -468,9 +483,8 @@ def _scan_setproperty(root: Path, parser):
         n += 1
         if n > _MAX_SCAN_FILES:
             return ("poisoned",)
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_java_source(root, f)
+        if text is None:
             return ("poisoned",)
         if "setProperty" not in text:
             continue
