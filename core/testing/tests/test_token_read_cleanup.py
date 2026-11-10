@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.testing import fds as support
+from core.testing.pipes import pipes_for_setup
 
 CASES = [
     ("core/llm/tests/test_consumed_attempt_e2e.py", ["_wire"], "token"),
@@ -179,24 +180,23 @@ def _statements(case):
 @pytest.mark.parametrize("case", CASES)
 @pytest.mark.parametrize("fault", ["read_error", "interrupt", "decode", "none"])
 def test_token_read_releases_its_owned_descriptor(case, fault, monkeypatch):
-    read_fd, write_fd = os.pipe()
-    stat = os.fstat(read_fd)
-    identity = (stat.st_dev, stat.st_ino)
-    os.write(write_fd, b"\xff" if fault == "decode" else b"owned-token")
-    os.close(write_fd)
-    real_read = os.read
-
-    def read(fd, size):
-        assert fd == read_fd and size in (64, 256)
-        if fault in ("read_error", "interrupt"):
-            raise (OSError if fault == "read_error" else KeyboardInterrupt)(
-                "injected token read failure"
-            )
-        return real_read(fd, size)
-
-    proxy = SimpleNamespace(**vars(os))
-    proxy.read = read
+    with pipes_for_setup(1) as pairs:
+        read_fd, write_fd = pairs[0]
+        stat = os.fstat(read_fd)
+        identity = (stat.st_dev, stat.st_ino)
+        os.write(write_fd, b"\xff" if fault == "decode" else b"owned-token")
     try:
+        os.close(write_fd)
+        real_read = os.read
+        def read(fd, size):
+            assert fd == read_fd and size in (64, 256)
+            if fault in ("read_error", "interrupt"):
+                raise (OSError if fault == "read_error" else KeyboardInterrupt)(
+                    "injected token read failure"
+                )
+            return real_read(fd, size)
+        proxy = SimpleNamespace(**vars(os))
+        proxy.read = read
         statements, name = _statements(case)
         namespace = {
             "os": proxy,
