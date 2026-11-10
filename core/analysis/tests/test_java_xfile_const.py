@@ -1012,3 +1012,66 @@ class TestTypeReceiverScope:
         assert rhs is not None
         result = fold_expr(rhs, lambda _n, _d: REFUSE, allow_taint_free=True)
         assert result is (REFUSE if before else TAINT_FREE)
+
+
+class TestSimpleFileIdentity:
+    @pytest.mark.parametrize("case,expected", [
+        ("mutable-own", False), ("literal-own", True),
+        ("imported-owned", False), ("imported-jdk", True),
+        ("qualified-jdk", True), ("wildcard-jdk", True),
+    ])
+    def test_actual_consumer_uses_source_and_import_identity(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        own = case in ("mutable-own", "literal-own")
+        name = "File" if own else "T"
+        declaration = ('static final String separator="safe";\n'
+                       if case == "literal-own" else
+                       'static String separator=System.getenv("OWNED");\n') if own else ""
+        imports = ""
+        receiver = "File"
+        if case == "imported-owned":
+            pkg = tmp_path / "owned"
+            pkg.mkdir()
+            (pkg / "File.java").write_text(
+                'package owned; public class File { public static String '
+                'separator=System.getenv("OWNED"); }')
+            imports = "import owned.File;\n"
+        elif case == "imported-jdk":
+            imports = "import java.io.File;\n"
+        elif case == "wildcard-jdk":
+            imports = "import java.io.*;\n"
+        elif case == "qualified-jdk":
+            receiver = "java.io.File"
+        source = (imports + f"class {name} {{\n" + declaration
+                  + "void m(java.io.PrintWriter out) {\n"
+                  + f"String value={receiver}.separator;\n"
+                  + "out.println(value);\n}\n}\n")
+        caller = tmp_path / f"{name}.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, len(source.splitlines())),
+                               str(caller), str(tmp_path))
+        sink_line = source.splitlines().index("out.println(value);") + 1
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    def test_context_free_folder_refuses_declared_top_level_file(self):
+        from core.analysis.cfg_builder_java import _get_parser
+
+        source = ('class File { static String separator=System.getenv("OWNED"); '
+                  'String m() { return File.separator; } }')
+        tree = _get_parser().parse(source.encode())
+        assert not tree.root_node.has_error
+        stack = [tree.root_node]
+        fields = []
+        while stack:
+            node = stack.pop()
+            if node.type == "field_access":
+                fields.append(node)
+            stack.extend(node.named_children)
+        assert len(fields) == 1
+        assert fold_expr(fields[0], lambda _n, _d: REFUSE,
+                         allow_taint_free=True) is REFUSE
