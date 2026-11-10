@@ -58,6 +58,7 @@ hole, not a pass.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import sys
 import xml.etree.ElementTree as ET
@@ -72,41 +73,54 @@ def count_skips(junit_path: Path) -> int:
     Nested suite rollups must not count the same skip twice. Summary-only
     reports retain the historical attribute-based counting behavior.
     """
+    suites = []
+    active_suites = []
+    elements = []
+    root_tag = None
+    cases = 0
+    detailed_skips = 0
     try:
-        root = ET.parse(junit_path).getroot()
+        with (nullcontext(junit_path) if hasattr(junit_path, 'read') else open(junit_path, 'rb')) as stream:
+            for event, element in ET.iterparse(stream, events=('start', 'end')):
+                if event == 'start':
+                    if root_tag is None:
+                        root_tag = element.tag
+                    elements.append(element)
+                    if element.tag == 'testsuite':
+                        row = {'raw': element.get('skipped', '0'), 'observed': 0}
+                        suites.append(row)
+                        active_suites.append(row)
+                    continue
+                if element.tag == 'skipped' and len(elements) > 1 and elements[-2].tag == 'testcase':
+                    detailed_skips += 1
+                    for row in active_suites:
+                        row['observed'] += 1
+                elif element.tag == 'testcase':
+                    cases += 1
+                elif element.tag == 'testsuite':
+                    active_suites.pop()
+                elements.pop()
+                element.clear()
+                if elements:
+                    elements[-1].remove(element)
     except (OSError, ET.ParseError) as exc:
-        msg = f"cannot read junit XML at {junit_path}: {exc}"
-        raise ValueError(msg) from exc
-    suites = (
-        [root] if root.tag == "testsuite"
-        else list(root.iter("testsuite"))
-    )
+        raise ValueError(f'cannot read junit XML at {junit_path}: {exc}') from exc
     if not suites:
-        msg = f"no <testsuite> element in {junit_path}"
-        raise ValueError(msg)
-    cases = list(root.iter("testcase"))
-    if cases:
-        suites = list(root.iter("testsuite"))
+        raise ValueError(f'no <testsuite> element in {junit_path}')
+    selected = suites[:1] if root_tag == 'testsuite' and not cases else suites
     total = 0
-    for suite in suites:
-        raw = suite.get("skipped", "0")
+    for row in selected:
+        raw = row['raw']
         try:
             count = int(raw)
             if count < 0:
-                raise ValueError("negative skip count")
+                raise ValueError('negative skip count')
             total += count
         except ValueError as exc:
-            msg = f"invalid skipped= attribute (expected a non-negative integer) in {junit_path}: {raw!r}"
-            raise ValueError(msg) from exc
-        if cases:
-            observed = sum(len(case.findall("skipped")) for case in suite.iter("testcase"))
-            if observed != count:
-                raise ValueError(
-                    f"skipped= counter does not match testcase records in {junit_path}: "
-                    f"reported {count}, observed {observed}")
-    if cases:
-        return sum(len(case.findall("skipped")) for case in cases)
-    return total
+            raise ValueError(f'invalid skipped= attribute (expected a non-negative integer) in {junit_path}: {raw!r}') from exc
+        if cases and row['observed'] != count:
+            raise ValueError(f'skipped= counter does not match testcase records in {junit_path}: reported {count}, observed {row["observed"]}')
+    return detailed_skips if cases else total
 
 
 def load_baseline(path: Path) -> dict:

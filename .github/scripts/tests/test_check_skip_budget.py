@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -310,3 +312,74 @@ def test_invalid_report_cannot_pass_or_refresh_baseline(gate, tmp_path, monkeypa
     assert gate.main() == 2
     assert 'does not match testcase records' in capsys.readouterr().err
     assert baseline.read_bytes() == before
+
+
+@pytest.mark.parametrize('wrapper,expected', [(False, 7), (True, 11)],
+                         ids=['suite-root', 'suites-root'])
+def test_summary_only_nested_counters_keep_historical_behavior(gate, tmp_path, wrapper, expected):
+    body = '<testsuite skipped="7"><testsuite skipped="4"/></testsuite>'
+    if wrapper:
+        body = '<testsuites>' + body + '</testsuites>'
+    xml = tmp_path / 'summary.xml'
+    xml.write_text(body)
+    assert gate.count_skips(xml) == expected
+
+
+def test_xml_parse_error_precedes_counter_validation(gate, tmp_path):
+    xml = tmp_path / 'truncated.xml'
+    xml.write_text('<testsuite skipped="bad"><testcase></testsuite>')
+    with pytest.raises(ValueError, match='cannot read junit XML') as error:
+        gate.count_skips(xml)
+    assert isinstance(error.value.__cause__, gate.ET.ParseError)
+
+
+@pytest.mark.parametrize('kind', ['parse', 'read', 'interrupt', 'exit'])
+def test_reader_closes_owned_stream_on_parser_failure(gate, tmp_path, monkeypatch, kind):
+    xml = tmp_path / 'report.xml'
+    xml.write_text('<testsuite skipped="0"/>')
+    opened = []
+    primary = {'parse': gate.ET.ParseError('owned parse error'),
+               'read': OSError('owned read error'),
+               'interrupt': KeyboardInterrupt('owned interrupt'),
+               'exit': SystemExit(9)}[kind]
+
+    native_open = open
+
+    def recording_open(path, mode):
+        stream = native_open(path, mode)
+        opened.append(stream)
+        return stream
+
+    def fail_parse(stream, *, events):
+        assert not stream.closed
+        assert events == ('start', 'end')
+        raise primary
+
+    parser = SimpleNamespace(**(vars(gate.ET) | {'iterparse': fail_parse}))
+    monkeypatch.setattr(gate, 'ET', parser)
+    monkeypatch.setattr(gate, 'open', recording_open, raising=False)
+    expected = ValueError if kind in {'parse', 'read'} else type(primary)
+    with pytest.raises(expected) as observed:
+        gate.count_skips(xml)
+    assert len(opened) == 1 and opened[0].closed
+    if expected is ValueError:
+        assert observed.value.__cause__ is primary
+    else:
+        assert observed.value is primary
+
+
+@pytest.mark.parametrize('malformed', [False, True], ids=['valid', 'malformed'])
+def test_borrowed_stream_is_not_closed(gate, malformed):
+    body = b'<testsuite><testcase>' if malformed else b'<testsuite skipped="3"/>'
+    with io.BytesIO(body) as stream:
+        if malformed:
+            with pytest.raises(ValueError, match='cannot read junit XML'):
+                gate.count_skips(stream)
+        else:
+            assert gate.count_skips(stream) == 3
+        assert not stream.closed
+
+
+def test_string_filename_remains_supported(gate, tmp_path):
+    xml = _junit(tmp_path, 'string-path.xml', skipped=3)
+    assert gate.count_skips(str(xml)) == 3
