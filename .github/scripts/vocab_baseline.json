@@ -1633,6 +1633,11 @@
     "kind": "literal",
     "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface"
   },
+  "core/labeled_attempts/test_pruning_reader_ownership.py::state": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Private pytest record-fixture bookkeeping for native pruning-reader ownership: owned paths/descriptors, injected setup/read/cleanup errors, wrapper/close counters and replacement-descriptor tracking. Yielded only to tests in this module; not a production record schema, target/API vocabulary, learned name list or detection vocabulary. Root-level test_ placement is included by the current directory-based runtime-universe rule."
+  },
   "core/labeled_attempts/test_store.py::bad_blob": {
     "count": 11,
     "kind": "literal"
