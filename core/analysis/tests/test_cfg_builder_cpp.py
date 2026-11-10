@@ -410,12 +410,9 @@ class TestLoops:
             "labeled statement's inner statement dropped from the CFG"
         )
 
-    def test_do_while_condition_label_invisible_to_guard_extraction(self):
-        # The do-while tail is labeled distinctly from a genuine while
-        # header, so label-driven condition extraction (which treats a
-        # condition as an entry guard) never reads it — symmetric with
-        # the Java leg, whose "do-while" label never matched. A plain
-        # while keeps extracting.
+    def test_do_while_tail_has_explicit_backedge_and_exit_conditions(self):
+        # Producer-owned branch facts distinguish the guarded back-edge
+        # from the unguarded initial body entry and the false exit-edge.
         from core.analysis.cfg_conditions import extract_conditions_from_cfg
         src_do = (
             "int f(int n) {\n"
@@ -429,7 +426,12 @@ class TestLoops:
         cfg = _build(src_do)
         conds = [e for e in extract_conditions_from_cfg(cfg)
                  if e.condition is not None]
-        assert not any("100" in e.condition.text for e in conds)
+        assert {(e.src_line, e.dst_line, e.condition.polarity) for e in conds} == {
+            (4, 3, True), (4, 5, False),
+        }
+        from core.analysis.dominators import build_dom_tree
+        from core.analysis.lifecycle_collector import collect_guards_at_site
+        assert not collect_guards_at_site(cfg, build_dom_tree(cfg), 3, "owned.c")
         src_while = (
             "int f(int n) {\n"
             "    while (n < 100) {\n"
