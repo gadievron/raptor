@@ -115,6 +115,11 @@ def known_python_identity_conflict(
         return None
     # Canonical imports inside helpers still refer to the same module
     # singleton. A local binding alone must not hide their mutations.
+    dynamic_code_names = {"exec", "eval"} | {
+        alias for alias, target in imports.items()
+        if target in {"builtins.exec", "builtins.eval"}
+    }
+    dynamic_imports: dict[ast.AST, set[str]] = {}
     local_imports: dict[ast.AST, set[str]] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -122,6 +127,10 @@ def known_python_identity_conflict(
             if owner is None:
                 continue
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
+            dynamic_aliases = {alias for alias, target in bindings.items()
+                               if target in {"builtins.exec", "builtins.eval"}}
+            dynamic_code_names.update(dynamic_aliases)
+            dynamic_imports.setdefault(owner, set()).update(dynamic_aliases)
             aliases = {alias for alias, target in bindings.items()
                        if target in {canonical_root, canonical}}
             roots.update(aliases)
@@ -143,6 +152,20 @@ def known_python_identity_conflict(
         return False
 
     for node in ast.walk(tree):
+        # Function-local dynamic code can mutate a global module member
+        # even when it cannot rebind the module's bare names. References
+        # also cover aliasing the builtin before invoking it elsewhere.
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+                and node.id in dynamic_code_names and node.id not in distrusted):
+            owner = scope_of(node)
+            dynamic_frame: ast.AST | None = owner
+            imported_builtin = False
+            while dynamic_frame is not None:
+                imported_builtin |= node.id in dynamic_imports.get(dynamic_frame, set())
+                dynamic_frame = parents.get(dynamic_frame)
+            if (owner is None or imported_builtin
+                    or node.id not in scopes.get(owner, frozenset())):
+                return "dynamic source code can invalidate the library identity"
         if (isinstance(node, (ast.Attribute, ast.Subscript))
                 and isinstance(node.ctx, (ast.Store, ast.Del))
                 and relevant_root(node, _member_root(node))):
