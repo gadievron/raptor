@@ -1594,7 +1594,7 @@ class TestSemgrepSurfaceFences:
     def test_pkcs_identity_fixtures_are_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_pkcs_padding_precision.py")
         assert _callers_of(calls, "run") == set()
-        assert _callers_of(calls, "run_pinned_subprocess") == {"_scan_owned_pkcs_cases"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {"_scan_owned_pkcs_cases", "test_go_pkcs_diagnostic_requires_protocol_review"}
 
     def test_password_hash_jca_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_password_hash_java_precision.py")
