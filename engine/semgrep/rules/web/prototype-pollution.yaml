@@ -14,6 +14,13 @@ rules:
     severity: CRITICAL
     mode: taint
     pattern-sources:
+      # The request query map is a source; its context receiver is not.
+      - patterns:
+          - pattern: $CTX.request.query
+          - metavariable-regex:
+              metavariable: $CTX
+              regex: '(?i)^(c|ctx|context)$'
+        exact: true
       - pattern-either:
           # Express — receiver-name anchored: bare $REQ.query/.params/
           # .body/.headers sources match those field names on any local

@@ -141,6 +141,26 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
             ("const data = ctx.query; collection.find(ctx);", False),
             ("collection.find({}, ctx.request.body);", False),
         ])
+    if config in ("injection/nosql-taint.yaml", "web/prototype-pollution.yaml"):
+        cases.extend([
+            (sink.replace("{s}", source), reports)
+            for source, reports in [
+                ("ctx.request.query", True),
+                ("context.request.query", True),
+                ("c.request.query", True),
+                ("{...ctx.request.query}", True),
+                ("ctx.response.query", False),
+                ("local.request.query", False),
+                ("local.query", False),
+            ]
+        ])
+        cases.extend([
+            ("const data = ctx.request.query; " + sink.replace("{s}", "data"), True),
+            ("const data = ctx.request.query; " + sink.replace("{s}", "ctx"), False),
+            ("const data = ctx.request.query; " + sink.replace("{s}", "ctx.request"), False),
+        ])
+    if config == "injection/nosql-taint.yaml":
+        cases.append(("collection.find({}, ctx.request.query);", False))
     lines = []
     expected = set()
     for index, (body, reports) in enumerate(cases):
