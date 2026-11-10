@@ -4,24 +4,27 @@ rules:
     languages: [java, kotlin]
     severity: HIGH
     patterns:
-      - pattern: Cipher.getInstance($ALGO, ...)
+      - pattern: javax.crypto.Cipher.getInstance($ALGO, ...)
       - metavariable-regex:
           metavariable: $ALGO
-          regex: "\"AES/ECB/.*\""
+          regex: '(?i)^"AES/ECB/[^"]+"$'
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]
 
-  # Bare "AES" is its own rule so the message can explain the trap: the JCE
-  # default transformation for "AES" is AES/ECB/PKCS5Padding.
+  # A bare algorithm leaves the mode and padding to the selected provider.
   - id: raptor.crypto.aes.default-ecb.java
-    message: >
-      Cipher.getInstance("AES") uses the JCE default transformation
-      AES/ECB/PKCS5Padding — this is ECB. Spell out an AEAD transformation
-      such as "AES/GCM/NoPadding" instead.
+    message: >-
+      Bare AES leaves the mode and padding to provider-specific defaults,
+      which may select ECB. Review the selected provider and specify an
+      explicit authenticated mode such as AES/GCM/NoPadding where appropriate.
     languages: [java, kotlin]
     severity: HIGH
-    pattern: Cipher.getInstance("AES", ...)
+    patterns:
+      - pattern: javax.crypto.Cipher.getInstance($ALGO, ...)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: '(?i)^"AES"$'
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]
