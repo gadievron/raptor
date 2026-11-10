@@ -57,6 +57,8 @@ def read_regular_bytes(
             path, st.st_size, max_bytes,
         )
         return None
+    from core.source.streams import preserving_stream_error
+
     try:
         # O_NOFOLLOW: a symlink raced in after the lstat fails with
         # ELOOP instead of being followed. O_NONBLOCK: a FIFO raced
@@ -74,9 +76,18 @@ def read_regular_bytes(
                 "non-regular file between stat and open", path,
             )
             return None
-        with os.fdopen(fd, "rb", closefd=True) as fh:
-            fd = -1
-            raw = fh.read(max_bytes + 1)
+        pending_io: OSError | None = None
+        try:
+            with preserving_stream_error(os.fdopen(fd, "rb", closefd=True)) as fh:
+                fd = -1
+                try:
+                    raw = fh.read(max_bytes + 1)
+                except OSError as exc:
+                    pending_io = exc
+            if pending_io is not None:
+                raise pending_io
+        finally:
+            pending_io = None
     except OSError as e:
         logger.warning("sca.resolvers: cannot read %s: %s", path, e)
         return None

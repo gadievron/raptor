@@ -259,6 +259,8 @@ def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:
             "file: mode=0o%o)", path, st.st_mode,
         )
         return None
+    from core.source.streams import preserving_stream_error
+
     try:
         # ``O_NOFOLLOW`` closes the lstat→open TOCTOU window for the
         # symlink case (re-linked final component fails with ELOOP);
@@ -276,9 +278,19 @@ def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:
                     "non-regular between lstat and open)", path,
                 )
                 return None
-            with os.fdopen(fd, "rb", closefd=True) as fh:
-                fd = -1
-                return fh.read(max_bytes)
+            pending_io: OSError | None = None
+            try:
+                with preserving_stream_error(os.fdopen(fd, "rb", closefd=True)) as fh:
+                    fd = -1
+                    try:
+                        data = fh.read(max_bytes)
+                    except OSError as exc:
+                        pending_io = exc
+                if pending_io is not None:
+                    raise pending_io
+                return data
+            finally:
+                pending_io = None
         except OSError:
             raise
         except BaseException:
