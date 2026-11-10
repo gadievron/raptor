@@ -9,7 +9,6 @@ is a potential context-drift bug.
 from __future__ import annotations
 
 import logging
-import re
 
 from .lifecycle_model import Guard, LifecycleFinding, StateField
 
@@ -17,37 +16,27 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_condition(cond: str) -> str:
-    """Normalize a condition string for comparison.
+    """Trim outer padding without inventing semantic equivalence.
 
-    Strips whitespace, lowercases, removes pointer-style variations
-    so 'task->mm != NULL' matches 'task->mm'.
+    Case, literal contents and null/zero comparisons require source and
+    type evidence; textual receipts cannot establish those rewrites.
     """
-    s = cond.strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    # Flip Yoda-style comparisons (e.g. "null != x" → "x != null")
-    s = re.sub(r"\b(null|0)\s*(!=|==)\s*(\S+)", r"\3 \2 \1", s)
-    # The (?<!\s) pins each match to the start of its whitespace run:
-    # an unanchored scan of a bare `\s*` prefix re-consumes the run
-    # from every position — quadratic on hostile condition text. The
-    # earliest match always starts at the run start, so the pinned
-    # spelling matches identically.
-    s = re.sub(r"(?<!\s)\s*!=\s*null\b", "", s)
-    s = re.sub(r"(?<!\s)\s*!=\s*0\b", "", s)
-    s = re.sub(r"(?<!\s)\s*==\s*null\b", " == null", s)
-    return re.sub(r"(?<!\s)\s*==\s*0\b", " == 0", s)
+    return cond.strip()
 
 
 def _guard_covers(read_guard: Guard, write_guard: Guard) -> bool:
     """Check if a read-site guard semantically covers a write-site guard.
 
-    Conservative: returns True only when the normalized conditions
-    match textually. LLM-assisted classification can provide a
-    richer equivalence check.
+    Returns True only for matching nonempty text and strict polarity.
+    Richer equivalence requires independent source and type evidence.
     """
-    return (
-        _normalize_condition(read_guard.condition)
-        == _normalize_condition(write_guard.condition)
-        and read_guard.polarity == write_guard.polarity
+    if (type(read_guard.condition) is not str or type(write_guard.condition) is not str
+            or type(read_guard.polarity) is not bool or type(write_guard.polarity) is not bool):
+        return False
+    required = _normalize_condition(write_guard.condition)
+    return bool(required) and (
+        _normalize_condition(read_guard.condition) == required
+        and read_guard.polarity is write_guard.polarity
     )
 
 
@@ -107,10 +96,10 @@ def check_coverage_with_cfg(
 ) -> list[LifecycleFinding]:
     """Check read sites using the structured guard-bypass query.
 
-    When a CFG is available, uses path enumeration from entry to
-    read site to determine whether write-site guards dominate all
-    paths. Falls back to textual check_coverage() if the guard-bypass
-    module isn't available or the CFG lacks the expected interface.
+    Native branch facts check selected-entry dominance and value stability.
+    Legacy graphs use bounded path enumeration and textual fallback.
+    Falls back to textual check_coverage() if the guard-bypass module is
+    unavailable or the CFG lacks the expected interface.
 
     When *cfg_file* is set, only read sites in that file are checked
     (the CFG is file-specific, so applying it to lines from other
@@ -142,10 +131,13 @@ def check_coverage_with_cfg(
         missing: set[str] = set()
         for wg in all_write_guards:
             covered_structurally = check_guard_coverage(
-                cfg, rs.line, wg.condition,
+                cfg, rs.line, wg.condition, required_polarity=wg.polarity,
             )
             if not covered_structurally:
-                if not _read_site_covers_guard(rs.guards, wg):
+                # Native facts already checked source branch truth and value
+                # stability. Model-supplied text cannot override that refusal.
+                native = getattr(cfg, "branch_guards", None) is not None
+                if native or not _read_site_covers_guard(rs.guards, wg):
                     missing.add(wg.condition)
 
         if missing:

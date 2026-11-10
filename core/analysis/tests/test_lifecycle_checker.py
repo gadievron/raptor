@@ -45,17 +45,17 @@ def _ptrace_field() -> StateField:
 
 
 class TestNormalizeCondition:
-    def test_null_check_normalized(self):
-        assert _normalize_condition("task->mm != NULL") == "task->mm"
+    def test_null_check_preserved(self):
+        assert _normalize_condition("task->mm != NULL") == "task->mm != NULL"
 
-    def test_zero_check_normalized(self):
-        assert _normalize_condition("x != 0") == "x"
+    def test_zero_check_preserved(self):
+        assert _normalize_condition("x != 0") == "x != 0"
 
-    def test_whitespace_normalized(self):
-        assert _normalize_condition("  a  &&  b  ") == "a && b"
+    def test_only_outer_whitespace_is_trimmed(self):
+        assert _normalize_condition("  a  &&  b  ") == "a  &&  b"
 
     def test_equality_null_preserved(self):
-        assert "== null" in _normalize_condition("p == NULL")
+        assert _normalize_condition("p == NULL") == "p == NULL"
 
     def test_plain_condition(self):
         assert _normalize_condition("x > 5") == "x > 5"
@@ -67,10 +67,10 @@ class TestGuardCovers:
         b = _guard("task->mm != NULL")
         assert _guard_covers(a, b)
 
-    def test_normalized_match(self):
+    def test_typed_null_rewrite_requires_independent_evidence(self):
         a = _guard("task->mm")
         b = _guard("task->mm != NULL")
-        assert _guard_covers(a, b)
+        assert not _guard_covers(a, b)
 
     def test_no_match(self):
         a = _guard("task->flags")
@@ -154,7 +154,7 @@ class TestCheckCoverage:
             read_sites=[
                 ReadSite(
                     file="b.c", line=10, function="g",
-                    guards=frozenset({_guard("task->mm", "b.c", 9)}),
+                    guards=frozenset({_guard("task->mm != NULL", "b.c", 9)}),
                 ),
             ],
         )
