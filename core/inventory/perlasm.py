@@ -51,6 +51,7 @@ from pathlib import Path
 
 from core.atomic_fs import write_bytes_atomically
 from core.source import open_regular_gated, read_bytes_gated
+from core.source.streams import preserving_stream_error
 from core.run.scratch import scratch_dir
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,9 @@ def _resolve_driver_sha(gen: PerlasmGenerator,
             if target is not None and not resolved.is_relative_to(
                     target.resolve()):
                 continue
-            with open_regular_gated(resolved, follow_symlinks=False) as stream:
+            with preserving_stream_error(open_regular_gated(
+                resolved, follow_symlinks=False,
+            )) as stream:
                 before = os.fstat(stream.fileno())
                 if before.st_size > _MAX_DRIVER_BYTES:
                     raise ValueError(f"perlasm driver exceeds {_MAX_DRIVER_BYTES}-byte budget")
@@ -265,7 +268,9 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
         return None, f"{gen.rel_path!r}: driver identity unavailable: {exc!r}"
     cached = cache_dir / f"{key}.S"
     try:
-        with open_regular_gated(cached, follow_symlinks=False) as hit:
+        with preserving_stream_error(open_regular_gated(
+            cached, follow_symlinks=False,
+        )) as hit:
             if 0 < os.fstat(hit.fileno()).st_size <= _MAX_ASM_BYTES:
                 return cached, None
     except (OSError, ValueError):
