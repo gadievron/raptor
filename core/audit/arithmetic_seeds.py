@@ -136,14 +136,14 @@ def _operations(source, language, abi):
             if len(mechanism) <= 300:
                 result.append((target, op, atoms, claim_kind, mechanism, {}))
     for target, array, index in accesses:
-        from .array_bounds import bind_array_access
+        from .array_bounds import array_access_candidate
         mechanism = f"Potential out-of-bounds read at `{array}[{index}]`."
         if len(mechanism) > 300:
             continue
-        access = bind_array_access(source, mechanism, language=language, integer_abi=abi)
-        if access.status == "bound":
+        access = array_access_candidate(source, mechanism, language=language, integer_abi=abi)
+        if access.status == "candidate":
             result.append((target, "[]", (array, index), "fixed-array-read", mechanism,
-                           {"object_extent": access.extent, "access_kind": "read"}))
+                           {"object_extent": access.extent, "access_kind": "read", "binding_status": "candidate"}))
     return result
 
 

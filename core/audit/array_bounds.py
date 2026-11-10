@@ -99,6 +99,19 @@ def _nodes(root):
 
 def bind_array_access(source, hypothesis, *, language, integer_abi=None):
     """Build an access obligation without borrowing extents or mutable values."""
+    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=False)
+
+
+def array_access_candidate(source, hypothesis, *, language, integer_abi=None):
+    """Bind syntax, extent and index type only; never prove a reaching prefix.
+
+    The candidate status cannot enter the native bounds oracle. Its full
+    binder must still establish the source path and prefix definedness.
+    """
+    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=True)
+
+
+def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_only):
     abi = resolve_integer_abi(integer_abi)
     claim = parse_array_access_claim(hypothesis)
     if abi is None or claim is None or language not in {"c", "cpp"} or len(source) > _MAX_SOURCE_CHARS:
@@ -235,22 +248,28 @@ def bind_array_access(source, hypothesis, *, language, integer_abi=None):
             children = [child for child in node.named_children if child.type != "comment"]
             if len(children) != 1 or children[0].type != "number_literal" or text(children[0]) != "0":
                 return ArrayAccess("unavailable", "other return effects are unsupported")
-    guards = guards_for_operation(body, target, data, [claim[1]],
-                                  language=language, integer_abi=abi)
-    if guards.status == "unavailable":
-        return ArrayAccess("unavailable", "reaching guards unavailable")
-    # Prefix definedness is checked over complete entry domains above. Only
-    # the index and reaching guards belong in this access's typed formula;
+    premises = ()
+    if not candidate_only:
+        guards = guards_for_operation(body, target, data, [claim[1]],
+                                      language=language, integer_abi=abi)
+        if guards.status == "unavailable":
+            return ArrayAccess("unavailable", "reaching guards unavailable")
+        premises = guards.premises
+    # Full binding checks prefix definedness over complete entry domains;
+    # candidates carry no such credit. Only the index and reaching guards
+    # belong in a proved access's typed formula;
     # unrelated scalar locals must not become unconstrained entry inputs.
     terms = [claim[1]]
-    model = model_for_integer_terms(target, data, terms, guards.premises, abi, language=language, result_operands=[claim[1]])
+    model = model_for_integer_terms(target, data, terms, premises, abi, language=language, result_operands=[claim[1]])
     if model.status != "bound" or any(declarations[name][1].type != "parameter_declaration" for name, _ in model.types):
         return ArrayAccess("unavailable", "immutable builtin parameter types required")
     kind = integer_type(dict(model.types)[claim[1]], abi)
-    return ArrayAccess("bound", object_name=claim[0], index=claim[1], extent=extent,
+    return ArrayAccess("candidate" if candidate_only else "bound",
+                       reason="source candidate; reaching prefix unverified" if candidate_only else "",
+                       object_name=claim[0], index=claim[1], extent=extent,
                        line=target.start_point[0] + 1, column=target.start_point[1] + 1,
                        profile=model.profile, width=kind.promoted_width, signed=kind.promoted_signed,
-                       premises=guards.premises, domains=model.domains, types=model.types,
+                       premises=premises, domains=model.domains, types=model.types,
                        parameters=tuple(parameter_types))
 
 
