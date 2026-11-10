@@ -166,3 +166,43 @@ def test_combined_digest_preserves_legacy_source_only_contract():
     assert combined != inputs.review_context_digest(source, _manifest(_answer("c.integer-promotion")))
     assert inputs.review_context_digest(source, {}) is None
     assert inputs.review_context_digest({**source, "complete": False}, reference) is None
+
+
+def test_new_prerequisite_invalidates_previously_delivered_bundle(monkeypatch):
+    from core.language_reference import c_integer
+    answer = lookup('owned','',ReferenceContext('c'),entry_id='c.integer-promotion')
+    manifest = inputs.reference_inputs_from_delivery(reference_delivery((answer,),reference_sections((answer,))),(answer,))
+    assert inputs.reference_inputs_current(manifest)
+    assert all(entry.entry_id != 'c.integer-conversion' for entry in answer.entries)
+    monkeypatch.setattr(c_integer,'ENTRIES',tuple(replace(entry,prerequisites=('c.integer-conversion',))
+        if entry.entry_id == 'c.integer-promotion' else entry for entry in c_integer.ENTRIES))
+    current = lookup('current','',ReferenceContext('c'),entry_id='c.integer-promotion')
+    assert {entry.entry_id for entry in current.entries} == {'c.integer-conversion','c.integer-promotion'}
+    assert not inputs.reference_inputs_current(manifest), 'new prerequisite leaves old incomplete reference bundle reusable'
+
+
+def test_new_prerequisite_already_delivered_does_not_buy_a_new_review(monkeypatch):
+    from core.language_reference import c_integer
+    promotion = _answer("c.integer-promotion", "promotion")
+    conversion = _answer("c.integer-conversion", "conversion")
+    answers = (promotion, conversion)
+    records = reference_delivery(answers, reference_sections(answers))
+    manifest = inputs.reference_inputs_from_delivery(records, answers)
+    assert inputs.reference_inputs_current(manifest)
+    monkeypatch.setattr(c_integer, "ENTRIES", tuple(replace(entry, prerequisites=("c.integer-conversion",))
+        if entry.entry_id == "c.integer-promotion" else entry for entry in c_integer.ENTRIES))
+    assert inputs.reference_inputs_current(manifest), "all newly required text was already delivered"
+
+
+def test_required_entries_must_include_their_own_current_prerequisites(monkeypatch):
+    from core.language_reference import c_integer
+    promotion = _answer("c.integer-promotion", "promotion")
+    conversion = _answer("c.integer-conversion", "conversion")
+    answers = (promotion, conversion)
+    manifest = inputs.reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    extra = replace(conversion.entries[0], entry_id="c.extra-context", prerequisites=())
+    updated = tuple(replace(entry, prerequisites=("c.integer-conversion",))
+        if entry.entry_id == "c.integer-promotion" else replace(entry, prerequisites=(extra.entry_id,))
+        if entry.entry_id == "c.integer-conversion" else entry for entry in c_integer.ENTRIES)
+    monkeypatch.setattr(c_integer, "ENTRIES", (*updated, extra))
+    assert not inputs.reference_inputs_current(manifest)
