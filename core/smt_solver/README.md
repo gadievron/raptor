@@ -239,3 +239,9 @@ including functions with no relevant mutations, are diagnostic observations;
 they cannot refute a source-level claim or justify clean conversion. Concrete
 transition witnesses remain diagnostic too. Historical invariant refutation
 records cannot regain authority through a channel alias or `:witness` suffix.
+
+The QUALITY source checker also enumerates builtin signed unary negation.
+It applies integer promotions, requires a feasible source entry and replays
+the signed-minimum witness independently. The `check-unary-negation` receipt
+is diagnostic: a local arithmetic witness does not establish caller reachability,
+and a safe or unsupported negation never clears the source claim.
