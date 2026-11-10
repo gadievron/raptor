@@ -203,13 +203,27 @@ class WorkQueue:
         if view is not None:
             sql += " AND view_id=?"
             params.append(view)
-        with closing(self.db.execute(sql+" ORDER BY rowid",params)) as rows:
+        rows = self.db.execute(sql+" ORDER BY rowid",params)
+        failed = False
+        try:
             for row in rows:
                 value = json.loads(row["result"])
                 evidence = value.get("key","")
                 if evidence and not self.db.execute("SELECT 1 FROM acknowledgements WHERE namespace=? AND view_id=? AND job_id=? AND evidence=?",
                                                    (self.namespace,row["view_id"],row["id"],evidence)).fetchone():
                     yield row,value,evidence
+        except GeneratorExit:
+            # Explicit iterator closure retains its fresh cleanup failure policy.
+            raise
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                rows.close()
+            except BaseException:
+                if not failed:
+                    raise
 
     def _undelivered_count(self, view=None):
         return sum(1 for _ in self._undelivered_rows(view))
