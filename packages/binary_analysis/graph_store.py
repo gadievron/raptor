@@ -92,14 +92,20 @@ def open_graph(path: Path) -> sqlite3.Connection:
 @contextmanager
 def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
     conn = open_graph(path)
+    failed = True
     try:
         yield conn
         conn.commit()
+        failed = False
     except Exception:
         conn.rollback()
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except BaseException:
+            if not failed:
+                raise
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
