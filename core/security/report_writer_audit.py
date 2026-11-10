@@ -2560,6 +2560,24 @@ def _dotted_name(node: ast.AST) -> str:
     return ""
 
 
+# Keep only immutable dispatch spellings, never bound visitors or AST facts.
+# Unknown/future node kinds retain NodeVisitor's normal name construction.
+_VISITOR_METHOD_NAMES = {
+    name: "visit_" + name
+    for name in (
+        "Add And AnnAssign Assert Assign Attribute AugAssign BinOp BitAnd BitOr "
+        "BoolOp Break Call ClassDef Compare Constant Continue Del Delete Dict "
+        "DictComp Div Eq ExceptHandler Expr FloorDiv For FormattedValue "
+        "FunctionDef GeneratorExp Global Gt GtE If IfExp Import ImportFrom In "
+        "Invert Is IsNot JoinedStr LShift Lambda List ListComp Load Lt LtE Mod "
+        "Module Mult Name NamedExpr Nonlocal Not NotEq NotIn Or Pass Pow Raise "
+        "Return Set SetComp Slice Starred Store Sub Subscript Try Tuple USub "
+        "UnaryOp While With Yield YieldFrom alias arg arguments comprehension "
+        "keyword withitem"
+    ).split()
+}
+
+
 class _Scanner(ast.NodeVisitor):
     """Walk one module, tracking function frames and one-level taint.
 
@@ -2581,6 +2599,16 @@ class _Scanner(ast.NodeVisitor):
         self._tainted_calls = tainted_calls
         self._fn_stack: list[str] = []
         self._tainted_stack: list[set] = [set()]
+
+    def visit(self, node):
+        # Read the current name and resolve the current visitor every time.
+        # Foreign name objects retain their observable concatenation behavior.
+        name = node.__class__.__name__
+        method = _VISITOR_METHOD_NAMES.get(name) if type(name) is str else None
+        if method is None:
+            method = "visit_" + name
+        visitor = getattr(self, method, self.generic_visit)
+        return visitor(node)
 
     # -- frames -------------------------------------------------------
 
