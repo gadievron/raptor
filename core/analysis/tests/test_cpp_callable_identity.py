@@ -197,3 +197,60 @@ def test_later_global_selection_cannot_rewrite_earlier_call():
     _, result = _check(OWN_NAMESPACE, between="    using ::g_shell_quote;\n",
                        language="cpp", nested=True)
     assert not result.suppress
+
+
+@pytest.mark.parametrize("nested,before,params", [
+    (False, "", ""), (True, "", ""),
+    (False, "", ", char *(*g_shell_quote)(const char *)"),
+    (False, "    char *(*g_shell_quote)(const char *) = replacement;\n", ""),
+], ids=["global", "namespace", "parameter-shadow", "local-shadow"])
+def test_direct_global_selection_can_use_existing_structural_profile(nested, before, params):
+    expression = "::g_shell_quote(raw)"
+    graph, result = _check(OWN_NAMESPACE, before, params, expression=expression, language="cpp", nested=nested)
+    assert result.suppress and result.value_bound_bindings
+    assert {binding.callable for binding in result.value_bound_bindings} == {"g_shell_quote"}
+    assert not any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+
+
+@pytest.mark.parametrize("prefix", [
+    "char *g_shell_quote(const char *raw) { return (char *)raw; }\n",
+    "#define g_shell_quote(x) (x)\n",
+    "using g_shell_quote = char *;\n",
+    "struct g_shell_quote { g_shell_quote(char *); operator char *() const; };\n",
+    "extern char *(*g_shell_quote)(const char *);\n",
+], ids=["source-body", "macro", "type-alias", "constructor", "global-pointer-object"])
+def test_global_prefix_cannot_forge_library_identity(prefix):
+    graph, result = _check(prefix, expression="::g_shell_quote(raw)", language="cpp", base=NO_LIBRARY_PROTOTYPE)
+    assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+    assert not result.suppress
+
+
+@pytest.mark.parametrize("expression", [
+    "((char *(*)(const char *))::g_shell_quote)(raw)",
+    "reinterpret_cast<char *(*)(const char *)>(::g_shell_quote)(raw)",
+])
+def test_cast_callees_do_not_inherit_the_direct_global_profile(expression):
+    _, result = _check(expression=expression, language="cpp")
+    assert not result.suppress
+
+
+@pytest.mark.parametrize("expression", ["g_shell_quote<char *>(raw)", "::g_shell_quote<char *>(raw)"])
+def test_template_callees_keep_their_distinct_identity(expression):
+    prefix = "template <class T> char *g_shell_quote(T);\n"
+    graph, result = _check(prefix, expression=expression, language="cpp", base=NO_LIBRARY_PROTOTYPE)
+    calls = {site.name for node in graph.nodes() for site in node.call_sites}
+    assert "g_shell_quote" not in calls
+    assert not result.suppress
+
+
+@pytest.mark.parametrize("nested,before,params", [
+    (False, "", ""), (True, "", ""),
+    (False, "", ", char *(*g_shell_quote)(const char *)"),
+    (False, "    char *(*g_shell_quote)(const char *) = replacement;\n", ""),
+], ids=["global", "namespace", "parameter-shadow", "local-shadow"])
+def test_parser_ambiguous_parenthesised_callee_does_not_earn_a_profile(nested, before, params):
+    # Without semantic type resolution the grammar represents this as a cast.
+    # Do not reinterpret that representation as a proven library call.
+    _, result = _check(OWN_NAMESPACE, before, params, expression="(::g_shell_quote)(raw)",
+                       language="cpp", nested=nested)
+    assert not result.suppress
