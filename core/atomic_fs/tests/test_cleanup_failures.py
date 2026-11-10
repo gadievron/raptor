@@ -16,15 +16,15 @@ from core import atomic_fs as fs
 def test_non_directory_roots_are_not_removed_or_chmodded(tmp_path, short_socket_dir, kind, mode):
     root = (short_socket_dir if kind == "socket" else tmp_path) / "node"
     sock = None
-    if kind == "file":
-        root.write_text("keep")
-    elif kind == "fifo":
-        os.mkfifo(root)
-    else:
-        sock = socket.socket(socket.AF_UNIX)
-        sock.bind(str(root))
-    root.chmod(mode)
     try:
+        if kind == "file":
+            root.write_text("keep")
+        elif kind == "fifo":
+            os.mkfifo(root)
+        else:
+            sock = socket.socket(socket.AF_UNIX)
+            sock.bind(str(root))
+        root.chmod(mode)
         assert fs.rmtree_hardened(root) is False
         assert root.lstat().st_mode & 0o777 == mode
     finally:
