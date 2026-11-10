@@ -1334,9 +1334,8 @@ class _JavaCFGBuilder:
         return [after]
 
     def _build_for(self, stmt: Node, incoming):
-        init = stmt.child_by_field_name("init")
         cursor = incoming
-        if init is not None:
+        for init in stmt.children_by_field_name("init"):
             init_node = self._straight_node(init)
             self._link_many(cursor, init_node)
             self._ambient_catch_link(init_node)
@@ -1344,22 +1343,28 @@ class _JavaCFGBuilder:
         header = self._cond_node(stmt, "for")
         self._link_many(cursor, header)
         self._ambient_catch_link(header)
-        update = stmt.child_by_field_name("update")
-        self._loop_stack.append((header, header))
-        self._break_targets.append(header)
+        after = self._make_node(lineno=-1, label="for-join")
+        # Continue executes every update, in source order, before the
+        # condition is re-tested. Preallocate that target before the body.
+        updates = [self._straight_node(update)
+                   for update in stmt.children_by_field_name("update")]
+        for index, update in enumerate(updates):
+            self._ambient_catch_link(update)
+            self._link(update, updates[index + 1] if index + 1 < len(updates) else header)
+        continue_target = updates[0] if updates else header
+        self._loop_stack.append((after, continue_target))
+        self._break_targets.append(after)
         body = stmt.child_by_field_name("body")
         body_out = self._build_stmts(body, [header]) \
-            if body is not None else []
-        if update is not None:
-            upd_node = self._straight_node(update)
-            self._link_many(body_out, upd_node)
-            self._link(upd_node, header)
-        else:
-            for tail in body_out:
-                self._link(tail, header)
+            if body is not None else [header]
+        self._link_many(body_out, continue_target)
+        # Keep the normal body edge before the exit edge for legacy
+        # condition-model consumers, including same-line loop bodies.
+        if stmt.child_by_field_name("condition") is not None:
+            self._link(header, after)
         self._loop_stack.pop()
         self._break_targets.pop()
-        return [header]
+        return [after]
 
     def _build_enhanced_for(self, stmt: Node, incoming):
         # ``for (T i : expr) body`` — header defines the induction
