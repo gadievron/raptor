@@ -15,6 +15,7 @@ from html import escape
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 from ci_change_scope import changed_paths
@@ -29,6 +30,85 @@ GLOBAL_INPUTS = {'tuning.json', 'conftest.py', 'pytest.ini', 'pyproject.toml', '
                  '.github/scripts/requirements-sandbox-wrappers.txt'}
 GLOBAL_DIRS = ('core/sandbox/', 'bin/', 'libexec/', 'test/', '.github/actions/setup-venv/', '.github/actions/enable-userns/')
 PLATFORMS = {'linux': 'ubuntu-24.04', 'darwin': 'macos-latest'}
+REGISTRY_INPUT = '.github/sandbox-wrapper-tests.json'
+
+
+def base_registry(repo: Path, base: str) -> dict | None:
+    """Read the same immutable base used by changed_paths, without fetching."""
+    if not re.fullmatch(r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', base or '') or set(base) == {'0'}:
+        return None
+    try:
+        result = subprocess.run(['git', 'show', base + ':' + REGISTRY_INPUT], cwd=repo,
+                                check=True, capture_output=True, timeout=10)
+        if len(result.stdout) > 2 * 1024 * 1024:
+            return None
+        registry = json.loads(result.stdout)
+        return registry if isinstance(registry, dict) else None
+    except (OSError, subprocess.SubprocessError, ValueError, UnicodeError, RecursionError):
+        return None
+
+
+def native_cell_changes(previous: dict | None, current: dict) -> set[tuple[str, str]] | None:
+    """Admit only native selector/count edits; unknown policy needs full coverage.
+
+    The current registry census runs before this comparison. Historical nodes
+    need not exist in the current tree, so do not run that census on old data.
+    """
+    def indexed(registry):
+        if (not isinstance(registry, dict) or not {'wrappers', 'native'} <= registry.keys()
+                or registry.keys() - {'version', 'wrappers', 'native'}
+                or ('version' in registry and (type(registry['version']) is not int or registry['version'] != 1))
+                or not isinstance(registry['wrappers'], list) or not isinstance(registry['native'], list)):
+            return None
+        if any(not isinstance(row, dict) or row.keys() - {'source', 'entrypoints', 'contracts', 'contract_platforms', 'discovery'}
+               or ('discovery' in row and not isinstance(row['discovery'], str))
+               for row in registry['wrappers']):
+            return None
+        families = {}
+        for family in registry['native']:
+            if (not isinstance(family, dict) or family.keys() - {'id', 'platforms', 'env'}
+                    or not isinstance(family.get('id'), str) or not family['id'] or family['id'] in families
+                    or not isinstance(family.get('platforms'), dict) or set(family['platforms']) != set(PLATFORMS)
+                    or not isinstance(family.get('env', {}), dict)
+                    or any(not isinstance(k, str) or not isinstance(v, str) for k, v in family.get('env', {}).items())):
+                return None
+            for cell in family['platforms'].values():
+                if (not isinstance(cell, dict) or cell.keys() - {'tests', 'expected', 'manual', 'reason'}
+                        or ('manual' in cell and type(cell['manual']) is not bool)
+                        or ('reason' in cell and not isinstance(cell['reason'], str))
+                        or ('expected' in cell and (type(cell['expected']) is not int or cell['expected'] < 1))):
+                    return None
+                tests = cell.get('tests')
+                if tests:
+                    if (not isinstance(tests, list) or any(not isinstance(s, str) or not s for s in tests)
+                            or len(set(tests)) != len(tests)
+                            or type(cell.get('expected')) is not int or cell['expected'] < 1):
+                        return None
+                elif tests not in (None, []) or not cell.get('reason'):
+                    return None
+            families[family['id']] = family
+        return families
+
+    old, new = indexed(previous), indexed(current)
+    if old is None or new is None or old.keys() != new.keys():
+        return None
+    if {k: v for k, v in previous.items() if k != 'native'} != {k: v for k, v in current.items() if k != 'native'}:
+        return None
+    changes = set()
+    for name, family in new.items():
+        before = old[name]
+        if {k: v for k, v in before.items() if k != 'platforms'} != {k: v for k, v in family.items() if k != 'platforms'}:
+            return None
+        for platform, cell in family['platforms'].items():
+            prior = before['platforms'][platform]
+            if cell == prior:
+                continue
+            if (not cell.get('tests') or not prior.get('tests') or cell.get('manual') or prior.get('manual')
+                    or {k: v for k, v in cell.items() if k not in {'tests', 'expected'}}
+                    != {k: v for k, v in prior.items() if k not in {'tests', 'expected'}}):
+                return None
+            changes.add((platform, name))
+    return changes
 
 
 def component(path: str) -> str:
@@ -318,10 +398,18 @@ class Dependencies:
         return seen, opaque
 
 
-def select(repo: Path, registry: dict, changed: list[str] | None, *, explanations: list[str] | None = None) -> dict:
+def select(repo: Path, registry: dict, changed: list[str] | None, *, explanations: list[str] | None = None,
+           previous_registry: dict | None = None) -> dict:
     def explain(message):
         if explanations is not None and message not in explanations:
             explanations.append(message)
+
+    registry_changes = set()
+    if changed is not None and REGISTRY_INPUT in changed:
+        delta = native_cell_changes(previous_registry, registry)
+        if delta is not None:
+            registry_changes = delta
+            changed = [path for path in changed if path != REGISTRY_INPUT]
 
     collected = {selector.split('::', 1)[0] for row in registry['wrappers']
                  for platform in PLATFORMS
@@ -344,13 +432,17 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
         triggers = sorted(p for p in changed if p in GLOBAL_INPUTS or p.startswith(GLOBAL_DIRS))
         if triggers:
             explain('Full coverage: shared sandbox or test-harness inputs changed: ' + ', '.join(triggers))
-    # Deleted modules can no longer supply the old dependency graph.
-    deleted = sorted(p for p in changed or [] if p.endswith('.py') and relevant(p)
+    # Deleted modules can no longer supply the old dependency graph. A registry
+    # retirement can also remove the last binding to an external test module.
+    deleted = sorted(p for p in changed or [] if p.endswith('.py') and (relevant(p) or registry_changes)
                      and not (repo / p).is_file())
     full |= bool(deleted)
     if deleted:
         explain('Full coverage: deleted Python modules require the old dependency graph: ' + ', '.join(deleted))
-    if not full and not any(relevant(p) for p in changed):
+    if not full and registry_changes:
+        explain('Scoped registry coverage: native test cells changed: ' + ', '.join(
+            platform + '/' + family for platform, family in sorted(registry_changes)))
+    if not full and not registry_changes and not any(relevant(p) for p in changed):
         explain('No platform runners: no wrapper source, dependency or harness inputs changed.')
         return {'include': []}
     graph = Dependencies(repo)
@@ -389,7 +481,9 @@ def select(repo: Path, registry: dict, changed: list[str] | None, *, explanation
             families = []
             for family in registry['native']:
                 cell = family['platforms'][platform]
-                if cell.get('tests') and not cell.get('manual') and affected((), (s.split('::', 1)[0] for s in cell['tests'])):
+                if cell.get('tests') and not cell.get('manual') and (
+                        (platform, family['id']) in registry_changes
+                        or affected((), (s.split('::', 1)[0] for s in cell['tests']))):
                     families.append(family['id'])
             if contracts or families:
                 matrix.append(dict(os=runner, platform=platform, contracts=sorted(contracts), families=families, full=full))
@@ -412,9 +506,11 @@ def main() -> None:
     if errors:
         raise SystemExit('\n'.join(errors))
     event = os.environ.get('EVENT', '')
-    changes = None if event in {'schedule', 'workflow_dispatch'} else changed_paths(repo, os.environ.get('BASE_SHA', ''))
+    base = os.environ.get('BASE_SHA', '')
+    changes = None if event in {'schedule', 'workflow_dispatch'} else changed_paths(repo, base)
+    previous = base_registry(repo, base) if changes is not None and REGISTRY_INPUT in changes else None
     explanations = []
-    matrix = select(repo, registry, changes, explanations=explanations)
+    matrix = select(repo, registry, changes, explanations=explanations, previous_registry=previous)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
         output.write('run=' + str(bool(matrix['include'])).lower() + '\n')
         output.write('matrix=' + json.dumps(matrix) + '\n')
