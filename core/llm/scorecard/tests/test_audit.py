@@ -142,7 +142,7 @@ def test_markdown_renderer_includes_verdict(green_scorecard):
     md = audit_mod.render_markdown(report)
     assert "VERDICT" not in md  # not a header label
     # Title Case per house output style — never all-caps statuses.
-    assert "## Verdict — **Green**" in md
+    assert "## Verdict — Green" in md
     assert "GREEN" not in md
     assert "multi_model_consensus" in md
     # Per-decision-class table populated for green.

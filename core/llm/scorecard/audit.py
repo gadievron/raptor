@@ -31,7 +31,6 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from core.json import dumps_artifact
-from core.llm.scorecard._render import scrub_cell
 from core.llm.scorecard.paths import default_scorecard_path
 from core.llm.scorecard.scorecard import (
     ALL_EVENT_TYPES,
@@ -396,89 +395,10 @@ def audit(path: Path | None = None) -> AuditReport:
 
 
 def render_markdown(report: AuditReport) -> str:
-    """Operator-facing markdown report. Tables paste cleanly into issues
-    and notebooks.
-
-    event_type / decision_class / schema_version are read from the
-    sidecar WITHOUT HMAC verification (`_load_raw` bypasses
-    ModelScorecard on purpose) — a same-user forger picks those bytes,
-    so each is escaped and bounded before it reaches the terminal,
-    and in-slot markdown structure (pipes, backticks) is entity-
-    escaped so a forged cell cannot mint table columns in the pasted
-    report (the shared ``scrub_cell`` discipline).
-    """
-    def _cell(value: object) -> str:
-        return scrub_cell(value)
-
-    lines: list[str] = []
-    lines.append(f"# Scorecard audit — `{report.scorecard_path}`")
-    lines.append("")
-    lines.append(f"Schema version: `{_cell(report.schema_version)}`")
-    lines.append(f"Distinct models: **{report.total_models}**")
-    lines.append(
-        f"Distinct decision classes: **{report.total_decision_classes}**"
-    )
-    lines.append(
-        f"Total `(model, decision_class)` cells "
-        f"(by {report.primary_event_type} coverage): **{report.total_cells}**"
-    )
-    lines.append("")
-    # Title Case per house output style (never all-caps statuses).
-    lines.append(f"## Verdict — **{report.verdict.title()}**")
-    lines.append("")
-    lines.append(report.verdict_reason)
-    lines.append("")
-    if report.sidecar_demoted:
-        lines.append(
-            "⚠️ Sidecar content failed integrity verification and was "
-            "excluded from every count above."
-        )
-        lines.append("")
-    if report.key_unusable:
-        lines.append(
-            "⚠️ Integrity key unusable — verification could not run; "
-            "every count above includes unverified sidecar content."
-        )
-        lines.append("")
-    lines.append("## Per-event-type coverage")
-    lines.append("")
-    lines.append(
-        "| event_type | cells | cells w/ data | "
-        + " | ".join(f"≥N={t}" for t in THRESHOLDS)
-        + " | total obs |"
-    )
-    lines.append(
-        "|---|---:|---:|"
-        + "|".join("---:" for _ in THRESHOLDS)
-        + "|---:|"
-    )
-    for summary in report.event_type_summaries:
-        row_parts = [
-            f"| `{_cell(summary.event_type)}` "
-            f"| {summary.total_cells} "
-            f"| {summary.cells_with_any_data} ",
-        ]
-        row_parts.extend(f"| {summary.cells_at_thresholds.get(t, 0)} " for t in THRESHOLDS)
-        row_parts.append(f"| {summary.total_observations} |")
-        lines.append("".join(row_parts))
-    lines.append("")
-    lines.append(
-        f"## Per-decision-class coverage ({report.primary_event_type})"
-    )
-    lines.append("")
-    if not report.decision_class_summaries:
-        lines.append("_No decision classes carry any data._")
-    else:
-        lines.append(
-            "| decision_class | distinct models | median obs/cell | total obs |"
-        )
-        lines.append("|---|---:|---:|---:|")
-        lines.extend(f"| `{_cell(s.decision_class)}` "
-                f"| {s.distinct_models} "
-                f"| {s.median_obs_primary:.1f} "
-                f"| {s.total_obs_primary} |" for s in report.decision_class_summaries)
-    lines.append("")
-    return "\n".join(lines)
+    """Render captured readiness measurements through shared typed blocks."""
+    from core.reporting.renderers import render_document
+    from .audit_document import build_audit_document
+    return render_document(build_audit_document(report), "markdown").content.decode("utf-8")
 
 
 def render_json(report: AuditReport) -> str:
