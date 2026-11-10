@@ -93,13 +93,21 @@ rules:
     severity: HIGH
     patterns:
       - pattern-either:
-          - pattern: AES.new($K, AES.MODE_GCM, ..., nonce=$IV, ...)
-          - pattern: AES.new($K, AES.MODE_CCM, ..., nonce=$IV, ...)
-          - pattern: AES.new($K, AES.MODE_CTR, ..., nonce=$IV, ...)
-          - pattern: AES.new($K, AES.MODE_CBC, $IV, ...)
-          - pattern: AES.new($K, AES.MODE_CFB, $IV, ...)
-          - pattern: AES.new($K, AES.MODE_OFB, $IV, ...)
-          - pattern: AES.new($K, $MODE, ..., iv=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_GCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, mode=Crypto.Cipher.AES.MODE_GCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new(key=$K, mode=Crypto.Cipher.AES.MODE_GCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_CCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, mode=Crypto.Cipher.AES.MODE_CCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new(key=$K, mode=Crypto.Cipher.AES.MODE_CCM, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_CTR, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, mode=Crypto.Cipher.AES.MODE_CTR, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new(key=$K, mode=Crypto.Cipher.AES.MODE_CTR, ..., nonce=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_CBC, $IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_CFB, $IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_OFB, $IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, $MODE, ..., iv=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new($K, mode=$MODE, ..., iv=$IV, ...)
+          - pattern: Crypto.Cipher.AES.new(key=$K, mode=$MODE, ..., iv=$IV, ...)
       - metavariable-pattern:
           metavariable: $IV
           patterns:
