@@ -10,7 +10,7 @@ fixture set spanning the three proposal shapes:
 * ``charset_sub`` — an assignment-form sanitizer (``x = re.sub(…, x)``)
   with no later rebind. The lexical substitution check targets this.
 * ``sanitizer_cut`` — a catalog sanitizer transforms a value that
-  then flows to the sink (``y = html.escape(x); render(y)``). The
+  then flows to the sink (``y = werkzeug.utils.secure_filename(x); open(y)``). The
   value-bound gate targets this; the lexical checks don't fire.
 
 Each fixture is labelled ``should_suppress`` (genuinely safe) or
@@ -109,6 +109,8 @@ _FIXTURES: list[_Fixture] = [
         label=LABEL_SHOULD_NOT_SUPPRESS, var_name="x",
     ),
     # --- sanitizer-cut shape — value-bound fires, lexical doesn't ---
+    # Use the unconditional path-cleaning profile so the direct/helper
+    # positives measure structural coverage, not unresolved HTML input contracts.
     # (Sources import their sanitizer: an UNBOUND root refuses by
     # doctrine — builtins are repo-writable — so the shapes must bind
     # the identity the way legitimate code does.)
@@ -116,40 +118,40 @@ _FIXTURES: list[_Fixture] = [
         name="sanitizer_cut_safe",
         kind="sanitizer_cut",
         source=(
-            "import html\n"
+            "import werkzeug\n"
             "def handle(x):\n"
-            "    y = html.escape(x)\n"
-            "    render(y)\n"
+            "    y = werkzeug.utils.secure_filename(x)\n"
+            "    open(y)\n"
         ),
-        source_line=2, sink_line=4, cwe="CWE-79",
+        source_line=2, sink_line=4, cwe="CWE-22",
         label=LABEL_SHOULD_SUPPRESS,
     ),
     _Fixture(
         name="sanitizer_cut_wrong_variable",
         kind="sanitizer_cut",
         source=(
-            "import html\n"
+            "import werkzeug\n"
             "def handle(user, other):\n"
-            "    safe = html.escape(other)\n"
-            "    render(user)\n"
+            "    safe = werkzeug.utils.secure_filename(other)\n"
+            "    open(user)\n"
         ),
         # Sanitizer cleans the wrong symbol; sink reads user. Real bug.
-        source_line=2, sink_line=4, cwe="CWE-79",
+        source_line=2, sink_line=4, cwe="CWE-22",
         label=LABEL_SHOULD_NOT_SUPPRESS,
     ),
     _Fixture(
         name="sanitizer_cut_helper",
         kind="sanitizer_cut",
         source=(
-            "import html\n"
+            "import werkzeug\n"
             "def _sanitize(s):\n"
-            "    return html.escape(s)\n"
+            "    return werkzeug.utils.secure_filename(s)\n"
             "def handle(x):\n"
             "    y = _sanitize(x)\n"
-            "    render(y)\n"
+            "    open(y)\n"
         ),
         # Sanitization in a callee — Phase 14 inter-proc suppresses.
-        source_line=4, sink_line=6, cwe="CWE-79",
+        source_line=4, sink_line=6, cwe="CWE-22",
         label=LABEL_SHOULD_SUPPRESS,
     ),
 ]
