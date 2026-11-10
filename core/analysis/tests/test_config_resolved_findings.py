@@ -223,3 +223,24 @@ def test_unreadable_java_is_disclosed_without_losing_readable_findings(tmp_path)
     metrics = generate_scan_metrics([str(path)])
     assert metrics['tool_coverage_limitations'] == {'raptor-config-resolved': 1}
     assert metrics['tool_execution_failures'] == {}
+
+
+@pytest.mark.parametrize('file_count, capped', [(0, False), (1, False), (2, True)])
+def test_stage_cap_discloses_only_actual_omissions(tmp_path, monkeypatch, file_count, capped):
+    from core.analysis import config_resolved_findings as stage
+    from core.sarif.parser import generate_scan_metrics
+
+    monkeypatch.setattr(stage, '_FILE_CAP', 1)
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir(); out.mkdir()
+    for index in range(file_count):
+        (repo / f'Source{index}.java').write_text(f'class Source{index} {{}}')
+    # Skipped build artefacts do not turn a fully examined selection partial.
+    (repo / 'target').mkdir()
+    (repo / 'target' / 'Ignored.java').write_text('class Ignored {}')
+    path, stats = run_config_resolved_stage(repo, out)
+    assert path is not None
+    assert bool(stats.get('file_cap_hit')) is capped
+    metrics = generate_scan_metrics([str(path)])
+    assert metrics['tool_coverage_limitations'] == ({'raptor-config-resolved': 1} if capped else {})
+    assert metrics['tool_execution_failures'] == {}
