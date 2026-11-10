@@ -32,13 +32,14 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
 
     A prerequisite must not be shed independently of its dependent rule.
     Request IDs remain in the delivery record rather than model prose.
-    Requested material precedes automatic reading; unavailable notes follow
-    both. Shared complete answers inherit their strongest requested priority.
+    Exact-ID requests precede topic requests, then automatic reading; unavailable
+    notes follow useful material. Shared answers inherit their strongest priority.
     """
     labels = _labels(answers)
     priorities: dict[str, int] = {}
     for label, answer in zip(labels, answers, strict=True):
-        priority = 3 if not answer.entries else 2 if answer.selection_origin == "initial" else 1
+        priority = (4 if not answer.entries else 3 if answer.selection_origin == "initial"
+                    else 1 if answer.selection_kind == "entry_id" else 2)
         priorities[label] = min(priorities.get(label, priority), priority)
     sections = []
     emitted = set()

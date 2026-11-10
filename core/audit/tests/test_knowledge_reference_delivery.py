@@ -132,4 +132,4 @@ def test_priority_origin_is_owned_metadata_not_request_id_spelling():
     initial = foundation_answers("c", request_id="ordinary-name")
     assert requested.selection_origin == "requested"
     assert initial[0].selection_origin == "initial"
-    assert [section.priority for section in reference_sections((requested, *initial))] == [1, 2]
+    assert [section.priority for section in reference_sections((requested, *initial))] == [1, 3]
