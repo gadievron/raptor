@@ -101,14 +101,15 @@ _TF_FILE_FIELDS = NON_SOURCE_JVM_CONSTANT_FIELDS
 
 class _FoldExt:
     """Bundled opt-in extensions threaded through the fold recursion:
-    the taint-free tier and the cross-file resolver. ``None`` (the
-    default everywhere) is byte-for-byte the pre-extension folder."""
+    the taint-free tier and the cross-file resolver. ``None`` retains
+    the pre-extension folder; indexed consumers also carry receiver scope."""
 
     __slots__ = (
         "allow_taint_free",
         "ban_tf_system_reads",
         "receiver_type",
         "shadowed_receiver_names",
+        "receiver_is_value",
         "union_hits",
         "union_member_check",
         "xfile",
@@ -116,10 +117,12 @@ class _FoldExt:
 
     def __init__(self, allow_taint_free: bool = False, xfile=None,
                  receiver_type=None, ban_tf_system_reads: bool = False,
-                 shadowed_receiver_names: frozenset[str] = frozenset()) -> None:
+                 shadowed_receiver_names: frozenset[str] = frozenset(),
+                 receiver_is_value=None) -> None:
         self.allow_taint_free = allow_taint_free
         self.xfile = xfile
         self.shadowed_receiver_names = frozenset(shadowed_receiver_names)
+        self.receiver_is_value = receiver_is_value
         # receiver_type(name) -> exact created class name, or None.
         # Sound only when EVERY indexed definition of the local is a
         # creation of that same class (see JavaConstIndex).
@@ -323,6 +326,10 @@ class JavaConstIndex:
                             "instanceof_expression", "formal_parameter",
                             "spread_parameter"):
                 nm = n.child_by_field_name("name")
+                if nm is None and n.type == "spread_parameter":
+                    variable = next((c for c in n.named_children
+                                     if c.type == "variable_declarator"), None)
+                    nm = variable.child_by_field_name("name") if variable is not None else None
                 if nm is not None and nm.type == "identifier":
                     self._note_unindexed_definer(n, nm)
             elif n.type == "catch_formal_parameter":
@@ -347,6 +354,8 @@ class JavaConstIndex:
         nm = name_node.text.decode()  # type: ignore[union-attr]
         self._unindexed_definers.add((construct.start_point[0] + 1, nm))
         self._unindexed_definers.add((name_node.start_point[0] + 1, nm))
+        # An unknown binding cannot borrow a same-named creation in another scope.
+        self._creation_types[nm] = None
 
     def _is_scoped_local(self, node: Node, name: str) -> bool:
         """True when ``node`` sits inside a method-like scope where a
@@ -478,8 +487,11 @@ def _tf_string_members_clear(ext, members) -> bool:
 
 def _receiver_is_shadowed(node, ext) -> bool:
     chain = _receiver_chain(node)
-    return (ext is not None and chain is not None
-            and chain.split(".", 1)[0] in ext.shadowed_receiver_names)
+    if ext is None or chain is None:
+        return False
+    head = chain.split(".", 1)[0]
+    return (head in ext.shadowed_receiver_names
+            or (ext.receiver_is_value is not None and ext.receiver_is_value(node, head)))
 
 
 def _fold_field_access(node: Node, ext) -> Any:
@@ -746,7 +758,7 @@ def _fold_xfile_call(node: Node, ext) -> Any:
     expression that cannot reference parameters or instance state."""
     obj = node.child_by_field_name("object")
     name_node = node.child_by_field_name("name")
-    if obj is None or name_node is None or _receiver_is_shadowed(obj, ext):
+    if obj is None or name_node is None:
         return _REFUSE
     args_node = node.child_by_field_name("arguments")
     argc = len([c for c in (args_node.children if args_node else ())
@@ -760,8 +772,12 @@ def _fold_xfile_call(node: Node, ext) -> Any:
     elif obj.type == "identifier":
         recv = obj.text.decode("utf-8", "replace")  # type: ignore[union-attr]
         typed = ext.receiver_type(recv) if ext.receiver_type else None
+        if _receiver_is_shadowed(obj, ext) and typed is None:
+            return _REFUSE
         cls = typed or recv
     else:
+        if _receiver_is_shadowed(obj, ext):
+            return _REFUSE
         cls = _receiver_chain(obj)
     if not cls:
         return _REFUSE
@@ -1013,16 +1029,15 @@ def _fold_binop(op: str, left: Any, right: Any) -> Any:
 
 
 def _index_ext(index: JavaConstIndex, allow_taint_free: bool):
-    """The fold-extension context an index carries: the cross-file
-    resolver (when the index was built with a file path and repo root)
-    plus the exact-creation receiver-type oracle. None when neither
-    extension is active — the folder then runs byte-identically to its
-    pre-extension form."""
-    if index.xfile is None and not allow_taint_free:
-        return None
+    """Carry exact-creation and positional value-binding evidence from the index.
+
+    Receiver scope remains active for value-only consumers too: a local named
+    String must not borrow the static String.valueOf special case.
+    """
     return _FoldExt(allow_taint_free=allow_taint_free,
                     xfile=index.xfile,
-                    receiver_type=index.receiver_type)
+                    receiver_type=index.receiver_type,
+                    receiver_is_value=index._is_scoped_local)
 
 
 def _make_point_resolver(rd, index: JavaConstIndex, array_resolver=None,
@@ -1129,11 +1144,8 @@ def fold_expr_at(rd, at_node, expr_node, index: JavaConstIndex,
     if not index.ok:
         return _REFUSE
     ext = _index_ext(index, allow_taint_free)
-    if ext is not None:
-        # A None ext means the taint-free tier is off, so the ban has
-        # nothing to withdraw (and the union never fires).
-        ext.ban_tf_system_reads = ban_tf_system_reads
-        ext.union_member_check = union_member_check
+    ext.ban_tf_system_reads = ban_tf_system_reads
+    ext.union_member_check = union_member_check
     resolve_at = _make_point_resolver(rd, index, array_resolver,
                                       config_resolver, conduit_resolver,
                                       ext)
