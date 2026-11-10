@@ -47,7 +47,7 @@ def _markdown(document: ReportDocument) -> RenderedReport:
 
     def bounded(value, sanitizer, max_chars):
         if len(str(value)) > max_chars:
-            notes.append("Markdown presentation truncated long values; complete content is retained in report-document.json")
+            notes.append("Markdown presentation truncated long values; complete values remain in the supplied report document")
         return sanitizer(value, max_chars=max_chars)
 
     def cell(value):
