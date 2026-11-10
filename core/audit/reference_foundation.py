@@ -38,6 +38,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
     arithmetic = False
     comparison = False
     shift = False
+    bitwise = False
     stack = [tree.root_node]
     visited = 0
     while stack:
@@ -52,15 +53,17 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
                 arithmetic = arithmetic or token in (b"+", b"-", b"*", b"/", b"%")
                 comparison = comparison or token in (b"<", b">", b"<=", b">=", b"==", b"!=")
                 shift = shift or token in (b"<<", b">>")
+                bitwise = bitwise or token in (b"&", b"^", b"|")
         elif node.type == "assignment_expression":
             operator = node.child_by_field_name("operator")
             if operator is not None:
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+=", b"-=", b"*=", b"/=", b"%=")
                 shift = shift or token in (b"<<=", b">>=")
+                bitwise = bitwise or token in (b"&=", b"^=", b"|=")
         stack.extend(node.children)
     selected: tuple[str, ...] = _FOUNDATION_IDS
-    if arithmetic or comparison:
+    if arithmetic or comparison or bitwise:
         selected += ("c.integer-usual-conversions",)
     if arithmetic:
         selected += ("c.integer-definedness",)
