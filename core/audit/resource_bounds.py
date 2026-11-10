@@ -586,9 +586,12 @@ def _classify_bound_guard(
     if match is None:
         # A matching substring inside a compound/arithmetic expression
         # does not establish an upper bound for the whole predicate.
-        for candidate in _CMP_RE.finditer(condition):
-            for operand in (candidate.group(1), candidate.group(3)):
-                if _COUNTISH_RE.search(_name_tail(operand)) or operand in limit_names:
+        if re.search(r"[<>=!]", condition):
+            from core.analysis.cfg_conditions import extract_references
+
+            for operand in sorted(extract_references(condition)):
+                tail = _name_tail(operand)
+                if _COUNTISH_RE.search(tail) or operand in limit_names or tail in limit_names:
                     return {"undecided": True, "condition": condition[:200], "count": operand}
         return None
     undecided: dict[str, Any] | None = None
@@ -608,10 +611,6 @@ def _classify_bound_guard(
             ):
                 continue
             bound_tail = _name_tail(bound_side)
-            if not bound_side.isdigit() and len(bound_tail) <= 2:
-                # Loop-induction shape (`i < len`): not a bound and
-                # not evidence of a bound attempt — skip entirely.
-                continue
             if bound_side.isdigit():
                 source = "integer-literal"
             elif bound_side in limit_names or bound_tail in limit_names:
