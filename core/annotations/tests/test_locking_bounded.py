@@ -110,12 +110,15 @@ def test_fifo_at_lock_path_is_refused_loudly(tmp_path: Path):
             done.set()
 
     thread = threading.Thread(target=writer, daemon=True)
-    thread.start()
-    try:
-        assert done.wait(timeout=10), (
-            "writer wedged opening the planted FIFO lock path"
-        )
-        assert errors, "the FIFO lock path was neither refused nor hung"
-        assert "not a regular file" in str(errors[0])
-    finally:
-        thread.join(timeout=10)
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads([thread], release=lambda: None, timeout=10):
+        thread.start()
+        try:
+            assert done.wait(timeout=10), (
+                "writer wedged opening the planted FIFO lock path"
+            )
+            assert errors, "the FIFO lock path was neither refused nor hung"
+            assert "not a regular file" in str(errors[0])
+        finally:
+            thread.join(timeout=10)
