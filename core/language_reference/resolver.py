@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from typing import Literal
 
 
@@ -59,6 +60,7 @@ class ReferenceAnswer:
 _TOKEN = re.compile(r"[a-z0-9_]+")
 _MAX_TOPIC_CHARS = 512
 _MAX_CANDIDATES = 3
+_MAX_PACK_ENTRIES = 256
 _STOP_WORDS = frozenset((
     "a", "an", "and", "are", "as", "at", "be", "by", "can", "do", "does",
     "for", "from", "how", "i", "in", "is", "it", "of", "on", "or", "that",
@@ -88,7 +90,32 @@ def lookup(
 
     if not isinstance(topic, str) or len(topic) > _MAX_TOPIC_CHARS:
         return ReferenceAnswer(request_id, "unsupported", reason="invalid or oversized topic")
-    available = tuple(e for e in ENTRIES if e.language == context.language)
+    if not isinstance(ENTRIES, tuple) or len(ENTRIES) > _MAX_PACK_ENTRIES:
+        return ReferenceAnswer(request_id, "unsupported", reason="reference pack is outside immutable bounds")
+    if entry_id is not None and not isinstance(entry_id, str):
+        return ReferenceAnswer(request_id, "unsupported", reason="invalid reference entry identity")
+    terms = _tokens(topic) if entry_id is None else frozenset()
+    pack_version = ReferenceAnswer("", "unsupported").pack_version
+    try:
+        answer = _lookup_cached(terms, context, entry_id, ENTRIES, pack_version)
+    except TypeError:
+        return ReferenceAnswer(request_id, "unsupported", reason="reference lookup inputs are not immutable")
+    return replace(answer, request_id=request_id, pack_version=pack_version)
+
+
+@lru_cache(maxsize=128)
+def _lookup_cached(
+    terms: frozenset[str], context: ReferenceContext, entry_id: str | None,
+    pack: tuple[ReferenceEntry, ...], pack_version: str,
+) -> ReferenceAnswer:
+    """Share only immutable reading; IDs and delivery stay with each caller.
+
+    The full pack is part of the key: ranking metadata and prerequisite links
+    can change without changing rendered rule text. The captured pack label
+    also keys the template and is rebound by the caller with its request ID.
+    """
+    request_id = ""
+    available = tuple(e for e in pack if e.language == context.language)
     if not available:
         return ReferenceAnswer(request_id, "unsupported", reason="language is outside this reference pack")
     if context.edition is not None:
@@ -98,7 +125,6 @@ def lookup(
     if entry_id is not None:
         candidates = tuple(e for e in available if e.entry_id == entry_id)
     else:
-        terms = _tokens(topic)
         ranked = sorted((
             (4 * len(terms & _tokens(e.title))
              + 2 * len(terms & _tokens(" ".join(e.topics)))
