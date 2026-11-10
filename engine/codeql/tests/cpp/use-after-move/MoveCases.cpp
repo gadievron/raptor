@@ -314,3 +314,34 @@ int safe_other_variable(bool flag) {
     take(std::move(value));
     return *other;
 }
+
+int safe_get_null_observation() {
+    Pointer value(new int(7));
+    Pointer destination(std::move(value));
+    return value.get() == nullptr;
+}
+int safe_get_null_observation_reversed() {
+    Pointer value(new int(7));
+    Pointer destination(std::move(value));
+    return nullptr != value.get();
+}
+int safe_get_null_without_move() {
+    Pointer value(new int(7));
+    return value.get() == nullptr;
+}
+int unsafe_get_dereference() {
+    Pointer value(new int(7));
+    Pointer destination(std::move(value));
+    return *value.get();
+}
+struct OtherPointer {
+    int *pointer;
+    explicit OtherPointer(int *value) : pointer(value) { }
+    OtherPointer(OtherPointer&& other) : pointer(other.pointer) { other.pointer = 0; }
+    int *get() const { return *pointer ? pointer : nullptr; }
+};
+int unsafe_custom_get_null() {
+    OtherPointer value(new int(7));
+    OtherPointer destination(std::move(value));
+    return value.get() == nullptr;
+}

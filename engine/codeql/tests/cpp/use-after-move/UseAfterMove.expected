@@ -4,6 +4,9 @@
 | safe_copy_from_const | false |
 | safe_discarded | false |
 | safe_disjoint_branch | false |
+| safe_get_null_observation | false |
+| safe_get_null_observation_reversed | false |
+| safe_get_null_without_move | false |
 | safe_loop_reset | false |
 | safe_move_then_return | false |
 | safe_observing_rvalue | false |
@@ -28,8 +31,10 @@
 | unsafe_conditional_reset | true |
 | unsafe_conditional_swap | true |
 | unsafe_consumed | true |
+| unsafe_custom_get_null | true |
 | unsafe_custom_reset | true |
 | unsafe_discarded_destination | true |
+| unsafe_get_dereference | true |
 | unsafe_insert | true |
 | unsafe_loop_carried | true |
 | unsafe_loop_maybe_reset | true |

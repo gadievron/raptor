@@ -78,6 +78,18 @@ private predicate stdObservation(FunctionCall call) {
   call.getTarget().getName() = ["empty", "size", "capacity", "get_allocator", "operator bool"]
 }
 
+/** Comparing the stored pointer with nullptr observes a moved-from unique_ptr. */
+private predicate stdUniquePointerNullObservation(FunctionCall call) {
+  call.getTarget().getName() = "get" and
+  call.getNumberOfArguments() = 0 and
+  call.getTarget().(MemberFunction).getDeclaringType().hasQualifiedName("std", "unique_ptr") and
+  exists(EqualityOperation comparison, Expr pointer, Expr nullValue |
+    comparison.hasOperands(pointer, nullValue) and
+    pointer.getUnconverted() = call and
+    nullValue.getUnconverted().getType().getUnspecifiedType() instanceof NullPointerType
+  )
+}
+
 /** Only completion of an assignment/reset, not evaluation of its receiver, clears state. */
 private predicate reinitializes(ControlFlowNode node, StackVariable variable) {
   exists(AssignExpr assignment |
@@ -103,7 +115,7 @@ class PostMoveUse extends VariableAccess {
     not assignmentReceiver(this) and
     not exists(FunctionCall call |
       call.getQualifier().getUnconverted() = this and
-      (stdResetter(call) or stdObservation(call))
+      (stdResetter(call) or stdObservation(call) or stdUniquePointerNullObservation(call))
     ) and
     not exists(DestructorCall destructor | destructor.getQualifier().getUnconverted() = this) and
     not this.getEnclosingFunction() instanceof Destructor
