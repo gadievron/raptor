@@ -181,7 +181,6 @@ def test_successful_worker_transfers_duplicate_ownership(kind):
 @pytest.mark.parametrize("kind", ["parser", "usage"])
 def test_kill_wakes_blocked_worker_with_peer_open(kind, monkeypatch):
     module = _module(kind)
-    parent, child = socket.socketpair()
     entered, wake = threading.Event(), threading.Event()
     real_socket = socket.socket
 
@@ -205,6 +204,7 @@ def test_kill_wakes_blocked_worker_with_peer_open(kind, monkeypatch):
     with suppress(ModuleNotFoundError):
         support = importlib.import_module("core.testing.sockets")
     worker = None
+    parent, child = socket.socketpair()
     try:
         with monkeypatch.context() as patcher:
             proxy = SimpleNamespace(**(vars(socket) | {"socket": Socket}))
