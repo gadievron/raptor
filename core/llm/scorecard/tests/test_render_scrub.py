@@ -438,20 +438,14 @@ class TestMarkdownStructureScrub:
         sidecar = tmp_path / "llm_scorecard.json"
         sc = ModelScorecard(sidecar)
         sc.record_event(self.EVIL_DC, "model-a",
-                        "cheap_short_circuit", "correct")
+                        "multi_model_consensus", "correct")
         sc.record_event("honest-dc", "model-a",
-                        "cheap_short_circuit", "correct")
+                        "multi_model_consensus", "correct")
         md = render_markdown(audit(sidecar))
-        table_rows = [
-            line for line in md.splitlines()
-            if line.startswith("| `") and "---" not in line
-        ]
-        assert table_rows, "expected rendered table rows"
-        # Every rendered row must carry the same column count as its
-        # table's honest rows — grouped per table by trailing shape.
-        assert len({r.count("|") for r in table_rows
-                    if "999" in r or "honest-dc" in r
-                    if "distinct" not in r}) <= 2
+        table_rows = [line for line in md.splitlines()
+                      if line.startswith("| ") and ("999" in line or "honest-dc" in line)]
+        assert len(table_rows) == 2, "expected hostile and honest decision-class rows"
+        assert all(row.count("|") == 5 for row in table_rows)
         # The raw injected fragment must not survive into any row.
         assert "` | 999 | 0 | `" not in md
         assert "&#124;" in md  # pipes entity-escaped, value preserved
