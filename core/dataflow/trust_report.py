@@ -95,7 +95,11 @@ def report(
     )
 
 
-def render(r: TrustReport) -> str:
+def render(r: TrustReport, *, format: str = "text") -> str:
+    if format != "text":
+        from core.reporting.renderers import render_document
+        from .report_documents import build_trust_document
+        return render_document(build_trust_document(r), format).content.decode("utf-8")
     def pct(x: float | None) -> str:
         return "n/a" if x is None else f"{x * 100:.0f}%"
 
