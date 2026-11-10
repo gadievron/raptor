@@ -26,6 +26,7 @@ rules:
                   - pattern: $REQ.body.$PROP
                   - pattern: $REQ.body
                   - pattern: $REQ.headers[...]
+                  - pattern: $REQ.headers.$PROP
               - metavariable-regex:
                   metavariable: $REQ
                   regex: '(?i)^(req|request)$'

@@ -1609,6 +1609,11 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run") == set()
         assert _callers_of(calls, "run_pinned_subprocess") == {"test_sql_text_argument_is_the_sink"}
 
+    def test_engine_javascript_header_regressions(self) -> None:
+        calls = _function_call_map("../../../engine/semgrep/tests/test_javascript_header_sources.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_header_property_sources"}
+
     def test_encoding_rules_c(self) -> None:
         calls = _function_call_map("test_encoding_rules_c.py")
         assert _callers_of(calls, "run_semgrep_sweep") == set()

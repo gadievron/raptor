@@ -53,6 +53,7 @@ rules:
                   - pattern: $REQ.body[...]
                   - pattern: $REQ.body.$PROP
                   - pattern: $REQ.headers[...]
+                  - pattern: $REQ.headers.$PROP
               - metavariable-regex:
                   metavariable: $REQ
                   regex: '(?i)^(req|request)$'
