@@ -915,7 +915,7 @@ class TestCallSiteSnippet:
         )
         src.write_text("\n".join(lines) + "\n")
         snippet = _extract_call_site_snippet(
-            src, "read", 1, len(lines),
+            src, "read", 1, len(lines), target_root=tmp_path,
         )
         assert "read(fd" in snippet
         assert "fread" not in snippet

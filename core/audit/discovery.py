@@ -475,6 +475,7 @@ def _try_build_bundle(
         callee_name,
         caller_info["line_start"],
         caller_info["line_end"],
+        target_root=target_path,
     )
 
     combined_tokens = estimate_tokens(caller_source) + estimate_tokens(callee_source)
@@ -510,7 +511,7 @@ def _read_function_source(
     """Read a function's source, truncating to fit the token budget."""
     full_path = target_path / func_info["file"]
     from core.audit.context import _read_target_text
-    text = _read_target_text(full_path)
+    text = _read_target_text(full_path, target_root=target_path)
     if text is None:
         return None
 
@@ -546,10 +547,12 @@ def _extract_call_site_snippet(
     callee_name: str,
     caller_start: int,
     caller_end: int,
+    *,
+    target_root: Path,
 ) -> str:
     """Extract lines around the call to callee_name within the caller."""
     from core.audit.context import _read_target_text
-    text = _read_target_text(file_path)
+    text = _read_target_text(file_path, target_root=target_root)
     if not text:
         return ""
 
@@ -922,7 +925,7 @@ def _try_build_sm_bundle(
                 continue
 
             context = _read_handler_context(
-                target_path / file_path, line,
+                target_path / file_path, line, target_root=target_path,
             )
 
             hs = HandlerSite(
@@ -961,11 +964,13 @@ def _try_build_sm_bundle(
 def _read_handler_context(
     file_path: Path,
     line: int,
+    *,
+    target_root: Path,
 ) -> str:
     """Read HANDLER_CONTEXT_LINES around a handler site."""
     from core.audit.context import _read_target_text
 
-    text = _read_target_text(file_path)
+    text = _read_target_text(file_path, target_root=target_root)
     if not text:
         return ""
 
@@ -1339,6 +1344,7 @@ def _collect_caller_signatures(
                             func_name,
                             item.get("line_start", 0),
                             item.get("line_end", 0),
+                            target_root=target_path,
                         )
                         callers.append((caller_fid, sig, snippet))
                         break
@@ -1779,7 +1785,7 @@ def _detect_side_effects(
     """Scan a function's source for side-effect call sites."""
     full_path = target_path / func_info["file"]
     from core.audit.context import _read_target_text
-    text = _read_target_text(full_path)
+    text = _read_target_text(full_path, target_root=target_path)
     if not text:
         return []
 
