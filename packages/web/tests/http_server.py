@@ -22,7 +22,7 @@ def start_http_server(server, add_cleanup, *, join_timeout=5):
     except BaseException:
         server.server_close()
         raise
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     add_cleanup(_stop_serving, server, thread, join_timeout)
     thread.start()
     return thread
