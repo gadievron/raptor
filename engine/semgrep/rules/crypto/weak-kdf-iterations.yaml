@@ -17,7 +17,9 @@ rules:
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern: hashlib.pbkdf2_hmac($ALG, $PW, $SALT, $ITERS, ...)
+      - pattern-either:
+          - pattern: hashlib.pbkdf2_hmac($ALG, $PW, $SALT, $ITERS, ...)
+          - pattern: hashlib.pbkdf2_hmac(..., iterations=$ITERS, ...)
       - metavariable-comparison:
           metavariable: $ITERS
           comparison: $ITERS < 100000
