@@ -293,6 +293,7 @@ if TYPE_CHECKING:
     from concurrent.futures import Future
     from collections.abc import Callable, Iterator
 
+    from .claims import ClaimRevision
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
     from .knowledge_requests import KnowledgeRequest
@@ -22374,6 +22375,7 @@ def _run_tool_chain(
     early_exit_check: Callable[[str], bool] | None = None,
     skipped_types: set | None = None,
     inconclusive_types: set | None = None,
+    claim_revision: "ClaimRevision | None" = None,
 ) -> ToolChainResult:
     """Run tools from *chain*, retaining confirmations and checker outcomes.
 
@@ -22418,6 +22420,7 @@ def _run_tool_chain(
         file=file_path, function=function_name, line_start=line_start,
         hypothesis=hypothesis,
         source_identity=capture_source_identity(effective_target, file_path, excerpt=source, line_start=line_start),
+        claim_revision=claim_revision,
     )
     if confirmed.source_identity is None and source is not None:
         current_source = capture_source_identity(effective_target, file_path)
@@ -25008,6 +25011,18 @@ def _retain_claim_refutation(outcome, results, config, *, hypothesis, phase) -> 
     if not isinstance(existing, (tuple, list)):
         existing = ()
     if receipt in existing:
+        # Lineage is telemetry, not part of the existing receipt's authority
+        # or deduplication key. A new intake may reuse the same scoped fact.
+        if receipt.claim_revision is not None and not any(
+            old == receipt and old.claim_revision == receipt.claim_revision
+            for old in existing if isinstance(old, ClaimRefutation)
+        ):
+            try:
+                record = receipt.to_record(action="claim_refutation_reuse")
+                record.update(phase=phase, role="context_provenance_not_verification_evidence")
+                append_audit_log(Path(config.out_dir), record)
+            except Exception:
+                logger.warning("could not record refutation lineage reuse", exc_info=True)
         return True
     record = receipt.to_record(action="ihv_refutation" if phase == "ihv" else "claim_refutation")
     record["phase"] = phase
@@ -25212,6 +25227,7 @@ def _verify_hypotheses_immediate(
             errored_types=_errored,
             skipped_types=_skipped,
             inconclusive_types=_inconclusive,
+            claim_revision=claim_revision,
         )
 
         _dispatched = {

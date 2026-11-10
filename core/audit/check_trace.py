@@ -122,6 +122,9 @@ def record_check_observation(out_dir, results, *, tool, verdict, rule_id, reason
             "tool": tool, "outcome": verdict, "rule_id": rule_id, "reason": reason,
             "result": _snapshot(result, request=request),
         }
+        claim_revision = getattr(results, "claim_revision", None)
+        if claim_revision is not None:
+            record["claim_reference"] = claim_revision.event_reference()
         append_audit_log(Path(out_dir), record)
     except Exception:
         # Reporting must never turn a successful check into a tool error.
