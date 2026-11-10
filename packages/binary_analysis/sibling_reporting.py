@@ -30,6 +30,9 @@ def complete_sibling_report(args, payload: dict, run_dir: Path):
         metrics = {"Clusters analysed": len(clusters), "Asymmetry review leads": len(leads),
                    "Hypothesis seeds emitted": payload.get("hypothesis_seeds_emitted", 0)}
         artifacts = [{"path": path} for path in (payload.get("artifacts") or {}).values() if isinstance(path, str)]
+        binary = payload.get("binary")
+        if isinstance(binary, str) and binary:
+            artifacts.append({"path": binary})
         # These are inputs of the native pass, not report output destinations.
         artifacts.extend({"path": str(run_dir / name)} for name in (
             "binary-manifest.json", "binary-context-map.json", "binary-evidence.json", "binary-checklist.json",
