@@ -63,6 +63,14 @@ rules:
                   - pattern: $CTX.request.body.$PROP
                   - pattern: $CTX.get($FIELD)
                   - pattern: $CTX.request.get($FIELD)
+                  - pattern: $CTX.header[...]
+                  - pattern: $CTX.header.$PROP
+                  - pattern: $CTX.headers[...]
+                  - pattern: $CTX.headers.$PROP
+                  - pattern: $CTX.request.header[...]
+                  - pattern: $CTX.request.header.$PROP
+                  - pattern: $CTX.request.headers[...]
+                  - pattern: $CTX.request.headers.$PROP
                   - pattern: $CTX.request.body
               - metavariable-regex:
                   metavariable: $CTX
