@@ -203,9 +203,22 @@ class AuditKnowledgeRuntime:
                 dependencies = context_inputs_from_delivery(outcome.review_result["caller_context_delivery"], origin)
                 if dependencies is not None:
                     history["source_inputs"] = dependencies
-            from .review_context_inputs import merge_context_inputs
+            from .review_context_inputs import context_inputs_from_sources, merge_context_inputs
+            from .reference_inputs import reference_inputs_from_delivery
             study_manifest, live_inputs, live_valid = self._capture_delivered_inputs(
                 origin, reservation, outcome.review_result)
+            reference_manifest = reference_inputs_from_delivery(
+                outcome.review_result.get("language_reference_delivery"),
+                reservation.packet.references if reservation is not None else ())
+            if reference_manifest is not None:
+                history["reference_inputs"] = reference_manifest
+                # Reference-only assessments still bind their original target,
+                # and use root-qualified source records under the ctx3 contract.
+                primary_manifest = context_inputs_from_sources(
+                    [("target", origin.file, origin.source_identity.sha256)]
+                    if origin.source_identity is not None else [],
+                    complete=origin.source_identity is not None)
+                study_manifest = merge_context_inputs(study_manifest, primary_manifest)
             dependencies = merge_context_inputs(history.get("source_inputs"), study_manifest)
             if dependencies is not None:
                 history["source_inputs"] = dependencies

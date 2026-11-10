@@ -82,6 +82,10 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
     if isinstance(value, dict) and "source_inputs" in value:
         from .review_context_inputs import merge_context_inputs
         history["source_inputs"] = merge_context_inputs(value["source_inputs"] if value["source_inputs"] is not None else {})
+    if isinstance(value, dict) and "reference_inputs" in value:
+        from .reference_inputs import merge_reference_inputs
+        history["reference_inputs"] = merge_reference_inputs(
+            value["reference_inputs"] if value["reference_inputs"] is not None else {})
     review = history["review"]
     origin = review.get("origin") if isinstance(review, dict) else None
     occurrence = (origin.get("file"), origin.get("function"), origin.get("line_start")) if isinstance(origin, dict) else None
@@ -114,7 +118,8 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
 def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
     """Retain contributing attempts without attributing new text to old IDs."""
     left, right = read_history(prior), read_history(fresh)
-    has_dependencies = any(isinstance(value, dict) and "source_inputs" in value for value in (prior, fresh))
+    has_dependencies = any(isinstance(value, dict) and any(field in value for field in ("source_inputs", "reference_inputs"))
+                           for value in (prior, fresh))
     if left is None and right is None and not has_dependencies:
         return None
     histories = [history for history in (left, right) if history is not None]
@@ -128,6 +133,12 @@ def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
                                           if isinstance(value, dict) and "source_inputs" in value))
     if dependencies is not None:
         result["source_inputs"] = dependencies
+    from .reference_inputs import merge_reference_inputs
+    references = merge_reference_inputs(*(value["reference_inputs"] if value["reference_inputs"] is not None else {}
+                                          for value in (prior, fresh)
+                                          if isinstance(value, dict) and "reference_inputs" in value))
+    if references is not None:
+        result["reference_inputs"] = references
     # All producer omission reasons are fixed strings. Keep them distinct so
     # repeated merges cannot grow the envelope through repeated warnings.
     for history in histories:
@@ -157,25 +168,31 @@ def panel_context_history(primary_history: object, member_results: list[dict]) -
     """
     from .review_context_inputs import merge_context_inputs
 
-    dependencies = []
-    for member in member_results:
-        history = member.get("review_claims")
-        if isinstance(history, dict) and "source_inputs" in history:
-            value = history["source_inputs"]
-            dependencies.append(value if value is not None else {})
-    merged = merge_context_inputs(*dependencies)
-    if merged is None:
+    from .reference_inputs import merge_reference_inputs
+    retained = {}
+    for field, merger in (("source_inputs", merge_context_inputs),
+                          ("reference_inputs", merge_reference_inputs)):
+        contributors = []
+        for member in member_results:
+            member_history = member.get("review_claims")
+            if isinstance(member_history, dict) and field in member_history:
+                value = member_history[field]
+                contributors.append(value if value is not None else {})
+        merged = merger(*contributors)
+        if merged is not None:
+            previous = primary_history.get(field) if isinstance(primary_history, dict) else None
+            retained[field] = merger(previous, merged)
+    if not retained:
         return None
     history = read_history(primary_history)
     if history is None:
         history = {"version": 1, "role": _ROLE, "review": None, "intakes": [],
                    "complete": False, "omissions": ["panel-primary-history-unavailable"]}
-    history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), merged)
-    # Never silently shed the dependency set to fit large primary metadata.
+    history.update(retained)
+    # Never silently shed either dependency channel to fit primary metadata.
     if read_history(history) is None:
         history = {"version": 1, "role": _ROLE, "review": None, "intakes": [],
-                   "complete": False, "omissions": ["panel-history-byte-limit"],
-                   "source_inputs": history["source_inputs"]}
+                   "complete": False, "omissions": ["panel-history-byte-limit"], **retained}
     return history
 
 

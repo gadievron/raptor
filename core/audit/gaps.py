@@ -2343,20 +2343,23 @@ _ContextReviewBarriers = dict[tuple[str, str], dict[int, _ContextReviewBarrier]]
 
 def _review_context_binding(entry) -> tuple[bool, _ContextReviewBinding]:
     """Recognise durable input bindings without granting them authority."""
-    from .review_context_inputs import context_inputs_digest
+    from .reference_inputs import review_context_digest
 
     history = getattr(entry, "review_claims", None)
-    present = isinstance(history, dict) and "source_inputs" in history
-    snapshot = history.get("source_inputs") if isinstance(history, dict) and present else None
+    present = isinstance(history, dict) and any(field in history for field in ("source_inputs", "reference_inputs"))
+    snapshot = history.get("source_inputs") if isinstance(history, dict) else None
+    references = (history["reference_inputs"] if history["reference_inputs"] is not None else {}) if (
+        isinstance(history, dict) and "reference_inputs" in history) else None
     source_hash = getattr(entry, "source_hash", "")
     source_hash = source_hash if isinstance(source_hash, str) else ""
     return (present or source_hash.startswith("src:ctx"),
-            (source_hash, context_inputs_digest(snapshot) if present else None))
+            (source_hash, review_context_digest(snapshot, references) if present else None))
 
 
 def _review_context_current(entry, target_path: Path | None, source_roots=None) -> bool:
-    """Require the portable dependency record and its admission tag together."""
+    """Require portable source/reference dependencies and their tag together."""
     from .review_context_inputs import context_inputs_current
+    from .reference_inputs import reference_inputs_current
     from .source_anchor import context_source_anchor_version, parse_context_source_anchor
 
     bound, (source_hash, digest) = _review_context_binding(entry)
@@ -2368,14 +2371,21 @@ def _review_context_current(entry, target_path: Path | None, source_roots=None) 
     history = getattr(entry, "review_claims", None)
     if not isinstance(history, dict):
         return False
+    version = context_source_anchor_version(source_hash)
+    has_references = "reference_inputs" in history
+    if has_references != (version == 3):
+        return False
+    if has_references and not reference_inputs_current(history["reference_inputs"]):
+        return False
     snapshot = history.get("source_inputs")
     if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), list)
-            or snapshot.get("version") != context_source_anchor_version(source_hash)):
+            or snapshot.get("version") != (2 if version == 3 else version)):
         return False
     primary_sources = [row for row in snapshot["sources"]
                if isinstance(row, dict) and row.get("root", "target") == "target" and row.get("file") == entry.file]
     return (len(primary_sources) == 1 and primary_sources[0].get("sha256") == anchor[0]
-            and context_inputs_current(snapshot, target_path, source_roots=source_roots)[0])
+            and context_inputs_current(snapshot, target_path, source_roots=source_roots)[0]
+            and (not has_references or reference_inputs_current(history["reference_inputs"])))
 
 
 def _review_context_site(entry) -> _ContextReviewSite:

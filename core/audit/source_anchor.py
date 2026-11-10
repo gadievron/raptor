@@ -5,7 +5,7 @@ import re
 SOURCE_ANCHOR_PREFIX = "src:"
 _SOURCE_ANCHOR = re.compile(r"src:([0-9a-f]{64}):([0-9a-f]{12})")
 _CONTEXT_SOURCE_ANCHOR = re.compile(
-    r"src:ctx([12]):([0-9a-f]{64}):([0-9a-f]{12}):([0-9a-f]{64}|unknown)"
+    r"src:ctx([123]):([0-9a-f]{64}):([0-9a-f]{12}):([0-9a-f]{64}|unknown)"
 )
 
 
@@ -51,7 +51,7 @@ def make_context_source_anchor(
     *, context_version: int = 1,
 ) -> str:
     """Bind known inputs; unknown dependencies explicitly prevent normal reuse."""
-    if type(context_version) is not int or context_version not in (1, 2):
+    if type(context_version) is not int or context_version not in (1, 2, 3):
         raise ValueError("invalid context anchor version")
     dependency = "unknown" if dependency_sha256 is None else dependency_sha256
     value = f"{SOURCE_ANCHOR_PREFIX}ctx{context_version}:{sha256}:{span_hash}:{dependency}"

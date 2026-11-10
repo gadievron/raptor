@@ -347,15 +347,22 @@ def append_journal_for_outcome(
         parse_context_source_anchor, parse_source_anchor,
     )
     from .review_claims import read_history
-    from .review_context_inputs import context_inputs_current, context_inputs_digest, context_inputs_record_digest
+    from .review_context_inputs import context_inputs_current, context_inputs_record_digest
+    from .reference_inputs import reference_inputs_current, review_context_digest
     from .review_input_scope import ReviewInputScope
 
     initial_review = getattr(outcome, "review_result", None) or {}
     raw_history = initial_review.get("review_claims")
     history = read_history(raw_history)
     has_context_inputs = isinstance(raw_history, dict) and "source_inputs" in raw_history
+    has_references = isinstance(raw_history, dict) and "reference_inputs" in raw_history
+    if has_references and not has_context_inputs:
+        logger.warning("journal reference inputs lost their target source binding")
+        return None
     context_inputs = history.get("source_inputs") if history is not None else None
-    context_digest = context_inputs_digest(context_inputs) if has_context_inputs else None
+    reference_inputs = (history["reference_inputs"] if history["reference_inputs"] is not None else {}) if (
+        history is not None and has_references) else None
+    context_digest = review_context_digest(context_inputs, reference_inputs) if has_context_inputs else None
     attached_scope = getattr(outcome, "review_input_scope", None)
     if ((attached_scope is not None and not isinstance(attached_scope, ReviewInputScope))
             or (review_input_scope is not None and not isinstance(review_input_scope, ReviewInputScope))
@@ -366,7 +373,7 @@ def append_journal_for_outcome(
     if input_scope is not None and not has_context_inputs:
         logger.warning("journal review input scope lost its dependency record")
         return None
-    context_version = context_inputs.get("version") if isinstance(context_inputs, dict) else None
+    context_version = 3 if has_references else context_inputs.get("version") if isinstance(context_inputs, dict) else None
     context_primary: str | None = None
     effective_roots = dict(source_roots) if isinstance(source_roots, dict) else {}
     if source_roots is not None and not isinstance(source_roots, dict):
@@ -388,6 +395,7 @@ def append_journal_for_outcome(
         # Portable incompleteness can retain a fresh concern only when its
         # original live stamps are supplied separately. It never grants reuse.
         if (history is None or not isinstance(context_inputs, dict)
+                or (has_references and context_inputs.get("version") != 2)
                 or context_inputs_record_digest(context_inputs) is None
                 or (context_digest is None and input_scope is None)):
             logger.warning("journal review context input binding is incomplete")
@@ -407,13 +415,19 @@ def append_journal_for_outcome(
                 return None
             context_primary = primary_inputs[0]
 
+    require_reference_current = False
+
     def context_current():
         if getattr(outcome, "review_input_scope", None) != attached_scope:
             return False
         current_review = getattr(outcome, "review_result", None) or {}
         current_history = current_review.get("review_claims")
         current_has_inputs = isinstance(current_history, dict) and "source_inputs" in current_history
-        if current_has_inputs != has_context_inputs:
+        current_has_references = isinstance(current_history, dict) and "reference_inputs" in current_history
+        if current_has_inputs != has_context_inputs or current_has_references != has_references:
+            return False
+        if has_references and (not isinstance(current_history, dict)
+                               or current_history.get("reference_inputs") != reference_inputs):
             return False
         if not has_context_inputs:
             return True
@@ -422,9 +436,10 @@ def append_journal_for_outcome(
         if input_scope is not None:
             return (input_scope.matches(file=outcome.file, function=outcome.function,
                                         line_start=gap.get("line_start", 0), source_inputs=context_inputs)
-                    and input_scope.current(target_path))
+                    and input_scope.current(target_path)
+                    and (not require_reference_current or reference_inputs_current(reference_inputs)))
         admitted, _ = context_inputs_current(context_inputs, target_path, source_roots=effective_roots)
-        return admitted
+        return admitted and (not has_references or reference_inputs_current(reference_inputs))
 
     inherited_anchor = getattr(outcome, "reused_source_anchor", None) if getattr(outcome, "reused", False) else None
     inherited_parts = parse_source_anchor(inherited_anchor)
@@ -593,7 +608,11 @@ def append_journal_for_outcome(
         span_hash = bound_primary[1] if bound_primary is not None else source_hash
         try:
             reusable = (context_digest is not None
-                        and context_inputs_current(context_inputs, target_path, source_roots=effective_roots)[0])
+                        and context_inputs_current(context_inputs, target_path, source_roots=effective_roots)[0]
+                        and (not has_references or reference_inputs_current(reference_inputs)))
+            # A fresh pass may retain an older reference as unknown context,
+            # but a known tag must remain current through the append barrier.
+            require_reference_current = has_references and reusable
             source_hash = make_context_source_anchor(context_primary, span_hash,
                 context_digest if reusable else None, context_version=cast(int, context_version))
         except ValueError:
