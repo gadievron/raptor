@@ -341,7 +341,7 @@ _SPECS = [{'file': 'core/sandbox/tests/test_evidence_append_resync.py',
   'kind': 'monkey',
   'line': 144,
   'module': 'core.source.gated',
-  'target': 'os.fdopen'},
+  'target': 'adopt_fd'},
  {'file': 'core/llm/dispatcher/tests/test_dispatcher_lifecycle_cleanup.py',
   'kind': 'monkey',
   'line': 168,
@@ -531,6 +531,12 @@ def _tree(file):
 
 @lru_cache(maxsize=None)
 def _nodes(file):
+    consumers = {
+        alias.asname: alias.name
+        for statement in _tree(file).body if isinstance(statement, ast.Import)
+        for alias in statement.names
+        if alias.asname and alias.asname.startswith("_os_fault_consumer")
+    }
     result = []
     for node in ast.walk(_tree(file)):
         if not isinstance(node, ast.Call) or not node.args:
@@ -545,6 +551,12 @@ def _nodes(file):
             if isinstance(node.args[1], ast.Name) and node.args[1].id.startswith("_os_fault_consumer"):
                 result.append(node)
         elif getattr(node.func, "attr", "") == "object" and len(node.args) >= 3 and (ast.unparse(node.args[0]) == "os" or ast.unparse(node.args[0]).startswith("_os_fault_consumer")):
+            result.append(node)
+        elif (getattr(node.func, "attr", "") == "setattr" and len(node.args) == 3
+              and isinstance(node.args[0], ast.Name) and isinstance(node.args[1], ast.Constant)
+              and any(row["file"] == file
+                      and row["module"] == consumers.get(node.args[0].id)
+                      and row["target"] == node.args[1].value for row in _SPECS)):
             result.append(node)
         elif getattr(node.func, "attr", "") == "setattr" and len(node.args) >= 3 and ast.unparse(node.args[0]) == "os":
             result.append(node)
