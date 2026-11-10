@@ -141,5 +141,72 @@ def test_real_confined_affine_division_worker_binds_the_typed_expression():
                                       source=SOURCE, hypothesis=CLAIM, integer_abi='lp64')
     assert result.outcome == 'confirmed', result.errors
     assert result.details['denominator'] == 0 and result.details['witness_validated']
-    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v4'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v5'
     assert result.details['oracle_scope'] == 'integer-division-fault'
+
+
+@pytest.mark.parametrize('abi', ['lp64', 'i16'])
+@pytest.mark.parametrize('operator', ['/', '%'])
+def test_reaching_guard_proves_signed_denominator_defined_but_not_nonzero(abi, operator):
+    source = f'int Read(int Value,int Count){{if(Count>0)return Value{operator}(Count-1);return 0;}}'
+    result = check(source, CLAIM.replace('/', operator), abi=abi)
+    assert result['violation'] is True and result['denominator'] == 0, result
+    assert result['model']['Count'] == 1 and result['witness_validated']
+    assert result['source_operation']['denominator_definedness'] == 'path-proved'
+
+
+@pytest.mark.parametrize('abi,maximum', [('lp64', 2147483647), ('i16', 32767)])
+def test_upper_guard_proves_addition_defined_before_zero_query(abi, maximum):
+    source = f'int Read(int Value,int Count){{if(Count<{maximum})return Value/(Count+1);return 0;}}'
+    result = check(source, CLAIM.replace('Count-1', 'Count+1'), abi=abi)
+    assert result['violation'] is True and result['model']['Count'] == -1, result
+    assert result['denominator'] == 0 and result['witness_validated']
+
+
+def test_wider_numerator_cannot_hide_narrow_denominator_overflow():
+    source = 'long Read(long Value,int Count){if(Count>0)return Value/(Count+1);return 0;}'
+    result = check(source, CLAIM.replace('Count-1', 'Count+1'))
+    assert result['violation'] is None and not result['witness_validated'], result
+
+
+def test_empty_path_cannot_supply_vacuous_definedness():
+    source = 'int Read(int Value,int Count){if(Count>0 && Count<0)return Value/(Count-1);return 0;}'
+    result = check(source)
+    assert result['violation'] is None and not result['witness_validated'], result
+
+
+def test_path_proved_minus_one_divisor_still_has_a_distinct_overflow_objective():
+    source = 'int Read(int Value,int Count){if(Count==0)return Value/(Count-1);return 0;}'
+    overflow = check(source, CLAIM.replace('division by zero', 'division overflow'))
+    assert overflow['violation'] is True and overflow['fault_kind'] == 'signed-division-overflow', overflow
+    assert overflow['numerator'] == -(1 << 31) and overflow['denominator'] == -1
+    assert check(source)['violation'] is False
+
+
+@pytest.mark.parametrize('undecided', [2, 3])
+def test_unknown_definedness_or_fault_query_refuses_signed_receipt(monkeypatch, undecided):
+    import z3
+    from core.audit import integer_affine_division
+    original = integer_affine_division.check_solver
+    calls = []
+
+    def injected(solver):
+        calls.append(solver)
+        return z3.unknown if len(calls) == undecided else original(solver)
+
+    monkeypatch.setattr(integer_affine_division, 'check_solver', injected)
+    result = check('int Read(int Value,int Count){if(Count>0)return Value/(Count-1);return 0;}')
+    assert len(calls) == undecided
+    assert result['violation'] is None and not result['witness_validated'], result
+
+
+@pytest.mark.slow
+def test_real_confined_guarded_divisor_worker_retains_path_definedness():
+    from core.audit import sweep
+    source = 'int Read(int Value,int Count){if(Count>0)return Value/(Count-1);return 0;}'
+    result = sweep.run_smt_verb_direct(file_path='unit.cpp', function_name='Read', verb='check-integer-division',
+                                      source=source, hypothesis=CLAIM, integer_abi='lp64')
+    assert result.outcome == 'confirmed', result.errors
+    assert result.details['model']['Count'] == 1 and result.details['denominator'] == 0
+    assert result.details['source_operation']['denominator_definedness'] == 'path-proved'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v5'

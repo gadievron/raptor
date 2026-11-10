@@ -11,7 +11,7 @@ from .integer_abi import resolve_integer_abi, integer_abi_record
 from .integer_literals import integer_literal_value, source_integer_atom
 from .integer_witness import source_model_scope, validate_integer_witness
 from core.smt_solver import DEFAULT_TIMEOUT_MS, mk_val, z3, z3_available
-from core.smt_solver.csem import cast, division_undefined
+from core.smt_solver.csem import cast, division_undefined, sadd_overflows, ssub_overflows
 from core.smt_solver.session import new_solver, check_solver, query_budget
 from core.smt_solver.witness import format_vars
 
@@ -115,8 +115,7 @@ def check_affine_division(source, hypothesis, *, language, integer_abi=None):
     if len(sites) != 1:
         return unavailable
     target, right, numerator, (count, op, offset), division_operator = sites[0]
-    guards = guards_for_operation(body, target, data, [numerator, count], language=language, integer_abi=abi,
-                                  selected_value=right)
+    guards = guards_for_operation(body, target, data, [numerator, count], language=language, integer_abi=abi)
     if guards.status == 'unavailable':
         return unavailable
     model = ComparisonModel(target, data, abi, language)
@@ -130,7 +129,9 @@ def check_affine_division(source, hypothesis, *, language, integer_abi=None):
         native_numerator = model.registry[numerator] if numerator in model.registry else mk_val(integer_literal_value(numerator), numerator_kind.width)
         native_numerator = cast(native_numerator, division_kind.width, numerator_kind.signed)
         raw_count = cast(model.registry[count], denominator_kind.width, count_kind.signed)
-        native_denominator = raw_count + mk_val(offset, denominator_kind.width) if op == '+' else raw_count - mk_val(offset, denominator_kind.width)
+        native_offset = mk_val(offset, denominator_kind.width)
+        denominator_undefined = (sadd_overflows(raw_count, native_offset) if op == '+' else ssub_overflows(raw_count, native_offset)) if denominator_kind.signed else None
+        native_denominator = raw_count + native_offset if op == '+' else raw_count - native_offset
         native_denominator = cast(native_denominator, division_kind.width, denominator_kind.signed)
         predicates = [p.split() for p in guards.premises]
         constraints = [model.predicate(*p) for p in predicates]
@@ -143,6 +144,7 @@ def check_affine_division(source, hypothesis, *, language, integer_abi=None):
                                     'operator': division_operator, 'operands': [numerator, f'({count}{op}{offset})'],
                                     'types': dict(model.types), 'premises': list(guards.premises),
                                     'denominator_width': denominator_kind.width, 'denominator_signed': denominator_kind.signed,
+                                    'denominator_definedness': 'path-proved' if denominator_kind.signed else 'unsigned-modulo',
                                     'division_width': division_kind.width, 'division_signed': division_kind.signed}}
     zero = native_denominator == 0
     fault = division_undefined(native_numerator, native_denominator, signed=division_kind.signed)
@@ -152,6 +154,15 @@ def check_affine_division(source, hypothesis, *, language, integer_abi=None):
         solver.add(*constraints)
         if check_solver(solver) != z3.sat:
             return unavailable
+        if denominator_undefined is not None:
+            # Check in the subexpression's type, before outer division
+            # conversions. Do not constrain away an undefined entry.
+            solver.push()
+            solver.add(denominator_undefined)
+            defined = check_solver(solver)
+            solver.pop()
+            if defined != z3.unsat:
+                return unavailable
         solver.add(fault)
         result = check_solver(solver)
         if result == z3.unsat:

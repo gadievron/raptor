@@ -222,3 +222,12 @@ entry and independent replay remain mandatory. Unproved signed denominator
 arithmetic is unsupported; a safe or unknown result never clears a function.
 QUALITY preparation proposes bounded storage/type candidates after prior leads,
 without performing native queries or granting source-path credit.
+
+For a signed affine denominator, typed reaching guards may establish the
+subexpression's definedness. The oracle first proves entry feasibility, then
+requires signed addition/subtraction overflow to be impossible for every
+admitted entry before checking the division fault. These checks share one
+query deadline. A wider numerator does not widen the denominator's earlier
+arithmetic; an overflowing, undecided or unreachable subexpression earns no
+receipt. For example, `Count > 0` makes `Count-1` defined while still admitting
+a zero divisor at `Count == 1`.
