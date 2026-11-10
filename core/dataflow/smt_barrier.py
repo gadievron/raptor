@@ -1599,11 +1599,48 @@ def _target_rebinds(target: ast.AST, var_name: str) -> bool:
     return False
 
 
+def _python_suspension(node: ast.AST) -> bool:
+    """Explicit places where execution can resume in another context."""
+    return isinstance(node, (ast.Await, ast.Yield, ast.YieldFrom,
+                             ast.AsyncFor, ast.AsyncWith)) or (
+        isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+        and any(part.is_async for part in node.generators)
+    )
+
+
+def _python_name_has_local_slot(scope_root: ast.AST, name: str) -> bool:
+    """A function-owned slot, excluding global/nonlocal declarations.
+
+    Only the function's body supplies local bindings: its own defaults and
+    decorators execute in the enclosing scope. Missing ownership declines;
+    this does not establish object immutability or closure effect freedom.
+    """
+    if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    body = ast.Module(body=scope_root.body, type_ignores=[])
+    nodes = list(_walk_same_scope(body))
+    if any(isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names
+           for node in nodes):
+        return False
+    args = scope_root.args
+    parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    if args.vararg is not None:
+        parameters.append(args.vararg)
+    if args.kwarg is not None:
+        parameters.append(args.kwarg)
+    return any(arg.arg == name for arg in parameters) or any(
+        _node_rebinds_var(node, name) for node in nodes
+    )
+
+
 def _variable_reassigned_between(
     tree: ast.AST, var_name: str, after_line: int, before_line: int,
 ) -> bool:
-    """True iff ``var_name`` is rebound or unbound strictly between
-    ``after_line`` and ``before_line``.
+    """Whether the name's value epoch may end in the source window.
+
+    Direct writes/unbindings are checked strictly between the rows.
+    Suspension on either boundary also invalidates externally owned slots;
+    local value slots retain the existing binding and closure checks.
 
     Sound conservatism for ``charset_sub``: ``x = re.sub('[F]+', '', x)``
     rebinds ``x`` to the sanitized value, but a later rebind would undo
@@ -1638,6 +1675,13 @@ def _variable_reassigned_between(
     CPython's own ``symtable`` so a new binding construct cannot be
     missed silently.
     """
+    scope_root = _function_containing(tree, before_line) or tree
+    if not _python_name_has_local_slot(scope_root, var_name) and any(
+        _python_suspension(node)
+        and after_line <= (getattr(node, "lineno", None) or -1) <= before_line
+        for node in _walk_same_scope(scope_root)
+    ):
+        return True
     for node in ast.walk(tree):
         line = getattr(node, "lineno", None)
         if line is None or not (after_line < line < before_line):
@@ -2672,7 +2716,17 @@ def _python_chain_reaches_sink(
         key=lambda pair: (pair[0].lineno,
                           getattr(pair[0], "col_offset", 0)),
     )
+    local_slots: dict[str, bool] = {}
     for node, class_decls in window:
+        if class_decls is None and _python_suspension(node):
+            # Suspending preserves a captured local value, but does not
+            # freeze module or enclosing-function name slots. Kill here,
+            # before any later alias could borrow the stale certificate.
+            for var in list(chain):
+                if var not in local_slots:
+                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
+                if not local_slots[var]:
+                    chain.discard(var)
         if class_decls is not None:
             # Kill-only: a class-body binding of a declared name
             # escapes to this scope; everything else in the body is
