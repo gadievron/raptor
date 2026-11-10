@@ -32,7 +32,12 @@ control can live further up than the depth-3 caller walk. The receipt
 therefore always records the searched caller set, and registry grade
 additionally requires the entry-reachability escalator.
 
-Verdicts: ``confirmed`` / ``refuted`` (bound witness receipt) /
+Caller-local bounds are conditional evidence: the bounded name-based
+walk does not establish complete entry-path coverage or resource identity
+across calls. A caller witness therefore yields ``inconclusive`` rather
+than refuting the accumulation site.
+
+Verdicts: ``confirmed`` / ``refuted`` (local bound witness receipt) /
 ``inconclusive`` with an enumerated reason. No LLM calls, no
 subprocesses.
 """
@@ -884,8 +889,8 @@ def _caller_bound_search(
     language: str,
     deadline: float | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], bool]:
-    """Depth-bounded reverse walk: a dominating count guard in a
-    caller before the call refutes (``bound-in-caller``). Returns
+    """Depth-bounded reverse walk collecting a caller-local count guard.
+    A witness is conditional evidence, not a whole-site refutation. Returns
     ``(witness_receipt | None, per_caller_receipts, truncated)`` —
     the receipt list records how far the search went (the honesty
     requirement). *deadline* (``time.monotonic()`` epoch, ``None`` =
@@ -1126,14 +1131,20 @@ def _adjudicate_site(
             bound_search=bound_search,
         )
     if caller_witness is not None:
+        # The first matching caller cannot speak for sibling entry paths.
+        # Name-based reverse search also supplies no resource forwarding
+        # proof. Keep the witness without turning it into a site refutation.
+        bound_search["caller_bound_scope"] = "caller-local"
+        bound_search["caller_bound_refutes_site"] = False
+        bound_search["caller_search_complete"] = False
         return BoundEvidence(
-            outcome="refuted",
+            outcome="inconclusive",
             reason=(
-                f"bound-in-caller: `{caller_witness['condition']}` "
-                f"dominates the call chain to {function_name} "
-                f"({caller_witness['bound_source']}); searched "
-                f"{len(per_caller)} caller site(s), depth ≤ "
-                f"{_CALLER_MAX_DEPTH}"
+                f"{REASON_GUARD_UNDECIDED}: bound-in-caller: "
+                f"`{caller_witness['condition']}` guards one caller "
+                f"({caller_witness['bound_source']}); complete entry-path "
+                f"coverage and resource forwarding to {function_name} "
+                "are unverified"
             ),
             resource=resource,
             site=site_receipt,

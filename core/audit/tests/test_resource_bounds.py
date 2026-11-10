@@ -293,15 +293,16 @@ class TestAnchorPairs:
         assert res.outcome == "confirmed"
         assert res.rule_id.endswith(DETECTION_VARIANT_SUFFIX)
 
-    def test_caller_bound_at_depth_two_refutes(self, tmp_path):
+    def test_caller_bound_at_depth_two_is_conditional(self, tmp_path):
         for rel, text in CALLER_BOUND_DEPTH2.items():
             _write(tmp_path, rel, text)
         res = run_resource_bounds_check(
             tmp_path, "src/inner.c", "cache_insert",
             "items list grows without limit",
         )
-        assert res.outcome == "refuted"
+        assert res.outcome == "inconclusive"
         assert "bound-in-caller" in res.reason
+        assert res.bound_search["caller_bound_refutes_site"] is False
         depths = [c["depth"] for c in res.bound_search["callers"]
                   if "bound" in c]
         assert depths == [2]
@@ -555,7 +556,7 @@ class TestCallerWalkDeadline:
         assert truncated is False
 
     def test_truncated_walk_never_confirms(self, tmp_path, monkeypatch):
-        # The fixture refutes (bound-in-caller) on a COMPLETE walk.
+        # The complete bounded walk retains a caller-local witness.
         # With the deadline expiring inside the walk — after the
         # between-sites boundary check — the no-witness result covers
         # only the searched prefix: confirming there would let a
@@ -569,7 +570,8 @@ class TestCallerWalkDeadline:
             tmp_path, "src/inner.c", "cache_insert",
             "items list grows without limit",
         )
-        assert control.outcome == "refuted"
+        assert control.outcome == "inconclusive"
+        assert "bound-in-caller" in control.reason
 
         # State-based clock: the deadline reads as expired only for
         # monotonic() calls made INSIDE the site walk — robust to
