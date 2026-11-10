@@ -226,6 +226,20 @@ private StackVariable keyIterator(Expr expression) {
   )
 }
 
+/** A direct begin value, including iterator copy/conversion construction. */
+private predicate listFrontValue(Expr value, StackVariable container) {
+  exists(FunctionCall call |
+    call = value.getUnconverted() and
+    containerFamily(call.getTarget().(MemberFunction).getDeclaringType(), "list") and
+    call.getTarget().getName() = ["begin", "cbegin"] and
+    call.getQualifier().getUnconverted().(VariableAccess).getTarget() = container
+  )
+  or
+  exists(ConstructorCall copy | copy = value.getUnconverted() |
+    listFrontValue(copy.getArgument(0), container)
+  )
+}
+
 /** Node insertion preserves existing iterators; erasure invalidates the erased position. */
 private predicate invalidates(ContainerMutation mutation, StackVariable iterator, boolean pastEnd) {
   pastEnd = [true, false] and
@@ -267,6 +281,13 @@ private predicate invalidates(ContainerMutation mutation, StackVariable iterator
       )
       or
       name = "pop_back" and family = ["vector", "deque", "basic_string"] and pastEnd = true
+      or
+      name = "pop_front" and family = "list" and pastEnd = false and
+      exists(ControlFlowNode binding, Expr value |
+        rawBinding(binding, iterator, value) and
+        listFrontValue(value, mutation.getContainer()) and
+        positionsUnchanged(binding, iterator, iterator, mutation)
+      )
     )
   )
 }
