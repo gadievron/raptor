@@ -140,3 +140,11 @@ read-bounds objective. Negated, conditional, or otherwise qualified prose is
 inconclusive; callers must not discard those qualifications to manufacture a
 positive goal. The source model's entry constraints and caller reachability
 remain separate from this objective admission.
+
+Legacy overflow objectives use the same closed goal admission while retaining
+whole-expression quotes, individually quoted operands, unquoted operands and
+explicit `plus`/`minus`/`times` operators. Expression extraction alone does not
+certify an overflow goal. Both source confirmation and auxiliary disproof,
+including literal-caller tuples, require a complete positive integer
+`overflow`/`underflow`/`wraparound` label. Source receipts carry a separate goal
+contract alongside their integer-model contract.

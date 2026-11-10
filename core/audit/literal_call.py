@@ -10,7 +10,7 @@ import hashlib
 import logging
 
 from ._util import IDENTIFIER_RE
-from .arithmetic_claim import parse_arithmetic_claim
+from .arithmetic_claim import parse_overflow_claim
 from .arithmetic_operation import ArithmeticOperation, _unwrap, bind_arithmetic_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type
 from .array_bounds import ArrayAccess, bind_array_access, has_array_read_goal, parse_array_access_claim
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "common-width-literal-frame-v12",
+        "query_contract": "common-width-literal-frame-v13",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -149,7 +149,7 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
         if obligation.status != "bound":
             return result
     else:
-        claim = parse_arithmetic_claim(hypothesis)
+        claim = parse_overflow_claim(hypothesis)
         if claim is None:
             return result
         obligation = bind_arithmetic_operation(selected, list(claim.operands), claim.operator, language=language, integer_abi=abi)
@@ -253,7 +253,7 @@ def literal_call_witness_valid(reply, call, verb, hypothesis, integer_abi):
             return (type(obligation.extent) is int and obligation.extent > 0
                     and (index < 0 or index >= obligation.extent)
                     and type(call.get("witness_index")) is int and call["witness_index"] == index)
-        claim = parse_arithmetic_claim(hypothesis)
+        claim = parse_overflow_claim(hypothesis)
         if claim is None or obligation.type_status != "bound":
             return False
         declared = dict(parameters)

@@ -174,7 +174,7 @@ def _bad_boundary(tokens, start, end):
     return False
 
 
-def parse_arithmetic_claim(hypothesis: str) -> ArithmeticClaim | None:
+def _arithmetic_claim_span(hypothesis):
     """Select one explicit binary expression, declining ambiguous input."""
     if not isinstance(hypothesis, str) or len(hypothesis) > _MAX_CHARS:
         return None
@@ -183,6 +183,7 @@ def parse_arithmetic_claim(hypothesis: str) -> ArithmeticClaim | None:
         return None
     selected = None
     selected_key = None
+    selected_span = None
     for index, token in enumerate(tokens):
         if token.expression is not None:
             expression = token.expression
@@ -204,7 +205,28 @@ def parse_arithmetic_claim(hypothesis: str) -> ArithmeticClaim | None:
         if selected is not None and key != selected_key:
             return None
         selected, selected_key = expression, key
-    return selected
+        selected_span = (tokens[start].start, tokens[end - 1].end)
+    return (selected, *selected_span) if selected is not None else None
+
+
+def parse_arithmetic_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """Select an explicit expression without certifying its surrounding goal."""
+    selected = _arithmetic_claim_span(hypothesis)
+    return selected[0] if selected is not None else None
+
+
+def parse_overflow_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """Admit a closed overflow objective around any supported expression form."""
+    from .integer_goal import OVERFLOW_GOALS, parse_integer_goal
+
+    selected = _arithmetic_claim_span(hypothesis)
+    if selected is None:
+        return None
+    claim, start, end = selected
+    # Use the original token span, retaining all surrounding qualifications.
+    # Individual code quotes and English operator aliases remain expressions.
+    goal = hypothesis[:start] + "`arithmetic`" + hypothesis[end:]
+    return claim if parse_integer_goal(goal, OVERFLOW_GOALS) is not None else None
 
 
 def has_integer_overflow_subject(hypothesis: str) -> bool:

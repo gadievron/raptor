@@ -3009,8 +3009,8 @@ def _run_smt_verb_on_source(
                     rule_id=f"smt:{verb}",
                 )
             from packages.exploit_feasibility.smt_verbs import check_overflow
-            from .arithmetic_claim import parse_arithmetic_claim
-            claim = parse_arithmetic_claim(hypothesis)
+            from .arithmetic_claim import parse_overflow_claim
+            claim = parse_overflow_claim(hypothesis)
             if claim is None:
                 return SweepResult(
                     tool="smt", file_path=file_path,
