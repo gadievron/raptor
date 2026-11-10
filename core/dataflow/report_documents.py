@@ -50,6 +50,8 @@ def build_corpus_document(report: CorpusReport) -> ReportDocument:
         return [[index, text(key if key != "" else "<unknown>"), count]
                 for index, (key, count) in enumerate(islice(counter.items(), 1000), 1)]
 
+    metadata = {"Source read state": text(report.read_state), "Source read reason": text(report.read_reason),
+                "Captured source rows": report.read_rows}
     summary = {"Processed outcomes": report.processed, "sound": report.sound, "not_sound": report.not_sound,
                "no_barrier": report.no_barrier, "Pipeline-error rows (separate)": sum(report.pipeline_errors.values()),
                "Suppression rate": report.suppression_rate, "Tier 0 share of sound": report.tier0_share_of_sound,
@@ -70,7 +72,7 @@ def build_corpus_document(report: CorpusReport) -> ReportDocument:
     blocks.append(Block("table", title="not_sound samples (retained subset)", columns=["Row", "CVE", "CWE", "Language", "Detail"],
                         rows=[[index, *[text(value) for value in sample]] for index, sample in enumerate(report.not_sound_samples[:100], 1)]))
     notes = ["This is a snapshot of returned corpus aggregates, not a target vulnerability report. Pipeline errors are separate from processed sound/not_sound/no_barrier outcomes.",
-             "No database query, synthesis, model or CodeQL adjudication is repeated for rendering. The source may still be changing; aggregate read quality, rejected-row accounting and whole-run completion were not supplied.",
+             "No database query, synthesis, model or CodeQL adjudication is repeated for rendering. The source may still be changing; rejected-row accounting and whole-run completion were not supplied. Read state and source-row counts describe only the captured query snapshot.",
              "Missing denominators remain unavailable. A zero-count aggregate does not distinguish an empty or in-flight table from an unavailable database/query.",
              "Tier 0 savings use the native rough default attempt assumption: avoided proposer attempts plus matched adjudications, not measured tokens, currency or completed work. Library backend rows are not counted as free SMT short-circuits.",
              "Sample rows are only the retained diagnostic subset; row numbers are local to this snapshot. All observed backend/status labels in captured rows are retained, including unknown labels."]
@@ -80,6 +82,7 @@ def build_corpus_document(report: CorpusReport) -> ReportDocument:
     if limited:
         notes.append("Portable capture limited: 1000 rows per counter/breakdown, 100 retained samples, 2000 characters per string and 200000 text characters. Omission counts are structured; omitted text is not retained here.")
     document = ReportDocument("Trust-witness corpus report", "trust-corpus", "", summary=summary, blocks=blocks, diagnostics=notes,
+                              metadata=metadata,
                               extensions={"raptor.capture_limited": limited, "raptor.rows_omitted": omissions})
     document.snapshot_id = digest(document.to_dict())
     return document

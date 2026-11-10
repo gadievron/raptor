@@ -41,13 +41,41 @@ def test_analyze_empty_db_returns_zero_counts(tmp_path: Path):
     assert rep.sound == 0
     assert rep.suppression_rate is None
     assert rep.tier0_share_of_sound is None
+    assert rep.read_state == "completed" and rep.read_rows == 0
 
 
 def test_analyze_missing_db_returns_zero_counts(tmp_path: Path):
     """If the bridge hasn't created the DB yet, analyze must still return
     a zero-counts report (not raise) — analyzer is safe to run any time."""
-    rep = r.analyze(tmp_path / "does-not-exist.db")
+    source = tmp_path / "does-not-exist.db"
+    rep = r.analyze(source)
     assert rep.processed == 0
+    assert rep.read_state == "failed" and rep.read_rows is None
+    assert not source.exists()
+
+
+def test_sqlite_uri_reserved_characters_are_literal_read_only_filename(tmp_path: Path):
+    source = tmp_path / "snapshot?#%-evidence.db"
+    _make_db(source, [_row("f1", "CWE-78", "CVE-1", "Python", "sound", "smt")])
+    before = source.read_bytes()
+    entries = set(tmp_path.iterdir())
+    rep = r.analyze(source)
+    assert rep.processed == rep.sound == 1
+    assert source.read_bytes() == before
+    assert set(tmp_path.iterdir()) == entries
+    assert rep.read_state == "completed" and rep.read_rows == 1
+
+
+def test_missing_table_is_unavailable_read_not_completed_empty_query(tmp_path: Path):
+    source = tmp_path / "no-table.db"
+    con = sqlite3.connect(source)
+    con.execute("CREATE TABLE unrelated (value TEXT)")
+    con.close()
+    before = source.read_bytes()
+    rep = r.analyze(source)
+    assert rep.processed == 0 and rep.read_rows is None
+    assert rep.read_state == "failed" and rep.read_reason == "synth_results query unavailable"
+    assert source.read_bytes() == before
 
 
 def test_analyze_mixed_outcomes(tmp_path: Path):
