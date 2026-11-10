@@ -1602,7 +1602,7 @@ def _target_rebinds(target: ast.AST, var_name: str) -> bool:
 def _variable_reassigned_between(
     tree: ast.AST, var_name: str, after_line: int, before_line: int,
 ) -> bool:
-    """True iff ``var_name`` is rebound at a line strictly between
+    """True iff ``var_name`` is rebound or unbound strictly between
     ``after_line`` and ``before_line``.
 
     Sound conservatism for ``charset_sub``: ``x = re.sub('[F]+', '', x)``
@@ -1612,6 +1612,7 @@ def _variable_reassigned_between(
 
       * ``x = …`` / ``x += …`` / ``x: T = …`` (Assign / AugAssign / AnnAssign)
       * ``x, y = pair`` and ``*x, = …`` (tuple / star-unpack targets)
+      * ``del x`` / ``del (x, y)`` (Delete ends the binding epoch)
       * ``for x in …:`` (For / AsyncFor)
       * ``with … as x:`` (With / AsyncWith optional_vars)
       * ``(x := …)`` (NamedExpr walrus)
@@ -1626,10 +1627,10 @@ def _variable_reassigned_between(
         every variable, the conservative direction)
 
     Pure-mutation forms (``x[0] = …``, ``x.attr = …``) don't rebind
-    ``x`` itself and are NOT flagged.  Also NOT flagged, each sound by
-    scope/runtime semantics rather than by rarity: ``del x`` (unbinds —
-    a later use of the name raises ``NameError``, so no value flows),
-    comprehension targets and ``lambda``/``def`` parameters (they bind
+    ``x`` itself and are NOT flagged. Deletion must kill the old epoch:
+    a global lookup can expose a different builtin after removal of
+    the module binding. Also NOT flagged: comprehension targets and
+    ``lambda``/``def`` parameters (they bind
     their own scope, never the enclosing one), and ``global`` /
     ``nonlocal`` statements (declarations — the actual binding is an
     Assign-family node this walk already flags).  The
@@ -1647,11 +1648,11 @@ def _variable_reassigned_between(
 
 
 def _node_rebinds_var(node: ast.AST, var_name: str) -> bool:
-    """True iff a single AST node rebinds ``var_name`` (all the forms
+    """True iff a single AST node replaces or removes ``var_name`` (all the forms
     documented on :func:`_variable_reassigned_between`)."""
     # Forms whose target is an AST node (Name / Tuple / Starred).
     targets: list = []
-    if isinstance(node, ast.Assign):
+    if isinstance(node, (ast.Assign, ast.Delete)):
         targets = list(node.targets)
     elif isinstance(
         node,

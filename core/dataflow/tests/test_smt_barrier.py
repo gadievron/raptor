@@ -2973,6 +2973,9 @@ def test_chain_survives_unrelated_for_target():
 # exists to prevent.
 _BINDING_CONSTRUCT_SNIPPETS: dict[str, str] = {
     "assign": "x = v",
+    # Unbinding invalidates an epoch too; symtable records the slot write.
+    "del": "del x",
+    "del-tuple": "del (x, y)",
     "assign-chained": "x = y = v",
     "assign-tuple-unpack": "a, x = v",
     "assign-list-unpack": "[a, x] = v",
@@ -3023,8 +3026,6 @@ if hasattr(__import__("ast"), "TypeAlias"):  # 3.12+
 # Constructs that mention ``x`` in a binding-like position but do NOT
 # rebind the enclosing scope's ``x`` — the detector must stay quiet on
 # these (precision direction: a spurious kill costs yield).
-#   * del — unbinds; a later use of the name raises NameError, so no
-#     value flows to a sink through it.
 #   * comprehension targets / lambda / def parameters — bind their own
 #     scope, never the enclosing one (symtable may still report
 #     comprehension targets as enclosing-scope symbols under PEP 709
@@ -3032,7 +3033,8 @@ if hasattr(__import__("ast"), "TypeAlias"):  # 3.12+
 #   * global/nonlocal — declarations; the actual binding is an
 #     Assign-family node the detector already flags on its own line.
 _NON_REBINDING_SNIPPETS: dict[str, str] = {
-    "del": "del x",
+    "subscript-deletion": "del x[0]",
+    "attribute-deletion": "del x.attr",
     "subscript-mutation": "x[0] = v",
     "attribute-mutation": "x.attr = v",
     "comprehension-target": "[x for x in v]",
@@ -3055,8 +3057,8 @@ def _detector_hits(src: str, var: str) -> bool:
     "construct", sorted(_BINDING_CONSTRUCT_SNIPPETS),
 )
 def test_node_rebinds_var_closure_binding_constructs(construct):
-    """Every enclosing-scope binding construct must be detected, and
-    CPython's symtable must agree the snippet binds ``x`` (so the
+    """Every enclosing-scope slot write or removal must be detected, and
+    CPython's symtable must record ``x`` as assigned/imported (so the
     catalog itself cannot rot into exercising non-binding shapes)."""
     import symtable
     src = _BINDING_CONSTRUCT_SNIPPETS[construct]
