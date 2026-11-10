@@ -16,6 +16,7 @@ rules:
       - patterns:
           - pattern-either:
               - pattern: $CTX.query
+              - pattern: $CTX.request.query
               - pattern: $CTX.params
           - metavariable-regex:
               metavariable: $CTX
