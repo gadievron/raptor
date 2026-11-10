@@ -58,18 +58,18 @@ def test_manual_direct_binding_cannot_omit_live_catalogue_requirements():
 
 def test_conditional_overwrite_is_not_an_allowed_eligible_definer():
     source = (
-        "import html\nimport bleach\ndef handle(raw, flag):\n"
-        "    safe = bleach.clean(raw)\n"
-        "    if flag:\n        safe = html.escape(raw)\n"
-        "    return render(safe)\n"
+        "import werkzeug\ndef handle(raw, flag):\n"
+        "    safe = werkzeug.utils.secure_filename(raw)\n"
+        "    if flag:\n        safe = werkzeug.security.safe_join(raw)\n"
+        "    return open(safe)\n"
     )
-    graph, sink = _graph(source)
-    result = _check(graph, sink)
+    graph, sink = _graph(source, "open")
+    result = _check(graph, sink, cwe="CWE-22")
     assert result.verdict == VERDICT_CANDIDATE_ONLY and not result.suppress
-    # Structural role witnesses remain visible, but the HTML overwrite
+    # Structural role witnesses remain visible, but the conditional join overwrite
     # cannot validate condition 3 for the earlier unconditional candidate.
-    assert any(item.callable == "bleach.clean" for item in result.value_bound_bindings)
-    assert any(item.callable == "html.escape" and item.unverified_source_contracts
+    assert any(item.callable == "werkzeug.utils.secure_filename" for item in result.value_bound_bindings)
+    assert any(item.callable == "werkzeug.security.safe_join" and item.unverified_source_contracts
                for item in result.all_matched_bindings)
 
 

@@ -659,6 +659,7 @@ def _try_known_safe_call(
             f"tracker-inconclusive)",
         )
     input_type_evidence = None
+    call_form_evidence = None
     unverified_contracts = set(entry.source_contracts)
     if known_safe_calls.EXACT_STR_DEFAULT_CALL in unverified_contracts:
         if language == "python":
@@ -669,6 +670,12 @@ def _try_known_safe_call(
             )
         if input_type_evidence is not None:
             unverified_contracts.remove(known_safe_calls.EXACT_STR_DEFAULT_CALL)
+    if known_safe_calls.DEFAULT_POSITIONAL_CALL in unverified_contracts and language == "python":
+        from core.dataflow.string_type_evidence import default_positional_call_evidence
+
+        call_form_evidence = default_positional_call_evidence(source_text, validator_line, entry.library_call)
+        if call_form_evidence is not None:
+            unverified_contracts.remove(known_safe_calls.DEFAULT_POSITIONAL_CALL)
     if unverified_contracts:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
@@ -683,7 +690,8 @@ def _try_known_safe_call(
         artifact=artifact,
         extras={"validator_line": validator_line, "var_name": spec.variable_name,
                 "library_call": entry.library_call,
-                **({"input_type_evidence": asdict(input_type_evidence)} if input_type_evidence else {})},
+                **({"input_type_evidence": asdict(input_type_evidence)} if input_type_evidence else {}),
+                **({"call_form_evidence": asdict(call_form_evidence)} if call_form_evidence else {})},
     )
 
 

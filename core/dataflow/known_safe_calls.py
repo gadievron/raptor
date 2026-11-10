@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 
 EXACT_STR_DEFAULT_CALL = "exact_builtin_str_default_call"
+DEFAULT_POSITIONAL_CALL = "single_positional_default_call"
 PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 
 
@@ -175,6 +176,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("python",),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({DEFAULT_POSITIONAL_CALL}),
         soundness_note=(
             "bleach.clean sanitises HTML against an allowlist of tags "
             "and attributes.  Default allowlist is XSS-safe; custom "

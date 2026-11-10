@@ -43,15 +43,15 @@ def test_transitive_summary_retains_original_library_contract():
 
 def test_repeated_source_at_conditional_and_unconditional_positions_unions_requirements():
     source = (
-        "import html\nimport bleach\n"
-        "def clean(left, right):\n    return html.escape(left) + bleach.clean(right)\n"
-        "def handle(raw):\n    safe = clean(raw, raw)\n    render(safe)\n"
+        "import werkzeug.security\nimport werkzeug.utils\n"
+        "def clean(left, right):\n    return werkzeug.security.safe_join(left) + werkzeug.utils.secure_filename(right)\n"
+        "def handle(raw):\n    safe = clean(raw, raw)\n    open(safe)\n"
     )
-    _, bindings = _bindings_for(source, "handle")
+    _, bindings = _bindings_for(source, "handle", "CWE-22")
     binding, = bindings
     assert binding.input_symbols == frozenset({"raw"})
-    assert binding.unverified_source_contracts == _REQUIRED
-    result = _evaluate(source, "handle", {"raw"}, "safe", 7)
+    assert binding.unverified_source_contracts == frozenset({"trusted_path_base_components_and_containment"})
+    result = _evaluate(source, "handle", {"raw"}, "safe", 7, "CWE-22")
     assert result.verdict == VERDICT_CANDIDATE_ONLY
     assert result.value_bound_bindings and result.suppress is False
 
@@ -65,7 +65,7 @@ def test_constant_position_does_not_discharge_return_effect_requirement():
     _, bindings = _bindings_for(source, "handle")
     binding, = bindings
     assert binding.input_symbols == frozenset({"raw"})
-    assert binding.unverified_source_contracts == _REQUIRED
+    assert binding.unverified_source_contracts == _REQUIRED | frozenset({"single_positional_default_call"})
     # The summary cannot prove the first input is an exact string, even
     # when only the second position contributes a bare tainted symbol.
     result = _evaluate(source, "handle", {"raw"}, "safe", 7)

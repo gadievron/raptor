@@ -26,6 +26,51 @@ def _span(node: ast.expr | ast.stmt) -> tuple[int, int, int | None, int | None]:
     return node.lineno, node.col_offset, node.end_lineno, node.end_col_offset
 
 
+@dataclass(frozen=True)
+class DefaultCallFormEvidence:
+    source_digest: str
+    library_call: str
+    call_span: tuple[int, int, int | None, int | None]
+    scope: str = "source-call-form-only"
+    assumptions: tuple[str, ...] = (
+        "library identity, runtime defaults and sink semantics remain separate assumptions",
+    )
+
+
+def _default_positional_call(tree: ast.AST, call_line: int, library_call: str) -> ast.Call | None:
+    from core.dataflow.source_identity import _parts
+
+    calls = [node for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and node.lineno == call_line
+             and _parts(node.func) == tuple(library_call.split("."))]
+    if (len(calls) != 1 or len(calls[0].args) != 1 or calls[0].keywords
+            or isinstance(calls[0].args[0], ast.Starred)):
+        return None
+    return calls[0]
+
+
+def default_positional_call_evidence(
+    source_text: str, call_line: int, library_call: str,
+) -> DefaultCallFormEvidence | None:
+    """Observe one non-starred positional argument and no configured options.
+
+    This records call syntax, not argument types or library/whole-source safety.
+    """
+    from core.dataflow.source_identity import known_python_identity_conflict
+
+    try:
+        tree = ast.parse(source_text)
+        if known_python_identity_conflict(source_text, call_line, (library_call,)):
+            return None
+        call = _default_positional_call(tree, call_line, library_call)
+        if call is None:
+            return None
+        digest = sha256(source_text.encode("utf-8", errors="surrogatepass")).hexdigest()
+        return DefaultCallFormEvidence(digest, library_call, _span(call))
+    except (SyntaxError, RecursionError, ValueError):
+        return None
+
+
 def exact_str_default_call_evidence(
     source_text: str, call_line: int, variable: str, library_call: str,
 ) -> ExactStringArgumentEvidence | None:
@@ -40,7 +85,7 @@ def exact_str_default_call_evidence(
         function_scope_bindings, local_binding_names, module_distrusted_roots,
         module_dynamic_namespace, module_import_map,
     )
-    from core.dataflow.source_identity import _parts, known_python_identity_conflict
+    from core.dataflow.source_identity import known_python_identity_conflict
     from core.dataflow.smt_barrier import (
         _function_containing, _nested_scope_escaping_rebinds,
         _walk_same_scope,
@@ -50,12 +95,9 @@ def exact_str_default_call_evidence(
         tree = ast.parse(source_text)
         if known_python_identity_conflict(source_text, call_line, (library_call,)):
             return None
-        calls = [node for node in ast.walk(tree)
-                 if isinstance(node, ast.Call) and node.lineno == call_line
-                 and _parts(node.func) == tuple(library_call.split("."))]
-        if len(calls) != 1 or len(calls[0].args) != 1 or calls[0].keywords:
+        call = _default_positional_call(tree, call_line, library_call)
+        if call is None:
             return None
-        call = calls[0]
         digest = sha256(source_text.encode("utf-8", errors="surrogatepass")).hexdigest()
         argument = call.args[0]
         if isinstance(argument, ast.Constant) and type(argument.value) is str:
