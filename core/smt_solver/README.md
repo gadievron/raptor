@@ -245,3 +245,9 @@ It applies integer promotions, requires a feasible source entry and replays
 the signed-minimum witness independently. The `check-unary-negation` receipt
 is diagnostic: a local arithmetic witness does not establish caller reachability,
 and a safe or unsupported negation never clears the source claim.
+
+`check-integer-update` covers builtin signed `++`/`--` used as a standalone
+statement or direct return value. It binds prefix/postfix spelling and rejects
+unsequenced siblings. It proves overflow in the promoted arithmetic, rather
+than treating a narrow storage conversion as that fault. Receipts remain
+diagnostic and non-refuting; QUALITY candidates follow existing candidate classes.

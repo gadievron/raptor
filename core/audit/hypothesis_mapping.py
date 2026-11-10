@@ -267,6 +267,8 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("signed increment overflow", "check-integer-update"),
+    ("signed decrement overflow", "check-integer-update"),
     ("signed negation overflow", "check-unary-negation"),
     ("non-representable unsigned conversion", "check-integer-conversion"),
     ("non representable unsigned conversion", "check-integer-conversion"),

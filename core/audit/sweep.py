@@ -2275,6 +2275,7 @@ _SMT_SHIM_DIR = Path(__file__).resolve().parents[2] / "libexec"
 # Verbs served only by run_smt_verb_direct() (no libexec shim).
 _SMT_DIRECT_ONLY_VERBS = frozenset({
     "check-unary-negation",
+    "check-integer-update",
     "check-integer-conversion",
     "check-integer-comparison",
     "check-shift-count",
@@ -2310,6 +2311,7 @@ _SMT_VERB_ROLES = {
     "check-integer-comparison": "detection",
     "check-integer-conversion": "detection",
     "check-unary-negation": "detection",
+    "check-integer-update": "detection",
     "check-oob": "detection",
     # A free pointer variable equaling zero does not establish a source dereference.
     "check-null-deref": "detection",
@@ -2830,7 +2832,7 @@ def _smt_verb_in_subprocess(
     from dataclasses import fields
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2907,7 +2909,7 @@ def _run_smt_verb_inner(
     """Confined-worker admission for source-derived function observations."""
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2953,7 +2955,15 @@ def _run_smt_verb_on_source(
     if vocab is None:
         vocab = _verb_vocab(target_path)
     try:
-        if verb == "check-unary-negation":
+        if verb == "check-integer-update":
+            from .integer_update import check_integer_update
+            from .condition_extraction import language_for_file
+            details = check_integer_update(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
+            outcome = "confirmed" if details.get("violation") is True else "inconclusive"
+            return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
+                               rule_id=f"smt:{verb}", outcome=outcome, details=details,
+                               matches=[details] if outcome == "confirmed" else [])
+        elif verb == "check-unary-negation":
             from .integer_negation import check_integer_negation
             from .condition_extraction import language_for_file
             details = check_integer_negation(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)

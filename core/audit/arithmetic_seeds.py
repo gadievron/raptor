@@ -399,7 +399,12 @@ def _operations(source, language, abi):
     negations = [(target, '-', (name,), 'signed-negation-overflow',
                   f"Potential signed negation overflow in `-{name}`.", {'binding_status': 'candidate'})
                  for target, name in negation_candidates(source, language=language, integer_abi=abi)]
-    return result + deferred_guards + affine_candidates + affine_divisions + negations
+    from .integer_update import update_candidates
+    updates = [(target, op, (name,), 'signed-update-overflow',
+                f"Potential signed {'increment' if op == '++' else 'decrement'} overflow in `{op + name if prefix else name + op}`.",
+                {'binding_status': 'candidate'})
+               for target, name, op, prefix in update_candidates(source, language=language, integer_abi=abi)]
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
