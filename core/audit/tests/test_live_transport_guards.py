@@ -1758,6 +1758,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_inet_ntoa_candidate_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_inet_ntoa_double_call_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_shared_buffer_calls_require_context_review"}
+
     def test_pointer_sizeof_expression_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_double_sizeof_rule.py")
         assert _callers_of(calls, "run") == set()

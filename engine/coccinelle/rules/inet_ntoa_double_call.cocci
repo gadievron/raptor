@@ -1,16 +1,14 @@
-// inet_ntoa_double_call.cocci — Detect two inet_ntoa() calls in the
-// same function-call argument list.
+// inet_ntoa_double_call.cocci — Review repeated shared-buffer conversions.
 //
-// inet_ntoa() returns a pointer to a static buffer. Each call
-// overwrites the previous result. When two inet_ntoa() calls appear
-// as arguments to the same function (e.g. printf, syslog, snprintf),
-// both arguments point to the same buffer containing only the
-// second call's result. The first address is silently clobbered.
-//
+// Canonical inet_ntoa calls may share output storage. Distinct addresses
+// can therefore be displayed incorrectly when both returned pointers are
+// consumed together. Equal addresses, copied values and the consumer's
+// contract require review; duplicate syntax alone does not prove lost data.
+// Silence excludes only this direct-argument shape, not other retained-pointer
+// uses of the API. Keep candidate discovery separate from verification.
 // CWE-676: Use of Potentially Dangerous Function
-// Zero-FP: two inet_ntoa() in the same argument list always share
-// the same static buffer — the first result is always lost.
-// @role: verification
+// @role: detection
+// raptor: confirm-only
 
 @double_inet_ntoa@
 expression E1, E2;
@@ -30,6 +28,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "Two inet_ntoa() calls in %s() arguments — static buffer clobbered, first address lost (CWE-676). Use inet_ntop() instead." % fn
+  "message": "Candidate: two inet_ntoa() calls in %s() arguments may share output storage; review address equality and use of the returned strings (CWE-676). Prefer inet_ntop() with caller-owned buffers." % fn
 }
 print("COCCIRESULT:" + json.dumps(msg))
