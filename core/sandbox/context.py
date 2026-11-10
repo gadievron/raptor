@@ -7978,6 +7978,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     encoding=kwargs.get("encoding"),
                                     errors=kwargs.get("errors"),
                                     stdin=kwargs.get("stdin"),
+                                    pass_fds=kwargs.get("pass_fds") or (),
                                     # Forwarded like the Linux spawn
                                     # dispatch — dropping them here
                                     # defeated run_untrusted's
