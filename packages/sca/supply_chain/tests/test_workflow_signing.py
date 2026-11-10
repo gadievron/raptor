@@ -585,11 +585,11 @@ def test_anomaly_findings_cap_at_emit_limit(
             message=f"anomaly {i}",
         )
     findings = scan_target(tmp_path, manifests=[])
-    # Some commits may fall outside the _MAX_COMMITS_WALKED=100
-    # window so check the cap holds rather than asserting a
-    # specific count.
+    # The newest 100 workflow commits include all 25 unsigned anomalies
+    # and 75 signed commits, so the signing norm still exceeds 70%.
+    # Require the cap to be reached: zero findings would not exercise it.
     anomalies = [f for f in findings if f.unsigned_commit is not None]
-    assert len(anomalies) <= ws_mod._MAX_PER_COMMIT_FINDINGS
+    assert len(anomalies) == ws_mod._MAX_PER_COMMIT_FINDINGS
 
 
 # ---------------------------------------------------------------------------
