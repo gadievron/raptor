@@ -121,6 +121,6 @@ def test_real_confined_affine_array_worker_keeps_the_computed_index():
                                       source=SOURCE, hypothesis=CLAIM, integer_abi='lp64')
     assert result.outcome == 'confirmed', result.errors
     assert result.details['witness_index'] == 4 and result.details['model']['Index'] == 3
-    assert result.details['source_scope']['query_contract'] == 'common-width-array-guards-v16'
+    assert result.details['source_scope']['query_contract'] == 'common-width-array-guards-v17'
     assert result.details['oracle_scope'] == 'fixed-local-array-access'
     assert result.details['obligation'] == '(Index+1) < 0 OR (Index+1) >= 4'

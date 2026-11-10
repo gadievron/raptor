@@ -1,7 +1,7 @@
 """Source-bound bounds obligations for a deliberately small C/C++ frame.
 
-One local fixed-size builtin array, one read indexed by an immutable integer
-parameter, supported branch guards, defined scalar prefixes, and an explicit
+One local fixed-size builtin array, one direct read or standalone zero store
+indexed by an immutable integer parameter, supported branch guards, defined scalar prefixes, and an explicit
 target ABI. Witnesses are conditional on the supplied source representing the active build and on
 function-entry parameter domains; caller reachability is not established.
 """
@@ -22,7 +22,7 @@ from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import common_integer_type, has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .function_execution_frame import ordinary_function_frame
-from .integer_goal import ARRAY_READ_GOALS, parse_integer_goal
+from .integer_goal import ARRAY_READ_GOALS, ARRAY_WRITE_GOALS, parse_integer_goal
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import callable_declarator, visible_declarations
@@ -63,9 +63,9 @@ class ArrayAccess:
     index_offset: int = 0
 
 
-def parse_array_access_claim(hypothesis):
+def parse_array_access_claim(hypothesis, *, access_kind="read"):
     """One unambiguous atomic object[index] reference, preserving case."""
-    if not isinstance(hypothesis, str) or len(hypothesis) > 8192 or _WRITE_CLAIM.search(hypothesis):
+    if not isinstance(hypothesis, str) or len(hypothesis) > 8192 or (access_kind != "write" and _WRITE_CLAIM.search(hypothesis)):
         return None
     affine = affine_access_claim(hypothesis)
     if affine is not None:
@@ -104,23 +104,25 @@ def _nodes(root):
     return result
 
 
-def bind_array_access(source, hypothesis, *, language, integer_abi=None):
+def bind_array_access(source, hypothesis, *, language, integer_abi=None, access_kind="read"):
     """Build an access obligation without borrowing extents or mutable values."""
-    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=False)
+    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=False, access_kind=access_kind)
 
 
-def array_access_candidate(source, hypothesis, *, language, integer_abi=None):
+def array_access_candidate(source, hypothesis, *, language, integer_abi=None, access_kind="read"):
     """Bind syntax, extent and index type only; never prove a reaching prefix.
 
     The candidate status cannot enter the native bounds oracle. Its full
     binder must still establish the source path and prefix definedness.
     """
-    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=True)
+    return _bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, candidate_only=True, access_kind=access_kind)
 
 
-def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_only):
+def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_only, access_kind="read"):
     abi = resolve_integer_abi(integer_abi)
-    claim = parse_array_access_claim(hypothesis)
+    if access_kind not in {"read", "write"}:
+        return ArrayAccess("unavailable", "unsupported access kind")
+    claim = parse_array_access_claim(hypothesis, access_kind=access_kind)
     affine = affine_access_claim(hypothesis)
     index_operator, index_offset = affine[2:] if affine is not None else ("", 0)
     if abi is None or claim is None or language not in {"c", "cpp"} or len(source) > _MAX_SOURCE_CHARS:
@@ -155,7 +157,8 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     body_nodes = _nodes(body) if body is not None else None
     if body_nodes is None:
         return ArrayAccess("unavailable", "function body unavailable")
-    if any(node.type not in _FRAME_NODES for node in body_nodes):
+    frame_nodes = _FRAME_NODES | {"assignment_expression", "expression_statement"} if access_kind == "write" else _FRAME_NODES
+    if any(node.type not in frame_nodes for node in body_nodes):
         return ArrayAccess("unavailable", "frame syntax or effects are unsupported")
     parameters = function_declarator.child_by_field_name("parameters")
     if parameters is None:
@@ -192,10 +195,27 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     while statement is not None and statement.type == "parenthesized_expression":
         statement = statement.parent
     children = [child for child in statement.named_children if child.type != "comment"] if statement is not None else []
-    if statement is None or statement.type != "return_statement" or len(children) != 1:
-        return ArrayAccess("unavailable", "a direct array read is required")
-    if _unwrap(children[0]) != target:
-        return ArrayAccess("unavailable", "array read is embedded in another operation")
+    guard_target = target
+    if access_kind == "write":
+        # Bind the entire sole store before exempting it from prefix effects.
+        # Exact zero has no evaluation or integer-conversion hazard.
+        assignment = statement
+        if (index_operator or assignment is None or assignment.type != "assignment_expression"
+                or _unwrap(assignment.child_by_field_name("left")) != target
+                or text(assignment.child_by_field_name("operator")) != "="
+                or text(assignment.child_by_field_name("right")) != "0"):
+            return ArrayAccess("unavailable", "one atomic-index zero store is required")
+        statement = assignment.parent
+        if statement is None or statement.type != "expression_statement" or statement.named_children != [assignment]:
+            return ArrayAccess("unavailable", "a standalone array store is required")
+        if any(node.type == "assignment_expression" and node != assignment for node in body_nodes):
+            return ArrayAccess("unavailable", "another assignment requires value-flow modeling")
+        guard_target = assignment
+    else:
+        if statement is None or statement.type != "return_statement" or len(children) != 1:
+            return ArrayAccess("unavailable", "a direct array read is required")
+        if _unwrap(children[0]) != target:
+            return ArrayAccess("unavailable", "array read is embedded in another operation")
 
     declarations = visible_declarations(target, data, language=language)
     record = declarations.get(claim[0])
@@ -262,7 +282,7 @@ def _bind_array_access(source, hypothesis, *, language, integer_abi, candidate_o
     premises = ()
     if not candidate_only:
         extra = {'selected_value': index} if index_operator else {}
-        guards = guards_for_operation(body, target, data, [claim[1]],
+        guards = guards_for_operation(body, guard_target, data, [claim[1]],
                                       language=language, integer_abi=abi, **extra)
         if guards.status == "unavailable":
             return ArrayAccess("unavailable", "reaching guards unavailable")
@@ -330,17 +350,23 @@ def has_array_read_goal(hypothesis):
     return parse_integer_goal(goal, ARRAY_READ_GOALS) is not None
 
 
+def has_array_write_goal(hypothesis):
+    """Require an explicit closed write objective; never infer one from a read."""
+    return parse_integer_goal(hypothesis, ARRAY_WRITE_GOALS) is not None
+
+
 def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
     """A source-linked function-entry counterexample; safe sites never refute a function."""
-    if not has_array_read_goal(hypothesis):
+    access_kind = "write" if has_array_write_goal(hypothesis) else "read"
+    if access_kind == "read" and not has_array_read_goal(hypothesis):
         return {"array_bounds_status": "unavailable", "violation": None,
-                "reason": "closed positive array read goal required"}
-    access = bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi)
+                "reason": "closed positive array access goal required"}
+    access = bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi, access_kind=access_kind)
     details = {"array_bounds_status": "unavailable", "reason": access.reason, "violation": None}
     if access.status != "bound" or not _z3_available():
         return details
     details.update(array_bounds_status="checked", source_access=asdict(access),
-                   integer_abi=integer_abi_record(integer_abi), access_kind="read", **source_model_scope())
+                   integer_abi=integer_abi_record(integer_abi), access_kind=access_kind, **source_model_scope())
     # The entry and access probes share one default query budget; a
     # nested caller budget may tighten it, never extend it.
     with query_budget(DEFAULT_TIMEOUT_MS):

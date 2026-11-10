@@ -34,6 +34,11 @@ ARRAY_READ_GOALS = {
     "array read out of bounds": "read",
 }
 
+ARRAY_WRITE_GOALS = {
+    "out of bounds write": "write", "write out of bounds": "write",
+    "array write out of bounds": "write",
+}
+
 
 def _cwe_tag(text):
     text = text.strip().lower()
