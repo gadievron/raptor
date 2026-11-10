@@ -1595,6 +1595,13 @@ class TestSemgrepSurfaceFences:
     runner, enumerated per file. A new live test that calls the raw
     sweep — or a guard silently dropped — flips these."""
 
+    def test_generated_source_wrapper_arity_regression(self) -> None:
+        calls = _function_call_map("../../analysis/tests/test_java_source_summaries.py")
+        assert _callers_of(calls, "run_semgrep_sweep") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_generated_sources_preserve_proven_overload_arity",
+        }
+
     def test_python_sql_recovery_native_surface(self) -> None:
         calls = _function_call_map("../../detectors/tests/test_python_sql.py")
         assert _callers_of(calls, "run_pinned_subprocess") == {

@@ -173,9 +173,11 @@ def _source_patterns(summaries) -> list[str]:
         # declaring the helper by its fully-qualified name only
         # matches the FQN form (verified live on the corpus), while
         # an imported simple-name declaration needs the simple form.
-        variants = [f"({s.owner} $W).{s.name}(...)"]
+        # The producer proves one (name, arity), not every overload.
+        arguments = ", ".join(f"$ARG{i}" for i in range(s.arity))
+        variants = [f"({s.owner} $W).{s.name}({arguments})"]
         if s.package:
-            variants.append(f"({s.package}.{s.owner} $W).{s.name}(...)")
+            variants.append(f"({s.package}.{s.owner} $W).{s.name}({arguments})")
         for pat in variants:
             if pat not in seen:
                 seen.add(pat)

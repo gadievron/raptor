@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import json
+import shutil
 
 import pytest
 
@@ -424,5 +425,82 @@ public class H {
         ids = [r["id"] for r in doc["rules"]]
         assert "raptor.generated.source-wrapper.xss" in ids
         srcs = doc["rules"][0]["pattern-sources"][0]["pattern-either"]
-        assert {"pattern": "(H $W).grab(...)"} in srcs
+        assert {"pattern": "(H $W).grab($ARG0, $ARG1)"} in srcs
         assert generate_rules_yaml([]) is None
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+def test_generated_sources_preserve_proven_overload_arity(tmp_path, monkeypatch):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from packages.semgrep.source_wrapper_rules import generate_rules_yaml
+
+    summaries = []
+    for arity in range(3):
+        source_return = (
+            "request.getQueryString()",
+            "request.getParameter(key)",
+            "req.getParameter(key)",
+        )[arity]
+        params = ("", "String key", "HttpServletRequest req, String key")
+        methods = [
+            f"public String grab({parameters}) {{ return "
+            + (source_return if index == arity else '\"constant\"') + "; }"
+            for index, parameters in enumerate(params)
+        ]
+        helper = (
+            "package demo;\nimport javax.servlet.http.HttpServletRequest;\n"
+            f"public class Helper{arity} {{\n"
+            "private HttpServletRequest request;\n"
+            f"public Helper{arity}(HttpServletRequest request) "
+            "{ this.request = request; }\n"
+            + "\n".join(methods) + "\n}\n"
+        )
+        (tmp_path / f"Helper{arity}.java").write_text(helper)
+        derived = derive_source_summaries(helper)
+        assert [(s.owner, s.name, s.arity) for s in derived.summaries] == [
+            (f"Helper{arity}", "grab", arity),
+        ]
+        summaries.extend(derived.summaries)
+
+    config = tmp_path / "rules.json"
+    config.write_text(generate_rules_yaml(summaries))
+    lines = [
+        "package demo;",
+        "import javax.servlet.http.HttpServletRequest;",
+        "import javax.servlet.http.HttpServletResponse;",
+        "class Caller {",
+    ]
+    expected = set()
+    index = 0
+    for arity in range(3):
+        for prefix in ("", "demo."):
+            for call_arity, arguments in enumerate(("", '\"key\"', 'req, \"key\"')):
+                lines.extend([
+                    f"void case_{index}({prefix}Helper{arity} helper, "
+                    "HttpServletRequest req, HttpServletResponse response) {",
+                    f"  response.getWriter().print(helper.grab({arguments}));",
+                    "}",
+                ])
+                if call_arity == arity:
+                    expected.add(len(lines) - 1)
+                index += 1
+    lines.append("}")
+    target = tmp_path / "Caller.java"
+    target.write_text("\n".join(lines) + "\n")
+    monkeypatch.setenv("SEMGREP_SETTINGS_FILE", str(tmp_path / "settings.yml"))
+    monkeypatch.setenv("SEMGREP_LOG_FILE", str(tmp_path / "semgrep.log"))
+    proc = run_pinned_subprocess(
+        ["semgrep", "scan", "--config", str(config), "--metrics", "off",
+         "--disable-version-check", "--jobs", "1", "--json", str(target)],
+        timeout=180, context="Generated source-wrapper overload arity", skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert not data.get("errors"), data.get("errors")
+    assert {Path(path).name for path in data["paths"]["scanned"]} == {target.name}
+    actual = {
+        row["start"]["line"] for row in data["results"]
+        if row["check_id"].endswith("raptor.generated.source-wrapper.xss")
+    }
+    assert actual == expected, (data.get("version"), actual, expected)
