@@ -43,11 +43,26 @@ rules:
       java.util.Random is not cryptographically secure (and a fixed seed makes
       the sequence fully predictable). Use java.security.SecureRandom for
       tokens, keys, and secrets.
-    languages: [java, kotlin]
+    languages: [java]
     severity: MEDIUM
     pattern-either:
-      - pattern: new Random()
-      - pattern: new Random($SEED)
+      - pattern: new java.util.Random()
+      - pattern: new java.util.Random($SEED)
+      - pattern: Math.random()
+    metadata:
+      cwe: ["CWE-338"]
+      asvs: ["V11.5.1"]
+
+  - id: raptor.crypto.prng.java-random.kotlin
+    message: >
+      java.util.Random is not cryptographically secure (and a fixed seed makes
+      the sequence fully predictable). Use java.security.SecureRandom for
+      tokens, keys, and secrets.
+    languages: [kotlin]
+    severity: MEDIUM
+    pattern-either:
+      - pattern: java.util.Random()
+      - pattern: java.util.Random($SEED)
       - pattern: Math.random()
     metadata:
       cwe: ["CWE-338"]
