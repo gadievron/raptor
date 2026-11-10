@@ -1742,6 +1742,13 @@ class TestSemgrepSurfaceFences:
             assert max(probe_at) > max(drain_at), test_name
 
 
+class TestCoccinelleSurfaceFences:
+    def test_pointer_sizeof_expression_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_double_sizeof_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_pointer_sizeof_expression_forms"}
+
+
 class TestCodeQLSurfaceFences:
     def test_owned_native_iris_query_selection(self) -> None:
         calls = _function_call_map("../../../packages/codeql/tests/test_query_selection_reuse.py")
