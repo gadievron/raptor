@@ -4141,7 +4141,10 @@ def run_sandboxed(
                     _instr,
                     setup_category=_status[0] if _status else None,
                 )
-        finally:
+        except BaseException:
+            _retire_parent_resources(lambda: _close_parent_fd(p_ready_r))
+            raise
+        else:
             _close_parent_fd(p_ready_r)
 
         # Step 6: newuidmap / newgidmap.
@@ -4379,7 +4382,10 @@ def run_sandboxed(
                     except BlockingIOError:
                         continue  # spurious wakeup — keep waiting
                     break  # 1 byte (ready) or b"" (EOF — tracer died)
-            finally:
+            except BaseException:
+                _retire_parent_resources(lambda: _close_parent_fd(t_ready_r))  # type: ignore[arg-type]
+                raise
+            else:
                 _close_parent_fd(t_ready_r)  # type: ignore[arg-type]
             if not ready:
                 # Tracer failed to attach. Reap it (capture exit code
