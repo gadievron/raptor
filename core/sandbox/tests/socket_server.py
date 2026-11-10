@@ -101,7 +101,7 @@ class SocketServer:
             except BaseException as exc:
                 errors.append(exc)
 
-        self._stop.set()
+        attempt(self._stop.set)
         def shutdown_listener():
             with contextlib.suppress(OSError):
                 self._listener.shutdown(socket.SHUT_RDWR)
