@@ -364,9 +364,9 @@
     "note": "Fixed schema of signed ihv_claim_observations event emitted during IHV aggregation. Keys carry identity/role/count, separately bounded consumer occurrence, producer bindings and claim-revision references, payload snapshot and omission/completeness metadata. _claim_event_shape validates envelope; write_check_results exports authenticated history; index_claim_observations uses exact references for correspondence only. Receipt labels/proposed refutations and completeness flags confer no verdict, freshness or resume authority. Persistence/report schema, not function-name taxonomy."
   },
   "core/audit/check_trace.py::write_check_results": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
-    "note": "verification_summary JSON field schema in findings-graded.json: artifact/export status, event admission, source-validation withdrawals and rejected inputs, finding/clean-review counts, observation summaries and limitations. Fixed report keys, not target function/API names or detection vocabulary; produced by write_check_results and read back by source-freshness/check-trace tests. Source-validation metadata withdraws applicability and grants no proof authority."
+    "note": "verification_summary JSON field schema in findings-graded.json: artifact/export status, event admission, source-validation withdrawals and rejected inputs, finding/clean-review counts, observation summaries and limitations. Fixed report keys, not target function/API names or detection vocabulary; produced by write_check_results and read back by source-freshness/check-trace tests. Source-validation metadata withdraws applicability and grants no proof authority. Current role review (previous baseline count 10; reviewed count 11): 10to11 verification_summary reportfields addsclaim_observations sidecar/status. Structural schema; no domain-vocabulary change."
   },
   "core/audit/cocci_flow.py::_PROSE_VICTIMS": {
     "count": 30,
@@ -658,15 +658,15 @@
     "kind": "literal"
   },
   "core/audit/evidence_grade.py::MODEL_AUTHORED_REVIEW_KEYS": {
-    "count": 36,
+    "count": 39,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary",
+    "note": "closed schema-key manifest: the review_result keys the review model authors (the review JSON schema fields plus legacy / other-mode fields pipeline code reads as model claims); a closure test (core/audit/tests/test_model_body_markers.py::TestReviewKeyClosure) fails when pipeline code reads a review_result key in neither this set nor PIPELINE_OWNED_REVIEW_KEYS \u2014 persistence/schema keys, not a learned name vocabulary Current role review (previous baseline count 36; reviewed count 39): Closed model-response field classification, including caller-context requests and guarded model-withdrawal proposals. It is not target/API vocabulary or checker evidence. The supplied comparator already contains language_reference_requests; no three-new-fields or proof-promotion claim is made.",
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 71,
+    "count": 77,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier.",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text.",
     "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
@@ -820,12 +820,14 @@
     "reviewed": "2026-08-28"
   },
   "core/audit/llm_review.py::REVIEW_SCHEMA": {
-    "count": 21,
-    "kind": "literal"
+    "count": 23,
+    "kind": "literal",
+    "note": " Current role review (previous baseline count 21; reviewed count 23): Fixed bounded review-response properties. Caller-context requests are locally validated context requests, not receipts or complete caller coverage; language_reference_requests predates the supplied comparator. No target-name vocabulary."
   },
   "core/audit/llm_review.py::REVIEW_SCHEMA_BLIND": {
-    "count": 12,
-    "kind": "literal"
+    "count": 14,
+    "kind": "literal",
+    "note": " Current role review (previous baseline count 12; reviewed count 14): Fixed blind review-response properties reusing bounded caller-context request schema. This is a response protocol, not a target function lexicon or proof authority; no claim that language_reference_requests is newly introduced here."
   },
   "core/audit/llm_review.py::STUDY_SUPPORTED_LANGUAGES": {
     "count": 10,
@@ -932,9 +934,9 @@
     "note": "audit-log refutation-gate record field names (framework record keys, not target API names)"
   },
   "core/audit/orchestrator.py::_re_review_study_enriched": {
-    "count": 19,
+    "count": 20,
     "kind": "literal",
-    "note": "study_reassessment journal schema preserving prior claims/evidence, unverified adjudication, scoped refutations, source hash, bounded body/omission accounting and model cost. Field names do not classify target function identities or confer clean verdicts."
+    "note": "study_reassessment journal schema preserving prior claims/evidence, unverified adjudication, scoped refutations, source hash, bounded body/omission accounting and model cost. Field names do not classify target function identities or confer clean verdicts. Current role review (previous baseline count 19; reviewed count 20): The flagged literal is a study_reassessment event schema retaining unverified/prior-retained claims, reasons, source, receipts and accounting plus guarded model-withdrawal judgment. This exception covers that literal only: the surrounding function can separately admit scoped withdrawals, so it is not wholly diagnostic or receipt-free."
   },
   "core/audit/orchestrator.py::log_entry": {
     "count": 10,
@@ -942,8 +944,9 @@
     "note": "adversarial critique audit-event schema: identity, proposed verdict, unverified adjudication, retained critique and unchanged status; fixed persistence keys, not target function/API names or a detection vocabulary. The payload records model judgment and grants no refutation authority."
   },
   "core/audit/orchestrator.py::study_consumer_thread": {
-    "count": 14,
-    "kind": "literal"
+    "count": 15,
+    "kind": "literal",
+    "note": " Current role review (previous baseline count 14; reviewed count 15): Concrete Python keyword-argument map accepted by _study_consumer and forwarded to its loop, including the pipeline knowledge_runtime handle. Not target vocabulary. Earlier fourteen-count origin is unknown and an empty inventory extraction is not evidence of no change."
   },
   "core/audit/orchestrator.py::sweep": {
     "count": 10,
@@ -1122,9 +1125,9 @@
     "note": "framework-internal enum/namespace vocabulary (not target API names)"
   },
   "core/audit/review_cycle.py::state_record": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
-    "note": "Bounded review-cycle state snapshot fields for origin, deadlines, continuation/model-call allowances, pending/delta IDs, retirement, active pass and recorded events. Persistence/control-state schema rather than learned function/API names."
+    "note": "Bounded review-cycle state snapshot fields for origin, deadlines, continuation/model-call allowances, pending/delta IDs, retirement, active pass and recorded events. Persistence/control-state schema rather than learned function/API names. Current role review (previous baseline count 10; reviewed count 11): Cycle-accounting serialization under lock, including bounded caller_request_ids alongside pending/delta/active/event state. It is not a target lexicon, coverage proof, or acceptance of deserialization/replay correctness."
   },
   "core/audit/rules.py::_run_semgrep_rule": {
     "count": 10,
@@ -1395,9 +1398,9 @@
     "note": "closed record schema, not a name vocabulary: the checkpoint hysteresis state record written to the run dir (the exact fields _load_state validates on read; the two sides must stay in lockstep)"
   },
   "core/coverage/journal_mac.py::_GENERATION_VOCABULARY": {
-    "count": 55,
+    "count": 56,
     "kind": "literal",
-    "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary"
+    "note": "shipped-generation schema manifest for the journal-row MAC verifier: the enumerated extra-key vocabulary each provenance generation is allowed to carry (covered-additive-field invariant - a row with keys outside its generation's set never verifies via the raw form); persistence schema keys in lockstep with the row writers, not a learned name vocabulary Current role review (previous baseline count 55; reviewed count 56): Persisted security-schema raw-form extra-key allowlist, including review_claims history, used by authenticated generation verification. This role is distinct from target function vocabulary. The count/note does not certify generation or migration compatibility, current producer/loader lockstep, authentication, or any new verification authority; those require their own affected controls."
   },
   "core/coverage/registry.py::_REGISTRY": {
     "count": 26,
