@@ -97,6 +97,7 @@ def _lock(root: Path, *, shared: bool = False) -> Iterator[bool]:
     import fcntl
 
     fd = None
+    failed = False
     try:
         try:
             if root.is_symlink():
@@ -124,9 +125,16 @@ def _lock(root: Path, *, shared: bool = False) -> Iterator[bool]:
                     raise TimeoutError("SCA cache maintenance remained busy for 30s")
                 time.sleep(0.05)
         yield True
+    except BaseException:
+        failed = True
+        raise
     finally:
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException:
+                if not failed:
+                    raise
 
 
 def _walk(root: Path, result: EvictionResult) -> Iterator[tuple[Path, os.stat_result]]:
