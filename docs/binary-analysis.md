@@ -680,3 +680,10 @@ receipt alongside the native profile. It preserves sample/skip totals and caps,
 and includes up to 100 family summaries. It does not repeat profiling or copy
 sample contents, sample filenames or seed bytes into the receipt. Corpus
 statistics remain uncorroborated observations.
+
+`/binary siblings RUN_DIR --report-format json` adds a portable review receipt
+without repeating the comparison. Native `--json` output remains on stdout;
+report summaries go to stderr. Counts and analysis caveats remain visible when
+detail is truncated. Asymmetries are review leads, never confirmed findings;
+consistent clusters remain unexamined. Use the native JSON for complete check
+matrices and disproof recipes.
