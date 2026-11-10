@@ -255,7 +255,10 @@ def _literal_load_resource(load_node) -> str | None:
         if method is None or _text(method) != "getClass" or _call_arguments(owner):
             return None
     resource_args = _call_arguments(stream)
-    return _string_literal_value(resource_args[0]) if len(resource_args) == 1 else None
+    resource = _string_literal_value(resource_args[0]) if len(resource_args) == 1 else None
+    # Raw literal spelling is not the runtime name when Java escapes occur.
+    # Refuse rather than selecting a different file or rewriting coordinates.
+    return resource if resource is not None and "\\" not in resource else None
 
 
 # Ancestor node types that are execution-TRANSPARENT: when every

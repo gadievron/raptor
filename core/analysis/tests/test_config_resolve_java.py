@@ -729,3 +729,11 @@ def test_literal_resource_name_with_glob_character_still_resolves(tmp_path):
     (tmp_path / '[a]pp.properties').write_text('alg=SHA-256\n')
     src = _src('[a]pp.properties', '"alg"')
     assert _resolver(tmp_path, src).fold_hook(_get_call(src), 1) == 'SHA-256'
+
+
+def test_resource_escape_cannot_select_raw_spelling(tmp_path):
+    (tmp_path / r'app\t.properties').write_text('alg=SHA-256\n')
+    (tmp_path / 'app\t.properties').write_text('alg=custom\n')
+    src = _src(r'app\t.properties', '"alg"')
+    result = _resolver(tmp_path, src).resolve_call(_get_call(src))
+    assert result.refusal == 'dynamic_resource'
