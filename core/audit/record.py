@@ -309,6 +309,8 @@ def load_audit_log_disclosed(
     row either way.
     """
     from core.json import load_jsonl
+    from core.source.streams import owned_fd
+
     rows: list[dict[str, Any]] = []
     total_bytes = 0
     tail_read: list[str] = []
@@ -340,10 +342,8 @@ def load_audit_log_disclosed(
         except OSError:
             unreadable.append(p.name)
             continue
-        try:
+        with owned_fd(probe_fd, close_fd=os.close):
             size = os.fstat(probe_fd).st_size
-        finally:
-            os.close(probe_fd)
         shards_read += 1
         total_bytes += size
         if size > _AUDIT_LOG_MAX_BYTES:
