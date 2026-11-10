@@ -2215,6 +2215,7 @@ def run_sandboxed(
         # t_ready_w) precisely so the confirmation-then-EOF contract
         # holds.
         status_r, status_w = os.pipe()
+        _parent_fds.update({status_r, status_w})
         # SECURITY INVARIANT: status_w MUST stay close-on-exec (non-
         # inheritable). That is the ONE thing that makes the status
         # unspoofable — it guarantees the fd is gone from the target's fd
@@ -2225,8 +2226,6 @@ def run_sandboxed(
         # silently re-opening the spoofing hole. NOT a bare `assert`
         # (stripped under -O) — a real check for a security invariant.
         if os.get_inheritable(status_w):
-            os.close(status_r)
-            os.close(status_w)
             msg = (
                 "sandbox exec-status pipe write-end is inheritable — the "
                 "target could forge/suppress setup status; refusing to use "
@@ -2239,7 +2238,6 @@ def run_sandboxed(
         # exits. Our child's status (if any) is written before it's reaped,
         # so it's already buffered when we read.
         os.set_blocking(status_r, False)
-        _parent_fds.update({status_r, status_w})
 
         # Output capture pipes (optional).
         if _capture_any:
