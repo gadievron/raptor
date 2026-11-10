@@ -78,8 +78,13 @@ def _write(node: int, name: str, data: str) -> None:
         encoded = data.encode('ascii')
         if os.write(fd, encoded) != len(encoded):
             raise OSError(errno.EIO, 'incomplete cgroup control write')
-    finally:
-        os.close(fd)
+    except BaseException:
+        try:
+            os.close(fd)
+        except BaseException:
+            pass
+        raise
+    os.close(fd)
 
 
 class Scope:
