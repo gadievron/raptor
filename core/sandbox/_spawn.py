@@ -1688,6 +1688,7 @@ def run_sandboxed(
     extra_unix_bridges: Sequence[tuple[int, str]] | None = None,
     exec_pid_callback: Callable[[int], None] | None = None,
     child_pid_callback: Callable[[int], None] | None = None,
+    execution_committed_callback: Callable[[], None] | None = None,
     rootfs: str | None = None,
     max_capture_bytes: int | None = None,
     job_controller=None,
@@ -4466,6 +4467,11 @@ def run_sandboxed(
                 )
                 raise RuntimeError(msg)
 
+        # Crossing this release boundary makes execution possible. A caller
+        # must not replay an exception unless a returned setup status proves
+        # the target never ran.
+        if execution_committed_callback is not None:
+            execution_committed_callback()
         # Step 8: tell child to proceed.
         try:
             os.write(p_go_w, b"G")
