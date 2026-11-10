@@ -204,6 +204,7 @@ def compute_gaps(
     reuse_stats: dict | None = None,
     seed_rereview_keys: set | None = None,
     current_tools: frozenset[str] | None = None,
+    source_roots: dict[str, Path] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -499,6 +500,7 @@ def compute_gaps(
         out_dir,
         project_dir,
         target_path=Path(target_path_str) if target_path_str else None,
+        source_roots=source_roots,
         current_spans=current_spans,
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
@@ -2352,10 +2354,10 @@ def _review_context_binding(entry) -> tuple[bool, _ContextReviewBinding]:
             (source_hash, context_inputs_digest(snapshot) if present else None))
 
 
-def _review_context_current(entry, target_path: Path | None) -> bool:
+def _review_context_current(entry, target_path: Path | None, source_roots=None) -> bool:
     """Require the portable dependency record and its admission tag together."""
     from .review_context_inputs import context_inputs_current
-    from .source_anchor import parse_context_source_anchor
+    from .source_anchor import context_source_anchor_version, parse_context_source_anchor
 
     bound, (source_hash, digest) = _review_context_binding(entry)
     if not bound:
@@ -2367,12 +2369,13 @@ def _review_context_current(entry, target_path: Path | None) -> bool:
     if not isinstance(history, dict):
         return False
     snapshot = history.get("source_inputs")
-    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), list):
+    if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), list)
+            or snapshot.get("version") != context_source_anchor_version(source_hash)):
         return False
     primary_sources = [row for row in snapshot["sources"]
-               if isinstance(row, dict) and row.get("file") == entry.file]
+               if isinstance(row, dict) and row.get("root", "target") == "target" and row.get("file") == entry.file]
     return (len(primary_sources) == 1 and primary_sources[0].get("sha256") == anchor[0]
-            and context_inputs_current(snapshot, target_path)[0])
+            and context_inputs_current(snapshot, target_path, source_roots=source_roots)[0])
 
 
 def _review_context_site(entry) -> _ContextReviewSite:
@@ -2441,6 +2444,7 @@ def _fold_journal_into_covered(
     domain_ctx: dict | None = None,
     reuse_stats: dict | None = None,
     current_tools: frozenset[str] | None = None,
+    source_roots: dict[str, Path] | None = None,
 ) -> None:
     """Fold review-journal entries into the covered-function set so
     LLM-reviewed functions suppress gaps mid-run.
@@ -2543,6 +2547,7 @@ def _fold_journal_into_covered(
                     covered,
                     _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
+                    source_roots=source_roots,
                     current_spans=current_spans or {},
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
@@ -2592,6 +2597,7 @@ def _fold_journal_into_covered(
                     covered,
                     _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
+                    source_roots=source_roots,
                     current_spans=current_spans or {},
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
@@ -2629,6 +2635,7 @@ def _fold_journal_into_covered(
             _fold_project_index(
                 covered, project_dir,
                 target_path=target_path,
+                source_roots=source_roots,
                 current_spans=current_spans or {},
                 current_raw_ends=current_raw_ends or {},
                 site_raw_ends=site_raw_ends or {},
@@ -3303,6 +3310,7 @@ def _fold_project_index(
     current_tools: frozenset[str] | None = None,
     context_barriers: _ContextReviewBarriers | None = None,
     full_entries: list | None = None,
+    source_roots: dict[str, Path] | None = None,
 ) -> None:
     """Fold the project journal index into ``covered``, hash-aware.
 
@@ -3401,6 +3409,7 @@ def _fold_project_index(
         covered,
         list(latest_function_grade_collapse(full_entries).values()),
         target_path=target_path,
+        source_roots=source_roots,
         current_spans=current_spans,
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
@@ -3472,6 +3481,7 @@ def _verify_entries_fold(
     sidecar_dir: Path | None = None,
     current_tools: frozenset[str] | None = None,
     context_barriers: _ContextReviewBarriers | None = None,
+    source_roots: dict[str, Path] | None = None,
 ) -> None:
     """Hash-verify journal *entries* and fold them into ``covered``.
 
@@ -3624,7 +3634,7 @@ def _verify_entries_fold(
 
     def _context_admitted(entry, key: str) -> bool:
         if (_review_context_preceded(entry, barriers)
-                or not _review_context_current(entry, target_path)):
+                or not _review_context_current(entry, target_path, source_roots)):
             reuse_blocked["review_context_inputs"] = reuse_blocked.get("review_context_inputs", 0) + 1
             if reuse_stats is not None:
                 reuse_stats.setdefault(key, "review_context_inputs")

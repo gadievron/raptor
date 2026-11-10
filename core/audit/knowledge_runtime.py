@@ -25,6 +25,7 @@ from .caller_review_context import (CallerContextAnswer, CallerContextRequest, r
                                     resolve_caller_context, validate_caller_context)
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin, KnowledgeRequest, register_requests
 from .refutation_source import capture_source_identity
+from .review_input_scope import CapturedReviewInput, ReviewInputScope
 from .review_cycle import KnowledgeContinuation, KnowledgeCycle
 from .study_inputs import StudyInputBindings
 
@@ -70,6 +71,8 @@ class AuditKnowledgeRuntime:
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
         self._knowledge_deliveries: dict[str, list[dict[str, list[dict]]]] = {}
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
+        self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
+        self._live_input_errors: set[str] = set()
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
         self._written_events: dict[str, int] = {}
@@ -200,7 +203,25 @@ class AuditKnowledgeRuntime:
                 dependencies = context_inputs_from_delivery(outcome.review_result["caller_context_delivery"], origin)
                 if dependencies is not None:
                     history["source_inputs"] = dependencies
+            from .review_context_inputs import merge_context_inputs
+            study_manifest, live_inputs, live_valid = self._capture_delivered_inputs(
+                origin, reservation, outcome.review_result)
+            dependencies = merge_context_inputs(history.get("source_inputs"), study_manifest)
+            if dependencies is not None:
+                history["source_inputs"] = dependencies
             outcome.review_result["review_claims"] = history
+            if dependencies is not None and live_valid:
+                from .review_context_inputs import context_inputs_record_digest
+                record_digest = context_inputs_record_digest(dependencies)
+                if record_digest is not None:
+                    outcome.review_input_scope = ReviewInputScope(origin, record_digest, live_inputs)
+            if reservation is not None:
+                with self._lock:
+                    self._live_input_sets.setdefault(reservation.packet.pass_id, []).append(live_inputs)
+                    if not live_valid:
+                        self._live_input_errors.add(reservation.packet.pass_id)
+                        self._events.append({"event": "review_inputs_unbound", "attempt_id": attempt_id,
+                            "pass_id": reservation.packet.pass_id, "reason": "delivered_input_binding_unavailable"})
             current = capture_source_identity(self.target_root, origin.file)
             if reservation is not None:
                 knowledge_delivery = {field: deepcopy(outcome.review_result[field])
@@ -228,6 +249,126 @@ class AuditKnowledgeRuntime:
 
         setattr(review, "_knowledge_review_owner", self)
         return review
+
+    def _capture_delivered_inputs(self, origin: KnowledgeOrigin, reservation: KnowledgeReservation | None,
+                                  review: dict) -> tuple[dict | None, tuple[CapturedReviewInput, ...], bool]:
+        """Use owned supplied material bindings, never model dependency guesses."""
+        from .review_context_inputs import context_inputs_from_sources
+
+        captured: list[CapturedReviewInput] = []
+        study_seen = False
+        valid = True
+        explanations = reservation.packet.explanations if reservation is not None else ()
+        caller_answers = {answer.request_id: answer for answer in
+                          (reservation.packet.caller_contexts if reservation is not None else ())}
+        if explanations and "source_study_delivery" not in review:
+            study_seen = True
+            valid = False
+        study_rows = review.get("source_study_delivery", [])
+        if not isinstance(study_rows, list):
+            study_seen = True
+            valid = False
+            study_rows = []
+        for row in study_rows:
+            if not isinstance(row, dict) or type(row.get("delivered")) is not bool:
+                study_seen = True
+                valid = False
+                continue
+            if row["delivered"] is not True:
+                continue
+            study_seen = True
+            linked = [answer for answer in explanations if answer.request_id == row.get("request_id")]
+            materials = tuple(material for answer in linked for material in answer.inputs)
+            expected_ids = list(dict.fromkeys(material.binding_id for material in materials))
+            if not linked or not materials or row.get("input_binding_ids") != expected_ids:
+                valid = False
+                continue
+            exported = self.bindings.snapshot_inputs(materials)
+            if exported is None:
+                valid = False
+            else:
+                captured.extend(exported)
+        if caller_answers and "caller_context_delivery" not in review:
+            valid = False
+        caller_rows = review.get("caller_context_delivery", [])
+        if not isinstance(caller_rows, list):
+            valid = False
+            caller_rows = []
+        for row in caller_rows:
+            if not isinstance(row, dict) or type(row.get("delivered")) is not bool:
+                valid = False
+                continue
+            if row["delivered"] is not True:
+                continue
+            request_id = row.get("request_id")
+            if not isinstance(request_id, str):
+                valid = False
+                continue
+            answer = caller_answers.get(request_id)
+            material = answer.material if answer is not None else None
+            supplied = row.get("source_materials")
+            if (material is None or not isinstance(supplied, list) or len(supplied) != 1
+                    or not isinstance(supplied[0], dict)
+                    or supplied[0].get("file") != material.file
+                    or supplied[0].get("sha256") != material.source_identity.sha256
+                    or supplied[0].get("source_version") != list(material.source_identity.version)):
+                valid = False
+                continue
+            captured.append(CapturedReviewInput("target", self.target_root.resolve(),
+                                               material.file, material.source_identity))
+        manifest = None
+        if study_seen or not valid:
+            sources = [(source.root_label, source.file, source.source_identity.sha256) for source in captured]
+            if origin.source_identity is None:
+                valid = False
+            else:
+                sources.append(("target", origin.file, origin.source_identity.sha256))
+            manifest = context_inputs_from_sources(sources, complete=valid)
+        return manifest, tuple(dict.fromkeys(captured)), valid
+
+    def publication_input_scope(self, reservation: KnowledgeReservation, candidate) -> ReviewInputScope | None:
+        """Bind fresh contributing inputs to the candidate's exact durable set."""
+        from .review_claims import read_history
+        from .review_context_inputs import context_inputs_record_digest
+
+        if not self._owned_reservation(reservation):
+            return None
+        history = read_history((candidate.review_result or {}).get("review_claims"))
+        if history is None or "source_inputs" not in history:
+            return None
+        digest = context_inputs_record_digest(history["source_inputs"])
+        if digest is None:
+            return None
+        with self._lock:
+            if reservation.packet.pass_id in self._live_input_errors:
+                return None
+            sources = tuple(dict.fromkeys(
+                source for group in self._live_input_sets.get(reservation.packet.pass_id, ())
+                for source in group))
+        return ReviewInputScope(reservation.origin, digest, sources)
+
+    def bind_review_input_scope(self, outcome) -> None:
+        """Attach the combined pass scope after panel reconstruction."""
+        from .review_claims import read_history
+
+        line = outcome.line or 0
+        if type(line) is not int or line <= 0:
+            history = read_history((outcome.review_result or {}).get("review_claims"))
+            review = history.get("review") if history is not None else None
+            origin = review.get("origin") if isinstance(review, dict) else None
+            if (not isinstance(origin, dict)
+                    or (origin.get("file"), origin.get("function")) != (outcome.file, outcome.function)):
+                return
+            line = origin.get("line_start")
+        if type(line) is not int or line <= 0:
+            return
+        with self._lock:
+            reservation = self._active_units.get((outcome.file, outcome.function, line))
+        if reservation is not None:
+            outcome.review_input_scope = self.publication_input_scope(reservation, outcome)
+
+    def source_roots(self) -> dict[str, Path]:
+        return self.bindings.registered_roots()
 
     def _signature(self, request: KnowledgeRequest, ctx: dict) -> tuple:
         language = ctx.get("language") if isinstance(ctx.get("language"), str) else ""
@@ -629,6 +770,8 @@ class AuditKnowledgeRuntime:
             self._active_units.pop(self._key(reservation.origin), None)
             self._knowledge_deliveries.pop(reservation.packet.pass_id, None)
             self._caller_deliveries.pop(reservation.packet.pass_id, None)
+            self._live_input_sets.pop(reservation.packet.pass_id, None)
+            self._live_input_errors.discard(reservation.packet.pass_id)
         self.notify()
 
     def complete(self, reservation: KnowledgeReservation, ctx: dict, *, published_status: str = "",
