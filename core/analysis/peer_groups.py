@@ -60,7 +60,9 @@ import os
 import random
 import re
 from collections import defaultdict
+from collections.abc import Callable, Iterable
 from pathlib import Path, PurePosixPath
+from types import BuiltinFunctionType
 from typing import Any
 
 from core.analysis.clone_index import (
@@ -80,6 +82,17 @@ from core.audit.sibling_analysis import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NAME_TYPE_IMPL = type
+_NAME_TEXT_TYPE = type("")
+_NAME_SET_TYPE = type({None})
+_NATIVE_NAME_SORT: Callable[[Iterable[str]], list[str]] | None = None
+_sort_candidate = sorted
+if (type(_sort_candidate) is BuiltinFunctionType
+        and _sort_candidate.__module__ == "builtins"
+        and _sort_candidate.__name__ == "sorted"):
+    _NATIVE_NAME_SORT = _sort_candidate
+del _sort_candidate
 
 # Extended sibling types for new layers.  We use plain strings because
 # SiblingType is a str enum — downstream consumers compare by value, so
@@ -2509,7 +2522,30 @@ def _paired_operation_groups(
         return []
 
     func_by_name = _name_index(functions)
+    native_set_builder = set is _NAME_SET_TYPE
     names = set(func_by_name)
+    cache_allowed = (native_set_builder
+                     and _NAME_TYPE_IMPL(names) is _NAME_SET_TYPE
+                     and _NATIVE_NAME_SORT is not None)
+    if cache_allowed:
+        for name in names:
+            if _NAME_TYPE_IMPL(name) is not _NAME_TEXT_TYPE:
+                cache_allowed = False
+                break
+    ordered: list[str] | None = None
+
+    def _ordered_names() -> list[str]:
+        nonlocal ordered, cache_allowed
+        sorter = sorted
+        if cache_allowed and sorter is _NATIVE_NAME_SORT:
+            if ordered is None:
+                ordered = sorter(names)
+            return ordered
+        # A foreign sorter can retain the mutable name set, then mutate it
+        # after restoring the builtin. Once exposed, never reuse its order.
+        cache_allowed = False
+        return sorter(names)
+
     groups: list[SiblingGroup] = []
     paired: set[str] = set()
 
@@ -2541,7 +2577,7 @@ def _paired_operation_groups(
     for fwd_pat, rev_pat in _PAIR_PATTERNS:
         forward: dict[str, str] = {}
         reverse: dict[str, str] = {}
-        for name in sorted(names):
+        for name in _ordered_names():
             m = fwd_pat.match(name)
             if m:
                 stem = m.group(2) or ""
@@ -2556,7 +2592,7 @@ def _paired_operation_groups(
 
     # Suffix-swap pairs
     for acq_sfx, rel_sfx in _SUFFIX_PAIRS:
-        for name in sorted(names):
+        for name in _ordered_names():
             if name.endswith(acq_sfx):
                 stem = name[: -len(acq_sfx)]
                 partner = stem + rel_sfx
