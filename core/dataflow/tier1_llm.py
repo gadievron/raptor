@@ -765,7 +765,7 @@ def try_tier1b(
         )
     # Source-wide binding checks need the complete file, including
     # declarations after the sink. A visible sink does not prove completeness.
-    got = read_text_capped(src_path, errors="replace")
+    got = read_text_capped(src_path, errors="replace", newline="")
     if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
