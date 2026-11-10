@@ -234,13 +234,10 @@ import ast
 import re
 import sys
 import unicodedata
-import unittest
-from unittest.mock import patch
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import pytest
 
 try:  # Python 3.11+
     from re import _parser as sre_parse  # type: ignore[attr-defined]
@@ -248,24 +245,15 @@ except ImportError:  # pragma: no cover - older interpreters
     import sre_parse  # type: ignore[no-redef]
 
 from contextlib import nullcontext as _path_nullcontext
-from unittest.mock import patch as _path_patch
-import pytest as _path_pytest
+
+if __name__ != "__main__":
+    from unittest.mock import patch as _path_patch
 
 with (_path_patch.object(sys, "path", sys.path.copy())
       if __name__ != "__main__" else _path_nullcontext()):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
     from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
-
-    # The census sre-parses every EXTRACTED candidate string, including
-    # literal alias spellings that runtime code re.escape()s before
-    # compiling (e.g. the C++ attribute forms ``[[nodiscard]]``). Parsing
-    # those raw trips Python 3.14's nested-set forward-compat
-    # FutureWarning; the census only inspects parse structure, so the
-    # warning is noise here (and would break the sweep under a -W error
-    # policy) while the runtime compile sites stay warning-clean.
-    pytestmark = pytest.mark.filterwarnings(
-        "ignore:Possible nested set:FutureWarning")
 
     _REPO = repo_root()
 
@@ -316,11 +304,6 @@ with (_path_patch.object(sys, "path", sys.path.copy())
 
 
 
-@_path_pytest.fixture(autouse=True)
-def _scoped_helper_import_path(monkeypatch):
-    """Keep lazy helper imports available without modifying borrowed path lists."""
-    monkeypatch.setattr(sys, "path", sys.path.copy())
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 
 def _iter_python_files() -> list[Path]:
@@ -3085,6 +3068,37 @@ def _probe_fixture(shape: str, spelling: str) -> str:
         return json.load(fh)[shape][spelling]
 
 
+# Each timing lane is a fresh process; it needs the oracle, not the test runner.
+if __name__ == "__main__" and "--oracle-worker" in sys.argv:
+    import json
+
+    request = json.load(sys.stdin)
+    _oracle_probe_lines(
+        request["pattern"], request["flags"], request["mode"],
+        request["kind"], request["index"], request["unit"],
+    )
+    sys.exit(0)
+
+
+import unittest
+from unittest.mock import patch
+import pytest
+from unittest.mock import patch as _path_patch
+import pytest as _path_pytest
+
+# The census parses extracted aliases which runtime code escapes before
+# compiling. Ignore their nested-set warning only in the test harness.
+pytestmark = pytest.mark.filterwarnings(
+    "ignore:Possible nested set:FutureWarning")
+
+
+@_path_pytest.fixture(autouse=True)
+def _scoped_helper_import_path(monkeypatch):
+    """Keep lazy helper imports available without modifying borrowed path lists."""
+    monkeypatch.setattr(sys, "path", sys.path.copy())
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+
+
 class RedosIdiomCensus(unittest.TestCase):
 
     def test_detector_catches_the_idiom(self) -> None:
@@ -4949,15 +4963,6 @@ class NestedQuantifierCensus(unittest.TestCase):
 if __name__ == "__main__":
     import sys
 
-    if "--oracle-worker" in sys.argv:
-        import json
-
-        request = json.load(sys.stdin)
-        _oracle_probe_lines(
-            request["pattern"], request["flags"], request["mode"],
-            request["kind"], request["index"], request["unit"],
-        )
-        sys.exit(0)
     if "--extract-worker" in sys.argv:
         import json
 
