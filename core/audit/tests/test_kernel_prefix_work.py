@@ -60,7 +60,7 @@ def test_tail_read_failure_preserves_kernel_fallback(tmp_path, monkeypatch):
 
     stream = FailingStream(b'ordinary source with a failing tail')
     monkeypatch.setattr(windows, '_CHUNK_BYTES', 8)
-    monkeypatch.setattr(windows, 'open_regular', lambda *args: stream)
+    monkeypatch.setattr(windows, '_open_contained', lambda *args: stream)
     assert context._file_has_kernel_markers({'file': path.name, 'target_path': str(tmp_path)}) is True
     assert stream.closed
 
@@ -71,9 +71,10 @@ def test_existing_kernel_cache_still_performs_one_read_per_key(tmp_path, monkeyp
     actual = context._read_target_text_prefix
     reads = []
 
-    def read(*args):
+    def read(*args, **kwargs):
+        assert kwargs == {"target_root": tmp_path}
         reads.append(args)
-        return actual(*args)
+        return actual(*args, **kwargs)
 
     monkeypatch.setattr(context, '_read_target_text_prefix', read)
     ctx = {'file': path.name, 'target_path': str(tmp_path)}

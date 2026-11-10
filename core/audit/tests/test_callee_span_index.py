@@ -80,8 +80,9 @@ def test_repeated_callee_still_reads_fresh_source(tmp_path, monkeypatch):
     real_read = context._read_target_line_window
     reads = []
 
-    def read(*args):
-        lines = real_read(*args)
+    def read(*args, **kwargs):
+        assert kwargs == {"target_root": tmp_path}
+        lines = real_read(*args, **kwargs)
         reads.append(args)
         if len(reads) == 1:
             write_source(tmp_path, 'after')

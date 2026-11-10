@@ -29,9 +29,10 @@ def test_unrelated_callers_do_not_consume_the_public_cap(tmp_path, monkeypatch):
     reads = []
     real_read = context._read_target_text
 
-    def read(path):
+    def read(path, *, target_root=None):
+        assert target_root == tmp_path
         reads.append(path.name)
-        return real_read(path)
+        return real_read(path, target_root=target_root)
 
     monkeypatch.setattr(context, '_read_target_text', read)
     callers = context.collect_caller_call_sites(
@@ -55,7 +56,7 @@ def test_entry_does_not_format_an_entire_long_source_line(tmp_path, monkeypatch)
 
     (tmp_path / 'caller.c').write_text('placeholder\n')
     line = Line('x' * (2 * 1024 * 1024))
-    monkeypatch.setattr(context, '_read_target_line_window', lambda *args: [line])
+    monkeypatch.setattr(context, '_read_target_line_window', lambda *args, **kwargs: [line])
     callers = [{'file': 'caller.c', 'name': 'f', 'line_start': 1}]
     inventory = {'files': [{'path': 'caller.c', 'items': [
         {'name': 'f', 'line_start': 1, 'line_end': 1},

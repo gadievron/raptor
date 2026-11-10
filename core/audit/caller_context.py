@@ -62,7 +62,10 @@ def enrich_caller_entries(callers: list[dict], target_path: Path, inventory: dic
         if path is None:
             continue
         window_start = max(0, first - 1 - _DOC_LOOKBACK_LINES)
-        lines = _read_target_line_window(path, window_start, min(last, first - 1 + CALLER_ENTRY_LINES))
+        lines = _read_target_line_window(
+            path, window_start, min(last, first - 1 + CALLER_ENTRY_LINES),
+            target_root=target_path,
+        )
         if not lines:
             continue
         entry_start = first - 1 - window_start
