@@ -164,6 +164,8 @@ def test_capability_preflight_is_machine_readable_and_does_not_start_work(capsys
     assert cli.main(["capabilities"]) == 0
     capabilities = json.loads(capsys.readouterr().out)
     assert any(c["command"] == "binary report" and c["artifact_policy"] == "explicit export" for c in capabilities)
+    assert any(c["command"] == "understand native map/hunt/trace/resume"
+               and c["document_kind"] == "understand" and c["summary_independent"] for c in capabilities)
 
 
 def test_validation_supplement_changes_snapshot_identity(tmp_path):
