@@ -3328,7 +3328,7 @@ def run_sandboxed(
             # shell command-not-found convention and fed downstream
             # returncode oracles a fabricated target result. The
             # stderr write stays as the human-readable diagnostic.
-            if cwd:
+            if cwd is not None:
                 try:
                     os.chdir(cwd)
                 except OSError as e:
