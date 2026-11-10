@@ -572,8 +572,16 @@ def _file_lock(path: Path):
     if not _HAS_FCNTL:
         yield
         return
+    from core.source.streams import owned_fd
+
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
+    close_pending = True
+
+    def close_owned(value: int) -> None:
+        if close_pending:
+            os.close(value)
+
     # Open with O_CREAT — creates if absent, doesn't truncate.
     # O_NOFOLLOW: the lock file has a predictable sibling name; a
     # symlink squatted there must fail loudly (ELOOP) rather than be
@@ -609,16 +617,17 @@ def _file_lock(path: Path):
             f"flight), then retry"
         )
         raise AnnotationFileError(msg) from e
-    st = os.fstat(fd)
-    if not pystat.S_ISREG(st.st_mode):
-        os.close(fd)
-        msg = (
-            f"annotation lock path {lock_path} is not a regular file "
-            "— a planted FIFO or device node there would defeat the "
-            "bounded wait; remove it, then retry"
-        )
-        raise AnnotationFileError(msg)
-    try:
+    with owned_fd(fd, close_fd=close_owned):
+        st = os.fstat(fd)
+        if not pystat.S_ISREG(st.st_mode):
+            close_pending = False
+            os.close(fd)
+            msg = (
+                f"annotation lock path {lock_path} is not a regular file "
+                "— a planted FIFO or device node there would defeat the "
+                "bounded wait; remove it, then retry"
+            )
+            raise AnnotationFileError(msg)
         # Bounded announce-once acquisition (shared helper). NO
         # foreign-uid refusal here, deliberately: this lock is the
         # documented two-operator rendezvous — operator B legitimately
@@ -642,8 +651,7 @@ def _file_lock(path: Path):
             yield
         finally:
             fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
+
 
 
 # Who authored the annotation. ``human`` — operator via an
