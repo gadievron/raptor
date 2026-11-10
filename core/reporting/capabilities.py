@@ -19,9 +19,10 @@ class CommandCapability:
 
 
 CAPABILITIES = (
-    CommandCapability("llm-scorecard summary/compare", "scorecard-summary/scorecard-compare", "explicit companion export", "native stdout; export quick view on stderr", "single captured read and native dashboard/comparison payload; policy and spend calculations retained"),
-    CommandCapability("llm-scorecard samples", "scorecard-samples", "explicit companion export", "native typed sample view; export quick summary on stderr", "retained samples and read integrity only; no policy update or model call"),
-    CommandCapability("panel-replay", "panel-replay", "explicit companion export; native --out retained", "native stdout and mechanical stderr quick view", "offline estimator comparison; no verdict mutation or model calls"),
+    CommandCapability("llm-scorecard list/recommend/chain-closure", "scorecard-list/scorecard-recommend/scorecard-chain-closure", "explicit destination required", "native stdout; export quick view on stderr", "native filtering, selected event, freshness drift and rank order retained; no routing change"),
+    CommandCapability("llm-scorecard summary/compare", "scorecard-summary/scorecard-compare", "explicit destination required", "native stdout; export quick view on stderr", "single captured read and native dashboard/comparison payload; policy and spend calculations retained"),
+    CommandCapability("llm-scorecard samples", "scorecard-samples", "explicit destination required", "native typed sample view; export quick summary on stderr", "retained samples and read integrity only; no policy update or model call"),
+    CommandCapability("panel-replay", "panel-replay", "explicit destination or native --out required", "native stdout and mechanical stderr quick view", "offline estimator comparison; no verdict mutation or model calls"),
     CommandCapability("scan", "triage", "automatic", "terminal and summary.md"),
     CommandCapability("codeql", "triage", "automatic", "terminal and summary.md"),
     CommandCapability("validate", "validation", "automatic", "terminal, summary.md and legacy summary.txt"),

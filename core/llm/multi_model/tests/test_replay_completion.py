@@ -98,3 +98,11 @@ def test_native_writes_replace_symlinks_without_touching_targets(tmp_path, monke
     assert not output.is_symlink() and not sibling.is_symlink()
     assert json.loads(output.read_text()) == json.loads(capsys.readouterr().out)
     assert calls == [True]
+
+
+def test_export_without_native_or_portable_destination_precedes_replay(tmp_path, monkeypatch):
+    source, calls = _capture(tmp_path, monkeypatch)
+    with pytest.raises(SystemExit) as error:
+        main([str(source), "--report-format", "json"])
+    assert error.value.code == 2 and not calls
+    assert source.read_text() == "owned source bytes"

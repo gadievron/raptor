@@ -18,11 +18,13 @@ from .scorecard import DecisionClassStats
 
 
 def prepare(options: ReportOptions, source: Path, kind: str) -> Path:
-    if kind not in {"summary", "compare"}:
+    if kind not in {"summary", "compare", "list", "recommend", "chain-closure"}:
         raise ValueError("Unsupported scorecard report view")
     root = source.parent / "portable-reports" / ("scorecard-" + kind)
     if not options.enabled:
         return root
+    if options.output is None:
+        raise ValueError("Read-only scorecard exports require --report-output")
     options = options.validate()
     chosen = options.output or root
     is_file = options.output_is_file or (bool(chosen.suffix) and not chosen.is_dir())
@@ -94,7 +96,7 @@ def emit(args: argparse.Namespace, kind: str, payload: dict, stats: list[Decisio
             for key, title in (("most_used", "Most-used recorded model"), ("cheapest_short_circuit", "Recorded cheapest short-circuit model")):
                 data[key] = view.record(payload.get(key))
                 blocks.append(Block("table", title=title, columns=["Field", "Value"], rows=data[key]))
-        else:
+        elif kind == "compare":
             data["model_a"] = view.scalar(payload.get("model_a"))
             data["model_b"] = view.scalar(payload.get("model_b"))
             shared = payload.get("shared", [])
@@ -113,24 +115,95 @@ def emit(args: argparse.Namespace, kind: str, payload: dict, stats: list[Decisio
                     Block("table", title="Model B", columns=["Field", "Value"], rows=row["model_b"])]))
             data["shared_classes_omitted"] = max(0, len(shared) - 1000)
             view.limited |= bool(data["shared_classes_omitted"])
+        elif kind == "list":
+            cells = payload.get("cells", [])
+            selected = payload.get("selected_event_rows", [])
+            if not isinstance(cells, list) or not isinstance(selected, list) or len(cells) != len(selected):
+                raise ValueError("Invalid captured selected event rows")
+            metrics["Selected cells"] = len(cells)
+            data["selected_event_type"] = view.scalar(payload.get("selected_event_type"))
+            metrics["Selected event type"] = data["selected_event_type"]
+            data["selection"] = view.record(payload.get("selection"))
+            data["freshness_impact"] = view.record(payload.get("freshness_impact"))
+            data["cells"] = []
+            blocks.extend([Block("table", title="Selection", columns=["Field", "Value"], rows=data["selection"]),
+                           Block("table", title="Recorded whole-scorecard freshness impact", columns=["Field", "Value"], rows=data["freshness_impact"])])
+            for index, (cell, event) in enumerate(zip(cells[:1000], selected[:1000], strict=True), 1):
+                if not isinstance(cell, dict):
+                    raise ValueError("Invalid captured list cell")
+                record = {"fields": view.record({key: value for key, value in cell.items() if key != "freshness_drift"}),
+                          "freshness_drift": view.record(cell.get("freshness_drift")), "selected_event": view.record(event)}
+                data["cells"].append(record)
+                blocks.append(Block("section", title=f"Selected cell {index}", children=[
+                    Block("table", title="Native cheap-policy fields", columns=["Field", "Value"], rows=record["fields"]),
+                    Block("table", title="Selected event observations", columns=["Field", "Value"], rows=record["selected_event"]),
+                    Block("table", title="Recorded freshness drift", columns=["Field", "Value"], rows=record["freshness_drift"])]))
+            data["cells_omitted"] = max(0, len(cells) - 1000)
+            view.limited |= bool(data["cells_omitted"])
+        else:
+            data["decision_class"] = view.scalar(payload.get("decision_class"))
+            data["recommendation_recorded"] = "recommendation" in payload
+            recommendation = payload.get("recommendation")
+            data["recommendation"] = view.record(recommendation) if isinstance(recommendation, dict) else view.scalar(recommendation)
+            blocks.append(Block("table", title="Recorded recommendation", columns=["Field", "Value"], rows=data["recommendation"])
+                          if isinstance(recommendation, dict) else Block("paragraph", title="Recorded recommendation",
+                          text=str(data["recommendation"]) if recommendation is not None else "No recommendation recorded in this view."))
+            groups = (("short_circuit", "Recorded short-circuit candidates"), ("fall_through", "Recorded fall-through candidates")) if kind == "recommend" else (("candidates", "Recorded chain-closure candidates"),)
+            data["candidate_rows_omitted"] = 0
+            for key, title in groups:
+                records = payload.get(key, [])
+                if not isinstance(records, list):
+                    raise ValueError("Invalid captured ranking records")
+                metrics[title] = len(records)
+                data[key] = [view.record(record) for record in records[:1000]]
+                data["candidate_rows_omitted"] += max(0, len(records) - 1000)
+                blocks.append(Block("section", title=title, children=[Block("table", title=f"Candidate {index}",
+                                    columns=["Field", "Value"], rows=record) for index, record in enumerate(data[key], 1)]))
+            if kind == "recommend":
+                learning = payload.get("learning", [])
+                if not isinstance(learning, list):
+                    raise ValueError("Invalid captured learning models")
+                metrics["Recorded learning models"] = len(learning)
+                data["learning"] = [view.scalar(value) for value in learning[:1000]]
+                data["candidate_rows_omitted"] += max(0, len(learning) - 1000)
+                blocks.append(Block("table", title="Recorded learning models", columns=["Row", "Model"],
+                                    rows=[[index, value] for index, value in enumerate(data["learning"], 1)]))
+                if "least_bad" in payload:
+                    data["least_bad"] = view.record(payload["least_bad"])
+                    blocks.append(Block("table", title="Recorded least-bad option", columns=["Field", "Value"], rows=data["least_bad"]))
+            data["recorded_no_candidates"] = bool(payload.get("recorded_no_candidates"))
+            if "message" in payload:
+                data["message"] = view.scalar(payload["message"])
+                blocks.append(Block("paragraph", title="Recorded availability", text=str(data["message"])))
+            view.limited |= bool(data["candidate_rows_omitted"])
         target = str(view.scalar(str(source)))
         freshness = view.scalar(getattr(args, "freshness_half_life_days", None))
         notes = ["Recorded scorecard introspection only; exports neither change routing policy nor validate findings. No scorecard reread or model call was made for reporting.",
                  "The CLI's recorded policy lens is retained. Run-specific gate settings or freshness weighting can produce a different routing decision. Counts and spend describe retained scorecard data, not guaranteed complete call history.",
-                 "Lifecycle and target execution coverage are not inferred from this read."]
+                 "Lifecycle and target execution coverage are not inferred from this read.",
+                 "The stats API supplies per-cell read integrity but no read-completeness or rejected-row accounting. Returned cells are not proof of complete source coverage."]
         if not stats:
             notes.append("No recorded cells were available. Historical calls and spend are unavailable, not established as zero.")
         if kind == "summary":
             notes.append("Usage row numbers distinguish captured rows when redacted or shortened labels look identical. Row numbers are local to this view, not persistent model identities.")
+        if kind == "list":
+            notes.append("Selected event counts and Wilson bounds describe the requested event slot. Native policy fields always describe the cheap-tier policy axis; they are not recomputed from the selected event. Cell numbers are local to this view.")
+            notes.append("Freshness impact is the native whole-scorecard measurement, ignores operator pins, and may include cells outside this selection. Read-cell counts here describe selected rows.")
+        if kind in {"recommend", "chain-closure"}:
+            notes.append("Rank order and any recommendation were copied from the native calculation, not recomputed. Missing rates or costs remain unavailable; an observed zero rate is distinct from missing data.")
+            if data["recorded_no_candidates"]:
+                notes.append("No candidate cells matched this decision class; this is not proof that a model has no historical calls or successes.")
         if any(not stat.trusted for stat in stats):
             notes.append("The read includes unverified cells; displayed policy labels grant no routing authority.")
         if view.limited:
-            notes.append("Portable capture is limited: up to 1000 model/shared-class rows, 50 fields per scalar record, 2000 characters per string and 200000 text characters. Non-scalar/non-finite values are unavailable; original scorecard data is unchanged.")
+            notes.append("Portable capture is limited: up to 1000 model, cell or candidate/shared-class rows per group, 50 fields per scalar record, 2000 characters per string and 200000 text characters. Non-scalar/non-finite values are unavailable; original scorecard data is unchanged.")
         context = ReportContext("scorecard-" + kind, "unknown", target=target,
                                 state="partial" if view.limited or any(not stat.trusted for stat in stats) else "completed",
                                 diagnostics=notes, artifacts=[{"path": str(source.resolve()), "role": "source scorecard; preserved"}],
                                 extensions={"raptor.findings_available": False, "raptor.metrics": metrics,
                                             "raptor.scorecard_read": data, "raptor.capture_limited": view.limited,
+                                            "raptor.read_quality": {"completeness": "unknown", "rejected_rows": None,
+                                                                    "reason": "not supplied by scorecard stats API"},
                                             "raptor.freshness_half_life_days": freshness})
         if not options.enabled:
             summary = build_operator_summary(context)
@@ -142,6 +215,10 @@ def emit(args: argparse.Namespace, kind: str, payload: dict, stats: list[Decisio
         metadata = {"Freshness half-life days": freshness if freshness is not None else "unweighted CLI view"}
         if kind == "compare":
             metadata.update({"Model A": data["model_a"], "Model B": data["model_b"]})
+        if kind == "list":
+            metadata["Selected event type"] = data["selected_event_type"]
+        if kind in {"recommend", "chain-closure"}:
+            metadata["Decision class"] = data["decision_class"]
         document = ReportDocument("Scorecard " + kind, context.kind, context.snapshot_id, metadata=metadata,
                                   summary=metrics, blocks=blocks, diagnostics=notes)
         complete_reporting(context, root, document=document, stem="scorecard-" + kind, options=options, stream=sys.stderr)
