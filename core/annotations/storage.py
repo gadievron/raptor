@@ -647,10 +647,18 @@ def _file_lock(path: Path):
                 "flight); clear the wedged holder, then retry"
             )
             raise AnnotationFileError(msg)
+        failed = False
         try:
             yield
+        except BaseException:
+            failed = True
+            raise
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException:
+                if not failed:
+                    raise
 
 
 
