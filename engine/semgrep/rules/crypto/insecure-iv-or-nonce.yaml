@@ -66,14 +66,35 @@ rules:
 
   # cryptography.hazmat block modes: literal IV / nonce in the mode constructor
   - id: raptor.crypto.iv.literal.hazmat-modes.python
-    message: IV or nonce is a constant literal. Use os.urandom() for the mode IV/nonce. Verify randomness.
+    message: >-
+      Candidate: a cryptography mode receives a literal IV, nonce, or tweak.
+      Review the mode's unpredictability or uniqueness requirements and the
+      key/data-unit context. XTS tweaks may be deterministic data-unit
+      identifiers; a literal alone does not prove misuse.
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern: modes.$MODE($IV, ...)
-      - metavariable-regex:
-          metavariable: $MODE
-          regex: "^(CBC|GCM|CTR|CFB|CFB8|OFB|XTS)$"
+      - pattern-either:
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CBC($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CBC(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.GCM($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.GCM(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CTR($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CTR(nonce=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CFB($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CFB(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CFB8($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.CFB8(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.OFB($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.OFB(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.XTS($IV, ...)
+          - pattern: cryptography.hazmat.primitives.ciphers.modes.XTS(tweak=$IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.CFB($IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.CFB(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.CFB8($IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.CFB8(initialization_vector=$IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.OFB($IV, ...)
+          - pattern: cryptography.hazmat.decrepit.ciphers.modes.OFB(initialization_vector=$IV, ...)
       - metavariable-pattern:
           metavariable: $IV
           patterns:
