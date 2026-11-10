@@ -1312,6 +1312,14 @@ def _print_report(run_dir: str, *, report_options=None) -> int:
             return 1
         try:
             payload = {p.name: load_json(p, strict=True, max_bytes=32 * 1024 * 1024) for p in sources}
+            from .reporting import _redact_captured_json
+            try:
+                payload = _redact_captured_json(payload)
+            except (ValueError, TypeError, OSError) as error:
+                from core.reporting.service import capture_failure_summary
+                capture_failure_summary("binary", base.name, str(base), base, cause=error,
+                                        artifacts=[{"uri": str(p)} for p in sources], stream=sys.stdout)
+                return 1
             result = complete_native_result(
                 NativeResult("binary", str(base), base.name, payload,
                              artifacts=[{"uri": str(p)} for p in sources]),

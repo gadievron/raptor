@@ -37,6 +37,26 @@ def _safe(value, depth=0, remaining=None):
     return value
 
 
+
+def _redact_captured_json(value):
+    """Redact readback values without imposing live-projection detail caps."""
+    from core.reporting.document import json_value
+    from core.security.redaction import redact_url_secrets_only
+
+    def copy(item, field=""):
+        if isinstance(item, str):
+            if field in ("binary_path", "file", "path"):
+                return redact_url_secrets_only(item)
+            return redact_secrets(item)
+        if isinstance(item, dict):
+            return {key: copy(child, key) for key, child in item.items()}
+        if isinstance(item, list):
+            return [copy(child, field) for child in item]
+        return item
+
+    return copy(json_value(value))
+
+
 def map_report_result(args, payload, result, out_dir, status, *, active_phases=()):
     mode = args.command
     notes = ["Binary map candidates and evidence tiers are observations, not confirmed vulnerabilities. Command completion does not establish complete analysis coverage.",
