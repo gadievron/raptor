@@ -41,7 +41,6 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
@@ -442,8 +441,8 @@ def _resolve_output_dir(
 ) -> Path:
     if explicit:
         return Path(explicit).resolve()
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path("out") / f"{prefix}-{ts}"
+    from core.run.output import unique_run_suffix
+    return Path("out") / f"{prefix}-{unique_run_suffix('-')}"
 
 
 def _print_summary(result) -> None:

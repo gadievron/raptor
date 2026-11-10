@@ -1889,8 +1889,8 @@ def _configure_logging(verbose: int) -> None:
 
 
 def _default_out_dir(target: Path) -> Path:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path("out") / f"sca-harden-{target.name}-{ts}"
+    from core.run.output import unique_run_suffix
+    return Path("out") / f"sca-harden-{target.name}-{unique_run_suffix('-')}"
 
 
 # ---------------------------------------------------------------------------

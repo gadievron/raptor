@@ -1237,6 +1237,5 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def _resolve_out_dir(explicit: str | None) -> Path:
     if explicit:
         return Path(explicit).resolve()
-    from datetime import datetime, timezone
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path("out") / f"sca-fix-{ts}"
+    from core.run.output import unique_run_suffix
+    return Path("out") / f"sca-fix-{unique_run_suffix('-')}"
