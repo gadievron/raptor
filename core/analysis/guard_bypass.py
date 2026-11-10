@@ -13,7 +13,7 @@ import logging
 from dataclasses import dataclass, field
 from collections.abc import Callable
 
-from .cfg_conditions import ConditionEdge, ControlCondition, extract_conditions_from_cfg
+from .cfg_conditions import ConditionEdge, ControlCondition, extract_conditions_from_cfg, extract_references
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +146,90 @@ def _guard_on_path(
     return guard.node_line in path_lines
 
 
+_MAX_NATIVE_QUERY_VISITS = 100_000
+
+
+class _NativeQueryIncomplete(RuntimeError):
+    pass
+
+
+def _query_native(cfg, source_node, sink_node, source_var, classifier) -> GuardBypassResult:
+    """Query selected node cuts, returning at most one bypass witness.
+
+    Reachability and dominance are relative to the supplied source node.
+    Serialized line paths are diagnostics, never branch identity authority.
+    """
+    from .dominators import AdjacencyGraph, build_dom_tree
+    from .lifecycle_collector import GuardEpochUnavailable, _require_stable_guard_epochs
+
+    remaining = _MAX_NATIVE_QUERY_VISITS
+    adjacency = {}
+    guards: list[Guard] = []
+
+    def successors(node):
+        if node not in adjacency:
+            adjacency[node] = list(cfg.successors(node))
+        return adjacency[node]
+
+    def walk(start, next_nodes, excluded=frozenset()):
+        nonlocal remaining
+        if start in excluded:
+            return {}
+        parents = {start: None}
+        pending = [start]
+        while pending:
+            remaining -= 1
+            if remaining < 0:
+                raise _NativeQueryIncomplete
+            node = pending.pop()
+            for successor in next_nodes(node):
+                if successor not in excluded and successor not in parents:
+                    parents[successor] = node
+                    pending.append(successor)
+        return parents
+
+    try:
+        reachable = walk(source_node, successors)
+        if sink_node not in reachable:
+            return GuardBypassResult()
+        reverse = {}
+        for node, children in adjacency.items():
+            for child in children:
+                reverse.setdefault(child, []).append(node)
+        reaches_sink = walk(sink_node, lambda node: reverse.get(node, ()))
+        candidates = []
+        for fact in cfg.branch_guards:
+            if fact.branch not in reachable or fact.branch not in reaches_sink:
+                continue
+            condition = ControlCondition(
+                text=fact.condition, references=extract_references(fact.condition),
+                polarity=fact.polarity,
+            )
+            if classifier(condition, source_var) is True:
+                candidates.append(fact)
+                guards.append(Guard(condition=condition, node_line=fact.line))
+        if candidates:
+            _require_stable_guard_epochs(cfg, sink_node, candidates)
+        selected = frozenset(fact.branch for fact in candidates)
+        bypass = walk(source_node, successors, selected)
+        witnesses = []
+        if sink_node in bypass:
+            path = []
+            current = sink_node
+            while current is not None:
+                path.append(current.lineno)
+                current = bypass[current]
+            witnesses.append(list(reversed(path)))
+        dominators = build_dom_tree(AdjacencyGraph(source_node, adjacency)).dominators_of(sink_node)
+        must_visit = [guard for fact, guard in zip(candidates, guards) if fact.branch in dominators]
+        return GuardBypassResult(
+            bypassable_paths=witnesses, constraining_guards=guards,
+            must_visit_guards=must_visit,
+        )
+    except (GuardEpochUnavailable, _NativeQueryIncomplete):
+        return GuardBypassResult(constraining_guards=guards, confidence="incomplete")
+
+
 def query(
     cfg,
     source_var: str,
@@ -174,6 +258,8 @@ def query(
 
     if source_node is None or sink_node is None:
         return GuardBypassResult(confidence="incomplete")
+    if getattr(cfg, "branch_guards", None) is not None:
+        return _query_native(cfg, source_node, sink_node, source_var, classifier)
 
     condition_edges = extract_conditions_from_cfg(cfg)
     guards = _find_guards(cfg, condition_edges, source_var, classifier)
