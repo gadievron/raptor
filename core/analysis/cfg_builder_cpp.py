@@ -324,16 +324,38 @@ def _innermost_ident(n: Node) -> str | None:
     return None
 
 
+def _direct_global_identifier(callee) -> str | None:
+    """An explicit global identifier, optionally parenthesised, never cast."""
+    while callee is not None and callee.type == "parenthesized_expression":
+        children = callee.named_children
+        if len(children) != 1:
+            return None
+        callee = children[0]
+    if (callee is not None and callee.type == "qualified_identifier"
+            and callee.child_by_field_name("scope") is None
+            and _node_text(callee).startswith("::")):
+        name = callee.child_by_field_name("name")
+        if name is not None and name.type == _IDENT:
+            return _node_text(name)
+    return None
+
+
 def _resolve_callable_name(callee: Node) -> str | None:
     """Dotted-or-arrow callable name from a ``call_expression``'s
     ``function`` field. ``foo`` → ``"foo"``; ``obj.method`` →
     ``"obj.method"``; ``obj->method`` → ``"obj.method"`` (arrow
     collapsed to dot — same convention as the call-graph extractor
     so the sanitizer catalogue keys match). C++ qualified identifiers
-    retain their namespace rather than collapsing to a library-name leaf."""
+    retain their namespace rather than collapsing to a library-name leaf.
+    A direct ::name selects the same global identifier as bare name."""
     if callee is None:
         return None
-    if callee.type in {_IDENT, "qualified_identifier"}:
+    global_name = _direct_global_identifier(callee)
+    if global_name is not None:
+        return global_name
+    if callee.type == "cast_expression":
+        return None  # the call ABI/profile is not established by a cast
+    if callee.type in {_IDENT, "qualified_identifier", "template_function"}:
         return _node_text(callee)
     if callee.type == _FIELD_EXPR:
         arg = callee.child_by_field_name("argument")
@@ -1087,13 +1109,16 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
     while pending:
         cur = pending.pop()
         if cur.type == _CALL_EXPR:
-            name = _resolve_callable_name(cur.child_by_field_name("function"))
+            callee = cur.child_by_field_name("function")
+            name = _resolve_callable_name(callee)
+            direct_global = _direct_global_identifier(callee) is not None
             unqualified = bool(name and "::" not in name and "." not in name)
-            if name and (name in bindings or local.vouches(name, cur.start_byte)
-                         or imported.vouches(name, cur.start_byte)
-                         or (unqualified and not local.vouches("::" + name, cur.start_byte)
-                             and (target_scoped or local.vouches("*", cur.start_byte)
-                                  or imported.vouches("*", cur.start_byte)))):
+            if name and (name in bindings or imported.vouches(name, cur.start_byte)
+                         or (not direct_global and (
+                             local.vouches(name, cur.start_byte)
+                             or (unqualified and not local.vouches("::" + name, cur.start_byte)
+                                 and (target_scoped or local.vouches("*", cur.start_byte)
+                                      or imported.vouches("*", cur.start_byte)))))):
                 conflicts.add((name, cur.start_point[0] + 1))
         pending.extend(cur.named_children)
     return frozenset(conflicts)
