@@ -144,14 +144,27 @@ def _file_version(info):
 
 
 def _read_record(directory, name):
+    from core.source.streams import owned_fd, preserving_stream_error
+
+    adopted = False
+
+    def close_record(value):
+        try:
+            os.close(value)
+        except OSError:
+            # Validation cleanup is best-effort; an adopted read needs a
+            # successful close before its bytes can be admitted.
+            if adopted:
+                raise
+
     descriptor = os.open(name, _FILE_FLAGS, dir_fd=directory)
-    try:
+    with owned_fd(descriptor, close_fd=close_record):
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode) or before.st_size > _MAX_RECORD_BYTES:
             return None
-        stream = os.fdopen(descriptor, "rb")
-        descriptor = -1
-        with stream:
+        stream = os.fdopen(descriptor, "rb", closefd=False)
+        adopted = True
+        with preserving_stream_error(stream):
             raw = stream.read(_MAX_RECORD_BYTES + 1)
             after = os.fstat(stream.fileno())
         if len(raw) > _MAX_RECORD_BYTES or _file_version(before) != _file_version(
@@ -159,10 +172,6 @@ def _read_record(directory, name):
         ):
             return None
         return raw, _file_version(before)
-    finally:
-        if descriptor >= 0:
-            with contextlib.suppress(OSError):
-                os.close(descriptor)
 
 
 @dataclass(frozen=True)
