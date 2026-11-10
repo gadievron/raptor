@@ -28,9 +28,11 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from contextlib import closing
 
 from core.atomic_fs import rmtree_hardened
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 from core.config import RaptorConfig
 from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, load_pairs
 from core.git.clone import (
@@ -533,7 +535,7 @@ def walk(
     controls ``--threads`` / ``--ram`` / ``--max-disk-cache``."""
     pairs = load_pairs(db_path, cwes=cwes, languages=languages)
     con = sqlite3.connect(str(results_db))
-    try:
+    with preserving_stream_error(closing(con)):
         con.execute(_SCHEMA)
         # Dedup todo by (fix_hash, cwe): the same commit credited to multiple CVE ids
         # yields identical (DB, query, result), so process it once. (The PK already
@@ -577,8 +579,6 @@ def walk(
             "SELECT 'fp_candidate', count(*) FROM walk_results "
             "WHERE status IN ('ok','ok_built') AND after_count>0"
         ).fetchall())
-    finally:
-        con.close()
     return summary
 
 
@@ -602,7 +602,7 @@ def promote_misses(
     the expensive autobuilds are bounded to the buildless false-negative set.
     """
     con = sqlite3.connect(str(results_db))
-    try:
+    with preserving_stream_error(closing(con)):
         con.execute(_SCHEMA)
         ph = ",".join("?" * len(promote_languages))
         rows = con.execute(
@@ -638,8 +638,6 @@ def promote_misses(
             else:
                 log(f"  [{n}/{len(rows)}] no-recovery {cve_id} {cwe}: "
                     f"{res.status} before={res.before_count}")
-    finally:
-        con.close()
     return {"candidates": len(rows), "promoted": promoted}
 
 
