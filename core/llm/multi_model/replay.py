@@ -52,6 +52,7 @@ from pathlib import Path
 from collections.abc import Sequence
 from typing import TypedDict
 
+from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact, load_json
 from core.llm.multi_model.dawid_skene import (
     DawidSkeneResult,
@@ -407,7 +408,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "next to it with a .json suffix."
         ),
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
     args = parser.parse_args(argv)
+    report_options = options_from_args(args, parser) if args.report_format or args.report_output or args.no_report else None
 
     paths: list[Path] = list(args.paths)
     if args.root:
@@ -419,6 +423,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    from .replay_completion import prepare
+    try:
+        prepare(report_options, paths, args.out)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     report = replay(
         paths, decision_class_prefix=args.decision_class_prefix,
     )
@@ -429,9 +439,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(rendered, encoding="utf-8")
+        write_text_atomically(args.out, rendered)
         json_out = args.out.with_suffix(args.out.suffix + ".json")
-        json_out.write_text(render_json(report), encoding="utf-8")
+        write_text_atomically(json_out, render_json(report))
+
+    try:
+        from .replay_completion import complete
+        complete(report, report_options, args.out)
+    except Exception as exc:  # noqa: BLE001 — optional presentation cannot change the completed replay
+        print("Optional replay report unavailable (" + type(exc).__name__ + "); native replay retained", file=sys.stderr)
 
     # Exit 0 on any completed replay — informational, no pass/fail
     # semantics.  (Usage errors return 2 above, before replaying.)

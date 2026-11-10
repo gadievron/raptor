@@ -19,6 +19,7 @@ class CommandCapability:
 
 
 CAPABILITIES = (
+    CommandCapability("panel-replay", "panel-replay", "explicit companion export; native --out retained", "native stdout and mechanical stderr quick view", "offline estimator comparison; no verdict mutation or model calls"),
     CommandCapability("scan", "triage", "automatic", "terminal and summary.md"),
     CommandCapability("codeql", "triage", "automatic", "terminal and summary.md"),
     CommandCapability("validate", "validation", "automatic", "terminal, summary.md and legacy summary.txt"),
