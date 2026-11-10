@@ -539,6 +539,11 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 # writer needs an explicit add (forcing a security review at file-add
 # time).
 _REPORT_WRITER_FILES = (
+    # Exact typed-document and terminal-summary boundaries reviewed for combined306.
+    "core/analysis/gadget_reporting.py",
+    "core/dataflow/corpus_report_completion.py",
+    "core/dataflow/parity_report_completion.py",
+    "packages/llm_analysis/reporting.py",
     # Native hook JSON; title components are bounded and terminal-sanitised.
     "core/startup/session_title.py",
     "packages/sca/sbom_inventory/cli.py",
@@ -846,6 +851,76 @@ class AllowlistEntry:
 # the heuristic. New entries require the same discipline (enforced by
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        file="core/analysis/gadget_reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="line",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="core/analysis/gadget_reporting.py",
+        func_name="emit",
+        kind="unsanitised_llm_value",
+        detail="quick",
+        audit_note="The flagged name is an OperatorSummary object, printed only via render_operator_summary with default terminal mode. That shared function applies sanitise_for_terminal to target, metrics, stage labels/reasons and diagnostics; it is not raw tool/LLM output. The disabled-report path writes no artifacts. Scope exception to this exact function/key; re-review if a direct sink is added.",
+    ),
+    AllowlistEntry(
+        file="core/dataflow/corpus_report_completion.py",
+        func_name="emit",
+        kind="unsanitised_llm_value",
+        detail="summary",
+        audit_note="The flagged name is an OperatorSummary object, printed only via render_operator_summary with default terminal mode. That shared function applies sanitise_for_terminal to target, metrics, stage labels/reasons and diagnostics; it is not raw tool/LLM output. The disabled-report path writes no artifacts. Scope exception to this exact function/key; re-review if a direct sink is added.",
+    ),
+    AllowlistEntry(
+        file="core/dataflow/parity_report_completion.py",
+        func_name="emit",
+        kind="unsanitised_llm_value",
+        detail="quick",
+        audit_note="The flagged name is an OperatorSummary object, printed only via render_operator_summary with default terminal mode. That shared function applies sanitise_for_terminal to target, metrics, stage labels/reasons and diagnostics; it is not raw tool/LLM output. The disabled-report path writes no artifacts. Scope exception to this exact function/key; re-review if a direct sink is added. Proposal-kind strings stay in captured table data and are not included in this aggregate quick view; the native counts/stage are displayed.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="finding_id",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="id",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="file",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="file_path",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="build_document",
+        kind="unsanitised_llm_value",
+        detail="status",
+        audit_note="Typed table-cell assembly only; this function emits no terminal or Markdown text. Redaction/caps preserve scalar identity, while shared render_document validates the model and routes Markdown cells through md_inline/literal, JSON through encode(ensure_ascii=True), and XML through nonprintable/XML1.0 cleaning plus ElementTree text escaping. Do not pre-escape identifiers into the data model or bless the helper name globally.",
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/reporting.py",
+        func_name="emit",
+        kind="unsanitised_llm_value",
+        detail="quick",
+        audit_note="The flagged name is an OperatorSummary object, printed only via render_operator_summary with default terminal mode. That shared function applies sanitise_for_terminal to target, metrics, stage labels/reasons and diagnostics; it is not raw tool/LLM output. The disabled-report path writes no artifacts. Scope exception to this exact function/key; re-review if a direct sink is added.",
+    ),
     AllowlistEntry(
         file="core/audit/corpus/receipt_replay.py", func_name="replay",
         kind="unsanitised_llm_value", detail='id',

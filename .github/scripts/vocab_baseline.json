@@ -2420,6 +2420,11 @@
     "count": 15,
     "kind": "literal"
   },
+  "packages/binary_analysis/harness_reporting.py::_PLAN_FIELDS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Fixed projection of harness-spec.json fields emitted by harness.generate_binary_harness; values include candidate status/prerequisites/evidence policy. They are report field names, not target function names. Generated code is referenced, never executed by reporting."
+  },
   "packages/binary_analysis/hunt.py::payload": {
     "count": 12,
     "kind": "literal",
@@ -2557,6 +2562,11 @@
     "count": 59,
     "kind": "literal"
   },
+  "packages/code_understanding/reporting.py::data": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Twelve persisted captured-result fields assembled by complete_understand_report (counts/costs/models/resume provenance). The keys define JSON output, not a membership list for target identifiers. Unknown or omitted observations stay explicit."
+  },
   "packages/codeql/agent.py::to_dict": {
     "count": 10,
     "kind": "literal",
@@ -2611,6 +2621,11 @@
   "packages/cve_diff/cve_diff/diffing/shape.py::_PACKAGING_NAMES": {
     "count": 31,
     "kind": "literal"
+  },
+  "packages/cve_diff/cve_diff/report/markdown.py::_ERROR_LABELS": {
+    "count": 15,
+    "kind": "literal",
+    "note": "Closed native failure-class/budget-reason to operator-label mapping extracted from _humanize_class unchanged. These are pipeline error taxonomy keys; the unknown-class fallback remains explicit. Preserve/retire the old _humanize_class review entry, not a learned function vocabulary."
   },
   "packages/cve_diff/cve_diff/report/markdown.py::_TOOL_INTENT": {
     "count": 17,
@@ -3041,6 +3056,16 @@
   "packages/llm_analysis/prompts/schemas.py::FINDING_RESULT_SCHEMA": {
     "count": 20,
     "kind": "literal"
+  },
+  "packages/llm_analysis/reporting.py::_COUNTERS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Eleven fixed native report count fields. Numeric/finite-or-unavailable projection only; no target symbol filtering, routing or verdict decision. Native payloads remain domain-owned."
+  },
+  "packages/llm_analysis/reporting.py::_SECTIONS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Twelve fixed native telemetry-section names, projected into bounded structured rows. Values/model labels remain dynamic data; this list does not classify target calls or suppress findings."
   },
   "packages/openant/forecast.py::result": {
     "count": 11,

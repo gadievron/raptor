@@ -358,6 +358,9 @@
   "artifacts:write_only_artifact::exploitation-report.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::exploitation-report.md": {
+   "note": "Intentional external human-readable combined exploitation report. ExploitReport.write_reports writes exploitation-report.md through the shared atomic writer and returns its path as markdown_report; generate_reports preserves this public artifact receipt and report_completion protects its destination from portable-export collisions. It is not a resume/cache/verdict input requiring a Python literal-name reader. No new exploit execution, verification or completeness authority is conferred; this artifact-index exception is not a general rendering-safety exemption."
+  },
   "artifacts:write_only_artifact::external-tool-results.json": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
