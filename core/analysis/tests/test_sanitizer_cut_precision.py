@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from core.analysis import sanitizer_cut_precision as precision_module
 from core.analysis.sanitizer_cut import (
     VERDICT_CANDIDATE_ONLY,
     VERDICT_SUPPRESS,
@@ -19,9 +20,9 @@ from core.analysis.sanitizer_cut_precision import (
     CutFixture,
     FixtureMeasurement,
     build_corpus,
-    main,
     run_corpus,
 )
+from core.testing.module_views import module_function_view
 from core.testing.treesitter import requires_ts
 
 
@@ -146,10 +147,21 @@ class TestPrecisionGate:
             assert key in d, key
         assert d["toolchain"].get("python")
 
-    def test_main_writes_reports_and_exits_zero(self, tmp_path):
-        rc = main(["--out", str(tmp_path)])
+    def test_main_writes_reports_and_exits_zero(self, tmp_path, report):
+        expected = json.loads(json.dumps(report.to_dict()))
+        requests = []
+
+        def prepared_report():
+            requests.append(None)
+            return report
+
+        view = module_function_view(precision_module, bindings={"run_corpus": prepared_report})
+        rc = view.main(["--out", str(tmp_path)])
+        assert requests == [None]
         assert rc == 0
         data = json.loads((tmp_path / "report.json").read_text())
+        assert data == expected
+        assert report.to_dict() == expected
         assert data["false_suppressions"] == []
         assert "Gate clean" in (tmp_path / "report.md").read_text()
 
