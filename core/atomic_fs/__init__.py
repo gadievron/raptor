@@ -371,11 +371,17 @@ def write_bytes_atomically(
         # rename survives a power loss. Windows + some mounts don't
         # support directory fsync — silent fallback is fine.
         try:
+            flush_failed = False
             dir_fd = os.open(parent, os.O_RDONLY)
             try:
                 os.fsync(dir_fd)
+            except OSError:
+                pass  # Best-effort flush is complete before directory close.
+            except BaseException:
+                flush_failed = True
+                raise
             finally:
-                os.close(dir_fd)
+                _close_write_fd(dir_fd, write_failed=flush_failed)
         except OSError:
             pass
     except BaseException:
