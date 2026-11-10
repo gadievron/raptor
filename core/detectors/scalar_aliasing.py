@@ -17,6 +17,7 @@ from typing import Any
 from core.atomic_fs import write_bytes_atomically
 from core.run.scratch import scratch_dir
 from core.source import read_text_capped, split_lines
+from core.source.streams import preserving_stream_error
 
 from .budget import WorkBudget
 
@@ -374,15 +375,25 @@ def corroborate_aliasing(target: Path, tu: str, candidates: list[dict[str, Any]]
                     raise _Unsupported("compiler-specific aliasing exception")
             path = scratch / "view.c"
             write_bytes_atomically(path, source)
-            with tempfile.TemporaryFile(dir=scratch) as output, tempfile.TemporaryFile(dir=scratch) as errors:
-                proc = budget.runner(sandbox_run)(
-                    [clang, "-fsyntax-only", "-x", "c", "-Xclang", "-ast-dump=json", str(path)],
-                    block_network=True, target=str(scratch), output=str(scratch), cwd=str(scratch),
-                    stdout=output, stderr=errors, timeout=30, caller_label="compiler-aliasing",
-                    limits={"memory_mb": 1024, "max_file_mb": 8, "cpu_seconds": 30},
-                )
-                output.seek(0)
-                payload = output.read(_MAX_AST_BYTES + 1)
+            capture_error = None
+            try:
+                with preserving_stream_error(tempfile.TemporaryFile(dir=scratch)) as output, \
+                        preserving_stream_error(tempfile.TemporaryFile(dir=scratch)) as errors:
+                    try:
+                        proc = budget.runner(sandbox_run)(
+                            [clang, "-fsyntax-only", "-x", "c", "-Xclang", "-ast-dump=json", str(path)],
+                            block_network=True, target=str(scratch), output=str(scratch), cwd=str(scratch),
+                            stdout=output, stderr=errors, timeout=30, caller_label="compiler-aliasing",
+                            limits={"memory_mb": 1024, "max_file_mb": 8, "cpu_seconds": 30},
+                        )
+                        output.seek(0)
+                        payload = output.read(_MAX_AST_BYTES + 1)
+                    except Exception as exc:
+                        capture_error = exc
+                if capture_error is not None:
+                    raise capture_error
+            finally:
+                capture_error = None
             if proc.returncode != 0 or len(payload) > _MAX_AST_BYTES:
                 raise _Unsupported("Clang AST failed or exceeded its output cap")
             proofs = scalar_access_proofs(json.loads(payload), source)
