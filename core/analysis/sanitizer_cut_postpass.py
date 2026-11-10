@@ -48,6 +48,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.analysis import threat_model_java as _tm
 from core.source.lines import split_lines
+from core.security.capped_read import read_capped_text
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -236,15 +237,16 @@ def _read_source_capped(path: Path) -> str | None:
     """Capped best-effort source read: None on IO failure or when the
     file exceeds :data:`_MAX_SOURCE_READ_BYTES`."""
     try:
-        if path.stat().st_size > _MAX_SOURCE_READ_BYTES:
-            logger.debug(
-                "sanitizer-cut post-pass: %s exceeds %d bytes; "
-                "treating as unreadable", path, _MAX_SOURCE_READ_BYTES,
-            )
-            return None
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        # Resolve the named source first, preserving existing symlink behavior.
+        text = read_capped_text(path.resolve(), _MAX_SOURCE_READ_BYTES)
+    except (OSError, RuntimeError):
         return None
+    if text is None:
+        logger.debug("sanitizer-cut post-pass: %s unavailable within %d bytes",
+                     path, _MAX_SOURCE_READ_BYTES)
+        return None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
 
 
 def _sink_method_span(
