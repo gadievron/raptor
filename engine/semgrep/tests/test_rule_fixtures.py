@@ -253,7 +253,18 @@ def fixture_findings():
             targets = [_FIXTURES / name for name in positives + negatives]
             for target in targets:
                 assert target.is_file(), target
-            results = _run_semgrep(_RULES_DIR / rule_rel, targets)["results"]
+            data = _run_semgrep(_RULES_DIR / rule_rel, targets)
+            expected_paths = {target.resolve() for target in targets}
+            scanned_paths = {
+                Path(name).resolve()
+                for name in data.get("paths", {}).get("scanned", [])
+            }
+            assert scanned_paths == expected_paths, (
+                f"{rule_rel}: fixture scan coverage mismatch: "
+                f"missing={sorted(map(str, expected_paths - scanned_paths))}, "
+                f"unexpected={sorted(map(str, scanned_paths - expected_paths))}"
+            )
+            results = data["results"]
             expected = {target.name for target in targets}
             unexpected = {Path(r["path"]).name for r in results} - expected
             assert not unexpected, f"{rule_rel}: unexpected result paths: {unexpected}"
