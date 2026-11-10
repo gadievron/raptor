@@ -18,10 +18,10 @@ import contextlib
 import ctypes
 import sys
 import errno
+from functools import partial
 import json
 import logging
 import os
-import stat
 import time
 import uuid
 from collections.abc import Iterator
@@ -31,6 +31,8 @@ from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
 from core.atomic_fs.fs_lock import artifact_lock
+from core.security.file_policy import validate_file_permissions
+from core.source.gated import open_regular_gated
 from .resource_lifetime import Lifetime, discard, held
 
 logger = logging.getLogger(__name__)
@@ -223,11 +225,11 @@ def _read_rows(path: Path, *, required=False) -> list[dict]:
     Advisory callers may decline bookkeeping, but cannot overwrite it.
     """
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(descriptor, "rb") as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022:
-                raise ValueError("unsafe heap ledger")
+        with open_regular_gated(
+            path, follow_symlinks=False,
+            stat_validator=partial(validate_file_permissions, owner_uid=os.geteuid(),
+                                   forbidden_mode_bits=0o022),
+        ) as stream:
             raw = stream.read(1024 * 1024 + 1)
             if len(raw) > 1024 * 1024:
                 raise ValueError("oversized heap ledger")

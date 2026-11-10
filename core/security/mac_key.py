@@ -57,6 +57,8 @@ import time
 from contextlib import contextmanager as _contextmanager
 from typing import TYPE_CHECKING, Final
 
+from core.security.file_policy import FilePermissionRefused, validate_file_permissions
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from pathlib import Path
@@ -178,21 +180,23 @@ def read_existing_key(
                     "remove the object at that path and investigate",
                 )
                 return REFUSED
-            if st.st_uid != os.geteuid():
-                warn(
-                    path,
-                    f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
-                    "investigate the foreign-owned key; restore your own "
-                    "0600 key file",
-                )
-                return REFUSED
-            if st.st_mode & 0o077:
-                warn(
-                    path,
-                    f"mode {stat.S_IMODE(st.st_mode):04o} grants group/other "
-                    "access",
-                    f"chmod 600 {path}",
-                )
+            try:
+                validate_file_permissions(st, owner_uid=os.geteuid(), forbidden_mode_bits=0o077)
+            except FilePermissionRefused as refusal:
+                if refusal.reason == "owner":
+                    warn(
+                        path,
+                        f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
+                        "investigate the foreign-owned key; restore your own "
+                        "0600 key file",
+                    )
+                else:
+                    warn(
+                        path,
+                        f"mode {stat.S_IMODE(st.st_mode):04o} grants group/other "
+                        "access",
+                        f"chmod 600 {path}",
+                    )
                 return REFUSED
             # A single os.read may return fewer bytes than requested
             # (network filesystems); a short read would land a healthy key

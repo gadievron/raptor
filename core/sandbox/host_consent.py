@@ -79,6 +79,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.security.log_sanitisation import sanitise_for_terminal
+from core.security.file_policy import FilePermissionRefused, validate_file_permissions
 
 from .evidence import _unique_evidence_object
 
@@ -253,10 +254,10 @@ def _read_marker_record(path: Path) -> "tuple[dict | None, str | None]":
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return None, "not-regular-file"
-        if st.st_uid != os.geteuid():
-            return None, "foreign-owner"
-        if st.st_mode & 0o022:
-            return None, "permissive-mode"
+        try:
+            validate_file_permissions(st, owner_uid=os.geteuid(), forbidden_mode_bits=0o022)
+        except FilePermissionRefused as refusal:
+            return None, "foreign-owner" if refusal.reason == "owner" else "permissive-mode"
         if st.st_size > _MAX_MARKER_BYTES:
             return None, "too-large"
         raw = bytearray()
