@@ -107,26 +107,34 @@ def _owner_pid(marker: Path) -> int | None:
         | getattr(os, "O_NONBLOCK", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
-    fd = -1
+    from core.source.streams import owned_fd, preserving_stream_error
+
+    adopted = False
+
+    def close_marker(value):
+        try:
+            os.close(value)
+        except OSError:
+            # Validation cleanup is best-effort. After stream adoption,
+            # close failure must still refuse the marker's PID.
+            if adopted:
+                raise
+
     try:
         fd = os.open(str(marker), flags)
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_size > _MARKER_MAX_BYTES:
-            return None
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
-            raw = fh.read(_MARKER_MAX_BYTES + 1)
+        with owned_fd(fd, close_fd=close_marker):
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_size > _MARKER_MAX_BYTES:
+                return None
+            stream = os.fdopen(fd, "rb", closefd=False)
+            adopted = True
+            with preserving_stream_error(stream) as fh:
+                raw = fh.read(_MARKER_MAX_BYTES + 1)
         if len(raw) > _MARKER_MAX_BYTES:
             return None
         data = json.loads(raw)
     except (OSError, ValueError):
         return None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
     pid = data.get("pid") if isinstance(data, dict) else None
     if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
         return pid
