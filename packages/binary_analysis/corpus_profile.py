@@ -576,6 +576,8 @@ def _collect_samples(
     reasons) — the profile never hides how much of the corpus it
     actually saw.
     """
+    from core.source.streams import owned_fd
+
     samples: list[_Sample] = []
     skipped: list[dict[str, Any]] = []
     skipped_count = 0
@@ -610,7 +612,7 @@ def _collect_samples(
         if fd is None:
             _skip(rel, "not a readable regular file")
             continue
-        try:
+        with owned_fd(fd, close_fd=os.close):
             size = os.fstat(fd).st_size
             read_cap = min(options.max_bytes_per_sample, budget)
             header = b""
@@ -634,8 +636,6 @@ def _collect_samples(
                 else:
                     body_counts.update(chunk)
                 read_total += len(chunk)
-        finally:
-            os.close(fd)
         if failed:
             _skip(rel, "read error")
             continue
