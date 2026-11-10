@@ -88,11 +88,31 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
             ('local.request.body.value', False),
             ('"constant body"', False),
         ])
+    cases = [(sink.replace("{s}", source), reports) for source, reports in sources]
+    if config == "injection/nosql-taint.yaml":
+        cases.extend([
+            ("collection.find(req.query);", True),
+            ("collection.find(req.params);", True),
+            ("collection.find(request.query);", True),
+            ("collection.find(request.params);", True),
+            ("collection.find(req.body);", True),
+            ("collection.find({}, req.query);", False),
+            ("collection.find({}, req.params);", False),
+            ("collection.find(req);", False),
+            ("const query = req.query; collection.find(query);", True),
+            ("const params = req.params; collection.find(params);", True),
+            ("collection.find({...req.query});", True),
+            ("collection.find({...req.params});", True),
+            ("const data = req.query; collection.find(req);", False),
+            ("collection.find(local.query);", False),
+            ("collection.find(local.params);", False),
+            ("collection.find({}, req.body);", False),
+        ])
     lines = []
     expected = set()
-    for index, (source, reports) in enumerate(sources):
+    for index, (body, reports) in enumerate(cases):
         lines.append(f"function case_{index}(req, request, local, ctx, context, c) {{")
-        lines.append("  " + sink.replace("{s}", source))
+        lines.append("  " + body)
         if reports:
             expected.add(len(lines))
         lines.append("}")

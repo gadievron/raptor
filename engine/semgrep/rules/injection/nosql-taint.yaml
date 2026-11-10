@@ -12,6 +12,16 @@ rules:
     severity: CRITICAL
     mode: taint
     pattern-sources:
+      # Query and route maps can be passed directly as filter objects.
+      # Exact sources keep the request receiver outside the tainted value.
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.query
+              - pattern: $REQ.params
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: '(?i)^(req|request)$'
+        exact: true
       - pattern-either:
           # Express — receiver-name anchored: bare $REQ.query/.params/
           # .body/.headers sources match those field names on any local
