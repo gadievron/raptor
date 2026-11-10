@@ -29,7 +29,7 @@ def _read(out):
     return json.loads((out / "portable-reports" / _CVE / "report-context.json").read_text())
 
 
-def test_success_preserves_scope_costs_native_bytes_and_privacy(tmp_path):
+def test_success_preserves_scope_costs_native_bytes_and_privacy(tmp_path, capsys):
     out = tmp_path / "run"
     out.mkdir()
     native = out / (_CVE + ".osv.json")
@@ -57,6 +57,7 @@ def test_success_preserves_scope_costs_native_bytes_and_privacy(tmp_path):
     serialized = json.dumps(context)
     assert not any(text in serialized for text in ["native private diff", "private before", "private after", "private arguments", "private prompt", "old-other-command"])
     assert native.read_bytes() == before
+    assert capsys.readouterr().err.count("Native exit status") == 1
 
 
 @pytest.mark.parametrize("status,state", [(0, "partial"), (9, "failed")])
@@ -101,11 +102,41 @@ def test_caps_and_nonfinite_metadata_are_explicit(tmp_path):
 
 
 @pytest.mark.parametrize("options", [None, ReportOptions(enabled=False)])
-def test_unrequested_or_disabled_capture_has_no_side_effects(tmp_path, monkeypatch, options):
+def test_unrequested_or_disabled_capture_does_not_build_or_write_reports(tmp_path, monkeypatch, capsys, options):
     monkeypatch.setattr(completion, "NativeResult", lambda *args, **kwargs: pytest.fail("capture must not build"))
     out = tmp_path / "absent"
     assert completion.complete_cve_report(options, out, _CVE, 0, bundle=_bundle()) is None
     assert not out.exists()
+    displayed = capsys.readouterr()
+    assert not displayed.out
+    assert _CVE in displayed.err and "Files changed" in displayed.err
+    assert displayed.err.count("Native exit status") == 1
+
+
+def test_quick_failure_has_unavailable_populations_and_no_private_bodies(tmp_path, capsys):
+    assert completion.complete_cve_report(None, tmp_path / "absent", _CVE, 5,
+                                         error_class="DiscoveryError", error_detail="private detail") is None
+    output = capsys.readouterr()
+    assert not output.out
+    assert "unavailable, not zero" in output.err
+    assert "DiscoveryError" in output.err
+    assert "private detail" not in output.err
+    assert "Files changed" not in output.err
+
+
+def test_disabled_quick_view_does_not_adopt_or_refresh_prior_receipts(tmp_path, capsys):
+    out = tmp_path / "run"
+    root = out / "portable-reports" / _CVE
+    root.mkdir(parents=True)
+    (root / "reporting-manifest.json").write_text("old manifest")
+    previous = root / "cve-diff-report.json"
+    previous.write_text("old receipt")
+    assert completion.complete_cve_report(ReportOptions(enabled=False), out, _CVE, 0, bundle=_bundle()) is None
+    output = capsys.readouterr()
+    assert "not refreshed" in output.err and "Files changed" in output.err
+    assert "old receipt" not in output.err
+    assert previous.read_text() == "old receipt"
+    assert not (root / "summary.json").exists()
 
 
 def test_native_and_input_destinations_are_refused(tmp_path):

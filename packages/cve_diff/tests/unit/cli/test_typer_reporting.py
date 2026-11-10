@@ -33,6 +33,8 @@ def test_native_success_and_export_scope(tmp_path, monkeypatch, flags, exported)
     result = _invoke(out, flags)
     assert result.exit_code == 0, result.output
     assert calls == [("pipeline", _CVE)]
+    assert "Files changed" in result.output
+    assert result.output.count("Native exit status") == 1
     assert (out / (_CVE + ".osv.json")).exists()
     assert (out / (_CVE + ".md")).exists()
     capture = out / "portable-reports" / _CVE / "report-context.json"

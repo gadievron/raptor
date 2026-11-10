@@ -301,8 +301,6 @@ def _classify_discovery(error_text: str) -> str:
 
 def _emit_report(options, output_dir: Path, cve_id: str, status: int, *, pipeline=None, **captured) -> None:
     """Keep optional presentation separate from native command policy."""
-    if options is None:
-        return
     try:
         from cve_diff.report.completion import complete_cve_report
         complete_cve_report(options, output_dir, cve_id, status,

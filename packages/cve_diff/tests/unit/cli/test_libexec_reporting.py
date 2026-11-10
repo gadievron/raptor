@@ -49,7 +49,10 @@ def test_success_captures_once_and_keeps_native_contract(tmp_path, monkeypatch, 
     calls = []
     assert _run_shim(["run", _CVE, "--output-dir", str(out), *flags], _pipeline(calls), calls, monkeypatch) == 0
     assert [call[0] for call in calls] == ["start", "pipeline", "complete"]
-    output = capsys.readouterr().out
+    displayed = capsys.readouterr()
+    output = displayed.out
+    assert "Files changed" in displayed.err
+    assert displayed.err.count("Native exit status") == 1
     assert output.startswith(f"OUTPUT_DIR={out}\n")
     native = json.loads(output[output.index("{"):])
     assert native["ok"] is True
