@@ -513,7 +513,7 @@ class JsonCache:
         if envelope is None:
             try:
                 envelope = self._read_envelope(path)
-            except (OSError, ValueError, KeyError) as e:
+            except (OSError, ValueError, KeyError, RecursionError) as e:
                 logger.debug("core.json.cache: corrupt entry %s: %s", path, e)
                 with self._memo_lock:
                     self._memo_evict(key)
