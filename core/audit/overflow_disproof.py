@@ -77,7 +77,7 @@ def _request(
 
 def _binding(request):
     return {
-        "query_contract": "source-overflow-disproof-v1",
+        "query_contract": "source-overflow-disproof-v2",
         "request_sha256": hashlib.sha256(
             dumps_canonical(request).encode("utf-8", "surrogatepass")
         ).hexdigest(),
@@ -102,7 +102,7 @@ def run_disproof(
 ):
     """Parent-side validation and transport only; never build a native query."""
     from .condition_smt import HypothesisDisproofResult, _run_z3_child, _z3_importable
-    from .arithmetic_claim import has_integer_overflow_subject, parse_arithmetic_claim
+    from .arithmetic_claim import parse_overflow_claim
 
     def decline(reason):
         return HypothesisDisproofResult(
@@ -118,10 +118,7 @@ def run_disproof(
         return decline(
             "overflow request is unsupported or exceeds the input budget — inconclusive"
         )
-    if (
-        not has_integer_overflow_subject(hypothesis)
-        or parse_arithmetic_claim(hypothesis) is None
-    ):
+    if parse_overflow_claim(hypothesis) is None:
         return decline("explicit arithmetic expression unavailable — inconclusive")
     if not _z3_importable():
         return HypothesisDisproofResult(
@@ -250,13 +247,9 @@ def _check_source(
 
     var_types = var_types or {}
 
-    from .arithmetic_claim import has_integer_overflow_subject, parse_arithmetic_claim
+    from .arithmetic_claim import parse_overflow_claim
 
-    claim = (
-        parse_arithmetic_claim(hypothesis)
-        if has_integer_overflow_subject(hypothesis)
-        else None
-    )
+    claim = parse_overflow_claim(hypothesis)
     if claim is None:
         return HypothesisDisproofResult(
             hypothesis_class="integer_overflow",

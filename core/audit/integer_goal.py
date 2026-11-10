@@ -1,5 +1,10 @@
 """Closed source-integer objectives, distinct from arbitrary claim prose."""
 
+OVERFLOW_GOALS = {
+    f"{subject} {fault}": "overflow"
+    for subject in ("integer", "int")
+    for fault in ("overflow", "underflow", "wraparound")
+}
 DIVISION_GOALS = {
     "division by zero": "zero-divisor", "division by 0": "zero-divisor",
     "divide by zero": "zero-divisor", "divide by 0": "zero-divisor",
