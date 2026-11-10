@@ -1848,8 +1848,13 @@ def _rule_matches_negative_control(
         # the rule. Do NOT cache matched=False — that permanently
         # disarmed the presence-detector cap for this keyword.
         return None
-    if not result.findings and getattr(result, "skipped_rules", ()):
-        # A scanned fixture does not prove the skipped rule was exercised.
+    if not result.findings and (
+        getattr(result, "skipped_rules", ())
+        or not _fixture_in_examined_files(getattr(result, "files_examined", ()), fixture)
+        or _fixture_in_failed_files(getattr(result, "files_failed", ()), fixture)
+    ):
+        # Empty findings prove a clean control only when its file and rules
+        # were examined. Honour exclusions without caching unwitnessed silence.
         return None
     matched = bool(result.findings)
     _negative_control_cache[cache_key] = matched
