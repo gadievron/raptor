@@ -16,7 +16,7 @@ struct test_iterator {
   void push_back(const T&) { } void push_front(const T&) { } \
   void clear() { } void reserve(unsigned long) { } void rehash(unsigned long) { } \
   void insert(const T&) { } iterator erase(iterator) { return iterator(); } unsigned long erase(const T&) { return 1; } iterator erase(iterator, iterator) { return iterator(); } \
-  void pop_back() { } };
+  void pop_back() { } void pop_front() { } };
 TEST_CONTAINER(vector)
 TEST_CONTAINER(list)
 TEST_CONTAINER(deque)
@@ -231,5 +231,33 @@ int unsafe_list_erase_prefix(std::list<int>& values, bool flag) {
 int safe_list_end_after_clear(std::list<int>& values, bool flag) {
   auto last = values.end();
   values.clear();
+  return last != values.end();
+}
+
+int unsafe_list_pop_front(std::list<int>& values, bool flag) {
+  if (values.size() == 0) return 0;
+  auto it = values.begin();
+  values.pop_front();
+  return *it;
+}
+int safe_list_pop_front_advanced(std::list<int>& values, bool flag) {
+  if (values.size() < 2) return 0;
+  auto it = values.begin();
+  ++it;
+  values.pop_front();
+  return *it;
+}
+int safe_list_pop_front_rebound(std::list<int>& values, std::list<int>& other) {
+  if (values.size() == 0 || other.size() == 0) return 0;
+  if (&values == &other) return 0;
+  auto it = values.begin();
+  it = other.begin();
+  values.pop_front();
+  return *it;
+}
+int safe_list_pop_front_end(std::list<int>& values, bool flag) {
+  if (values.size() == 0) return 0;
+  auto last = values.end();
+  values.pop_front();
   return last != values.end();
 }

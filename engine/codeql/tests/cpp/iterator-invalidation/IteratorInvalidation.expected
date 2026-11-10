@@ -9,6 +9,9 @@
 | safe_list_erase_other | false |
 | safe_list_erase_postincrement | false |
 | safe_list_insert_use | false |
+| safe_list_pop_front_advanced | false |
+| safe_list_pop_front_end | false |
+| safe_list_pop_front_rebound | false |
 | safe_list_push | false |
 | safe_list_range_insert | false |
 | safe_other_container | false |
@@ -29,6 +32,7 @@
 | unsafe_list_erase_current | true |
 | unsafe_list_erase_other_capture | true |
 | unsafe_list_erase_prefix | true |
+| unsafe_list_pop_front | true |
 | unsafe_set_erase_key | true |
 | unsafe_unordered_insert | true |
 | unsafe_unordered_rehash | true |
