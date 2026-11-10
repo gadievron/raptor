@@ -29,6 +29,7 @@ from collections import Counter
 from pathlib import Path
 
 from core.json import save_json
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
 from core.sarif import emit
 
 from core.analysis.config_resolve_java import (
@@ -48,6 +49,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _FILE_CAP = 5000
+_MAX_SOURCE_BYTES = DEFAULT_MAX_SOURCE_CHARS
 
 # Selector APIs whose string argument names an algorithm. Seed set —
 # growth must come from learned vocabulary, never by editing this
@@ -265,11 +267,14 @@ def run_config_resolved_stage(
                 break
             java_files.append(p)
         for p in java_files:
-            try:
-                text = p.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            content = read_contained_bytes(repo_path, p.absolute(), _MAX_SOURCE_BYTES)
+            if content is None:
                 stats["files_unreadable"] += 1
                 continue
+            if content[1]:
+                stats["files_oversized"] += 1
+                continue
+            text = content[0].decode("utf-8", errors="replace")
             if "getInstance" not in text:
                 continue
             stats["files_scanned"] += 1
@@ -288,6 +293,12 @@ def run_config_resolved_stage(
                 "level": "warning",
                 "message": {"text": f"{stats['files_unreadable']} Java source file(s) could not be read"},
                 "properties": {"coverage_limitation": "unreadable_sources"},
+            })
+        if stats["files_oversized"]:
+            notifications.append({
+                "level": "warning",
+                "message": {"text": f"{stats['files_oversized']} Java source file(s) exceeded the read budget"},
+                "properties": {"coverage_limitation": "source_read_budget"},
             })
         if stats["file_cap_hit"]:
             notifications.append({

@@ -60,12 +60,14 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tree_sitter import Node
 
 _CANDIDATE_CAP = 8
+_MAX_PROPERTIES_BYTES = DEFAULT_MAX_SOURCE_CHARS
 _SKIP_DIR_PARTS = frozenset({
     ".git", "node_modules", "target", "build", "out", "dist",
 })
@@ -173,11 +175,14 @@ class _FileIndex:
         cached = self._parsed.get(path)
         if cached is not None:
             return cached
-        try:
-            entry = parse_properties_strict(
-                path.read_text(encoding="utf-8", errors="strict"))
-        except (OSError, UnicodeDecodeError):
+        content = read_contained_bytes(self._root, path.absolute(), _MAX_PROPERTIES_BYTES)
+        if content is None or content[1]:
             entry = _FileEntry(unsupported=True)
+        else:
+            try:
+                entry = parse_properties_strict(content[0].decode("utf-8", errors="strict"))
+            except UnicodeDecodeError:
+                entry = _FileEntry(unsupported=True)
         self._parsed[path] = entry
         return entry
 

@@ -195,19 +195,21 @@ class TestSarifAndStage:
         assert stats["emitted"] == 1
 
 
-def test_unreadable_java_is_disclosed_without_losing_readable_findings(tmp_path):
+def test_unreadable_java_is_disclosed_without_losing_readable_findings(tmp_path, monkeypatch):
+    from core.analysis import config_resolved_findings as stage
     from core.sarif.parser import generate_scan_metrics
 
     denied = []
+    read = stage.read_contained_bytes
 
-    class ReadDeniedPath(type(tmp_path)):
-        def read_text(self, *args, **kwargs):
-            if self.name == 'Denied.java':
-                denied.append(self.name)
-                raise PermissionError('owned unreadable source')
-            return super().read_text(*args, **kwargs)
+    def deny_owned_source(root, candidate, limit):
+        if candidate.name == 'Denied.java':
+            denied.append(candidate.name)
+            return None
+        return read(root, candidate, limit)
 
-    repo = ReadDeniedPath(tmp_path / 'repo')
+    monkeypatch.setattr(stage, 'read_contained_bytes', deny_owned_source)
+    repo = tmp_path / 'repo'
     repo.mkdir()
     (repo / 'app.properties').write_text('hashAlg=MD5\n')
     (repo / 'H.java').write_text(_src('app.properties', '"hashAlg"'))
@@ -244,3 +246,67 @@ def test_stage_cap_discloses_only_actual_omissions(tmp_path, monkeypatch, file_c
     metrics = generate_scan_metrics([str(path)])
     assert metrics['tool_coverage_limitations'] == ({'raptor-config-resolved': 1} if capped else {})
     assert metrics['tool_execution_failures'] == {}
+
+
+@pytest.mark.parametrize('escaped', ['source', 'properties'])
+def test_stage_refuses_outside_symlinks(tmp_path, escaped):
+    repo, out, external = tmp_path / 'repo', tmp_path / 'out', tmp_path / 'external'
+    repo.mkdir(); out.mkdir(); external.mkdir()
+    source = _src('app.properties', '"hashAlg"')
+    for name, text, kind in [('H.java', source, 'source'), ('app.properties', 'hashAlg=MD5\n', 'properties')]:
+        if escaped == kind:
+            (external / name).write_text(text)
+            (repo / name).symlink_to(external / name)
+        else:
+            (repo / name).write_text(text)
+    path, stats = run_config_resolved_stage(repo, out)
+    assert path is not None
+    assert json.loads(path.read_text())['runs'][0]['results'] == [], (escaped, stats)
+    assert stats.get('files_unreadable' if escaped == 'source' else 'resolver:grammar_unsupported') == 1
+
+
+@pytest.mark.parametrize('linked', ['source', 'properties'])
+def test_stage_preserves_in_root_symlinks(tmp_path, linked):
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir(); out.mkdir()
+    for name, text, kind in [('H.java', _src('app.properties', '"hashAlg"'), 'source'),
+                             ('app.properties', 'hashAlg=MD5\n', 'properties')]:
+        if linked == kind:
+            backing = repo / (kind + '.txt')
+            backing.write_text(text)
+            (repo / name).symlink_to(backing)
+        else:
+            (repo / name).write_text(text)
+    path, stats = run_config_resolved_stage(repo, out)
+    assert path is not None and stats['emitted'] == 1
+    assert len(json.loads(path.read_text())['runs'][0]['results']) == 1
+
+
+@pytest.mark.parametrize('delta', [0, -1])
+def test_stage_requires_complete_source_within_byte_budget(tmp_path, monkeypatch, delta):
+    from core.analysis import config_resolved_findings as stage
+    from core.sarif.parser import generate_scan_metrics
+
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir(); out.mkdir()
+    source = _src('app.properties', '"hashAlg"')
+    (repo / 'H.java').write_text(source)
+    (repo / 'app.properties').write_text('hashAlg=MD5\n')
+    monkeypatch.setattr(stage, '_MAX_SOURCE_BYTES', len(source.encode()) + delta)
+    path, stats = run_config_resolved_stage(repo, out)
+    assert path is not None
+    assert len(json.loads(path.read_text())['runs'][0]['results']) == (1 if delta == 0 else 0)
+    assert stats.get('files_oversized', 0) == (0 if delta == 0 else 1)
+    assert generate_scan_metrics([str(path)])['tool_coverage_limitations'] == (
+        {} if delta == 0 else {'raptor-config-resolved': 1})
+
+
+def test_stage_preserves_relative_repository_inputs(tmp_path, monkeypatch):
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir(); out.mkdir()
+    (repo / 'H.java').write_text(_src('app.properties', '"hashAlg"'))
+    (repo / 'app.properties').write_text('hashAlg=MD5\n')
+    monkeypatch.chdir(tmp_path)
+    path, stats = run_config_resolved_stage(type(tmp_path)('repo'), type(tmp_path)('out'))
+    assert path is not None and stats.get('emitted') == 1
+    assert len(json.loads(path.read_text())['runs'][0]['results']) == 1
