@@ -1,15 +1,13 @@
-// signal_sigkill_sigstop.cocci — Detect attempts to catch or ignore
-// SIGKILL or SIGSTOP.
+// signal_sigkill_sigstop.cocci — Review uncatchable signal disposition attempts.
 //
-// POSIX mandates that SIGKILL and SIGSTOP cannot be caught, blocked,
-// or ignored. signal(SIGKILL, handler) and sigaction(SIGSTOP, ...)
-// unconditionally fail with EINVAL. The handler is never installed,
-// so the program has no protection against the signal it tried to
-// handle. This is always a logic error.
+// SIGKILL and SIGSTOP cannot be caught or ignored. Attempts to install
+// dispositions fail, but sigaction with a null action can query existing
+// state. Exclude recognised literal queries; other action expressions
+// and return-value handling still require review. Checked failure probes
+// need not be bugs, so call syntax alone cannot verify unchecked failure.
 //
-// CWE-252: Unchecked Return Value (the failing call is never checked)
-// Zero-FP: these calls always fail per POSIX — no legitimate use.
-// @role: verification
+// CWE-252: Unchecked Return Value
+// @role: detection
 
 @signal_sigkill@
 expression HANDLER;
@@ -27,7 +25,7 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "signal(SIGKILL, ...) always fails with EINVAL — SIGKILL cannot be caught or ignored (CWE-252)"
+  "message": "Candidate: signal(SIGKILL, ...) attempts an uncatchable signal disposition; review intent and SIG_ERR/EINVAL handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -47,12 +45,13 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "signal(SIGSTOP, ...) always fails with EINVAL — SIGSTOP cannot be caught or ignored (CWE-252)"
+  "message": "Candidate: signal(SIGSTOP, ...) attempts an uncatchable signal disposition; review intent and SIG_ERR/EINVAL handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
 @sigaction_sigkill@
-expression ACT, OLDACT;
+expression ACT != { NULL, 0 };
+expression OLDACT;
 position p;
 @@
 
@@ -67,12 +66,13 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "sigaction(SIGKILL, ...) always fails with EINVAL — SIGKILL cannot be caught (CWE-252)"
+  "message": "Candidate: sigaction(SIGKILL, ...) uses an uncatchable signal; review whether the action argument requests a change and check error handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
 @sigaction_sigstop@
-expression ACT, OLDACT;
+expression ACT != { NULL, 0 };
+expression OLDACT;
 position p;
 @@
 
@@ -87,6 +87,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message": "sigaction(SIGSTOP, ...) always fails with EINVAL — SIGSTOP cannot be caught (CWE-252)"
+  "message": "Candidate: sigaction(SIGSTOP, ...) uses an uncatchable signal; review whether the action argument requests a change and check error handling (CWE-252)."
 }
 print("COCCIRESULT:" + json.dumps(msg))
