@@ -6,6 +6,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 
 from core.json import dumps_canonical
+from core.source.streams import preserving_stream_error
 
 from .model import digest
 
@@ -243,18 +244,12 @@ def pending_report_keys(out_dir: Path, *, selection_key=None, target=None):
         return set()
     if target is not None and progress.get("target") != str(Path(target).resolve()):
         return set()
-    queue = WorkQueue(Path(out_dir),progress["namespace"])
-    try:
+    with preserving_stream_error(closing(WorkQueue(Path(out_dir),progress["namespace"]))) as queue:
         return {key for key in progress.get("report_keys",[]) if isinstance(key,str)} if queue._undelivered_count() else set()
-    finally:
-        queue.close()
 
 
 def acknowledge_delivery(out_dir: Path, receipt):
     if not isinstance(receipt,dict) or not all(isinstance(receipt.get(k),str) for k in ("namespace","view","job","evidence")):
         return
-    queue = WorkQueue(Path(out_dir),receipt["namespace"])
-    try:
+    with preserving_stream_error(closing(WorkQueue(Path(out_dir),receipt["namespace"]))) as queue:
         queue.acknowledge(receipt["view"],receipt["job"],receipt["evidence"])
-    finally:
-        queue.close()
