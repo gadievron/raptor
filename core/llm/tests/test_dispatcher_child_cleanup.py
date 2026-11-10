@@ -64,7 +64,7 @@ def test_integration_caller_reaps_owned_process_tree(
     upstream = SimpleNamespace(shutdown=Mock(), captured={})
     server = SimpleNamespace(
         server_address=("127.0.0.1", 1),
-        serve_forever=lambda: None,
+        serve_forever=lambda poll_interval=0.5: None,
         shutdown=Mock(),
         server_close=Mock(),
     )
