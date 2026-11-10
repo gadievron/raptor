@@ -76,10 +76,14 @@ class TestManifestReader:
         # foreign file while the reader loops. The by-name-check
         # reader lost this race within seconds; the fd-checked reader
         # must never ingest the foreign line.
+        from core.testing.threads import retiring_threads
+
         manifest = tmp_path / ".reads-manifest"
         foreign = tmp_path / "foreign.txt"
         foreign.write_text("/etc/FOREIGN-INGESTED\n")
         stop = threading.Event()
+        swapped = threading.Event()
+        reads = 0
 
         def swapper() -> None:
             while not stop.is_set():
@@ -88,22 +92,23 @@ class TestManifestReader:
                         f.write("benign.c\n")
                     os.unlink(manifest)
                     os.symlink(foreign, manifest)
+                    swapped.set()
                     os.unlink(manifest)
                 except OSError:
                     pass
 
         t = threading.Thread(target=swapper, daemon=True)
-        t.start()
-        try:
-            deadline = time.time() + 5
-            while time.time() < deadline:
+        with retiring_threads([t], release=stop.set, timeout=2):
+            t.start()
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
                 files = read_manifest_lines(manifest)
+                reads += 1
                 assert not any("FOREIGN" in f for f in files), (
                     "foreign lines ingested past the regularity check"
                 )
-        finally:
-            stop.set()
-            t.join(2)
+            assert reads > 0, "manifest reader never ran during the race"
+            assert swapped.is_set(), "swapper never installed the foreign symlink"
 
 
 def _bounded(fn, secs: float = 5.0):
