@@ -113,8 +113,11 @@ def check_integer_condition(source, hypothesis, *, language, integer_abi=None):
         return unavailable
     wanted = _claim(hypothesis, language, integer_abi)
     if wanted is None:
-        from .integer_conjunction import check_integer_conjunction
-        return check_integer_conjunction(source, hypothesis, language=language, integer_abi=integer_abi)
+        from .integer_conjunction import check_integer_conjunction, check_integer_disjunction
+        result = check_integer_conjunction(source, hypothesis, language=language, integer_abi=integer_abi)
+        if result['comparison_status'] == 'unavailable':
+            return check_integer_disjunction(source, hypothesis, language=language, integer_abi=integer_abi)
+        return result
     frame = _frame(source, integer_abi, language) if wanted is not None else None
     if frame is None:
         return unavailable

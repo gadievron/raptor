@@ -41,7 +41,7 @@ def test_outer_guard_can_prove_truth_but_empty_entry_has_no_credit():
     assert check(source.replace('Value==2', 'Value<0 && Value>=0'), expression, truth='true')['matches_claim'] is None
 
 @pytest.mark.parametrize('expression', [
-    'Value < 0 || Value >= 0', 'Value < 0 && Value >= 0 && Value == 0',
+    'Value < 0 && Value >= 0 && Value == 0',
     'Value < 0 && unknown() == 0', 'Value < 0 && Value++ == 0',
     'Value < 0 && (Value=1) == 0', 'Value < 0 && Value+1 == 0',
     'Value < 0 && (unsigned)Value == 0', 'Value < 0 && Value < 4U',

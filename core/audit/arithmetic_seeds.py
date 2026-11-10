@@ -444,7 +444,16 @@ def _operations(source, language, abi):
             conjunctions.append((target, '&&', tuple(atom for leaf in leaves for atom in (leaf[0], leaf[2])),
                                  'constant-condition-false', mechanism,
                                  {'binding_status': 'candidate', 'candidate_basis': 'disjoint-comparison-relations'}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions
+    from .integer_conjunction import disjunction_candidates
+    disjunctions = []
+    for target, leaves in disjunction_candidates(source, language=language, integer_abi=abi):
+        expression = ' || '.join(' '.join(leaf) for leaf in leaves)
+        mechanism = f"Condition is always true in `{expression}`."
+        if len(mechanism) <= 300:
+            disjunctions.append((target, '||', tuple(atom for leaf in leaves for atom in (leaf[0], leaf[2])),
+                                 'constant-condition-true', mechanism,
+                                 {'binding_status': 'candidate', 'candidate_basis': 'exhaustive-comparison-alternatives'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
