@@ -21,6 +21,7 @@ import threading
 import pytest
 
 from core.inventory import _ts_cache, call_graph, extractors
+from core.testing.threads import retiring_threads
 
 _FAKE = "tree_sitter_zz_nonexistent"
 
@@ -166,8 +167,9 @@ def test_parser_cache_is_per_thread(fresh_caches):
         seen.append(extractors._ts_parser_for("python"))
 
     t = threading.Thread(target=_worker)
-    t.start()
-    t.join()
+    with retiring_threads([t], release=lambda: None, timeout=10):
+        t.start()
+        t.join()
     assert seen[0] is not None
     assert seen[0] is not main_parser, (
         "Parser holds C-side parse state — threads must not share one"
