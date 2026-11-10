@@ -86,15 +86,23 @@ class CallerGateDecision:
 
 
 def _appears_bare(operand: str, text: str) -> bool:
-    """True when *operand* occurs in *text* outside a member access.
+    """True when *operand* occurs outside a member or qualified name.
 
     An operand seen only as ``x->operand`` / ``x.operand`` names a
     field, not the callee parameter of the same name — binding it
     would adjudicate the wrong variable.
     """
     for m in re.finditer(rf"\b{re.escape(operand)}\b", text):
-        prefix = text[max(0, m.start() - 2):m.start()]
-        if prefix.endswith("->") or prefix.endswith("."):
+        start = m.start()
+        # Receipt prose can quote an individual operand and place source
+        # whitespace after a member/scope operator.
+        if (start > 0 and text[start - 1] in "`'\"" and m.end() < len(text)
+                and text[m.end()] == text[start - 1]):
+            start -= 1
+        while start > 0 and text[start - 1].isspace():
+            start -= 1
+        prefix = text[max(0, start - 2):start]
+        if prefix.endswith(("->", ".", "::")):
             continue
         return True
     return False

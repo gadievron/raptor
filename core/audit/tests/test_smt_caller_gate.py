@@ -10,6 +10,8 @@ violating call site promotes with the site cited; errors fail closed.
 import json
 from pathlib import Path
 
+import pytest
+
 import core.audit.orchestrator as orch
 import core.audit.smt_promotion_gate as spg
 from core.audit.orchestrator import (
@@ -863,3 +865,34 @@ class TestCallerGateContainment:
         # The contained read binds the parameters exactly as the raw
         # read did: the gate proceeds past unbindable.
         assert decision.channel_outcome != "unbindable"
+
+
+@pytest.mark.parametrize("access", [
+    "c -> cb", "c . cb", "c->\tcb", "c.\ncb", "callbacks :: cb",
+    "c -> `cb`", "c . 'cb'", 'c -> "cb"',
+], ids=["arrow", "dot", "tab", "newline", "qualified", "backtick", "single-quote", "double-quote"])
+def test_spaced_member_receipt_never_binds_an_unrelated_parameter(access):
+    assert receipt_preconditions("check-null-deref", access + " is NULL", ["c", "cb"], _FIELD_CALLEE) == []
+
+
+@pytest.mark.parametrize("access", ["c -> cb", "c . cb", "callbacks :: cb"], ids=["arrow", "dot", "qualified"])
+def test_independent_bare_pointer_mention_still_produces_its_own_contract(access):
+    contracts = receipt_preconditions(
+        "check-null-deref", '`cb` is NULL; separately ' + access,
+        ["c", "cb"], _FIELD_CALLEE,
+    )
+    assert len(contracts) == 1
+    assert contracts[0].param == "cb"
+    assert contracts[0].kind == "null"
+
+
+def test_member_only_receipt_is_held_without_borrowing_callback_argument(tmp_path):
+    (tmp_path / "unit.c").write_text(_FIELD_CALLEE + '\nint entry(void) { return fire(0, 0); }\n')
+    decision = evaluate_caller_gate(
+        tmp_path, "unit.c", "fire", "check-null-deref", "c -> cb is NULL",
+        source=_FIELD_CALLEE, def_span=(1, 4),
+    )
+    assert decision.action == "hold"
+    assert decision.channel_outcome == "unbindable"
+    assert decision.site_count == 0
+    assert "binds no caller-checkable precondition" in decision.reason
