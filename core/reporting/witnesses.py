@@ -49,6 +49,10 @@ def build_witness_summary(
                               # outcome_detail (LLM-emit-run only)
         }``
 
+    Failed store opening or interrupted iteration adds ``enumeration_incomplete``
+    to distinguish retained partial counts from an empty store. Per-record skips
+    remain owned by WitnessStore; absence of this flag is not a provenance claim.
+
     Empty store / missing directory returns the zero-valued shape
     rather than raising — keeps the call site clean.
     """
@@ -67,7 +71,7 @@ def build_witness_summary(
         from core.witness import WitnessStore, WitnessOutcome
     except ImportError as e:
         logger.debug("core.witness unavailable (%s) — empty summary", e)
-        return empty
+        return {**empty, "enumeration_incomplete": True}
 
     try:
         store = WitnessStore(Path(witnesses_dir))
@@ -76,13 +80,14 @@ def build_witness_summary(
             "build_witness_summary: WitnessStore open failed: "
             "%s: %s; empty summary returned", type(e).__name__, e,
         )
-        return empty
+        return {**empty, "enumeration_incomplete": True}
 
     total = 0
     by_source: dict[str, int] = {}
     by_outcome: dict[str, int] = {}
     executed = 0
     compiled = 0
+    incomplete = False
 
     try:
         for w in store.list_witnesses():
@@ -97,6 +102,7 @@ def build_witness_summary(
                     and w.outcome_detail.get("compiled") is True:
                 compiled += 1
     except Exception as e:  # noqa: BLE001 — best-effort iteration
+        incomplete = True
         logger.warning(
             "build_witness_summary: iteration aborted at %d "
             "witnesses (%s: %s); returning partial counts",
@@ -109,6 +115,7 @@ def build_witness_summary(
         "by_outcome": by_outcome,
         "executed": executed,
         "compiled": compiled,
+        **({"enumeration_incomplete": True} if incomplete else {}),
     }
 
 
@@ -139,10 +146,12 @@ def render_witness_summary(
     read ``0/0`` and clutter the fuzz-only view.
     """
     s = build_witness_summary(witnesses_dir)
+    incomplete = s.get("enumeration_incomplete", False)
     if s["total"] == 0:
-        return ""
+        return "Witness summary unavailable: enumeration incomplete; totals unknown" if incomplete else ""
 
-    out = [f"Witnesses recorded: {s['total']}"]
+    qualifier = " (partial enumeration; total unknown)" if incomplete else ""
+    out = [f"Witnesses recorded: {s['total']}{qualifier}"]
     if s["by_source"]:
         out.append(f"{indent}By source:")
         for src, cnt in sorted(s["by_source"].items()):
