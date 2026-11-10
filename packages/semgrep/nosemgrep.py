@@ -52,6 +52,21 @@ _NOSEMGREP_RE = re.compile(
 _MAX_CACHE_FILES = 512
 
 
+def _read_source_lines(path: str | Path) -> list[str] | None:
+    """Read complete source lines before using them as suppression evidence."""
+    got = read_text_capped(path, newline="")
+    if got is None:
+        return None
+    text, truncated = got
+    # Scanner locations count LF only; bare CR/form-feed must not shift them.
+    lines = split_lines(text)
+    # The shared reader retains a raw single-line prefix on truncation for
+    # rendered context. A partial directive cannot establish rule scope.
+    if truncated and not text.endswith("\n") and lines:
+        lines.pop()
+    return lines
+
+
 class _FileCache:
     """LRU-ish file cache for source lines, scoped to one annotation pass."""
 
@@ -66,13 +81,7 @@ class _FileCache:
         if len(self._store) >= _MAX_CACHE_FILES:
             # Evict oldest entry (insertion-order dict).
             self._store.pop(next(iter(self._store)))
-        # Capped read (shared 10 MB default): a pathological
-        # generated/planted file yields its truncated prefix instead
-        # of loading whole per annotation pass.
-        got = read_text_capped(path, newline="")
-        # \n-model split: the indexing line numbers are
-        # semgrep's, which count \n only (see extract_nosemgrep).
-        result = None if got is None else split_lines(got[0])
+        result = _read_source_lines(path)
         self._store[path] = result
         return result
 
@@ -94,18 +103,9 @@ def extract_nosemgrep(
     comments selecting that rule (or all rules) are returned.
     """
     if _lines is None:
-        # Same capped read as the annotate_sarif path's _FileCache —
-        # the standalone entry point read files unbounded, the
-        # uncapped-read shape the shared reader exists to close.
-        got = read_text_capped(file_path, newline="")
-        if got is None:
+        _lines = _read_source_lines(file_path)
+        if _lines is None:
             return None
-        # \n-model split (core.source.lines contract): *line* is the
-        # semgrep-reported line number, which counts \n only. A
-        # splitlines() view let one string-literal form feed shift the
-        # index so a standalone nosemgrep comment two physical lines
-        # above the finding forged a developer-suppression annotation.
-        _lines = split_lines(got[0])
 
     for offset in (0, -1):
         idx = line - 1 + offset  # 1-indexed → 0-indexed

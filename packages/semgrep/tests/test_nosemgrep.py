@@ -602,3 +602,82 @@ def test_marker_alias_requires_complete_keyword(tmp_path, marker):
     source = tmp_path / "a.py"
     source.write_text(f"subject(value) # {marker}: test.rule\n")
     assert extract_nosemgrep(source, 1) is None
+
+
+@pytest.mark.parametrize("mode", ["standalone", "annotation"])
+@pytest.mark.parametrize("text,cap,line,applies", [
+    ("subject(value) # nosemgrep: other.rule\n", len("subject(value) # nosemgrep"), 1, False),
+    ("# nosemgrep: other.rule\nsubject(value)\n", len("# nosemgrep"), 2, False),
+    ("subject(value) # nosemgrep: test.rule\n" + "x" * 100,
+     len("subject(value) # nosemgrep: test.rule\n") + 5, 1, True),
+    ("# nosemgrep: test.rule\nsubject(value)\n", len("# nosemgrep: test.rule\n"), 2, True),
+    ("subject(value) # nosemgrep: test.rule", len("subject(value) # nosemgrep: test.rule"), 1, True),
+])
+def test_only_complete_capped_lines_establish_suppression(tmp_path, monkeypatch, mode, text, cap, line, applies):
+    from packages.semgrep import nosemgrep
+
+    source = tmp_path / "case.py"
+    source.write_text(text)
+    read = nosemgrep.read_text_capped
+
+    def bounded(path, **kwargs):
+        return read(path, max_chars=cap, **kwargs)
+
+    monkeypatch.setattr(nosemgrep, "read_text_capped", bounded)
+    if mode == "standalone":
+        info = extract_nosemgrep(source, line, rule_id="test.rule")
+        assert bool(info) is applies
+    else:
+        result = _make_result("case.py", line)
+        sarif = _make_sarif_data([result])
+        assert annotate_sarif(sarif, str(tmp_path)) == int(applies)
+        assert bool(result.get("properties", {}).get("nosemgrep")) is applies
+        assert sarif["runs"][0]["results"] == [result]
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+def test_native_capped_source_cannot_create_unscoped_suppression(tmp_path):
+    from core.sarif.parser import generate_scan_metrics
+    from core.source import read_text_capped
+    from core.source.contained import DEFAULT_MAX_SOURCE_CHARS
+    from packages.semgrep.runner import build_cmd
+
+    cap = DEFAULT_MAX_SOURCE_CHARS
+    marker = "# nosemgrep"
+    prefix = "#" + " " * (cap - len(marker) - 1) + marker
+    source = tmp_path / "case.py"
+    source.write_text(prefix + ": beta\nsubject(value)\n")
+    got = read_text_capped(source, newline="")
+    assert got == (prefix, True)
+    config = tmp_path / "rules.json"
+    config.write_text(json.dumps({"rules": [{
+        "id": name, "languages": ["python"], "message": "owned capped source",
+        "severity": "WARNING", "pattern": "subject(...)",
+    } for name in ("alpha", "beta")]}))
+    metadata = tmp_path / "native.json"
+    command = build_cmd(
+        source, str(config), json_output_path=metadata,
+        extra_args=["--max-target-bytes", str(cap * 2)], scope_isolation=False,
+    )
+    proc = run_pinned_subprocess(
+        command, timeout=120, context="capped suppression source", skip_signals=(9,),
+        env={**os.environ, "SEMGREP_SETTINGS_FILE": str(tmp_path / "settings.yml"),
+             "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log")},
+    )
+    # The production command uses --error: findings legitimately return 1.
+    assert proc.returncode in (0, 1), proc.stderr
+    native = json.loads(metadata.read_text())
+    assert not native.get("errors"), native.get("errors")
+    assert {Path(path).name for path in native["paths"]["scanned"]} == {source.name}
+    sarif = json.loads(proc.stdout)
+    rows = [result for run in sarif["runs"] for result in run.get("results", [])]
+    assert len(rows) == 2
+    assert {result["locations"][0]["physicalLocation"]["region"]["startLine"] for result in rows} == {2}
+    assert annotate_sarif(sarif, str(tmp_path)) == 0
+    assert all("nosemgrep" not in result.get("properties", {}) for result in rows)
+    report = tmp_path / "annotated.sarif"
+    report.write_text(json.dumps(sarif))
+    metrics = generate_scan_metrics([str(report)])
+    assert metrics["total_findings"] == 2
+    assert metrics["nosemgrep_suppressed_count"] == 0
