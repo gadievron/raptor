@@ -5,13 +5,26 @@ import json
 from core.audit.tests.test_knowledge_runtime_coordinator import _runtime
 
 
-def test_trace_retains_omission_and_failure_without_claiming_model_use(tmp_path):
+def test_trace_retains_omission_and_failure_without_claiming_model_use(tmp_path, monkeypatch):
     runtime, ctx = _runtime(tmp_path)
     reservation = runtime.ready_continuations(admission=lambda: True)[0]
     request_id = reservation.packet.references[0].request_id
     ctx["language_reference_delivery"] = [{"request_id": request_id, "delivered": False,
                                            "reason": "token_budget"}]
     assert runtime.enrich_context(ctx, reservation)
+    from core.audit.llm_review import make_review_fn
+    from core.audit.orchestrator import OrchestratorConfig
+    from core.llm.providers import StructuredResponse
+
+    monkeypatch.setattr("core.audit.llm_review._prompt_budget", lambda *_: 100)
+
+    class Client:
+        def generate_structured(self, prompt, schema, **kwargs):
+            return StructuredResponse(result={"status": "clean", "body": "Scripted assessment"},
+                                      raw="", cost=0, model="scripted")
+
+    runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(
+        ctx, OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out"))
     assert runtime.fail(reservation, "scripted_failure", ctx)
     out = tmp_path / "out"
     out.mkdir()
