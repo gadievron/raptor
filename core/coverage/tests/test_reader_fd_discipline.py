@@ -267,7 +267,10 @@ class TestJournalReader:
                 return _shrink(st)
             return st
 
-        monkeypatch.setattr(Path, "stat", _small_stat)
+        class StatPath(type(Path())):
+            stat = _small_stat
+
+        monkeypatch.setattr(_mock_consumer_os, "Path", StatPath)
         monkeypatch.setattr(
             "core.coverage.journal._MAX_JOURNAL_BYTES", 64 * 1024)
         tracemalloc.start()
