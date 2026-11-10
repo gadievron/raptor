@@ -790,6 +790,12 @@ def run_sandboxed(cmd: list[str], *,
                   # has no unix lanes (netns tier never engages on
                   # darwin); accepted + ignored for signature parity.
                   child_pid_callback=None,
+                  # Linux-only fallback release boundary; macOS has no
+                  # weaker execution fallback. Accepted for signature parity.
+                  execution_committed_callback=None,
+                  # Delegated cgroup ownership is Linux-only. An inactive
+                  # controller is harmless; active budgets must be refused.
+                  job_controller=None,
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
@@ -831,6 +837,13 @@ def run_sandboxed(cmd: list[str], *,
     are bounded by core.sandbox.audit_budget.AuditBudget's per-
     category caps + 1-in-N sampling so the JSONL doesn't bloat.
     """
+    if job_controller is not None and job_controller.scope is not None:
+        from .errors import SandboxSetupError
+        raise SandboxSetupError(
+            "Job budgets require the Linux delegated cgroup backend; "
+            "macOS cannot enforce an active job controller.",
+            "run delegated job-budget sandboxes on a Linux host.",
+        )
     if rootfs is not None:
         from .errors import SandboxSetupError
         msg = (
