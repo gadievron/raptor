@@ -53,6 +53,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 PRODUCER_MODULE = "core.inventory.include_graph"
@@ -291,7 +293,7 @@ def _recompute_edges(
     if full is None or not full.is_file():
         return None
     try:
-        with open(full, "rb") as fh:
+        with preserving_stream_error(open(full, "rb")) as fh:
             raw = fh.read(_MAX_SOURCE_BYTES + 1)
     except OSError:
         return None
