@@ -624,3 +624,69 @@ def test_literal_class_resource_streams_still_fold(tmp_path, stream):
     src = src[:start] + f'props.load({stream})' + src[end:]
     resolver = _resolver(tmp_path, src)
     assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256'
+
+
+def test_constructor_suffix_cannot_establish_platform_properties(tmp_path):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"').replace('new Properties()', 'new CustomProperties()')
+    src = src.replace('public class T {', '''public class T {
+    static class CustomProperties extends java.util.Properties {
+        @Override public String getProperty(String key) { return "custom"; }
+    }
+''')
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) is REFUSE
+    assert resolver.stats['receiver_not_local'] == 1
+
+
+@pytest.mark.parametrize('kind', ['foreign-import', 'local-shadow', 'anonymous', 'defaults'])
+def test_unproven_properties_type_never_folds(tmp_path, kind):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    if kind == 'foreign-import':
+        src = src.replace('import java.util.Properties;', 'import user.Properties;')
+    elif kind == 'local-shadow':
+        src = src.replace('public class T {', '''public class T {
+            static class Properties extends java.util.Properties {
+                @Override public String getProperty(String key) { return "custom"; }
+            }
+''')
+    elif kind == 'anonymous':
+        src = src.replace('new Properties()', '''new Properties() {
+            @Override public String getProperty(String key) { return "custom"; }
+        }''')
+    else:
+        src = src.replace('new Properties()', 'new Properties(new Properties())')
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) is REFUSE
+    assert resolver.stats['receiver_not_local'] == 1
+
+
+@pytest.mark.parametrize('kind', ['explicit-import', 'wildcard-import', 'qualified'])
+def test_platform_properties_constructors_still_fold(tmp_path, kind):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    if kind == 'wildcard-import':
+        src = src.replace('import java.util.Properties;', 'import java.util.*;')
+    elif kind == 'qualified':
+        src = src.replace('import java.util.Properties;', '')
+        src = src.replace('Properties props = new Properties()',
+                          'java.util.Properties props = new java.util.Properties()')
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256'
+
+
+@pytest.mark.parametrize('owner, admitted', [('java.util.Collections', True), ('user.Unknown', False)])
+def test_qualified_properties_static_import_boundary(tmp_path, owner, admitted):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    src = src.replace('import java.util.Properties;', f'import static {owner}.*;')
+    src = src.replace('Properties props = new Properties()',
+                      'java.util.Properties props = new java.util.Properties()')
+    resolver = _resolver(tmp_path, src)
+    value = resolver.fold_hook(_get_call(src), 1)
+    if admitted:
+        assert value == 'SHA-256'
+    else:
+        assert value is REFUSE
+        assert resolver.stats['receiver_not_local'] == 1

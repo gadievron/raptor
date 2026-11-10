@@ -340,3 +340,16 @@ def test_reader_literal_cannot_bind_a_bundled_algorithm_file(tmp_path):
     findings, stats = _scan(tmp_path, src)
     assert findings == []
     assert stats['resolver:dynamic_resource'] == 1
+
+
+def test_custom_properties_receiver_cannot_establish_a_weak_selector(tmp_path):
+    (tmp_path / 'app.properties').write_text('hashAlg=MD5\n')
+    source = _src('app.properties', '"hashAlg"').replace('new Properties()', 'new CustomProperties()')
+    source = source.replace('public class H {', '''public class H {
+        static class CustomProperties extends java.util.Properties {
+            @Override public String getProperty(String key) { return "SHA-256"; }
+        }
+''')
+    findings, stats = _scan(tmp_path, source)
+    assert findings == []
+    assert stats['resolver:receiver_not_local'] == 1

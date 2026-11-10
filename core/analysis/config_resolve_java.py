@@ -328,8 +328,51 @@ def _load_dominates_get(load_node, get_node) -> bool:
     return False
 
 
+
+def _properties_type_names(root) -> frozenset[str]:
+    """Source-visible platform type spellings, with local shadows refused."""
+    allowed = {"java.util.Properties"}
+    declared: set[str] = set()
+    platform_import = False
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "import_declaration":
+            imported = "".join(_text(node).split())
+            if imported in {"importjava.util.Properties;", "importjava.util.*;"}:
+                platform_import = True
+            elif imported.endswith(".Properties;"):
+                declared.add("Properties")
+            if imported.endswith(".java;") or (
+                imported.endswith(".*;") and not imported.startswith(("importjava.", "importstaticjava."))
+            ):
+                declared.add("java")
+        elif node.type in {
+            "class_declaration", "interface_declaration", "enum_declaration",
+            "record_declaration", "annotation_type_declaration", "type_parameter",
+        }:
+            name = node.child_by_field_name("name")
+            if name is not None and _text(name) in {"Properties", "java"}:
+                declared.add(_text(name))
+        stack.extend(node.children)
+    if "java" in declared:
+        allowed.clear()
+    if platform_import and "Properties" not in declared:
+        allowed.add("Properties")
+    return frozenset(allowed)
+
+
+def _platform_properties_creation(value, accepted_types: frozenset[str]) -> bool:
+    if value is None or value.type != "object_creation_expression":
+        return False
+    name = value.child_by_field_name("type")
+    return (name is not None and "".join(_text(name).split()) in accepted_types
+            and not _call_arguments(value)
+            and not any(child.type == "class_body" for child in value.named_children))
+
+
 def _receiver_discipline(method_node, receiver: str,
-                         get_node: Node) -> tuple[str | None, str]:
+                         get_node: Node, accepted_types: frozenset[str]) -> tuple[str | None, str]:
     """(resource_basename, refusal). Walks the enclosing method once:
     classifies every appearance of ``receiver`` and extracts the single
     load resource literal. Any unclassified appearance refuses."""
@@ -349,10 +392,7 @@ def _receiver_discipline(method_node, receiver: str,
             name = n.child_by_field_name("name")
             value = n.child_by_field_name("value")
             if name is not None and _text(name) == receiver:
-                if (value is not None
-                        and value.type == "object_creation_expression"
-                        and _text(value).replace(" ", "").endswith(
-                            "Properties()")):
+                if _platform_properties_creation(value, accepted_types):
                     new_props += 1
                     claimed.add((name.start_point[0], name.start_point[1]))
                 # a declarator with any other initializer is an
@@ -428,6 +468,7 @@ class ConfigResolver:
         except Exception:  # noqa: BLE001
             self.stats["parser_unavailable"] += 1
             return
+        self._properties_types = _properties_type_names(self._tree.root_node)
         self._ok = True
 
     def _refuse(self, reason: str) -> ConfigResolution:
@@ -468,7 +509,7 @@ class ConfigResolver:
         if method_node is None:
             return self._refuse("no_enclosing_method")
         basename, refusal = _receiver_discipline(
-            method_node, _text(obj), node)
+            method_node, _text(obj), node, self._properties_types)
         if refusal:
             return self._refuse(refusal)
 
