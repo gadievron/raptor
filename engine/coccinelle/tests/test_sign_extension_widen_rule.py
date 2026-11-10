@@ -1,6 +1,6 @@
 """Fixture tests for the sign_extension_widen rule.
 
-Verification-role rule (fires mint confirmed CWE-194 verdicts). The
+Detection-role rule (reports conversion candidates for CWE-194 review). The
 rule emits two ids — sign_extension_char and sign_extension_short —
 for signed-narrow-to-unsigned-wide widenings in declaration-init and
 cast form. Negatives pin the intentional-mask guard the rule's own
@@ -103,3 +103,48 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.slow
+def test_guarded_widening_requires_value_range_review(tmp_path):
+    import json
+
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    source = """unsigned long guarded_char(signed char c) {
+    if (c < 0) return 0;
+    unsigned long n = c;
+    return n;
+}
+unsigned long guarded_short(short s) {
+    if (s < 0) return 0;
+    unsigned long n = s;
+    return n;
+}
+unsigned long unguarded(signed char c) {
+    unsigned long n = c;
+    return n;
+}
+unsigned long unsigned_source(unsigned char c) {
+    unsigned long n = c;
+    return n;
+}
+"""
+    target = tmp_path / 'owned.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff'],
+        timeout=45, context='Owned signed widening candidate syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr)
+            for line in stream.splitlines() if line.startswith('COCCIRESULT:')]
+    assert sorted((row['line'], row['rule']) for row in rows) == [
+        (3, 'sign_extension_char'), (8, 'sign_extension_short'),
+        (12, 'sign_extension_char'),
+    ]
+    assert all(row['message'].startswith('Candidate:')
+               and 'negative values' in row['message'] for row in rows)
