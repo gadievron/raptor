@@ -1278,12 +1278,17 @@ def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> in
         print(f"raptor-binary: missing {filename}: {path}", file=sys.stderr)
         return 1
     if not json_output:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            print(f"raptor-binary: cannot read {escape_nonprintable(filename)} ({type(error).__name__})", file=sys.stderr)
+            return 1
         # Report files embed binary-derived names; the writers scrub,
         # but this print is the last line of defence for the terminal
         # (control/bidi bytes in older or hand-edited artifacts).
         print(
             escape_nonprintable(
-                path.read_text(encoding="utf-8"), preserve_newlines=True,
+                text, preserve_newlines=True,
             ),
             end="",
         )
