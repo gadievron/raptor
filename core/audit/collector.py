@@ -12,10 +12,10 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any, TYPE_CHECKING, cast
 
-from .verification_results import VerificationScope
+from .verification_results import ReviewPublicationScope, VerificationScope
 
 from core.coverage.journal import CLEAN_BASIS_VERDICT
 
@@ -284,6 +284,7 @@ def append_journal_for_outcome(
     domain_model_hash: str | None = None,
     producer: str | None = None,
     verification_scope: VerificationScope | None = None,
+    publication_scope: ReviewPublicationScope | None = None,
 ) -> ReviewJournalEntry | None:
     """Append one ``ReviewJournalEntry`` for a completed review outcome.
 
@@ -309,6 +310,8 @@ def append_journal_for_outcome(
     An optional pipeline-created verification scope binds the claim and
     known source version around journal hashing. It does not certify a
     proof or an immutable build; unbound callers retain legacy behaviour.
+    A separate publication scope binds an already reviewed source unit even
+    when no claim was established. Both supplied bindings must pass.
 
     Return the appended entry, or None when admission or append failed. Callers
     that remove pending work use this exact acknowledgement, rather than
@@ -393,7 +396,33 @@ def append_journal_for_outcome(
             logger.warning("could not admit bound journal source", exc_info=True)
             return False
 
+    def publication_current(*, after_hash=False):
+        current = None
+        reason = "invalid_publication_scope"
+        if isinstance(publication_scope, ReviewPublicationScope):
+            current = capture_source_identity(target_path, outcome.file)
+            reason = "publication_scope_or_source_changed"
+            if publication_scope.matches(file=outcome.file, function=outcome.function,
+                    line_start=gap.get("line_start", 0),
+                    line_end=gap.get("line_end") or gap.get("line_start", 0), source_identity=current):
+                if not after_hash or source_hash:
+                    return True
+                reason = "publication_source_hash_unavailable"
+        try:
+            from .record import append_audit_log
+
+            append_audit_log(out_dir, {"action": "review_publication_rejected", "file": outcome.file,
+                "function": outcome.function, "line_start": gap.get("line_start", 0), "reason": reason,
+                "role": "context_provenance_not_verification_evidence",
+                "expected": asdict(publication_scope) if isinstance(publication_scope, ReviewPublicationScope) else None,
+                "observed_source_identity": asdict(current) if current is not None else None})
+        except Exception:
+            logger.warning("could not record review publication rejection", exc_info=True)
+        return False
+
     if verification_scope is not None and not binding_current():
+        return None
+    if publication_scope is not None and not publication_current():
         return None
     edge_callee = gap.get("edge_callee") or None
     try:
@@ -437,6 +466,8 @@ def append_journal_for_outcome(
 
     if verification_scope is not None and not binding_current(after_hash=True):
         return None
+    if publication_scope is not None and not publication_current(after_hash=True):
+        return None
     if inherited_parts is not None:
         inherited_after = capture_source_identity(target_path, outcome.file)
         if inherited_after != inherited_before or source_hash != inherited_parts[1]:
@@ -448,6 +479,12 @@ def append_journal_for_outcome(
             source_hash = make_source_anchor(verification_scope.source_identity.sha256, source_hash)
         except ValueError:
             logger.warning("journal known source cannot be represented by a source anchor")
+            return None
+    elif publication_scope is not None:
+        try:
+            source_hash = make_source_anchor(publication_scope.source_identity.sha256, source_hash)
+        except ValueError:
+            logger.warning("journal publication source cannot be represented by a source anchor")
             return None
 
     hypotheses_list: list[dict[str, str]] = []
