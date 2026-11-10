@@ -737,7 +737,7 @@ class TestTaintSummaryResolver:
         assert result.resolution == "confirmed"
         assert result.resolver_used == "taint_summary"
 
-    def test_refutes_when_sanitizer_present(self):
+    def test_return_sanitizer_without_caller_binding_does_not_refute(self):
         ts = _FakeTaintSummary(
             params=["user_input"],
             call_arg_taint=[],
@@ -750,10 +750,7 @@ class TestTaintSummaryResolver:
         config = PropagationConfig(evidence_index={"src/packet.c:parse_header": rec})
         c = _constraint(target="user_input")
         result = _try_taint_summary_resolve(c, config)
-        assert result is not None
-        assert result.resolved
-        assert result.resolution == "refuted"
-        assert result.resolver_used == "taint_summary"
+        assert result is None
 
     def test_returns_none_when_param_not_found(self):
         ts = _FakeTaintSummary(

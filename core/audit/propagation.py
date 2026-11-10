@@ -782,29 +782,10 @@ def _try_taint_summary_resolve(
                     resolver_used="taint_summary",
                 )
 
-    if hasattr(ts, "return_sanitizers_for_param"):
-        sanitizers = ts.return_sanitizers_for_param(param_idx)
-        if sanitizers and constraint.cwe:
-            from core.dataflow.sanitizer_catalog import sanitizer_callables_for_cwe
-
-            from .prefilter import detect_language
-            lang = detect_language(constraint.file)
-            if lang:
-                relevant = sanitizer_callables_for_cwe(constraint.cwe, lang)
-                sanitizers = frozenset(
-                    (name, idx) for name, idx in sanitizers if name in relevant
-                )
-        if sanitizers:
-            return PropagationResult(
-                constraint=constraint,
-                resolved=True,
-                resolution="refuted",
-                resolver_used="taint_summary",
-            )
-
-    if hasattr(ts, "summary_unknown") and ts.summary_unknown:
-        return None
-
+    # Return effects describe a transformed return value, not a constraint
+    # on the original parameter or its use by a caller. Names alone neither
+    # establish catalogue source contracts nor bind the return to the sink.
+    # Leave these cases to source-bound analysis and later resolvers.
     return None
 
 
