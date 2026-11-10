@@ -55,6 +55,9 @@ Public surface:
 """
 from __future__ import annotations
 
+import logging
+import re
+
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import (
@@ -1677,6 +1680,66 @@ class _CPPCFGBuilder:
 # ---------------------------------------------------------------------------
 
 
+def _preprocessing_proof_gaps(source: str, fn_def, language: str) -> frozenset[str]:
+    """Known active preprocessing cannot be treated as transparent CFG code.
+
+    No macro body is assumed inert: even literal-valued keyword macros can
+    change parsing. Definitions and data mentions alone are not expansion.
+    """
+    if re.search(r"\?\?[=/'()!<>-]", source):
+        return frozenset({"trigraph_translation"})
+    if "#" not in source and "%:" not in source:
+        return frozenset()
+    from core.audit.source_view import sanitized_view_with_status
+
+    encoded = source.encode("utf-8", errors="replace")
+    try:
+        start = len(encoded[:fn_def.start_byte].decode("utf-8"))
+        end = len(encoded[:fn_def.end_byte].decode("utf-8"))
+    except UnicodeDecodeError:
+        return frozenset({"source_span_encoding"})
+    splices = list(re.finditer(r"\\\r?\n", source))
+    if any(match.start() < boundary < match.end() for match in splices for boundary in (start, end)):
+        return frozenset({"source_span_splicing"})
+    lower = start - sum(match.end() - match.start() for match in splices if match.end() <= start)
+    upper = end - sum(match.end() - match.start() for match in splices if match.end() <= end)
+    phase2 = re.sub(r"\\\r?\n", "", source)
+    view = sanitized_view_with_status(phase2, language=language)
+    if view.ambiguous or len(view.text) != len(phase2):
+        return frozenset({"ambiguous_preprocessing_view"})
+    if "%:" in view.text:
+        return frozenset({"digraph_directive"})
+    function_view = view.text[lower:upper]
+    directives = re.findall(r"(?m)^[ \t]*#\s*([A-Za-z_]+)", function_view)
+    if any(directive not in {"define", "undef"} for directive in directives):
+        return frozenset({"function_preprocessing_directive"})
+    names = set(re.findall(r"(?m)^[ \t]*#\s*define\s+([^\s(]+)", view.text))
+    if not names:
+        return frozenset()
+    function_code = re.sub(r"(?m)^[ \t]*#.*$", "", function_view)
+    if (any(not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name) for name in names)
+            or any(ord(character) > 127 for character in function_code)
+            or re.search(r"\\[uU]", function_code)):
+        return frozenset({"macro_identifier_encoding"})
+    # Keywords remain tokens: subtracting a C keyword set loses macros
+    # named return/if/etc. Alias chains require no speculative expansion.
+    if set(re.findall(r"[\w$]+", function_code)) & names:
+        return frozenset({"unexpanded_macro"})
+    return frozenset()
+
+
+def _record_preprocessing_refusal(file_path: str, function_name: str, gaps: frozenset[str]) -> None:
+    try:
+        from core.run.gaps import record_analysis_gap
+        record_analysis_gap(
+            file_path=file_path, reason="cpp_preprocessing_unverified", tool="cfg_builder_cpp",
+            detail="Selected C/C++ function requires verified preprocessing before CFG proofs.",
+            extra={"function": function_name, "gap_kinds": ",".join(sorted(gaps))},
+        )
+    except Exception:  # diagnostics must never restore an unavailable proof
+        logging.getLogger(__name__).debug("C/C++ preprocessing gap recording failed", exc_info=True)
+
+
 def build_cpp_intraproc_cfg(
     source: str | Path, function_name: str, *, language: str = "c",
     _ts_tree: "Any | None" = None,
@@ -1693,6 +1756,8 @@ def build_cpp_intraproc_cfg(
     * The source has unrecoverable parse errors before any function
       definition is found.
     * No function in the file matches ``function_name``.
+    * Active macros or unverified preprocessing make function control flow
+      unavailable. An analysis-gap receipt records this refusal.
 
     Partial parse errors (a malformed statement inside an otherwise-
     parseable function) do NOT return None — tree-sitter's error
@@ -1733,6 +1798,10 @@ def build_cpp_intraproc_cfg(
             tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     fn_def = _find_function_definition(tree.root_node, function_name)
     if fn_def is None:
+        return None
+    preprocessing_gaps = _preprocessing_proof_gaps(source_text, fn_def, language)
+    if preprocessing_gaps:
+        _record_preprocessing_refusal(file_path, function_name, preprocessing_gaps)
         return None
     builder = _CPPCFGBuilder(function_name, file_path, language)
     return replace(

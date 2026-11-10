@@ -954,6 +954,12 @@ def _caller_bound_search(
                         "depth": depth,
                         "guards_scanned": len(guards or []),
                     }
+                    if guards is None:
+                        # Missing CFG evidence is coverage loss, not an empty
+                        # guard set. Keep it distinct from deadline truncation.
+                        receipt["guards_available"] = False
+                        per_caller.append(receipt)
+                        return None, per_caller, False
                     if guards:
                         for cond in guards:
                             witness = _classify_bound_guard(
@@ -1107,6 +1113,18 @@ def _adjudicate_site(
     )
     bound_search["callers"] = per_caller
     bound_search["truncated"] = walk_truncated
+    if any(receipt.get("guards_available") is False for receipt in per_caller):
+        bound_search["caller_guards_complete"] = False
+        return BoundEvidence(
+            outcome="inconclusive",
+            reason=(
+                f"{REASON_CENSUS_DEGRADED}: caller CFG/dominators unavailable; "
+                "the caller bound search is incomplete"
+            ),
+            resource=resource,
+            site=site_receipt,
+            bound_search=bound_search,
+        )
     if caller_witness is not None:
         return BoundEvidence(
             outcome="refuted",
