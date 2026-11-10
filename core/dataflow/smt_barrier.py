@@ -1314,7 +1314,7 @@ def _lexical_validator_in_branch(
     :func:`_validator_in_branch`: True when the validator line is
     conditionally executed relative to the sink.
 
-    Java first applies a native syntax veto for unsupported control
+    Java and JS-family source first apply a native syntax veto for unsupported control
     ownership, including multiline braceless conditional parents.
     A passing veto is not a replacement for the checks below.
 
@@ -1368,11 +1368,11 @@ def _lexical_validator_in_branch(
     """
     if java_unicode_unverified(source_text, language=language):
         return True  # Unknown control structure cannot establish dominance.
-    if language == "java":
-        from core.analysis.java_guard_scope import java_guard_scope_unverified
+    if language in {"java", "javascript", "typescript", "tsx"}:
+        from core.analysis.validator_control_scope import validator_control_scope_unverified
 
-        if java_guard_scope_unverified(
-            source_text, validator_line, sink_line, guard_shaped=guard_shaped,
+        if validator_control_scope_unverified(
+            source_text, validator_line, sink_line, guard_shaped=guard_shaped, language=language,
         ):
             return True
     lines = split_source_lines(source_text)

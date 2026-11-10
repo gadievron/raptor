@@ -366,8 +366,8 @@ def _step_refutes_path(
                 source_text, step_line, sink_line, language,
             )
             and not _lexical_validator_in_branch(
-                source_text, step_line, sink_line, guard_shaped=True,
-                language=language,
+                source_text, step_line, sink_line,
+                guard_shaped=(spec.kind == "charset"), language=language,
             )
         )
     if not dominates:

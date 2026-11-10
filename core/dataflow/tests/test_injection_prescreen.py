@@ -18,7 +18,7 @@ import pytest
 pytest.importorskip("z3")
 
 from core.dataflow import injection_prescreen as ip
-from core.dataflow.smt_barrier import ValidatorSpec
+from core.dataflow.smt_barrier import ValidatorSpec, extract_validator_from_line
 from core.dataflow.injection_prescreen import (
     PrescreenVerdict,
     prescreen_finding,
@@ -441,12 +441,12 @@ class TestNonPythonRebindKill:
     a charset guard whose variable is re-tainted after the guard does NOT
     suppress a live JS/TS/Java finding."""
 
-    _SPEC = ValidatorSpec(
-        kind="charset", var_name="p", charset="A-Za-z0-9",
-        source_line="+  p = p.replace(/[^A-Za-z0-9]/g, '')", forbidden=0,
+    _SPEC = extract_validator_from_line(
+        "  if (!/^[A-Za-z0-9]+$/.test(p)) return;", "javascript",
     )
 
     def _refute(self, src, step_line, sink_line):
+        assert self._SPEC is not None
         return ip._step_refutes_path(
             spec=self._SPEC, step_file="app.js", step_line=step_line,
             sink_file="app.js", sink_line=sink_line, source_text=src,
@@ -458,7 +458,7 @@ class TestNonPythonRebindKill:
         src = (
             "function h(req){\n"
             "  let p = req.query.name;\n"
-            "  p = p.replace(/[^A-Za-z0-9]/g, '');\n"   # 3 validator
+            "  if (!/^[A-Za-z0-9]+$/.test(p)) return;\n"   # 3 validator
             "  fs.readFile('/data/'+p);\n"              # 4 sink
             "}\n"
         )
@@ -471,7 +471,7 @@ class TestNonPythonRebindKill:
         src = (
             "function h(req){\n"
             "  let p = req.query.name;\n"
-            "  p = p.replace(/[^A-Za-z0-9]/g, '');\n"   # 3 validator
+            "  if (!/^[A-Za-z0-9]+$/.test(p)) return;\n"   # 3 validator
             "  p = req.query.evil;\n"                   # 4 rebind
             "  fs.readFile('/data/'+p);\n"              # 5 sink
             "}\n"
@@ -912,7 +912,7 @@ class TestExoticLineTerminators:
     def test_u2028_in_comment_does_not_shift_line_judgments(self, tmp_path):
         js = (
             "function run(x) {\n"
-            "  // prose\u2028still line two\n"
+            "  // prose\u2028// still raw LF line two\n"
             "  if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3 = guard
             "  exec(x);\n"                               # line 4 = sink
             "}\n"

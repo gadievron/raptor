@@ -2158,7 +2158,7 @@ def test_lexical_branch_wrap_flags_enclosing_conditional():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 4, 6, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 4, 6, guard_shaped=True, language="java") is True
 
 
 def test_lexical_branch_wrap_exempts_guards_own_block():
@@ -2172,7 +2172,7 @@ def test_lexical_branch_wrap_exempts_guards_own_block():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 3, 6, guard_shaped=True) is False
+    assert sb._lexical_validator_in_branch(src, 3, 6, guard_shaped=True, language="java") is False
 
 
 @_requires_z3
@@ -2571,7 +2571,7 @@ def test_lexical_branch_wrap_flags_one_line_enclosing_conditional():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True, language="java") is True
 
 
 def test_lexical_branch_wrap_flags_braceless_inner_guard_one_line():
@@ -2583,7 +2583,7 @@ def test_lexical_branch_wrap_flags_braceless_inner_guard_one_line():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True, language="java") is True
 
 
 def test_lexical_branch_wrap_flags_enclosing_closing_on_guard_line():
@@ -2598,7 +2598,7 @@ def test_lexical_branch_wrap_flags_enclosing_closing_on_guard_line():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True, language="java") is True
 
 
 def test_lexical_branch_wrap_one_line_self_guard_still_certifies():
@@ -2612,7 +2612,7 @@ def test_lexical_branch_wrap_one_line_self_guard_still_certifies():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True) is False
+    assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True, language="java") is False
 
 
 @_requires_z3
@@ -2746,7 +2746,7 @@ def test_lexical_guard_shaped_flags_braceless_enclosing_on_prev_line():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True, language="java") is True
 
 
 def test_lexical_guard_shaped_flags_prev_line_keyword_with_brace_on_guard_line():
@@ -2759,7 +2759,7 @@ def test_lexical_guard_shaped_flags_prev_line_keyword_with_brace_on_guard_line()
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True) is True
+    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True, language="java") is True
 
 
 def test_lexical_guard_shaped_plain_prev_statement_still_certifies():
@@ -2774,7 +2774,7 @@ def test_lexical_guard_shaped_plain_prev_statement_still_certifies():
         "  }\n"
         "}\n"
     )
-    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True) is False
+    assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True, language="java") is False
 
 
 @_requires_z3
