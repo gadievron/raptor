@@ -2,6 +2,7 @@
 
 import ast
 import builtins
+import importlib
 from collections.abc import Iterator
 from contextlib import contextmanager, ExitStack, nullcontext
 from inspect import signature
@@ -9,7 +10,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from types import ModuleType
+from types import FunctionType, ModuleType
 import unittest
 
 import pytest
@@ -295,3 +296,77 @@ def test_metadata_read_error_follows_process_cleanup(streams, error, tmp_path):
             _assert_reaped(processes)
     finally:
         _cleanup(processes, group=True)
+
+
+DEAD_WORKER_CASES = [
+    ("TestToolPidAlive", "test_dead_pid_is_dead_regardless_of_stamp"),
+    ("TestCleanLivenessGrace", "test_sessionless_dead_worker_recent_activity_is_live"),
+    ("TestCleanLivenessGrace", "test_sessionless_dead_worker_quiet_run_not_live"),
+]
+
+
+def _dead_worker_method(case_name, view, *, import_error=None):
+    owner = importlib.import_module("core.run.tests.test_worker_liveness")
+    classname, method = case_name
+    cls = getattr(owner, classname)
+    case = cls(method)
+    original = getattr(cls, method)
+
+    def private_import(name, *args, **kwargs):
+        if name == "subprocess":
+            return view
+        if name == "core.testing.processes" and import_error is not None:
+            raise import_error("owner import interrupted")
+        return builtins.__import__(name, *args, **kwargs)
+
+    namespace = dict(vars(owner), subprocess=view,
+                     __builtins__=dict(vars(builtins), __import__=private_import))
+    function = FunctionType(original.__code__, namespace, original.__name__,
+                            original.__defaults__, original.__closure__)
+    function.__kwdefaults__ = original.__kwdefaults__
+    return lambda: function(case), lambda: getattr(cls, method) is original
+
+
+@pytest.mark.parametrize("case_name", DEAD_WORKER_CASES)
+@pytest.mark.parametrize("streams", [False, True])
+def test_dead_worker_native_assertions_and_reaping(case_name, streams, tmp_path):
+    view, processes, _ = _process_view(streams=streams)
+    invoke, unchanged = _dead_worker_method(case_name, view)
+    try:
+        with _owned_context(LIVE, tmp_path / "state"):
+            invoke()
+        assert processes[0].args == [sys.executable, "-c", "pass"]
+        assert processes[0].returncode == 0
+        _assert_reaped(processes)
+        assert unchanged()
+    finally:
+        _cleanup(processes)
+
+
+@pytest.mark.parametrize("case_name", DEAD_WORKER_CASES)
+@pytest.mark.parametrize("streams", [False, True])
+@pytest.mark.parametrize("phase", ["before_wait", "after_wait"])
+@pytest.mark.parametrize("error", [OSError, KeyboardInterrupt, SystemExit])
+def test_dead_worker_wait_failure_reaps_and_closes(case_name, streams, phase, error, tmp_path):
+    view, processes, _ = _process_view(streams=streams, phase=phase, error=error)
+    invoke, unchanged = _dead_worker_method(case_name, view)
+    try:
+        with _owned_context(LIVE, tmp_path / "state"):
+            with pytest.raises(error, match="worker boundary interrupted"):
+                invoke()
+        assert processes[0].args == [sys.executable, "-c", "pass"]
+        _assert_reaped(processes)
+        assert unchanged()
+    finally:
+        _cleanup(processes)
+
+
+@pytest.mark.parametrize("case_name", DEAD_WORKER_CASES)
+@pytest.mark.parametrize("error", [ImportError, KeyboardInterrupt])
+def test_dead_worker_owner_import_precedes_spawn(case_name, error):
+    view, processes, _ = _process_view(streams=False)
+    invoke, unchanged = _dead_worker_method(case_name, view, import_error=error)
+    with pytest.raises(error, match="owner import interrupted"):
+        invoke()
+    assert processes == []
+    assert unchanged()
