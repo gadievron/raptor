@@ -18,6 +18,7 @@ from core.sandbox._proxy_bridge import _run_bridges, _run_forwarder
 from core.sandbox.tests.socket_server import SocketServer
 
 from core.testing.threads import retiring_threads
+from core.testing.pipes import pipes_for_setup
 
 
 @pytest.fixture(autouse=True)
@@ -98,12 +99,13 @@ class TestRunBridges:
         srv_a = _unix_echo_server(path_a, b"A:")
         srv_b = _unix_echo_server(path_b, b"B:")
         port_a, port_b = _free_port(), _free_port()
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges,
-            args=(((port_a, path_a), (port_b, path_b)), death_r),
-            daemon=True,
-        )
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges,
+                args=(((port_a, path_a), (port_b, path_b)), death_r),
+                daemon=True,
+            )
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
                 t.start()
@@ -124,11 +126,12 @@ class TestRunBridges:
         path = str(short_sock_dir / "one.sock")
         srv = _unix_echo_server(path, b"X:")
         port = _free_port()
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_forwarder, args=(port, path, death_r),
-            daemon=True,
-        )
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_forwarder, args=(port, path, death_r),
+                daemon=True,
+            )
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
                 t.start()
@@ -152,13 +155,14 @@ class TestRunBridges:
             bound.extend(bridges)
             ready.set()
 
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges,
-            args=(((0, path_dead), (0, path_live)), death_r),
-            kwargs={"ready_cb": on_ready},
-            daemon=True,
-        )
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges,
+                args=(((0, path_dead), (0, path_live)), death_r),
+                kwargs={"ready_cb": on_ready},
+                daemon=True,
+            )
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
                 t.start()
@@ -234,11 +238,12 @@ class TestForwarderBounds:
             bound.extend(bridges)
             ready.set()
 
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges, args=(((0, path),), death_r),
-            kwargs={"ready_cb": on_ready},
-            daemon=True)
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges, args=(((0, path),), death_r),
+                kwargs={"ready_cb": on_ready},
+                daemon=True)
         held = []
         try:
             # A connect-and-close readiness probe can temporarily consume
@@ -289,10 +294,11 @@ class TestForwarderBounds:
         path = str(short_sock_dir / "idle.sock")
         srv = _unix_hold_echo_server(path)
         port = _free_port()
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges, args=(((port, path),), death_r),
-            daemon=True)
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges, args=(((port, path),), death_r),
+                daemon=True)
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
                 t.start()
@@ -343,12 +349,13 @@ class TestForwarderBounds:
             bound.extend(port for port, _ in bridges)
             ready.set()
 
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges,
-            args=(((0, flood_path), (0, echo_path)), death_r),
-            kwargs={"ready_cb": on_ready},
-            daemon=True)
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges,
+                args=(((0, flood_path), (0, echo_path)), death_r),
+                kwargs={"ready_cb": on_ready},
+                daemon=True)
         stalled = None
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
@@ -416,10 +423,11 @@ class TestForwarderBounds:
 
         server = SocketServer(srv, _burst)
         port = _free_port()
-        death_r, death_w = os.pipe()
-        t = threading.Thread(
-            target=_run_bridges, args=(((port, path),), death_r),
-            daemon=True)
+        with pipes_for_setup(1) as pairs:
+            death_r, death_w = pairs[0]
+            t = threading.Thread(
+                target=_run_bridges, args=(((port, path),), death_r),
+                daemon=True)
         try:
             with retiring_threads([t], release=lambda: os.close(death_w), timeout=5):
                 t.start()
