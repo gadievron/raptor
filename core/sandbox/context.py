@@ -6113,6 +6113,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         setup_category=_mac_status[0],
                     )
             elif spawn_eligible:
+                _spawn_execution_committed = False
+
+                def _mark_spawn_execution_committed():
+                    nonlocal _spawn_execution_committed
+                    _spawn_execution_committed = True
+
                 try:
                     from . import _spawn as _spawn_mod
                     if rootfs is not None and not _spawn_mod.mount_ns_available():
@@ -6198,6 +6204,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         def _run_spawn_backend(
                                 *, skip_mount: bool,
                         ) -> subprocess.CompletedProcess:
+                            nonlocal _spawn_execution_committed
+                            _spawn_execution_committed = False
                             _call_writable = list(writable_paths or [])
                             _call_env = _env_for_target
                             if skip_mount:
@@ -6339,7 +6347,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 ),
                                 exec_pid_callback=_exec_pid_callback,
                                 child_pid_callback=_register_lane_peer,
+                                execution_committed_callback=_mark_spawn_execution_committed,
                             )
+                            if getattr(_native_result, "_setup_status", None) is not None:
+                                # A returned failure status keeps the existing
+                                # typed setup decision table authoritative.
+                                _spawn_execution_committed = False
                             if _explicit_codec:
                                 # Explicit codecs imply text mode in subprocess.
                                 # Keep raw bytes until the selected decoder runs;
@@ -7240,6 +7253,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             )
                 except (FileNotFoundError, RuntimeError, OSError,
                         _errors.SandboxSetupError) as _spawn_err:
+                    if _spawn_execution_committed:
+                        raise
                     # _spawn raised mid-setup (uidmap uninstalled,
                     # kernel quirk, libc soname absent on minimal
                     # containers, etc.). Fall back to the plain
