@@ -60,7 +60,9 @@ on:
     paths:
       - 'pyproject.toml'
       - 'uv.lock'
-      - 'core/sandbox/scripts/feature-matrix/images/**'
+      # Only u24 is published; Dockerfile.26 belongs to the full matrix.
+      - 'core/sandbox/scripts/feature-matrix/images/Dockerfile'
+      - 'core/sandbox/scripts/feature-matrix/images/rustup-proxy.c'
       - 'core/sandbox/scripts/feature-matrix/run-matrix.sh'
       - '.github/workflows/sandbox-matrix-image.yml'
   workflow_dispatch:
