@@ -75,6 +75,19 @@ class TestResolveClassname:
 
 
 class TestCollectRun:
+    def test_file_only_keeps_totals_and_dropped_rows(self, mini_repo, tmp_path):
+        xml = _write_junit(tmp_path / "file-only.xml", [
+            ("core.pkga.tests.test_mod.TestC", "test_a[case]", "1.5"),
+            ("core.pkga.tests.test_mod.TestC", "test_a[case]", "2.0"),
+            ("", "core.pkga.tests.test_other", "0"),
+            ("core.deleted.test_gone", "test_missing", "9"),
+            ("core.pkga.tests.test_mod", "test_invalid", "NaN"),
+        ])
+        files, nodeids, dropped = collect_run(xml, mini_repo)
+        assert nodeids == {"core/pkga/tests/test_mod.py::TestC::test_a[case]": 3.5}
+        assert dropped == 2
+        assert collect_run(xml, mini_repo, include_nodeids=False) == (files, {}, dropped)
+
     def test_per_file_sums_and_class_strip(self, mini_repo, tmp_path):
         xml = _write_junit(tmp_path / "run.xml", [
             ("core.pkga.tests.test_mod", "test_a", "1.5"),
@@ -126,12 +139,42 @@ class TestMeanAcrossRuns:
 
 
 class TestCli:
-    def test_end_to_end_per_file(self, mini_repo, tmp_path):
+    @pytest.mark.parametrize("nodeids", [False, True], ids=["files", "nodeids"])
+    def test_multiple_reports_keep_per_present_run_means(self, mini_repo, tmp_path, nodeids):
+        first = _write_junit(tmp_path / "first.xml", [
+            ("core.pkga.tests.test_mod.TestC", "test_a", "1"),
+            ("core.pkga.tests.test_mod.TestC", "test_b", "3"),
+        ])
+        second = _write_junit(tmp_path / "second.xml", [
+            ("core.pkga.tests.test_mod.TestC", "test_a", "5"),
+            ("core.pkga.tests.test_other", "test_new", "2"),
+        ])
+        out = tmp_path / "mean.json"
+        flags = ["--nodeids"] if nodeids else []
+        assert main([*flags, str(out), str(first), str(second), "--repo", str(mini_repo)]) == 0
+        expected = {
+            "core/pkga/tests/test_mod.py::TestC::test_a": 3.0,
+            "core/pkga/tests/test_mod.py::TestC::test_b": 3.0,
+            "core/pkga/tests/test_other.py::test_new": 2.0,
+        } if nodeids else {
+            "core/pkga/tests/test_mod.py": 4.5,
+            "core/pkga/tests/test_other.py": 2.0,
+        }
+        assert json.loads(out.read_text()) == expected
+
+    def test_end_to_end_per_file(self, mini_repo, tmp_path, monkeypatch):
         xml = _write_junit(tmp_path / "run.xml", [
             ("core.pkga.tests.test_mod", "test_a", "1.5"),
             ("core.pkga.tests.test_mod.TestC", "test_b", "2.0"),
         ])
         out = tmp_path / "out.json"
+
+        def file_only(*args, **kwargs):
+            result = collect_run(*args, **kwargs)
+            assert result[1] == {}, "file-only CLI allocated per-test timings"
+            return result
+
+        monkeypatch.setitem(main.__globals__, "collect_run", file_only)
         rc = main([str(out), str(xml), "--repo", str(mini_repo)])
         assert rc == 0
         assert json.loads(out.read_text(encoding="utf-8")) == {

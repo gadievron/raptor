@@ -65,9 +65,13 @@ def resolve_classname(dotted: str, repo: Path) -> tuple[str, list[str]] | None:
 
 
 def collect_run(
-    xml_path: Path, repo: Path,
+    xml_path: Path, repo: Path, *, include_nodeids: bool = True,
 ) -> tuple[dict[str, float], dict[str, float], int]:
-    """One junit XML → (per-file totals, per-nodeid times, dropped count)."""
+    """One XML → file totals, optional nodeid times, and dropped count.
+
+    Existing helper callers retain both maps. File-only CLI conversion avoids
+    allocating a per-test map for every report it aggregates.
+    """
     per_file: dict[str, float] = defaultdict(float)
     per_nodeid: dict[str, float] = defaultdict(float)
     dropped = 0
@@ -96,7 +100,7 @@ def collect_run(
             continue
         file_path, classes = resolved
         per_file[file_path] += seconds
-        if name:
+        if name and include_nodeids:
             nodeid = "::".join([file_path, *classes, name])
             per_nodeid[nodeid] += seconds
     return dict(per_file), dict(per_nodeid), dropped
@@ -138,9 +142,12 @@ def main(argv: list[str] | None = None) -> int:
     nodeid_runs: list[dict[str, float]] = []
     total_dropped = 0
     for xml_path in args.xml:
-        per_file, per_nodeid, dropped = collect_run(Path(xml_path), repo)
+        per_file, per_nodeid, dropped = collect_run(
+            Path(xml_path), repo, include_nodeids=args.nodeids,
+        )
         file_runs.append(per_file)
-        nodeid_runs.append(per_nodeid)
+        if args.nodeids:
+            nodeid_runs.append(per_nodeid)
         total_dropped += dropped
 
     merged = mean_across_runs(nodeid_runs if args.nodeids else file_runs)
