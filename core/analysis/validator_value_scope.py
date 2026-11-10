@@ -79,9 +79,9 @@ def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
         return True
 
 
-def implicit_value_epoch_unverified(source: str, name: str, after_line: int,
+def native_value_epoch_unverified(source: str, name: str, after_line: int,
                                     through_line: int, *, language: str) -> bool:
-    """Refuse iteration and update writes missing from plain-assignment scans.
+    """Refuse pattern, iteration and update writes absent from assignment scans.
 
     This supplies a negative write fact, not declaration identity or a
     complete effect proof. An unavailable native profile remains unverified.
@@ -109,6 +109,10 @@ def implicit_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = node.child_by_field_name("name")
             elif node.type == "update_expression":
                 target = _write_target(node)
+            elif node.type in {"assignment_expression", "variable_declarator"}:
+                target = _write_target(node)
+                if target is None or target.type not in {"array_pattern", "object_pattern"}:
+                    continue
             else:
                 continue
             if target is None or _target_mentions(target, encoded_name):

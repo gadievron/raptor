@@ -2762,9 +2762,9 @@ def _lexical_var_reaches_sink(
 
         if not native_sink_reads_name(source_text, sink_line, var, language=language):
             return False
-        from core.analysis.validator_value_scope import implicit_value_epoch_unverified
+        from core.analysis.validator_value_scope import native_value_epoch_unverified
 
-        if implicit_value_epoch_unverified(source_text, var, validator_line, sink_line, language=language):
+        if native_value_epoch_unverified(source_text, var, validator_line, sink_line, language=language):
             return False
     return _lexical_epoch_preserved(var, views, validator_line, sink_line)
 
