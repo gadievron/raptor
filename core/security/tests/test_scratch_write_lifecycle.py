@@ -13,19 +13,19 @@ def test_failed_adoption_retires_descriptor_and_temporary(tmp_path, monkeypatch)
     original_open, original_close = os.open, os.close
     owners = []
     node = original_open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    primary = KeyboardInterrupt('owned adoption failure')
-
-    def opened(*args, **kwargs):
-        fd = original_open(*args, **kwargs)
-        owners.append(fd)
-        return fd
-
-    def adopt(*args, **kwargs):
-        raise primary
-
-    patch_module_attribute(monkeypatch, lifecycle, 'os', 'open', opened)
-    patch_module_attribute(monkeypatch, lifecycle, 'os', 'fdopen', adopt)
     try:
+        primary = KeyboardInterrupt('owned adoption failure')
+
+        def opened(*args, **kwargs):
+            fd = original_open(*args, **kwargs)
+            owners.append(fd)
+            return fd
+
+        def adopt(*args, **kwargs):
+            raise primary
+
+        patch_module_attribute(monkeypatch, lifecycle, 'os', 'open', opened)
+        patch_module_attribute(monkeypatch, lifecycle, 'os', 'fdopen', adopt)
         with pytest.raises(KeyboardInterrupt) as caught:
             lifecycle._write(node, 'record.json', {'owned': True})
         assert caught.value is primary
@@ -51,67 +51,67 @@ def test_primary_failure_keeps_previous_record_and_retires_owned_state(
     path.write_text('{"previous":true}')
     original_open, original_close, original_adopt = os.open, os.close, os.fdopen
     original_unlink, original_sync = os.unlink, os.fsync
-    node = original_open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     owners, closed, streams, unlinked = [], [], [], []
-    primary = error_type('owned record failure')
-
-    class Stream:
-        def __init__(self, raw):
-            self.raw = raw
-            self.closes = 0
-        def write(self, data):
-            if phase == 'write':
-                raise primary
-            return self.raw.write(data)
-        def flush(self):
-            if phase == 'flush':
-                raise primary
-            self.raw.flush()
-        def fileno(self):
-            return self.raw.fileno()
-        def close(self):
-            self.closes += 1
-            self.raw.close()
-            if phase == 'close':
-                raise primary
-            if phase in ('write', 'flush', 'sync'):
-                raise RuntimeError('secondary stream close')
-
-    def opened(*args, **kwargs):
-        fd = original_open(*args, **kwargs)
-        info = os.fstat(fd)
-        owners.append((fd, (info.st_dev, info.st_ino)))
-        return fd
-
-    def adopt(fd, *args, **kwargs):
-        assert kwargs['closefd'] is False
-        stream = Stream(original_adopt(fd, *args, **kwargs))
-        streams.append(stream)
-        return stream
-
-    def close(fd):
-        original_close(fd)
-        closed.append(fd)
-        if phase != 'replace':
-            raise RuntimeError('secondary raw close')
-
-    def sync(fd):
-        if phase == 'sync':
-            raise primary
-        original_sync(fd)
-
-    def replace(*args, **kwargs):
-        raise primary
-
-    def unlink(name, **kwargs):
-        original_unlink(name, **kwargs)
-        unlinked.append(name)
-        raise RuntimeError('secondary unlink')
-
-    for name, value in [('open', opened), ('fdopen', adopt), ('close', close),
-                        ('fsync', sync), ('replace', replace), ('unlink', unlink)]:
-        patch_module_attribute(monkeypatch, lifecycle, 'os', name, value)
+    node = original_open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
+        primary = error_type('owned record failure')
+
+        class Stream:
+            def __init__(self, raw):
+                self.raw = raw
+                self.closes = 0
+            def write(self, data):
+                if phase == 'write':
+                    raise primary
+                return self.raw.write(data)
+            def flush(self):
+                if phase == 'flush':
+                    raise primary
+                self.raw.flush()
+            def fileno(self):
+                return self.raw.fileno()
+            def close(self):
+                self.closes += 1
+                self.raw.close()
+                if phase == 'close':
+                    raise primary
+                if phase in ('write', 'flush', 'sync'):
+                    raise RuntimeError('secondary stream close')
+
+        def opened(*args, **kwargs):
+            fd = original_open(*args, **kwargs)
+            info = os.fstat(fd)
+            owners.append((fd, (info.st_dev, info.st_ino)))
+            return fd
+
+        def adopt(fd, *args, **kwargs):
+            assert kwargs['closefd'] is False
+            stream = Stream(original_adopt(fd, *args, **kwargs))
+            streams.append(stream)
+            return stream
+
+        def close(fd):
+            original_close(fd)
+            closed.append(fd)
+            if phase != 'replace':
+                raise RuntimeError('secondary raw close')
+
+        def sync(fd):
+            if phase == 'sync':
+                raise primary
+            original_sync(fd)
+
+        def replace(*args, **kwargs):
+            raise primary
+
+        def unlink(name, **kwargs):
+            original_unlink(name, **kwargs)
+            unlinked.append(name)
+            raise RuntimeError('secondary unlink')
+
+        for name, value in [('open', opened), ('fdopen', adopt), ('close', close),
+                            ('fsync', sync), ('replace', replace), ('unlink', unlink)]:
+            patch_module_attribute(monkeypatch, lifecycle, 'os', name, value)
         with pytest.raises(error_type) as caught:
             lifecycle._write(node, 'record.json', {'next': True})
         assert caught.value is primary
@@ -139,15 +139,15 @@ def test_success_syncs_file_then_published_directory(tmp_path, monkeypatch):
     import json
 
     node = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    real_sync = os.fsync
-    seen = []
-
-    def sync(fd):
-        seen.append((fd == node, (tmp_path / 'record.json').exists()))
-        real_sync(fd)
-
-    patch_module_attribute(monkeypatch, lifecycle, 'os', 'fsync', sync)
     try:
+        real_sync = os.fsync
+        seen = []
+
+        def sync(fd):
+            seen.append((fd == node, (tmp_path / 'record.json').exists()))
+            real_sync(fd)
+
+        patch_module_attribute(monkeypatch, lifecycle, 'os', 'fsync', sync)
         lifecycle._write(node, 'record.json', {'owned': True})
     finally:
         os.close(node)
@@ -175,16 +175,16 @@ def test_directory_sync_failure_does_not_remove_published_record(tmp_path, monke
     import json
 
     node = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
-    original_sync = os.fsync
-    primary = OSError('directory sync failed')
-
-    def sync(fd):
-        if fd == node:
-            raise primary
-        original_sync(fd)
-
-    patch_module_attribute(monkeypatch, lifecycle, 'os', 'fsync', sync)
     try:
+        original_sync = os.fsync
+        primary = OSError('directory sync failed')
+
+        def sync(fd):
+            if fd == node:
+                raise primary
+            original_sync(fd)
+
+        patch_module_attribute(monkeypatch, lifecycle, 'os', 'fsync', sync)
         with pytest.raises(OSError) as caught:
             lifecycle._write(node, 'record.json', {'owned': True})
         assert caught.value is primary
