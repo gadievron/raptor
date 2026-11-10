@@ -7,7 +7,8 @@ import pytest
 from core.inventory.tests import test_corpus_cache_lifecycle as native
 from core.testing.module_bindings import patch_module_attribute
 
-pytest_plugins = ["core.inventory.tests.test_corpus_cache_lifecycle"]
+private_state = native.private_state
+case = native.case
 
 
 @pytest.mark.parametrize("position,error", [(position, error)
