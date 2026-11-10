@@ -46,9 +46,14 @@ def test_rebound_regex_root_cannot_certify_source(tmp_path: Path):
     ("import re\ndef poison():\n    vars(re)['fullmatch'] = replacement\npoison()\n", "name"),
     ("import re\ndef poison():\n    import re as rx\n    rx.fullmatch = replacement\npoison()\n", "name"),
     ("import re\ndef poison():\n    global re\n    proxy = re\n    proxy.fullmatch = replacement\npoison()\n", "name"),
+    ("import re\ndef poison():\n    exec('re.fullmatch = replacement')\npoison()\n", "name"),
+    ("import re\ndef poison():\n    eval('setattr(re, \"fullmatch\", replacement)')\npoison()\n", "name"),
+    ("import re\ndef poison():\n    run = exec\n    run('re.fullmatch = replacement')\npoison()\n", "name"),
+    ("import re\ndef poison():\n    from builtins import exec as run\n    run('re.fullmatch = replacement')\npoison()\n", "name"),
 ], ids=["root-rebind", "wrong-import", "parameter", "member-write", "alias-write",
         "namespace-dict", "setattr", "dynamic-namespace", "helper-alias", "helper-vars",
-        "helper-import-alias", "helper-global"])
+        "helper-import-alias", "helper-global", "helper-exec", "helper-eval",
+        "helper-exec-alias", "helper-imported-exec"])
 def test_regex_namespace_conflicts_reach_all_consumers(tmp_path: Path, prefix, parameters):
     import json
     from core.dataflow import injection_prescreen as ip
@@ -170,3 +175,19 @@ def test_identity_conflict_is_not_overridden_by_dominance(monkeypatch):
         "        return\n    return open(name)\n"
     )
     assert not sb.validator_dominates_sink(source, 3, 5)
+
+
+@pytest.mark.skipif(not z3_available(), reason="z3-solver not installed")
+def test_unrelated_local_exec_parameter_is_not_dynamic_builtin(tmp_path: Path):
+    source = (
+        "import re\ndef unrelated(exec):\n    return exec('literal')\n"
+        "def handle(name):\n"
+        '    if not re.fullmatch(r"[a-z]+", name):\n'
+        "        return\n    return open(name)\n"
+    )
+    (tmp_path / "app.py").write_text(source)
+    result = sb.try_tier0(
+        fix_diff='+    if not re.fullmatch(r"[a-z]+", name):\n', repo_root=tmp_path,
+        sink_uri="app.py", sink_line=7, sink_class="pathtrav",
+    )
+    assert result.status is sb.Tier0Status.SOUND
