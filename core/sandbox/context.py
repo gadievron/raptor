@@ -8772,138 +8772,166 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 )
         yield run
     finally:
-        # Drain + dedup + persist the block-token events before
-        # releasing the audit ref-count. Per-spawn events were
-        # fanned into BOTH the per-spawn token (already persisted
-        # by ``_run()``) AND the block token; dedup on
-        # ``(proxy_seq, t, host, port)`` so the JSONL doesn't carry
-        # duplicates. The proxy's per-event ``proxy_seq`` (distinct
-        # from the persisted stream ``seq``) keeps two
-        # GENUINELY DISTINCT events apart even when they tie on
-        # (t, host, port) — a bare timestamp key silently dropped
-        # such a second event from the persisted JSONL.
-        # ``_sandbox_events`` is the cumulative per-spawn view
-        # appended after each inner ``run()``.
-        if _block_token is not None and proxy_instance is not None:
-            try:
-                _block_events = proxy_instance.unregister_sandbox(
-                    _block_token,
-                )
-            except Exception:                       # noqa: BLE001
-                _block_events = []
-            if _block_events:
-                _seen = {
-                    (e.get("proxy_seq"), e.get("t"), e.get("host"),
-                     e.get("port"))
-                    for e in _sandbox_events
-                }
-                _block_only = [
-                    e for e in _block_events
-                    if (e.get("proxy_seq"), e.get("t"), e.get("host"),
-                        e.get("port"))
-                    not in _seen
-                ]
-                if _block_only:
-                    _persist_proxy_events(
-                        _block_only, output=output, target=target,
-                    )
-        if use_egress_proxy and (_engaging_audit or _audit_enable_attempted):
-            # Clear the audit bit BEFORE unbind/close pops the lane
-            # from the registry: set_lane_audit resolves the key
-            # through the registry and returns False once the lane is
-            # popped, so a clear placed after unbind/close was a
-            # silent no-op — in-flight connections (handlers hold the
-            # lane object) kept log-and-allow leniency until they
-            # finished. Clearing first flips the shared lane object's
-            # bit while it is still resolvable, so in-flight handlers
-            # revert to enforcing immediately.
-            try:
-                _lane_key = (
-                    _proxy_unix_path if _use_proxy_netns
-                    else _proxy_tcp_lane_port
-                )
-                if _lane_key is not None:
-                    proxy_instance.set_lane_audit(_lane_key, False)  # type: ignore[union-attr]
-            except Exception:
-                # WARNING-level (not debug): a failed clear leaves
-                # connections in flight on this context's lane in
-                # audit-log mode until they finish — the operator
-                # should see it, because a recurring failure here
-                # means the teardown path is broken.
-                logger.warning(
-                    "audit lane clear failed — in-flight connections "
-                    "on this context's lane may keep audit-log mode "
-                    "until they finish.",
-                    exc_info=True,
-                )
-        if _use_proxy_netns and _proxy_unix_path and proxy_instance is not None:
-            try:
-                proxy_instance.unbind_unix(_proxy_unix_path)
-            except Exception:
-                logger.debug(
-                    "proxy unix socket cleanup failed", exc_info=True,
-                )
-        if _proxy_tcp_lane_port is not None and proxy_instance is not None:
-            try:
-                proxy_instance.close_tcp_lane(_proxy_tcp_lane_port)
-            except Exception:
-                logger.debug(
-                    "proxy tcp lane cleanup failed", exc_info=True,
-                )
-        # Per-instance lane directory follows its socket.
-        if _proxy_lane_dir is not None:
-            import shutil as _shutil
-            try:
-                _shutil.rmtree(_proxy_lane_dir, ignore_errors=True)
-            except Exception:
-                logger.debug(
-                    "proxy lane dir cleanup failed for %s",
-                    _proxy_lane_dir, exc_info=True,
-                )
-        # Persona tmpdir lifecycle: created in build_persona above; the
-        # source files were bind-mounted into the sandbox children but
-        # bind sources can be unlinked after the bind is established —
-        # the kernel keeps the inode alive for the lifetime of the mount.
-        # Cleanup now is safe even mid-run (rare: with sandbox() used as
-        # a long-lived context wrapping many run() calls). For simplicity
-        # we only clean up at __exit__; the file count is small.
-        if _persona_tmpdir is not None:
-            import shutil as _shutil
-            from core.run.scratch import keepalive_unregister
-            keepalive_unregister(_persona_tmpdir)
-            try:
-                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
-            except Exception:
-                logger.debug(
-                    "persona tmpdir cleanup failed for %s",
-                    _persona_tmpdir, exc_info=True,
-                )
-        # Private scratch dir (restricted Landlock-only posture) —
-        # per-context, so it goes with the context.
-        if _private_scratch_dir is not None:
-            import shutil as _shutil
-            from core.run.scratch import keepalive_unregister
-            keepalive_unregister(_private_scratch_dir)
-            try:
-                _shutil.rmtree(_private_scratch_dir, ignore_errors=True)
-            except Exception:
-                logger.debug(
-                    "private scratch cleanup failed for %s",
-                    _private_scratch_dir, exc_info=True,
-                )
-        # Per-call scratch dirs minted by mount-ns demotions.
-        if _demoted_scratch_dirs:
-            import shutil as _shutil
-            from core.run.scratch import keepalive_unregister
-            for _dsd in _demoted_scratch_dirs:
-                keepalive_unregister(_dsd)
+        from ._retirement import retire_parent_resources
+
+        def _retire_context_events() -> None:
+            # Drain + dedup + persist the block-token events before
+            # releasing the audit ref-count. Per-spawn events were
+            # fanned into BOTH the per-spawn token (already persisted
+            # by ``_run()``) AND the block token; dedup on
+            # ``(proxy_seq, t, host, port)`` so the JSONL doesn't carry
+            # duplicates. The proxy's per-event ``proxy_seq`` (distinct
+            # from the persisted stream ``seq``) keeps two
+            # GENUINELY DISTINCT events apart even when they tie on
+            # (t, host, port) — a bare timestamp key silently dropped
+            # such a second event from the persisted JSONL.
+            # ``_sandbox_events`` is the cumulative per-spawn view
+            # appended after each inner ``run()``.
+            if _block_token is not None and proxy_instance is not None:
                 try:
-                    _shutil.rmtree(_dsd, ignore_errors=True)
+                    _block_events = proxy_instance.unregister_sandbox(
+                        _block_token,
+                    )
+                except Exception:                       # noqa: BLE001
+                    _block_events = []
+                if _block_events:
+                    _seen = {
+                        (e.get("proxy_seq"), e.get("t"), e.get("host"),
+                         e.get("port"))
+                        for e in _sandbox_events
+                    }
+                    _block_only = [
+                        e for e in _block_events
+                        if (e.get("proxy_seq"), e.get("t"), e.get("host"),
+                            e.get("port"))
+                        not in _seen
+                    ]
+                    if _block_only:
+                        _persist_proxy_events(
+                            _block_only, output=output, target=target,
+                        )
+
+        def _retire_context_audit() -> None:
+            if use_egress_proxy and (_engaging_audit or _audit_enable_attempted):
+                # Clear the audit bit BEFORE unbind/close pops the lane
+                # from the registry: set_lane_audit resolves the key
+                # through the registry and returns False once the lane is
+                # popped, so a clear placed after unbind/close was a
+                # silent no-op — in-flight connections (handlers hold the
+                # lane object) kept log-and-allow leniency until they
+                # finished. Clearing first flips the shared lane object's
+                # bit while it is still resolvable, so in-flight handlers
+                # revert to enforcing immediately.
+                try:
+                    _lane_key = (
+                        _proxy_unix_path if _use_proxy_netns
+                        else _proxy_tcp_lane_port
+                    )
+                    if _lane_key is not None:
+                        proxy_instance.set_lane_audit(_lane_key, False)  # type: ignore[union-attr]
+                except Exception:
+                    # WARNING-level (not debug): a failed clear leaves
+                    # connections in flight on this context's lane in
+                    # audit-log mode until they finish — the operator
+                    # should see it, because a recurring failure here
+                    # means the teardown path is broken.
+                    logger.warning(
+                        "audit lane clear failed — in-flight connections "
+                        "on this context's lane may keep audit-log mode "
+                        "until they finish.",
+                        exc_info=True,
+                    )
+
+        def _retire_context_unix_lane() -> None:
+            if _use_proxy_netns and _proxy_unix_path and proxy_instance is not None:
+                try:
+                    proxy_instance.unbind_unix(_proxy_unix_path)
                 except Exception:
                     logger.debug(
-                        "demoted scratch cleanup failed for %s",
-                        _dsd, exc_info=True,
+                        "proxy unix socket cleanup failed", exc_info=True,
                     )
+
+        def _retire_context_tcp_lane() -> None:
+            if _proxy_tcp_lane_port is not None and proxy_instance is not None:
+                try:
+                    proxy_instance.close_tcp_lane(_proxy_tcp_lane_port)
+                except Exception:
+                    logger.debug(
+                        "proxy tcp lane cleanup failed", exc_info=True,
+                    )
+
+        def _retire_context_lane_dir() -> None:
+            # Per-instance lane directory follows its socket.
+            if _proxy_lane_dir is not None:
+                import shutil as _shutil
+                try:
+                    _shutil.rmtree(_proxy_lane_dir, ignore_errors=True)
+                except Exception:
+                    logger.debug(
+                        "proxy lane dir cleanup failed for %s",
+                        _proxy_lane_dir, exc_info=True,
+                    )
+
+        def _retire_context_persona() -> None:
+            # Persona tmpdir lifecycle: created in build_persona above; the
+            # source files were bind-mounted into the sandbox children but
+            # bind sources can be unlinked after the bind is established —
+            # the kernel keeps the inode alive for the lifetime of the mount.
+            # Cleanup now is safe even mid-run (rare: with sandbox() used as
+            # a long-lived context wrapping many run() calls). For simplicity
+            # we only clean up at __exit__; the file count is small.
+            if _persona_tmpdir is not None:
+                import shutil as _shutil
+                from core.run.scratch import keepalive_unregister
+                keepalive_unregister(_persona_tmpdir)
+                try:
+                    _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                except Exception:
+                    logger.debug(
+                        "persona tmpdir cleanup failed for %s",
+                        _persona_tmpdir, exc_info=True,
+                    )
+
+        def _retire_context_scratch() -> None:
+            # Private scratch dir (restricted Landlock-only posture) —
+            # per-context, so it goes with the context.
+            if _private_scratch_dir is not None:
+                import shutil as _shutil
+                from core.run.scratch import keepalive_unregister
+                keepalive_unregister(_private_scratch_dir)
+                try:
+                    _shutil.rmtree(_private_scratch_dir, ignore_errors=True)
+                except Exception:
+                    logger.debug(
+                        "private scratch cleanup failed for %s",
+                        _private_scratch_dir, exc_info=True,
+                    )
+
+        def _retire_context_demotions() -> None:
+            # Per-call scratch dirs minted by mount-ns demotions.
+            if _demoted_scratch_dirs:
+                import shutil as _shutil
+                from core.run.scratch import keepalive_unregister
+                for _dsd in _demoted_scratch_dirs:
+                    keepalive_unregister(_dsd)
+                    try:
+                        _shutil.rmtree(_dsd, ignore_errors=True)
+                    except Exception:
+                        logger.debug(
+                            "demoted scratch cleanup failed for %s",
+                            _dsd, exc_info=True,
+                        )
+
+        retire_parent_resources(
+            _retire_context_events,
+            _retire_context_audit,
+            _retire_context_unix_lane,
+            _retire_context_tcp_lane,
+            _retire_context_lane_dir,
+            _retire_context_persona,
+            _retire_context_scratch,
+            _retire_context_demotions,
+        )
 
 
 def _cmd_resolves_nowhere(cmd: "list | None",
