@@ -59,6 +59,26 @@ def current_registry(repo: Path) -> dict | None:
         return None
 
 
+def _same_registry(left, right) -> bool:
+    """Match parsed JSON snapshots without coercing boolean/numeric types."""
+    pending = [(left, right)]
+    while pending:
+        left, right = pending.pop()
+        if type(left) is not type(right):
+            return False
+        if isinstance(left, dict):
+            if left.keys() != right.keys():
+                return False
+            pending.extend((left[key], right[key]) for key in left)
+        elif isinstance(left, list):
+            if len(left) != len(right):
+                return False
+            pending.extend(zip(left, right, strict=True))
+        elif left != right:
+            return False
+    return True
+
+
 def base_registry(repo: Path, base: str) -> dict | None:
     """Read the same immutable base used by changed_paths, without fetching."""
     if not re.fullmatch(r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', base or '') or set(base) == {'0'}:
@@ -98,7 +118,9 @@ def _python_selector(selector: str) -> bool:
     names, parameter, _ = nodes.partition('[')
     if parameter and not nodes.endswith(']'):
         return False
-    return all(name.isidentifier() and not keyword.iskeyword(name) for name in names.split('::'))
+    components = names.split('::')
+    return components[-1].startswith('test_') and all(
+        name.isidentifier() and not keyword.iskeyword(name) for name in components)
 
 
 def native_cell_changes(previous: dict | None, current: dict) -> set[tuple[str, str]] | None:
@@ -562,7 +584,7 @@ def main() -> None:
     base = os.environ.get('BASE_SHA', '')
     changes = None if event in {'schedule', 'workflow_dispatch'} else changed_paths(repo, base)
     previous = None
-    if changes is not None and REGISTRY_INPUT in changes and current_registry(repo) == registry:
+    if changes is not None and REGISTRY_INPUT in changes and _same_registry(current_registry(repo), registry):
         previous = base_registry(repo, base)
     explanations = []
     matrix = select(repo, registry, changes, explanations=explanations, previous_registry=previous)

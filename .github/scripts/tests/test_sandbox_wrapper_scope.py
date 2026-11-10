@@ -806,8 +806,10 @@ def test_registry_retirement_with_deleted_external_test_keeps_full(registry_git,
     r'C:\outside.py::test_native', 'core/file.txt::test_native',
     'core/file.py::', 'core/file.py::not-a-name', 'core/file.py::class',
     'core/file.py::test_native[unfinished', 'core/file.py::test_native\n',
+    'core/file.py::helper', 'core/file.py::TestContainer', 'core/file.py::testnative',
 ], ids=['no-file', 'no-node', 'absolute', 'parent', 'nested-parent', 'empty-part',
-        'windows', 'not-python', 'empty-node', 'bad-name', 'keyword', 'parameter', 'newline'])
+        'windows', 'not-python', 'empty-node', 'bad-name', 'keyword', 'parameter', 'newline',
+        'helper', 'class-only', 'missing-test-prefix'])
 def test_malformed_historical_selector_requires_full(registry_git, monkeypatch, selector):
     from core.testing.gitrepo import git_run
 
@@ -967,3 +969,46 @@ def test_registry_blob_read_uses_admitted_object_id(tmp_path, monkeypatch, decla
     monkeypatch.setattr(scope, 'subprocess', private)
     assert scope.base_registry(tmp_path, 'a' * 40) == expected
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize('field,value', [
+    ('expected', True), ('expected', 1.0), ('version', True), ('version', 1.0), ('manual', 0),
+    ('key-order', None),
+], ids=['expected-boolean', 'expected-float', 'version-boolean', 'version-float', 'manual-integer', 'key-order'])
+def test_current_snapshot_types_must_match_census(registry_git, monkeypatch, field, value):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    registry['version'] = 1
+    registry['native'][0]['platforms']['linux']['manual'] = False
+    previous = deepcopy(registry)
+    previous['native'][0]['platforms']['linux']['tests'].append('core/one/tests/test_wrapper.py::test_extra')
+    previous['native'][0]['platforms']['linux']['expected'] = 2
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(previous))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'prior native cell with two selectors')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    real_read = scope.current_registry
+    reads = []
+    def changed_snapshot(repo):
+        # Deterministically change the owned file after the census read, not
+        # the parsed census dictionary or a shared JSON/OS module binding.
+        raw = deepcopy(registry)
+        if field == 'key-order':
+            raw = json.loads(json.dumps(raw, sort_keys=True))
+        elif field == 'version':
+            raw[field] = value
+        else:
+            raw['native'][0]['platforms']['linux'][field] = value
+        (repo / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(raw))
+        reads.append(True)
+        return real_read(repo)
+    monkeypatch.setattr(scope, 'current_registry', changed_snapshot)
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert reads == [True]
+    if field == 'key-order':
+        assert set(matrix) == {'linux'}
+        assert matrix['linux']['families'] == ['one'] and not matrix['linux']['full']
+    else:
+        assert set(matrix) == {'linux', 'darwin'}
+        assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
