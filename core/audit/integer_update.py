@@ -1,8 +1,9 @@
-"""Diagnostic signed arithmetic faults at standalone builtin ++/-- sites.
+"""Diagnostic signed arithmetic faults and unsigned stored-value update wrap.
 
-Only a direct return value or standalone update is admitted. Prefix/postfix
-result values and narrowing stores are not interchangeable with promoted
-arithmetic overflow, and no safe result refutes the original source claim.
+Signed arithmetic admits a direct return value or standalone update; unsigned
+storage wrap requires a standalone statement. Prefix/postfix result values and
+narrowing stores are not interchangeable with promoted arithmetic overflow,
+and no safe result refutes the original source claim.
 """
 
 import operator
@@ -26,7 +27,8 @@ from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import visible_declarations
 
 _GOALS = {'signed increment overflow': '++', 'signed decrement overflow': '--',
-          'signed compound overflow': 'compound'}
+          'signed compound overflow': 'compound', 'unsigned increment wrap': 'unsigned++',
+          'unsigned decrement wrap': 'unsigned--'}
 _UPDATE = re.compile(r'(?:(\+\+|--)\s*([A-Za-z_]\w*)|([A-Za-z_]\w*)\s*(\+\+|--))')
 
 
@@ -87,6 +89,9 @@ def check_integer_update(source, hypothesis, *, language, integer_abi=None):
     goal = parse_integer_goal(hypothesis, _GOALS)
     if goal is None or not z3_available():
         return unavailable
+    if goal in {'unsigned++', 'unsigned--'}:
+        from .unsigned_update import check_unsigned_update_wrap
+        return check_unsigned_update_wrap(source, hypothesis, language=language, integer_abi=integer_abi)
     if goal == 'compound':
         return _check_compound_update(source, hypothesis, language=language, integer_abi=integer_abi)
     claim = _UPDATE.fullmatch(hypothesis.split('`')[1].strip())

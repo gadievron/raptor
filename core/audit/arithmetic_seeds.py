@@ -487,7 +487,12 @@ def _operations(source, language, abi):
         if len(mechanism) <= 300:
             chains.append((target, outer_op, (literal, name, outer_literal), 'constant-condition-' + direction,
                            mechanism, {'binding_status': 'candidate', 'candidate_basis': 'promoted-comparison-result'}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains
+    from .unsigned_update import unsigned_update_candidates
+    unsigned_updates = [(target, op, (name,), 'unsigned-update-wrap',
+                         f"Potential unsigned {'increment' if op == '++' else 'decrement'} wrap in `{op + name if prefix else name + op}`.",
+                         {'binding_status': 'candidate'})
+                        for target, name, op, prefix in unsigned_update_candidates(source, language=language, integer_abi=abi)]
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains + unsigned_updates
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

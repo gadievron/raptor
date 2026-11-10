@@ -252,6 +252,13 @@ unsequenced siblings. It proves overflow in the promoted arithmetic, rather
 than treating a narrow storage conversion as that fault. Receipts remain
 diagnostic and non-refuting; QUALITY candidates follow existing candidate classes.
 
+Standalone builtin unsigned `++`/`--` can be checked separately for stored-value
+wrap. The checker distinguishes the mathematical update from the destination's
+modular value, including narrow destinations whose promoted arithmetic does not
+overflow. Boolean and signed destinations, compound assignments and used result
+values are outside this unsigned-update check. Defined unsigned wrap does not
+establish programmer intent; these receipts remain diagnostic and non-refuting.
+
 Fixed local-array reads may use a parameter remainder by a positive small int
 literal. The source checker preserves promoted signedness: a signed remainder
 can be negative. Independent source and literal-caller replay uses truncating
