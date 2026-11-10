@@ -700,3 +700,46 @@ class Cfg {
 ''')
         value, _ = _xfold(xroot, f"new Cfg().{method}(x)")
         assert (value is REFUSE) if expected is None else (value == expected)
+
+
+class TestMethodReceiverScope:
+    @pytest.mark.parametrize("method,argument,expected", [
+        ("field", "new Other()", None),
+        ("method", "new Other()", None),
+        ("jvmField", "new Other()", None),
+        ("stringCall", "new Other()", None),
+        ("packageHead", "new PackageValue()", None),
+        ("fullyQualified", "new Other()", "class-literal"),
+        ("fresh", "new Other()", "class-literal"),
+        ("ignoredArgument", "new Other()", "literal"),
+        ("derived", "new Other()", "class-literal-derived"),
+    ])
+    def test_value_receiver_binding_cannot_be_a_class_spelling(self, xroot, method,
+                                                              argument, expected):
+        root, _ = xroot
+        (root / "app" / "Cfg.java").write_text('''package app;
+class Cfg {
+    static final String SAFE = "class-literal";
+    static final String DERIVED = app.Cfg.SAFE + "-derived";
+    String literal() { return "class-literal"; }
+    String constant(Object value) { return "literal"; }
+    String field(Other Cfg) { return Cfg.SAFE; }
+    String method(Other Cfg) { return Cfg.literal(); }
+    String jvmField(Other File) { return File.separator; }
+    String stringCall(Other String) { return String.valueOf("fixed"); }
+    String packageHead(PackageValue app) { return app.Cfg.SAFE; }
+    String fullyQualified(Other Cfg) { return app.Cfg.SAFE; }
+    String fresh(Other Cfg) { return new Cfg().literal(); }
+    String ignoredArgument(Other Cfg) { return new Cfg().constant(Cfg.SAFE); }
+    String derived(Other app) { return DERIVED; }
+}
+class Other {
+    String SAFE = System.getenv("OWNED");
+    String separator = System.getenv("OWNED");
+    String literal() { return SAFE; }
+    String valueOf(String ignored) { return SAFE; }
+}
+class PackageValue { Other Cfg = new Other(); }
+''')
+        value, _ = _xfold(xroot, f"new Cfg().{method}({argument})", allow_tf=True)
+        assert (value is REFUSE) if expected is None else (value == expected)

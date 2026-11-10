@@ -302,7 +302,8 @@ class XFileConst:
         # inline read (without it, USERDIR-style fields would refuse).
         return fold_expr(node, resolve_name,
                          allow_taint_free=allow_taint_free,
-                         xfile_resolver=self)
+                         xfile_resolver=self,
+                         shadowed_receiver_names=shadowed_names)
 
     # ---- public resolutions ---------------------------------------------
 
