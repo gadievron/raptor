@@ -113,6 +113,7 @@ def _receipt_corroborated_hypothesis(
         source=source,
         target_path=getattr(config, "target_path", None) if config else None,
         repo_trusted=bool(getattr(config, "repo_trusted", False)),
+        integer_abi=getattr(config, "integer_abi", None),
     )
 
     race_protected = False

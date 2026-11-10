@@ -52,11 +52,14 @@ Mechanism
     such path is infeasible the property still holds.  The arm is
     heavily fenced: it runs only when no macro reduction occurred, no
     keyword-named macro exists in the closure, and only over
-    conditions whose every variable is a PARAMETER of ISO-C integer
+    conditions whose every variable is a PARAMETER of builtin C integer
     type that is never reassigned in the function — locals can be
     indeterminate at the read and function-scope externs can change
     between reads, so joint unsatisfiability over such reads is not a
-    refutation — with a single consistent width/signedness profile.
+    refutation — with a single consistent width/signedness profile under
+    a resolved target integer ABI. Only atomic comparisons are admitted:
+    compound operators need independently resolved intermediate types.
+    Unresolved aliases and parameter attributes receive no type credit.
     Without z3, or on any vetting failure, the arm degrades to "no
     proof" — never to a weaker "proof".
 
@@ -102,9 +105,12 @@ import re
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, TYPE_CHECKING
 
 from core.source import read_text_capped, strip_c_comments
+
+if TYPE_CHECKING:
+    from core.smt_solver.integer_abi import IntegerABIInput
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +169,7 @@ class DefiniteAssignmentResult:
     unresolved_includes: int = 0
     macro_files_scanned: int = 0
     smt_paths_discharged: int = 0
+    integer_abi: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -174,6 +181,7 @@ class DefiniteAssignmentResult:
             "unresolved_includes": self.unresolved_includes,
             "macro_files_scanned": self.macro_files_scanned,
             "smt_paths_discharged": self.smt_paths_discharged,
+            "integer_abi": dict(self.integer_abi) if self.integer_abi is not None else None,
         }
 
 
@@ -1762,34 +1770,11 @@ class _Walker:
 # Z3 arm
 # ---------------------------------------------------------------------------
 
-_INT_TYPE_PROFILES: dict[tuple[str, ...], tuple[bool, int]] = {
-    # normalized type-token tuple -> (signed, width)
-    ("int",): (True, 32),
-    ("signed", "int"): (True, 32),
-    ("signed",): (True, 32),
-    ("unsigned",): (False, 32),
-    ("unsigned", "int"): (False, 32),
-    ("long",): (True, 64),
-    ("long", "int"): (True, 64),
-    ("long", "long"): (True, 64),
-    ("long", "long", "int"): (True, 64),
-    ("unsigned", "long"): (False, 64),
-    ("unsigned", "long", "int"): (False, 64),
-    ("unsigned", "long", "long"): (False, 64),
-    ("unsigned", "long", "long", "int"): (False, 64),
-    ("size_t",): (False, 64),
-    ("int32_t",): (True, 32),
-    ("int64_t",): (True, 64),
-    ("uint32_t",): (False, 32),
-    ("uint64_t",): (False, 64),
-}
-
 _REL_OPS = frozenset({"<", "<=", ">", ">=", "==", "!="})
 
 
-def _parameter_int_types(fn_node: Any) -> dict[str, tuple[bool, int]]:
-    """Names of PARAMETERS with a resolvable ISO integer type (no
-    pointers/arrays), mapped to (signed, width).
+def _parameter_int_types(fn_node: Any, integer_abi: IntegerABIInput = None) -> dict[str, tuple[bool, int]]:
+    """Own builtin integer parameters, resolved under the selected layout.
 
     Parameters only, deliberately: they are the sole variables whose
     value at every condition read is well-defined and stable without
@@ -1800,49 +1785,72 @@ def _parameter_int_types(fn_node: Any) -> dict[str, tuple[bool, int]]:
     not a refutation.  Mutation of a parameter is separately refused
     by the caller's assigned-names check.
     """
+    from core.smt_solver.integer_types import integer_type
+    from core.smt_solver.integer_abi import resolve_integer_abi
+    from .narrowing_bindings import callable_declarator
+
+    abi = resolve_integer_abi(integer_abi)
+    declarator = callable_declarator(fn_node)
+    parameters = declarator.child_by_field_name("parameters") if declarator is not None else None
+    if abi is None or parameters is None:
+        return {}
     out: dict[str, tuple[bool, int]] = {}
-    for n in _walk_nodes(fn_node):
+    for n in parameters.named_children:
         if n.type != "parameter_declaration":
             continue
         declarator = n.child_by_field_name("declarator")
         if declarator is None or declarator.type != "identifier":
             continue  # pointer/array declarators are out of scope
-        type_tokens: list[str] = []
-        for c in n.children:
-            if c.type in ("primitive_type", "sized_type_specifier",
-                          "type_identifier"):
-                type_tokens.extend(_node_text(c).split())
-        key = tuple(t for t in type_tokens if t != "const")
-        prof = _INT_TYPE_PROFILES.get(key)
-        if prof is not None:
-            out[_node_text(declarator)] = prof
+        type_node = n.child_by_field_name("type")
+        if type_node is None or type_node.type not in {"primitive_type", "sized_type_specifier"}:
+            continue  # aliases need an independently bound definition
+        spelling = _node_text(type_node)
+        if not set(spelling.split()) <= {"signed", "unsigned", "int", "long"}:
+            continue  # retain the existing int/long arithmetic fragment
+        if any(child not in (type_node, declarator) and child.type != "comment"
+               and not (child.type == "type_qualifier" and _node_text(child) == "const")
+               for child in n.named_children):
+            continue
+        kind = integer_type(spelling, abi)
+        if kind is not None:
+            out[_node_text(declarator)] = kind.promoted_signed, kind.promoted_width
     return out
 
 
 def _assigned_names(fn_node: Any) -> set[str]:
-    """Every identifier that is written or address-taken anywhere in
-    the function (assignment, compound assignment, update, unary &)."""
+    """Names whose entry binding/value cannot serve every guard read.
+
+    A local shadow, write or address escape anywhere in the function
+    declines parameter credit. Prototype parameter scopes stay separate.
+    """
     body = fn_node.child_by_field_name("body")
     names: set[str] = set()
     if body is None:
         return names
+
+    def record(node):
+        while node is not None and node.type == "parenthesized_expression":
+            children = [child for child in node.named_children if child.type != "comment"]
+            if len(children) != 1:
+                return
+            node = children[0]
+        if node is not None and node.type == "identifier":
+            names.add(_node_text(node))
+
     for n in _walk_nodes(body):
         if n.type == "assignment_expression":
-            left = n.child_by_field_name("left")
-            if left is not None and left.type == "identifier":
-                names.add(_node_text(left))
+            record(n.child_by_field_name("left"))
         elif n.type == "update_expression":
-            arg = n.child_by_field_name("argument")
-            if arg is not None and arg.type == "identifier":
-                names.add(_node_text(arg))
+            record(n.child_by_field_name("argument"))
         elif n.type == "pointer_expression":
             op = n.child_by_field_name("operator")
-            arg = n.child_by_field_name("argument")
-            if (
-                op is not None and _node_text(op) == "&"
-                and arg is not None and arg.type == "identifier"
-            ):
-                names.add(_node_text(arg))
+            if op is not None and _node_text(op) == "&":
+                record(n.child_by_field_name("argument"))
+        elif n.type in {"declaration", "type_definition"}:
+            for declarator in n.children_by_field_name("declarator"):
+                record(_declarator_name(declarator))
+        elif n.type == "enumerator":
+            record(n.child_by_field_name("name"))
     return names
 
 
@@ -1850,6 +1858,8 @@ def _vet_condition_text(
     text: str,
     int_types: dict[str, tuple[bool, int]],
     mutated: set[str],
+    *,
+    int_bits: int,
 ) -> tuple[bool, int] | None:
     """Profile of a condition the Z3 arm may faithfully encode, or
     None when the condition is out of its fenced fragment."""
@@ -1876,12 +1886,28 @@ def _vet_condition_text(
             if s in _REL_OPS:
                 has_rel = True
                 continue
-            if s in ("+", "-", "*", "|", "&", "<<", ">>", "(", ")"):
+            if s in ("(", ")"):
                 continue
+            if (s == "-" and i + 1 < len(toks) and toks[i + 1][0] == "num"
+                    and not toks[i + 1][1].lower().startswith("0x")
+                    and (i == 0 or toks[i - 1][1] in _REL_OPS or toks[i - 1][1] == "(")):
+                continue  # one negative decimal atom, never binary subtraction
+            # Literal-only arithmetic and shifts retain their own C types.
+            # The uniform parameter profile must not widen intermediates.
             return None
         elif kind == "num":
             if s.startswith("0") and len(s) > 1 and not s.lower().startswith("0x"):
                 return None
+            if not s.lower().startswith("0x"):
+                try:
+                    if int(s, 10) > (1 << (int_bits - 1)) - 1:
+                        return None
+                except ValueError:
+                    return None
+                # Wider decimal literals may convert an unsigned operand
+                # to signed long/long long before arithmetic. A fixed-width
+                # unsigned profile cannot model that conversion. Hex input
+                # retains the parser's width-checked unsigned-leaf rules.
             continue
         else:
             return None
@@ -1893,31 +1919,27 @@ def _vet_condition_text(
 def _discharge_with_smt(
     violations: list[_Violation],
     fn_node: Any,
+    integer_abi: IntegerABIInput = None,
 ) -> tuple[bool, int]:
     """Try to prove every violating path infeasible.  Returns
     (all_discharged, paths_checked); degrades to (False, n) on any
     vetting failure, unparsed condition, sat/unknown verdict, or z3
     absence — never to a false proof."""
+    if integer_abi is None or integer_abi == "unknown":
+        return False, 0
     try:
-        from core.smt_solver import (
-            BV_C_INT32,
-            BV_C_INT64,
-            BV_C_UINT32,
-            BV_C_UINT64,
-        )
+        from core.smt_solver import BVProfile
+        from core.smt_solver.integer_abi import resolve_integer_abi
         from core.smt_solver.path_feasibility import (
             PathCondition,
             check_path_feasibility,
         )
     except Exception:
         return False, 0
-    profile_map = {
-        (True, 32): BV_C_INT32,
-        (True, 64): BV_C_INT64,
-        (False, 32): BV_C_UINT32,
-        (False, 64): BV_C_UINT64,
-    }
-    int_types = _parameter_int_types(fn_node)
+    abi = resolve_integer_abi(integer_abi)
+    if abi is None:
+        return False, 0
+    int_types = _parameter_int_types(fn_node, abi)
     mutated = _assigned_names(fn_node)
     contexts: set[_Context] = set()
     for v in violations:
@@ -1928,7 +1950,7 @@ def _discharge_with_smt(
             return False, checked  # unconditionally-reachable path
         profiles = set()
         for text, _neg in ctx:
-            prof = _vet_condition_text(text, int_types, mutated)
+            prof = _vet_condition_text(text, int_types, mutated, int_bits=abi.int_bits)
             if prof is None:
                 return False, checked
             profiles.add(prof)
@@ -1938,9 +1960,8 @@ def _discharge_with_smt(
             PathCondition(text=text, step_index=i, negated=neg)
             for i, (text, neg) in enumerate(sorted(ctx))
         ]
-        result = check_path_feasibility(
-            conditions, profile=profile_map[profiles.pop()],
-        )
+        signed, width = profiles.pop()
+        result = check_path_feasibility(conditions, profile=BVProfile(width, signed))
         checked += 1
         if result.feasible is not False:
             return False, checked
@@ -2033,6 +2054,7 @@ def check_definite_assignment(
     *,
     target_path: str | Path | None = None,
     rel_file: str | None = None,
+    integer_abi: IntegerABIInput = None,
 ) -> DefiniteAssignmentResult:
     """Prove *variable* is assigned on every path to every use in
     *func_source* (a single C function definition).
@@ -2040,6 +2062,7 @@ def check_definite_assignment(
     *target_path*/*rel_file* locate the function's file inside the
     target tree so macro definitions come from the tree's own headers
     (read-only).  Without them, only macro-free sources can prove.
+    Residual SMT obligations require *integer_abi*; structural proofs do not.
 
     Returns a :class:`DefiniteAssignmentResult`; every refusal is
     ``proven=False`` with the refusing construct named — the
@@ -2142,8 +2165,10 @@ def check_definite_assignment(
         # Z3 arm: only when no macro reduction blurred a condition and
         # no keyword-named macro definition could invert one.
         if processed.reductions == 0 and not keyword_macro_present:
-            ok, checked = _discharge_with_smt(walker.violations, fn_node)
+            ok, checked = _discharge_with_smt(walker.violations, fn_node, integer_abi)
             if ok and checked:
+                from core.smt_solver.integer_abi import integer_abi_record
+
                 return DefiniteAssignmentResult(
                     proven=True, variable=variable,
                     reason=(
@@ -2152,6 +2177,7 @@ def check_definite_assignment(
                         f"branch conditions ({checked} path(s), z3)"
                     ),
                     method="structural+smt",
+                    integer_abi=integer_abi_record(integer_abi),
                     smt_paths_discharged=checked, **provenance,
                 )
         sample = walker.violations[0]
