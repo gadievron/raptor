@@ -242,9 +242,11 @@ def _literal_load_resource(load_node) -> str | None:
     if name is None or _text(name) != "getResourceAsStream":
         return None
     owner = unwrapped(stream.child_by_field_name("object"))
+    class_loader = False
     if owner is not None and owner.type == "method_invocation":
         method = owner.child_by_field_name("name")
         if method is not None and _text(method) == "getClassLoader" and not _call_arguments(owner):
+            class_loader = True
             owner = unwrapped(owner.child_by_field_name("object"))
     if owner is None:
         return None
@@ -258,7 +260,13 @@ def _literal_load_resource(load_node) -> str | None:
     resource = _string_literal_value(resource_args[0]) if len(resource_args) == 1 else None
     # Raw literal spelling is not the runtime name when Java escapes occur.
     # Refuse rather than selecting a different file or rewriting coordinates.
-    return resource if resource is not None and "\\" not in resource else None
+    if resource is None or "\\" in resource:
+        return None
+    # Class resolves a leading slash from the classpath root; ClassLoader
+    # takes an unprefixed resource name and does not strip that slash.
+    if class_loader and resource.startswith("/"):
+        return None
+    return resource
 
 
 # Ancestor node types that are execution-TRANSPARENT: when every
