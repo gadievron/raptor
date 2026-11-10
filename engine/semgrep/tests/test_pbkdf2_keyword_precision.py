@@ -57,3 +57,51 @@ def test_pbkdf2_iteration_argument_forms(tmp_path):
     actual = {row["start"]["line"] for row in data["results"]
               if row["check_id"].endswith("raptor.crypto.pbkdf2.low-iterations.python")}
     assert actual == expected
+
+
+
+def test_pbkdf2_jvm_constructor_forms(tmp_path):
+    java = (
+        'import javax.crypto.spec.PBEKeySpec;\nclass Owned {\n'
+        'PBEKeySpec low(char[] pw, byte[] salt) { return new PBEKeySpec(pw,salt,99999,256); }\n'
+        'PBEKeySpec qualified(char[] pw, byte[] salt) { return new javax.crypto.spec.PBEKeySpec(pw,salt,99999,256); }\n'
+        'PBEKeySpec boundary(char[] pw, byte[] salt) { return new PBEKeySpec(pw,salt,100000,256); }\n'
+        'static Object PBEKeySpec(char[] pw, byte[] salt, int iters, int bits) { return null; }\n'
+        'Object unrelated(char[] pw, byte[] salt) { return PBEKeySpec(pw,salt,99999,256); }\n}\n'
+    )
+    kotlin = (
+        'import javax.crypto.spec.PBEKeySpec\n'
+        'import javax.crypto.spec.PBEKeySpec as KeySpec\n'
+        'fun low(pw: CharArray, salt: ByteArray) = PBEKeySpec(pw,salt,99999,256)\n'
+        'fun qualified(pw: CharArray, salt: ByteArray) = javax.crypto.spec.PBEKeySpec(pw,salt,99999,256)\n'
+        'fun alias(pw: CharArray, salt: ByteArray) = KeySpec(pw,salt,99999,256)\n'
+        'fun boundary(pw: CharArray, salt: ByteArray) = PBEKeySpec(pw,salt,100000,256)\n'
+        'object Other { fun PBEKeySpec(pw: CharArray,salt: ByteArray,iters: Int,bits: Int) = "unrelated" }\n'
+        'fun unrelated(pw: CharArray, salt: ByteArray) = Other.PBEKeySpec(pw,salt,99999,256)\n'
+        'fun shadowed(pw: CharArray, salt: ByteArray, PBEKeySpec: (CharArray, ByteArray, Int, Int) -> String) = PBEKeySpec(pw,salt,99999,256)\n'
+    )
+    unrelated_java = (
+        'import other.PBEKeySpec;\nclass OwnedOther {\n'
+        'Object unrelated(char[] pw, byte[] salt) { return new PBEKeySpec(pw,salt,99999,256); }\n}\n'
+    )
+    (tmp_path / "other").mkdir()
+    (tmp_path / "other/PBEKeySpec.java").write_text(
+        'package other; public class PBEKeySpec { public PBEKeySpec('
+        'char[] pw,byte[] salt,int iters,int bits) {} }')
+    targets = [tmp_path / "Owned.java", tmp_path / "owned.kt", tmp_path / "OwnedOther.java"]
+    for target, source in zip(targets, (java, kotlin, unrelated_java)):
+        target.write_text(source)
+    proc = run_pinned_subprocess(
+        ["semgrep", "scan", "--config", str(_RULE), "--metrics", "off",
+         "--disable-version-check", "--jobs", "1", "--json", *map(str, targets)],
+        timeout=60, context="PBKDF2 Java/Kotlin constructor identity", skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert not data.get("errors"), data.get("errors")
+    assert {Path(path).name for path in data["paths"]["scanned"]} == {p.name for p in targets}
+    actual = {(Path(row["path"]).name, row["start"]["line"], row["check_id"].split("low-iterations.")[-1])
+              for row in data["results"]}
+    assert actual == {("Owned.java", 3, "java"), ("Owned.java", 4, "java"),
+                      ("owned.kt", 3, "kotlin"), ("owned.kt", 4, "kotlin"),
+                      ("owned.kt", 5, "kotlin")}

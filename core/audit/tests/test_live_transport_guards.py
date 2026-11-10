@@ -1619,7 +1619,9 @@ class TestSemgrepSurfaceFences:
     def test_engine_pbkdf2_keyword_regressions(self) -> None:
         calls = _function_call_map("../../../engine/semgrep/tests/test_pbkdf2_keyword_precision.py")
         assert _callers_of(calls, "run") == set()
-        assert _callers_of(calls, "run_pinned_subprocess") == {"test_pbkdf2_iteration_argument_forms"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_pbkdf2_iteration_argument_forms", "test_pbkdf2_jvm_constructor_forms",
+        }
 
     def test_engine_javascript_header_regressions(self) -> None:
         calls = _function_call_map("../../../engine/semgrep/tests/test_javascript_header_sources.py")
