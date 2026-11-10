@@ -1,7 +1,8 @@
 """Explicit checker outcomes beside the legacy positive-receipt list."""
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 
+from .claims import ClaimRevision
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_non_refuting_smt_rule
 
@@ -53,9 +54,16 @@ class ClaimRefutation:
     hypothesis: str
     checks: tuple[ProbeOutcome, ...]
     source_identity: SourceIdentity | None = None
+    claim_revision: ClaimRevision | None = field(default=None, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "checks", tuple(self.checks))
+        if self.claim_revision is not None:
+            if not isinstance(self.claim_revision, ClaimRevision):
+                raise TypeError("claim lineage must be a ClaimRevision or None")
+            if not self.claim_revision.matches_occurrence(file=self.file, function=self.function,
+                                                          line_start=self.line_start, hypothesis=self.hypothesis):
+                raise ValueError("refutation lineage does not match its producer scope")
 
     def matches(self, *, file, function, line_start, hypothesis, source_identity) -> bool:
         return isinstance(self.source_identity, SourceIdentity) and self.source_identity == source_identity and (
@@ -68,10 +76,13 @@ class ClaimRefutation:
         )
 
     def to_record(self, *, action="claim_refutation") -> dict:
-        return {"action": action, "file": self.file, "function": self.function,
-                "line_start": self.line_start, "hypothesis": self.hypothesis,
-                "source_identity": asdict(self.source_identity) if self.source_identity else None,
-                "checks": [asdict(check) for check in self.checks]}
+        record = {"action": action, "file": self.file, "function": self.function,
+                  "line_start": self.line_start, "hypothesis": self.hypothesis,
+                  "source_identity": asdict(self.source_identity) if self.source_identity else None,
+                  "checks": [asdict(check) for check in self.checks]}
+        if self.claim_revision is not None:
+            record["claim_reference"] = self.claim_revision.event_reference()
+        return record
 
 
 def claims_refuted(outcome, hypotheses: list[str], *, source_identity) -> bool:
@@ -95,10 +106,22 @@ class ToolChainResult(list[str]):
     explicit ``refuted`` outcome on this exact claim can supply it.
     """
 
-    def __init__(self, receipts=(), *, file="", function="", line_start=0, hypothesis="", source_identity=None):
+    def __init__(self, receipts=(), *, file="", function="", line_start=0, hypothesis="", source_identity=None,
+                 claim_revision: ClaimRevision | None = None):
         super().__init__(receipts)
         self._binding = VerificationScope(file, function, line_start or 0, hypothesis, source_identity)
+        if claim_revision is not None:
+            if not isinstance(claim_revision, ClaimRevision):
+                raise TypeError("claim lineage must be a ClaimRevision or None")
+            if not claim_revision.matches_occurrence(file=file, function=function,
+                                                      line_start=line_start, hypothesis=hypothesis):
+                raise ValueError("checker lineage does not match its producer scope")
+        self._claim_revision = claim_revision
         self.outcomes: list[ProbeOutcome] = []
+
+    @property
+    def claim_revision(self) -> ClaimRevision | None:
+        return self._claim_revision
 
     @property
     def binding(self) -> VerificationScope:
@@ -150,4 +173,4 @@ class ToolChainResult(list[str]):
         outcomes = self.refutations(file=file, function=function, line_start=line_start, hypothesis=hypothesis)
         if not outcomes:
             return None
-        return ClaimRefutation(file, function, line_start or 0, hypothesis, outcomes, self.source_identity)
+        return ClaimRefutation(file, function, line_start or 0, hypothesis, outcomes, self.source_identity, self.claim_revision)

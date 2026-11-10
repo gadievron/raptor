@@ -53,6 +53,15 @@ class ClaimRevision:
         object.__setattr__(child, "parent_revision", self.revision_id)
         return child
 
+    def matches_occurrence(self, *, file: str, function: str, line_start: int, hypothesis: str) -> bool:
+        """Check statement/location correspondence, without certifying source."""
+        return (self.file, self.function, self.line_start, self._hypothesis.get("mechanism")) == (
+            file, function, line_start or 0, hypothesis)
+
+    def event_reference(self) -> dict[str, str]:
+        """Compact producer link; scope stays on the checker observation."""
+        return {"claim_id": self.claim_id, "revision_id": self.revision_id}
+
     def reference(self) -> dict:
         """Data-only reference; the containing observation owns its statement."""
         return {"claim_id": self.claim_id, "revision_id": self.revision_id, "revision": self.revision,
