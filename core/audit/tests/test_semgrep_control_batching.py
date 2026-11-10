@@ -10,8 +10,6 @@ ambiguity falls back to that path.
 
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -48,10 +46,10 @@ class _Result:
 
 
 def _install_fake_semgrep(monkeypatch, run_rule):
-    fake = types.ModuleType("packages.semgrep.runner")
-    fake.run_rule = run_rule
-    fake.is_available = lambda: True
-    monkeypatch.setitem(sys.modules, "packages.semgrep.runner", fake)
+    from packages.semgrep import runner
+
+    monkeypatch.setattr(runner, "run_rule", run_rule)
+    monkeypatch.setattr(runner, "is_available", lambda: True)
 
 
 def _finding(path: str, line: int) -> dict:

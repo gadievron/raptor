@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -42,10 +40,10 @@ def _clear_negative_control_cache(monkeypatch):
 
 def _install_fake_semgrep(monkeypatch, run_rule):
     """Install a fake packages.semgrep.runner module."""
-    fake = types.ModuleType("packages.semgrep.runner")
-    fake.run_rule = run_rule
-    fake.is_available = lambda: True
-    monkeypatch.setitem(sys.modules, "packages.semgrep.runner", fake)
+    from packages.semgrep import runner
+
+    monkeypatch.setattr(runner, "run_rule", run_rule)
+    monkeypatch.setattr(runner, "is_available", lambda: True)
 
 
 class _FakeSemgrepResult:
@@ -470,8 +468,9 @@ class TestCppControlRelanguage:
         seen = {}
 
         def fake_run_rule(target, config, timeout=60):
+            from packages.semgrep.models import SemgrepResult
             seen["config"] = str(config)
-            return _FakeSemgrepResult([])
+            return SemgrepResult(files_examined=[str(target)])
 
         _install_fake_semgrep(monkeypatch, fake_run_rule)
         monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
@@ -521,3 +520,21 @@ class TestCppControlRelanguage:
             assert matched is True
         finally:
             Path(rule_path).unlink()
+
+
+@pytest.mark.parametrize('state,expected', [('unwitnessed', None), ('scanned', False), ('failed', None), ('positive', True)])
+def test_standalone_control_requires_a_scanned_witness_for_silence(tmp_path, monkeypatch, state, expected):
+    from core.audit import sweep
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+    cache = {}
+    monkeypatch.setattr(sweep, '_negative_control_cache', cache)
+    def run_rule(target, config, **kwargs):
+        return SemgrepResult(
+            files_examined=[str(target)] if state in ('scanned', 'failed') else [],
+            files_failed=[{'path': str(target), 'reason': 'parse failure'}] if state == 'failed' else [],
+            findings=[SemgrepFinding(file=str(target), line=1, rule_id='check', message='hit')] if state == 'positive' else [],
+        )
+    _install_fake_semgrep(monkeypatch, run_rule)
+    result = sweep._rule_matches_negative_control('rule.yaml', 'use after free', 'a.c')
+    assert result is expected
+    assert list(cache.values()) == ([] if expected is None else [expected])
