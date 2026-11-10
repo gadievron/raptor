@@ -69,7 +69,9 @@ from core.dataflow.smt_barrier import (
 from core.dataflow.smt_barrier import (
     extract_validator as _mechanical_extract,
 )
-from core.dataflow.source_identity import known_python_identity_conflict
+from core.dataflow.source_identity import (
+    known_python_identity_conflict, known_python_origin_conflict,
+)
 from core.paths import confine
 from core.source import read_text_capped
 from core.llm.coerce import extract_fenced_code
@@ -737,6 +739,13 @@ def try_tier1b(
             f"Tier 1B: could not read source {sink_uri!r}",
         )
     source_text = got[0]
+
+    if language == "python" and spec.kind in ("charset", "charset_sub", "known_safe_call"):
+        library_root = ("re" if spec.kind != "known_safe_call"
+                        else spec.library_call.split(".", 1)[0])
+        origin_conflict = known_python_origin_conflict(repo_root, src_path, library_root)
+        if origin_conflict:
+            return Tier0Result(Tier0Status.NOT_APPLICABLE, origin_conflict)
 
     if spec.kind in ("charset", "charset_sub"):
         # Mechanical re-extract on the LLM-named line; agreement gates

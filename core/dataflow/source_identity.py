@@ -6,6 +6,7 @@ receipts also require import execution, origin and value evidence.
 from __future__ import annotations
 
 import ast
+from pathlib import Path
 
 
 def _parts(node: ast.AST) -> tuple[str, ...] | None:
@@ -174,4 +175,26 @@ def known_python_identity_conflict(
                 continue
             if isinstance(node.ctx, ast.Load):
                 return "source library member escapes its call position"
+    return None
+
+
+def known_python_origin_conflict(
+    repo_root: Path, source_path: Path, library_root: str,
+) -> str | None:
+    """Refuse visible repo/script shadows, without resolving imports.
+
+    No conflict remains conditional on the runtime import-search profile;
+    this check must not be used as positive origin authority.
+    """
+    from core.dataflow.sanitizer_catalog import repo_shadows_module_root
+
+    try:
+        root = repo_root.resolve()
+        source = source_path.resolve()
+        source.relative_to(root)
+        for directory in {root, source.parent}:
+            if repo_shadows_module_root(str(directory), library_root):
+                return "source library origin is shadowed by a repository module"
+    except (OSError, RuntimeError, ValueError):
+        return "source library origin cannot be established"
     return None
