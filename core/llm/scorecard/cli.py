@@ -939,6 +939,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 
 def cmd_samples(args: argparse.Namespace) -> int:
+    from .sample_completion import emit
     sc = ModelScorecard(args.path)
     all_stats = sc.get_stats()
     matching = [
@@ -953,10 +954,12 @@ def cmd_samples(args: argparse.Namespace) -> int:
             + ")_",
             file=sys.stderr,
         )
+        emit(args, matching, 1)
         return 1
     for stat in matching:
         print(_render_samples(stat))
         print()
+    emit(args, matching, 0)
     return 0
 
 
@@ -1426,6 +1429,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="restrict to a specific model (default: all models with data)",
     )
     p_smp.set_defaults(handler=cmd_samples)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p_smp)
 
     # pin
     p_pin = sub.add_parser(
@@ -1568,6 +1573,15 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(_sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
+    if args.subcommand == "samples":
+        from core.reporting.options import options_from_args
+        from .sample_completion import prepare
+        args._report_options = options_from_args(args, parser) if args.report_format or args.report_output or args.no_report else None
+        if args._report_options is not None:
+            try:
+                prepare(args._report_options, args.path)
+            except ValueError as exc:
+                parser.error(str(exc))
     if getattr(args, "handler", None) is None:
         # No subcommand given -> default to `list` (top-level optionals like
         # --path stay before the appended subcommand, which argparse accepts).
