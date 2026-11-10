@@ -658,7 +658,7 @@ class TestDispatchFailsOpen:
         ("macos_test_scope.py", ["ci_lint", "sandbox"]),
         ("sca_test_matrix.py", ["ci_lint", "sca"]),
     ], ids=["worker-planner", "macos-planner", "sca-planner"])
-    def test_worker_planner_edit_runs_its_consuming_tiers(self, tmp_path, planner, expected):
+    def test_worker_planner_edit_runs_its_consuming_tiers(self, tmp_path, monkeypatch, planner, expected):
         targets = [
             "core/sandbox/tests/test_one.py",
             "packages/exploit_feasibility/tests/test_one.py",
@@ -669,6 +669,10 @@ class TestDispatchFailsOpen:
             path = tmp_path / target
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("def test_one(): pass\n")
+        def unexpected_graph(*args, **kwargs):
+            pytest.fail("outside-graph planner must not parse the runtime graph")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
         result = compute_tier_dispatch(
             [f".github/scripts/{planner}"], tmp_path,
         )
@@ -1613,6 +1617,58 @@ def test_lane_closure_includes_literal_special_paths(tmp_path):
 
 
 class TestOwnedResourceDispatchWork:
+    def test_ci_test_change_selects_owner_without_runtime_graph(self, tmp_path, monkeypatch, capsys):
+        changed = ".github/tests/test_dispatch.py"
+        target = tmp_path / changed
+        target.parent.mkdir(parents=True)
+        target.write_text("def test_dispatch(): pass\n")
+        runtime = tmp_path / "core/example.py"
+        runtime.parent.mkdir()
+        runtime.write_text("VALUE = 1\n")
+
+        def unexpected_graph(*args, **kwargs):
+            pytest.fail("outside-graph CI test must not parse the runtime graph")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
+        result = compute_tier_dispatch([changed], tmp_path)
+        assert _active(result) == ["ci_lint"]
+        assert result["ci_lint"]["files"] == [Path(changed)]
+        assert result["_stats"]["changed"] == 1
+        assert "Building import graph" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize("extra,calls,full", [
+        ("core/pkga/mod.py", 1, False),
+        ("entrymod.py", 1, False),
+        ("core/pkga/tests/fixtures/sample.json", 1, False),
+        ("core/orphan/blob.bin", 1, True),
+        ("libexec/unmapped-entry", 1, True),
+        ("packages/sca/data/popular/pypi.json", 0, False),
+        ("conftest.py", 0, True),
+        ("core/pkga/removed.py", 0, True),
+    ], ids=["runtime", "root-entry", "fixture", "unmapped-resource", "script",
+            "owned-data", "global-harness", "deleted-module"])
+    def test_outside_graph_input_keeps_mixed_work_and_fallbacks(
+        self, mini_repo, monkeypatch, extra, calls, full,
+    ):
+        import test_scope as scope
+
+        original = scope.build_graph
+        observed = []
+
+        def count_graph(*args, **kwargs):
+            observed.append(1)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(scope, "build_graph", count_graph)
+        result = compute_tier_dispatch([".github/scripts/pytest_workers.py", extra], mini_repo)
+        assert len(observed) == calls
+        assert _is_full_dispatch(result) == full
+        assert result["ci_lint"]["run"]
+        if not full and extra != "packages/sca/data/popular/pypi.json":
+            assert result["python"]["run"]
+        if extra == "packages/sca/data/popular/pypi.json":
+            assert Path("packages/sca/tests/test_shape.py") in result["sca"]["files"]
+
     def test_script_and_resource_share_parsed_fixture_inventory(self, mini_repo, monkeypatch):
         import test_scope as scoper
 
