@@ -543,6 +543,8 @@ def _copy_regular_tree(src: Path, dst: Path) -> None:
     that fd — so a symlink swapped in after classification fails the
     open (ELOOP) instead of redirecting the walk, at every level.
     """
+    from core.source.streams import owned_fd
+
     # Each frame: (open directory fd, destination dir, depth,
     # top-level flag). Fds are owned by the stack until their frame is
     # processed; the finally lanes guarantee none leaks on refusal.
@@ -553,16 +555,14 @@ def _copy_regular_tree(src: Path, dst: Path) -> None:
     try:
         while stack:
             dir_fd, dst_dir, depth, top = stack.pop()
-            try:
+            with owned_fd(dir_fd, close_fd=os.close):
                 _seed_one_dir(dir_fd, dst_dir, depth, top, stack)
-            finally:
-                os.close(dir_fd)
     finally:
         for fd, _dst, _depth, _top in stack:
             try:
                 os.close(fd)
-            except OSError:
-                pass
+            except BaseException:
+                pass  # Retire every pending frame without replacing the active failure.
 
 
 def _seed_one_dir(dir_fd: int, dst_dir: Path, depth: int,
