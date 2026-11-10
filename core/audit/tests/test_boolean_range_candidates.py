@@ -98,5 +98,5 @@ def test_real_confined_receipt_for_discovered_range_condition():
     claim=gap['injected_hypotheses'][0]['mechanism']
     result=sweep.run_smt_verb_direct(file_path='unit.c',function_name='Read',verb='check-integer-comparison',source=text,hypothesis=claim,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v8'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v9'
     assert result.details['entry_witness_validated']
