@@ -115,6 +115,12 @@
       "api_path": "/v1"
     },
     {
+      "name": "uberllm",
+      "auth_scheme": "Bearer",
+      "upstream_base_url": "https://api.uberllm.dev",
+      "api_path": "/v1"
+    },
+    {
       "name": "yapi",
       "auth_scheme": "Bearer",
       "upstream_base_url": "https://api.y-api.bestvirtualgoods.com",
