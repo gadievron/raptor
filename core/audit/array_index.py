@@ -1,4 +1,4 @@
-"""Bounded affine index syntax and independent builtin integer replay."""
+"""Bounded adjusted/remainder index syntax and independent builtin integer replay."""
 
 from .arithmetic_operation import _unwrap
 from .arithmetic_types import common_integer_type
@@ -7,7 +7,7 @@ from .integer_literals import integer_literal_value, source_integer_atom
 
 
 def source_index(node, data):
-    """One parameter, optionally plus/minus a nonnegative int literal."""
+    """One parameter with an optional small adjustment or positive remainder divisor."""
     node = _unwrap(node)
     if node is None:
         return None
@@ -22,19 +22,20 @@ def source_index(node, data):
     op = text(node.child_by_field_name('operator'))
     left, right = (_unwrap(node.child_by_field_name(field)) for field in ('left', 'right'))
     offset = integer_literal_value(source_integer_atom(right, data))
-    if op not in {'+', '-'} or left is None or left.type != 'identifier' or offset is None or offset < 0:
+    if (op not in {'+', '-', '%'} or left is None or left.type != 'identifier'
+            or offset is None or offset < 0 or (op == '%' and offset == 0)):
         return None
     return text(left), op, offset
 
 
 def affine_access_claim(hypothesis):
-    """Read a complete quoted affine subscript, without inventing a goal."""
+    """Read a complete quoted adjusted/remainder subscript without inventing a goal."""
     if not isinstance(hypothesis, str) or len(hypothesis) > 8192:
         return None
     pieces = hypothesis.split('`')
     if len(pieces) != 3 or len(pieces[1]) > 512:
         return None
-    if '+' not in pieces[1] and '-' not in pieces[1]:
+    if not any(op in pieces[1] for op in ('+', '-', '%')):
         return None
     try:
         data = ('int Query(void){return ' + pieces[1] + ';}').encode('utf-8')
@@ -76,14 +77,20 @@ def evaluate_array_index(access, values, integer_abi):
     op, offset = access.index_operator, access.index_offset
     value = values.get(access.index)
     if (type(value) is not int or type(offset) is not int or offset < 0
-            or op not in {'', '+', '-'} or (not op and offset != 0)):
+            or op not in {'', '+', '-', '%'} or (not op and offset != 0) or (op == '%' and offset == 0)):
         return None
     operands = [access.index, str(offset)] if op else [access.index]
     kind = common_integer_type(operands, access.parameters, integer_abi)
     if (kind is None or type(access.width) is not int or type(access.signed) is not bool
             or kind.width != access.width or kind.signed != access.signed):
         return None
-    mathematical = value + offset if op == '+' else value - offset if op == '-' else value
+    if op == '%':
+        # C division truncates towards zero; Python % differs for negatives.
+        quotient = abs(value) // offset
+        quotient = -quotient if value < 0 else quotient
+        mathematical = value - quotient * offset
+    else:
+        mathematical = value + offset if op == '+' else value - offset if op == '-' else value
     if kind.signed:
         low, high = -(1 << (kind.width - 1)), (1 << (kind.width - 1)) - 1
         return mathematical if low <= mathematical <= high else None

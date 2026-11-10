@@ -251,3 +251,9 @@ statement or direct return value. It binds prefix/postfix spelling and rejects
 unsequenced siblings. It proves overflow in the promoted arithmetic, rather
 than treating a narrow storage conversion as that fault. Receipts remain
 diagnostic and non-refuting; QUALITY candidates follow existing candidate classes.
+
+Fixed local-array reads may use a parameter remainder by a positive small int
+literal. The source checker preserves promoted signedness: a signed remainder
+can be negative. Independent source and literal-caller replay uses truncating
+C division, rather than Python's negative-operand modulo. Invalid divisors and
+unsupported source expressions remain unavailable; safe reads never refute a function.
