@@ -42,9 +42,28 @@ rules:
     languages: [go]
     severity: HIGH
     pattern-either:
-      - pattern: rsa.DecryptPKCS1v15(...)
-      - pattern: rsa.DecryptPKCS1v15SessionKey(...)
-      - pattern: rsa.EncryptPKCS1v15(...)
+    - patterns:
+      - pattern-inside: |-
+          package $PACKAGE
+          import "crypto/rsa"
+          ...
+      - pattern-not-inside: |-
+          package $PACKAGE
+          import $EXPLICIT "crypto/rsa"
+          ...
+      - pattern-either:
+        - pattern: rsa.DecryptPKCS1v15(...)
+        - pattern: rsa.DecryptPKCS1v15SessionKey(...)
+        - pattern: rsa.EncryptPKCS1v15(...)
+    - patterns:
+      - pattern-inside: |-
+          package $PACKAGE
+          import $RSA "crypto/rsa"
+          ...
+      - pattern-either:
+        - pattern: $RSA.DecryptPKCS1v15(...)
+        - pattern: $RSA.DecryptPKCS1v15SessionKey(...)
+        - pattern: $RSA.EncryptPKCS1v15(...)
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]

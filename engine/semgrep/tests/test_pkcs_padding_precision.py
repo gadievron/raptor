@@ -1,4 +1,4 @@
-"""Native Cipher API identity controls; source fixtures are never executed."""
+"""Native PKCS API controls; source fixtures are never executed."""
 
 import json
 import shutil
@@ -243,3 +243,48 @@ def test_go_pkcs_diagnostic_requires_protocol_review(tmp_path):
         message = row["extra"]["message"]
         assert "review candidate" in message.lower()
         assert "DecryptPKCS1v15SessionKey" in message and "protocol" in message.lower()
+
+
+def test_pkcs_go_import_identity(tmp_path):
+    profiles = {
+        "canonical": ('import rsa "crypto/rsa"', "rsa", True),
+        "alias": ('import ownedrsa "crypto/rsa"', "ownedrsa", True),
+        "unrelated": ('import rsa "application/rsa"', "rsa", False),
+        "unaliased": ('import "crypto/rsa"', "rsa", True),
+        "grouped": ('import (\n "crypto/rsa"\n)', "rsa", True),
+        "grouped_alias": ('import (\n box "crypto/rsa"\n)', "box", True),
+        "mixed": (
+            'import (\n trusted "crypto/rsa"\n rsa "application/rsa"\n)',
+            "rsa",
+            False,
+        ),
+    }
+    cases = {}
+    for name, (imports, receiver, reports) in profiles.items():
+        for operation in (
+            "DecryptPKCS1v15",
+            "DecryptPKCS1v15SessionKey",
+            "EncryptPKCS1v15",
+        ):
+            arguments = (
+                "nil, private, ciphertext, key"
+                if operation.endswith("SessionKey")
+                else "nil, public, message"
+                if operation.startswith("Encrypt")
+                else "nil, private, ciphertext"
+            )
+            keep_import_used = "\nvar _ *trusted.PrivateKey" if name == "mixed" else ""
+            source = (
+                "package owned\n"
+                + imports
+                + keep_import_used
+                + "\nfunc inspect() { "
+                + receiver
+                + "."
+                + operation
+                + "("
+                + arguments
+                + ") }\n"
+            )
+            cases[name + "_" + operation + ".go"] = (source, reports)
+    _scan_owned_pkcs_cases(tmp_path, cases, "raptor.crypto.rsa.pkcs1v15.go")
