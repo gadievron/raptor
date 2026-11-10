@@ -6,6 +6,8 @@ module contracts directly, including the cross-file discipline the
 corpus can't express in single-file fixtures."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("tree_sitter_java")
@@ -654,3 +656,53 @@ class TestQualifiedSpellingDiscipline:
         src = self._TEMPLATE.replace(
             "    void poison(String evil) { MUTATOR }\n", "")
         assert collection_guard_reason(src, 5, "x", "CWE-79") is not None
+
+
+class TestSourceReadBoundary:
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_declaration_symlink_stays_within_root(self, tmp_path, outside):
+        src, root = TestCrossFile()._tree(tmp_path / "repo")
+        candidate = Path(root) / "org/example/helpers/Utils.java"
+        target = (tmp_path if outside else Path(root)) / "owned-declaration.txt"
+        target.write_bytes(candidate.read_bytes())
+        candidate.unlink()
+        candidate.symlink_to(target)
+        reason = collection_guard_reason(src, 5, "x", "CWE-79", source_root=root)
+        assert (reason is None) if outside else (reason is not None)
+
+    def test_unreadable_candidate_refuses_uniqueness(self, tmp_path):
+        src, root = TestCrossFile()._tree(tmp_path / "repo")
+        other = Path(root) / "other"
+        other.mkdir()
+        (other / "Utils.java").symlink_to(tmp_path / "owned-missing.txt")
+        assert collection_guard_reason(src, 5, "x", "CWE-79", source_root=root) is None
+
+    @pytest.mark.parametrize("target_kind", ["declaration", "mutation"])
+    @pytest.mark.parametrize("overflow", [False, True])
+    def test_source_byte_budget(self, tmp_path, monkeypatch, target_kind, overflow):
+        from core.analysis import collection_guard_java as stage
+
+        src, root = TestCrossFile()._tree(tmp_path / "repo")
+        declaration = Path(root) / "org/example/helpers/Utils.java"
+        cap = max(len(src.encode()), declaration.stat().st_size) + 16
+        monkeypatch.setattr(stage, "_MAX_SOURCE_BYTES", cap)
+        target = declaration if target_kind == "declaration" else Path(root) / "Other.java"
+        data = target.read_bytes() if target.exists() else b"class Other {}\n"
+        target.write_bytes(data + b" " * (cap + int(overflow) - len(data)))
+        reason = collection_guard_reason(src, 5, "x", "CWE-79", source_root=root)
+        assert (reason is None) if overflow else (reason is not None)
+
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_mutation_scan_requires_contained_sources(self, tmp_path, outside):
+        src, root = TestCrossFile()._tree(tmp_path / "repo")
+        target = (tmp_path if outside else Path(root)) / "owned-other.txt"
+        target.write_text("class Other {}\n")
+        (Path(root) / "Other.java").symlink_to(target)
+        reason = collection_guard_reason(src, 5, "x", "CWE-79", source_root=root)
+        assert (reason is None) if outside else (reason is not None)
+
+    @pytest.mark.parametrize("newline", ["\r\n", "\r"])
+    def test_same_class_skip_text_preserves_newline_normalization(self, tmp_path, newline):
+        src = TestStaticFieldBindingIdentity.VULN
+        (tmp_path / "Vuln.java").write_bytes(src.replace("\n", newline).encode())
+        assert collection_guard_reason(src, 5, "x", "CWE-79", source_root=str(tmp_path))
