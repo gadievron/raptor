@@ -1690,6 +1690,7 @@ def run_sandboxed(
     child_pid_callback: Callable[[int], None] | None = None,
     rootfs: str | None = None,
     max_capture_bytes: int | None = None,
+    job_controller=None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -1780,6 +1781,12 @@ def run_sandboxed(
     and refer to the same resources until this synchronous call returns;
     callers must not close/replace them concurrently with setup or exec.
     """
+    _job_control_sealer = None
+    if job_controller is not None and job_controller.scope is not None:
+        from .job_budget import JobBudgetError
+        if skip_pid_ns or skip_mount_ns or not (target or output or rootfs):
+            raise JobBudgetError("Job budgets require a full mount/PID namespace payload", job_controller.record)
+        _job_control_sealer = job_controller.control_sealer
     # Validate before allocating internal pipes: an invalid caller fd must
     # not accidentally become a valid setup/status descriptor later.
     pass_fds = tuple(sorted(set(pass_fds)))
@@ -3243,6 +3250,10 @@ def run_sandboxed(
                                    src_fds=_bind_src_fds,
                                    fresh_netns=bool(
                                        ns_flags & CLONE_NEWNET))
+                    if _job_control_sealer is not None:
+                        _status_step = b'C'
+                        _job_control_sealer()
+                        _status_step = b'M'
                 except OSError as _mnt_exc:
                     # ESTALE out of a pinned bind = the source stopped
                     # resolving to its validation-time inode — a
@@ -3881,6 +3892,11 @@ def run_sandboxed(
         _retire_parent_resources(*callbacks)
 
     try:
+        # The setup child cannot fork a payload until the parent go signal.
+        # Cgroup admission here is mandatory and deliberately not routed
+        # through the advisory PID callback (whose errors are swallowed).
+        if job_controller is not None:
+            job_controller.attach(child_pid)
         if _unix_scope_parent_sock is not None:
             assert _unix_scope_child_sock is not None
             _unix_scope_child_sock.close()

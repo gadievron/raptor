@@ -1685,6 +1685,14 @@ def _assemble_and_write_summary(
            if audit_capture is not None else {})))
     if _token:
         summary["mac"] = _token
+    if allowed_reports:
+        try:
+            activity_token = _tmac.mint(_tmac.allowed_activity_fields(
+                allowed_reports, run=_tmac.run_binding(run_dir)))
+        except (ValueError, TypeError, RecursionError):
+            activity_token = None
+        if activity_token:
+            summary['allowed_activity_mac'] = activity_token
 
     summary_path = run_dir / SUMMARY_FILE
     # Atomic write: sandbox denial summary is the run's final audit

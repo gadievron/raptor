@@ -1091,6 +1091,102 @@ Example `~/.config/raptor/sandbox.json`:
 
 ---
 
+### Job-wide Linux cgroup budgets
+
+Untrusted entry points accept `job_budget={...}` and also read a standing
+`job_budget` object from the existing `~/.config/raptor/sandbox.json` file.
+An explicit per-call object replaces the standing object. Trusted-tool calls
+do not pick up standing job budgets. For example:
+
+```json
+{
+  "memory_mb": 0,
+  "job_budget": {
+    "memory_max": 8589934592,
+    "cpu_max": [100000, 100000],
+    "pids_max": 1024,
+    "required": true
+  }
+}
+```
+
+`memory_max` is a kernel-accounted aggregate memory byte ceiling; `cpu_max` is `[quota_us, period_us]`
+for the job, not a total CPU-time allowance. `pids_max` bounds tasks in the
+job. All requested values must be finite and positive. Existing rlimits remain
+in place; no virtual-address-space cap is enabled by this feature, preserving
+ASAN compatibility. No budgets are invented when no job policy is configured.
+
+The operator must provide a writable delegated cgroup v2 subtree with the
+requested controllers already enabled for children. RAPTOR tries the process's
+current group and its existing systemd `user@UID.service` delegation, requiring
+a user-owned writable parent with the requested controllers enabled for
+children. `parent` can name another delegated absolute path under
+`/sys/fs/cgroup`. The invoking process must also have permission to move its
+own children into that delegation. RAPTOR creates only its own leaf, never changes parent
+controller settings, and does not require or obtain broad privileges.
+
+The initial implementation requires the full Linux mount/PID namespace lane.
+It hides the watcher, masks `/sys/fs/cgroup`, and refuses declared path or
+descriptor grants that would hand back writable cgroup controls. It installs
+and reads back controls while the leaf is empty, attaches the trusted setup
+child before the payload's launch gate opens, and keeps descendants in that
+job. A separate trusted watcher remains outside the job: normal completion,
+timeout, setup failure or owner death stops the whole leaf and waits for its
+population to reach zero. Usage counters are read before removal. A bounded signed cleanup receipt is
+appended through a parent-opened evidence descriptor, including after owner
+death; missing or unverifiable receipts remain a visibility gap. Kernel tasks
+that cannot be reaped within the bounded cleanup period produce a visible
+cleanup failure, rather than a claim that the job stopped.
+
+Budgets are required by default. Missing delegation/controllers, an unsupported
+lane or failed admission refuses before payload execution. `required: false`
+explicitly permits an unavailable budget to use rlimits alone, with a warning
+and an `unavailable` record. A prepared job may not silently follow a later
+weaker fallback, even when originally optional. Mountless and PID-namespace
+bypass lanes cannot claim this first version of required job containment. macOS has no cgroup
+backend. I/O controller budgets are not part of this first version.
+
+Each result's `sandbox_info.job_budget` records requested and effective values,
+admission status, usage, and verified cleanup. Failed admission or cleanup
+carries the same record on `JobBudgetError`; execution exceptions such as
+`TimeoutExpired` also retain `job_budget` after cleanup. Required budgets do not lower any
+filesystem, network or containment-floor requirement.
+
+### Per-run activity report
+
+Run finalisation writes three private artifacts:
+
+- `sandbox-activity.jsonl`: bounded normalised events with source, timestamp,
+  process when known, action, resource and outcome;
+- `sandbox-activity-summary.json`: counts, coverage gaps, a digest of the event
+  stream and provenance token;
+- `sandbox-activity.txt`: a readable activity and coverage summary.
+
+The report joins parent-owned process completion and job-budget receipts with
+verified denial and proxy evidence. Protected observe records add individual path and connection attempts when
+observation engaged, preserving source timestamps and PIDs where present.
+The existing profile parser supplies provenance and capture-quality checks;
+an attempted open is not proof that a file was read. Missing timestamps, PIDs
+and operation outcomes remain unknown. Event sequence is ingestion
+order, not a fabricated global timeline. Unauthenticated input is excluded
+with a coverage warning. New proxy activity signatures also bind timing,
+ports and byte counts; legacy records retain their verified destination and
+decision while unsigned details remain unknown. Informational allowed policy
+records need their separate activity signature. A known key-exposed run cannot claim verified parent
+provenance; verification requires an independently known key-hiding posture.
+
+Coverage distinguishes disabled, degraded, truncated and unavailable inputs.
+An empty event list never proves that no activity occurred. Collection is
+bounded to 4096 events and 2 MiB of normalised event content per run; reaching a
+bound is disclosed. Files are written with mode `0600`; displayed fields are
+bounded, terminal-sanitised and secret-redacted. Paths and destinations remain
+sensitive evidence and should be shared deliberately.
+
+HTTPS reporting covers CONNECT destinations and tunnel decisions/bytes, not
+encrypted HTTP methods or paths. DNS reporting covers proxy resolution, not a
+complete DNS query log. This version adds neither TLS interception nor a DNS
+listener. `/scorecard` remains about model reliability.
+
 ## When the sandbox cannot engage
 
 `SandboxSetupError` is raised when sandbox isolation could not engage
@@ -1611,3 +1707,9 @@ it does not replace enforcement checks when an actual child starts.
 This behavior applies to every frontend. The default `full` profile keeps its
 existing degraded-isolation behavior. An outer tool sandbox or read-only
 installation does not establish the scanner's own isolation requirements.
+
+A requested `memory_max` also sets `memory.swap.max=0`: the job cannot exceed
+its resident-memory ceiling by consuming unbounded swap. Delegation must support
+both controls. ASAN virtual address reservations remain unrestricted.
+LeakSanitizer's exit-time tracing has separate compatibility constraints
+under confinement.
