@@ -35,6 +35,17 @@ from core.coverage.journal import (
 from core.coverage.record import build_from_journal
 from core.staleness import hash_span
 
+
+def _legacy_policy_gaps(*args, **kwargs):
+    """Exercise provenance independently of the newer C-foundation policy.
+
+    Current-policy retirement is covered by test_foundation_rollout. Keeping
+    this policy explicit ensures the stamp/hash discriminator still decides
+    these positive and negative controls.
+    """
+    return compute_gaps(*args, require_c_foundation=False, **kwargs)
+
+
 _SOURCE = """\
 int check_pw(const char *pw) {
     if (!pw)
@@ -102,7 +113,7 @@ class TestPlantedRecords:
         target = _write_target(tmp_path)
         planted = _record(rows=[{"file": "auth.c",
                                  "function": "check_pw"}])
-        gaps = compute_gaps(_checklist(target), [planted])
+        gaps = _legacy_policy_gaps(_checklist(target), [planted])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_planted_forged_hash_resurfaces(self, tmp_path):
@@ -110,7 +121,7 @@ class TestPlantedRecords:
         planted = _record(rows=[{"file": "auth.c",
                                  "function": "check_pw",
                                  "hash": "f" * 64}])
-        gaps = compute_gaps(_checklist(target), [planted])
+        gaps = _legacy_policy_gaps(_checklist(target), [planted])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_planted_legacy_files_shape_resurfaces(self, tmp_path):
@@ -119,7 +130,7 @@ class TestPlantedRecords:
         target = _write_target(tmp_path)
         shape = {"files": {"auth.c": {"functions": {"check_pw": {}}}}}
         for tool in ("semgrep", "llm"):
-            gaps = compute_gaps(
+            gaps = _legacy_policy_gaps(
                 _checklist(target), [_record(tool=tool, **shape)])
             assert "auth.c:check_pw" in _gap_keys(gaps), tool
 
@@ -130,10 +141,10 @@ class TestPlantedRecords:
         stamped = _stamped_row()
         planted = {k: v for k, v in stamped.items()
                    if k != journal_mac.TOKEN_KEY}
-        gaps = compute_gaps(_checklist(target),
+        gaps = _legacy_policy_gaps(_checklist(target),
                             [_record(rows=[stamped])])
         assert "auth.c:check_pw" not in _gap_keys(gaps)
-        gaps = compute_gaps(_checklist(target),
+        gaps = _legacy_policy_gaps(_checklist(target),
                             [_record(rows=[planted])])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
@@ -142,7 +153,7 @@ class TestPlantedRecords:
         not verify when replayed into a review-grade llm record."""
         target = _write_target(tmp_path)
         replayed = _stamped_row(tool="understand")
-        gaps = compute_gaps(_checklist(target),
+        gaps = _legacy_policy_gaps(_checklist(target),
                             [_record(tool="llm", rows=[replayed])])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
@@ -152,7 +163,7 @@ class TestPlantedRecords:
         target = _write_target(tmp_path)
         row = _stamped_row(status="error")
         row["status"] = "clean"
-        gaps = compute_gaps(_checklist(target), [_record(rows=[row])])
+        gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -163,7 +174,7 @@ class TestLegacyTolerance:
         target = _write_target(tmp_path)
         row = {"file": "auth.c", "function": "check_pw",
                "hash": hash_span(target / "auth.c", 1, 5)}
-        gaps = compute_gaps(_checklist(target), [_record(rows=[row])])
+        gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
         assert "auth.c:check_pw" not in _gap_keys(gaps)
 
     def test_unstamped_row_with_hash_prefix_resurfaces(self, tmp_path):
@@ -175,7 +186,7 @@ class TestLegacyTolerance:
         assert len(full) == 12
         row = {"file": "auth.c", "function": "check_pw",
                "hash": full[:8]}
-        gaps = compute_gaps(_checklist(target), [_record(rows=[row])])
+        gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_unstamped_finding_class_row_never_hash_credits(
@@ -191,7 +202,7 @@ class TestLegacyTolerance:
             row = {"file": "auth.c", "function": "check_pw",
                    "status": status,
                    "hash": hash_span(target / "auth.c", 1, 5)}
-            gaps = compute_gaps(_checklist(target), [_record(rows=[row])])
+            gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
             assert "auth.c:check_pw" in _gap_keys(gaps), status
 
     def test_unstamped_row_resurfaces_after_source_drift(self, tmp_path):
@@ -200,7 +211,7 @@ class TestLegacyTolerance:
                "hash": hash_span(target / "auth.c", 1, 5)}
         (target / "auth.c").write_text(
             _SOURCE.replace("strcmp", "memcmp"), encoding="utf-8")
-        gaps = compute_gaps(_checklist(target), [_record(rows=[row])])
+        gaps = _legacy_policy_gaps(_checklist(target), [_record(rows=[row])])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -271,7 +282,7 @@ class TestFindingsProjection:
         # And hashless, so the fold's exact-hash tier refuses too:
         # the function stays in the review queue.
         target = _write_target(tmp_path)
-        gaps = compute_gaps(_checklist(target), [record])
+        gaps = _legacy_policy_gaps(_checklist(target), [record])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -301,7 +312,7 @@ class TestAnnotationProjection:
         assert journal_mac.coverage_row_provenance(
             rows[0], "annotations") == journal_mac.ROW_UNSTAMPED
         # ...and the fold still credits it via the hash gate.
-        gaps = compute_gaps(_checklist(target), [record])
+        gaps = _legacy_policy_gaps(_checklist(target), [record])
         assert "auth.c:check_pw" not in _gap_keys(gaps)
 
     def test_planted_hashless_annotation_stays_a_gap(self, tmp_path):
@@ -313,7 +324,7 @@ class TestAnnotationProjection:
             tmp_path, status="clean", source="human",
             provenance="legacy-pre-era")
         record = build_from_annotations(ann_dir)
-        gaps = compute_gaps(_checklist(target), [record])
+        gaps = _legacy_policy_gaps(_checklist(target), [record])
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -337,7 +348,7 @@ class TestNoLaundering:
             {"file": "auth.c", "function": "check_pw"},  # planted
             _stamped_row(function="other_fn", file="other.c"),
         ]
-        gaps = compute_gaps(checklist, [_record(rows=rows)])
+        gaps = _legacy_policy_gaps(checklist, [_record(rows=rows)])
         keys = _gap_keys(gaps)
         assert "auth.c:check_pw" in keys
         assert "other.c:other_fn" not in keys

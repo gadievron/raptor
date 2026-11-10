@@ -245,3 +245,16 @@ def review_context_digest(source_inputs: object, reference_inputs: object = None
         return None
     return hashlib.sha256(_canonical({"version": 1, "role": "review-input-digests",
                                       "source": source_digest, "reference": reference_digest})).hexdigest()
+
+
+def reference_answer_already_delivered(answer: ReferenceAnswer, snapshot: object) -> bool:
+    """Compare desired reading with actual supplied entries, not question IDs.
+
+    This grants no new delivery credit or target-fact authority. An omitted,
+    unknown or changed entry cannot suppress useful subsequent lookup work.
+    """
+    if (not isinstance(answer, ReferenceAnswer) or not answer.entries
+            or len(answer.entries) > MAX_ENTRIES or not reference_inputs_current(snapshot)):
+        return False
+    entries, complete = _decode(snapshot)
+    return complete and all(_render_identity(entry, answer.pack_version) in entries for entry in answer.entries)

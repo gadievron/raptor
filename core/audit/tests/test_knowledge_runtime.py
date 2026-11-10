@@ -59,9 +59,14 @@ def test_current_review_queues_source_and_resolves_reference_without_an_extra_ca
     class Client:
         def generate_structured(self, prompt, schema, **kwargs):
             calls.append(kwargs["task_type"])
+            # The initial foundation already supplies promotions/conversions;
+            # this fixture exercises a genuinely new local reference lookup.
+            assert "c.integer-promotion v1:" in prompt
+            assert "c.integer-conversion v1:" in prompt
             return StructuredResponse(result={"status": "suspicious", "body": "provisional",
                 "reading_list": [{"subject": "foo_t", "resolution": "identifier", "context": "role of this type"}],
-                "language_reference_requests": [{"topic": "integer promotion"}]},
+                "language_reference_requests": [{"topic": "integer arithmetic definedness",
+                                                  "entry_id": "c.integer-definedness"}]},
                 raw="", cost=0, model="scripted")
 
     review = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))
@@ -72,6 +77,7 @@ def test_current_review_queues_source_and_resolves_reference_without_an_extra_ca
     assert queue.dequeue_batch(timeout=0) == [requests[0]]
     references = [event["answer"] for event in runtime.events() if event["event"] == "reference_answer"]
     assert len(references) == 1 and references[0]["entries"]
+    assert "c.integer-definedness" in {entry["entry_id"] for entry in references[0]["entries"]}
     assert references[0]["status"] == "needs_target_facts"
     assert "language edition" in references[0]["missing_facts"]
     assert outcome.status == "suspicious" and not outcome.evidence_tool

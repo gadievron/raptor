@@ -28,6 +28,7 @@ def test_changed_delivered_reference_requires_fresh_review(tmp_path, monkeypatch
     config=OrchestratorConfig(target_path=tmp_path,out_dir=tmp_path/'out')
     outcome=runtime.wrap_review(make_review_fn(Client(),escalate_clean=False))(ctx,config)
     assert all(row['delivered'] for row in outcome.review_result['language_reference_delivery'])
+    supplied = {row['id'] for row in outcome.review_result['review_claims']['reference_inputs']['entries']}
     entry=append_journal_for_outcome(out_dir=config.out_dir,target_path=tmp_path,run_id='owned',outcome=outcome,
         gap={'file':'unit.c','function':'f','line_start':1,'line_end':1})
     assert entry is not None
@@ -43,18 +44,20 @@ def test_changed_delivered_reference_requires_fresh_review(tmp_path, monkeypatch
     from core.audit.source_anchor import context_source_anchor_version
     assert context_source_anchor_version(entry.source_hash) == 3
     assert entry.review_claims['reference_inputs']['complete'] is True
+    extra = replace(c_integer.ENTRIES[0], entry_id='c.new-required-context', prerequisites=())
     def update(item):
         if change == 'unrelated':
             return replace(item, rule=item.rule+' Unrelated clarification.') if item.entry_id not in supplied else item
         if item.entry_id not in supplied:
             return item
         if change == 'prerequisite':
-            assert 'c.integer-conversion' not in supplied
-            return replace(item, prerequisites=(*item.prerequisites, 'c.integer-conversion'))
+            assert extra.entry_id not in supplied
+            return replace(item, prerequisites=(*item.prerequisites, extra.entry_id))
         if change == 'version': return replace(item, version=item.version+1)
         if change == 'conditions': return replace(item, conditions=(*item.conditions,'Reviewed additional condition.'))
         return replace(item, rule=item.rule+' Updated reviewed clarification.')
-    monkeypatch.setattr(c_integer,'ENTRIES',tuple(update(item) for item in c_integer.ENTRIES))
+    changed_entries = tuple(update(item) for item in c_integer.ENTRIES)
+    monkeypatch.setattr(c_integer,'ENTRIES',(*changed_entries, extra) if change == 'prerequisite' else changed_entries)
     if change == 'unrelated':
         assert covered_now()=={'unit.c:f'}, 'unrelated reference entries must not force a new review'
     else:
