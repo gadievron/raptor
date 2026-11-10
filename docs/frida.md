@@ -643,3 +643,8 @@ simple query without report output.
 | `Error sending credentials` / `ProcessNotRespondingError: unexpected early end-of-stream` (wrapper spawn) | Frida's agent-injection channel blocked by the sandbox on this host. Pre-flight the target with the raw CLI (`python3 -m packages.frida.cli ...`) to distinguish sandbox friction from a target problem. |
 | frida-server killed by SELinux (Android-flavoured Linux) | Run `setenforce 0` while researching, or label the binary appropriately. |
 | No provisioning profile / arch mismatch (macOS) | Old Intel frida-server binary on Apple Silicon; match host and target architectures. |
+
+When `--no-report` leaves an earlier portable receipt in the run directory,
+RAPTOR warns that those report files were not refreshed. Native summaries and
+evidence remain available. The retained portable files remain an earlier
+snapshot, rather than output from this invocation.

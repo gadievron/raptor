@@ -211,6 +211,12 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _complete_report(args, cfg, result, status):
+    if not args._report_options.enabled:
+        from core.reporting.service import unrefreshed_report_notice
+        notice = unrefreshed_report_notice(Path(args.out))
+        if notice:
+            print("Warning: " + notice, file=sys.stderr)
+        return
     if args._report_options.enabled and (args.report_format or args.report_output):
         from .reporting import complete_frida_report
         complete_frida_report(args, cfg, result, status)
