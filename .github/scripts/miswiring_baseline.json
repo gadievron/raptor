@@ -419,7 +419,7 @@
    "note": "operator-facing run record: names the project's own Jazzer seed corpus (src/test/resources/<pkg>/<Class>Inputs, the jazzer JUnit convention) the campaign staged \u2014 same posture as crate-corpus.json / generated-corpus.json"
   },
   "artifacts:write_only_artifact::knowledge-results.json": {
-   "note": "Operator diagnostic/export of knowledge-request processing, context delivery/omission/failure, material bindings and cycle/call provenance. Produced by AuditKnowledgeRuntime.write_artifacts during progress and drain; events mirror to audit-log.jsonl. Live objects drive review scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
+   "note": "Terminal operator diagnostic/export of knowledge-request processing, recorded context delivery/omission/failure, material bindings and cycle/call provenance. AuditKnowledgeRuntime.write_artifacts writes it at normal review-drain completion and executor/drain failure cleanup; events mirror to audit-log.jsonl. Live runtime objects drive scheduling. Deliberately not a resume/cache/checker input; role context_provenance_not_verification_evidence. Tests validate the export. No production reader is expected."
   },
   "artifacts:write_only_artifact::ledger.json": {
    "note": "Constant/path indirection: core/engagement/ledger.py load_ledger and set_artifact_status read LEDGER_FILENAME through ledger_path and load_json. The engagement report also lists this existing artifact; its mention is not a new write-only data flow."
