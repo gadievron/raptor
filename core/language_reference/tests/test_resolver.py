@@ -67,8 +67,8 @@ def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edi
 @pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
                          ids=["other-c-edition", "cpp"])
 @pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update", "c.integer-unary-sign",
-                                     "c.integer-division", "c.integer-conditional"],
-                         ids=["shift", "update", "unary-sign", "division", "conditional"])
+                                     "c.integer-division", "c.integer-conditional", "c.scalar-logical"],
+                         ids=["shift", "update", "unary-sign", "division", "conditional", "logical"])
 def test_operator_entries_do_not_guess_language_mode(context, entry_id):
     answer = lookup("owned", "", context, entry_id=entry_id)
     assert answer.status == "unsupported" and answer.entries == ()
@@ -143,5 +143,19 @@ def test_conditional_core_separates_both_arm_typing_from_selected_evaluation(edi
                       "unequal to zero", "Only the selected arm is evaluated",
                       "as if applied to both arms", "selected value", "does not yield an lvalue",
                       "Both arms must satisfy", "outside this integer core", "6.5.15"):
+        assert condition in core
+    assert answer.missing_facts == (("language edition",) if edition is None else ())
+
+
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_logical_core_preserves_scalar_results_and_evaluation_without_integer_prerequisites(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.scalar-logical")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == ["c.scalar-logical"]
+    core = answer.entries[0].render_core()
+    for condition in ("requires a scalar operand", "compares equal to zero", "int zero or one",
+                      "left operand first", "For &&, do not evaluate", "For ||, do not evaluate",
+                      "sequence point", "arithmetic and pointer types", "not the bitwise operators",
+                      "does not waive operand constraints", "nor permits a dereference", "6.5.13-14"):
         assert condition in core
     assert answer.missing_facts == (("language edition",) if edition is None else ())
