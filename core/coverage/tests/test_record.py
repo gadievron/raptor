@@ -532,6 +532,7 @@ class TestTrackReadHook(unittest.TestCase):
 
     def setUp(self):
         self._home_tmp = TemporaryDirectory()
+        self.addCleanup(self._home_tmp.cleanup)
         registry_env = patch.dict(os.environ, {
             "RAPTOR_REGISTRY_HOME": str(Path(self._home_tmp.name) / ".raptor"),
         })
