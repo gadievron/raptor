@@ -1774,11 +1774,6 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
      "value-expression", "590cd925cae38590"):
         "deepcopy(_l2_selected.review_result): owned selected or held review "
         "copy; classified keys retained and the held claim keeps its own stamp",
-    ("core/audit/orchestrator.py", "_model_withdrawal_assessment",
-     "value-expression", "c163db8b11cd3c53"):
-        "fresh.review_result or {}: assessed model record; only pipeline-owned "
-        "review_claims history is written after source/delivery/intake guards; "
-        "model withdrawal grants no mechanical refutation",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).
