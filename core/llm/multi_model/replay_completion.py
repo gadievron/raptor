@@ -23,6 +23,8 @@ def prepare(options: ReportOptions | None, sources: list[Path], native_output: P
     root = (native_output.parent / ("." + native_output.stem + "-portable")) if native_output else Path("out/panel-replay/portable")
     if options is None or not options.enabled:
         return root
+    if options.output is None and native_output is None:
+        raise ValueError("Replay exports require --report-output or a native --out destination")
     options = options.validate()
     chosen = options.output or root
     is_file = options.output_is_file or (bool(chosen.suffix) and not chosen.is_dir())

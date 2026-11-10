@@ -34,6 +34,8 @@ def _reader(tmp_path, monkeypatch, *, cells=None):
 def test_native_view_and_portable_snapshot_share_one_read(tmp_path, monkeypatch, capsys, flags, exported):
     source, calls, cells = _reader(tmp_path, monkeypatch)
     before = deepcopy(cells)
+    if exported:
+        flags = [*flags, "--report-output", str(tmp_path / "portable-reports" / "scorecard-samples")]
     assert cli.main(["--path", str(source), "samples", "owned-class", *flags]) == 0
     shown = capsys.readouterr()
     assert "recorded observation" in shown.out and "unverified" in shown.out
@@ -74,7 +76,7 @@ def test_mutating_leaf_does_not_accept_sample_export_controls(tmp_path, monkeypa
 
 def test_empty_selection_preserves_native_status_and_discloses_scope(tmp_path, monkeypatch, capsys):
     source, calls, _ = _reader(tmp_path, monkeypatch)
-    assert cli.main(["--path", str(source), "samples", "other-class", "--report-format", "json"]) == 1
+    assert cli.main(["--path", str(source), "samples", "other-class", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-samples")]) == 1
     context, _, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-samples")
     assert context.state == "failed"
     assert context.extensions["raptor.metrics"]["Matched cells"] == 0
@@ -91,7 +93,7 @@ def test_publisher_failure_preserves_native_view_and_status(tmp_path, monkeypatc
         reached.append(True)
         raise OSError("private detail")
     monkeypatch.setattr(sample_completion, "complete_reporting", fail)
-    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-samples")]) == 0
     shown = capsys.readouterr()
     assert "recorded observation" in shown.out
     assert "native sample view retained" in shown.err and "private detail" not in shown.err
@@ -113,7 +115,7 @@ def test_cell_capture_limit_preserves_matched_counts_and_source_cells(tmp_path, 
     cells = [_stat("owned-class", f"model-{index}") for index in range(26)]
     source, calls, original = _reader(tmp_path, monkeypatch, cells=cells)
     before = deepcopy(original)
-    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-samples")]) == 0
     context, _, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-samples")
     assert context.state == "partial"
     assert context.extensions["raptor.metrics"]["Matched cells"] == 26
@@ -126,7 +128,7 @@ def test_field_loss_reaches_context_and_operator_summary(tmp_path, monkeypatch, 
     cell = _stat("owned-class", "owned-model")
     cell.disagreement_samples = [{"note": "recorded long reasoning " * 1000}]
     source, calls, _ = _reader(tmp_path, monkeypatch, cells=[cell])
-    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "samples", "owned-class", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-samples")]) == 0
     context, _, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-samples")
     assert context.state == "partial" and context.extensions["raptor.sample_capture_limited"] is True
     assert "sample fields or records were truncated" in capsys.readouterr().err

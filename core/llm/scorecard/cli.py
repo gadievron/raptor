@@ -510,7 +510,8 @@ def cmd_list(args: argparse.Namespace) -> int:
         sort_key = "cost"
     event_type = getattr(args, "event_type", EventType.CHEAP_SHORT_CIRCUIT)
     stats = _sort_stats(stats, sort_key=sort_key, event_type=event_type)
-    if getattr(args, "json", False):
+    impact = None
+    if getattr(args, "json", False) or getattr(args, "_report_options", None) is not None:
         cells = []
         for s in stats:
             d = _stats_to_json(s)
@@ -522,9 +523,21 @@ def cmd_list(args: argparse.Namespace) -> int:
         out: dict[str, Any] = {"cells": cells}
         if hl:
             out["freshness_half_life_days"] = hl
-            out["freshness_impact"] = sc.measure_freshness_impact(hl)
-        print(_dumps_json_lane(out))
-        return 0
+            impact = sc.measure_freshness_impact(hl)
+            out["freshness_impact"] = impact
+        if getattr(args, "_report_options", None) is not None:
+            from .read_report import emit
+            emit(args, "list", {**out, "selected_event_type": event_type,
+                 "selection": {"consumer": args.consumer, "since": args.since,
+                               "fall_through_policy_only": args.untrusted, "learning_only": args.learning, "sort_key": sort_key},
+                 "selected_event_rows": [{"event_type": event_type, "correct": cell.events[event_type].correct,
+                     "incorrect": cell.events[event_type].incorrect, "n": cell.events[event_type].correct + cell.events[event_type].incorrect,
+                     "max_miss_pct": _wilson_ub_pct(cell, event_type),
+                     "correct_column": "calls_saved" if event_type == EventType.CHEAP_SHORT_CIRCUIT else "correct",
+                     "correct_column_value": _event_correct_count(cell, event_type)} for cell in stats]}, stats)
+        if getattr(args, "json", False):
+            print(_dumps_json_lane(out))
+            return 0
     print(_render_table(stats, event_type=event_type, drift_map=drift_map))
     if not hl:
         # Divergence breadcrumb: the live gate applies the run
@@ -541,7 +554,7 @@ def cmd_list(args: argparse.Namespace) -> int:
         # When the freshness view is on, summarise its impact inline: how many
         # currently-trusted cells would change verdict under this half-life —
         # the cold-start signal to weigh before enabling freshness by default.
-        imp = sc.measure_freshness_impact(hl)
+        imp = impact if impact is not None else sc.measure_freshness_impact(hl)
         extra = f", +{imp['flipped_in']} newly trusted" if imp["flipped_in"] else ""
         print(
             f"\nfreshness @{hl:g}d: {imp['flipped_out']} of "
@@ -714,6 +727,9 @@ def cmd_recommend(args: argparse.Namespace) -> int:
             f"survey what's available.",
             file=sys.stderr,
         )
+        from .read_report import emit
+        emit(args, "recommend", {"decision_class": target_dc, "short_circuit": [], "learning": [],
+             "fall_through": [], "recommendation": None, "recorded_no_candidates": True}, stats)
         return 0
 
     # (model, max_miss_pct_or_None, cost_per_call_or_None, policy, n)
@@ -737,7 +753,7 @@ def cmd_recommend(args: argparse.Namespace) -> int:
 
     hl = getattr(args, "freshness_half_life_days", None)
 
-    if getattr(args, "json", False):
+    if getattr(args, "json", False) or getattr(args, "_report_options", None) is not None:
         def _r(row):
             m, ub, cpc, _pol, n = row
             return {"model": m, "max_miss_pct": ub, "cost_per_call": cpc, "n": n}
@@ -754,8 +770,11 @@ def cmd_recommend(args: argparse.Namespace) -> int:
         }
         if not sc_rows and fall_through:
             out["least_bad"] = {"model": fall_through[0][0]}
-        print(_dumps_json_lane(out))
-        return 0
+        from .read_report import emit
+        emit(args, "recommend", out, stats)
+        if getattr(args, "json", False):
+            print(_dumps_json_lane(out))
+            return 0
 
     # Freshness banner — when an operator passes --freshness, surface that the
     # ranking reflects weighted (recent-dominant) data so a different answer
@@ -832,6 +851,9 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
             f"events is not wired in this tree yet; this view populates "
             f"once it lands."
         )
+        from .read_report import emit
+        emit(args, "chain-closure", {"decision_class": target_dc, "candidates": [], "message": msg,
+             "recorded_no_candidates": True}, stats)
         if getattr(args, "json", False):
             print(_dumps_json_lane({
                 "decision_class": target_dc,
@@ -892,13 +914,13 @@ def cmd_chain_closure(args: argparse.Namespace) -> int:
             return top["model"]  # type: ignore[return-value]
         return None
 
-    if getattr(args, "json", False):
-        print(_dumps_json_lane({
-            "decision_class": target_dc,
-            "candidates": rows,
-            "recommendation": _recommendation(),
-        }))
-        return 0
+    if getattr(args, "json", False) or getattr(args, "_report_options", None) is not None:
+        out = {"decision_class": target_dc, "candidates": rows, "recommendation": _recommendation()}
+        from .read_report import emit
+        emit(args, "chain-closure", out, stats)
+        if getattr(args, "json", False):
+            print(_dumps_json_lane(out))
+            return 0
 
     print(f"chain-closure ranking for {target_dc}:")
     print(
@@ -1259,6 +1281,7 @@ def cmd_mark(args: argparse.Namespace) -> int:
 
 
 def _build_parser() -> argparse.ArgumentParser:
+    from core.reporting.options import add_report_arguments
     p = argparse.ArgumentParser(
         prog="raptor-llm-scorecard",
         description=(
@@ -1356,6 +1379,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_list.set_defaults(handler=cmd_list)
+    add_report_arguments(p_list)
 
     # summary — the daily-driver dashboard
     p_sum = sub.add_parser(
@@ -1375,7 +1399,6 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p_sum.set_defaults(handler=cmd_summary)
-    from core.reporting.options import add_report_arguments
     add_report_arguments(p_sum)
 
     # recommend — the actionable payoff
@@ -1397,6 +1420,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="weight recent behaviour (half-life in days); same as `list --freshness`",
     )
     p_rec.set_defaults(handler=cmd_recommend)
+    add_report_arguments(p_rec)
 
     # chain-closure — rank models by /exploit chain-closure success
     p_cc = sub.add_parser(
@@ -1418,6 +1442,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="weight recent behaviour (half-life in days)",
     )
     p_cc.set_defaults(handler=cmd_chain_closure)
+    add_report_arguments(p_cc)
 
     # compare
     p_cmp = sub.add_parser(
@@ -1575,6 +1600,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p_adopt.set_defaults(handler=cmd_adopt)
 
+    for view in (p_list, p_sum, p_rec, p_cc, p_cmp, p_smp):
+        view.epilog = "Portable exports require --report-output. --no-report retains the native on-screen view."
     return p
 
 
@@ -1583,7 +1610,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = list(_sys.argv[1:] if argv is None else argv)
     parser = _build_parser()
     args = parser.parse_args(argv)
-    if args.subcommand in {"samples", "summary", "compare"}:
+    if args.subcommand in {"samples", "summary", "compare", "list", "recommend", "chain-closure"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser) if args.report_format or args.report_output or args.no_report else None
         if args._report_options is not None:

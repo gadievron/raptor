@@ -20,6 +20,8 @@ def prepare(options: ReportOptions, scorecard: Path) -> Path:
     root = scorecard.parent / "portable-reports" / "scorecard-samples"
     if not options.enabled:
         return root
+    if options.output is None:
+        raise ValueError("Read-only scorecard exports require --report-output")
     options = options.validate()
     chosen = options.output or root
     is_file = options.output_is_file or (bool(chosen.suffix) and not chosen.is_dir())

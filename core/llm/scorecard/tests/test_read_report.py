@@ -43,7 +43,7 @@ def test_native_json_and_single_read_are_preserved_with_export(tmp_path, monkeyp
     assert cli.main(base) == 0
     native = json.loads(capsys.readouterr().out)
     calls.clear()
-    assert cli.main([*base, "--report-format", "json", "--report-format", "xml"]) == 0
+    assert cli.main([*base, "--report-format", "json", "--report-format", "xml", "--report-output", str(tmp_path / "portable-reports" / ("scorecard-" + kind))]) == 0
     shown = capsys.readouterr()
     assert json.loads(shown.out) == native and len(calls) == 1
     root = tmp_path / "portable-reports" / ("scorecard-" + kind)
@@ -68,7 +68,7 @@ def test_native_json_and_single_read_are_preserved_with_export(tmp_path, monkeyp
 
 def test_freshness_value_and_computed_lens_are_retained(tmp_path, monkeypatch, capsys):
     source, _, calls = _reader(tmp_path, monkeypatch)
-    assert cli.main(["--path", str(source), "summary", "--freshness", "30", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "summary", "--freshness", "30", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-summary")]) == 0
     context, document, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-summary")
     assert calls == [{"freshness_half_life_days": 30.0}]
     assert context.extensions["raptor.freshness_half_life_days"] == 30.0
@@ -78,7 +78,7 @@ def test_freshness_value_and_computed_lens_are_retained(tmp_path, monkeypatch, c
 
 def test_empty_read_keeps_native_text_and_does_not_invent_historical_spend(tmp_path, monkeypatch, capsys):
     source, _, calls = _reader(tmp_path, monkeypatch, empty=True)
-    assert cli.main(["--path", str(source), "summary", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "summary", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-summary")]) == 0
     context, _, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-summary")
     assert context.extensions["raptor.metrics"]["total_spend_usd"] is None
     assert any("unavailable, not established as zero" in note for note in context.diagnostics)
@@ -114,7 +114,7 @@ def test_publisher_fault_does_not_change_native_json(tmp_path, monkeypatch, caps
         reached.append(True)
         raise OSError("private fault")
     monkeypatch.setattr(read_report, "complete_reporting", fail)
-    assert cli.main(["--path", str(source), "--json", "summary", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "--json", "summary", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-summary")]) == 0
     shown = capsys.readouterr()
     assert json.loads(shown.out)["total_spend_usd"] == 4.0
     assert "native view retained" in shown.err and "private fault" not in shown.err
@@ -128,7 +128,7 @@ def test_redacted_truncated_model_labels_do_not_merge_usage_rows(tmp_path, monke
     for index, cell in enumerate(stats):
         cell.model = prefix + ("A" if index < 3 else "B")
     stats[3].cost_usd = 3.0
-    assert cli.main(["--path", str(source), "summary", "--report-format", "json"]) == 0
+    assert cli.main(["--path", str(source), "summary", "--report-format", "json", "--report-output", str(tmp_path / "portable-reports" / "scorecard-summary")]) == 0
     context, document, _ = load_committed_report(tmp_path / "portable-reports" / "scorecard-summary")
     data = context.extensions["raptor.scorecard_read"]
     assert len(data["model_rows"]) == 2
@@ -141,3 +141,24 @@ def test_redacted_truncated_model_labels_do_not_merge_usage_rows(tmp_path, monke
     assert token not in json.dumps(context.to_dict())
     assert context.state == "partial" and context.extensions["raptor.capture_limited"] is True
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("kind,selection", [("list", []), ("summary", []), ("compare", ["model-a", "model-b"]),
+                                         ("recommend", ["owned-class"]), ("chain-closure", []), ("samples", ["owned-class"])])
+def test_read_only_exports_require_a_destination_before_opening_source(tmp_path, monkeypatch, kind, selection):
+    source, _, _ = _reader(tmp_path, monkeypatch)
+    def refuse(*args, **kwargs):
+        pytest.fail("missing-destination preflight must precede opening scorecard")
+    monkeypatch.setattr(cli, "ModelScorecard", refuse)
+    with pytest.raises(SystemExit) as error:
+        cli.main(["--path", str(source), kind, *selection, "--report-format", "json"])
+    assert error.value.code == 2
+    assert source.read_text() == "owned source bytes" and not (tmp_path / "portable-reports").exists()
+
+
+def test_output_only_option_uses_default_markdown_format(tmp_path, monkeypatch, capsys):
+    source, _, calls = _reader(tmp_path, monkeypatch)
+    destination = tmp_path / "chosen-reports"
+    assert cli.main(["--path", str(source), "summary", "--report-output", str(destination)]) == 0
+    assert (destination / "scorecard-summary.md").is_file()
+    assert "total spend:" in capsys.readouterr().out and len(calls) == 1
