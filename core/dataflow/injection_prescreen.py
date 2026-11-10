@@ -64,6 +64,7 @@ from core.dataflow.smt_barrier import (
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
     _sanitizer_tails_for_spec_kind,
+    _sanitizer_spans_for_spec_kind,
     code_view_lines,
     extract_validator_from_line,
     extractor_languages,
@@ -384,6 +385,7 @@ def _step_refutes_path(
         var_reaches = _python_chain_reaches_sink(
             tree, spec.var_name, step_line, sink_line, sink_line_text,
             sanitizer_call_tails=_sanitizer_tails_for_spec_kind(spec.kind),
+            sanitizer_call_spans=_sanitizer_spans_for_spec_kind(tree, step_line, spec.kind),
         )
     else:
         var_reaches = _lexical_var_reaches_sink(
