@@ -139,11 +139,14 @@ def test_retry_pool_and_sweep_pool_share_root_ownership(owned):
 
 @pytest.mark.parametrize("interrupt", [False, True], ids=["timeout", "interrupt"])
 @pytest.mark.parametrize("worker_error", [None, RuntimeError, SystemExit], ids=["success", "error", "exit"])
-def test_live_abandoned_worker_keeps_root_until_exit(owned, interrupt, worker_error):
+def test_live_abandoned_worker_keeps_root_until_exit(owned, interrupt, worker_error, deferred_start=False):
     release, started = threading.Event(), threading.Event()
+    driver_wait = threading.Event()
     seen = []
 
     def scan(item, root, **kwargs):
+        if deferred_start:
+            assert driver_wait.wait(5), "driver never reached its wait boundary"
         seen.append(root)
         (root / "started").write_text("owned")
         started.set()
@@ -158,11 +161,18 @@ def test_live_abandoned_worker_keeps_root_until_exit(owned, interrupt, worker_er
     with pytest.MonkeyPatch.context() as patch:
         with isolated_stress_workers(stress, patch):
             patch.setattr(stress, "_scan_one_inner", scan)
-            if interrupt:
-                def stop_driver(*args, **kwargs):
-                    assert started.wait(5)
+            original_wait = stress.concurrent.futures.wait
+
+            def wait_for_started_worker(*args, **kwargs):
+                # Registration precedes scan setup; zero budgets can expire
+                # before the worker reaches this test's ownership marker.
+                driver_wait.set()
+                assert started.wait(5)
+                if interrupt:
                     raise KeyboardInterrupt("driver interrupted")
-                patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', stop_driver)
+                return original_wait(*args, **kwargs)
+
+            patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', wait_for_started_worker)
             try:
                 if interrupt:
                     with pytest.raises(KeyboardInterrupt, match="driver interrupted"):
@@ -176,8 +186,18 @@ def test_live_abandoned_worker_keeps_root_until_exit(owned, interrupt, worker_er
                 assert started.is_set() and len(seen) == 1
                 assert seen[0].is_dir() and str(seen[0]) in owned.pins
             finally:
+                driver_wait.set()
                 release.set()
     assert not seen[0].exists()
+
+
+@pytest.mark.parametrize("interrupt", [False, True], ids=["timeout", "interrupt"])
+@pytest.mark.parametrize("worker_error", [None, RuntimeError, SystemExit], ids=["success", "error", "exit"])
+def test_abandoned_worker_startup_waits_for_driver_boundary(owned, interrupt, worker_error):
+    # Force worker startup after the driver reaches wait, without timing sleeps.
+    test_live_abandoned_worker_keeps_root_until_exit(
+        owned, interrupt, worker_error, deferred_start=True,
+    )
 
 
 @pytest.mark.parametrize("failure", ["mkdir", "heartbeat", "executor"])
