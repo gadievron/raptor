@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING
 from core.source.lines import split_lines
 
 from .cfg_conditions import _CONDITION_LABEL_RE, extract_references
 from .lifecycle_model import Guard, ReadSite, WriteSite
+
+if TYPE_CHECKING:
+    from collections.abc import Hashable
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +58,7 @@ def _require_stable_guard_epochs(cfg, target, facts) -> None:
     remain relevant when the same guard is not re-tested.
     """
     generic_effects = set()
-    definitions = {}
+    definitions: dict[str, set[Hashable]] = {}
     for node in cfg.nodes():
         if getattr(node, "calls", ()) or getattr(node, "may_escape", False):
             generic_effects.add(node)
@@ -65,7 +69,7 @@ def _require_stable_guard_epochs(cfg, target, facts) -> None:
         references = extract_references(fact.condition)
         if not references:
             continue
-        relevant_stores = set()
+        relevant_stores: set[Hashable] = set()
         for name in references:
             relevant_stores.update(definitions.get(name, ()))
         visits += len(generic_effects) + len(relevant_stores) + len(references)
@@ -77,7 +81,7 @@ def _require_stable_guard_epochs(cfg, target, facts) -> None:
             continue
         forward = {fact.branch}
         pending = [fact.branch]
-        predecessors = {}
+        predecessors: dict[Hashable, set[Hashable]] = {}
         while pending:
             node = pending.pop()
             visits += 1

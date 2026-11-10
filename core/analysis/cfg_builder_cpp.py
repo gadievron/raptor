@@ -351,7 +351,7 @@ def _direct_global_identifier(callee) -> str | None:
     return None
 
 
-def _resolve_callable_name(callee: Node) -> str | None:
+def _resolve_callable_name(callee: Node | None) -> str | None:
     """Dotted-or-arrow callable name from a ``call_expression``'s
     ``function`` field. ``foo`` → ``"foo"``; ``obj.method`` →
     ``"obj.method"``; ``obj->method`` → ``"obj.method"`` (arrow
@@ -999,6 +999,7 @@ def _declared_local_scopes(
     # Identity mode includes static/extern objects, but excludes function
     # prototypes. The ordinary mode retains its unaliasable-store contract.
     windows: dict[str, list[tuple[int, int]]] = {}
+    name: str | None
 
     def add(name: str, decl_byte: int, bound_end: int) -> None:
         windows.setdefault(name, []).append((decl_byte, bound_end))
@@ -1078,6 +1079,7 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
     separate from bare global library spelling.
     """
     bindings: set[str] = set()
+    name: str | None
     import_windows: dict[str, list[tuple[int, int]]] = {}
     target_scoped = False
     scoped_types = (_LOCAL_SCOPE_BARRIERS - {_FN_DEFINITION, _LAMBDA_EXPR}) | {"namespace_definition"}
