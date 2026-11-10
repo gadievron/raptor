@@ -15,8 +15,9 @@
 // chdir, by design) shadows the flagged legs below it.
 //
 // CWE-243: Creation of chroot Jail Without Changing Working Directory
-// Zero-FP confidence: very high — always a misconfiguration.
-// @role: verification
+// A prior successful directory change can already place CWD inside the new
+// root. Review CWD, path identity and error handling before confirming escape.
+// @role: detection
 
 @chroot_without_chdir@
 position p;
@@ -75,6 +76,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "chroot() without chdir(\"/\") — relative paths can escape the jail (CWE-243)"
+  "message":   "chroot() without a subsequent chdir(\"/\") — review prior working directory, path identity and error handling for a possible jail escape (CWE-243)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

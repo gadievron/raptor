@@ -117,3 +117,30 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+def test_prior_directory_change_remains_a_review_candidate(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+    import json
+
+    source = tmp_path / "cwd.c"
+    source.write_text("""int jail(const char *dir) {
+        if (chdir(dir) != 0) return -1;
+        if (chroot(".") != 0) return -1;
+        return run();
+    }
+    """)
+    proc = run_pinned_subprocess(
+        ["spatch", "--sp-file", str(_RULE), str(source), "--no-show-diff", "--no-includes"],
+        timeout=45, context="Chroot cwd candidate syntax",
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix("COCCIRESULT:"))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith("COCCIRESULT:")]
+    assert len(rows) == 1
+    assert rows[0]["rule"] == "chroot_no_chdir"
+    assert rows[0]["line"] == 3
+    assert "review prior working directory" in rows[0]["message"]
