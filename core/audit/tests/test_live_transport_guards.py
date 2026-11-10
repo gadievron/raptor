@@ -1722,6 +1722,15 @@ class TestSemgrepSurfaceFences:
             assert max(probe_at) > max(drain_at), test_name
 
 
+class TestCodeQLSurfaceFences:
+    def test_owned_native_iris_query_selection(self) -> None:
+        calls = _function_call_map("../../../packages/codeql/tests/test_query_selection_reuse.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "native_resolve", "test_native_iris_security_selection_retains_direct_probe",
+        }
+
+
 class TestCompilerSurfaceFences:
     """Every live compiler-analyzer call site routes through the
     guarded runner (via the file-local ``_guarded_compiler_sweep``),
