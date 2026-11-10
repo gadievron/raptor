@@ -249,8 +249,9 @@ def project_op_lock(project_dir: Path, operation: str,
                 pass  # path gone (purge in flight) — re-mint below
             with contextlib.suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+            retired_fd = fd
             fd = -1
+            os.close(retired_fd)
             try:
                 project_dir.mkdir(parents=True, exist_ok=True)
                 fd = _open_op_lock(lock_path)
