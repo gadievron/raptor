@@ -584,7 +584,7 @@ class TestInconclusiveRecordSurvivesCopies:
                     for s in window
                 ):
                     missing.append((site, stmt.lineno))
-        # Eight manual sites remain after critic-driven demotion was removed.
+        # Nine manual sites: cheap refuted rescue now retains channel booking.
         # Machine-escalation resolution uses dataclasses.replace, retaining
         # every field. The resolver has two manual branches (clean and dark).
         # Pin owners and source/destination pairs so any addition, removal or
@@ -592,6 +592,7 @@ class TestInconclusiveRecordSurvivesCopies:
         assert copies == Counter({
             ("_promote_suspicious_preconditions", "promoted", "outcome"): 1,
             ("_hold_smt_promotion", "held", "outcome"): 1,
+            ("_promote_clean_refuted", "rescued", "_l2_selected"): 1,
             ("_dispatch_secondary_hypotheses", "rescued", "outcome"): 1,
             ("_demote_absent_promotions", "demoted", "outcome"): 1,
             ("_promote_outcome", "promoted", "outcome"): 1,

@@ -700,8 +700,8 @@ class TestCleanRefutedCallerGate:
     ):
         # A cheap-channel rescue for a LATER hypothesis must not
         # displace the held verification-role clean-refuted stamp —
-        # the stronger receipt keeps grading, the new channel is
-        # provenance-appended.
+        # the receipt stays on its own selected claim; the independent
+        # cheap-channel observation is retained with its own claim/tool.
         target = tmp_path / "target"
         target.mkdir()
         (target / "lib.c").write_text(_CALLEE)
@@ -756,9 +756,18 @@ class TestCleanRefutedCallerGate:
         _promote_clean_refuted(result, config, checklist=checklist)
         rescued = result.outcomes[0]
         assert rescued.status == "suspicious"
-        assert rescued.evidence_tool == (
-            "clean-refuted:smt:check-overflow+semgrep:c-overflow-rule"
-        )
+        assert rescued.evidence_tool == "clean-refuted:smt:check-overflow"
+        assert rescued.hypothesis == _MECHANISM
+        assert rescued.review_result["hypothesis"] == _MECHANISM
+        assert rescued.hypotheses[0]["mechanism"] == _MECHANISM
+        observations = [
+            json.loads(line) for line in
+            (out / ".audit-log.jsonl").read_text().splitlines()
+        ]
+        cheap = next(e for e in observations
+                     if e.get("action") == "refuted_hypothesis_confirmed")
+        assert cheap["hypothesis"] == "unchecked copy length into fixed buffer"
+        assert cheap["evidence_tool"] == "semgrep:c-overflow-rule"
         assert "[refuted-hypothesis-confirmed via" in rescued.body
         assert "[smt-caller-gate:" in rescued.body
         assert result.clean == 0
