@@ -5370,7 +5370,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # from subprocess.run itself.
         if (not effectively_disabled and rootfs is None
                 and _cmd_resolves_nowhere(cmd,
-                                          kwargs["env"].get("PATH"))):
+                                          kwargs["env"].get("PATH"),
+                                          cwd=kwargs.get("cwd"))):
             raise FileNotFoundError(
                 errno.ENOENT, os.strerror(errno.ENOENT), cmd[0])
 
@@ -9128,7 +9129,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
 
 
 def _cmd_resolves_nowhere(cmd: "list | None",
-                          env_path: "str | None") -> bool:
+                          env_path: "str | None", *, cwd=None) -> bool:
     """True when ``cmd[0]`` resolves NOWHERE — not on the caller's
     PATH, not on ``env_path`` (a child/caller-provided PATH value),
     and (for absolute invocations) not on the filesystem. This is the
@@ -9137,15 +9138,34 @@ def _cmd_resolves_nowhere(cmd: "list | None",
     body). Relative-with-separator commands resolve against the CHILD
     cwd and are never classified here; an empty/absent command is left
     to the lane's own validation. An absent child PATH uses the default
-    exec search, matching os.execvpe rather than inheriting caller PATH."""
+    exec search, matching os.execvpe rather than inheriting caller PATH.
+    Relative and empty child PATH entries are searched from the child cwd.
+    An unusable cwd is left to the lane's own validation."""
     if not (cmd and cmd[0]):
         return False
     _cmd0 = cmd[0]
     if os.sep not in _cmd0:
+        if shutil.which(_cmd0):
+            return False
         _child_path = os.defpath if env_path is None else env_path
-        return not (shutil.which(_cmd0)
-                    or (_child_path
-                        and shutil.which(_cmd0, path=_child_path)))
+        _cwd = os.fsdecode(cwd) if cwd is not None else None
+        if _cwd is not None and (not _cwd or not os.path.isdir(_cwd)):
+            return False
+        _entries = _child_path.split(os.pathsep)
+        if any(not os.path.isabs(entry) for entry in _entries):
+            try:
+                if _cwd is None:
+                    _base = os.getcwd()
+                elif os.path.isabs(_cwd):
+                    _base = _cwd
+                else:
+                    _base = os.path.join(os.getcwd(), _cwd)
+            except OSError:
+                return False
+            # Do not normpath: symlink/.. traversal belongs to the filesystem.
+            _entries = [entry if os.path.isabs(entry) else os.path.join(_base, entry)
+                        for entry in _entries]
+        return shutil.which(_cmd0, path=os.pathsep.join(_entries)) is None
     if os.path.isabs(_cmd0):
         return not os.path.exists(_cmd0)
     return False  # relative-with-sep: cwd-dependent
@@ -9285,8 +9305,11 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
                     raise _record_floor_refusal(
                         audit_run_dir or output, _floor_exc,
                     ) from _construction_refusal
+            _resolution_cwd = kwargs.get("cwd")
+            if _resolution_cwd is None and output:
+                _resolution_cwd = os.path.abspath(output)
             if rootfs is None and _cmd_resolves_nowhere(
-                    cmd, (kwargs.get("env") or {}).get("PATH")):
+                    cmd, (kwargs.get("env") or {}).get("PATH"), cwd=_resolution_cwd):
                 raise FileNotFoundError(
                     errno.ENOENT, os.strerror(errno.ENOENT),
                     cmd[0]) from _construction_refusal
