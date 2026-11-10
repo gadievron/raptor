@@ -380,29 +380,7 @@ class JavaConstIndex:
             if start <= node.start_byte and node.end_byte <= end \
                     and scopes.vouches(name, node.start_byte):
                 return True
-        from core.analysis.cfg_node_tables import JAVA_TABLES
-        current = node.parent
-        while current is not None:
-            # Inspect ancestor-owned declarations, never sibling/nested bodies.
-            for member in current.named_children:
-                if member.type not in ("field_declaration", "constant_declaration"):
-                    continue
-                for declaration in member.named_children:
-                    if declaration.type == "variable_declarator":
-                        ident = declaration.child_by_field_name("name")
-                        if ident is not None and ident.text.decode() == name:
-                            return True
-            body = current.child_by_field_name("body")
-            parameters = current.child_by_field_name("parameters")
-            if body is not None and body.type in JAVA_TABLES.scope_barriers \
-                    and parameters is not None:
-                # A record header's parameters also declare implicit fields.
-                for parameter in parameters.named_children:
-                    ident = parameter.child_by_field_name("name")
-                    if ident is not None and ident.text.decode() == name:
-                        return True
-            current = current.parent
-        return False
+        return name in _member_value_names_at(node)
 
     def receiver_type_at(self, name: str, node: Node) -> str | None:
         # A member/capture must not borrow a same-named local's creation proof.
@@ -514,6 +492,34 @@ def _tf_string_members_clear(ext, members) -> bool:
         return False
     chk = ext.union_member_check
     return chk is not None and bool(chk(strs))
+
+
+def _member_value_names_at(node: Node) -> frozenset[str]:
+    """Ancestor-owned field/record names, excluding sibling/nested bodies."""
+    from core.analysis.cfg_node_tables import JAVA_TABLES
+
+    names: set[str] = set()
+    current = node.parent
+    while current is not None:
+        for member in current.named_children:
+            if member.type not in ("field_declaration", "constant_declaration"):
+                continue
+            for declaration in member.named_children:
+                if declaration.type == "variable_declarator":
+                    ident = declaration.child_by_field_name("name")
+                    if ident is not None:
+                        names.add(ident.text.decode())
+        body = current.child_by_field_name("body")
+        parameters = current.child_by_field_name("parameters")
+        if body is not None and body.type in JAVA_TABLES.scope_barriers \
+                and parameters is not None:
+            # A record header's parameters also declare implicit fields.
+            for parameter in parameters.named_children:
+                ident = parameter.child_by_field_name("name")
+                if ident is not None:
+                    names.add(ident.text.decode())
+        current = current.parent
+    return frozenset(names)
 
 
 def _exact_creation_class(node: Node) -> str | None:
