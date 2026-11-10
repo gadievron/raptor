@@ -428,7 +428,14 @@ def _operations(source, language, abi):
         if len(mechanism) <= 300:
             compound_candidates.append((target, op, (lhs, rhs), 'signed-compound-overflow', mechanism,
                                         {'binding_status': 'candidate'}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates
+    from .integer_condition import condition_candidates
+    conditions = []
+    for target, name, left, op, right in condition_candidates(source, language=language, integer_abi=abi):
+        mechanism = f"Condition is always false in `{name} & {left} {op} {right}`."
+        if len(mechanism) <= 300:
+            conditions.append((target, '&', (name, left, right), 'constant-condition-false', mechanism,
+                               {'binding_status': 'candidate', 'candidate_basis': 'actual-bitwise-condition'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

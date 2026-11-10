@@ -20,6 +20,9 @@ def check_integer_comparison(source, hypothesis, *, language, integer_abi=None):
     abi = integer_abi_record(integer_abi)
     if abi is None or not z3_available():
         return details
+    from .integer_condition import CONDITION_GOALS, check_integer_condition
+    if parse_integer_goal(hypothesis, CONDITION_GOALS) is not None:
+        return check_integer_condition(source, hypothesis, language=language, integer_abi=integer_abi)
     if claim is None:
         from .integer_mask_comparison import check_mask_comparison
         return check_mask_comparison(source, hypothesis, language=language, integer_abi=integer_abi)

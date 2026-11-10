@@ -270,3 +270,10 @@ conversion result, not the left storage width; a narrow unsigned left operand
 can therefore participate in promoted signed overflow. Repeated operands
 share one pre-update value. Later storage conversion is outside this claim,
 and bounded unknown results remain inconclusive.
+
+An explicit condition-truth objective also covers a builtin parameter AND a
+small literal comparison. It preserves C/C++ precedence: `Flags & 4 == 0`
+is evaluated as `Flags & (4 == 0)`, without changing it to a grouped mask
+comparison. Feasible-entry and contrary-truth checks plus independent typed
+replay support a diagnostic constant-condition observation, not programmer
+intent or function-wide safety.
