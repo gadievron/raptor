@@ -1598,6 +1598,7 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "_scan_owned_pkcs_cases") == {
             "test_pkcs_jvm_import_identity", "test_pkcs_python_import_identity",
             "test_pkcs_go_import_identity",
+            "test_pkcs_go_signing_import_identity",
         }
 
     def test_password_hash_jca_fixture_is_guarded(self):

@@ -245,20 +245,23 @@ def test_go_pkcs_diagnostic_requires_protocol_review(tmp_path):
         assert "DecryptPKCS1v15SessionKey" in message and "protocol" in message.lower()
 
 
+_GO_IMPORT_PROFILES = {
+    "canonical": ('import rsa "crypto/rsa"', "rsa", True),
+    "alias": ('import ownedrsa "crypto/rsa"', "ownedrsa", True),
+    "unrelated": ('import rsa "application/rsa"', "rsa", False),
+    "unaliased": ('import "crypto/rsa"', "rsa", True),
+    "grouped": ('import (\n "crypto/rsa"\n)', "rsa", True),
+    "grouped_alias": ('import (\n box "crypto/rsa"\n)', "box", True),
+    "mixed": (
+        'import (\n trusted "crypto/rsa"\n rsa "application/rsa"\n)',
+        "rsa",
+        False,
+    ),
+}
+
+
 def test_pkcs_go_import_identity(tmp_path):
-    profiles = {
-        "canonical": ('import rsa "crypto/rsa"', "rsa", True),
-        "alias": ('import ownedrsa "crypto/rsa"', "ownedrsa", True),
-        "unrelated": ('import rsa "application/rsa"', "rsa", False),
-        "unaliased": ('import "crypto/rsa"', "rsa", True),
-        "grouped": ('import (\n "crypto/rsa"\n)', "rsa", True),
-        "grouped_alias": ('import (\n box "crypto/rsa"\n)', "box", True),
-        "mixed": (
-            'import (\n trusted "crypto/rsa"\n rsa "application/rsa"\n)',
-            "rsa",
-            False,
-        ),
-    }
+    profiles = _GO_IMPORT_PROFILES
     cases = {}
     for name, (imports, receiver, reports) in profiles.items():
         for operation in (
@@ -288,3 +291,52 @@ def test_pkcs_go_import_identity(tmp_path):
             )
             cases[name + "_" + operation + ".go"] = (source, reports)
     _scan_owned_pkcs_cases(tmp_path, cases, "raptor.crypto.rsa.pkcs1v15.go")
+
+
+def test_pkcs_go_signing_import_identity(tmp_path):
+    cases = {}
+    for name, (imports, receiver, canonical) in _GO_IMPORT_PROFILES.items():
+        for operation in ("SignPKCS1v15", "VerifyPKCS1v15"):
+            arguments = (
+                "nil, private, 0, hashed"
+                if operation.startswith("Sign")
+                else "public, 0, hashed, signature"
+            )
+            keep_import_used = "\nvar _ *trusted.PrivateKey" if name == "mixed" else ""
+            source = (
+                "package owned\n"
+                + imports
+                + keep_import_used
+                + "\nfunc inspect() { "
+                + receiver
+                + "."
+                + operation
+                + "("
+                + arguments
+                + ") }\n"
+            )
+            cases[name + "_" + operation + ".go"] = (
+                source,
+                canonical and operation == "SignPKCS1v15",
+            )
+    for name in ("canonical", "alias"):
+        imports, receiver, _ = _GO_IMPORT_PROFILES[name]
+        for operation in ("SignPSS", "VerifyPSS"):
+            arguments = (
+                "nil, private, 0, hashed, nil"
+                if operation == "SignPSS"
+                else "public, 0, hashed, signature, nil"
+            )
+            cases[name + "_" + operation + ".go"] = (
+                "package owned\n"
+                + imports
+                + "\nfunc inspect() { "
+                + receiver
+                + "."
+                + operation
+                + "("
+                + arguments
+                + ") }\n",
+                False,
+            )
+    _scan_owned_pkcs_cases(tmp_path, cases, "raptor.crypto.rsa.pkcs1v15-sign.go")
