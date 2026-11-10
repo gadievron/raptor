@@ -94,15 +94,16 @@ def test_store_lock_degrades_after_bounded_wait(
     monkeypatch.setattr(fs_lock, "_ACQUIRE_POLL_S", 0.05,
                         raising=False)
     lock = tmp_path / "coverage.json.lock"
+    thread = None
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    entered = threading.Event()
-
-    def writer() -> None:
-        with coverage_store_lock(tmp_path / "coverage.json"):
-            entered.set()
-
-    thread = threading.Thread(target=writer, daemon=True)
     try:
+        entered = threading.Event()
+
+        def writer() -> None:
+            with coverage_store_lock(tmp_path / "coverage.json"):
+                entered.set()
+
+        thread = threading.Thread(target=writer, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         with caplog.at_level("WARNING"):
             thread.start()
@@ -114,7 +115,7 @@ def test_store_lock_degrades_after_bounded_wait(
         assert any("WITHOUT" in r.message for r in caplog.records)
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
@@ -136,20 +137,21 @@ def test_journal_append_fails_loudly_after_bounded_wait(
                         raising=False)
     append_entry(tmp_path, _entry(0))  # create the shard
     shard = tmp_path / "review-journal.jsonl"
+    thread = None
     holder_fd = os.open(str(shard), os.O_WRONLY | os.O_APPEND)
-    errors: list[BaseException] = []
-    done = threading.Event()
-
-    def appender() -> None:
-        try:
-            append_entry(tmp_path, _entry(1))
-        except OSError as exc:
-            errors.append(exc)
-        finally:
-            done.set()
-
-    thread = threading.Thread(target=appender, daemon=True)
     try:
+        errors: list[BaseException] = []
+        done = threading.Event()
+
+        def appender() -> None:
+            try:
+                append_entry(tmp_path, _entry(1))
+            except OSError as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=appender, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         thread.start()
         assert done.wait(timeout=10), (
@@ -159,7 +161,7 @@ def test_journal_append_fails_loudly_after_bounded_wait(
         assert "row NOT appended" in str(errors[0])
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
