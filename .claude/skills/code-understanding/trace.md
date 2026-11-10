@@ -60,8 +60,10 @@ Separately from `branches[]` (which describes *alternative* paths), record the *
 
   - Numeric comparisons: `"size > 0"`, `"offset + length <= buffer_size"`, `"count * 16 < max_alloc"`
   - Null checks: `"ptr != NULL"`, `"ptr == NULL"`
-  - Bitmask: `"flags & 0x80000000 == 0"`
+  - Bitmask: `"(flags & 0x80000000) == 0"`
   - Negated form (the guard was *bypassed* on the dangerous path): `{"text": "validate(input)", "negated": true}` — but most negations come out clearer as the inverted predicate (`ptr == NULL` instead of `!ptr != NULL`).
+
+Preserve source grouping. An ungrouped bitwise comparison such as `flags & MASK == VAL` has different C semantics from `(flags & MASK) == VAL`; retain unsupported source text rather than inventing parentheses.
 
 For each condition, also record the `step_index` it gates so consumers can correlate back to `steps[]`.
 

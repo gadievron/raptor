@@ -181,35 +181,33 @@ class TestFeasibility:
 
     @_requires_z3
     def test_bitmask_mask_too_wide_for_profile_goes_to_unknown(self):
-        """The bitmask form (``flags & MASK == VAL``) extracts MASK and
-        VAL via its own regex rather than going through ``atom()`` — the
-        same width-range check must apply or 0x100 at uint8 silently
-        wraps to 0, producing a false tautology."""
+        """Grouped bitmask literals retain width checks; 0x100 at uint8
+        must not wrap to zero and produce a false tautology."""
         from core.smt_solver import BVProfile
         r = check_path_feasibility(
-            [PathCondition("flags & 0x100 == 0", step_index=0)],
+            [PathCondition("(flags & 0x100) == 0", step_index=0)],
             profile=BVProfile(width=8, signed=False),
         )
-        assert "flags & 0x100 == 0" in r.unknown
+        assert "(flags & 0x100) == 0" in r.unknown
 
     @_requires_z3
     def test_bitmask_leading_zero_mask_goes_to_unknown(self):
         """Leading-zero literals in the bitmask path used to crash
         ``int(tok, 0)`` with a Python ValueError on tokens like '010';
         now they're rejected cleanly to ``unknown``."""
-        r = check_path_feasibility([PathCondition("flags & 010 == 0", step_index=0)])
-        assert "flags & 010 == 0" in r.unknown
+        r = check_path_feasibility([PathCondition("(flags & 010) == 0", step_index=0)])
+        assert "(flags & 010) == 0" in r.unknown
 
     @_requires_z3
     def test_bitmask_leading_zero_rhs_goes_to_unknown(self):
-        r = check_path_feasibility([PathCondition("flags & 0xff == 010", step_index=0)])
-        assert "flags & 0xff == 010" in r.unknown
+        r = check_path_feasibility([PathCondition("(flags & 0xff) == 010", step_index=0)])
+        assert "(flags & 0xff) == 010" in r.unknown
 
     @_requires_z3
     def test_bitmask_normal_form_still_works(self):
         """Regression check: the bitmask-path validation tightening
         must not break valid bitmask conditions."""
-        r = check_path_feasibility([PathCondition("flags & 0xff == 0", step_index=0)])
+        r = check_path_feasibility([PathCondition("(flags & 0xff) == 0", step_index=0)])
         assert r.feasible is True
         assert (r.model.get("flags", 0) & 0xff) == 0
 
@@ -319,17 +317,17 @@ class TestConditionForms:
 
     @_requires_z3
     def test_bitmask_alignment(self):
-        """rsp & 0xf == 0 — stack alignment check."""
+        """(rsp & 0xf) == 0 — stack alignment check."""
         r = check_path_feasibility([
-            PathCondition("rsp & 0xf == 0", step_index=0),
+            PathCondition("(rsp & 0xf) == 0", step_index=0),
         ])
         assert r.feasible is True
 
     @_requires_z3
     def test_bitmask_infeasible(self):
         r = check_path_feasibility([
-            PathCondition("flags & 0x1 == 0", step_index=0),
-            PathCondition("flags & 0x1 == 1", step_index=1),
+            PathCondition("(flags & 0x1) == 0", step_index=0),
+            PathCondition("(flags & 0x1) == 1", step_index=1),
         ])
         assert r.feasible is False
 
@@ -368,14 +366,14 @@ class TestConditionForms:
 
     @_requires_z3
     def test_bitwise_or_sat(self):
-        """flags | 0x1 != 0 — any flags value satisfies this (OR with 1 is always >=1)."""
-        r = check_path_feasibility([PathCondition("flags | 0x1 != 0", step_index=0)])
+        """(flags | 0x1) != 0 — any flags value satisfies this (OR with 1 is always >=1)."""
+        r = check_path_feasibility([PathCondition("(flags | 0x1) != 0", step_index=0)])
         assert r.feasible is True
 
     @_requires_z3
     def test_bitwise_or_infeasible(self):
-        """flags | 0x1 == 0 — impossible since OR with 1 always sets bit 0."""
-        r = check_path_feasibility([PathCondition("flags | 0x1 == 0", step_index=0)])
+        """(flags | 0x1) == 0 — impossible since OR with 1 always sets bit 0."""
+        r = check_path_feasibility([PathCondition("(flags | 0x1) == 0", step_index=0)])
         assert r.feasible is False
 
     @_requires_z3
@@ -586,7 +584,7 @@ class TestParametricProfile:
         from core.smt_solver import BV_C_UINT32
         r = check_path_feasibility(
             [
-                PathCondition("flags & 0x80000000 == 0", step_index=0),
+                PathCondition("(flags & 0x80000000) == 0", step_index=0),
                 PathCondition("size < 4096", step_index=1),
                 PathCondition("base + size <= 8192", step_index=2),
                 PathCondition("base > 0x80000000", step_index=3),
@@ -1089,9 +1087,9 @@ class TestAssignmentShapeCoverage:
 
     @_requires_z3
     def test_call_in_bitmask_lhs(self):
-        """Function call in bitmask LHS: ``strlen(s) & 0xff == 0``."""
+        """Function call in bitmask LHS: ``(strlen(s) & 0xff) == 0``."""
         r = check_path_feasibility([
-            PathCondition("strlen(s) & 0xff == 0", step_index=0),
+            PathCondition("(strlen(s) & 0xff) == 0", step_index=0),
         ])
         assert r.unknown == []
         assert r.feasible is True
@@ -1226,7 +1224,7 @@ class TestPrecedence:
         the two readings: a=2, b=1, c=2 gives 2|(1+2)=2|3=3, while the
         LTR misparse (2|1)+2 = 3+2 = 5."""
         r = check_path_feasibility([
-            PathCondition("a | b + c == 3", step_index=0),
+            PathCondition("(a | b + c) == 3", step_index=0),
             PathCondition("a == 2", step_index=1),
             PathCondition("b == 1", step_index=2),
             PathCondition("c == 2", step_index=3),
@@ -1252,7 +1250,7 @@ class TestPrecedence:
         """``a | b + c * d`` is ``a | (b + (c * d))``.  Values:
         a=0x10, b=2, c=3, d=4 → 0x10 | (2 + 12) = 0x10 | 14 = 0x1E."""
         r = check_path_feasibility([
-            PathCondition("a | b + c * d == 0x1E", step_index=0),
+            PathCondition("(a | b + c * d) == 0x1E", step_index=0),
             PathCondition("a == 0x10", step_index=1),
             PathCondition("b == 2", step_index=2),
             PathCondition("c == 3", step_index=3),
@@ -1328,9 +1326,9 @@ class TestParensGrouping:
     @_requires_z3
     def test_parens_in_bitmask_lhs(self):
         """Bitmask form's LHS goes through ``_parse_expr``; parens work
-        there too: ``(a + b) & 0xff == 0``."""
+        there too: ``((a + b) & 0xff) == 0``."""
         r = check_path_feasibility([
-            PathCondition("(a + b) & 0xff == 0", step_index=0),
+            PathCondition("((a + b) & 0xff) == 0", step_index=0),
         ])
         assert r.feasible is True
 

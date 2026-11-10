@@ -668,7 +668,10 @@ class DataflowValidator:
             "reach the sink. Express each as a simple predicate over named variables, "
             "for example:\n"
             '  "size > 0", "offset + length <= buffer_size", "ptr != NULL",\n'
-            '  "flags & 0x80000000 == 0"\n\n'
+            '  "(flags & 0x80000000) == 0"\n\n'
+            "Preserve source grouping. Do not turn an ungrouped bitwise comparison "
+            "such as flags & MASK == VAL into (flags & MASK) == VAL; those have "
+            "different C semantics. Leave unsupported source forms unchanged.\n\n"
             "Emit GUARDS ONLY — Boolean predicates that gate execution. Do NOT emit "
             "program statements (assignments, function calls without a comparison, "
             "loops, returns). Statements like `input = realloc(input, n)` are not "

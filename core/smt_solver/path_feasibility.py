@@ -23,10 +23,10 @@ Accepted condition forms (case-sensitive identifiers; case-insensitive English a
   n >> 1 < limit               (arithmetic right shift when the profile is
                                signed; logical right shift when unsigned)
   n << 3 == buf_size           (left shift)
-  flags | 0x1 != 0             (bitwise OR)
+  (flags | 0x1) != 0           (explicitly grouped bitwise OR)
   ptr != NULL  /  ptr == NULL
   index >= 0
-  flags & 0x80000000 == 0
+  (flags & 0x80000000) == 0
   value == 42
 
 Width and signedness are carried by a ``BVProfile`` (from
@@ -39,9 +39,8 @@ Pre-made profiles are importable from ``core.smt_solver``.
 Conditions rejected to the ``unknown`` bucket (rather than silently
 mis-encoded):
 
-  - **Operators outside the supported set.**  Accepted: ``+ - * |``,
-    relational ``< <= > >= == !=``, shifts ``<< >>``, bitmask
-    ``&`` (only in the ``flags & MASK == VAL`` form), and grouping
+  - **Operators outside the supported set.**  Accepted: ``+ - * & |``,
+    relational ``< <= > >= == !=``, shifts ``<< >>``, and grouping
     parentheses ``( )``.  Rejected: unary NOT (``~``), XOR (``^``),
     division (``/``), modulo (``%``), ternary (``? :``), single-equals
     assignment, chained relational (``0 < x < 100``).  Anything else
@@ -95,13 +94,16 @@ Other limitations of the uniform-profile model:
 
   - **C operator precedence**, not arithmetic-textbook precedence.
     Within an expression, ``*`` binds tightest, then ``+ -``, then
-    ``<< >>``, then ``|`` (lowest).  All left-associative.  The
+    ``<< >>``, then ``&``, then ``|`` (lowest). All left-associative.  The
     notable surprise is that shifts bind *less* tightly than additive
     operators in C — ``a + b << 2`` parses as ``(a + b) << 2``, not
     ``a + (b << 2)``.  Use parentheses to make the grouping explicit
     when the C reading isn't what was meant.
-  - **Bitmask form** requires both ``MASK`` and ``VAL`` to be integer
-    literals; variables on either side go to ``unknown``.
+  - **Bitwise comparisons require explicit grouping.** Comparisons bind
+    more tightly than bitwise AND/OR in C. Ungrouped forms such as
+    ``flags & MASK == VAL`` are rejected, rather than interpreted as
+    ``(flags & MASK) == VAL``. Boolean-valued bitwise operands remain
+    outside this uniform-profile expression model.
   - **Variables still share one profile.** High-bit hex literals carry
     unsigned expression type through arithmetic, comparisons, and shifts.
     Shift results preserve the left operand's type. This is not general C
@@ -304,15 +306,14 @@ _TOKEN_RE = re.compile(
 )
 
 # Operator precedence for the arithmetic/bitwise sub-expression.  C-derived:
-#   *               > +-              > << >>            > |
-# All left-associative.  The relational and bitmask layers run in
-# ``_parse_condition`` above this; ``&`` therefore doesn't appear in this
-# table — it's only accepted in the dedicated bitmask form.
+#   *               > +-              > << >>            > & > |
+# All left-associative. Relational predicates are parsed separately;
+# bitwise expressions must be grouped when used alongside comparisons.
 _PRECEDENCE: dict[str, int] = {
-    '|':  1,
-    '<<': 2, '>>': 2,
-    '+':  3, '-':  3,
-    '*':  4,
+    '|':  1, '&': 2,
+    '<<': 3, '>>': 3,
+    '+':  4, '-':  4,
+    '*':  5,
 }
 
 # Maximum nesting depth for parenthesised subexpressions.  The parser
@@ -331,10 +332,8 @@ _MAX_CONDITIONS_PER_CALL = 64
 # Operator-shaped tokens we recognise but don't accept as binary operators
 # inside ``_parse_expr`` — they belong to the relational or bitmask layer
 # and reaching ``_parse_expr`` with one in operand-trailing position is a
-# user error rather than a malformed expression.  Named
-# ``_CONDITION_LEVEL_OPS`` (not ``_RELATIONAL_TOKENS``) because the set
-# includes ``&`` (bitwise AND in bitmask form), which is not relational.
-_CONDITION_LEVEL_OPS = frozenset({'<=', '>=', '!=', '==', '<', '>', '&'})
+# user error rather than a malformed expression.
+_CONDITION_LEVEL_OPS = frozenset({'<=', '>=', '!=', '==', '<', '>'})
 
 
 @dataclass(frozen=True)
@@ -508,6 +507,8 @@ def _parse_typed_expr_in_frame(
             value = a * b
         elif op == '|':
             value = a | b
+        elif op == '&':
+            value = a & b
         elif op == '<<':
             value, signed = a << b, lhs.signed
         elif op == '>>':
@@ -1042,8 +1043,8 @@ def _parse_condition_in_frame(
     Recognised forms:
       lhs == rhs / lhs != rhs
       lhs < rhs  / lhs <= rhs / lhs > rhs / lhs >= rhs
-      lhs & mask == val  (bitmask alignment)
-      lhs & mask != val
+      (lhs & mask) == val  (explicit bitmask alignment)
+      (lhs & mask) != val
 
     English operator phrases ("is greater than", "equals", ...) are
     rewritten to symbolic operators by :func:`canonicalise` first, so
@@ -1136,41 +1137,21 @@ def _parse_condition_in_frame(
             f"{depth} unmatched '(' at end of input",
         )
 
-    # Bitmask: lhs & mask (==|!=) val.
-    #
-    # The lhs group is a negated class (no `&`) ending in
-    # non-whitespace, with a single-`\s` branch for the
-    # all-whitespace-lhs corner the previous spelling matched. The
-    # naive `([^&]+?)\s*&` overlapped the lazy lhs and the following
-    # whitespace span on whitespace: a condition whose lhs ends in a
-    # long whitespace run with no `&` made the engine try every
-    # split of the run between them — quadratic in the condition
-    # length. Match set and the stripped lhs capture are unchanged.
-    # (`[^&]` rather than `.` so a non-bitmask input still fails at
-    # the first `&`-less stretch instead of rescanning, the earlier
-    # hardening this pattern shares with `_parse_atom`.)
-    m = re.fullmatch(
-        r'([^&]*?[^&\s]|\s)\s*&\s*(0x[0-9a-f]+|\d+)\s*(==|!=)\s*(0x[0-9a-f]+|\d+)',
-        t, re.IGNORECASE,
-    )
-    if m:
-        lhs = _parse_expr(m.group(1).strip(), vars_, profile=profile)
-        if isinstance(lhs, Rejection):
-            return _propagate(text, lhs)
-        # Mask and rhs literals go through the same validation as atom-level
-        # literals — width range and leading-zero ambiguity must be rejected
-        # the same way, otherwise the bitmask path silently wraps or trips
-        # ValueError on octal-style tokens.  Specific Rejection reasons
-        # (LITERAL_AMBIGUOUS / LITERAL_OUT_OF_RANGE) are preserved here.
-        mask_val = _parse_literal_value(m.group(2), profile)
-        if isinstance(mask_val, Rejection):
-            return _propagate(text, mask_val)
-        rhs_val = _parse_literal_value(m.group(4), profile)
-        if isinstance(rhs_val, Rejection):
-            return _propagate(text, rhs_val)
-        masked = lhs & _mk_val(mask_val, profile.width)
-        rhs = _mk_val(rhs_val, profile.width)
-        return (masked == rhs) if m.group(3) == '==' else (masked != rhs)
+    # C comparisons bind more tightly than bitwise AND/OR. The expression
+    # model has no Boolean-valued bitwise operands, so reject ambiguous
+    # ungrouped input rather than silently moving a comparison outside it.
+    depth = 0
+    for char in t:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and char in "&|":
+            return Rejection(
+                text, RejectionKind.UNSUPPORTED_OPERATOR,
+                "ungrouped bitwise predicate has unsupported comparison precedence",
+                hint="group the intended bitwise operand explicitly, e.g. '(flags & mask) == value'",
+            )
 
     # Relational: lhs OP rhs
     # The LHS pattern consumes '>>' and '<<' as atomic units so the regex
@@ -1212,7 +1193,7 @@ def _parse_condition_in_frame(
         text, RejectionKind.UNRECOGNIZED_FORM,
         "no relational or bitmask pattern matched",
         hint="use 'lhs OP rhs' with OP in {==, !=, <, <=, >, >=}, "
-             "or 'lhs & MASK (==|!=) VAL' for bitmask alignment",
+             "or '(lhs & MASK) (==|!=) VAL' for bitmask alignment",
     )
 
 
