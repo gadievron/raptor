@@ -6,10 +6,11 @@ import math
 from pathlib import Path
 import sys
 
-from core.reporting.document import StageEnvelope
+from core.reporting.document import ReportContext, StageEnvelope
 from core.reporting.options import ReportOptions
 from core.reporting.results import NativeResult, complete_native_result
 from core.reporting.service import unrefreshed_report_notice
+from core.reporting.summary import build_operator_summary, render_operator_summary
 from core.run import RUN_METADATA_FILE
 from core.security.prompt_output_sanitise import sanitise_string
 from core.security.redaction import redact_secrets
@@ -83,6 +84,53 @@ class _Projection:
                                                   for key, item in islice(value.items(), 100)], "entries_omitted": omitted}
 
 
+def _metrics(view, status, bundle, root_cause, telemetry):
+    metrics = {"Native exit status": status}
+    if bundle is not None:
+        metrics.update({"Files changed": view.scalar(bundle.files_changed), "Recorded diff bytes": view.scalar(bundle.bytes_size)})
+    if root_cause is not None:
+        metrics.update({"Root-cause input tokens": view.scalar(root_cause.input_tokens),
+                        "Root-cause output tokens": view.scalar(root_cause.output_tokens)})
+    if isinstance(telemetry, dict) and "cost_usd" in telemetry:
+        metrics["Discovery cost USD"] = view.scalar(telemetry["cost_usd"])
+    return metrics
+
+
+def _stages(view, stage_status):
+    stages = []
+    if isinstance(stage_status, dict):
+        for name, record in islice(stage_status.items(), 100):
+            raw_status = record.get("status") if isinstance(record, dict) else None
+            reason = record.get("reason") if isinstance(record, dict) else None
+            state = {"ok": "completed", "fail": "failed"}.get(raw_status, "unknown") if isinstance(raw_status, str) else "unknown"
+            stages.append(StageEnvelope(str(view.scalar(str(name))), state, producer="cve-diff", reason=str(view.scalar(reason or ""))))
+    return stages
+
+
+def _quick_summary(cve_id, status, *, bundle, root_cause, root_cause_requested, root_cause_error,
+                   error_class, telemetry, stage_status):
+    """Display results without building a document or persisting any files."""
+    view = _Projection()
+    metrics = _metrics(view, status, bundle, root_cause, telemetry)
+    stages = _stages(view, stage_status)
+    if root_cause_requested or root_cause is not None:
+        stages.append(StageEnvelope("root-cause analysis", "completed" if root_cause is not None else "failed" if root_cause_error else "unknown",
+                                    producer="cve-diff", reason=str(view.scalar(root_cause_error))))
+    notes = ["Recorded agreement and analysis confidence are not validation verdicts."]
+    if error_class:
+        notes.append("Native failure class: " + str(view.scalar(error_class)))
+    if bundle is None:
+        notes.append("Current diff file and byte counts are unavailable, not zero.")
+    if isinstance(telemetry, dict) and "cost_usd" in telemetry:
+        notes.append("Recorded discovery cost may exclude other attempts and root-cause work; no full run-cost total is inferred.")
+    if view.limited:
+        notes.append("Some recorded summary metadata could not be represented completely.")
+    state = "failed" if status else "partial" if view.limited or any(stage.state in {"failed", "unknown"} for stage in stages) else "completed"
+    context = ReportContext("cve-diff", "unknown", target=str(view.scalar(cve_id)), state=state, stages=stages,
+                            diagnostics=notes, extensions={"raptor.findings_available": False, "raptor.metrics": metrics})
+    print(render_operator_summary(build_operator_summary(context)), file=sys.stderr, end="")
+
+
 def _native_paths(output_dir: Path, cve_id: str) -> list[Path]:
     suffixes = (".osv.json", ".md", ".flow.jsonl", ".flow.md", ".clone.patch", ".github_api.patch", ".patch_url.patch")
     return [*(output_dir / (cve_id + suffix) for suffix in suffixes),
@@ -108,11 +156,15 @@ def complete_cve_report(options: ReportOptions | None, output_dir: Path, cve_id:
                         error_class="", error_detail="", telemetry=None, stage_status=None, input_root=None):
     """Never rerun discovery, extraction, consensus, root cause or validation."""
     if options is None:
+        _quick_summary(cve_id, status, bundle=bundle, root_cause=root_cause, root_cause_requested=root_cause_requested,
+                       root_cause_error=root_cause_error, error_class=error_class, telemetry=telemetry, stage_status=stage_status)
         return None
     try:
         cve_id = validate_cve_id(cve_id)
         root = output_dir / "portable-reports" / cve_id
         if not options.enabled:
+            _quick_summary(cve_id, status, bundle=bundle, root_cause=root_cause, root_cause_requested=root_cause_requested,
+                           root_cause_error=root_cause_error, error_class=error_class, telemetry=telemetry, stage_status=stage_status)
             notice = unrefreshed_report_notice(root)
             if notice:
                 print("Warning: " + notice, file=sys.stderr)
@@ -121,22 +173,16 @@ def complete_cve_report(options: ReportOptions | None, output_dir: Path, cve_id:
         view = _Projection()
         data = {"native_exit_status": status, "recorded_error_class": view.scalar(error_class),
                 "recorded_error_detail": view.scalar(error_detail), "bundle": None, "root_cause": None}
-        metrics = {"Native exit status": status}
-        stages = []
+        metrics = _metrics(view, status, bundle, root_cause, telemetry)
+        stages = _stages(view, stage_status)
         if isinstance(stage_status, dict):
             data["observed_stages"] = []
             for name, record in islice(stage_status.items(), 100):
-                raw_status = record.get("status") if isinstance(record, dict) else None
-                reason = record.get("reason") if isinstance(record, dict) else None
                 stage_name = str(view.scalar(str(name)))
-                state = {"ok": "completed", "fail": "failed"}.get(raw_status, "unknown") if isinstance(raw_status, str) else "unknown"
-                stages.append(StageEnvelope(stage_name, state,
-                                            producer="cve-diff", reason=str(view.scalar(reason or ""))))
                 data["observed_stages"].append({"name": stage_name, "details": view.mapping(record)})
             data["stages_omitted"] = max(0, len(stage_status) - 100)
             view.limited |= bool(data["stages_omitted"])
         if bundle is not None:
-            metrics.update({"Files changed": bundle.files_changed, "Recorded diff bytes": bundle.bytes_size})
             data["bundle"] = {"repository_url": view.scalar(bundle.repo_ref.repository_url),
                               "parent_commit": view.scalar(bundle.commit_before), "fix_commit": view.scalar(bundle.commit_after),
                               "shape": view.scalar(bundle.shape), "canonical_score": view.scalar(bundle.repo_ref.canonical_score),
@@ -160,8 +206,6 @@ def complete_cve_report(options: ReportOptions | None, output_dir: Path, cve_id:
                                   ("cwe_id", "vulnerability_type", "summary", "confidence", "model_id", "input_tokens", "output_tokens")}
             data["root_cause"].update({"why_chain": view.sequence(root_cause.why_chain),
                                         "affected_functions": view.sequence(root_cause.affected_functions)})
-            metrics.update({"Root-cause input tokens": view.scalar(root_cause.input_tokens),
-                            "Root-cause output tokens": view.scalar(root_cause.output_tokens)})
         if root_cause_requested or root_cause is not None:
             stages.append(StageEnvelope("root-cause analysis", "completed" if root_cause is not None else "failed" if root_cause_error else "unknown",
                                         producer="cve-diff", reason=str(view.scalar(root_cause_error))))
@@ -170,15 +214,13 @@ def complete_cve_report(options: ReportOptions | None, output_dir: Path, cve_id:
             data["discovery_telemetry"] = {"fields": {key: view.scalar(telemetry[key]) for key in public_fields if key in telemetry},
                                             "tool_names": view.sequence(telemetry.get("tool_calls")),
                                             "fields_not_projected": len(telemetry) - sum(key in telemetry for key in (*public_fields, "tool_calls"))}
-            if "cost_usd" in telemetry:
-                metrics["Discovery cost USD"] = view.scalar(telemetry["cost_usd"])
         else:
             data["discovery_telemetry"] = {"recorded": False}
         data["capture_limited"] = view.limited
         notes = ["This is one captured CVE-diff attempt; no discovery, extraction, consensus or model call was repeated for reporting.",
                  "Root-cause confidence and agreement are recorded observations, not vulnerability validation verdicts. Failure to produce a diff is not proof of absence of a fix.",
                  "Raw diff/source bodies and tool-call argument/prompt collections are not copied. Native artifacts retain the command's original output when emitted; reserved paths are not evidence of a successful write.",
-                 "Discovery telemetry describes the agent only; separately requested root-cause work may incur additional cost. No complete monetary total is inferred.",
+                 "Discovery telemetry is a recorded agent observation; other attempts and separately requested root-cause work may incur additional cost. No complete monetary total is inferred.",
                  "Lists are capped at 100, scalar maps at 20 fields, strings at 2000 characters and total captured input text at 200000 characters. Nested values are omitted from scalar rows; omission counts are explicit.",
                  "Lifecycle identity was not captured by this hook; historical directory metadata is not adopted."]
         notes.append("Only observed pipeline stage statuses are captured; missing stages are not implicitly passed.")
