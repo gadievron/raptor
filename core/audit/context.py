@@ -1173,6 +1173,7 @@ def format_context_for_prompt(
     ctx: dict[str, Any],
     budget_limit: int = 0,
     patterns_in_system: bool = False,
+    *, claim_delivery_sink: Callable[[dict], None] | None = None,
 ) -> str:
     """Format a context slice as text for the LLM prompt.
 
@@ -1227,6 +1228,24 @@ def format_context_for_prompt(
     from core.llm.prompt_budget import PromptSection, fit_to_budget_report
 
     sections: list[PromptSection] = []
+    from .review_claims import prepare_history_presentation, source_fragment
+
+    # A panel can share ctx. Source identity and rendered text must come
+    # from the same snapshot even if another caller replaces ctx fields.
+    source_ctx = dict(ctx)
+    source_text = source_ctx.get("source", "(not available)")
+    history_requested = "prior_review_claims" in source_ctx
+    history_text, history_definitions = prepare_history_presentation(source_ctx.get("prior_review_claims"))
+    fragment = source_fragment(file=source_ctx.get("file"), function=source_ctx.get("function"),
+                               line_start=source_ctx.get("line_start"), source=source_text) if history_requested else None
+
+    def deliver_claim_context(kept, *, source_elided=False):
+        if claim_delivery_sink is None or not history_requested:
+            return
+        labels = {section.label for section in kept}
+        claim_delivery_sink({"version": 1, "role": "review-delivery-only",
+            "claims": history_definitions if "prior_review_claims" in labels else [],
+            "source_fragment": fragment if "source" in labels and not source_elided else None})
 
     # ── Priority 0: never shed ──────────────────────────────────────
     # Identifiers (paths, names, signatures, sink labels) interpolate
@@ -1251,7 +1270,7 @@ def format_context_for_prompt(
     # constraints cwe / prior-attempts tier / session-observation
     # label rows).
     safe_heading = _defend_identifier(
-        f"{ctx.get('file', '')}:{ctx.get('function', '')}",
+        f"{source_ctx.get('file', '')}:{source_ctx.get('function', '')}",
         max_length=768,
     )
     header_parts = [f"## {safe_heading}"]
@@ -1272,8 +1291,10 @@ def format_context_for_prompt(
             )
             header_parts.append(f"**Attributes:** {attrs}")
 
-    header_parts.append(_source_heading(ctx))
-    header_parts.append(_fenced(ctx.get("source", "(not available)")))
+    header_parts.append(_source_heading(source_ctx))
+    if fragment is not None:
+        header_parts.append(f"**Source fragment:** {fragment['fragment_id']}")
+    header_parts.append(_fenced(source_text))
     sections.append(PromptSection("source", "\n".join(header_parts), 0))
 
     if ctx.get("injection_warnings"):
@@ -2669,15 +2690,19 @@ def format_context_for_prompt(
     sections.extend(study_sections(study_requests, study_explanations, scope=study_scope))
 
     if "prior_review_claims" in ctx:
-        from .review_claims import prompt_history
-
         sections.append(PromptSection("prior_review_claims", (
             "\n### Prior claim identities (historical, unverified statements)\n"
             "These identifiers refer to prior pipeline intakes. History is not "
             "verification evidence or a statement that all bugs were considered. "
             "Re-evaluate the statements against the current supplied source; "
-            "do not infer receipt authority, freshness or revision links.\n"
-            + _fenced(prompt_history(ctx["prior_review_claims"]))
+            "do not infer receipt authority, freshness or revision links. "
+            "If an unsupported theory rests on a mistaken premise, you may "
+            "propose claim_withdrawals using its exact claim_id/revision_id, "
+            "corrected_premise, reason, source_anchors and remaining_unknowns. "
+            "Cite only this function's delivered source fragment and line bounds. "
+            "A missing caller guarantee or language/platform fact remains unknown. "
+            "Do not withdraw a concern merely by omitting it or answering clean.\n"
+            + _fenced(history_text)
         ), 1))
 
     prior_hyp_text = _format_prior_hypotheses(ctx.get("prior_hypotheses"))
@@ -2975,6 +3000,7 @@ def format_context_for_prompt(
             ctx["language_reference_delivery"] = reference_delivery(reference_answers, kept)
         if study_requests:
             ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, kept, scope=study_scope)
+        deliver_claim_context(kept, source_elided=any(item.label == "source" for item in report.elisions))
         return "\n".join(s.text for s in kept)
 
     if ctx.get("cross_entry_analysis"):
@@ -2983,6 +3009,7 @@ def format_context_for_prompt(
         ctx["language_reference_delivery"] = reference_delivery(reference_answers, sections)
     if study_requests:
         ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, sections, scope=study_scope)
+    deliver_claim_context(sections)
     return "\n".join(s.text for s in sections)
 
 

@@ -96,6 +96,14 @@ disagreement, including a proposed guard or caller guarantee, does not itself
 confirm or refute a concern. The audit retains the assessment until applicable
 evidence supports a change.
 
+A knowledge re-review can explicitly withdraw an unsupported theory when it
+identifies the mistaken premise and cites the function source it reviewed.
+Every prior concern must be accounted for before the assessment becomes
+`clean`; omitting a concern or guessing an unseen caller guarantee is
+insufficient. The journal records these withdrawals as model judgments,
+separately from mechanical refutations. Existing mechanical support still
+requires evidence reconciliation.
+
 Some checks execute test witnesses and require explicit repository trust.
 See the [project trust controls](commands.md#project) before enabling execution
 of target code. Binary reviews also compare relevant decompiler claims with

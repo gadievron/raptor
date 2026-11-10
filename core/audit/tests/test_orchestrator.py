@@ -5040,6 +5040,53 @@ class TestMultiPassReview:
         assert "page-cache aliasing" in mechanisms
         assert "integer overflow in outlen" in mechanisms
         assert len(outcome.hypotheses) == 2
+        page_cache = next(h for h in outcome.hypotheses if h["mechanism"] == "page-cache aliasing")
+        assert page_cache["confidence"] == "medium"
+        from core.audit.orchestrator import _extract_all_hypotheses
+        assert any(h["mechanism"] == "page-cache aliasing" for h in _extract_all_hypotheses(outcome))
+
+    @pytest.mark.parametrize("first,second", [("low", "medium"), ("medium", "low"), ("low", "high"), ("high", "low")])
+    def test_confidence_merge_is_order_independent_for_equal_material(self, tmp_path: Path, first, second):
+        from threading import Lock
+        from core.audit.orchestrator import _extract_all_hypotheses
+
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        responses = [ReviewOutcome(file="a.c", function="f", status="suspicious", body="review",
+            hypothesis="primary concern", cost_usd=0.01,
+            hypotheses=[{"mechanism": "secondary concern", "confidence": confidence,
+                         "counter_scope": "cross_function", "assumed_property": "count <= allocation"}])
+            for confidence in (first, second)]
+        lock = Lock()
+        def review(ctx, cfg):
+            with lock:
+                return responses.pop(0)
+        outcome = _multi_pass_review(review, {"file": "a.c", "function": "f", "line_start": 1}, config, passes=2)
+        assert not responses and outcome.cost_usd == 0.02
+        secondary, = outcome.hypotheses
+        assert secondary["confidence"] == ("high" if "high" in (first, second) else "medium")
+        assert any(h["mechanism"] == "secondary concern" for h in _extract_all_hypotheses(outcome))
+
+    def test_confidence_does_not_overwrite_a_different_material_variant(self, tmp_path: Path):
+        from threading import Lock
+
+        target, out = _setup_target(tmp_path)
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        hypotheses = [{"mechanism": "length controls a copy", "confidence": "low", "cwe": "CWE-787",
+                       "counter_scope": "cross_function", "assumed_property": "caller restricts element count"},
+                      {"mechanism": "length controls a copy", "confidence": "medium", "cwe": "CWE-190",
+                       "counter_scope": "local", "assumed_property": "allocation uses byte count"}]
+        responses = [ReviewOutcome(file="a.c", function="f", status="suspicious", body="review",
+                                   hypothesis="primary concern", hypotheses=[h]) for h in hypotheses]
+        lock = Lock()
+        def review(ctx, cfg):
+            with lock:
+                return responses.pop(0)
+        outcome = _multi_pass_review(review, {"file": "a.c", "function": "f", "line_start": 1}, config, passes=2)
+        assert len(outcome.hypotheses) == 2
+        assert {h["assumed_property"] for h in outcome.hypotheses} == {h["assumed_property"] for h in hypotheses}
+        outcome.hypotheses[0]["assumed_property"] = "mutated result"
+        assert all(h["assumed_property"] != "mutated result" for h in hypotheses)
 
     def test_single_pass_returns_as_is(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)

@@ -158,3 +158,74 @@ def prompt_history(value: object, *, max_bytes: int = 8192) -> str:
     if _size(history) > max_bytes:
         return "Prior claim history omitted: metadata exceeds the prompt byte limit."
     return json.dumps(history, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
+
+
+def prepare_history_presentation(value: object, *, max_bytes: int = 8192) -> tuple[str, list[dict]]:
+    """Present whole definitions after conflict quarantine and prompt caps."""
+    from core.json import dumps_canonical
+    from .claim_observations import _definition
+
+    history = read_history(value)
+    if history is None:
+        return prompt_history(None), []
+    fingerprints: dict[str, set[str]] = {}
+    invalid: set[str] = set()
+    for intake in history["intakes"]:
+        for row in intake["claims"]:
+            reference, hypothesis = row["reference"], row["hypothesis"]
+            revision_id = reference.get("revision_id")
+            if not isinstance(revision_id, str):
+                continue
+            if not _definition(reference, hypothesis):
+                invalid.add(revision_id)
+                continue
+            fingerprints.setdefault(revision_id, set()).add(dumps_canonical({
+                "reference": reference, "hypothesis": hypothesis}))
+    invalid.update(key for key, variants in fingerprints.items() if len(variants) != 1)
+    seen: set[str] = set()
+    rejected = 0
+    for intake in history["intakes"]:
+        kept = []
+        for row in intake["claims"]:
+            reference, hypothesis = row["reference"], row["hypothesis"]
+            revision_id = reference.get("revision_id")
+            if not _definition(reference, hypothesis) or revision_id in invalid:
+                rejected += 1
+            elif revision_id not in seen:
+                kept.append(row)
+                seen.add(revision_id)
+        intake["claims"] = kept
+    if rejected:
+        history["complete"] = False
+        history["omissions"].append("invalid-or-conflicting-revision-definition")
+    rendered = prompt_history(history, max_bytes=max_bytes)
+    try:
+        displayed = json.loads(rendered)
+    except ValueError:
+        return rendered, []
+    return rendered, [deepcopy(row) for intake in displayed["intakes"] for row in intake["claims"]]
+
+
+def source_fragment(*, file: object, function: object, line_start: object, source: object) -> dict | None:
+    """Identify complete supplied source; this is neither a file hash nor proof."""
+    from hashlib import sha256
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX
+    from core.json import dumps_canonical
+    from core.source.lines import split_lines
+    from .orchestrator import _raw_ihv_review_source
+
+    if (not isinstance(file, str) or not file or file.startswith(BINARY_PATH_PREFIX)
+            or not isinstance(function, str) or not function or type(line_start) is not int or line_start < 1
+            or not isinstance(source, str) or not source):
+        return None
+    try:
+        if len(source.encode("utf-8")) > MAX_HISTORY_BYTES:
+            return None
+    except UnicodeError:
+        return None
+    raw = _raw_ihv_review_source(source, line_start)
+    data = {"file": file, "function": function, "line_start": line_start,
+            "line_end": line_start + len(split_lines(raw)) - 1, "source": raw}
+    # Content/location identity keeps identical retries cacheable; source
+    # freshness is checked separately against the pre-call origin.
+    return {"fragment_id": sha256(dumps_canonical(data).encode("utf-8")).hexdigest()[:32], **data}
