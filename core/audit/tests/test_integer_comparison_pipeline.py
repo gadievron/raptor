@@ -23,7 +23,7 @@ def test_native_worker_preserves_source_abi_and_diagnostic_scope():
     assert result.details["entry_witness_validated"] is True
     binding = result.details["source_scope"]
     assert binding == source_binding(SOURCE, "Read", verb="check-integer-comparison", integer_abi="lp64", hypothesis=CLAIM)
-    assert binding["query_contract"] == "source-integer-comparison-v2"
+    assert binding["query_contract"] == "source-integer-comparison-v3"
     assert binding["hypothesis_sha256"]
     assert binding["integer_abi"]["name"] == "lp64"
     assert is_diagnostic_smt_rule(result.rule_id)

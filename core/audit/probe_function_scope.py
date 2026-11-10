@@ -165,19 +165,19 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-comparison":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "source-integer-comparison-v2"
+        binding["query_contract"] = "source-integer-comparison-v3"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-shift-count":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "independent-shift-count-v1"
+        binding["query_contract"] = "independent-shift-count-v2"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-division":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "source-integer-division-v2"
+        binding["query_contract"] = "source-integer-division-v3"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-array-bounds":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "common-width-array-guards-v12"
+        binding["query_contract"] = "common-width-array-guards-v13"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-oob":
         binding["query_contract"] = "explicit-bounds-roles-v1"

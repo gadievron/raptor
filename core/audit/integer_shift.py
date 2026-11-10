@@ -14,6 +14,7 @@ from .arithmetic_expression_types import promoted
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_operation import _select_arithmetic_site
 from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
+from .integer_goal import SHIFT_GOALS, parse_integer_goal
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_literals import integer_literal_value
 from .integer_witness import source_model_scope, validate_integer_witness
@@ -30,16 +31,10 @@ def check_shift_count(source, hypothesis, *, language, integer_abi=None):
     abi = resolve_integer_abi(integer_abi)
     if claim is None or abi is None or not z3_available():
         return details
-    prose = ' '.join(hypothesis.split('`')[::2]).lower().replace('-', ' ')
-    words = [word.strip('.,:;()!?') for word in prose.split()]
-    triples = {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
-    negative_claim = ('negative', 'shift', 'count') in triples
-    large_claim = ('oversized', 'shift', 'count') in triples or 'shift count too large' in ' '.join(words)
-    generic_claim = ('invalid', 'shift', 'count') in triples or 'shift count out of range' in ' '.join(words)
-    if (negative_claim and large_claim) or not (negative_claim or large_claim or generic_claim):
-        details['reason'] = 'shift count subject is unsupported or ambiguous'
+    requested = parse_integer_goal(hypothesis, SHIFT_GOALS)
+    if requested is None:
+        details["reason"] = "closed positive integer goal required"
         return details
-    requested = 'negative' if negative_claim else 'oversized' if large_claim else 'any'
     status, data, body, target = _select_arithmetic_site(source, claim.operands, claim.operator, language=language)
     if status != 'bound':
         details['reason'] = 'source shift is unavailable or ambiguous'

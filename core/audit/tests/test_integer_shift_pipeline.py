@@ -30,7 +30,7 @@ def test_source_worker_keeps_only_positive_count_proofs(safe):
                                       source=source,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome == ('inconclusive' if safe else 'confirmed')
     assert result.details['oracle_scope'] == 'integer-shift-count'
-    assert result.details['source_scope']['query_contract'] == 'independent-shift-count-v1'
+    assert result.details['source_scope']['query_contract'] == 'independent-shift-count-v2'
     assert bool(result.matches) is (not safe)
     if not safe:
         assert result.details['count_value'] == 32

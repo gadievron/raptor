@@ -124,3 +124,19 @@ Include private contexts, invalid domains, unknown/expired queries, incomplete
 predicates, mutations, and source-model refusal cases when they affect the
 encoder's contract. Bind cached or worker results to the same source, ABI,
 operation, and assumptions used by the query.
+
+Source integer adapters admit closed objective labels around one backtick-quoted
+expression, for example:
+
+```text
+Potential zero divisor in `Value / Count`.
+invalid shift count in `Value << Count`
+comparison is always false: `Value < 0`
+```
+
+A CWE tag and `potential`/`possible` metadata are optional. Labels may follow
+the expression. Array bounds also accepts a bare `Data[Index]` as an implicit
+read-bounds objective. Negated, conditional, or otherwise qualified prose is
+inconclusive; callers must not discard those qualifications to manufacture a
+positive goal. The source model's entry constraints and caller reachability
+remain separate from this objective admission.
