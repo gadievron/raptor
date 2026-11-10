@@ -1920,13 +1920,16 @@ class _ProbeContext:
     assertion (trust-gated gates refuse without it), and
     ``detector_finding`` the receipt's own record when the floor being
     probed is a mechanical-detector receipt (its description can name
-    the exact variable the detector flagged).
+    the exact variable the detector flagged). ``integer_abi`` is the
+    selected target layout for SMT obligations; structural proofs do
+    not need one.
     """
 
     source: str | None = None
     target_path: Any = None
     repo_trusted: bool = False
     detector_finding: dict | None = None
+    integer_abi: Any = None
 
 
 def _bounded_name_near_overflow_claim(mechanism_lower: str) -> bool:
@@ -2066,6 +2069,7 @@ def _probe_definite_assignment(
             res = check_definite_assignment(
                 ctx.source, var,
                 target_path=ctx.target_path, rel_file=fpath,
+                integer_abi=ctx.integer_abi,
             )
             if not res.proven:
                 logger.debug(
@@ -2082,6 +2086,17 @@ def _probe_definite_assignment(
     facts = "; ".join(
         f"{p.variable}: {p.reason}" for p in proofs
     )
+    abi_suffix = ""
+    if any(p.method == "structural+smt" for p in proofs):
+        from .integer_abi import integer_abi_key, integer_abi_record
+
+        record = integer_abi_record(ctx.integer_abi)
+        if record is None or any(
+            p.integer_abi != record for p in proofs if p.method == "structural+smt"
+        ):
+            return None
+        # Keep complete layout provenance after the bounded fact summary.
+        abi_suffix = f"; SMT target integer ABI {integer_abi_key(record)}"
     # Grade: PROOF. The refuting fact is a definite-assignment walk
     # over the macro-expanded function source — mechanically true
     # however the claim's prose is read. Conservative by
@@ -2092,7 +2107,7 @@ def _probe_definite_assignment(
         gate="definite_assignment",
         reason=(
             f"definite assignment proven for the claimed "
-            f"variable(s) — {facts[:400]}"
+            f"variable(s) — {facts[:400]}{abi_suffix}"
         ),
         demote_to="clean",
         refuter_grade="proof",
@@ -2490,6 +2505,7 @@ def rescue_self_refuted(
             target_path=_witness_target,
             repo_trusted=_witness_trusted,
             detector_finding=detector_finding,
+            integer_abi=getattr(config, "integer_abi", None),
         )
 
     hypotheses = getattr(outcome, "hypotheses", None) or []

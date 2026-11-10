@@ -29,6 +29,10 @@ def _check(src: str, var: str = "v", **kw):
     return check_definite_assignment(src, var, **kw)
 
 
+def _smt_check(src: str, var: str = "v", **kw):
+    return check_definite_assignment(src, var, integer_abi="lp64", **kw)
+
+
 # ---------------------------------------------------------------------------
 # Structural proofs (macro-free)
 # ---------------------------------------------------------------------------
@@ -500,20 +504,20 @@ class TestSmtArm:
 
     def test_contradictory_branch_conditions_prove(self):
         pytest.importorskip("z3")
-        r = _check(self._contradiction_src())
+        r = _smt_check(self._contradiction_src())
         assert r.proven
         assert r.method == "structural+smt"
         assert r.smt_paths_discharged >= 1
 
     def test_independent_conditions_refuse(self):
-        r = _check(
+        r = _smt_check(
             "int f(int a, int b){int v; if(a > 5) v=1;"
             " if(b > 5) return v; return 0;}",
         )
         assert not r.proven
 
     def test_overlapping_satisfiable_conditions_refuse(self):
-        r = _check(
+        r = _smt_check(
             "int f(int a){int v; if(a > 5) v=1;"
             " if(a > 3) return v; return 0;}",
         )
@@ -522,7 +526,7 @@ class TestSmtArm:
     def test_condition_variable_mutated_refuses(self):
         # The naive condition conjunction is only faithful when every
         # named variable is immutable across the path.
-        r = _check(
+        r = _smt_check(
             "int f(int a){int v; if(a > 5) v=1; a = 0;"
             " if(a > 5) return v; return 0;}",
         )
@@ -532,7 +536,7 @@ class TestSmtArm:
         # A function-scope extern is not a parameter: a call between
         # the two condition reads can change it, so joint
         # unsatisfiability over the reads is not a refutation.
-        r = _check(
+        r = _smt_check(
             "int f(void){ extern int g; extern void se(void); int v;"
             " if(g > 5) v=1; se(); if(g <= 5) return 0; return v;}",
         )
@@ -541,7 +545,7 @@ class TestSmtArm:
     def test_uninit_local_condition_variable_refuses(self):
         # Reads of an indeterminate local are unstable (and UB) —
         # the SMT fence admits parameters only.
-        r = _check(
+        r = _smt_check(
             "int f(void){int c; int v;"
             " if(c > 5) v=1; if(c <= 5) return 0; return v;}",
         )
@@ -550,7 +554,7 @@ class TestSmtArm:
     def test_initialized_local_condition_variable_refuses(self):
         # Parameters only — even a well-defined local is out of the
         # fence (margin over precision).
-        r = _check(
+        r = _smt_check(
             "int f(int a){int c = a; int v;"
             " if(c > 5) v=1; if(c <= 5) return 0; return v;}",
         )
@@ -559,7 +563,7 @@ class TestSmtArm:
     def test_call_in_condition_refuses(self):
         # Two calls can return different values — same text is not the
         # same value.
-        r = _check(
+        r = _smt_check(
             "int f(void){int v; if(g() > 5) v=1;"
             " if(g() > 5) return v; return 0;}",
         )
@@ -572,8 +576,8 @@ class TestSmtArm:
         monkeypatch.setattr(
             da, "_discharge_with_smt", lambda *_a, **_k: (False, 0),
         )
-        assert not _check(self._contradiction_src()).proven
-        assert _check("int f(void){int v; v=1; return v;}").proven
+        assert not _smt_check(self._contradiction_src()).proven
+        assert _smt_check("int f(void){int v; v=1; return v;}").proven
 
 
 # ---------------------------------------------------------------------------

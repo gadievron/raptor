@@ -46,6 +46,7 @@ class _Config:
     target_path: Optional[Path] = None
     out_dir: Optional[Path] = None
     repo_trusted: bool = True
+    integer_abi: Any = None
 
 
 _PROVABLE_SRC = (
