@@ -1232,3 +1232,43 @@ class TestWrapperMemberReceiver:
         index = JavaConstIndex(source, (1, 6), str(caller), str(tmp_path))
         sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
         assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+
+class TestEnclosingCreationIdentity:
+    @pytest.mark.parametrize("case,expected", [
+        ("enclosing", False), ("plain", True),
+        ("package-qualified", True), ("constructor-argument", True),
+    ])
+    def test_actual_consumer_distinguishes_enclosing_instance(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        (tmp_path / "Outer.java").write_text(
+            'class Outer { class Inner { String literal() { '
+            'return System.getenv("OWNED"); } } }')
+        (tmp_path / "Inner.java").write_text(
+            'class Inner { Inner() {} Inner(Outer unused) {} '
+            'String literal() { return "safe"; } }')
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg/Inner.java").write_text(
+            'package pkg; public class Inner { public String literal() { return "safe"; } }')
+        creation = {"enclosing": "new Outer().new Inner()", "plain": "new Inner()",
+                    "package-qualified": "new pkg.Inner()",
+                    "constructor-argument": "new Inner(new Outer())"}[case]
+        (tmp_path / "Cfg.java").write_text(
+            'class Cfg { static String wrapper() { return ' + creation + '.literal(); } }')
+        source = ('class T {\nvoid m(java.io.PrintWriter out) {\n'
+                  'String value=Cfg.wrapper();\nout.println(value);\n}\n}\n')
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, 6), str(caller), str(tmp_path))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    def test_creation_cache_does_not_guess_member_class(self):
+        source = 'class T { void m() { Object receiver=new Outer().new Inner(); } }'
+        index = JavaConstIndex(source, (1, 1))
+        assert index.ok
+        assert index.receiver_type("receiver") is None
