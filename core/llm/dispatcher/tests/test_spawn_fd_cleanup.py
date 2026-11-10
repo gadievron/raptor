@@ -16,6 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.llm.dispatcher.spawn import spawn_worker
+from core.testing.processes import reap_on_exit
 
 
 def _fd_is_open(fd: int) -> bool:
@@ -60,6 +61,7 @@ def test_successful_spawn_still_closes_token_fd():
         label="test-worker",
         env={"PATH": "/usr/bin"},
     )
-    proc.wait()
+    with reap_on_exit(proc):
+        proc.wait()
 
     assert not _fd_is_open(token_fd)
