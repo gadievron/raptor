@@ -831,6 +831,8 @@ class TestSidecarLockProbes:
         walk's record)."""
         import threading
 
+        from core.testing.threads import retiring_threads
+
         for i in range(8):
             append_entry(tmp_path, _entry(i, cost_usd=0.1))
         errors: list[BaseException] = []
@@ -842,11 +844,12 @@ class TestSidecarLockProbes:
                 errors.append(exc)
 
         threads = [threading.Thread(target=walk) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
-        assert not any(t.is_alive() for t in threads)
+        with retiring_threads(threads, release=lambda: None, timeout=60):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=60)
+            assert not any(t.is_alive() for t in threads)
         assert not errors, errors
         raw = (tmp_path / SIDECAR_FILENAME).read_bytes()
         for ln in raw.splitlines():
