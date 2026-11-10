@@ -65,7 +65,7 @@ def _atom(tokens, index, step=1, depth=0):
     return None
 
 
-def _binary(tokens):
+def _binary(tokens, *, operators=None):
     # Strip only parentheses enclosing the complete expression.
     for _ in range(_MAX_DEPTH):
         if not tokens or tokens[0].value != "(":
@@ -82,7 +82,12 @@ def _binary(tokens):
     if first is None:
         return None
     left, index = first
-    if index >= len(tokens) or (operator := _operator(tokens[index])) is None:
+    if index >= len(tokens):
+        return None
+    token = tokens[index]
+    operator = (_operator(token) if operators is None else
+                token.value if token.kind == "symbol" and token.value in operators else None)
+    if operator is None:
         return None
     second = _atom(tokens, index + 1)
     if second is None or second[1] != len(tokens):
@@ -190,3 +195,24 @@ def parse_arithmetic_claim(hypothesis: str) -> ArithmeticClaim | None:
 def has_integer_overflow_subject(hypothesis: str) -> bool:
     """The auxiliary disproof API must not reinterpret another bug class."""
     return isinstance(hypothesis, str) and len(hypothesis) <= _MAX_CHARS and bool(_INTEGER_SUBJECT.search(hypothesis))
+
+
+def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """One explicitly quoted atomic division/remainder; never a compound prefix."""
+    if not isinstance(hypothesis, str) or len(hypothesis) > _MAX_CHARS:
+        return None
+    if hypothesis.count("`") % 2:
+        return None
+    selected = None
+    for match in _TOKEN.finditer(hypothesis):
+        if match.lastgroup != "quoted":
+            continue
+        text = match.group()[1:-1]
+        if "/" not in text and "%" not in text:
+            continue
+        tokens = _tokens(text, code=True)
+        expression = _binary(tokens, operators={"/", "%"}) if tokens else None
+        if expression is None or (selected is not None and selected != expression):
+            return None
+        selected = expression
+    return selected

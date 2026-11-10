@@ -267,6 +267,20 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("division by zero", "check-integer-division"),
+    ("division by 0", "check-integer-division"),
+    ("remainder by 0", "check-integer-division"),
+    ("zero divisor", "check-integer-division"),
+    ("undefined integer division", "check-integer-division"),
+    ("undefined integer remainder", "check-integer-division"),
+    ("division-by-zero", "check-integer-division"),
+    ("divide-by-zero", "check-integer-division"),
+    ("remainder-by-zero", "check-integer-division"),
+    ("modulo-by-zero", "check-integer-division"),
+    ("divide by zero", "check-integer-division"),
+    ("remainder by zero", "check-integer-division"),
+    ("modulo by zero", "check-integer-division"),
+    ("division overflow", "check-integer-division"),
     ("integer overflow leading to", "check-overflow-to-oob"),
     ("overflow to oob", "check-overflow-to-oob"),
     ("negative value", "check-negative-bypass"),

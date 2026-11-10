@@ -165,6 +165,6 @@ def model_for_integer_terms(target, data, operands, premises, integer_abi=None, 
 
 def model_for_operation(target, data, operands, operator, premises, integer_abi=None, *, language=None):
     """Integer facts for a supported atomic arithmetic operation."""
-    if operator not in {"+", "-", "*"}:
+    if operator not in {"+", "-", "*", "/", "%"}:
         return ArithmeticModel("unavailable")
     return model_for_integer_terms(target, data, operands, premises, integer_abi, language=language)

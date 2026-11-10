@@ -2494,9 +2494,52 @@ _INTEGER_ARITH_RE = re.compile(
 )
 
 
-def _has_integer_arithmetic(source: str) -> bool:
-    """Detect arithmetic that could overflow (addition, multiplication, shifts)."""
-    return bool(_INTEGER_ARITH_RE.search(source))
+def _has_integer_arithmetic(source: str, *, language: str | None = None) -> bool:
+    """Keep C arithmetic in review regardless of spacing or sink reachability.
+
+    This is admission, not a defect verdict. Syntax distinguishes compact
+    multiplication from pointer declarators and subtraction from member arrows.
+    Other languages retain their existing lexical safeguard.
+    """
+    if language not in {"c", "cpp"}:
+        return bool(_INTEGER_ARITH_RE.search(source))
+    if len(source) > 65536:
+        return True  # an oversized input cannot earn a clean skip
+    try:
+        view = sanitized_view_with_status(source, language=language)
+        if view.ambiguous:
+            return True
+        if not any(operator in view.text for operator in ("+", "-", "*", "/", "%", "<<", ">>")):
+            return False
+        from core.audit.condition_extraction import _get_parser
+
+        parser = _get_parser(language)
+        if parser is None:
+            return True
+        data = source.encode("utf-8")
+        root = parser.parse(data).root_node
+        if root.has_error:
+            return True
+        pending = [root]
+        visited = 0
+        while pending:
+            visited += 1
+            if visited > 2048:
+                return True
+            node = pending.pop()
+            if node.type == "update_expression":
+                return True
+            if node.type in {"binary_expression", "assignment_expression", "unary_expression"}:
+                operator = node.child_by_field_name("operator")
+                spelling = data[operator.start_byte:operator.end_byte] if operator is not None else b""
+                if spelling in {b"+", b"-", b"*", b"/", b"%", b"<<", b">>",
+                                b"+=", b"-=", b"*=", b"/=", b"%=", b"<<=", b">>="}:
+                    return True
+            pending.extend(node.named_children)
+        return False
+    except Exception:
+        logger.debug("arithmetic admission syntax unavailable", exc_info=True)
+        return True  # parser failure cannot certify absence of quality issues
 
 
 def _is_sink_unreachable_clean(
@@ -2551,7 +2594,7 @@ def _is_sink_unreachable_clean(
     if re.search(r"==\s*(0x[0-9a-fA-F]+|[4-5]\d{2})\b", source):
         return False
 
-    return not _has_integer_arithmetic(source)
+    return not _has_integer_arithmetic(source, language=result.language)
 
 
 def _py_simple_accessor(source: str) -> bool:

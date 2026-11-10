@@ -2259,6 +2259,7 @@ _SMT_SHIM_DIR = Path(__file__).resolve().parents[2] / "libexec"
 
 # Verbs served only by run_smt_verb_direct() (no libexec shim).
 _SMT_DIRECT_ONLY_VERBS = frozenset({
+    "check-integer-division",
     "check-array-bounds",
     "check-auth-bypass",
     "check-lock-discipline",
@@ -2285,6 +2286,7 @@ _SMT_VERB_ROLES = {
     "invariant-preservation": "detection",
     "check-overflow": "verification",
     "check-array-bounds": "verification",
+    "check-integer-division": "verification",
     "check-oob": "detection",
     # A free pointer variable equaling zero does not establish a source dereference.
     "check-null-deref": "detection",
@@ -2805,7 +2807,7 @@ def _smt_verb_in_subprocess(
     from dataclasses import fields
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-integer-division"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2855,7 +2857,7 @@ def _smt_verb_in_subprocess(
                     result.matches = []
                     result.details = {**details, "source_scope_status": "unbound-worker-result"}
                 result.rule_id = f"smt:{verb}"
-            if (is_diagnostic_smt_rule(verb) or verb == "check-array-bounds") and result.outcome != "error":
+            if (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-integer-division"}) and result.outcome != "error":
                 result.outcome, result.details = _scope_smt_observation(
                     verb, result.outcome, result.details or {},
                 )
@@ -2882,7 +2884,7 @@ def _run_smt_verb_inner(
     """Confined-worker admission for source-derived function observations."""
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
-    if verb in {"check-overflow", "check-array-bounds"} and abi_record is None:
+    if verb in {"check-overflow", "check-array-bounds", "check-integer-division"} and abi_record is None:
         return SweepResult(
             tool="smt", file_path=file_path, function_name=function_name,
             outcome="inconclusive", rule_id=f"smt:{verb}",
@@ -2904,7 +2906,7 @@ def _run_smt_verb_inner(
         file_path=file_path, function_name=function_name, verb=verb,
         source=source, hypothesis=hypothesis, target_path=target_path, vocab=vocab, integer_abi=abi_record,
     )
-    if binding is not None and (is_diagnostic_smt_rule(verb) or verb == "check-array-bounds") and result.outcome != "error":
+    if binding is not None and (is_diagnostic_smt_rule(verb) or verb in {"check-array-bounds", "check-integer-division"}) and result.outcome != "error":
         result.outcome, result.details = _scope_smt_observation(verb, result.outcome, result.details or {})
         if result.outcome != "confirmed":
             result.matches = []
@@ -2928,7 +2930,15 @@ def _run_smt_verb_on_source(
     if vocab is None:
         vocab = _verb_vocab(target_path)
     try:
-        if verb == "check-array-bounds":
+        if verb == "check-integer-division":
+            from .integer_division import check_integer_division
+            from .condition_extraction import language_for_file
+            details = check_integer_division(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
+            outcome = "confirmed" if details.get("violation") is True else "inconclusive"
+            return SweepResult(tool="smt", file_path=file_path, function_name=function_name,
+                               rule_id=f"smt:{verb}", outcome=outcome, details=details,
+                               matches=[details] if outcome == "confirmed" else [])
+        elif verb == "check-array-bounds":
             from .array_bounds import check_array_bounds
             from .condition_extraction import language_for_file
             details = check_array_bounds(source, hypothesis, language=language_for_file(file_path), integer_abi=integer_abi)
