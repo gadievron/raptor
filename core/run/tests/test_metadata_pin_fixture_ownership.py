@@ -6,7 +6,8 @@ from core.run import pin
 from core.run.tests import test_metadata as native
 from core.testing.module_state import isolated_module_state
 
-pytest_plugins = ["core.run.tests.test_metadata"]
+_user_state_in_tmp = native._user_state_in_tmp
+monkeypatch = native.monkeypatch
 FIELDS = ("_process_project", "_process_project_set", "_process_project_threaded")
 
 
