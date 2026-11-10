@@ -138,6 +138,21 @@ def native_sink_reads_name(source: str, line: int, name: str, *, language: str) 
             if not any(child.type == "=" for child in value.children):
                 return False
             value = _parenthesised_value(value.child_by_field_name("right"))
+        expected_calls = int(value is not None and value.type in {"call_expression", "method_invocation"})
+        pending = [statements[0]]
+        visited = calls = 0
+        while pending:
+            node = pending.pop()
+            visited += 1
+            if visited > _syntax._MAX_NODES:
+                return False
+            if node.type in {"call_expression", "method_invocation", "new_expression", "object_creation_expression"}:
+                calls += 1
+                if calls > expected_calls:
+                    return False
+            pending.extend(node.named_children)
+        if calls != expected_calls:
+            return False
         if value is not None and value.type in {"call_expression", "method_invocation"}:
             arguments = value.child_by_field_name("arguments")
             if arguments is None:
