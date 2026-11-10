@@ -150,3 +150,9 @@ def test_primitive_and_path_contracts_are_distinct_and_composable():
     assert replace(entry, requires_exact_str=True).source_contracts == frozenset({
         ksc.PATH_JOIN_CONTAINMENT, ksc.EXACT_STR_DEFAULT_CALL,
     })
+
+
+def test_bleach_declares_default_configuration_contract():
+    entry = ksc.find("bleach.clean", "xss", "python")
+    assert entry is not None
+    assert entry.source_contracts == frozenset({ksc.DEFAULT_POSITIONAL_CALL})
