@@ -30,10 +30,12 @@ import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
+from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 from core.json.bounded import load_json_bounded
 
 if TYPE_CHECKING:
@@ -263,7 +265,7 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
     extras are deliberately omitted (don't fabricate data)."""
     db_path.unlink(missing_ok=True)
     con = sqlite3.connect(db_path)
-    try:
+    with preserving_stream_error(closing(con)):
         con.executescript(_SCHEMA)
         for h in harvested:
             con.execute(
@@ -287,8 +289,6 @@ def _write_metadata_db(db_path: Path, harvested: list) -> None:
                 (h.repo_url, h.repo_language),
             )
         con.commit()
-    finally:
-        con.close()
 
 
 # ---------------------------------------------------------------------------
