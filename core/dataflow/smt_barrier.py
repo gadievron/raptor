@@ -2055,8 +2055,8 @@ def validator_dominates_sink(
 def _if_test_contains_call(tree: ast.AST, line: int) -> bool:
     """Require the supported regex call itself to control the guard.
 
-    A nested match inside a Boolean expression or wrapper does not
-    establish that a successful guard implies successful validation.
+    A nested match inside a Boolean expression, wrapper or unsupported
+    call argument does not establish the outer guard's character language.
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.If) and node.lineno == line:
@@ -2071,6 +2071,11 @@ def _if_test_contains_call(tree: ast.AST, line: int) -> bool:
                 and isinstance(func.value, ast.Name)
                 and func.value.id == "re"
                 and func.attr in {"match", "fullmatch"}
+                and len(test.args) == 2
+                and not test.keywords
+                and isinstance(test.args[0], ast.Constant)
+                and isinstance(test.args[0].value, str)
+                and isinstance(test.args[1], ast.Name)
             )
     return False
 
