@@ -89,7 +89,8 @@ def build_document(report: dict, *, orchestration_skipped: bool = False) -> Repo
             continue
         raw_analysis = result.get("analysis")
         analysis = raw_analysis if isinstance(raw_analysis, dict) else {}
-        raw_claim = analysis.get("is_exploitable", result.get("is_exploitable"))
+        raw_claim = (analysis.get("is_exploitable") if "is_exploitable" in analysis
+                     else result.get("is_exploitable"))
         if isinstance(raw_claim, (dict, list)):
             excluded += 1
             limited = True
