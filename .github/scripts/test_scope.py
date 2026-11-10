@@ -1081,12 +1081,15 @@ def compute_tier_dispatch(
                 trigger_set = set(tier_config.get("trigger_files", []))
                 if trigger_set:
                     triggered = any(f in trigger_set for f in changed_files)
-            # If not triggered yet, check if any of the tier's own
-            # test files are in the changed set.
+            # Directory ownership also covers deleted tests and fixture inputs;
+            # neither can be identified from the surviving test census alone.
             if not triggered:
                 tier_file_strs = {str(tf) for tf in tier_files}
                 triggered = any(
-                    f in tier_file_strs for f in changed_files
+                    f in tier_file_strs or any(
+                        file_in_dir(Path(f), directory)
+                        for directory in tier_config.get("test_dirs", [])
+                    ) for f in changed_files
                 )
             result[tier_name] = {"run": triggered, "files": tier_files if triggered else []}
         else:

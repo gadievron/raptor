@@ -1617,6 +1617,37 @@ def test_lane_closure_includes_literal_special_paths(tmp_path):
 
 
 class TestOwnedResourceDispatchWork:
+    @pytest.mark.parametrize("changed,selected", [
+        (".github/tests/test_removed.py", True),
+        (".github/tests/test_surviving.py", True),
+        (".github/tests/fixtures/input.json", True),
+        (".github/tests/fixtures/test_example.py", True),
+        (".github/tests/conftest.py", True),
+        (".github/tests_neighbor/test_removed.py", False),
+        (".github/notes/input.json", False),
+    ], ids=["deleted", "existing", "fixture", "python-fixture", "conftest",
+            "sibling-prefix", "unowned-metadata"])
+    def test_outside_graph_directory_ownership_survives_deletions(
+        self, tmp_path, monkeypatch, changed, selected,
+    ):
+        survivor = Path(".github/tests/test_surviving.py")
+        target = tmp_path / survivor
+        target.parent.mkdir(parents=True)
+        target.write_text("def test_surviving(): pass\n")
+        if "/fixtures/" in changed:
+            fixture = tmp_path / changed
+            fixture.parent.mkdir()
+            fixture.write_text("{}\n" if fixture.suffix == ".json" else "VALUE = 1\n")
+
+        def unexpected_graph(*args, **kwargs):
+            pytest.fail("outside-graph test inputs must not parse runtime sources")
+
+        monkeypatch.setattr("test_scope.build_graph", unexpected_graph)
+        result = compute_tier_dispatch([changed], tmp_path)
+        assert result["ci_lint"]["run"] == selected
+        assert result["ci_lint"]["files"] == ([survivor] if selected else [])
+        assert not result["python"]["run"]
+
     def test_ci_test_change_selects_owner_without_runtime_graph(self, tmp_path, monkeypatch, capsys):
         changed = ".github/tests/test_dispatch.py"
         target = tmp_path / changed
