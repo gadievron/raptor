@@ -185,6 +185,17 @@ def sha256_tree(
     #     an untruncated tree that happens to contain only the
     #     hashed prefix.
     import os as __os
+    from contextlib import closing
+    from core.source.streams import owned_fd, preserving_stream_error
+
+    def close_read_fd(descriptor):
+        # Preserve best-effort pre-adoption closes and strict stream closes.
+        try:
+            __os.close(descriptor)
+        except OSError:
+            if stream_adopted:
+                raise
+
     # max_file_size was defaulted from config above, so it is never
     # None here — the fallback is simply 100x the per-file cap.
     cumulative_cap = getattr(
@@ -205,7 +216,8 @@ def sha256_tree(
             # race-removed file, EACCES on race-changed perms
             # — all best-effort skip.
             continue
-        try:
+        stream_adopted = False
+        with owned_fd(fd, close_fd=close_read_fd):
             st = __os.fstat(fd)
             # The `< _MAX_FILE_SIZE_NO_CAP_THRESHOLD` test treats any
             # value >= 1 TiB as the "no per-file cap" sentinel. Pre-fix
@@ -267,8 +279,9 @@ def sha256_tree(
             h.update(len(name_bytes).to_bytes(8, "little"))
             h.update(name_bytes)
             content_h = hashlib.sha256()
-            with __os.fdopen(fd, "rb") as f:
-                fd = -1  # fdopen now owns it; don't close twice
+            stream = __os.fdopen(fd, "rb", closefd=False)
+            stream_adopted = True
+            with preserving_stream_error(closing(stream)) as f:
                 # Bound the read to the fstat'd size. Without this,
                 # a file that grows between fstat and read defeats
                 # both the per-file gate and the cumulative cap the
@@ -285,12 +298,6 @@ def sha256_tree(
                     cumulative_bytes += len(chunk)
                     remaining -= len(chunk)
             h.update(content_h.digest())
-        finally:
-            if fd >= 0:
-                try:
-                    __os.close(fd)
-                except OSError:
-                    pass
     if skipped:
         _export("logger").debug("Skipped %s large files during hashing", len(skipped))
     if truncated_at is not None:
@@ -326,7 +333,9 @@ def sha256_file(path: Path, chunk_size: int | None = None) -> str:
     stream with :func:`sha256_fileobj` so the bytes hashed are the
     bytes of the inode you verified.
     """
-    with Path(path).open("rb") as f:
+    from core.source.streams import preserving_stream_error
+
+    with preserving_stream_error(Path(path).open("rb")) as f:
         return sha256_fileobj(f, chunk_size)
 
 
