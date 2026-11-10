@@ -152,6 +152,16 @@ def test_dependency_digest_is_canonical_and_refuses_unknown():
     assert inputs.context_inputs_digest(inputs.merge_context_inputs(a, _snapshot("a.c", b"changed"))) is None
 
 
+@pytest.mark.parametrize("file,expected", [
+    pytest.param("caller.c", "782a8b8e8c51ec6609cb0ca02197efa45e760153cb72223861f09510b8d86705", id="ascii"),
+    pytest.param("caf\u00e9.c", "6ad6222b44aca61809d5167a1d6b1950d7fe20fe481ad8b88d5637c3c0f17864", id="unicode"),
+])
+def test_dependency_digest_preserves_persisted_anchor_bytes(file, expected):
+    # These identities predate routing through the shared canonical helper.
+    # A byte-form change would invalidate existing journal context anchors.
+    assert inputs.context_inputs_digest(_snapshot(file)) == expected
+
+
 def test_dependencies_survive_intake_and_capped_history_merges():
     from core.audit.review_claims import begin_review, record_intake, merge_history, read_history
     from core.audit.claims import ClaimRevision
