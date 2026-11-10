@@ -13,7 +13,7 @@ from ._util import IDENTIFIER_RE
 from .arithmetic_claim import parse_arithmetic_claim
 from .arithmetic_operation import ArithmeticOperation, _unwrap, bind_arithmetic_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type
-from .array_bounds import ArrayAccess, bind_array_access, parse_array_access_claim
+from .array_bounds import ArrayAccess, bind_array_access, has_array_read_goal, parse_array_access_claim
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_literals import integer_literal_value, source_integer_atom
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def literal_call_binding(source, function_name, verb, hypothesis, integer_abi, site_lines, language="c"):
     """Bind worker replies to the complete caller/callee source and query."""
     return {
-        "query_contract": "common-width-literal-frame-v11",
+        "query_contract": "common-width-literal-frame-v12",
         "source_sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
         "function": function_name,
         "verb": verb,
@@ -112,6 +112,9 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
     if not isinstance(site_lines, list) or not 0 < len(site_lines) <= _MAX_SITES or any(type(line) is not int or line <= 0 for line in site_lines):
         return result
     if verb not in {"check-overflow", "check-array-bounds"}:
+        return result
+    if verb == "check-array-bounds" and not has_array_read_goal(hypothesis):
+        result["reason"] = "closed positive array read goal required"
         return result
     result["binding"] = literal_call_binding(source, function_name, verb, hypothesis, abi, site_lines, language)
     parser = _get_parser(language)
@@ -222,6 +225,8 @@ def check_literal_calls(source, function_name, verb, hypothesis, integer_abi, si
 def literal_call_witness_valid(reply, call, verb, hypothesis, integer_abi):
     """Independently check a positive worker tuple before granting promotion."""
     if verb not in {"check-array-bounds", "check-overflow"}:
+        return False
+    if verb == "check-array-bounds" and not has_array_read_goal(hypothesis):
         return False
     parameters, arguments = reply.get("parameter_types"), call.get("arguments")
     if not isinstance(parameters, (list, tuple)) or not 0 < len(parameters) <= 8 or not isinstance(arguments, dict):

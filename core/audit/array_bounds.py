@@ -296,8 +296,8 @@ def _valid_witness(access, model, abi):
     return model[access.index] < 0 or model[access.index] >= access.extent
 
 
-def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
-    """A source-linked function-entry counterexample; safe sites never refute a function."""
+def has_array_read_goal(hypothesis):
+    """Admit only a complete positive read goal, without binding its source."""
     goal = hypothesis
     if isinstance(goal, str) and "`" not in goal and len(goal) <= 8192:
         accesses = list(_ACCESS.finditer(goal))
@@ -305,7 +305,12 @@ def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
             access_match = accesses[0]
             goal = (goal[:access_match.start()] + "`" + access_match.group() + "`"
                     + goal[access_match.end():])
-    if parse_integer_goal(goal, ARRAY_READ_GOALS) is None:
+    return parse_integer_goal(goal, ARRAY_READ_GOALS) is not None
+
+
+def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
+    """A source-linked function-entry counterexample; safe sites never refute a function."""
+    if not has_array_read_goal(hypothesis):
         return {"array_bounds_status": "unavailable", "violation": None,
                 "reason": "closed positive array read goal required"}
     access = bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi)
