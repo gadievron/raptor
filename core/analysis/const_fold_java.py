@@ -108,15 +108,18 @@ class _FoldExt:
         "allow_taint_free",
         "ban_tf_system_reads",
         "receiver_type",
+        "shadowed_receiver_names",
         "union_hits",
         "union_member_check",
         "xfile",
     )
 
     def __init__(self, allow_taint_free: bool = False, xfile=None,
-                 receiver_type=None, ban_tf_system_reads: bool = False) -> None:
+                 receiver_type=None, ban_tf_system_reads: bool = False,
+                 shadowed_receiver_names: frozenset[str] = frozenset()) -> None:
         self.allow_taint_free = allow_taint_free
         self.xfile = xfile
+        self.shadowed_receiver_names = frozenset(shadowed_receiver_names)
         # receiver_type(name) -> exact created class name, or None.
         # Sound only when EVERY indexed definition of the local is a
         # creation of that same class (see JavaConstIndex).
@@ -405,7 +408,8 @@ class JavaConstIndex:
 
 def fold_expr(node, resolve_name, array_resolver=None,
           config_resolver=None, conduit_resolver=None,
-          allow_taint_free: bool = False, xfile_resolver=None) -> Any:
+          allow_taint_free: bool = False, xfile_resolver=None,
+          shadowed_receiver_names: frozenset[str] = frozenset()) -> Any:
     """Fold a tree-sitter Java expression node to a constant.
 
     ``resolve_name(name, depth)`` returns the name's constant value or
@@ -417,13 +421,16 @@ def fold_expr(node, resolve_name, array_resolver=None,
     taint-free subexpressions refuse and behavior is unchanged.
     ``xfile_resolver`` (see :mod:`core.analysis.java_xfile_const`)
     resolves cross-file static-final fields and returns-literal
-    methods. Returns the folded value, TAINT_FREE (opt-in), or
+    methods. ``shadowed_receiver_names`` names source-proven value bindings
+    that cannot act as class/package receiver heads in this expression.
+    Returns the folded value, TAINT_FREE (opt-in), or
     ``_REFUSE``.
     """
     ext = None
-    if allow_taint_free or xfile_resolver is not None:
+    if allow_taint_free or xfile_resolver is not None or shadowed_receiver_names:
         ext = _FoldExt(allow_taint_free=allow_taint_free,
-                       xfile=xfile_resolver)
+                       xfile=xfile_resolver,
+                       shadowed_receiver_names=shadowed_receiver_names)
     val = _fold(node, resolve_name, 0, array_resolver, config_resolver,
                 conduit_resolver, ext)
     return _tf_or_refuse(val, ext)
@@ -469,6 +476,12 @@ def _tf_string_members_clear(ext, members) -> bool:
     return chk is not None and bool(chk(strs))
 
 
+def _receiver_is_shadowed(node, ext) -> bool:
+    chain = _receiver_chain(node)
+    return (ext is not None and chain is not None
+            and chain.split(".", 1)[0] in ext.shadowed_receiver_names)
+
+
 def _fold_field_access(node: Node, ext) -> Any:
     """``File.separator``-class taint-free fields and cross-file
     static-final resolution. Only fires under an extension context —
@@ -481,7 +494,7 @@ def _fold_field_access(node: Node, ext) -> Any:
         return _REFUSE
     field = fld.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     chain = _receiver_chain(obj)
-    if chain is None:
+    if chain is None or _receiver_is_shadowed(obj, ext):
         return _REFUSE
     if ext.allow_taint_free and chain.rsplit(".", 1)[-1] == "File" \
             and field in _TF_FILE_FIELDS:
@@ -517,7 +530,8 @@ def _fold_tf_system_read(node: Node, resolve_name, depth, array_resolver,
     if name_node.text.decode() not in _TF_SYSTEM_READS:  # type: ignore[union-attr]
         return _REFUSE
     chain = _receiver_chain(obj)
-    if chain is None or chain.rsplit(".", 1)[-1] != "System":
+    if (chain is None or _receiver_is_shadowed(obj, ext)
+            or chain.rsplit(".", 1)[-1] != "System"):
         return _REFUSE
     args_node = node.child_by_field_name("arguments")
     args = [c for c in (args_node.children if args_node else ())
@@ -732,7 +746,7 @@ def _fold_xfile_call(node: Node, ext) -> Any:
     expression that cannot reference parameters or instance state."""
     obj = node.child_by_field_name("object")
     name_node = node.child_by_field_name("name")
-    if obj is None or name_node is None:
+    if obj is None or name_node is None or _receiver_is_shadowed(obj, ext):
         return _REFUSE
     args_node = node.child_by_field_name("arguments")
     argc = len([c for c in (args_node.children if args_node else ())
@@ -785,7 +799,8 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     args = [c for c in (args_node.children if args_node else ())
             if c.is_named]
     if method == "valueOf" and obj.type == "identifier" \
-            and obj.text.decode() == "String" and len(args) == 1:  # type: ignore[union-attr]
+            and obj.text.decode() == "String" and len(args) == 1 \
+            and not _receiver_is_shadowed(obj, ext):  # type: ignore[union-attr]
         v = _fold(args[0], resolve_name, depth + 1, array_resolver,
                   config_resolver, conduit_resolver, ext)
         if v is TAINT_FREE:
