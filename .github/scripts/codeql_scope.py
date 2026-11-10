@@ -234,6 +234,7 @@ def extract_imports(
     literal_references: dict[str, set[Path]] | None = None,
     *,
     source_tree: ast.Module | None = None,
+    division_references: list[ast.BinOp] | None = None,
 ) -> list[str] | None:
     """Parse a .py file and return the dotted module names it imports.
 
@@ -247,6 +248,8 @@ def extract_imports(
     SCAN_ROOTS ones; when None it is derived from the tree. Callers
     looping over many files (``build_graph``) pass it once. ``source_tree``
     lets a caller reuse an already parsed tree without reading/parsing twice.
+    An optional ``division_references`` list receives path-division nodes
+    during the same read-only walk, avoiding a separate consumer traversal.
     """
     if root_modules is None:
         root_modules = frozenset(
@@ -296,6 +299,9 @@ def extract_imports(
             declarations.append(node)
         elif isinstance(node, ast.Call):
             calls.append(node)
+        elif (division_references is not None and isinstance(node, ast.BinOp)
+              and isinstance(node.op, ast.Div)):
+            division_references.append(node)
         pending.extend(ast.iter_child_nodes(node))
     for node in declarations:
         if isinstance(node, ast.Import):
@@ -354,6 +360,7 @@ def build_graph(
     py_files: list[Path], repo: Path,
     *, literal_references: dict[str, set[Path]] | None = None,
     on_parsed: Callable[[Path, str, ast.Module], None] | None = None,
+    on_divisions: Callable[[Path, str, list[ast.BinOp]], None] | None = None,
 ) -> tuple[dict[Path, set[Path]], int]:
     """Build a reverse dependency graph: file → files that depend on it.
 
@@ -361,6 +368,9 @@ def build_graph(
     ``on_parsed`` consumer runs once per successfully parsed file, before
     import extraction, so another census can reuse the source and tree
     without retaining the repository's entire AST forest.
+    ``on_divisions`` receives the same source and its read-only division
+    nodes after import extraction, in breadth-first order. Both consumers
+    run within one file's lifetime; neither runs for a failed parse.
     """
     # Module name → file path mapping.
     mod_to_file: dict[str, Path] = {}
@@ -374,7 +384,7 @@ def build_graph(
 
     root_modules = frozenset(p.stem for p in discover_root_modules(repo))
     for f in py_files:
-        if on_parsed is None:
+        if on_parsed is None and on_divisions is None:
             imports = extract_imports(f, repo, root_modules, literal_references)
         else:
             try:
@@ -383,10 +393,15 @@ def build_graph(
             except (OSError, SyntaxError, ValueError):
                 imports = None
             else:
-                on_parsed(f, source, tree)
+                if on_parsed is not None:
+                    on_parsed(f, source, tree)
+                divisions = [] if on_divisions is not None else None
                 imports = extract_imports(
                     f, repo, root_modules, literal_references, source_tree=tree,
+                    division_references=divisions,
                 )
+                if on_divisions is not None:
+                    on_divisions(f, source, divisions)
         if imports is None:
             parse_failures += 1
             continue

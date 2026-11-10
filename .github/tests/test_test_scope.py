@@ -948,7 +948,8 @@ class TestOnRealRepo:
             return list(fast_files)
 
         def _build_graph_cached(all_py, repo_arg, **kwargs):
-            if repo_arg == repo and kwargs.get("on_parsed") is None:
+            if (repo_arg == repo and kwargs.get("on_parsed") is None
+                    and kwargs.get("on_divisions") is None):
                 for literal, paths in kwargs.get("literal_references", {}).items():
                     paths.update(references.get(literal, ()))
                 return cached
@@ -1338,6 +1339,7 @@ def test_workflow_rebalance_preserves_selected_cases(tmp_path, monkeypatch):
 
 class TestSharedFixtureInventory:
 
+    @pytest.mark.parametrize("shared_divisions", [False, True], ids=["tree", "divisions"])
     @pytest.mark.parametrize("source,leaf", [
         ("VALUE = {'row': call(Path(__file__).parent / 'fixtures' / 'nested')}\n", "nested"),
         ("def factory(base=Path(__file__).parent / 'fixtures' / 'nested'):\n    return base\n", "nested"),
@@ -1345,7 +1347,9 @@ class TestSharedFixtureInventory:
         ("FIXTURE = Path(__file__).parent / 'fixtur\\x65s' / 'nested'\n", "nested"),
         ("VALUE = call('fixtures', 123)\n", ""),
     ], ids=["mapping-call", "function-default", "comprehension", "escaped-path", "leaf-fallback"])
-    def test_nested_path_syntax_and_fallback_keep_tree_read_only(self, tmp_path, source, leaf):
+    def test_nested_path_syntax_and_fallback_keep_tree_read_only(
+        self, tmp_path, source, leaf, shared_divisions,
+    ):
         from test_scope import _extract_fixture_dirs
 
         test = tmp_path / "core/pkg/tests/test_shapes.py"
@@ -1355,8 +1359,11 @@ class TestSharedFixtureInventory:
         test.write_text(source)
         tree = ast.parse(source)
         before = ast.dump(tree, include_attributes=True)
+        divisions = [node for node in ast.walk(tree)
+                     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
+        kwargs = {"division_nodes": divisions} if shared_divisions else {"source_tree": tree}
         result = _extract_fixture_dirs(test.relative_to(tmp_path), tmp_path,
-                                       source=source, source_tree=tree)
+                                       source=source, **kwargs)
         assert set(result) == {fixture / leaf}
         assert ast.dump(tree, include_attributes=True) == before
         assert test.read_text() == source
@@ -1538,11 +1545,11 @@ class TestOwnedResourceDispatchWork:
         original = scoper._extract_fixture_dirs
         parsed = []
 
-        def require_shared_tree(path, repo, *, source=None, source_tree=None):
-            assert source is not None and source_tree is not None, "fixture source reparsed after graph"
-            before = ast.dump(source_tree, include_attributes=True)
-            result = original(path, repo, source=source, source_tree=source_tree)
-            assert ast.dump(source_tree, include_attributes=True) == before
+        def require_shared_tree(path, repo, *, source=None, division_nodes=None):
+            assert source is not None and division_nodes is not None, "fixture source walked after graph"
+            before = [ast.dump(node, include_attributes=True) for node in division_nodes]
+            result = original(path, repo, source=source, division_nodes=division_nodes)
+            assert [ast.dump(node, include_attributes=True) for node in division_nodes] == before
             parsed.append(path)
             return result
 
