@@ -636,3 +636,19 @@ def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publicatio
             assert any(e.get("reason") == "study_history_ack_mismatch" for e in runtime.events())
         else:
             assert load_entries(config.out_dir, fresh=True) == []
+
+
+def test_label_only_negative_cannot_withdraw_distinct_prior_assumptions(study_case):
+    case = study_case
+    primary = case['prior'].hypothesis
+    case['prior'].hypotheses = [
+        {'mechanism': primary, 'confidence': 'high', 'counter_scope': 'local',
+         'assumed_property': 'local declaration'},
+        {'mechanism': primary, 'confidence': 'high', 'counter_scope': 'cross_function',
+         'assumed_property': 'caller declaration'},
+    ]
+    candidate = _candidate()
+    candidate.claim_refutations = _refutations(case)[:1]
+    _reassess(case, candidate)
+    _retained(case)
+    _diagnostic(case)

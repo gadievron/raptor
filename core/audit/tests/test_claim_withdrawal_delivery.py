@@ -187,7 +187,8 @@ def test_first_pass_does_not_pay_for_withdrawal_schema_or_source_packet(tmp_path
     assert "claim_review_delivery" not in outcome.review_result
 
 
-def test_scoped_negative_and_model_withdrawal_cover_distinct_prior_claims(tmp_path, monkeypatch):
+@pytest.mark.parametrize("same_label", [False, True], ids=["distinct-labels", "distinct-material"])
+def test_scoped_negative_and_model_withdrawal_cover_distinct_prior_claims(tmp_path, monkeypatch, same_label):
     import re
 
     from core.audit.refutation_source import capture_source_identity
@@ -196,6 +197,16 @@ def test_scoped_negative_and_model_withdrawal_cover_distinct_prior_claims(tmp_pa
     config, runtime, ctx, prior = case(tmp_path)
     prior.hypotheses = [{"mechanism": "an independent later copy ignores allocation", "confidence": "high", "cwe": "CWE-787"}]
     hypotheses = orch._extract_all_hypotheses(prior)
+    if same_label:
+        # Exercise the negative-authority consumer with two complete intake
+        # declarations; this does not claim production intake now preserves them.
+        hypotheses[0].update(counter_scope="local", assumed_property="local declaration")
+        hypotheses[1].update(mechanism=hypotheses[0]["mechanism"], cwe=hypotheses[0]["cwe"],
+                             counter_scope="cross_function", assumed_property="caller declaration")
+        prior.hypotheses = deepcopy(hypotheses)
+        actual_extract = orch._extract_all_hypotheses
+        monkeypatch.setattr(orch, "_extract_all_hypotheses",
+                            lambda outcome: deepcopy(hypotheses) if outcome is prior else actual_extract(outcome))
     revisions = [ClaimRevision(h, pass_id="mixed-intake", file="owned.c", function="f", line_start=1) for h in hypotheses]
     prior.review_result["review_claims"] = record_intake(begin_review(runtime._origin(ctx), "mixed"), revisions)
     ctx["prior_review_claims"] = prior.review_result["review_claims"]
@@ -217,11 +228,15 @@ def test_scoped_negative_and_model_withdrawal_cover_distinct_prior_claims(tmp_pa
     fresh.claim_refutations = (ClaimRefutation("owned.c", "f", 1, hypotheses[1]["mechanism"],
         (ProbeOutcome("joern", "refuted", "owned-negative"),), identity),)
     report = orch._model_withdrawal_assessment(config, prior, fresh, identity)
-    assert report["admissible"]
-    assert len(report["accepted"]) == len(report["scoped_refuted_references"]) == 1
+    assert report["admissible"] is not same_label
+    assert len(report["accepted"]) == 1
     assert report["accepted"][0]["reference"] == revisions[0].reference()
-    assert report["scoped_refuted_references"] == [revisions[1].reference()]
     assert report["accepted"][0]["adjudication"] == "model_withdrawn"
+    if same_label:
+        assert report["reason"] == "prior_claims_not_explicitly_withdrawn"
+        assert "scoped_refuted_references" not in report
+    else:
+        assert report["scoped_refuted_references"] == [revisions[1].reference()]
 
 
 def test_panel_merge_keeps_only_selected_responses_delivery_packet(tmp_path):

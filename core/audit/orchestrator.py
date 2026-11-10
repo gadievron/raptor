@@ -34904,7 +34904,7 @@ def _model_withdrawal_assessment(config, prior, fresh, current_source):
     # unsupported theory is explicitly withdrawn. Never infer either state
     # from prose agreement or the absence of a current hypothesis.
     negative = {key for key, row in expected.items() if claims_refuted(
-        fresh, [row["hypothesis"]["mechanism"]], source_identity=current_source)}
+        fresh, [row["hypothesis"]["mechanism"]], source_identity=current_source, claim_outcome=prior)}
     withdrawn = {row["reference"]["revision_id"] for row in accepted}
     if set(expected) - negative - withdrawn:
         return {**report, "reason": "prior_claims_not_explicitly_withdrawn"}
@@ -35389,7 +35389,9 @@ def _re_review_study_enriched(
             current_source = capture_source_identity(config.target_path, prior_outcome.file)
             same_occurrence = (outcome.file, outcome.function, outcome.line or 0) == (
                 prior_outcome.file, prior_outcome.function, prior_outcome.line or 0)
-            refuted_prior = same_occurrence and claims_refuted(outcome, prior_claims, source_identity=current_source)
+            refuted_prior = same_occurrence and claims_refuted(
+                outcome, prior_claims, source_identity=current_source, claim_outcome=prior_outcome,
+            )
             try:
                 model_withdrawal = (_model_withdrawal_assessment(config, prior_outcome, outcome, current_source)
                                     if knowledge_runtime is not None else {"admissible": False, "reason": "unowned_review"})
