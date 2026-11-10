@@ -567,6 +567,14 @@ class AuditKnowledgeRuntime:
                     if not admitted:
                         reason = why
                         break
+            if not reason and reservation.packet.explanations:
+                # Re-admit the union after all explanation/caller callbacks.
+                # A later explanation's check must not leave an earlier
+                # explanation stale while the primary source is unchanged.
+                admitted, why = self.bindings.admit_inputs(tuple(
+                    material for answer in reservation.packet.explanations for material in answer.inputs))
+                if not admitted:
+                    reason = why
             if not reason:
                 for caller_answer in reservation.packet.caller_contexts:
                     material = caller_answer.material
