@@ -222,7 +222,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ runner.temp }}/apt-debs
-          key: apt-debs-${{ steps.native_venv.outputs.platform-key }}-llvm21-radare2-${{ steps.native_venv.outputs.week }}-v2
+          key: apt-debs-${{ steps.native_venv.outputs.platform-key }}-llvm21-radare2-${{ steps.native_venv.outputs.week }}-${{ hashFiles('.github/scripts/apt_history_window.py') }}-v3
 
       - name: Install binary-analysis toolchain (radare2 + LLVM 21)
         # continue-on-error so a transient apt/LLVM mirror outage doesn't
@@ -238,6 +238,7 @@ jobs:
           APT_CACHE_USABLE: ${{ steps.apt-debs.outcome == 'success' && steps.apt-debs.outputs.cache-hit == 'true' }}
         run: |
           set -euo pipefail
+          capture_rc=0
           if [[ "$APT_CACHE_USABLE" == true ]] && ls "$DEBS_DIR"/*.deb >/dev/null 2>&1; then
             # Warm path: install straight from the cached .debs — no
             # network. dpkg resolves inter-deb ordering itself; a
@@ -250,29 +251,50 @@ jobs:
             # A failed restore can leave partial files; never bank those.
             mkdir -p "$DEBS_DIR"
             rm -f "$DEBS_DIR"/*.deb
+            history_snapshot="$RUNNER_TEMP/toolchain-apt-before.json"
+            history_window="$RUNNER_TEMP/toolchain-apt-window.log"
+            history_ready=0
+            # A cache observation failure must not prevent the original installs.
+            if python3 .github/scripts/apt_history_window.py snapshot \
+              /var/log/apt/history.log "$history_snapshot"; then
+              history_ready=1
+            fi
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends radare2
             wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x /tmp/llvm.sh
             sudo /tmp/llvm.sh 21
             sudo apt-get install -y --no-install-recommends llvm-21 clang-21
-            # Capture this run's full apt transaction closure as .debs
-            # for the cache: on a fresh runner the history log holds
-            # only this job's installs, and --reinstall --download-only
-            # fetches exactly those packages (dependencies included)
-            # without touching the installed state.
-            sudo mkdir -p "$DEBS_DIR"
-            # Entries in the log line look like ``name:arch (version,
-            # automatic)`` — match on the ``name:arch (`` shape so the
-            # comma inside the parens can't leak stray tokens.
-            pkgs=$(sed -n 's/^Install: //p' /var/log/apt/history.log \
-                     | grep -oE '[A-Za-z0-9][A-Za-z0-9.+-]*:[a-z0-9-]+ \(' \
-                     | sed 's/:.*//' | sort -u)
-            [ -n "$pkgs" ]
-            sudo apt-get install -y --reinstall --download-only \
-              -o Dir::Cache::archives="$DEBS_DIR" $pkgs
-            sudo find "$DEBS_DIR" -mindepth 1 ! -name '*.deb' -depth -delete
-            sudo chown -R "$(id -u):$(id -g)" "$DEBS_DIR"
+            # Capture errors must not hide tools already installed above.
+            # Run with errexit inside the subshell, retain its status outside,
+            # then publish PATH before reporting failure (and refusing save).
+            set +e
+            (
+              set -euo pipefail
+              # Keep Install rows from the verified cold-toolchain window.
+              # Earlier browser provisioning has its own mandatory installer.
+              # Retain the existing package extraction and download semantics.
+              sudo mkdir -p "$DEBS_DIR"
+              if [[ "$history_ready" != 1 ]]; then
+                echo '::warning::No verified APT history boundary; refusing cache capture'
+                exit 1
+              fi
+              python3 .github/scripts/apt_history_window.py extract \
+                /var/log/apt/history.log "$history_snapshot" "$history_window"
+              # Entries in the log line look like ``name:arch (version,
+              # automatic)`` — match on the ``name:arch (`` shape so the
+              # comma inside the parens can't leak stray tokens.
+              pkgs=$(sed -n 's/^Install: //p' "$history_window" \
+                       | grep -oE '[A-Za-z0-9][A-Za-z0-9.+-]*:[a-z0-9-]+ \(' \
+                       | sed 's/:.*//' | sort -u)
+              [ -n "$pkgs" ]
+              sudo apt-get install -y --reinstall --download-only \
+                -o Dir::Cache::archives="$DEBS_DIR" $pkgs
+              sudo find "$DEBS_DIR" -mindepth 1 ! -name '*.deb' -depth -delete
+              sudo chown -R "$(id -u):$(id -g)" "$DEBS_DIR"
+            )
+            capture_rc=$?
+            set -e
           fi
           sudo update-alternatives --install /usr/bin/clang clang \
             /usr/bin/clang-21 100
@@ -283,6 +305,7 @@ jobs:
           clang --version || true
           /usr/lib/llvm-21/bin/llvm-cov --version || true
           /usr/lib/llvm-21/bin/llvm-profdata --version || true
+          exit "$capture_rc"
 
       # Explicit save (not actions/cache's implicit post-job save) so a
       # partial download from a failed cold path can never be cached:
@@ -296,7 +319,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           path: ${{ runner.temp }}/apt-debs
-          key: apt-debs-${{ steps.native_venv.outputs.platform-key }}-llvm21-radare2-${{ steps.native_venv.outputs.week }}-v2
+          key: apt-debs-${{ steps.native_venv.outputs.platform-key }}-llvm21-radare2-${{ steps.native_venv.outputs.week }}-${{ hashFiles('.github/scripts/apt_history_window.py') }}-v3
 
       # RAPTOR_MAX_SESSION_SECONDS: tier wallclock tripwire (root
       # conftest). Nightly #193 measured 1829s for the expanded slow tier.
