@@ -1075,3 +1075,34 @@ class TestSimpleFileIdentity:
         assert len(fields) == 1
         assert fold_expr(fields[0], lambda _n, _d: REFUSE,
                          allow_taint_free=True) is REFUSE
+
+
+class TestAnonymousCreationIdentity:
+    @pytest.mark.parametrize("anonymous,expected", [(False, True), (True, False)])
+    def test_actual_consumer_through_cross_file_wrapper(self, tmp_path, anonymous, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        body = (' { String literal() { return System.getenv("OWNED"); } }'
+                if anonymous else "")
+        (tmp_path / "Cfg.java").write_text(
+            'class Cfg { String literal() { return "safe"; } '
+            'static String wrapper() { return new Cfg()' + body + '.literal(); } }'
+        )
+        source = ('class T {\nvoid m(java.io.PrintWriter out) {\n'
+                  'String value=Cfg.wrapper();\nout.println(value);\n}\n}\n')
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, 6), str(caller), str(tmp_path))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    @pytest.mark.parametrize("anonymous", [False, True])
+    def test_creation_cache_records_only_named_runtime_class(self, anonymous):
+        body = ' { String literal() { return System.getenv("OWNED"); } }' if anonymous else ""
+        source = 'class T { void m() { Cfg receiver=new Cfg()' + body + '; } }'
+        index = JavaConstIndex(source, (1, 1))
+        assert index.ok
+        assert index.receiver_type("receiver") == (None if anonymous else "Cfg")
