@@ -9136,14 +9136,16 @@ def _cmd_resolves_nowhere(cmd: "list | None",
     FileNotFoundError (see the missing-tool check in the per-call run
     body). Relative-with-separator commands resolve against the CHILD
     cwd and are never classified here; an empty/absent command is left
-    to the lane's own validation."""
+    to the lane's own validation. An absent child PATH uses the default
+    exec search, matching os.execvpe rather than inheriting caller PATH."""
     if not (cmd and cmd[0]):
         return False
     _cmd0 = cmd[0]
     if os.sep not in _cmd0:
+        _child_path = os.defpath if env_path is None else env_path
         return not (shutil.which(_cmd0)
-                    or (env_path
-                        and shutil.which(_cmd0, path=env_path)))
+                    or (_child_path
+                        and shutil.which(_cmd0, path=_child_path)))
     if os.path.isabs(_cmd0):
         return not os.path.exists(_cmd0)
     return False  # relative-with-sep: cwd-dependent
