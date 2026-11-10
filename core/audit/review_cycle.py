@@ -194,6 +194,11 @@ class KnowledgeCycle:
             self._terminal.add(answer.request_id)
             if answer.entries and answer != previous:
                 self._changed(answer.request_id, now)
+            elif not answer.entries:
+                # A withdrawn answer cannot leave useful-work credit behind.
+                self._delta.discard(answer.request_id)
+                if not self._delta:
+                    self._first_ready = None
             return True
 
     def explanation(self, answer: SubjectExplanation, *, now: float) -> bool:
@@ -299,7 +304,7 @@ class KnowledgeCycle:
                 self._defer("shared_admission")
                 return None
             packet = KnowledgeContinuation(
-                uuid4().hex, tuple(a for a in self._references.values() if a.entries),
+                uuid4().hex, tuple(self._references.values()),
                 tuple(explanations), tuple(sorted(self._delta)), pending, tuple(caller_contexts),
             )
             self.started += 1
@@ -321,7 +326,7 @@ class KnowledgeCycle:
             if self._active is None or self._active.pass_id != pass_id:
                 self._events.append(KnowledgeCycleEvent("rejected_completion", reason="inactive_pass", pass_id=pass_id))
                 return False
-            candidates = ({a.request_id for a in self._active.references}
+            candidates = ({a.request_id for a in self._active.references if a.entries}
                           | {a.request_id for a in self._active.explanations}
                           | {a.request_id for a in self._active.caller_contexts})
             if not set(delivered) <= candidates:
