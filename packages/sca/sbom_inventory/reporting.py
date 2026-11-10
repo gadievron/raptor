@@ -151,6 +151,8 @@ def verification_blocks(report, *, limit=50):
             *report["unmatched_findings"], *report["coverage"]["baseline_unmatched_findings"]]
     blocks.append(_notes("Unavailable coverage", [*report["coverage"]["errors"],
                          *((row.get("name") or row.get("finding_id") or "scan") + ": " + row["reason"] for row in (gaps if limit is None else gaps[:limit]))]))
+    if limit is not None and len(gaps[:limit]) < len(gaps):
+        blocks.append(Block("paragraph", text=f"Showing {len(gaps[:limit])} of {len(gaps)} recorded coverage gaps."))
     blocks.append(_notes("Scope", report["limitations"]))
     return blocks
 
