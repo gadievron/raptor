@@ -19,6 +19,7 @@ class CommandCapability:
 
 
 CAPABILITIES = (
+    CommandCapability("analyze", "analysis", "explicit portable export; native output directory default", "native summary; captured snapshot summary on stderr", "preparation and orchestrated snapshots remain separate; recorded claims only, no generation/verification replay"),
     CommandCapability("gadget-scan", "gadget-oracle", "explicit destination or native --out required", "native text/JSON; snapshot summary on stderr", "captured hint witnesses and census only; native absence tier unchanged"),
     CommandCapability("sanitizer-cut-parity-report", "sanitizer-cut-parity", "explicit destination required", "native Markdown; snapshot summary on stderr", "one synthetic baseline capture; native gate preserved and not a real horizon window"),
     CommandCapability("trust-report --synth-db", "trust-corpus", "explicit destination required", "native text; requested snapshot summary on stderr", "single read-only query, source-read stage and unknown corpus completion; attempts are not measured tokens or money"),
