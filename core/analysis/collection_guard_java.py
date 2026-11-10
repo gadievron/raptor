@@ -62,6 +62,8 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
@@ -69,6 +71,16 @@ logger = logging.getLogger(__name__)
 
 _MAX_DECLARING_CANDIDATES = 8
 _MAX_TREE_FILES = 5000
+_MAX_SOURCE_BYTES = DEFAULT_MAX_SOURCE_CHARS
+
+
+def _read_java_source(root: Path, path: Path) -> str | None:
+    content = read_contained_bytes(root, path.absolute(), _MAX_SOURCE_BYTES)
+    if content is None or content[1]:
+        return None
+    # Match read_text's universal newlines: skip_text compares source content.
+    return content[0].decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+
 
 def _loop_statement_types() -> frozenset[str]:
     """Loop statements carry a back edge — inside one, textual order
@@ -497,10 +509,12 @@ def _resolve_cross_file(chain: str, field: str, source_root: Path,
     declaring_root = None
     for f in candidates:
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            text = _read_java_source(source_root, f)
+            if text is None:
+                raise _Refused("declaring source unavailable")
             tree = parser.parse(text.encode("utf-8", errors="replace"))
-        except (OSError, ValueError):
-            continue
+        except (OSError, ValueError) as exc:
+            raise _Refused("declaring source unavailable") from exc
         pkg = _package_of(tree.root_node)
         if package and pkg != package:
             continue
@@ -560,9 +574,8 @@ def _scan_tree_contains_only(field: str, source_root: Path, parser, *,
         if n_files > _MAX_TREE_FILES:
             msg = "source tree too large to verify immutability"
             raise _Refused(msg)
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        text = _read_java_source(source_root, f)
+        if text is None:
             msg = "unreadable file during immutability scan"
             raise _Refused(msg)
         if field not in text:
