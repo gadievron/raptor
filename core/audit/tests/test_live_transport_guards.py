@@ -1614,6 +1614,13 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run") == set()
         assert _callers_of(calls, "run_pinned_subprocess") == {"test_header_property_sources"}
 
+    def test_nosemgrep_rule_scope_regressions(self) -> None:
+        calls = _function_call_map("../../../packages/semgrep/tests/test_nosemgrep.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_native_rule_scoped_suppression_annotation",
+        }
+
     def test_encoding_rules_c(self) -> None:
         calls = _function_call_map("test_encoding_rules_c.py")
         assert _callers_of(calls, "run_semgrep_sweep") == set()

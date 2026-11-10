@@ -38,7 +38,7 @@ _NOSEMGREP_RE = re.compile(
     r"""(?://|[#]|/\*)       # comment opener
         \s*nosemgrep         # keyword
         (?::[ \t]*           # optional colon + rule list
-          ([\w.:,/-]+)       # group 1: comma-separated rule IDs
+          ([\w.:/-]+(?:[ \t]*,[ \t]*[\w.:/-]+)*)  # group 1: rule IDs
         )?
         (?:[ \t]+(.+?))?     # group 2: justification text
         (?:\s*\*/)?          # optional block-comment closer
@@ -82,6 +82,7 @@ def extract_nosemgrep(
     line: int,
     *,
     _lines: list[str] | None = None,
+    rule_id: str | None = None,
 ) -> dict | None:
     """Check whether *line* (1-indexed) in *file_path* has a nosemgrep comment.
 
@@ -89,7 +90,8 @@ def extract_nosemgrep(
     are valid nosemgrep positions per Semgrep's spec).
 
     Returns a dict ``{suppressed, rule_ids, justification, comment_line}``
-    if found, ``None`` otherwise.
+    if found, ``None`` otherwise. When ``rule_id`` is supplied, only
+    comments selecting that rule (or all rules) are returned.
     """
     if _lines is None:
         # Same capped read as the annotate_sarif path's _FileCache —
@@ -125,6 +127,11 @@ def extract_nosemgrep(
                 rule_ids = [
                     r.strip() for r in raw_ids.split(",") if r.strip()
                 ]
+                if rule_id is not None and rule_ids and not any(
+                    rule_id == selected or rule_id.endswith("." + selected)
+                    for selected in rule_ids
+                ):
+                    continue
                 return {
                     "suppressed": True,
                     "rule_ids": rule_ids,
@@ -209,7 +216,11 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
             if lines is None:
                 continue
 
-            info = extract_nosemgrep(Path(abs_path), line, _lines=lines)
+            rule_id = result.get("ruleId")
+            info = extract_nosemgrep(
+                Path(abs_path), line, _lines=lines,
+                rule_id=rule_id if isinstance(rule_id, str) else "",
+            )
             if info:
                 # A non-dict properties value can't take the
                 # annotation; skip rather than clobber or crash.
