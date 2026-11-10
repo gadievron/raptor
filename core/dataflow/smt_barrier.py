@@ -74,7 +74,9 @@ from enum import Enum
 from pathlib import Path
 
 from core.dataflow import sanitizer_cut_config as _sc_config
-from core.dataflow.source_identity import known_python_identity_conflict
+from core.dataflow.source_identity import (
+    known_python_identity_conflict, known_python_origin_conflict,
+)
 from core.paths import confine
 from core.smt_solver import z3
 from core.smt_solver._validation import require_bool
@@ -3154,6 +3156,10 @@ def try_tier0(
             f"validator located in diff but not findable in {sink_uri!r}",
             spec=spec,
         )
+    if language == "python":
+        origin_conflict = known_python_origin_conflict(repo_root, src_path, "re")
+        if origin_conflict:
+            return Tier0Result(Tier0Status.NOT_APPLICABLE, origin_conflict, spec=spec)
     if language != "python":
         # Non-Python extractors require guard-and-exit on one diff line —
         # dominance is partly established by the diff itself.  Three

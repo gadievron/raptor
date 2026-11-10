@@ -51,6 +51,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.dataflow.sanitizer_catalog import sink_classes_for_cwe
+from core.dataflow.source_identity import known_python_origin_conflict
+from core.paths import confine
 from core.dataflow.smt_barrier import (
     _DANGER_CHARS,
     _STR_LITERAL,
@@ -316,12 +318,20 @@ def _step_refutes_path(
     source_text: str,
     language: str,
     sink_classes: frozenset,
+    repo_root: Path | None = None,
 ) -> tuple[bool, str, float]:
     """Full soundness pipeline for one lifted validator on one path:
     dominance (same file, patch-flow AST machinery), value-chain
     reach, then the language-emptiness proof for every sink class."""
     if step_file != sink_file:
         return False, "validator and sink in different files", 0.0
+    if language == "python" and repo_root is not None:
+        source_path = confine(repo_root, step_file)
+        if source_path is None:
+            return False, "source library origin is outside the repository", 0.0
+        origin_conflict = known_python_origin_conflict(repo_root, source_path, "re")
+        if origin_conflict:
+            return False, origin_conflict, 0.0
     if spec.kind == "charset_sub":
         dominates = substitution_dominates_sink(
             source_text, step_line, sink_line, spec.var_name,
@@ -485,6 +495,7 @@ def prescreen_finding(
                 source_text=source_text,
                 language=language,
                 sink_classes=sink_classes,
+                repo_root=repo_root,
             )
             total_ms += ms
             if ok:
