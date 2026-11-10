@@ -8,7 +8,7 @@ canonicalization, injector semantics, executor-table dispatch, hooks.
 from __future__ import annotations
 
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from typing import Any
 
 from core.container.exec import ExecOutcome
@@ -326,47 +326,50 @@ def test_http_exchange_watchdog_stops_dripping_headers() -> None:
     import threading as _threading
     import time as _time
 
-    srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-    srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    port = srv.getsockname()[1]
-    stop = _threading.Event()
+    with ExitStack() as resources:
+        srv = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        resources.callback(srv.close)
+        srv.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        port = srv.getsockname()[1]
+        stop = _threading.Event()
 
-    def _drip(conn) -> None:
-        try:
-            conn.sendall(b"HTTP/1.1 200 OK\r\n")
-            # Drip header bytes one at a time, each inside the
-            # inactivity window — never a blank line, never EOF.
-            for ch in (b"X-Drip: " + b"a" * 4096) * 4:
-                if stop.is_set():
-                    break
-                try:
-                    conn.sendall(bytes([ch]))
-                except OSError:
-                    break
-                if stop.wait(0.2):
-                    break
-        except OSError:
-            pass
+        def _drip(conn) -> None:
+            try:
+                conn.sendall(b"HTTP/1.1 200 OK\r\n")
+                # Drip header bytes one at a time, each inside the
+                # inactivity window — never a blank line, never EOF.
+                for ch in (b"X-Drip: " + b"a" * 4096) * 4:
+                    if stop.is_set():
+                        break
+                    try:
+                        conn.sendall(bytes([ch]))
+                    except OSError:
+                        break
+                    if stop.wait(0.2):
+                        break
+            except OSError:
+                pass
 
-    server = SocketServer(srv, _drip)
-    start = _time.monotonic()
-    try:
+        server = resources.enter_context(SocketServer(srv, _drip))
+        resources.callback(stop.set)
+        start = _time.monotonic()
         try:
-            ev._http_exchange(
-                host_ip="127.0.0.1", host_port=port,
-                method="GET", path="/", timeout_seconds=1.0,
-            )
-        except TimeoutError as exc:
-            assert "watchdog" in str(exc)
-        else:  # pragma: no cover
-            raise AssertionError("expected TimeoutError from header drip")
-    finally:
-        stop.set()
-        server.close()
-    # Watchdog fires at 2x timeout; without it this blocks ~55 min.
-    assert _time.monotonic() - start < 5.0
+            try:
+                ev._http_exchange(
+                    host_ip="127.0.0.1", host_port=port,
+                    method="GET", path="/", timeout_seconds=1.0,
+                )
+            except TimeoutError as exc:
+                assert "watchdog" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected TimeoutError from header drip")
+        finally:
+            stop.set()
+            server.close()
+        # Watchdog fires at 2x timeout; without it this blocks ~55 min.
+        assert _time.monotonic() - start < 5.0
 # ── tcp_probe destination pinning (plans are untrusted) ───────────────
 
 
