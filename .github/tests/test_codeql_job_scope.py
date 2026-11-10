@@ -1,12 +1,16 @@
 """CodeQL allocates analysis runners only when their outputs are needed."""
 
 import ast
+import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import textwrap
 
 import pytest
+
+from core.testing.processes import run_in_process_group
 
 
 WORKFLOW = Path(__file__).resolve().parents[2] / '.github/workflows/codeql.yml'
@@ -91,3 +95,74 @@ def test_required_status_accepts_intentional_skips_and_refuses_failures(tmp_path
         capture_output=True, text=True, timeout=5,
     )
     assert result.returncode == code, result.stdout + result.stderr
+
+
+def _cleanup_script():
+    lines = _job('analyze').splitlines()
+    start = lines.index('      - name: Free disk space for overlay analysis') + 1
+    end = next(i for i in range(start, len(lines))
+               if lines[i].startswith('      - '))
+    step = lines[start:end]
+    assert step[0] == "        if: steps.gate.outputs.run == 'true' && matrix.language == 'python'"
+    body = step.index('        run: |') + 1
+    return textwrap.dedent('\n'.join(step[body:]) + '\n')
+
+
+@pytest.mark.parametrize('before_failure,cleanup_failure,after_failure,expected', [
+    (False, False, False, 0),
+    (False, True, False, 7),
+    (True, False, False, 0),
+    (True, True, False, 7),
+    (False, False, True, 13),
+], ids=['success', 'cleanup-failure', 'before-df-failure', 'both-fail', 'after-df-failure'])
+def test_cleanup_measurement_keeps_all_roots_and_status(
+    tmp_path, before_failure, cleanup_failure, after_failure, expected,
+):
+    tools = tmp_path / 'tools'
+    tools.mkdir()
+    log = tmp_path / 'commands.jsonl'
+    fake = f'#!{sys.executable} -I\n' + r'''
+import json
+import os
+from pathlib import Path
+import sys
+
+tool = Path(sys.argv[0]).name
+args = sys.argv[1:]
+with open(os.environ['COMMAND_LOG'], 'a') as stream:
+    stream.write(json.dumps([tool, args]) + '\n')
+if tool == 'sudo':
+    assert args[:3] == ['rm', '-rf', '--'] and len(args) == 4
+    assert args[3] in ['/usr/share/dotnet', '/usr/local/lib/android', '/opt/ghc']
+    sys.exit(7 if os.environ['CLEANUP_FAILURE'] == '1' and args[3] == '/usr/local/lib/android' else 0)
+assert tool == 'df' and args in [['-B1', '/'], ['-h', '/']]
+failure = 'BEFORE_FAILURE' if args[0] == '-B1' else 'AFTER_FAILURE'
+sys.exit(13 if os.environ[failure] == '1' else 0)
+'''
+    for name in ('sudo', 'df'):
+        executable = tools / name
+        executable.write_text(fake)
+        executable.chmod(0o755)
+    # Only inert tools are reachable; sudo records arguments without running rm.
+    result = run_in_process_group(
+        ['/bin/bash', '--noprofile', '--norc', '-euo', 'pipefail', '-c', _cleanup_script()],
+        timeout=5, cwd=tmp_path, env={
+            'PATH': str(tools), 'COMMAND_LOG': str(log),
+            'BEFORE_FAILURE': str(int(before_failure)),
+            'CLEANUP_FAILURE': str(int(cleanup_failure)),
+            'AFTER_FAILURE': str(int(after_failure)),
+        }, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+    commands = [json.loads(line) for line in log.read_text().splitlines()]
+    assert commands[0] == ['df', ['-B1', '/']]
+    assert [args for tool, args in commands if tool == 'sudo'] == [
+        ['rm', '-rf', '--', '/usr/share/dotnet'],
+        ['rm', '-rf', '--', '/usr/local/lib/android'],
+        ['rm', '-rf', '--', '/opt/ghc'],
+    ]
+    assert sum(tool == 'df' and args == ['-h', '/'] for tool, args in commands) == int(not cleanup_failure)
+    assert result.stdout.count('CodeQL cleanup path=') == 3
+    for line in result.stdout.splitlines():
+        assert re.fullmatch(r'CodeQL cleanup path=/\S+ seconds=\d+ exit=(0|7)', line)
+    assert ('::warning::CodeQL pre-cleanup disk measurement failed' in result.stderr) == before_failure

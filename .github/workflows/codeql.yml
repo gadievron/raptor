@@ -230,7 +230,27 @@ jobs:
       - name: Free disk space for overlay analysis
         if: steps.gate.outputs.run == 'true' && matrix.language == 'python'
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          # Diagnostic failure must not prevent the existing cleanup.
+          if ! df -B1 /; then
+            echo '::warning::CodeQL pre-cleanup disk measurement failed' >&2
+          fi
+          cleanup_status=0
+          for cleanup_path in /usr/share/dotnet /usr/local/lib/android /opt/ghc; do
+            cleanup_started=$SECONDS
+            if sudo rm -rf -- "$cleanup_path"; then
+              cleanup_exit=0
+            else
+              cleanup_exit=$?
+              if (( cleanup_status == 0 )); then
+                cleanup_status=$cleanup_exit
+              fi
+            fi
+            printf 'CodeQL cleanup path=%s seconds=%s exit=%s\n' \
+              "$cleanup_path" "$((SECONDS - cleanup_started))" "$cleanup_exit"
+          done
+          if (( cleanup_status != 0 )); then
+            exit "$cleanup_status"
+          fi
           df -h /
 
       - name: Initialize CodeQL
