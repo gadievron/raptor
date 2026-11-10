@@ -113,22 +113,27 @@ class _FileEntry:
 def parse_properties_strict(text: str) -> _FileEntry:
     """Strict ``.properties`` grammar: ``key=value`` per line, ``#`` or
     ``!`` comments, blank lines. Any backslash anywhere, or a
-    non-comment line without ``=``, marks the whole file unsupported —
-    java.util.Properties' continuation and escape semantics are not
-    modelled, so a file using them must never contribute a value."""
+    non-comment line without ``=``, marks the whole file unsupported.
+    Non-ASCII text and ambiguous key separators also refuse rather than
+    guessing input-stream encoding or key syntax. Leading value whitespace
+    is ignored, but embedded and trailing whitespace remain significant."""
     entry = _FileEntry()
-    if "\\" in text:
+    if "\\" in text or not text.isascii():
         entry.unsupported = True
         return entry
-    for raw in text.splitlines():
-        line = raw.strip()
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.lstrip(" \t\f")
         if not line or line.startswith("#") or line.startswith("!"):
             continue
         if "=" not in line:
             entry.unsupported = True
             return entry
         key, _, value = line.partition("=")
-        entry.entries.setdefault(key.strip(), []).append(value.strip())
+        key = key.rstrip(" \t\f")
+        if any(character in key for character in " \t\f:"):
+            entry.unsupported = True
+            return entry
+        entry.entries.setdefault(key, []).append(value.lstrip(" \t\f"))
     return entry
 
 

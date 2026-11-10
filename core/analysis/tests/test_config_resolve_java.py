@@ -55,7 +55,7 @@ class TestStrictGrammar:
             "# c\n! c2\n\nalg=SHA-256\nother = x \n")
         assert not e.unsupported
         assert e.entries["alg"] == ["SHA-256"]
-        assert e.entries["other"] == ["x"]
+        assert e.entries["other"] == ["x "]
 
     def test_backslash_anywhere_refuses_file(self):
         assert parse_properties_strict("alg=SHA\\\n256\n").unsupported
@@ -566,3 +566,26 @@ def test_fold_hook_preserves_relative_repository_inputs(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     resolver = ConfigResolver(src, 'repo/T.java', 'repo')
     assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256'
+
+
+@pytest.mark.parametrize('suffix', [' ', '\t', '\f'], ids=['space', 'tab', 'formfeed'])
+def test_fold_hook_preserves_significant_property_value_suffix(tmp_path, suffix):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256' + suffix + '\n')
+    src = _src('app.properties', '"alg"')
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256' + suffix
+    from core.analysis.const_fold_java import fold_expr
+    assert fold_expr(_get_call(src), lambda name, depth: REFUSE, config_resolver=resolver.fold_hook) == 'SHA-256' + suffix
+
+
+@pytest.mark.parametrize('text', [
+    'first second=value\n', 'alg:part=value\n', 'alg=SHA-256\u00a0\n',
+])
+def test_unsupported_key_or_encoding_never_contributes_a_value(text):
+    assert parse_properties_strict(text).unsupported
+
+
+def test_property_whitespace_uses_java_line_and_prefix_rules():
+    parsed = parse_properties_strict(' \talg \f= \tSHA-256\f\rsecond=x\r\nthird=y\n')
+    assert not parsed.unsupported
+    assert parsed.entries == {'alg': ['SHA-256\f'], 'second': ['x'], 'third': ['y']}
