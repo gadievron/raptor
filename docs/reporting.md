@@ -273,15 +273,33 @@ reruns analysis.
 | Describe | Explicit file exports; directory/archive/binary paths keep default stdout contracts |
 | Binary report | Explicit captured-JSON exports; default existing-report display retained |
 
-The following census targets retain their domain renderers: SCA
-specialized fix/check/upgrade/diff/verify/health/bump/triage/fix-diff views; binary
-map/investigate/hunt/harness/siblings presentation; CVE diff, threat model,
-exploitation evidence reports, evaluation/scorecard/replay, and specialized
-precision/dataflow reports. Their structured JSON is supported by the offline
-`native` importer, including metadata-only results. Domain-specific presentation
-migration remains necessary before claiming full portability for those surfaces.
-Help, completion, transport servers, interactive shells, credential/configuration
-operations, and acknowledgement-only mutations do not create empty reports.
+Additional reporting boundaries include SCA fix/check/upgrade/diff/verify/health/
+bump/triage/fix-diff and fingerprint views; binary map/investigate/hunt/harness/
+siblings/corpus/graph/runtime; native understand views; CVE checking and diff;
+project threat-model reports; exploitation evidence; recall, scorecard and replay
+measurements; and trust-corpus and parity snapshots. Use the capability listing
+below for the exact command, destination policy and supported formats. Support at
+one boundary does not imply that every subcommand in its domain accepts exports.
+
+Read-only scorecard, trust-corpus and parity exports require an explicit
+`--report-output`. Choose a destination for replay and gadget-scan, or reuse their
+native `--out` policy. Existing stdout remains available; portable export summaries
+appear on stderr so machine JSON stays usable.
+
+`/analyze` can export a captured preparation, analysis or orchestrated snapshot
+with the common controls. Preparation is labelled separately from analysis;
+generated code is not treated as successful verification. Reports contain counters,
+telemetry and recorded claims, while code bodies, prompts and reasoning remain in
+the native artifacts. Gadget reports retain the oracle's hint-only witness and
+absence limitations. Trust-corpus and parity reports describe measurements, not
+new vulnerability verdicts; the synthetic parity baseline is not the real gating
+window. Multiple requested formats share one captured result.
+
+Developer precision harnesses retain their native Markdown/JSON measurement
+artifacts and gate contracts. Help, completion, transport servers, interactive
+shells, credential/configuration operations and acknowledgement-only mutations
+do not create empty reports. Domain evidence serializers also remain native;
+portable reports complement SARIF, OSV, SBOM and workflow records.
 
 ## Reporting capabilities
 
