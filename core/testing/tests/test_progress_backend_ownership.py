@@ -125,7 +125,6 @@ def test_keepalive_caller_releases_listener_and_client(stage, error, monkeypatch
         with monkeypatch.context() as patcher:
             patcher.setattr(keepalive, "socket", sockets)
             patcher.setattr(keepalive, "SocketServer", Mock(return_value=server), raising=False)
-            patcher.setattr(threading, "Thread", Mock(return_value=Mock(ident=None)))
             patcher.setattr(progress.proxy_mod, "EgressProxy", Mock(
                 side_effect=failure if stage == "proxy" else None, return_value=proxy,
             ))
