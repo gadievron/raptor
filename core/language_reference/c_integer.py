@@ -1,4 +1,4 @@
-"""C11 integer explanations checked against WG14 N1570, not bug patterns.
+"""C11 integer and scalar logical explanations checked against WG14 N1570, not bug patterns.
 
 Coverage is deliberately C11 only. Other editions and C++ require their own
 review; source-file suffixes do not make these rules universally applicable.
@@ -175,6 +175,28 @@ ENTRIES = (
          "arm representable ranges", "selected arm value", "access and sequencing constraints"),
         (_N1570 + " sections 6.5.15 paragraphs 2-5 and footnote 110, and 6.3.1.8",),
         ("c.integer-usual-conversions", "c.integer-conversion"),
+    ),
+    ReferenceEntry(
+        "c.scalar-logical", 1, "c", ("c11",),
+        "Logical results and short-circuit evaluation",
+        ("logical", "not", "conjunction", "disjunction", "short-circuit", "boolean"),
+        "Scalar zero comparisons produce int zero or one; binary logical evaluation can omit the right operand.",
+        "Logical ! requires a scalar operand and yields int one when its value "
+        "compares equal to zero, otherwise int zero. Logical && and || require "
+        "scalar operands and yield int zero or one: && yields one only when "
+        "both operands compare unequal to zero; || yields one when either does. "
+        "Evaluate the left operand first. For &&, do not evaluate the right "
+        "operand when the left compares equal to zero. For ||, do not evaluate "
+        "the right operand when the left compares unequal to zero. If the right "
+        "operand is evaluated, a sequence point separates its evaluation from "
+        "the left operand's evaluation.",
+        ("Scalar operands include arithmetic and pointer types; these are not the bitwise operators.",
+         "Do not require common-type arithmetic conversions between logical operands; their subexpressions retain their own rules.",
+         "Short-circuiting does not waive operand constraints or prove evaluated subexpressions safe.",
+         "Pointer zero comparison neither assumes an all-zero representation nor permits a dereference."),
+        ("configured language edition", "actual scalar operand types", "operand values relevant to selection",
+         "definedness of evaluated accesses and subexpressions"),
+        (_N1570 + " sections 6.2.5 paragraph 21, 6.5.3.3 paragraphs 1 and 5, and 6.5.13-14",),
     ),
     ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
