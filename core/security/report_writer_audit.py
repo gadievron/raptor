@@ -628,6 +628,7 @@ _REPORT_WRITER_FILES = (
     "packages/diagram/cli_reporting.py",
     "packages/code_understanding/reporting.py",
     "core/recall/score.py",
+    "core/recall/reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
