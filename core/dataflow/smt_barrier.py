@@ -3151,7 +3151,14 @@ def try_tier0(
         )
     # Source-wide binding checks cannot establish identity from a prefix.
     # Refuse an incomplete read even when validator and sink are visible.
-    got = read_text_capped(src_path, newline="")
+    try:
+        got = read_text_capped(src_path, errors="strict", newline="")
+    except UnicodeDecodeError:
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            "source is not valid UTF-8; exact source proof unavailable",
+            spec=spec, extras={"unverified_source_profile": "invalid_utf8_source"},
+        )
     if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
