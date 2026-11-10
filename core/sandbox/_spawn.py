@@ -2943,11 +2943,10 @@ def run_sandboxed(
             # Map the caller's stdin= into fd 0. Handles the same cases
             # subprocess.Popen does:
             #   - None or subprocess.DEVNULL → /dev/null
-            #   - subprocess.PIPE  → unsupported on this path (context.py
-            #     already routes `input=` callers away from _spawn, so PIPE
-            #     is always a caller mistake — fail closed with /dev/null
-            #     and a stderr note rather than silently letting the child
-            #     talk to whatever fd -1 resolves to).
+            #   - subprocess.PIPE without input → EOF via /dev/null for
+            #     synchronous run(). context.py converts non-None input=
+            #     into a read-only spool before native dispatch. This gives
+            #     read-EOF semantics, not a pipe descriptor for inspection.
             #   - int fd (real)    → dup2 onto 0
             #   - file-like object → dup2 on .fileno() onto 0
             _use_devnull = (
@@ -2956,14 +2955,6 @@ def run_sandboxed(
                 or stdin == subprocess.PIPE
             )
             if _use_devnull:
-                if stdin == subprocess.PIPE:
-                    try:
-                        os.write(2, b"sandbox: stdin=subprocess.PIPE "
-                                    b"not supported via the mount-ns path; "
-                                    b"use `input=` or an explicit fd. "
-                                    b"Falling back to /dev/null.\n")
-                    except OSError:
-                        pass
                 devnull = os.open("/dev/null", os.O_RDONLY)
                 os.dup2(devnull, 0)
                 os.close(devnull)
