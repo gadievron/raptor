@@ -1346,7 +1346,7 @@ print(json.dumps([{'kind':'warning','option':'-Wanalyzer-use-after-free','messag
     monkeypatch.setattr(_cs, '_clang_path', lambda: None)
     out = tmp_path / 'out'
     started = time.monotonic()
-    result = _cs.scan_target(repo, out_dir=out, max_workers=1, max_seconds=5)
+    result = _cs.scan_target(repo, out_dir=out, max_workers=1, max_seconds=3)
     assert time.monotonic() - started < 15  # includes process teardown on a loaded runner
     assert result.budget_exhausted and result.tus_analyzed == 1
     assert result.tus_failed == 1 and result.tus_skipped_budget == 1
