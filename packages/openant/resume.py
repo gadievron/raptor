@@ -614,23 +614,20 @@ def _copy_regular_file(src_name: str, dst: Path, *, dir_fd: int) -> None:
     on the OPEN fd is the authoritative type check. The destination is
     RAPTOR-created (``O_EXCL`` into a fresh tree)."""
     import stat as stat_mod
+    from core.source.streams import owned_fd, preserving_stream_error
     in_fd = os.open(src_name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                     dir_fd=dir_fd)
-    try:
+    with owned_fd(in_fd, close_fd=os.close):
         st = os.fstat(in_fd)
         if not stat_mod.S_ISREG(st.st_mode):
             _refuse_entry("special file (fifo/device/socket)", src_name)
         # Keep raw-fd ownership through stream setup as well as copying.
         # fdopen can itself fail before a context manager owns the fd.
-        with os.fdopen(in_fd, "rb", closefd=False) as inp:
+        with preserving_stream_error(os.fdopen(in_fd, "rb", closefd=False)) as inp:
             out_fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-            try:
-                with os.fdopen(out_fd, "wb", closefd=False) as out:
+            with owned_fd(out_fd, close_fd=os.close):
+                with preserving_stream_error(os.fdopen(out_fd, "wb", closefd=False)) as out:
                     shutil.copyfileobj(inp, out)
-            finally:
-                os.close(out_fd)
-    finally:
-        os.close(in_fd)
     # Checkpoint mtimes participate in upstream's dual-stale-file
     # consolidation tie-breaks — preserve them on the copy.
     os.utime(dst, ns=(st.st_atime_ns, st.st_mtime_ns))
