@@ -289,7 +289,10 @@ def _rpm_connection(content: bytes):
             except BaseException:
                 if not failed:
                     raise
-                logger.warning("RPM database close failed for %s", path, exc_info=True)
+                try:
+                    logger.warning("RPM database close failed for %s", path, exc_info=True)
+                except BaseException:
+                    pass  # Preserve the active operation error if its diagnostic fails.
 
 
 def parse_rpm_sqlite(content: bytes) -> list[InstalledPackage]:
