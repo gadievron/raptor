@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing import pipes as pipe_consumer
+from core.testing.module_bindings import patch_module_attribute
+
 _SHIMS = [
     ("test_status_byte_relayed_and_exit_mirrored", 2),
     ("test_target_does_not_inherit_status_fd", 1),
@@ -34,7 +37,7 @@ def _owned(fd, identity):
 @contextmanager
 def _record_pipes(monkeypatch, error, fault):
     descriptors, pairs = [], []
-    real_pipe = os.pipe
+    real_pipe = pipe_consumer.os.pipe
 
     def pipe():
         if fault == "second-pipe" and pairs:
@@ -48,7 +51,7 @@ def _record_pipes(monkeypatch, error, fault):
 
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(os, "pipe", pipe)
+            patch_module_attribute(patcher, pipe_consumer, "os", "pipe", pipe)
             yield pairs
         assert descriptors
         assert not any(_owned(fd, identity) for fd, identity in descriptors), (
@@ -81,7 +84,7 @@ def test_shim_preparation_or_spawn_failure_releases_pipes(
         with monkeypatch.context() as patcher:
             # Every launch is inert in the failure matrix, including if an
             # expected argument/environment failure is accidentally bypassed.
-            patcher.setattr(module.subprocess, "Popen", fail("spawn"))
+            patch_module_attribute(patcher, module, "subprocess", "Popen", fail("spawn"))
             if fault == "argv":
                 patcher.setattr(module, "_outer", fail("argv"))
             elif fault == "env":
