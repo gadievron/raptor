@@ -60,14 +60,16 @@ _VALID_SEMGREP_RULE = (
 def _probe_or_skip_semgrep(tmp_path: Path) -> None:
     """Skip when the sandboxed adapter path cannot run semgrep at all
     (e.g. core.sandbox unavailable on this host) — these tests verify
-    error semantics of runs that executed, not sandbox availability."""
+    error semantics of runs that executed, not sandbox availability.
+    An error-free probe must find its known positive match."""
     rule = tmp_path / "probe.yaml"
     rule.write_text(_VALID_SEMGREP_RULE, encoding="utf-8")
     target = tmp_path / "probe.py"
     target.write_text("exec('x')\n", encoding="utf-8")
     matches, errors = _run_semgrep(rule, target)
-    if errors or not matches:
+    if errors:
         pytest.skip(f"semgrep adapter probe failed on this host: {errors}")
+    assert matches, "valid semgrep positive probe returned no matches"
 
 
 @needs_semgrep
@@ -155,3 +157,12 @@ class TestSynthesisEndToEndTruth:
             or "did not match seed" in e
             for e in result.errors
         )
+
+
+def test_semgrep_probe_does_not_skip_error_free_silence(tmp_path, monkeypatch):
+    monkeypatch.setitem(globals(), "_run_semgrep", lambda *_a, **_k: ([], []))
+    try:
+        with pytest.raises(AssertionError, match="positive probe returned no matches"):
+            _probe_or_skip_semgrep(tmp_path)
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"error-free positive-probe silence was skipped: {exc}")
