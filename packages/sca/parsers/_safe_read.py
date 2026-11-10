@@ -268,6 +268,7 @@ def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:
         fd = os.open(
             str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
         )
+        raw_failed = False
         try:
             if not _stat.S_ISREG(os.fstat(fd).st_mode):
                 logger.debug(
@@ -278,9 +279,18 @@ def read_head_bytes(path: Path, *, max_bytes: int) -> bytes | None:
             with os.fdopen(fd, "rb", closefd=True) as fh:
                 fd = -1
                 return fh.read(max_bytes)
+        except OSError:
+            raise
+        except BaseException:
+            raw_failed = True
+            raise
         finally:
             if fd >= 0:
-                os.close(fd)
+                try:
+                    os.close(fd)
+                except BaseException:
+                    if not raw_failed:
+                        raise
     except OSError as e:
         logger.debug("sca.parsers: cannot read %s: %s", path, e)
         return None

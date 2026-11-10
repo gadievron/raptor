@@ -66,6 +66,7 @@ def read_regular_bytes(
     except OSError as e:
         logger.warning("sca.resolvers: cannot open %s: %s", path, e)
         return None
+    raw_failed = False
     try:
         if not _stat.S_ISREG(os.fstat(fd).st_mode):
             logger.warning(
@@ -79,9 +80,16 @@ def read_regular_bytes(
     except OSError as e:
         logger.warning("sca.resolvers: cannot read %s: %s", path, e)
         return None
+    except BaseException:
+        raw_failed = True
+        raise
     finally:
         if fd >= 0:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException:
+                if not raw_failed:
+                    raise
     if len(raw) > max_bytes:
         logger.warning(
             "sca.resolvers: %s grew past max during read (>%d)",
