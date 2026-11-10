@@ -1802,12 +1802,19 @@ def _rebound_in_loop_containing_sink(
     Conservative: per-iteration re-validation patterns are declined
     too — the sound direction; Tier 2 takes those cases.
     """
+    scope_root = _function_containing(tree, sink_line) or tree
+    externally_owned = not _python_name_has_local_slot(scope_root, var_name)
     for loop in ast.walk(tree):
         if not isinstance(loop, (ast.For, ast.AsyncFor, ast.While)):
             continue
         end = getattr(loop, "end_lineno", None)
         if end is None or not (loop.lineno <= sink_line <= end):
             continue
+        if externally_owned and not loop.lineno <= validator_line <= end and any(
+            _python_possible_call(node) or _python_suspension(node)
+            for node in _walk_same_scope(loop)
+        ):
+            return True  # The next iteration cannot reuse an outer shared-slot fact.
         for node in ast.walk(loop):
             line = getattr(node, "lineno", None)
             if line is None:
