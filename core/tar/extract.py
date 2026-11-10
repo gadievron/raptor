@@ -55,6 +55,9 @@ import io
 import logging
 import tarfile
 from collections.abc import Callable, Iterable
+from contextlib import closing
+
+from core.source.streams import preserving_stream_error
 
 from .safe_member import DEFAULT_MAX_MEMBER_BYTES, safe_member_reason
 
@@ -292,7 +295,7 @@ def extract_files_from_tar(
         # must surface as an error, not as a successfully-empty result.
         raise TarOpenError(f"not a readable tar archive: {e}") from e
 
-    try:
+    with preserving_stream_error(closing(tf)):
         count = 0
         # Iteration and member reads are tarfile-driven work over the
         # same untrusted bytes the open path guards: seekable modes
@@ -361,26 +364,24 @@ def extract_files_from_tar(
                 raise TarReadError(msg) from e
             if f is None:
                 continue
-            if unique_keys and key in found:
-                # Strict-mode: refuse a tar that produces the same
-                # logical key twice. A malicious tar can populate
-                # ``found`` with attacker-chosen content under N
-                # distinct selector hits, then the legitimate file
-                # later in the stream is never read because
-                # ``expected_count`` already short-circuited the
-                # walk. Caller opts in when the selector domain
-                # guarantees uniqueness (e.g. ``wanted_paths`` is
-                # a set of distinct logical paths).
-                f.close()
-                msg = f"duplicate tar key {key!r} (unique_keys=True)"
-                raise ValueError(msg)
-            try:
-                data = f.read()
-            except _TAR_CORRUPTION_ERRORS as e:
-                msg = f"tar member read failed mid-iteration: {e}"
-                raise TarReadError(msg) from e
-            finally:
-                f.close()
+            with preserving_stream_error(closing(f)):
+                if unique_keys and key in found:
+                    # Strict-mode: refuse a tar that produces the same
+                    # logical key twice. A malicious tar can populate
+                    # ``found`` with attacker-chosen content under N
+                    # distinct selector hits, then the legitimate file
+                    # later in the stream is never read because
+                    # ``expected_count`` already short-circuited the
+                    # walk. Caller opts in when the selector domain
+                    # guarantees uniqueness (e.g. ``wanted_paths`` is
+                    # a set of distinct logical paths).
+                    msg = f"duplicate tar key {key!r} (unique_keys=True)"
+                    raise ValueError(msg)
+                try:
+                    data = f.read()
+                except _TAR_CORRUPTION_ERRORS as e:
+                    msg = f"tar member read failed mid-iteration: {e}"
+                    raise TarReadError(msg) from e
             if sink is not None:
                 sink(key, data)
                 del data
@@ -389,8 +390,6 @@ def extract_files_from_tar(
                 found[key] = data
             if expected_count is not None and len(found) >= expected_count:
                 break
-    finally:
-        tf.close()
     return found
 
 
