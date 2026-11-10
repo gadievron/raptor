@@ -908,6 +908,38 @@ def _declared_local_scopes(decl: Node) -> _LocalNameScopes:
     return _LocalNameScopes({k: tuple(v) for k, v in windows.items()})
 
 
+def _type_shadow_names_at(node: Node) -> frozenset[str]:
+    """Member/local types and type parameters visible at this use site.
+
+    Unlike the catalog's conservative file-wide veto, this excludes
+    unrelated sibling scopes and local declarations after the use.
+    Top-level types remain available to the cross-file resolver.
+    """
+    out: set[str] = set()
+    use_start = node.start_byte
+    parent = node.parent
+    while parent is not None:
+        parameters = parent.child_by_field_name("type_parameters")
+        if parameters is not None:
+            out.update(_file_type_shadow_names(parameters))
+        member_scope = parent.type in _NODE_TABLES.scope_barriers
+        local_scope = parent.type in _NODE_TABLES.scope_bounds
+        if member_scope or local_scope:
+            children = list(parent.named_children)
+            for child in children:
+                if child.type in ("enum_body_declarations", "switch_block_statement_group"):
+                    children.extend(child.named_children)
+                elif child.type in ("class_declaration", "interface_declaration",
+                                    "enum_declaration", "record_declaration",
+                                    "annotation_type_declaration"):
+                    if member_scope or child.start_byte <= use_start:
+                        name = child.child_by_field_name("name")
+                        if name is not None:
+                            out.add(_node_text(name))
+        parent = parent.parent
+    return frozenset(out)
+
+
 def _file_type_shadow_names(root: Node) -> frozenset[str]:
     """Simple names of every class-like type declared anywhere in the
     file, plus every type-parameter name — the JLS 6.4.1 type-shadow

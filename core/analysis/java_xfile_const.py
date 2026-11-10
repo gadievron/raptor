@@ -456,6 +456,10 @@ class XFileConst:
             chain = _chain_text(obj)
             if chain is None:
                 return False
+            from core.analysis.cfg_builder_java import _type_shadow_names_at
+
+            if chain.split(".", 1)[0] in _type_shadow_names_at(obj):
+                return False
             if receiver_is_value is not None \
                     and receiver_is_value(obj, chain.split(".", 1)[0]):
                 return False

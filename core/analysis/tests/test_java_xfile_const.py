@@ -914,3 +914,101 @@ class TestMemberReceiverCoverage:
             str(caller), str(tmp_path), "CWE-79",
         )
         assert (reason is not None) is expected
+
+
+class TestTypeReceiverScope:
+    @pytest.mark.parametrize("case,expected", [
+        ("member-before", False), ("member-after", False),
+        ("sibling", True), ("qualified", True),
+        ("qualified-member", False), ("type-parameter", False),
+        ("new-member", False), ("cached-member", False),
+        ("new-value-name", True), ("plain-new", True),
+    ])
+    def test_actual_consumer_respects_type_namespace(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        (tmp_path / "Cfg.java").write_text(
+            'class Cfg { String literal() { return "safe"; } }'
+        )
+        shadow = ('static class File { static String separator='
+                  'System.getenv("OWNED"); }\n')
+        cfg_shadow = ('static class Cfg { String literal() { '
+                      'return System.getenv("OWNED"); } }\n')
+        prefix, suffix, parameter = "", "", ""
+        body = "String value = File.separator;\n"
+        generic = ""
+        if case == "member-before":
+            prefix = shadow
+        elif case == "member-after":
+            suffix = shadow
+        elif case == "sibling":
+            prefix = "static class Other { " + shadow + "}\n"
+        elif case == "qualified":
+            prefix = shadow
+            body = "String value = java.io.File.separator;\n"
+        elif case == "qualified-member":
+            prefix = shadow
+            body = "String value = T.File.separator;\n"
+        elif case == "type-parameter":
+            generic = "<File> "
+        elif case in ("new-member", "cached-member"):
+            prefix = cfg_shadow
+            body = "String value = new Cfg().literal();\n"
+            if case == "cached-member":
+                body = "Cfg receiver = new Cfg();\nString value = receiver.literal();\n"
+        elif case in ("new-value-name", "plain-new"):
+            parameter = "Object Cfg, " if case == "new-value-name" else ""
+            body = "String value = new Cfg().literal();\n"
+        source = ("import java.io.File;\nclass T {\n" + prefix + generic
+                  + "void m(" + parameter + "java.io.PrintWriter out) {\n"
+                  + body + "out.println(value);\n}\n" + suffix + "}\n")
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        sink_line = source.splitlines().index("out.println(value);") + 1
+        index = JavaConstIndex(source, (1, len(source.splitlines())),
+                               str(caller), str(tmp_path))
+        assert index.ok
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    @pytest.mark.parametrize("shadowed", [False, True])
+    def test_sibling_coverage_refuses_member_type(self, tmp_path, shadowed):
+        from core.analysis.java_xfile_const import XFileConst
+
+        source = ('import java.io.File;\nclass T {\n'
+                  + ('static class File { static String separator=System.getenv("OWNED"); }'
+                     if shadowed else "") + "\n"
+                  + 'void m(java.io.PrintWriter out) {\n'
+                  'out.printf("%s", File.separator);\n}\n}\n')
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        resolver = XFileConst(str(caller), str(tmp_path))
+        assert resolver.ok
+        assert ("File" in resolver.covered_identifiers(source, 5)) is not shadowed
+
+
+    @pytest.mark.parametrize("before", [False, True])
+    def test_local_type_scope_at_folder_boundary(self, before):
+        from core.analysis.cfg_builder_java import _get_parser
+
+        local = 'class File { static String separator=System.getenv("OWNED"); }'
+        value = 'String value=File.separator;'
+        source = ('import java.io.File; class T { void m() { '
+                  + (local + value if before else value + local) + ' } }')
+        tree = _get_parser().parse(source.encode())
+        assert not tree.root_node.has_error
+        stack = [tree.root_node]
+        rhs = None
+        while stack:
+            node = stack.pop()
+            if node.type == "variable_declarator":
+                name = node.child_by_field_name("name")
+                if name.text == b"value":
+                    rhs = node.child_by_field_name("value")
+            stack.extend(node.named_children)
+        assert rhs is not None
+        result = fold_expr(rhs, lambda _n, _d: REFUSE, allow_taint_free=True)
+        assert result is (REFUSE if before else TAINT_FREE)
