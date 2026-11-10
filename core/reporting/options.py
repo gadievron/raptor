@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .renderers import get_renderer
+from .output_policy import PERSISTENCE_FILENAMES, check_report_destination, check_report_directory
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,19 @@ class ReportOptions:
         if not self.output_is_file and self.output and self.output.suffix and not self.output.is_dir() and len(formats) == 1:
             if self.output.suffix != get_renderer(formats[0]).extension:
                 raise ValueError("Report filename extension does not match its format")
+        if self.enabled:
+            if any(filename in PERSISTENCE_FILENAMES for filename in overrides.values()):
+                raise ValueError("Report filename uses a reserved persistence filename")
+            if self.output is not None:
+                is_file = self.output_is_file or bool(self.output.suffix) and not self.output.is_dir()
+                if is_file:
+                    check_report_destination(self.output)
+                else:
+                    check_report_directory(self.output)
+                    # The producer chooses its default stem later. Only inspect
+                    # actual filename overrides here, not an invented filename.
+                    for filename in overrides.values():
+                        check_report_destination(self.output / filename)
         filenames = tuple(overrides.items())
         return replace(self, formats=formats, filenames=filenames) if (formats != self.formats or filenames != self.filenames) else self
 
