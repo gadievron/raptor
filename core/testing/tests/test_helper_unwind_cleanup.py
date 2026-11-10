@@ -96,57 +96,57 @@ def test_pipe_success_transfers_open_descriptors(forked, monkeypatch):
 @pytest.mark.parametrize("stage", ["shutdown", "join", "none", "transfer"])
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt, RuntimeError])
 def test_socket_worker_unwind_joins_after_shutdown_failure(stage, error, monkeypatch):
-    parent, original = socket.socketpair()
     adopted, workers, joined = [], [], []
-    ready, finished = threading.Event(), threading.Event()
-    setup_error = LookupError("owned socket setup failed")
-    cleanup_error = error("owned socket cleanup failed")
-    real_thread = threading.Thread
-
-    class OwnedSocket(socket.socket):
-        def shutdown(self, how):
-            super().shutdown(how)
-            if stage == "shutdown":
-                raise cleanup_error
-
-    def adopt(*args, **kwargs):
-        instance = OwnedSocket(*args, **kwargs)
-        adopted.append(instance)
-        return instance
-
-    def thread(*args, **kwargs):
-        instance = real_thread(*args, **kwargs)
-        workers.append(instance)
-        join = instance.join
-
-        def join_once(*args, **kwargs):
-            joined.append(instance)
-            result = join(*args, **kwargs)
-            if stage == "join":
-                raise cleanup_error
-            return result
-
-        instance.join = join_once
-        return instance
-
-    def invoke():
-        with sockets.socket_worker_setup(original.fileno()) as (owned, start):
-
-            def work():
-                ready.set()
-                try:
-                    owned.recv(1)
-                except OSError:
-                    pass
-                finally:
-                    finished.set()
-
-            start(work)
-            assert ready.wait(3), "owned socket worker did not initialize"
-            if stage != "transfer":
-                raise setup_error
-
+    parent, original = socket.socketpair()
     try:
+        ready, finished = threading.Event(), threading.Event()
+        setup_error = LookupError("owned socket setup failed")
+        cleanup_error = error("owned socket cleanup failed")
+        real_thread = threading.Thread
+
+        class OwnedSocket(socket.socket):
+            def shutdown(self, how):
+                super().shutdown(how)
+                if stage == "shutdown":
+                    raise cleanup_error
+
+        def adopt(*args, **kwargs):
+            instance = OwnedSocket(*args, **kwargs)
+            adopted.append(instance)
+            return instance
+
+        def thread(*args, **kwargs):
+            instance = real_thread(*args, **kwargs)
+            workers.append(instance)
+            join = instance.join
+
+            def join_once(*args, **kwargs):
+                joined.append(instance)
+                result = join(*args, **kwargs)
+                if stage == "join":
+                    raise cleanup_error
+                return result
+
+            instance.join = join_once
+            return instance
+
+        def invoke():
+            with sockets.socket_worker_setup(original.fileno()) as (owned, start):
+
+                def work():
+                    ready.set()
+                    try:
+                        owned.recv(1)
+                    except OSError:
+                        pass
+                    finally:
+                        finished.set()
+
+                start(work)
+                assert ready.wait(3), "owned socket worker did not initialize"
+                if stage != "transfer":
+                    raise setup_error
+
         with monkeypatch.context() as patcher:
             patcher.setattr(
                 sockets, "socket", SimpleNamespace(**(vars(socket) | {"socket": adopt}))
