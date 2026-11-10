@@ -20,6 +20,8 @@ import threading
 from collections import OrderedDict
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 #: File extension → CodeQL extractor language. Mirrors the alias set
@@ -155,6 +157,7 @@ def _src_zip_index(src_zip: Path) -> dict[str, tuple[str, ...]] | None:
             return cached[1]
     # Built outside the lock (archive IO); racing builders store
     # identical indexes and the last store wins.
+    read_error: Exception | None = None
     try:
         from core.zip import bomb_shaped_reason, peek_eocd
         summary = peek_eocd(src_zip)
@@ -168,12 +171,17 @@ def _src_zip_index(src_zip: Path) -> dict[str, tuple[str, ...]] | None:
                 )
                 return None
         import zipfile
-        with zipfile.ZipFile(src_zip) as zf:
-            names = zf.namelist()
-    except Exception:  # noqa: BLE001 — unreadable archive ⇒ no index
+        with preserving_stream_error(zipfile.ZipFile(src_zip)) as zf:
+            try:
+                names = zf.namelist()
+            except Exception as exc:  # noqa: BLE001 — unreadable archive ⇒ no index
+                read_error = exc
+    except Exception as exc:  # noqa: BLE001 — constructor or fresh close failure
+        read_error = exc
+    if read_error is not None:
         logger.debug(
             "codeql src.zip membership index failed for %s",
-            src_zip, exc_info=True,
+            src_zip, exc_info=(type(read_error), read_error, read_error.__traceback__),
         )
         return None
     buckets: dict[str, list[str]] = {}
