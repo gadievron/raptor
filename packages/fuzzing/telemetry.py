@@ -263,15 +263,25 @@ class FuzzingTelemetry:
     def stop(self) -> None:
         with self._lock:
             self.stats.duration_s = time.time() - self.stats.started
-            self._emit(FuzzEvent(
-                kind="campaign_end",
-                timestamp=time.time(),
-                payload=self.stats.to_dict(),
-            ))
-            self._reporter.finish(self.stats)
-            if self._events_fp:
-                self._events_fp.close()
-                self._events_fp = None
+            failed = False
+            try:
+                self._emit(FuzzEvent(
+                    kind="campaign_end",
+                    timestamp=time.time(),
+                    payload=self.stats.to_dict(),
+                ))
+                self._reporter.finish(self.stats)
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                stream, self._events_fp = self._events_fp, None
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        if not failed:
+                            raise
             from core.json import save_json
             save_json(self.summary_path, self.stats.to_dict())
             logger.info(
