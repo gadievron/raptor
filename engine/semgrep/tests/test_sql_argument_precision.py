@@ -171,6 +171,42 @@ _MATRICES["java-wrapper"] = (
 )
 
 
+_MATRICES["javascript"][2].extend([
+    ('connection.query({text: "SELECT $1", values: [req.query.id]});', False),
+    ('connection.query({text: req.query.sql, values: [1]});', True),
+    ('connection.query({values: [req.query.id], text: "SELECT $1"});', False),
+    ('const text = "SELECT $1";\nconnection.query({text, values: [req.query.id]});', False),
+    ('const text = req.query.sql;\nconnection.query({text, values: [1]});', True),
+    ('connection.query({text: "SELECT " + req.query.head + " FROM t", values: [req.query.id]});', True),
+    ('connection.query({query: req.query.sql});', True),
+    ('search.query({text: req.query.sql, values: []});', False),
+    ('connection.query({text: "SELECT $1", values: [connection.query(req.query.sql)]});', True),
+    ('connection.query({text: "SELECT $1", values: [{id: req.query.id}]});', False),
+    ('connection.query({text: "SELECT $1", values: ["SELECT " + req.query.id]});', False),
+    ('connection.query(`SELECT ${req.query.sql}`);', True),
+    ('connection.query(`SELECT $1`, [req.query.id]);', False),
+    ('connection.query({text: `SELECT ${req.query.sql}`, values: [1]});', True),
+    ('knex.raw(req.query.sql, [1]);', True),
+    ('knex.raw("SELECT ?", [req.query.id]);', False),
+    ('sequelize.query(req.query.sql, {bind: [1]});', True),
+    ('sequelize.query("SELECT $1", {bind: [req.query.id]});', False),
+    ('connection.prepare(req.query.sql);', True),
+    ('connection.prepare("SELECT 1");', False),
+    ('connection.query({text: "SELECT $1", values: [1], sql: req.query.sql});', True),
+])
+for _source in ('req.params.sql', 'req.body.sql', 'req.headers["x-query"]',
+                'ctx.query.sql', 'ctx.params.sql', 'ctx.request.body.sql', 'ctx.request.body["sql"]',
+                'process.env.QUERY', 'process.argv[2]'):
+    _MATRICES["javascript"][2].extend([
+        (f'connection.query({_source});', True),
+        (f'connection.query("SELECT $1", [{_source}]);', False),
+    ])
+_MATRICES["typescript"] = (
+    "injection/sql-taint.yaml", "raptor.injection.sql.taint.javascript",
+    _MATRICES["javascript"][2],
+)
+
+
 @pytest.mark.parametrize("family", _MATRICES)
 def test_sql_text_argument_is_the_sink(tmp_path, monkeypatch, family):
     config, rule_id, cases = _MATRICES[family]
@@ -185,8 +221,9 @@ def test_sql_text_argument_is_the_sink(tmp_path, monkeypatch, family):
         prefix = ["package example", "import (" + imports + ")", "type Search struct{}",
                   "func (*Search) Query(text string, args ...interface{}) {}"]
         head, tail, indent = "func case_{index}(r *http.Request, db *sql.DB, search *Search) {{", "}", "    "
-    elif family == "javascript":
-        name, prefix, head, tail, indent = "cases.js", [], "function case_{index}(req, connection, search) {{", "}", "  "
+    elif family in {"javascript", "typescript"}:
+        name = "cases.ts" if family == "typescript" else "cases.js"
+        prefix, head, tail, indent = [], "function case_{index}(req, connection, search) {{", "}", "  "
     else:
         name = "Cases.java"
         prefix = ["import java.sql.*;", "import javax.servlet.http.HttpServletRequest;",
@@ -238,3 +275,49 @@ def test_sql_text_argument_is_the_sink(tmp_path, monkeypatch, family):
     assert expected, family
     actual = {row["start"]["line"] for row in data["results"] if row["check_id"].endswith(rule_id)}
     assert actual == expected, (family, data.get("version"), actual, expected)
+
+
+@pytest.mark.parametrize("family", ["javascript", "typescript"])
+def test_sql_query_option_sink_retention(tmp_path, monkeypatch, family):
+    """Exercise sink admission without taint propagation masking unknown fields."""
+    import yaml
+
+    document = yaml.safe_load((_RULES / "injection/sql-taint.yaml").read_text())
+    rule = next(row for row in document['rules'] if row['id'] == 'raptor.injection.sql.taint.javascript')
+    generic = next(sink for sink in rule['pattern-sinks'] if any(
+        row.get('metavariable-regex', {}).get('metavariable') == '$DBOBJ'
+        for row in sink.get('patterns', [])
+    ))
+    config = tmp_path / 'generic-sink-contract.json'
+    config.write_text(json.dumps({'rules': [{
+        'id': rule['id'], 'languages': rule['languages'],
+        'message': 'owned generic sink contract', 'severity': 'WARNING',
+        'options': rule['options'], 'patterns': generic['patterns'],
+    }]}))
+    cases = [('connection.query({text: "SELECT $1", values: [req.query.id]});', False),
+     ('connection.query({values: [req.query.id], text: "SELECT $1"});', False),
+     ('const text = "SELECT $1";\nconnection.query({text, values: [req.query.id]});', False),
+     ('connection.query({text: req.query.sql, values: [1]});', True),
+     ('connection.query({text: `SELECT ${req.query.sql}`, values: [1]});', True),
+     ('connection.query({text: "SELECT $1", values: [1], ...req.query});', True),
+     ('connection.query({...req.query, text: "SELECT $1", values: [1]});', True),
+     ('connection.query({text: "SELECT $1", values: [1], [req.query.key]: req.query.sql});', True),
+     ('connection.query({text: "SELECT $1", values: [1], [[req.query.key][0]]: req.query.sql});', True),
+     ('connection.query({text: "SELECT $1", values: [1], sql: req.query.sql});', True),
+     ('connection.query({text: "SELECT $1", values: [1], text: req.query.sql});', True),
+     ('connection.query({text: req.query.sql, values: [1], text: "SELECT $1"});', True),
+     ('connection.query({text: "SELECT $1", values: [1], get text() {return req.query.sql;}});', True),
+     ('connection.query({text: "SELECT $1", values: [1], name: "cache"});', True),
+     ('connection.query({query: req.query.sql, box: {text: "SELECT $1", values: [1]}});', True),
+     ('connection.query({text: "SELECT $1", values: [1], sql: {text: "SELECT $1", values: '
+      '[req.query.sql]}});',
+      True),
+     ('connection.query({text: "SELECT $1", values: [req.query.id], ...{}});', True),
+     ('connection.query({text: "SELECT $1", values: [{id: req.query.id}]});', False),
+     ('const options = {text: "SELECT $1", values: [req.query.id]};\nconnection.query(options);', True),
+     ('const options = {text: "SELECT $1", values: [1]};\n'
+      'options.text = req.query.sql;\n'
+      'connection.query(options);',
+      True)]
+    monkeypatch.setitem(_MATRICES, family, (str(config), rule['id'], cases))
+    test_sql_text_argument_is_the_sink(tmp_path, monkeypatch, family)

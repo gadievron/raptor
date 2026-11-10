@@ -164,6 +164,10 @@ rules:
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
+    # Closed option records need exact fields and direct call matching.
+    options:
+      implicit_ellipsis: false
+      go_deeper_expr: false
     pattern-sources:
       - pattern-either:
           # Express — receiver-name anchored: bare $REQ.query/.params/
@@ -190,6 +194,7 @@ rules:
                   - pattern: $CTX.params[...]
                   - pattern: $CTX.params.$PROP
                   - pattern: $CTX.request.body[...]
+                  - pattern: $CTX.request.body.$PROP
               - metavariable-regex:
                   metavariable: $CTX
                   regex: '(?i)^(c|ctx|context)$'
@@ -215,7 +220,15 @@ rules:
       # operands, while keeping bound values outside the sink.
       - patterns:
           - pattern-either:
-              - pattern: $CONN.query($QUERY, ...)
+              - patterns:
+                  - pattern: $CONN.query($QUERY, ...)
+                  - pattern-not: '$CONN.query({text: "...", values: $_}, ...)'
+              - patterns:
+                  - pattern: $CONN.query($QUERY, ...)
+                  - pattern: '$CONN.query({..., ...$REST, ...}, ...)'
+              - patterns:
+                  - pattern: $CONN.query($QUERY, ...)
+                  - pattern: '$CONN.query({..., [$KEY]: $VALUE, ...}, ...)'
               - pattern: $DB.exec($QUERY)
           - metavariable-pattern:
               metavariable: $QUERY
@@ -244,7 +257,18 @@ rules:
       # name is the FP control — only DB-shaped receivers qualify.
       - patterns:
           - pattern-either:
-              - pattern: $DBOBJ.query($Q, ...)
+              # Only a closed constant-text/values object is known bind data.
+              - patterns:
+                  - pattern: $DBOBJ.query($Q, ...)
+                  - pattern-not: '$DBOBJ.query({text: "...", values: $_}, ...)'
+              # Unknown overrides retain the generic sink even when the
+              # record matcher can see two otherwise admissible fields.
+              - patterns:
+                  - pattern: $DBOBJ.query($Q, ...)
+                  - pattern: '$DBOBJ.query({..., ...$REST, ...}, ...)'
+              - patterns:
+                  - pattern: $DBOBJ.query($Q, ...)
+                  - pattern: '$DBOBJ.query({..., [$KEY]: $VALUE, ...}, ...)'
               - pattern: $DBOBJ.execute($Q, ...)
           - metavariable-regex:
               metavariable: $DBOBJ
