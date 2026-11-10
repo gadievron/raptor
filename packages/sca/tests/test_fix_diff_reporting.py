@@ -31,6 +31,7 @@ def test_fix_diff_receipt_keeps_cap_failures_and_native_summary(tmp_path, monkey
     context, _, _ = load_committed_report(tmp_path / ".receipt-report")
     assert context.state == "partial" and context.extensions["raptor.result"]["results"] == native["results"]
     assert context.extensions["raptor.metrics"]["Unattempted over cap"] == 1
+    assert any("native summary.json retains" in note for note in context.diagnostics)
     streams = capsys.readouterr()
     assert "1/2 CVEs resolved" in streams.out and "Summary" in streams.err
 
@@ -46,6 +47,8 @@ def test_empty_selection_report_is_noop_without_agent_or_native_directory(tmp_pa
     assert context.extensions["raptor.metrics"]["Attempted CVE entries"] == 0
     assert context.extensions["raptor.findings_available"] is False
     assert any("not a clean" in note for note in context.diagnostics)
+    assert not any("native summary.json retains" in note for note in context.diagnostics)
+    assert any("no native discovery summary was recorded" in note for note in context.diagnostics)
 
 
 @isolated_cli_logging()
@@ -55,6 +58,8 @@ def test_missing_input_receipt_keeps_error_status_and_no_agent(tmp_path, monkeyp
                           "--report-output", str(tmp_path / "failed.json")]) == 2
     context, _, _ = load_committed_report(tmp_path / ".failed-report")
     assert context.state == "failed" and context.extensions["raptor.result"]["results"] == []
+    assert not any("native summary.json retains" in note for note in context.diagnostics)
+    assert any("no native discovery summary was recorded" in note for note in context.diagnostics)
 
 
 @isolated_cli_logging()
