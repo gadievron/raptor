@@ -98,20 +98,26 @@ class TestOwnerOnlyFileHandler:
     def test_record_content_persisted(self, tmp_path):
         log_path = str(tmp_path / "audit.jsonl")
         handler = core_logging._OwnerOnlyFileHandler(log_path, delay=True)
-        handler.setFormatter(core_logging.JSONFormatter())
-        handler.emit(_record("audit record body"))
-        handler.close()
+        try:
+            handler.setFormatter(core_logging.JSONFormatter())
+            handler.emit(_record("audit record body"))
+        finally:
+            handler.close()
         with open(log_path) as fh:
             assert "audit record body" in fh.read()
 
     def test_reopen_appends_and_stays_owner_only(self, tmp_path):
         log_path = str(tmp_path / "audit.jsonl")
         handler = core_logging._OwnerOnlyFileHandler(log_path, delay=True)
-        handler.emit(_record("first"))
-        handler.close()
+        try:
+            handler.emit(_record("first"))
+        finally:
+            handler.close()
         handler = core_logging._OwnerOnlyFileHandler(log_path, delay=True)
-        handler.emit(_record("second"))
-        handler.close()
+        try:
+            handler.emit(_record("second"))
+        finally:
+            handler.close()
         with open(log_path) as fh:
             content = fh.read()
         assert "first" in content
