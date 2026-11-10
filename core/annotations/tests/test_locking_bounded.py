@@ -52,21 +52,22 @@ def test_wedged_holder_raises_after_bounded_wait(
                         raising=False)
     target = tmp_path / "notes.md"
     lock = tmp_path / "notes.md.lock"
+    thread = None
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    errors: list[BaseException] = []
-    done = threading.Event()
-
-    def writer() -> None:
-        try:
-            with _file_lock(target):
-                pass
-        except AnnotationFileError as exc:
-            errors.append(exc)
-        finally:
-            done.set()
-
-    thread = threading.Thread(target=writer, daemon=True)
     try:
+        errors: list[BaseException] = []
+        done = threading.Event()
+
+        def writer() -> None:
+            try:
+                with _file_lock(target):
+                    pass
+            except AnnotationFileError as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=writer, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         with caplog.at_level("WARNING"):
             thread.start()
@@ -79,7 +80,7 @@ def test_wedged_holder_raises_after_bounded_wait(
                    for r in caplog.records)
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 

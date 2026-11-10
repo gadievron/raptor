@@ -56,15 +56,16 @@ def test_wedged_holder_never_blocks_finalisers_unboundedly(
                         raising=False)
     meta = tmp_path / ".raptor-run.json"
     lock = tmp_path / ".raptor-run.json.lock"
+    thread = None
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    entered = threading.Event()
-
-    def finaliser() -> None:
-        with _metadata_lock(meta):
-            entered.set()
-
-    thread = threading.Thread(target=finaliser, daemon=True)
     try:
+        entered = threading.Event()
+
+        def finaliser() -> None:
+            with _metadata_lock(meta):
+                entered.set()
+
+        thread = threading.Thread(target=finaliser, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         with caplog.at_level("WARNING"):
             thread.start()
@@ -81,7 +82,7 @@ def test_wedged_holder_never_blocks_finalisers_unboundedly(
         )
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
