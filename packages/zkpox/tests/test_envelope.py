@@ -148,3 +148,22 @@ def test_decrypt_rejects_aes128_downgrade():
     blob = nonce + AESGCM(key).encrypt(nonce, b'payload', envelope._AAD)
     with pytest.raises(ValueError, match='AES-256'):
         envelope.aes_decrypt(blob, key)
+from types import SimpleNamespace
+
+
+def test_run_routes_through_sandbox(tmp_path, monkeypatch):
+    """Contract: _run dispatches through run_untrusted, not bare subprocess."""
+    import core.sandbox.context as sbx_ctx
+
+    calls = []
+
+    def fake_run_untrusted(cmd, **kwargs):
+        calls.append({"cmd": list(cmd), **kwargs})
+        return SimpleNamespace(returncode=0, stdout=b"ok", stderr=b"")
+
+    monkeypatch.setattr(sbx_ctx, "run_untrusted", fake_run_untrusted)
+    monkeypatch.setattr(envelope, "run_untrusted", fake_run_untrusted)
+    result = envelope._run(["/bin/echo", "test"])
+    assert result == b"ok"
+    assert len(calls) == 1
+    assert calls[0]["caller_label"] == "zkpox-envelope"
