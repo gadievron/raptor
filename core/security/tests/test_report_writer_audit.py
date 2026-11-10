@@ -1553,3 +1553,68 @@ def test_taint_walk_repeats_only_when_helper_returns_require_it(monkeypatch, hel
     assert findings
     assert any(v.func_name == "show" for v in findings)
     assert findings == audit.audit_source(source, "sample.py")
+
+
+@pytest.mark.parametrize("mode", ["replace", "rename", "lookup-error", "foreign-name"])
+def test_scanner_dispatch_preserves_current_visitor_and_foreign_names(mode):
+    import ast
+
+    from core.security import report_writer_audit as audit
+
+    def observe(visit):
+        events = []
+        failure = RuntimeError("visitor lookup")
+
+        class Probe:
+            def __getattribute__(self, name):
+                if name.startswith("visit_") or name == "generic_visit":
+                    events.append(name)
+                if mode == "lookup-error" and name == "visit_Name":
+                    raise failure
+                return object.__getattribute__(self, name)
+
+            def generic_visit(self, node):
+                events.append("generic callback")
+
+            def visit_Name(self, node):
+                events.append("first callback")
+                self.visit_Name = lambda node: events.append("replaced callback")
+
+        class Label(str):
+            def __radd__(self, prefix):
+                events.append("foreign concatenation")
+                return prefix + str(self)
+
+        class ForeignMeta(type):
+            def __getattribute__(cls, name):
+                if name == "__name__":
+                    events.append("foreign class name")
+                    return Label("Foreign")
+                return super().__getattribute__(name)
+
+        class ForeignNode(metaclass=ForeignMeta):
+            pass
+
+        class UnknownNode:
+            pass
+
+        probe = Probe()
+        try:
+            if mode == "foreign-name":
+                visit(probe, ForeignNode())
+            elif mode == "rename":
+                node = UnknownNode()
+                visit(probe, node)
+                UnknownNode.__name__ = "RenamedNode"
+                visit(probe, node)
+            else:
+                visit(probe, ast.Name(id="first"))
+                visit(probe, ast.Name(id="second"))
+        except RuntimeError as caught:
+            assert caught is failure
+            events.append("same lookup error")
+        return events
+
+    expected = observe(ast.NodeVisitor.visit)
+    assert expected
+    assert observe(audit._Scanner.visit) == expected
