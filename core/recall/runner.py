@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import contextlib
 import shutil
@@ -28,6 +27,7 @@ from core.atomic_fs import (
 )
 from core.json import dumps_artifact
 from core.sarif.parser import parse_sarif_findings
+from core.source.streams import open_owned_fd
 
 from core.recall.manifest import PROFILES, RecallManifest
 from core.recall.pinned_clone import verify_pinned_clone as _verify_pin
@@ -153,9 +153,9 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
         # the log dir is reused run output the pipeline's children
         # write under — a planted symlink/FIFO at these predictable
         # names must not be followed / block the open.
-        with os.fdopen(
+        with open_owned_fd(
             open_exclusive_artifact(log_path, replace=True), "wb",
-        ) as out_f, os.fdopen(
+        ) as out_f, open_owned_fd(
             open_exclusive_artifact(stderr_tmp, replace=True), "wb",
         ) as err_f:
             try:
@@ -181,8 +181,8 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
         # line; a bare OSError would surface as a traceback.
         sentinel_matches: list[str] = []
         try:
-            with os.fdopen(
-                open_hardened_read(log_path),
+            with open_owned_fd(
+                open_hardened_read(log_path), "r",
                 encoding="utf-8", errors="replace",
             ) as f:
                 for line in f:
@@ -194,9 +194,9 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
             # carried, by chunked copy (never buffered whole).
             # Hardened append (O_NOFOLLOW + FIFO refusal) for the
             # reopen of our own log after the pipeline's children ran.
-            with os.fdopen(
+            with open_owned_fd(
                 open_hardened_append(log_path), "ab",
-            ) as out_f, os.fdopen(
+            ) as out_f, open_owned_fd(
                 open_hardened_read(stderr_tmp), "rb",
             ) as err_f:
                 out_f.write(b"\n--- stderr ---\n")
