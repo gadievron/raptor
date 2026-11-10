@@ -95,7 +95,10 @@ def test_large_and_invalid_payloads_preserve_effective_outcome(tmp_path):
 
 
 def test_failed_sidecar_write_does_not_publish_stale_links_or_block_findings(tmp_path, monkeypatch):
+    from core.audit.claim_verification import ClaimVerification
+
     _record(tmp_path, FIXTURES[0])
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "unverified concern"})])
     (tmp_path / "verification-checks.json").write_text('{"checks":["stale"]}')
 
     def fail(*args, **kwargs):
@@ -111,6 +114,9 @@ def test_failed_sidecar_write_does_not_publish_stale_links_or_block_findings(tmp
     assert summary["export_status"] == "export_error"
     assert summary["observations"]["retained"]["records"] == 0
     assert summary["findings"]["without_matching_observations"] == 1
+    assert summary["claim_observations"]["artifact"] is None
+    assert summary["claim_observations"]["status"] == "export_error"
+    assert summary["claim_observations"]["retained_events"] == 0
 
 
 @pytest.mark.parametrize("sample", FIXTURES, ids=lambda x: x["outcome"])
@@ -658,3 +664,155 @@ def test_tampered_and_cross_run_claim_summaries_are_not_authenticated(tmp_path):
     other.mkdir()
     (other / ".audit-log.jsonl").write_text(original)
     assert load_verified_audit_log(other) == []
+
+
+def test_normal_export_retains_claim_inputs_without_verification_links(tmp_path):
+    from core.audit.claims import ClaimRevision
+    from core.audit.claim_verification import ClaimVerification
+
+    hyp = {"mechanism": "Fixture assertion", "claim_id": "model-owned", "status": "finding"}
+    revision = ClaimRevision(hyp, pass_id="intake", file="a.c", function="f", line_start=1)
+    check_trace.record_claim_observations(tmp_path, file="a.c", function="f", line_start=1,
+        verifications=[ClaimVerification(hyp, ("semgrep:alleged",), claim_revision=revision),
+                       ClaimVerification({"mechanism": "untested concern"}, refuted=True)])
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            hypothesis="Fixture assertion")
+    write_graded_findings(export_findings([finding]), tmp_path)
+    graded = json.loads((tmp_path / "findings-graded.json").read_text())
+    sidecar = json.loads((tmp_path / "claim-observations.json").read_text())
+    row, = sidecar["claim_observations"]
+    assert row["claim_revisions"][0] == revision.reference()
+    assert row["claim_revisions"][1] is None
+    assert row["observations"]["data"]["details"][0]["hypothesis"] == hyp
+    assert row["observations"]["data"]["details"][1]["proposed_refutation"] is True
+    checks = json.loads((tmp_path / "verification-checks.json").read_text())
+    assert checks["checks"] == []
+    assert checks["summary"]["records"] == 0
+    summary = graded["verification_summary"]["claim_observations"]
+    assert summary["retained_events"] == summary["event_admission"]["accepted_records"] == 1
+    assert summary["role"] == "unadjudicated_observation" and summary["status"] == "recorded"
+    assert summary["history_complete"] is False
+    assert graded["findings"][0]["verification_trace"]["check_results"]["references"] == []
+    assert graded["findings"][0]["discovery"]["confirmed_by"] == []
+    assert finding.status == "suspicious"
+
+
+def test_claim_export_rejects_unsigned_tampered_and_cross_run_rows(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+
+    out, other = tmp_path / "out", tmp_path / "other"
+    out.mkdir()
+    other.mkdir()
+    _claim_summary(out, [ClaimVerification({"mechanism": "a claim"})])
+    path = out / ".audit-log.jsonl"
+    original = path.read_text()
+    signed = json.loads(original)
+    unsigned = {k: v for k, v in signed.items() if k != "integrity"}
+    path.write_text(original + json.dumps({**signed, "observation_count": 42}) + "\n"
+                    + json.dumps(unsigned) + "\n")
+    write_graded_findings(export_findings([]), out)
+    assert len(json.loads((out / "claim-observations.json").read_text())["claim_observations"]) == 1
+    (other / ".audit-log.jsonl").write_text(original)
+    write_graded_findings(export_findings([]), other)
+    assert json.loads((other / "claim-observations.json").read_text())["claim_observations"] == []
+
+
+@pytest.mark.parametrize("conflict", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_claim_export_deduplicates_or_quarantines_signed_event_variants(tmp_path, conflict, reverse):
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a claim"})])
+    original = {k: v for k, v in load_verified_audit_log(tmp_path)[0].items() if k != "integrity"}
+    # Invalid conflicting shape must quarantine the valid variant too.
+    variant = {**original, "observation_count": -1} if conflict else dict(original)
+    (tmp_path / ".audit-log.jsonl").unlink()
+    for row in ([variant, original] if reverse else [original, variant]):
+        append_audit_log(tmp_path, row)
+    _record(tmp_path, FIXTURES[0])
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "claim-observations.json").read_text())
+    admission = sidecar["event_admission"]
+    assert len(json.loads((tmp_path / "verification-checks.json").read_text())["checks"]) == 1
+    assert admission["input_records"] == 2
+    if conflict:
+        assert sidecar["claim_observations"] == []
+        assert len(sidecar["quarantined_claim_observations"]) == 2
+        assert admission["conflicting_ids"] == admission["invalid_records"] == 1
+    else:
+        assert len(sidecar["claim_observations"]) == 1
+        assert sidecar["quarantined_claim_observations"] == []
+        assert admission["duplicate_records"] == 1
+
+
+def test_claim_export_retains_disclosed_partial_payload_and_metadata(tmp_path):
+    from core.audit.claims import ClaimRevision
+    from core.audit.claim_verification import ClaimVerification
+
+    hyp = {"mechanism": "a" * (80 * 1024)}
+    revision = ClaimRevision(hyp, pass_id="intake", file="a.c", function="f" * (140 * 1024), line_start=1)
+    check_trace.record_claim_observations(tmp_path, file="a.c", function="f" * (20 * 1024), line_start=1,
+        verifications=[ClaimVerification(hyp, claim_revision=revision)])
+    write_graded_findings(export_findings([]), tmp_path)
+    sidecar = json.loads((tmp_path / "claim-observations.json").read_text())
+    row, = sidecar["claim_observations"]
+    assert row["consumer_scope"] is row["claim_revisions"] is None
+    assert not row["observations"]["complete"]
+    assert set(row["metadata_omissions"]) == {"consumer_scope_size_limit", "claim_revisions_size_limit"}
+    assert sidecar["event_admission"]["invalid_records"] == 0
+
+
+def test_claim_export_keeps_legacy_missing_lineage_explicit(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a claim"})])
+    row = load_verified_audit_log(tmp_path)[0]
+    for key in ("integrity", "claim_revisions", "claim_revisions_complete"):
+        row.pop(key, None)
+    (tmp_path / ".audit-log.jsonl").unlink()
+    append_audit_log(tmp_path, row)
+    write_graded_findings(export_findings([]), tmp_path)
+    retained, = json.loads((tmp_path / "claim-observations.json").read_text())["claim_observations"]
+    assert "claim_revisions" not in retained
+    assert retained["producer_bindings"] == [None]
+
+
+@pytest.mark.parametrize("failed_artifact", ["claim-observations.json", "verification-checks.json"])
+def test_claim_and_check_artifact_failures_are_independent(tmp_path, monkeypatch, failed_artifact):
+    from core.audit.claim_verification import ClaimVerification
+
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a claim"})])
+    _record(tmp_path, FIXTURES[0])
+    original = check_trace.save_json
+    def save(path, data):
+        if path.name == failed_artifact:
+            raise OSError("owned artifact failure")
+        return original(path, data)
+    monkeypatch.setattr(check_trace, "save_json", save)
+    write_graded_findings(export_findings([]), tmp_path)
+    summary = json.loads((tmp_path / "findings-graded.json").read_text())["verification_summary"]
+    if failed_artifact == "claim-observations.json":
+        assert summary["claim_observations"]["status"] == "export_error"
+        assert summary["claim_observations"]["artifact"] is None
+        assert summary["export_status"] == "recorded"
+        assert summary["observations"]["retained"]["records"] == 1
+    else:
+        assert summary["export_status"] == "export_error"
+        assert summary["artifact"] is None
+        assert summary["claim_observations"]["status"] == "recorded"
+        assert summary["claim_observations"]["retained_events"] == 1
+
+
+def test_claim_history_does_not_expand_checker_artifact(tmp_path):
+    from core.audit.claim_verification import ClaimVerification
+
+    _record(tmp_path, FIXTURES[0])
+    write_graded_findings(export_findings([]), tmp_path)
+    before = (tmp_path / "verification-checks.json").read_bytes()
+    _claim_summary(tmp_path, [ClaimVerification({"mechanism": "a" * (80 * 1024)})])
+    write_graded_findings(export_findings([]), tmp_path)
+    assert (tmp_path / "verification-checks.json").read_bytes() == before
+    claims = json.loads((tmp_path / "claim-observations.json").read_text())
+    assert len(claims["claim_observations"]) == 1

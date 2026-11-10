@@ -383,7 +383,7 @@ _AUTHORITY_READERS = {
 #: (file, enclosing function) → why an unverified read is acceptable.
 _TELEMETRY_READERS = {
     ("core/audit/check_trace.py", "write_check_results"):
-        "report-only check observations; verifies run-bound rows to exclude"
+        "report-only checker and claim observations; verifies run-bound rows to exclude"
         " forged or replayed provenance, grants no verdict authority",
     ("core/audit/record.py", "load_verified_audit_log"):
         "the strict loader implementation itself",
