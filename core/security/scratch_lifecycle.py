@@ -209,6 +209,7 @@ def locked(session_id: str):
     session_id = _identifier(session_id)
     node = _open_registry()
     fd = None
+    failed = False
     try:
         fd = os.open(session_id + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
                      0o600, dir_fd=node)
@@ -216,10 +217,20 @@ def locked(session_id: str):
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         value = json.loads(_read_file(node, session_id + '.json'))
         yield node, _validate(value, session_id)
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if fd is not None:
-            os.close(fd)
-        os.close(node)
+        cleanup_error: BaseException | None = None
+        for descriptor in (fd, node):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
 
 
 def register(metadata: Path, owner_pid: int) -> str:
