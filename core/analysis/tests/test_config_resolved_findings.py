@@ -193,3 +193,33 @@ class TestSarifAndStage:
         doc = json.loads(path.read_text())
         assert len(doc["runs"][0]["results"]) == 1
         assert stats["emitted"] == 1
+
+
+def test_unreadable_java_is_disclosed_without_losing_readable_findings(tmp_path):
+    from core.sarif.parser import generate_scan_metrics
+
+    denied = []
+
+    class ReadDeniedPath(type(tmp_path)):
+        def read_text(self, *args, **kwargs):
+            if self.name == 'Denied.java':
+                denied.append(self.name)
+                raise PermissionError('owned unreadable source')
+            return super().read_text(*args, **kwargs)
+
+    repo = ReadDeniedPath(tmp_path / 'repo')
+    repo.mkdir()
+    (repo / 'app.properties').write_text('hashAlg=MD5\n')
+    (repo / 'H.java').write_text(_src('app.properties', '"hashAlg"'))
+    (repo / 'Denied.java').write_text('class Denied {}')
+    out = tmp_path / 'out'
+    out.mkdir()
+    path, stats = run_config_resolved_stage(repo, out)
+    assert denied == ['Denied.java']
+    assert path is not None and stats['emitted'] == 1
+    assert stats.get('files_unreadable') == 1
+    document = json.loads(path.read_text())
+    assert len(document['runs'][0]['results']) == 1
+    metrics = generate_scan_metrics([str(path)])
+    assert metrics['tool_coverage_limitations'] == {'raptor-config-resolved': 1}
+    assert metrics['tool_execution_failures'] == {}

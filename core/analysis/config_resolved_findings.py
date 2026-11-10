@@ -268,6 +268,7 @@ def run_config_resolved_stage(
             try:
                 text = p.read_text(encoding="utf-8", errors="replace")
             except OSError:
+                stats["files_unreadable"] += 1
                 continue
             if "getInstance" not in text:
                 continue
@@ -280,7 +281,17 @@ def run_config_resolved_stage(
         return None, dict(stats)
     sarif_path = out_dir / "config-resolved.sarif"
     try:
-        save_json(sarif_path, to_sarif(findings, str(repo_path)))
+        document = to_sarif(findings, str(repo_path))
+        if stats["files_unreadable"]:
+            document["runs"][0]["invocations"] = [{
+                "executionSuccessful": True,
+                "toolExecutionNotifications": [{
+                    "level": "warning",
+                    "message": {"text": f"{stats['files_unreadable']} Java source file(s) could not be read"},
+                    "properties": {"coverage_limitation": "unreadable_sources"},
+                }],
+            }]
+        save_json(sarif_path, document)
     except OSError as e:
         logger.warning("config-resolved stage: SARIF write failed: %s", e)
         return None, dict(stats)
