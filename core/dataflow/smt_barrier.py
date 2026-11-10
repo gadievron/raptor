@@ -1628,17 +1628,30 @@ def _python_definition_headers(node: ast.AST) -> list[ast.AST]:
     return []
 
 
+def _python_operator_dispatch(node: ast.AST) -> bool:
+    """Operators can invoke user methods without an explicit Call node.
+
+    This is a negative effect boundary, not a transfer or purity contract.
+    """
+    return isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp))
+
+
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
-    return isinstance(node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript)) or bool(
+    return _python_operator_dispatch(node) or isinstance(
+        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript)
+    ) or bool(
         getattr(node, "decorator_list", [])
-    ) or any(isinstance(part, (ast.Call, ast.Attribute, ast.Subscript))
+    ) or any(_python_operator_dispatch(part)
+             or isinstance(part, (ast.Call, ast.Attribute, ast.Subscript))
              for value in _python_definition_headers(node) for part in ast.walk(value))
 
 
-def _python_lookup_load(node: ast.AST) -> bool:
-    """Descriptor/index dispatch may precede a same-row consumed read."""
-    return isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
+def _python_evaluation_dispatch(node: ast.AST) -> bool:
+    """Protocol dispatch may precede a same-row consumed name read."""
+    return _python_operator_dispatch(node) or (
+        isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
+    )
 
 
 def _python_name_has_local_slot(scope_root: ast.AST, name: str) -> bool:
@@ -1718,7 +1731,7 @@ def _variable_reassigned_between(
          and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
         or (_python_possible_call(node)
             and after_line < (getattr(node, "lineno", None) or -1) < before_line)
-        or (_python_lookup_load(node)
+        or (_python_evaluation_dispatch(node)
             and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
         for node in _walk_same_scope(scope_root)
     ):
@@ -2776,7 +2789,7 @@ def _python_chain_reaches_sink(
         if class_decls is None and (
             _python_suspension(node)
             or (_python_possible_call(node) and validator_line < node.lineno < sink_line)
-            or (_python_lookup_load(node) and validator_line < node.lineno <= sink_line)
+            or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
         ):
             # A call or suspension can preserve a captured local value,
             # but cannot freeze externally owned name slots. Kill here,
