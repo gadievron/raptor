@@ -45,9 +45,12 @@ rules:
     patterns:
       - pattern-either:
           # cryptography.hazmat
-          - pattern: rsa.generate_private_key(public_exponent=$E, key_size=$N, ...)
+          - pattern: cryptography.hazmat.primitives.asymmetric.rsa.generate_private_key(public_exponent=$E, key_size=$N, ...)
+          - pattern: cryptography.hazmat.primitives.asymmetric.rsa.generate_private_key($E, $N, ...)
+          - pattern: cryptography.hazmat.primitives.asymmetric.rsa.generate_private_key($E, key_size=$N, ...)
           # pycryptodome / pycrypto
           - pattern: Crypto.PublicKey.RSA.generate($N, ...)
+          - pattern: Crypto.PublicKey.RSA.generate(bits=$N, ...)
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048
@@ -62,9 +65,11 @@ rules:
     patterns:
       - pattern-either:
           # cryptography.hazmat
-          - pattern: dsa.generate_private_key(key_size=$N, ...)
+          - pattern: cryptography.hazmat.primitives.asymmetric.dsa.generate_private_key(key_size=$N, ...)
+          - pattern: cryptography.hazmat.primitives.asymmetric.dsa.generate_private_key($N, ...)
           # pycryptodome / pycrypto
           - pattern: Crypto.PublicKey.DSA.generate($N, ...)
+          - pattern: Crypto.PublicKey.DSA.generate(bits=$N, ...)
       - metavariable-comparison:
           metavariable: $N
           comparison: $N < 2048
