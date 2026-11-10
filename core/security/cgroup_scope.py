@@ -61,9 +61,15 @@ def _read(node: int, name: str) -> str:
         raw = os.read(fd, 16385)
         if len(raw) > 16384:
             raise ValueError('oversized cgroup control file')
-        return raw.decode('ascii')
-    finally:
-        os.close(fd)
+        result = raw.decode('ascii')
+    except BaseException:
+        try:
+            os.close(fd)
+        except BaseException:
+            pass
+        raise
+    os.close(fd)
+    return result
 
 
 def _write(node: int, name: str, data: str) -> None:
