@@ -54,7 +54,7 @@ import subprocess
 import sys
 import time
 import warnings
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 
 from ._retirement import retire_parent_resources as _retire_parent_resources
 
@@ -489,6 +489,7 @@ def run_landlock_audit(
     stdout=None,
     stderr=None,
     start_new_session: bool = True,
+    execution_committed_callback: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess:
     """Spawn ``cmd`` under Landlock + seccomp + ptrace tracer, no
     namespaces.
@@ -892,6 +893,10 @@ def run_landlock_audit(
             )
             raise RuntimeError(msg)
 
+        # Commit before releasing the target: even a subsequent write or
+        # retirement error must not let a caller replay a possible execution.
+        if execution_committed_callback is not None:
+            execution_committed_callback()
         # Tracer attached. Tell the target it can proceed.
         try:
             os.write(p_go_w, b"G")
