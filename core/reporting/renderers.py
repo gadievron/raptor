@@ -46,9 +46,13 @@ def _markdown(document: ReportDocument) -> RenderedReport:
         return re.sub(r"[\[\]!]", lambda match: f"&#{ord(match[0])};", value)
 
     def bounded(value, sanitizer, max_chars):
-        if len(str(value)) > max_chars:
+        # Probe one extra character so escaping, rather than raw input size,
+        # determines whether the existing presentation cap removed content.
+        rendered = sanitizer(value, max_chars=max_chars + 1)
+        if len(rendered) > max_chars:
             notes.append("Markdown presentation truncated long values; complete values remain in the supplied report document")
-        return sanitizer(value, max_chars=max_chars)
+            return rendered[:max_chars - 1] + "…"
+        return rendered
 
     def cell(value):
         return literal(bounded(value, md_inline, 4000))
@@ -187,7 +191,6 @@ def _xml(document: ReportDocument) -> RenderedReport:
 
 
 _RENDERERS: dict[str, Renderer] = {}
-_FORMAT_ALIASES = {"md": "markdown"}
 
 
 def _link_allowed(value: str) -> bool:
@@ -200,8 +203,6 @@ def _link_allowed(value: str) -> bool:
 def register_renderer(renderer: Renderer) -> None:
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", renderer.name) or not re.fullmatch(r"\.[a-z0-9]{1,10}", renderer.extension):
         raise ValueError("Unsafe renderer name or extension")
-    if renderer.name in _FORMAT_ALIASES:
-        raise ValueError(f"Renderer name is a reserved alias: {renderer.name}")
     if renderer.name in _RENDERERS:
         raise ValueError(f"Renderer already registered: {renderer.name}")
     _RENDERERS[renderer.name] = renderer
@@ -212,7 +213,7 @@ def available_formats() -> tuple[str, ...]:
 
 
 def get_renderer(name: str) -> Renderer:
-    name = _FORMAT_ALIASES.get(name, name)
+    name = "markdown" if name == "md" else name
     if name not in _RENDERERS:
         raise ValueError(f"Unsupported report format {name!r}; available: {', '.join(available_formats())}")
     return _RENDERERS[name]
@@ -224,11 +225,6 @@ def render_document(document: ReportDocument, format: str = "markdown") -> Rende
     renderer = get_renderer(format)
     try:
         rendered = renderer.render(document)
-        if (not isinstance(rendered, RenderedReport)
-                or not isinstance(rendered.content, bytes)
-                or not isinstance(rendered.diagnostics, tuple)
-                or not all(isinstance(note, str) for note in rendered.diagnostics)):
-            raise ValueError(f"{renderer.name} renderer returned invalid report content or diagnostics")
     except (OSError, ValueError, TypeError):
         raise
     except Exception as exc:  # noqa: BLE001 — isolate optional plugins; cancellation still propagates
