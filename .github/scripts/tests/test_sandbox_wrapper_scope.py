@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import re
 from collections import Counter
 from pathlib import Path
@@ -543,3 +544,243 @@ def test_wrapper_workflow_passes_merge_group_base_to_scope():
     assert fields['BASE_SHA'] == (
         "${{ github.event_name != 'push' && (github.event.pull_request.base.sha || github.event.merge_group.base_sha) || steps.push_base.outputs.base }}")
     assert fields['EVENT'] == '${{ github.event_name }}'
+
+
+@pytest.fixture
+def registry_git(tree):
+    from core.testing.gitrepo import git_run
+
+    root, registry = tree
+    path = root / 'core/one/tests/test_wrapper.py'
+    path.write_text(path.read_text() + '\ndef test_extra():\n    pass\n')
+    git_run(root, 'init', '-b', 'main')
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'registry comparison base')
+    return root, registry, git_run(root, 'rev-parse', 'HEAD')
+
+
+def _registry_step(root, registry, base, monkeypatch):
+    from core.testing.gitrepo import git_run
+
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(registry, indent=2))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'current registry selection')
+    monkeypatch.chdir(root)
+    monkeypatch.setenv('EVENT', 'merge_group')
+    monkeypatch.setenv('BASE_SHA', base)
+    output = root / 'scope-output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    scope.main()
+    fields = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    matrix = json.loads(fields['matrix'])['include']
+    assert fields['run'] == str(bool(matrix)).lower()
+    return {cell['platform']: cell for cell in matrix}
+
+
+@pytest.mark.parametrize('kind', ['count', 'selector'])
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
+def test_registry_cell_only_git_diff_keeps_other_platform_idle(registry_git, monkeypatch, kind, platform):
+    root, registry, base = registry_git
+    cell = registry['native'][0]['platforms'][platform]
+    cell['expected'] = 2
+    if kind == 'selector':
+        cell['tests'].append('core/one/tests/test_wrapper.py::test_extra')
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {platform}
+    assert matrix[platform]['families'] == ['one']
+    assert matrix[platform]['contracts'] == []
+    assert matrix[platform]['full'] is False
+
+
+def test_registry_formatting_only_needs_no_platform_runner(registry_git, monkeypatch):
+    root, registry, base = registry_git
+    assert _registry_step(root, registry, base, monkeypatch) == {}
+
+
+def test_registry_delta_unions_normal_source_selection(registry_git, monkeypatch):
+    root, registry, base = registry_git
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    path = root / 'core/two/wrapper.py'
+    path.write_text(path.read_text() + '# source changed\n')
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert matrix['linux']['families'] == ['one', 'two']
+    assert matrix['darwin']['families'] == ['two']
+    for cell in matrix.values():
+        assert cell['contracts'] == ['core/two/tests/test_wrapper.py::test_contract']
+        assert cell['full'] is False
+
+
+@pytest.mark.parametrize('other', ['global', 'deleted', 'unparseable', 'shared-opaque'])
+def test_registry_narrowing_cannot_override_full_fallbacks(registry_git, monkeypatch, other):
+    from core.testing.gitrepo import git_run
+
+    root, registry, base = registry_git
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    if other == 'global':
+        (root / 'uv.lock').write_text('owned change\n')
+    elif other == 'deleted':
+        (root / 'core/shared/helper.py').unlink()
+    elif other == 'unparseable':
+        (root / 'core/shared/helper.py').write_text('def broken(')
+    else:
+        (root / 'conftest.py').write_text('import importlib\nimportlib.import_module(unknown)\n')
+        git_run(root, 'add', 'conftest.py')
+        git_run(root, 'commit', '-qm', 'shared opaque fixture base')
+        base = git_run(root, 'rev-parse', 'HEAD')
+        path = root / 'core/two/wrapper.py'
+        path.write_text(path.read_text() + '# runtime input changed\n')
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'}
+    assert all(cell['full'] and cell['families'] == ['one', 'two']
+               and len(cell['contracts']) == 2 for cell in matrix.values())
+
+
+def test_registry_delta_uses_comparison_base_not_previous_commit(registry_git, monkeypatch):
+    from core.testing.gitrepo import git_run
+
+    root, registry, base = registry_git
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(registry))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'first queued registry edit')
+    # The next commit only changes formatting. HEAD^ already has the new cell.
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux'} and matrix['linux']['families'] == ['one']
+    assert matrix['linux']['full'] is False
+
+
+def test_retired_old_selector_need_not_exist_in_current_tree(registry_git, monkeypatch):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    old_cell = registry['native'][0]['platforms']['linux']
+    old_cell['tests'].append('core/one/tests/test_wrapper.py::test_extra')
+    old_cell['expected'] = 2
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(registry))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'old selector exists at base')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    old_cell['tests'].pop()
+    old_cell['expected'] = 1
+    path = root / 'core/one/tests/test_wrapper.py'
+    path.write_text(path.read_text().replace('\ndef test_extra():\n    pass\n', ''))
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'}  # Python change affects both.
+    assert all(cell['families'] == ['one'] and not cell['full'] for cell in matrix.values())
+
+
+@pytest.mark.parametrize('old', ['missing', 'json', 'schema', 'duplicate-id', 'unknown-cell',
+                                 'zero-count', 'bad-tests', 'manual-type', 'null-native', 'unknown-wrapper'])
+def test_unavailable_or_invalid_old_registry_keeps_full_selection(registry_git, monkeypatch, old):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    path = root / '.github/sandbox-wrapper-tests.json'
+    if old == 'missing':
+        path.unlink()
+    elif old == 'json':
+        path.write_text('{')
+    else:
+        previous = deepcopy(registry)
+        if old == 'schema':
+            previous['version'] = 999
+        elif old == 'duplicate-id':
+            previous['native'].append(deepcopy(previous['native'][0]))
+        elif old == 'unknown-cell':
+            previous['native'][0]['platforms']['linux']['unknown'] = 'future policy'
+        elif old == 'zero-count':
+            previous['native'][0]['platforms']['linux']['expected'] = 0
+        elif old == 'bad-tests':
+            previous['native'][0]['platforms']['linux']['tests'] = 'not a selector list'
+        elif old == 'manual-type':
+            previous['native'][0]['platforms']['linux']['manual'] = 'false'
+        elif old == 'null-native':
+            previous['native'] = None
+        else:
+            previous['wrappers'][0]['unknown'] = 'future policy'
+        path.write_text(json.dumps(previous))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'unavailable historical schema')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
+
+
+@pytest.mark.parametrize('policy', ['wrapper', 'env', 'reason', 'manual', 'family-id', 'unknown'])
+def test_registry_policy_changes_still_run_full_without_manual_opt_in(registry_git, monkeypatch, policy):
+    root, registry, base = registry_git
+    if policy == 'wrapper':
+        registry['wrappers'][0]['discovery'] = 'owned additional policy review'
+    elif policy == 'env':
+        registry['native'][0]['env'] = {'OWNED_MODE': 'changed'}
+    elif policy == 'reason':
+        registry['native'][0]['platforms']['linux']['reason'] = 'new policy rationale'
+    elif policy == 'manual':
+        registry['native'][0]['platforms']['linux']['manual'] = True
+    elif policy == 'family-id':
+        registry['native'][0]['id'] = 'renamed'
+    else:
+        registry['future_policy'] = True
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'} and all(cell['full'] for cell in matrix.values())
+    expected_linux = ['two'] if policy == 'manual' else ['renamed', 'two'] if policy == 'family-id' else ['one', 'two']
+    assert matrix['linux']['families'] == expected_linux
+    assert len(matrix['linux']['contracts']) == 2
+
+
+@pytest.mark.parametrize('base', ['', '0' * 40, 'HEAD', 'a' * 39, 'a' * 41, 'a' * 40 + ':other'])
+def test_unverified_registry_base_never_runs_git(tmp_path, monkeypatch, base):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(scope, 'subprocess', SimpleNamespace(
+        run=lambda *a, **k: pytest.fail('unverified revision reached Git')))
+    assert scope.base_registry(tmp_path, base) is None
+
+
+@pytest.mark.parametrize('failure', ['spawn', 'timeout', 'status'])
+def test_registry_history_read_failures_are_unavailable(tmp_path, monkeypatch, failure):
+    import subprocess
+    from types import SimpleNamespace
+
+    error = {'spawn': OSError('owned spawn failure'),
+             'timeout': subprocess.TimeoutExpired(['git'], 10),
+             'status': subprocess.CalledProcessError(128, ['git'])}[failure]
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(scope, 'subprocess', SimpleNamespace(run=fail, SubprocessError=subprocess.SubprocessError))
+    assert scope.base_registry(tmp_path, 'a' * 40) is None
+
+
+@pytest.mark.parametrize('payload', [b'[]', b'null', b'{', b'\xff', b' ' * (2 * 1024 * 1024 + 1)],
+                         ids=['list', 'null', 'json', 'encoding', 'oversized'])
+def test_unreadable_registry_payload_is_unavailable(tmp_path, monkeypatch, payload):
+    import subprocess
+    from types import SimpleNamespace
+
+    def read(command, **options):
+        assert command == ['git', 'show', 'a' * 40 + ':.github/sandbox-wrapper-tests.json']
+        assert options == {'cwd': tmp_path, 'check': True, 'capture_output': True, 'timeout': 10}
+        return SimpleNamespace(stdout=payload)
+    monkeypatch.setattr(scope, 'subprocess', SimpleNamespace(run=read, SubprocessError=subprocess.SubprocessError))
+    assert scope.base_registry(tmp_path, 'a' * 40) is None
+
+
+def test_registry_retirement_with_deleted_external_test_keeps_full(registry_git, monkeypatch):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    retired = root / '.github/acceptance/old.py'
+    retired.parent.mkdir(parents=True)
+    retired.write_text('def test_old():\n    pass\n')
+    cell = registry['native'][0]['platforms']['linux']
+    cell['tests'] = ['.github/acceptance/old.py::test_old']
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(registry))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'old external native selector')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    retired.unlink()
+    cell['tests'] = ['core/one/tests/test_wrapper.py::test_native']
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'}
+    assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
