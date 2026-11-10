@@ -17906,9 +17906,27 @@ def _requeue_pending_study(
     try:
         if not config.out_dir:
             return 0
-        from core.concepts.reading_list import ReadingList
-        rl = ReadingList.load(Path(config.out_dir) / "reading-list.json")
-        pending = rl.pending()[:_STUDY_REQUEUE_CAP]
+        from core.concepts.reading_list import READING_LIST_WRITE_LOCK, ReadingList
+        from core.atomic_fs.fs_lock import artifact_lock
+
+        path = Path(config.out_dir) / "reading-list.json"
+        # Retire only this pipeline's old generated premise-question shape.
+        # Keep its text/history, without rewriting prose into an identifier
+        # or treating an unavailable review dependency as resolved knowledge.
+        with READING_LIST_WRITE_LOCK, artifact_lock(path, subject="reading list"):
+            rl = ReadingList.load(path)
+            changed = False
+            for item in rl.pending():
+                if (item.id.startswith("premise-") and item.source_command == "/audit"
+                        and item.question.startswith("Does this hold: ")
+                        and item.question.endswith(f"(refutation premise for {item.source_function})?")):
+                    item.mark_unresolvable(
+                        "Requires review with related caller/helper code; unavailable as a source-study subject."
+                    )
+                    changed = True
+            if changed:
+                rl.save(path)
+            pending = rl.pending()[:_STUDY_REQUEUE_CAP]
         for it in pending:
             study_queue.enqueue(StudyRequest(
                 question=it.question,
@@ -30674,61 +30692,37 @@ def _premise_blocks_confirm(
     return not any(_tool_sees_cross_function(t) for t in confirmed)
 
 
-# Reading-list updates are load-modify-save cycles on one JSON file
-# with writers all over the process (premise questions from parallel
-# review/post-loop passes, audit_bridge queueing, the study
-# consumer). ALL of them serialize on the shared lock owned by
-# core.concepts.reading_list — a writer-local lock here only covered
-# this module's premise-question writers and did nothing against the
-# other writers' concurrent cycles.
-
-
-def _queue_premise_study_question(
+def _record_unresolved_review_premise(
     config: OrchestratorConfig,
     outcome: ReviewOutcome,
     h: dict[str, Any],
 ) -> None:
-    """Best-effort: park the refutation's cross-function premise on the
-    reading list so the study loop can verify it with a receipt. A
-    resolved premise re-enters review; an unverified one stays visible
-    instead of being silently trusted or silently overridden."""
+    """Keep a caller-context review need visible without queueing source study.
+
+    Arbitrary premise prose does not identify a study subject or resolved
+    caller endpoint. This records an outstanding review dependency; it does
+    not schedule or claim to have completed that review.
+    """
+    counter = h.get("counter")
+    if not isinstance(counter, str) or not counter.strip():
+        return
+    counter = counter.strip()[:400]
+    note = (
+        "[needs review] Check this premise with the relevant caller or "
+        f"helper code: {counter}. The premise remains unverified."
+    )
+    # Append so existing gate markers at the start keep their meaning.
+    if note not in outcome.body:
+        outcome.body += "\n\n" + note
     try:
-        import uuid
-
-        from core.concepts.reading_list import (
-            READING_LIST_WRITE_LOCK,
-            ReadingList,
-            ReadingListItem,
-        )
-
-        counter = (h.get("counter") or "").strip()
-        if not counter or config.out_dir is None:
-            return
-        from core.atomic_fs.fs_lock import artifact_lock
-
-        rl_path = config.out_dir / "reading-list.json"
-        question = (
-            f"Does this hold: {counter[:400]} "
-            f"(refutation premise for {outcome.function})?"
-        )
-        with READING_LIST_WRITE_LOCK, artifact_lock(
-            rl_path, subject="reading list",
-        ):
-            rl = ReadingList.load(rl_path)
-            if any(it.question == question for it in rl.items):
-                return
-            rl.queue(ReadingListItem(
-                id=f"premise-{uuid.uuid4().hex[:12]}",
-                question=question,
-                source_command="/audit",
-                source_file=outcome.file,
-                source_function=outcome.function,
-                priority="high",
-                context=(h.get("mechanism") or "")[:200],
-            ))
-            rl.save(rl_path)
+        append_audit_log(config.out_dir, {
+            "action": "review_premise_unresolved", "file": outcome.file,
+            "function": outcome.function, "line_start": outcome.line,
+            "hypothesis": (h.get("mechanism") or "")[:200],
+            "reason": counter, "adjudication": "unverified",
+        })
     except Exception:
-        logger.debug("premise study-question queueing failed", exc_info=True)
+        logger.warning("could not record unresolved review premise", exc_info=True)
 
 
 def _primary_hypothesis_entry(
@@ -30820,12 +30814,12 @@ def _note_premise_blocked_validation(
     lane: str = "finding validation",
     tier: str = "sweep_validate",
 ) -> None:
-    """Receipt + study question for a premise-blocked primary confirm.
+    """Receipt + unresolved review need for a premise-blocked primary confirm.
 
     Mirrors the secondary-sweep premise block: the confirmation is
     recorded for the export (it is real local evidence) but does not
     ground or promote the verdict, and the unconsumed cross-function
-    premise is parked on the reading list for a study receipt.
+    premise remains visible for review with the related caller/helper code.
     """
     if outcome.review_result is not None:
         outcome.review_result.setdefault(
@@ -30842,7 +30836,7 @@ def _note_premise_blocked_validation(
     )
     if tier_counters is not None:
         _increment_tier_dict(tier_counters, tier, "premise_blocked")
-    _queue_premise_study_question(config, outcome, h)
+    _record_unresolved_review_premise(config, outcome, h)
 
 
 def _smt_caller_gate_decision(
@@ -31208,7 +31202,7 @@ def _promote_clean_refuted(
                             result.tier_counters, "refuted_sweep",
                             "premise_blocked",
                         )
-                        _queue_premise_study_question(config, outcome, h)
+                        _record_unresolved_review_premise(config, result.outcomes[i], h)
                         continue
                     _gblk = _guard_blocks_promotion(
                         outcome.function, joern_server,
@@ -31242,6 +31236,10 @@ def _promote_clean_refuted(
                         # and a cheap-channel rescue would overwrite
                         # that stamp with a weaker one.
                         continue
+                    # Prior hypotheses may have left unresolved review
+                    # dependencies on a replaced held slot. Carry its body,
+                    # while the selected claim keeps only its own receipt.
+                    selected.body = result.outcomes[i].body
                     promoted_outcome = _promote_outcome(
                         selected, f"clean-refuted:{tool}",
                     )
@@ -31359,7 +31357,7 @@ def _promote_clean_refuted(
                     result.tier_counters, "refuted_sweep",
                     "premise_blocked",
                 )
-                _queue_premise_study_question(config, outcome, h)
+                _record_unresolved_review_premise(config, result.outcomes[i], h)
                 continue
             _gblk = _guard_blocks_promotion(
                 outcome.function, joern_server, result.tier_counters,
@@ -31687,7 +31685,7 @@ def _dispatch_secondary_hypotheses(
                     result.tier_counters, "secondary_sweep",
                     "premise_blocked",
                 )
-                _queue_premise_study_question(config, outcome, h)
+                _record_unresolved_review_premise(config, result.outcomes[i], h)
                 continue
 
             material_reason = _claim_material_rejection(outcome, mechanism, h, admission=admission)
