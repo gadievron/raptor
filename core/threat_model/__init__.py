@@ -876,6 +876,7 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
         | getattr(os, "O_NONBLOCK", 0),
         0o600,
     )
+    failed = False
     try:
         # Regularity plus foreign-uid refusal (shared checker): a
         # pre-created lock file opens FINE, so a hostile owner would
@@ -899,8 +900,15 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
             )
             raise OSError(msg)
         yield
+    except BaseException:
+        failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            if not failed:
+                raise
 
 
 def save_model(
