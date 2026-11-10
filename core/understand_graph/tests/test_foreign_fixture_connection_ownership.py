@@ -1,5 +1,6 @@
 """Foreign-store fixtures retire their native schema-creation connections."""
 
+import errno
 import os
 import sqlite3
 from contextlib import closing
@@ -12,14 +13,26 @@ from core.understand_graph.tests import test_call_edge_ingest as ingest
 from core.understand_graph.tests import test_store_fd_honest as honest
 
 
-def _owned_fds(path):
-    count = 0
-    for name in os.listdir("/proc/self/fd"):
+def _owned_fds(path, identity):
+    for directory in ("/proc/self/fd", "/dev/fd"):
         try:
-            target = os.readlink("/proc/self/fd/" + name)
+            names = os.listdir(directory)
+            break
         except FileNotFoundError:
             continue
-        count += target in (str(Path(path).resolve()), str(Path(path).resolve()) + " (deleted)")
+    else:
+        raise RuntimeError("native descriptor observation is unavailable")
+    count = 0
+    for name in names:
+        if not name.isdecimal():
+            continue
+        try:
+            status = os.fstat(int(name))
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+            continue
+        count += (status.st_dev, status.st_ino) == identity
     return count
 
 
@@ -27,6 +40,7 @@ def _exercise(tmp_path, consumer, error=None, after=True, deny=False):
     records = []
     closed = []
     paths = []
+    identities = {}
     failure = error("owned foreign fixture fault") if error else None
 
     class Connection(sqlite3.Connection):
@@ -47,9 +61,12 @@ def _exercise(tmp_path, consumer, error=None, after=True, deny=False):
 
     def connected(path):
         connection = sqlite3.connect(path, factory=Connection)
-        connection.calls = 0
-        paths.append(Path(path))
         records.append(connection)
+        connection.calls = 0
+        owned_path = Path(path)
+        status = owned_path.stat()
+        identities[owned_path] = status.st_dev, status.st_ino
+        paths.append(owned_path)
         if deny:
             connection.set_authorizer(
                 lambda action, *rest: sqlite3.SQLITE_DENY
@@ -62,7 +79,7 @@ def _exercise(tmp_path, consumer, error=None, after=True, deny=False):
             assert closed == records
             with pytest.raises(sqlite3.ProgrammingError, match="closed"):
                 sqlite3.Connection.execute(records[0], "SELECT 1")
-            assert _owned_fds(self) == 0
+            assert _owned_fds(self, identities[Path(self)]) == 0
             return super().read_bytes()
 
     function = ingest.test_junk_store_costs_the_ingest_not_the_caller if consumer == "ingest" else honest._make_foreign
@@ -87,11 +104,11 @@ def _exercise(tmp_path, consumer, error=None, after=True, deny=False):
         assert closed == records
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             sqlite3.Connection.execute(records[0], "SELECT 1")
-        assert all(_owned_fds(path) == 0 for path in paths)
+        assert all(_owned_fds(path, identities[path]) == 0 for path in paths)
     finally:
         for connection in records:
             sqlite3.Connection.close(connection)
-        assert all(_owned_fds(path) == 0 for path in paths)
+        assert all(_owned_fds(path, identities[path]) == 0 for path in paths)
 
 
 @pytest.mark.parametrize("consumer", ["ingest", "honest"])
