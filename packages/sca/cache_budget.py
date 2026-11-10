@@ -68,17 +68,20 @@ def _expired(unit: _Unit, now: float) -> bool:
     Unknown formats remain eligible for age/LRU eviction, without claiming
     to know their validity. Content-addressed TTL_FOREVER entries never expire.
     """
+    from core.source.streams import owned_fd
+
     if unit.directory or unit.path.suffix != '.json':
         return False
     try:
         fd = os.open(unit.path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
                      | getattr(os, 'O_NOATIME', 0))
-        try:
-            if not stat.S_ISREG(os.fstat(fd).st_mode):
+        with owned_fd(fd, close_fd=os.close):
+            try:
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    return False
+                match = _ENVELOPE_HEADER.match(os.read(fd, 256))
+            except (OSError, ValueError, OverflowError):
                 return False
-            match = _ENVELOPE_HEADER.match(os.read(fd, 256))
-        finally:
-            os.close(fd)
         if match:
             written, ttl = float(match[1]), int(match[2])
             return ttl >= 0 and now - written > ttl
