@@ -690,3 +690,29 @@ def test_qualified_properties_static_import_boundary(tmp_path, owner, admitted):
     else:
         assert value is REFUSE
         assert resolver.stats['receiver_not_local'] == 1
+
+
+def test_unicode_escape_cannot_hide_a_properties_shadow(tmp_path):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"').replace('public class T {', r'''public class T {
+        static class Propert\u0069es extends java.util.Properties {
+            @Override public String getProperty(String key) { return "custom"; }
+        }
+''')
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) is REFUSE
+
+
+def test_unicode_escape_refusal_preserves_foreign_call_fallback(tmp_path):
+    src = r'public class T { String s = "\u0061"; void m() { foo(); } }'
+    resolver = _resolver(tmp_path, src)
+    tree = _parser().parse(src.encode())
+    stack = [tree.root_node]
+    calls = []
+    while stack:
+        node = stack.pop()
+        if node.type == 'method_invocation':
+            calls.append(node)
+        stack.extend(node.children)
+    assert len(calls) == 1
+    assert resolver.fold_hook(calls[0], 1) is None
