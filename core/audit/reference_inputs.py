@@ -214,12 +214,23 @@ def reference_inputs_current(snapshot: object) -> bool:
     current: dict[str, _Entry] = {}
     if not isinstance(c_integer.ENTRIES, tuple) or len(c_integer.ENTRIES) > _MAX_PACK_ENTRIES:
         return False
+    prerequisites: dict[str, tuple[str, ...]] = {}
     for entry in c_integer.ENTRIES:
         identity = _render_identity(entry, pack)
         if identity is None or identity[0] in current:
             return False
+        required = entry.prerequisites
+        if (not isinstance(required, tuple) or len(required) > MAX_ENTRIES
+                or any(not isinstance(item, str) or _ID.fullmatch(item) is None for item in required)):
+            return False
         current[identity[0]] = identity
-    return all(current.get(entry[0]) == entry for entry in entries)
+        prerequisites[identity[0]] = required
+    delivered_ids = {entry[0] for entry in entries}
+    # A newly required entry must have actually travelled in the old packet.
+    # Its own identity and prerequisites are checked by the same finite set.
+    return all(current.get(entry[0]) == entry
+               and all(required in delivered_ids for required in prerequisites[entry[0]])
+               for entry in entries)
 
 
 def review_context_digest(source_inputs: object, reference_inputs: object = None) -> str | None:

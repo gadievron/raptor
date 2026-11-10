@@ -11,7 +11,7 @@ from core.audit.gaps import _verify_entries_fold
 from core.llm.providers import StructuredResponse
 
 
-@pytest.mark.parametrize("change", ["version", "rule", "conditions", "unrelated"])
+@pytest.mark.parametrize("change", ["version", "rule", "conditions", "prerequisite", "unrelated"])
 @pytest.mark.parametrize("reuse", [False, True])
 def test_changed_delivered_reference_requires_fresh_review(tmp_path, monkeypatch, change, reuse):
     monkeypatch.setenv('XDG_DATA_HOME',str(tmp_path/'xdg'))
@@ -48,6 +48,9 @@ def test_changed_delivered_reference_requires_fresh_review(tmp_path, monkeypatch
             return replace(item, rule=item.rule+' Unrelated clarification.') if item.entry_id not in supplied else item
         if item.entry_id not in supplied:
             return item
+        if change == 'prerequisite':
+            assert 'c.integer-conversion' not in supplied
+            return replace(item, prerequisites=(*item.prerequisites, 'c.integer-conversion'))
         if change == 'version': return replace(item, version=item.version+1)
         if change == 'conditions': return replace(item, conditions=(*item.conditions,'Reviewed additional condition.'))
         return replace(item, rule=item.rule+' Updated reviewed clarification.')
