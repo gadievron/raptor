@@ -266,6 +266,9 @@ class AuditKnowledgeRuntime:
                 if isinstance(delivered, list):
                     with self._lock:
                         self._caller_deliveries.setdefault(reservation.packet.pass_id, []).append(deepcopy(delivered))
+            # Retain this invocation's fitting, including explicit omissions.
+            # This is disclosure only; continuation credit uses owned receipts.
+            reference_fitting = outcome.review_result.get("language_reference_delivery")
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
                     "pass_id": origin.pass_id, "status": outcome.status,
@@ -273,6 +276,8 @@ class AuditKnowledgeRuntime:
                     "body_omitted_chars": max(0, len(outcome.body or "") - 4000),
                     "hypothesis": outcome.hypothesis, "hypotheses": deepcopy(outcome.hypotheses),
                     "model": outcome.model, "cost_usd": outcome.cost_usd,
+                    **({"language_reference_delivery": deepcopy(reference_fitting)}
+                       if isinstance(reference_fitting, list) else {}),
                     "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity})
             self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
             self._register_caller_requests(origin, outcome.review_result)
