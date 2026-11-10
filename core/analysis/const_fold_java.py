@@ -540,6 +540,30 @@ def _type_receiver_is_shadowed(node, chain: str) -> bool:
     return chain.split(".", 1)[0] in _type_shadow_names_at(node)
 
 
+def _type_import_at(node: Node, name: str) -> str | None:
+    from core.analysis.cfg_builder_java import build_import_map
+
+    root = node
+    while root.parent is not None:
+        root = root.parent
+    imports, _statics = build_import_map(root)
+    return imports.get(name)
+
+
+def _is_jvm_string_name(node: Node, ext) -> bool:
+    from core.analysis.cfg_builder_java import _type_shadow_names_at
+
+    if "String" in _type_shadow_names_at(node, include_top_level=True):
+        return False
+    imported = _type_import_at(node, "String")
+    if imported is not None:
+        return imported == "java.lang.String"
+    if ext is not None and ext.xfile is not None \
+            and ext.xfile.source_class_may_exist("String"):
+        return False
+    return True
+
+
 def _receiver_is_shadowed(node, ext) -> bool:
     chain = _receiver_chain(node)
     if chain is None:
@@ -573,15 +597,9 @@ def _fold_field_access(node: Node, ext) -> Any:
             return TAINT_FREE
         # Use this expression's compilation unit, including when folding
         # a cross-file initializer whose imports differ from the caller's.
-        from core.analysis.cfg_builder_java import (
-            _type_shadow_names_at, build_import_map,
-        )
+        from core.analysis.cfg_builder_java import _type_shadow_names_at
 
-        root = obj
-        while root.parent is not None:
-            root = root.parent
-        imports, _statics = build_import_map(root)
-        imported = imports.get("File")
+        imported = _type_import_at(obj, "File")
         if imported == "java.io.File":
             return TAINT_FREE
         declared = "File" in _type_shadow_names_at(obj, include_top_level=True)
@@ -898,7 +916,8 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     # this identity cast adds no fallback or change to that input contract.
     if method == "valueOf" and obj.type == "identifier" \
             and cast(bytes, obj.text).decode() == "String" and len(args) == 1 \
-            and not _receiver_is_shadowed(obj, ext):  # type: ignore[union-attr]
+            and not _receiver_is_shadowed(obj, ext) \
+            and _is_jvm_string_name(obj, ext):  # type: ignore[union-attr]
         v = _fold(args[0], resolve_name, depth + 1, array_resolver,
                   config_resolver, conduit_resolver, ext)
         if v is TAINT_FREE:
