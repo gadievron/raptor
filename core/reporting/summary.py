@@ -124,6 +124,8 @@ def render_operator_summary(summary: OperatorSummary, *, markdown: bool = False,
         lines.append("No findings in captured results; completeness and scope limits below still apply.")
     for key, value in list(summary.metrics.items())[:20]:
         lines.append(f"{safe(key)}: {safe(value)}")
+    if len(summary.metrics) > 20:
+        lines.append(f"{len(summary.metrics) - 20} additional metrics omitted from quick view")
     if summary.accounting:
         lines.append("Accounting: " + "; ".join(f"{safe(k)}={safe(v)}" for k, v in list(summary.accounting.items())[:20]))
         if len(summary.accounting) > 20:
