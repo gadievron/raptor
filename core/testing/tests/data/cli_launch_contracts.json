@@ -323,6 +323,7 @@
     "core/git/tests/test_clone_repo_cli.py": "02abfd4777360310f19f2d400af462f0a60652e20514d8e59b537dd7b7b9ab88",
     "core/git/tests/test_dirty.py": "e24c71d65018e5c5a6e94fdb87dc96bbdf9b4213dc0bb53ea45db637b2baab02",
     "core/hash/tests/test_startup.py": "fb3e7239c2a5ea9417132ecfd03138aebd36b96ab97779e980c2f2fba246abf1",
+    "core/hash/tests/test_text.py": "62045898fc0faa28674573c7608eed84e895be8bf3e2fd0b29ddc31b032d2914",
     "core/http/tests/test_anonymous_https.py": "b0e3f614fad224a436e9b530c05ee7b01726f86ff41cdbd5102e55e8448eb94b",
     "core/http/tests/test_egress_backend.py": "2185d41ba9c77729e53ae9b675b5e5a926803f503a97ffb41c7a2d74800c1047",
     "core/http/tests/test_fetch_attachment_cli.py": "d3ee499b43599f33d3486d64de82c0be5353537daf0c25fab2bb12536b48b259",
@@ -16507,6 +16508,14 @@
       "count": 1,
       "contract": "standalone",
       "purpose": "core/hash/tests/test_startup.py:test_study_help_does_not_load_configuration: delegates through reviewed helper(s) _python; producer source and this exact caller are pinned."
+    },
+    {
+      "path": "core/hash/tests/test_text.py",
+      "scope": "test_native_constructor_metadata_is_not_compared",
+      "signature": "84d46cbd853a140d831cf0a38a448ae04195bd9a7f74733f9a3585c6c95928cc",
+      "count": 1,
+      "contract": "standalone",
+      "purpose": "Owned run_standalone_cli launches a test-owned isolated Python child; native SHA-256 metadata mutation is confined to the child and restored in finally, while real journal fallback and absence of equality callbacks are checked under the original 30-second bound."
     },
     {
       "path": "core/http/tests/test_anonymous_https.py",
