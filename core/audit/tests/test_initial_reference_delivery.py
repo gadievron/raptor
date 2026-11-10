@@ -116,3 +116,83 @@ def test_initial_foundation_does_not_invent_c_mode_for_other_subjects(tmp_path, 
     assert outcome.review_result['language_reference_delivery']==[]
     assert 'reference_inputs' not in outcome.review_result['review_claims']
     runtime.close()
+
+
+@pytest.mark.parametrize("small", [False, True], ids=["delivered", "omitted"])
+def test_initial_reference_artifact_retains_original_material_after_pack_change(tmp_path, monkeypatch, small):
+    from dataclasses import asdict, replace
+    import hashlib
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.language_reference import c_integer
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setattr("core.audit.llm_review._prompt_budget", lambda *args: 100 if small else 100000)
+    source = "unsigned short f(unsigned n) { return n; }"
+    (tmp_path / "unit.c").write_text(source + "\n")
+    runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
+    prompts = []
+    class Client:
+        def generate_structured(self, prompt, schema, **kwargs):
+            prompts.append(prompt)
+            return StructuredResponse(result={"status": "clean", "body": "Scripted assessment"},
+                                      raw="", cost=0, model="scripted")
+    ctx = {"file": "unit.c", "function": "f", "line_start": 1, "line_end": 1,
+           "source": source, "language": "c"}
+    try:
+        outcome = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(
+            ctx, orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out"))
+        answer, = ctx["language_reference_answers"]
+        expected = json.loads(json.dumps(asdict(answer)))
+        assert len(prompts) == 1
+        assert all(entry.render_core() in prompts[0] for entry in answer.entries) is (not small)
+        assert outcome.review_result["language_reference_delivery"][0]["delivered"] is (not small)
+        assert not runtime.requests()
+        monkeypatch.setattr(c_integer, "ENTRIES", tuple(replace(entry, version=entry.version + 1,
+            rule=entry.rule + " Changed after review.") for entry in c_integer.ENTRIES))
+        out = tmp_path / "out"
+        out.mkdir()
+        runtime.write_artifacts(out)
+        payload = json.loads((out / "knowledge-results.json").read_text())
+        snapshots = [event for event in payload["events"] if event["event"] == "initial_reference_answer"]
+        assert len(snapshots) == 1
+        snapshot = snapshots[0]
+        assert snapshot["answer"] == expected
+        assert "delivered" not in snapshot
+        assert snapshot["answer"]["missing_facts"] == ["language edition"]
+        assert snapshot["origin"]["source_identity"]["sha256"] == hashlib.sha256((tmp_path / "unit.c").read_bytes()).hexdigest()
+        assessment, = [event for event in payload["events"] if event["event"] == "review_assessment"]
+        assert snapshot["attempt_id"] == assessment["attempt_id"]
+        assert outcome.review_result["language_reference_delivery"][0]["request_id"] == answer.request_id
+        assert payload["role"] == "context_provenance_not_verification_evidence"
+    finally:
+        runtime.close()
+
+
+def test_initial_reference_snapshot_survives_failed_review_without_delivery_receipt(tmp_path):
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    source = "int f(void) { return 0; }"
+    (tmp_path / "unit.c").write_text(source + "\n")
+    runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
+    ctx = {"file": "unit.c", "function": "f", "line_start": 1, "line_end": 1,
+           "source": source, "language": "c"}
+    def failed_review(ctx, config):
+        raise ValueError("scripted callback failure")
+    try:
+        with pytest.raises(ValueError, match="scripted callback failure"):
+            runtime.wrap_review(failed_review)(ctx, orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out"))
+        out = tmp_path / "out"
+        out.mkdir()
+        runtime.write_artifacts(out)
+        payload = json.loads((out / "knowledge-results.json").read_text())
+        snapshot, = [event for event in payload["events"] if event["event"] == "initial_reference_answer"]
+        failure, = [event for event in payload["events"] if event["event"] == "review_failed"]
+        assert snapshot["attempt_id"] == failure["attempt_id"]
+        assert snapshot["origin"] == next(event["origin"] for event in payload["events"]
+                                          if event["event"] == "review_attempt")
+        assert {entry["entry_id"] for entry in snapshot["answer"]["entries"]} == {
+            "c.integer-promotion", "c.integer-conversion"}
+        assert all(entry["rule"] and entry["conditions"] and entry["citations"] for entry in snapshot["answer"]["entries"])
+        assert not any(event["event"] in {"review_assessment", "review_prompt_context"} for event in payload["events"])
+        assert "language_reference_delivery" not in ctx
+        assert "delivered" not in snapshot
+    finally:
+        runtime.close()

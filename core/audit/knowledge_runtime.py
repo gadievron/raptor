@@ -18,7 +18,7 @@ from uuid import UUID, uuid4, uuid5
 from typing import TypedDict
 
 from core.concepts.subject_study import StudySubjects, SubjectExplanation
-from core.language_reference import ReferenceContext, lookup
+from core.language_reference import ReferenceAnswer, ReferenceContext, lookup
 from core.source.lines import split_lines
 
 from .caller_review_context import (CallerContextAnswer, CallerContextRequest, register_caller_context_requests,
@@ -179,6 +179,7 @@ class AuditKnowledgeRuntime:
                 origin = captured
             from .reference_foundation import foundation_answers, foundation_required_for_file
             owned_references = reservation.packet.references if reservation is not None else ()
+            initial_answers: tuple[ReferenceAnswer, ...] = ()
             if origin.source_identity is not None and foundation_required_for_file(origin.file):
                 foundation_id = "foundation:" + uuid5(UUID(self._foundation_namespace),
                     repr((self._key(origin), origin.source_identity))).hex
@@ -196,6 +197,11 @@ class AuditKnowledgeRuntime:
                 if getattr(review_fn, "_knowledge_observed_client_contract", None) is not True:
                     self._unknown_calls.add(key)
                 self._events.append({"event": "review_attempt", "attempt_id": attempt_id, "origin": asdict(origin)})
+                # Retain resolved material even if fitting omits it or the
+                # callback fails. This is not a prompt-delivery receipt.
+                for answer in initial_answers:
+                    self._events.append({"event": "initial_reference_answer", "attempt_id": attempt_id,
+                                         "origin": asdict(origin), "answer": asdict(answer)})
             try:
                 from .knowledge_calls import owned_call_scope
                 with owned_call_scope(lambda purpose, method: self.admit_client_call(
