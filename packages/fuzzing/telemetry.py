@@ -251,14 +251,23 @@ class FuzzingTelemetry:
                 open_hardened_append(self.events_path),
                 "a", buffering=1, encoding="utf-8",
             )
-            self._emit(FuzzEvent(
-                kind="campaign_start",
-                timestamp=self.stats.started,
-                payload={"fuzzer": self.stats.fuzzer, "target": self.stats.target},
-            ))
-            logger.info(
-                "Fuzzing campaign started: fuzzer=%s target=%s", self.stats.fuzzer, self.stats.target
-            )
+            try:
+                self._emit(FuzzEvent(
+                    kind="campaign_start",
+                    timestamp=self.stats.started,
+                    payload={"fuzzer": self.stats.fuzzer, "target": self.stats.target},
+                ))
+                logger.info(
+                    "Fuzzing campaign started: fuzzer=%s target=%s", self.stats.fuzzer, self.stats.target
+                )
+            except BaseException:
+                stream, self._events_fp = self._events_fp, None
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except BaseException:
+                        pass  # Retain startup failure after consuming the event writer.
+                raise
 
     def stop(self) -> None:
         with self._lock:
