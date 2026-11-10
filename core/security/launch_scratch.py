@@ -44,11 +44,14 @@ def _open_directory(path: Path, *, create: bool = False) -> int:
                 except FileExistsError:
                     pass
                 child = os.open(part, flags, dir_fd=node)
-            os.close(node)
-            node = child
+            previous, node = node, child
+            os.close(previous)
         return node
     except BaseException:
-        os.close(node)
+        try:
+            os.close(node)
+        except BaseException:
+            pass  # Preserve the walk error after consuming the owned descriptor.
         raise
 
 
