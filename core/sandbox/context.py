@@ -5570,7 +5570,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             _in_payload = kwargs.pop("input")
             if isinstance(_in_payload, str):
                 _enc = kwargs.get("encoding") or "utf-8"
-                _in_payload = _in_payload.encode(_enc, "strict")
+                if kwargs.get("encoding") is None and kwargs.get("errors") is not None:
+                    import locale
+                    _enc = locale.getpreferredencoding(False)
+                _in_payload = _in_payload.encode(_enc, kwargs.get("errors") or "strict")
             from ._retirement import retire_parent_resources
             _stdin_spool = _tf_mod.TemporaryFile()
             try:
@@ -6235,7 +6238,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                             else v)
                                         for k, v in _call_env.items()
                                     }
-                            return _spawn_mod.run_sandboxed(
+                            _explicit_codec = (kwargs.get("encoding") is not None
+                                               or kwargs.get("errors") is not None)
+                            _native_result = _spawn_mod.run_sandboxed(
                                 cmd,
                                 target=target, output=output,
                                 rootfs=rootfs,
@@ -6252,7 +6257,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 cwd=kwargs.get("cwd"),
                                 timeout=kwargs.get("timeout"),
                                 capture_output=kwargs.get("capture_output", False),
-                                text=kwargs.get("text", False),
+                                text=False if _explicit_codec else kwargs.get("text", False),
                                 stdin=kwargs.get("stdin"),
                                 stdout=kwargs.get("stdout"),
                                 stderr=kwargs.get("stderr"),
@@ -6318,6 +6323,21 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 exec_pid_callback=_exec_pid_callback,
                                 child_pid_callback=_register_lane_peer,
                             )
+                            if _explicit_codec:
+                                # Explicit codecs imply text mode in subprocess.
+                                # Keep raw bytes until the selected decoder runs;
+                                # the backend's legacy UTF-8 replacement would
+                                # otherwise lose bytes before errors= sees them.
+                                import locale
+                                _codec = kwargs.get("encoding") or locale.getpreferredencoding(False)
+                                _errors = kwargs.get("errors") or "strict"
+                                for _stream in ("stdout", "stderr"):
+                                    _data = getattr(_native_result, _stream)
+                                    if isinstance(_data, bytes):
+                                        _decoded = _data.decode(_codec, _errors)
+                                        setattr(_native_result, _stream,
+                                                _decoded.replace("\r\n", "\n").replace("\r", "\n"))
+                            return _native_result
 
                         def _capture_grant_identities() -> dict[str, tuple]:
                             """Snapshot every grant root's identity with
