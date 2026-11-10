@@ -24,7 +24,7 @@ def _safe(value):
 
 def bridge_result(args, native, status, *, error=None):
     notes = ["Proposed rules, mechanical controls, matches and LLM triage are separate observations. Matches are not confirmed vulnerabilities; promotion is recorded only from native promoted_rule_ids.",
-             "Receipt captures up to 50 entries per detail list and 2000 characters per text field, excludes executable rule bodies, and retains full recorded totals. Native JSON/rule files remain the full native output."]
+             "Receipt captures up to 50 entries per detail list and 2000 characters per text field, excludes executable rule bodies, and retains full recorded totals."]
     if native is None:
         payload = {"native exit status": status, "unavailable reason": error}
         metrics = {"Native exit status": status, "Derived seeds": None}
@@ -32,6 +32,7 @@ def bridge_result(args, native, status, *, error=None):
         state = "failed"
         notes.append("No checker result was produced; synthesis/control/promotion outcomes are unavailable, not successful or empty.")
     else:
+        notes.append("Native JSON/rule files remain the full native output.")
         results = native["results"]
         rows = []
         for result in results[:DETAIL_LIMIT]:
