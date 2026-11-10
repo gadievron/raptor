@@ -579,10 +579,27 @@ def _classify_bound_guard(
     receipt, ``{"undecided": True, ...}`` when a count comparison
     exists but the bound side cannot be classified, or ``None`` when
     the condition is unrelated."""
+    text = condition.strip()
+    negated = re.fullmatch(r"!\(([^()]*)\)", text)
+    comparison = negated.group(1).strip() if negated else text
+    match = _CMP_RE.fullmatch(comparison)
+    if match is None:
+        # A matching substring inside a compound/arithmetic expression
+        # does not establish an upper bound for the whole predicate.
+        for candidate in _CMP_RE.finditer(condition):
+            for operand in (candidate.group(1), candidate.group(3)):
+                if _COUNTISH_RE.search(_name_tail(operand)) or operand in limit_names:
+                    return {"undecided": True, "condition": condition[:200], "count": operand}
+        return None
     undecided: dict[str, Any] | None = None
-    for m in _CMP_RE.finditer(condition):
-        lhs, _op, rhs = m.group(1), m.group(2), m.group(3)
-        for count_side, bound_side in ((lhs, rhs), (rhs, lhs)):
+    for m in (match,):
+        lhs, op, rhs = m.group(1), m.group(2), m.group(3)
+        if negated:
+            op = {"<": ">=", "<=": ">", ">": "<=", ">=": "<", "==": "!="}[op]
+        for count_side, bound_side, upper in ((lhs, rhs, op in {"<", "<=", "=="}),
+                                             (rhs, lhs, op in {">", ">=", "=="})):
+            if not upper:
+                continue
             tail = _name_tail(count_side)
             if not (
                 _COUNTISH_RE.search(tail)
@@ -745,7 +762,7 @@ def _guards_at(
         logger.debug("resource_bounds: guard collection failed",
                      exc_info=True)
         return None
-    return [g.condition for g in guards]
+    return [g.condition if g.polarity else f"!({g.condition})" for g in guards]
 
 
 def _c_function_spans(source: str) -> list[tuple[str, int, int]]:

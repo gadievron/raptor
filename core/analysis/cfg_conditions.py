@@ -113,6 +113,37 @@ def _is_smt_parseable(text: str) -> bool:
     return any(op in text for op in _SMT_PARSEABLE_OPS)
 
 
+def _native_branch_edges(cfg, branch_guards) -> list[ConditionEdge]:
+    """Project producer facts onto source lines for legacy model consumers.
+
+    Structural proof consumers use branch node identities directly; this
+    line-based projection remains a diagnostic/model interface.
+    """
+    facts = {fact.branch: fact for fact in branch_guards}
+    edges: list[ConditionEdge] = []
+    for node in cfg.nodes():
+        if node.lineno < 0:
+            continue
+        for successor in cfg.successors(node):
+            fact = facts.get(successor)
+            condition = None if fact is None else ControlCondition(
+                text=fact.condition, references=extract_references(fact.condition),
+                smt_parseable=_is_smt_parseable(fact.condition), polarity=fact.polarity,
+            )
+            pending = [successor]
+            seen = set()
+            while pending:
+                target = pending.pop()
+                if target in seen:
+                    continue
+                seen.add(target)
+                if target.lineno >= 0:
+                    edges.append(ConditionEdge(node.lineno, target.lineno, condition))
+                else:
+                    pending.extend(cfg.successors(target))
+    return edges
+
+
 def extract_conditions_from_cfg(cfg) -> list[ConditionEdge]:
     """Walk an existing PythonCFG or CPPCFG and produce ConditionEdge records.
 
@@ -120,6 +151,9 @@ def extract_conditions_from_cfg(cfg) -> list[ConditionEdge]:
     successors with the appropriate polarity. Non-conditional edges
     get condition=None.
     """
+    branch_guards = getattr(cfg, "branch_guards", None)
+    if branch_guards is not None:
+        return _native_branch_edges(cfg, branch_guards)
     edges: list[ConditionEdge] = []
 
     for node in cfg.nodes():

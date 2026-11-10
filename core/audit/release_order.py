@@ -496,7 +496,7 @@ def _guards_at(
         logger.debug("release_order: guard collection failed",
                      exc_info=True)
         return None
-    return [g.condition for g in guards]
+    return [g.condition if g.polarity else f"!({g.condition})" for g in guards]
 
 
 def _entry_reachability(

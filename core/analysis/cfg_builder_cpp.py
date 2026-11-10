@@ -147,6 +147,16 @@ class CPPCFGNode:
 
 
 @dataclass(frozen=True)
+class CPPBranchGuard:
+    """Producer-owned truth premise attached to a synthetic branch entry."""
+
+    branch: CPPCFGNode
+    condition: str
+    line: int
+    polarity: bool
+
+
+@dataclass(frozen=True)
 class CPPCFG:
     """Concrete :class:`core.analysis.dominators.Graph` for a C / C++
     function.
@@ -172,6 +182,8 @@ class CPPCFG:
     params: tuple[str, ...] = ()
     # Negative source facts only; absence does not prove library origin.
     untrusted_call_sites: frozenset[tuple[str, int]] | None = None
+    # None denotes legacy/manual graphs without authoritative branch facts.
+    branch_guards: tuple[CPPBranchGuard, ...] | None = None
 
     @property
     def entry(self) -> CPPCFGNode:
@@ -1183,6 +1195,7 @@ class _CPPCFGBuilder:
         # nodes on the same line (e.g. an empty ``case`` label) would
         # otherwise collapse into one and corrupt the adjacency.
         self._dedupe_counter = 0
+        self._branch_guards: list[CPPBranchGuard] = []
 
     # ----- edge plumbing -----
 
@@ -1331,6 +1344,26 @@ class _CPPCFGBuilder:
             may_escape=self._escapes(stmt),
         )
 
+    def _branch(self, header: CPPCFGNode, condition, polarity: bool) -> CPPCFGNode:
+        # Negative source lines keep synthetic entries out of site matching.
+        branch = self._make_node(
+            kind="branch", lineno=-1,
+            label=f"branch:{header.lineno}:{polarity}",
+        )
+        self._link(header, branch)
+        if condition is not None:
+            text = _node_text(condition).strip()
+            if condition.type in {"parenthesized_expression", "condition_clause"} and text.startswith("(") and text.endswith(")"):
+                text = text[1:-1].strip()
+            self._branch_guards.append(CPPBranchGuard(
+                branch=branch, condition=text,
+                line=condition.start_point[0] + 1, polarity=polarity,
+            ))
+        return branch
+
+    def _loop_join(self, label: str) -> CPPCFGNode:
+        return self._make_node(kind="join", lineno=-1, label=label)
+
     # ----- compound constructs -----
 
     def _build_if(self, stmt: Node, incoming):
@@ -1343,15 +1376,17 @@ class _CPPCFGBuilder:
             may_escape=self._escapes(cond),
         )
         self._link_many(incoming, cond_node)
+        true_branch = self._branch(cond_node, cond, True)
+        false_branch = self._branch(cond_node, cond, False)
         then_body = stmt.child_by_field_name("consequence")
         else_body = stmt.child_by_field_name("alternative")
-        then_out = self._build_stmts(then_body, [cond_node]) \
-            if then_body is not None else [cond_node]
+        then_out = self._build_stmts(then_body, [true_branch]) \
+            if then_body is not None else [true_branch]
         # tree-sitter wraps ``else`` content in an alternative field
         # that points either at the else-body compound_statement or
         # at an ``else_clause`` node — handle both shapes.
         if else_body is None:
-            else_out: list[CPPCFGNode] = [cond_node]
+            else_out: list[CPPCFGNode] = [false_branch]
         elif else_body.type == "else_clause":
             # else_clause's first named child is the body / nested if
             inner = None
@@ -1359,10 +1394,10 @@ class _CPPCFGBuilder:
                 if c.is_named:
                     inner = c
                     break
-            else_out = self._build_stmt(inner, [cond_node]) \
-                if inner is not None else [cond_node]
+            else_out = self._build_stmt(inner, [false_branch]) \
+                if inner is not None else [false_branch]
         else:
-            else_out = self._build_stmts(else_body, [cond_node])
+            else_out = self._build_stmts(else_body, [false_branch])
         return then_out + else_out
 
     def _build_while(self, stmt: Node, incoming):
@@ -1375,16 +1410,19 @@ class _CPPCFGBuilder:
             may_escape=self._escapes(cond),
         )
         self._link_many(incoming, header)
-        after_loop: list[CPPCFGNode] = [header]
-        self._loop_stack.append((header, header))
-        self._break_stack.append(header)
+        after = self._loop_join("while-join")
+        true_branch = self._branch(header, cond, True)
+        false_branch = self._branch(header, cond, False)
+        self._link(false_branch, after)
+        self._loop_stack.append((after, header))
+        self._break_stack.append(after)
         body = stmt.child_by_field_name("body")
-        body_out = self._build_stmts(body, [header]) if body is not None else []
+        body_out = self._build_stmts(body, [true_branch]) if body is not None else [true_branch]
         for tail in body_out:
             self._link(tail, header)
         self._break_stack.pop()
         self._loop_stack.pop()
-        return after_loop
+        return [after]
 
     def _build_for(self, stmt: Node, incoming):
         # ``for (init; cond; step) body`` — model as init → header →
@@ -1426,14 +1464,19 @@ class _CPPCFGBuilder:
             self._link(step_node, header)
         else:
             step_node = header   # continue == loop back to header
-        self._loop_stack.append((header, step_node))
-        self._break_stack.append(header)
-        body_out = self._build_stmts(body, [header]) if body is not None else []
+        after = self._loop_join("for-join")
+        true_branch = self._branch(header, cond, True)
+        if cond is not None:
+            false_branch = self._branch(header, cond, False)
+            self._link(false_branch, after)
+        self._loop_stack.append((after, step_node))
+        self._break_stack.append(after)
+        body_out = self._build_stmts(body, [true_branch]) if body is not None else [true_branch]
         for tail in body_out:
             self._link(tail, step_node)
         self._break_stack.pop()
         self._loop_stack.pop()
-        return [header]
+        return [after]
 
     def _build_do(self, stmt: Node, incoming):
         # ``do body while (cond);`` — body runs at least once, cond
@@ -1461,31 +1504,17 @@ class _CPPCFGBuilder:
                 kind="stmt", lineno=stmt.end_point[0] + 1,
                 label="do-while (...)",
             )
-        # ``break`` exits the whole do statement WITHOUT evaluating
-        # the tail condition (C11 6.8.6.3): it targets a payload-free
-        # after-loop join, never the condition — routing it through
-        # the tail invented condition dominance over post-loop code
-        # (SMT guard consumers read dominance as "this condition held
-        # here"). ``continue`` targets the condition (real path).
-        after = self._make_node(
-            kind="stmt", lineno=stmt.end_point[0] + 1,
-            label="do-while-join",
-        )
-        self._loop_stack.append((tail, tail))
+        after = self._loop_join("do-while-join")
+        body_entry = self._loop_join("do-body-entry")
+        self._link_many(incoming, body_entry)
+        self._loop_stack.append((after, tail))
         self._break_stack.append(after)
-        # Tail loops back to body entry.  _build_stmts links incoming →
-        # first body node(s), so we snapshot incoming's successors before
-        # and diff after to recover the body entry set.
-        pre_succs = {n: set(self._adjacency.get(n, ())) for n in incoming}
-        body_out = self._build_stmts(body, incoming) if body is not None else list(incoming)
-        # Body falls through to tail (the condition test)
+        body_out = self._build_stmts(body, [body_entry]) if body is not None else [body_entry]
         self._link_many(body_out, tail)
-        body_entry = set()
-        for n in incoming:
-            body_entry |= set(self._adjacency.get(n, ())) - pre_succs.get(n, set())
-        for entry in body_entry:
-            self._link(tail, entry)
-        self._link(tail, after)
+        true_branch = self._branch(tail, cond, True)
+        false_branch = self._branch(tail, cond, False)
+        self._link(true_branch, body_entry)
+        self._link(false_branch, after)
         self._break_stack.pop()
         self._loop_stack.pop()
         return [after]
@@ -1672,6 +1701,7 @@ class _CPPCFGBuilder:
             _nodes=tuple(ordered),
             _adjacency=adjacency,
             params=_function_params(fn_def),
+            branch_guards=tuple(self._branch_guards),
         )
 
 

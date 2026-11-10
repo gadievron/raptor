@@ -54,6 +54,14 @@ def collect_guards_at_site(
         return frozenset()
 
     dominators = dom_tree.dominators_of(target_node)
+    branch_guards = getattr(cfg, "branch_guards", None)
+    if branch_guards is not None:
+        # A selected branch entry must dominate the site. Domination by
+        # the condition's evaluation alone says nothing about its truth.
+        return frozenset(Guard(
+            condition=fact.condition, file=file_path, line=fact.line,
+            polarity=fact.polarity,
+        ) for fact in branch_guards if fact.branch in dominators)
     guards: set[Guard] = set()
 
     for dom_node in dominators:
