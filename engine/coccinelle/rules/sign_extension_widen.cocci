@@ -10,7 +10,10 @@
 //
 // CWE-194: Unexpected Sign Extension
 // Guards: explicit mask (& 0xFF / & 0xFFFF) is intentional.
+// The selected source types and conversion forms are not exhaustive;
+// no match cannot refute a broader signed-conversion hypothesis.
 // @role: detection
+// raptor: confirm-only
 
 @sign_ext_char_to_unsigned@
 typedef uint64_t, uint32_t;
