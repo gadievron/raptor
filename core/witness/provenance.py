@@ -79,6 +79,7 @@ from typing import Any
 from core.logging import get_logger
 from core.run.finding_status import read_verdict
 from core.security import mac_key
+from core.source.streams import owned_fd, preserving_stream_error
 from core.status import normalize_status
 
 logger = get_logger(__name__)
@@ -268,24 +269,29 @@ def _read_run_nonce(run_dir: Path | str) -> str | None:
         | getattr(os, "O_NONBLOCK", 0)
         | getattr(os, "O_CLOEXEC", 0)
     )
+    adopted = False
+
+    def close_nonce(value: int) -> None:
+        try:
+            os.close(value)
+        except OSError:
+            if adopted:
+                raise
+
     try:
         fd = os.open(str(Path(run_dir) / _BINDING_FILE), flags)
     except OSError:
         return None
     try:
-        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
-            return None
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
-            raw = fh.read(_NONCE_HEX_LEN + 16)
+        with owned_fd(fd, close_fd=close_nonce):
+            if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            stream = os.fdopen(fd, "rb", closefd=False)
+            adopted = True
+            with preserving_stream_error(stream) as fh:
+                raw = fh.read(_NONCE_HEX_LEN + 16)
     except OSError:
         return None
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
     try:
         text = raw.decode("utf-8").strip()
     except UnicodeDecodeError:
