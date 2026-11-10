@@ -344,6 +344,7 @@ class Job:
     def _start_watcher(self) -> None:
         from . import _spawn
         from ._fd_sweep import close_fds_except
+        from ._retirement import retire_parent_resources
         owner_pid = os.getpid()
         if self.budget is None or self.scope is None:
             raise ValueError('watcher needs a validated budget and scope')
@@ -365,14 +366,16 @@ class Job:
                 os._exit(1)
             self.writer, self.reader, self.watcher = writer, reader, watcher
         except BaseException:
-            _spawn.close_death_w(writer)
-            if reader is not None:
-                os.close(reader)
+            retire_parent_resources(
+                lambda: _spawn.close_death_w(writer),
+                lambda: os.close(reader) if reader is not None else None,
+            )
             raise
         finally:
-            os.close(lifetime)
-            if reply is not None:
-                os.close(reply)
+            retire_parent_resources(
+                lambda: os.close(lifetime),
+                lambda: os.close(reply) if reply is not None else None,
+            )
 
     def ensure_lane(self, lane: str, *, namespace_isolated: bool = False) -> None:
         if self.scope is not None and (lane != 'mount-ns spawn' or not namespace_isolated):
