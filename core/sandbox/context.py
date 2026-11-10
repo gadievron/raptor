@@ -8712,61 +8712,64 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # before_yield``); if ``register_sandbox`` raises, the audit
     # acquire never runs so there's no ref-count leak.
     _block_token: int | None = None
-    if (use_egress_proxy and _will_engage_audit and output
-            and proxy_instance is not None):
-        # Same lane subscription as the per-spawn buffers (D3): the
-        # cm-block view collects THIS context's would-deny records,
-        # not a concurrent run's.
-        _block_token = proxy_instance.register_sandbox(
-            caller_label=(
-                f"{caller_label}:cm-block" if caller_label
-                else "sandbox:cm-block"
-            ),
-            lane_key=(_proxy_unix_path if _use_proxy_netns
-                      else _proxy_tcp_lane_port),
-            host_recon_threshold=host_recon_threshold_for_profile(
-                profile or DEFAULT_PROFILE,
-                _proxy_mod.DEFAULT_HOST_RECON_THRESHOLD,
-            ),
-        )
-    if _private_scratch_dir is not None:
-        # Registered here, adjacent to the try whose finally
-        # unregisters (only the guard-tested non-raising audit
-        # acquire sits between), so no setup-failure path can strand
-        # the registration. The dir is seconds old during setup, so
-        # late registration loses no reaper protection.
-        from core.run.scratch import keepalive_register
-        keepalive_register(_private_scratch_dir)
-    if _persona_tmpdir is not None:
-        # Same contract as the scratch above: the persona home is
-        # reaper-listed and mtime-quiet after build_persona writes it
-        # once, but a long-lived context making run() calls past the
-        # age floor still needs its source files — losing them would
-        # skip the overlay and leak host-real identity to the target.
-        from core.run.scratch import keepalive_register
-        keepalive_register(_persona_tmpdir)
-    if use_egress_proxy and _will_engage_audit:
-        # Scope the leniency to THIS context's lane. Concurrent
-        # sandboxes and in-process consumers (main listener) stay
-        # enforcing. set_lane_audit returning False means no lane
-        # exists (tcp lane bind failed) — fail CLOSED: the audit run
-        # proceeds with gate 1 enforcing and the operator is told the
-        # would-deny signal is incomplete.
-        _lane_key = (
-            _proxy_unix_path if _use_proxy_netns
-            else _proxy_tcp_lane_port
-        )
-        if _lane_key is not None and proxy_instance.set_lane_audit(  # type: ignore[union-attr]
-                _lane_key, True):
-            _engaging_audit = True
-        else:
-            logger.warning(
-                "Sandbox: audit-log mode unavailable for this "
-                "context (no proxy lane) — egress allowlist stays "
-                "ENFORCING; would-deny events will appear as real "
-                "denials."
-            )
+    _audit_enable_attempted = False
     try:
+        if (use_egress_proxy and _will_engage_audit and output
+                and proxy_instance is not None):
+            # Same lane subscription as the per-spawn buffers (D3): the
+            # cm-block view collects THIS context's would-deny records,
+            # not a concurrent run's.
+            _block_token = proxy_instance.register_sandbox(
+                caller_label=(
+                    f"{caller_label}:cm-block" if caller_label
+                    else "sandbox:cm-block"
+                ),
+                lane_key=(_proxy_unix_path if _use_proxy_netns
+                          else _proxy_tcp_lane_port),
+                host_recon_threshold=host_recon_threshold_for_profile(
+                    profile or DEFAULT_PROFILE,
+                    _proxy_mod.DEFAULT_HOST_RECON_THRESHOLD,
+                ),
+            )
+        if _private_scratch_dir is not None:
+            # Registered here, adjacent to the try whose finally
+            # unregisters (only the guard-tested non-raising audit
+            # acquire sits between), so no setup-failure path can strand
+            # the registration. The dir is seconds old during setup, so
+            # late registration loses no reaper protection.
+            from core.run.scratch import keepalive_register
+            keepalive_register(_private_scratch_dir)
+        if _persona_tmpdir is not None:
+            # Same contract as the scratch above: the persona home is
+            # reaper-listed and mtime-quiet after build_persona writes it
+            # once, but a long-lived context making run() calls past the
+            # age floor still needs its source files — losing them would
+            # skip the overlay and leak host-real identity to the target.
+            from core.run.scratch import keepalive_register
+            keepalive_register(_persona_tmpdir)
+        if use_egress_proxy and _will_engage_audit:
+            # Scope the leniency to THIS context's lane. Concurrent
+            # sandboxes and in-process consumers (main listener) stay
+            # enforcing. set_lane_audit returning False means no lane
+            # exists (tcp lane bind failed) — fail CLOSED: the audit run
+            # proceeds with gate 1 enforcing and the operator is told the
+            # would-deny signal is incomplete.
+            _lane_key = (
+                _proxy_unix_path if _use_proxy_netns
+                else _proxy_tcp_lane_port
+            )
+            # An interrupted setter may already have enabled the lane.
+            _audit_enable_attempted = _lane_key is not None
+            if _lane_key is not None and proxy_instance.set_lane_audit(  # type: ignore[union-attr]
+                    _lane_key, True):
+                _engaging_audit = True
+            else:
+                logger.warning(
+                    "Sandbox: audit-log mode unavailable for this "
+                    "context (no proxy lane) — egress allowlist stays "
+                    "ENFORCING; would-deny events will appear as real "
+                    "denials."
+                )
         yield run
     finally:
         # Drain + dedup + persist the block-token events before
@@ -8804,7 +8807,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     _persist_proxy_events(
                         _block_only, output=output, target=target,
                     )
-        if use_egress_proxy and _engaging_audit:
+        if use_egress_proxy and (_engaging_audit or _audit_enable_attempted):
             # Clear the audit bit BEFORE unbind/close pops the lane
             # from the registry: set_lane_audit resolves the key
             # through the registry and returns False once the lane is
