@@ -18,6 +18,11 @@ _OWNERS = {"run_standalone_cli", "standalone_cli_env", "run_in_process_group"}
 
 def process_sites(path: str, source: str, *, launch_helpers=frozenset()) -> list[dict]:
     """Find direct, imported, assigned and getattr subprocess entry points."""
+    return _process_sites(path, source, launch_helpers=launch_helpers)[0]
+
+
+def _process_sites(path: str, source: str, *, launch_helpers=frozenset()) -> tuple[list[dict], set[str]]:
+    """Return launch rows and every resolved callable name for invalidation."""
     tree = ast.parse(source, filename=path)
     aliases = {}
     bindings = defaultdict(list)
@@ -77,6 +82,7 @@ def process_sites(path: str, source: str, *, launch_helpers=frozenset()) -> list
 
     rows = []
     calls = []
+    called_names: set[str] = set()
     stack = []
 
     class Visitor(ast.NodeVisitor):
@@ -95,6 +101,7 @@ def process_sites(path: str, source: str, *, launch_helpers=frozenset()) -> list
         def visit_Call(self, node):
             calls.append((node, ".".join(stack)))
             resolved = names(node.func)
+            called_names.update(resolved)
             matched = sorted(value for value in resolved if (
                 value.startswith("subprocess.") and value.split(".")[-1] in (_SPAWNS | {"<dynamic>"})
                 or value in {"os.system", "os.popen", "os.posix_spawn", "os.posix_spawnp",
@@ -140,7 +147,7 @@ def process_sites(path: str, source: str, *, launch_helpers=frozenset()) -> list
             if scope and scope.split(".")[-1] not in local:
                 local.add(scope.split(".")[-1])
                 changed = True
-    return rows
+    return rows, called_names
 
 
 def shell_routes(path: str, source: str) -> dict:
@@ -160,16 +167,24 @@ def inventory(root: Path, paths: list[str]) -> list[dict]:
         ):
             sources[path] = (root / path).read_text(encoding="utf-8")
     helpers: set[str] = set()
+    analyses: dict[str, tuple[list[dict], set[str]]] = {}
+    added: set[str] = set()
     while True:
-        rows = [row for path, source in sources.items()
-                for row in process_sites(path, source, launch_helpers=helpers)]
+        for path, source in sources.items():
+            previous = analyses.get(path)
+            # Callable resolution depends only on this source. Newly discovered
+            # helpers can affect a file only if one of its calls resolves to them.
+            if previous is None or previous[1] & added:
+                analyses[path] = _process_sites(path, source, launch_helpers=helpers)
+        rows = [row for path in sources for row in analyses[path][0]]
         discovered = {
             row["path"][:-3].replace("/", ".") + "." + row["scope"]
             for row in rows if row["scope"]
         }
         if discovered <= helpers:
             return rows
-        helpers.update(discovered)
+        added = discovered - helpers
+        helpers.update(added)
 
 
 def source_witnesses(root: Path, paths: list[str], rows: list[dict]) -> dict[str, str]:

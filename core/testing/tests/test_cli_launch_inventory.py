@@ -185,3 +185,80 @@ launch(['x']); launch(['x'])
     assert len(callers) == 2
     assert callers[0]["signature"] == callers[1]["signature"]
     assert callers[0]["column"] != callers[1]["column"]
+
+
+@pytest.mark.parametrize("caller", [
+    "from tests.m_bridge import bridge\nbridge(['x']); bridge(['x'])\n",
+    "import tests.m_bridge as module\nmodule.bridge(['x']); module.bridge(['x'])\n",
+    "from tests.m_bridge import bridge as imported\nalias = imported\nalias(['x']); alias(['x'])\n",
+    "import tests.m_bridge as module\ngetattr(module, 'bridge')(['x']); getattr(module, 'bridge')(['x'])\n",
+])
+def test_inventory_rechecks_transitive_callers_only(tmp_path, monkeypatch, caller):
+    from collections import Counter
+
+    from core.testing import cli_launch_inventory as module
+
+    sources = {
+        "tests/a_router.py": caller,
+        "tests/m_bridge.py": (
+            "from tests.z_sink import launch\n"
+            "def bridge(args):\n    return launch(args)\n"
+        ),
+        "tests/z_sink.py": (
+            "import subprocess\n"
+            "def launch(args):\n    return subprocess.run(args)\n"
+        ),
+        "tests/unrelated.py": "def ordinary():\n    return str(42)\nordinary()\n",
+    }
+    for path, source in sources.items():
+        target = tmp_path / path
+        target.parent.mkdir(exist_ok=True)
+        target.write_text(source)
+
+    # Compare every row, including duplicate call sites, with the original
+    # exhaustive fixed point rather than an expected row-count shortcut.
+    helpers = set()
+    while True:
+        expected = [row for path, source in sorted(sources.items())
+                    for row in process_sites(path, source, launch_helpers=helpers)]
+        discovered = {
+            row["path"][:-3].replace("/", ".") + "." + row["scope"]
+            for row in expected if row["scope"]
+        }
+        if discovered <= helpers:
+            break
+        helpers.update(discovered)
+
+    calls = Counter()
+    analyse = module._process_sites
+
+    def record(path, source, **kwargs):
+        calls[path] += 1
+        return analyse(path, source, **kwargs)
+
+    monkeypatch.setattr(module, "_process_sites", record)
+    actual = module.inventory(tmp_path, list(reversed(sources)))
+    assert actual == expected
+    assert calls == {
+        "tests/a_router.py": 2,
+        "tests/m_bridge.py": 2,
+        "tests/z_sink.py": 1,
+        "tests/unrelated.py": 1,
+    }
+    assert len([row for row in actual if row["path"] == "tests/a_router.py"]) == 2
+
+
+def test_inventory_does_not_reuse_analysis_across_source_changes(tmp_path):
+    from core.testing.cli_launch_inventory import inventory
+
+    path = tmp_path / "test_change.py"
+    path.write_text("import subprocess\nsubprocess.run(['first'])\n")
+    first = inventory(tmp_path, [path.name])
+    path.write_text("import subprocess\nsubprocess.run(['second'])\n")
+    second = inventory(tmp_path, [path.name])
+    assert first[0]["command_references"] == ["first"]
+    assert second[0]["command_references"] == ["second"]
+    assert first[0]["signature"] != second[0]["signature"]
+    path.write_text("def broken(\n")
+    with pytest.raises(SyntaxError):
+        inventory(tmp_path, [path.name])
