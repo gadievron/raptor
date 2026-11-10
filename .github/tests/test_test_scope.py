@@ -29,6 +29,88 @@ with patch.object(sys, "path", sys.path.copy()):
     )
 
 
+class TestFeatureMatrixProducerDispatch:
+    PRODUCERS = [
+        "core/sandbox/scripts/feature-matrix/bin/probe.py",
+        "core/sandbox/scripts/feature-matrix/bin/report.py",
+        "core/sandbox/scripts/feature-matrix/profiles/make_profiles.py",
+    ]
+    DRIVER = Path("core/sandbox/tests/test_feature_matrix_selftest.py")
+    OTHER = Path("core/other/tests/test_other.py")
+
+    @pytest.fixture
+    def repo(self, tmp_path):
+        for path in self.PRODUCERS:
+            target = tmp_path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("VALUE = 1\n")
+        for path in (self.DRIVER, self.OTHER):
+            target = tmp_path / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("def test_example(): pass\n")
+        script = tmp_path / "core/sandbox/scripts/feature-matrix/run-matrix.sh"
+        script.write_text("# inert fixture; never executed\n")
+        return tmp_path
+
+    @pytest.mark.parametrize("producer", PRODUCERS, ids=["probe", "report", "profiles"])
+    def test_producer_selects_existing_self_test(self, repo, producer):
+        result = compute_tier_dispatch([producer], repo)
+        assert result["sandbox"]["files"] == [self.DRIVER]
+        assert not result["python"]["run"]
+        assert result["_stats"]["changed"] == 1
+        assert result["_stats"]["dependents"] == 1
+
+    def test_preserves_graph_consumers_and_mixed_changes(self, repo):
+        (repo / self.OTHER).write_text(
+            "__import__('core.sandbox.scripts.feature-matrix.bin.probe')\n"
+        )
+        result = compute_tier_dispatch([self.PRODUCERS[0], str(self.OTHER)], repo)
+        assert result["sandbox"]["files"] == [self.DRIVER]
+        assert result["python"]["files"] == [self.OTHER]
+        # The importing test remains selected without being explicitly changed.
+        result = compute_tier_dispatch([self.PRODUCERS[0]], repo)
+        assert result["python"]["files"] == [self.OTHER]
+
+    def test_unrelated_change_does_not_select_self_test(self, repo):
+        result = compute_tier_dispatch([str(self.OTHER)], repo)
+        assert not result["sandbox"]["run"]
+        assert result["python"]["files"] == [self.OTHER]
+
+    def test_missing_driver_fails_toward_full_dispatch(self, repo):
+        (repo / self.DRIVER).unlink()
+        result = compute_tier_dispatch([self.PRODUCERS[0]], repo)
+        assert all(info["run"] for tier, info in result.items() if not tier.startswith("_"))
+        assert result["_stats"]["closure"] == result["_stats"]["total"]
+
+    @pytest.mark.parametrize("changed", [
+        "pyproject.toml", "conftest.py",
+        "core/sandbox/scripts/feature-matrix/run-matrix.sh",
+    ], ids=["manifest", "root-harness", "unmapped-shell"])
+    def test_existing_full_fallbacks_dominate(self, repo, changed):
+        result = compute_tier_dispatch([self.PRODUCERS[0], changed], repo)
+        assert all(info["run"] for tier, info in result.items() if not tier.startswith("_"))
+
+    def test_deleted_producer_still_forces_full_dispatch(self, repo):
+        (repo / self.PRODUCERS[0]).unlink()
+        result = compute_tier_dispatch([self.PRODUCERS[0]], repo)
+        assert all(info["run"] for tier, info in result.items() if not tier.startswith("_"))
+
+    def test_producer_selection_builds_only_one_graph(self, repo, monkeypatch):
+        import test_scope as scope
+
+        original = scope.build_graph
+        calls = []
+
+        def counted(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(scope, "build_graph", counted)
+        result = compute_tier_dispatch(self.PRODUCERS, repo)
+        assert result["sandbox"]["files"] == [self.DRIVER]
+        assert len(calls) == 1
+
+
 class TestExpandConftest:
     _ALL = [
         Path("conftest.py"),

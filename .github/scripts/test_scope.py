@@ -1033,7 +1033,27 @@ def compute_tier_dispatch(
         return result
     changed_py |= resource_seeds
 
-    closure = transitive_dependents(changed_py, reverse_graph)
+    # These producers execute through run-matrix.sh, not Python imports.
+    # Keep the existing self-test in the graph-selected union for their edits.
+    matrix_producers = {
+        "core/sandbox/scripts/feature-matrix/bin/probe.py",
+        "core/sandbox/scripts/feature-matrix/bin/report.py",
+        "core/sandbox/scripts/feature-matrix/profiles/make_profiles.py",
+    }
+    matrix_drivers: set[Path] = set()
+    if matrix_producers.intersection(changed_files):
+        matrix_driver = Path("core/sandbox/tests/test_feature_matrix_selftest.py")
+        if not (repo / matrix_driver).is_file():
+            print("Feature-matrix self-test driver missing — full tier dispatch")
+            result = _force_all_dispatch(repo)
+            result["_stats"] = {
+                "closure": total, "total": total,
+                "changed": len(changed_files), "dependents": 0,
+            }
+            return result
+        matrix_drivers.add(matrix_driver)
+
+    closure = transitive_dependents(changed_py | matrix_drivers, reverse_graph)
 
     pct = f"{len(closure) / total * 100:.0f}%" if total else "?"
     print(f"Closure: {len(closure)}/{total} files ({pct})")
