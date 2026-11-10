@@ -554,6 +554,7 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
     except OSError as exc:
         logger.debug("reach_cache: open failed for %s: %s", path, exc)
         return None
+    failed = False
     try:
         try:
             st = os.fstat(fd)
@@ -624,11 +625,15 @@ def load_index(fingerprint: str | None) -> _AdjacencyIndex | None:
         except OSError as exc:
             logger.debug("reach_cache: load failed for %s: %s", path, exc)
             return None
+    except BaseException:
+        failed = True
+        raise
     finally:
         try:
             os.close(fd)
-        except OSError:
-            pass
+        except BaseException as exc:
+            if not failed and not isinstance(exc, OSError):
+                raise
     if not blob.startswith(_HEADER_MAGIC):
         logger.debug(
             "reach_cache: cache file %s has wrong magic; ignoring", path,
