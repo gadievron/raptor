@@ -16,6 +16,7 @@ The ``bench`` command is registered here from
 """
 from __future__ import annotations
 
+from argparse import Namespace
 import re
 import signal
 import sys
@@ -27,6 +28,7 @@ import typer
 
 from core.atomic_fs import write_text_atomically
 from core.json import save_json
+from core.reporting.options import options_from_args
 from core.security.log_sanitisation import sanitise_for_terminal
 from cve_diff import __version__
 from cve_diff.analysis.analyzer import RootCauseAnalysisError, RootCauseAnalyzer
@@ -44,6 +46,7 @@ from cve_diff.infra.github_client import warn_if_token_missing
 from cve_diff.llm.client import LLMCallFailed
 from cve_diff.pipeline import Pipeline, PipelineResult
 from cve_diff.report import markdown, osv_schema
+from cve_diff.security.exceptions import ValidationError
 from cve_diff.report.flow import write_flow_files, write_outcome_patches
 from cve_diff.security.validators import validate_cve_id
 
@@ -296,6 +299,19 @@ def _classify_discovery(error_text: str) -> str:
     return m.group(1) if m else "DiscoveryError"
 
 
+def _emit_report(options, output_dir: Path, cve_id: str, status: int, *, pipeline=None, **captured) -> None:
+    """Keep optional presentation separate from native command policy."""
+    if options is None:
+        return
+    try:
+        from cve_diff.report.completion import complete_cve_report
+        complete_cve_report(options, output_dir, cve_id, status,
+                            telemetry=getattr(getattr(pipeline, "agent", None), "last_telemetry", None),
+                            stage_status=getattr(pipeline, "_stage_status", None), **captured)
+    except Exception as exc:  # noqa: BLE001 — report failure must not mask analysis
+        typer.echo("Optional CVE-diff report failed (" + type(exc).__name__ + "); native result retained", err=True)
+
+
 def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
                       error_text: str) -> None:
     """Write a per-CVE markdown surfacing the agent's surrender rationale.
@@ -387,10 +403,22 @@ def run(
             help="Suppress progress and API-key banner.",
         ),
     ] = False,
+    report_format: Annotated[list[str] | None, typer.Option("--report-format", help="Portable companion format; repeat for multiple outputs.")] = None,
+    report_output: Annotated[Path | None, typer.Option("--report-output", help="Portable companion file or directory.")] = None,
+    no_report: Annotated[bool, typer.Option("--no-report", help="Disable portable companions; retain native CVE artifacts and terminal output.")] = False,
 ) -> None:
     """Discover, acquire, diff, and report the fix commit for a CVE."""
     warn_if_token_missing()
     cve_id = validate_cve_id(cve_id)
+    report_options = None
+    if report_format or report_output or no_report:
+        from cve_diff.report.completion import prepare_cve_report
+        try:
+            report_options = options_from_args(Namespace(report_format=report_format, report_output=report_output, no_report=no_report))
+            prepare_cve_report(report_options, output_dir, cve_id, input_root=work_dir)
+        except (ValueError, OSError, ValidationError) as exc:
+            typer.echo("Invalid report options: " + sanitise_for_terminal(str(exc), max_len=300), err=True)
+            raise typer.Exit(code=2) from exc
     # Resolve the model at the entry point (operator pin > models.json
     # > env autodetect > historical fallback) so the pipeline and
     # analyzer stay config-free — see cve_diff.llm.auth.default_model_id.
@@ -512,6 +540,8 @@ def run(
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                     ok=False, error_class="DiskBudgetExceeded")
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 8, pipeline=pipeline_slot[0],
+                         error_class="DiskBudgetExceeded", error_detail=str(exc), input_root=work)
             raise typer.Exit(code=8) from exc
         except UnsupportedSource as exc:
             typer.echo("unsupported source: "
@@ -527,6 +557,8 @@ def run(
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                     ok=False, error_class="UnsupportedSource")
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 4, pipeline=pipeline_slot[0],
+                         error_class="UnsupportedSource", error_detail=str(exc), input_root=work)
             raise typer.Exit(code=4) from exc
         except DiscoveryError as exc:
             typer.echo("discovery failed: "
@@ -545,6 +577,8 @@ def run(
                                     ok=False,
                                     error_class=_classify_discovery(str(exc)))
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 5, pipeline=pipeline_slot[0],
+                         error_class=_classify_discovery(str(exc)), error_detail=str(exc), input_root=work)
             raise typer.Exit(code=5) from exc
         except AcquisitionError as exc:
             typer.echo("acquisition failed: "
@@ -561,6 +595,8 @@ def run(
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                     ok=False, error_class="AcquisitionError")
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 6, pipeline=pipeline_slot[0],
+                         error_class="AcquisitionError", error_detail=str(exc), input_root=work)
             raise typer.Exit(code=6) from exc
         except IdenticalCommitsError as exc:
             typer.echo("identical commits: "
@@ -577,6 +613,8 @@ def run(
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                     ok=False, error_class="IdenticalCommitsError")
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 7, pipeline=pipeline_slot[0],
+                         error_class="IdenticalCommitsError", error_detail=str(exc), input_root=work)
             raise typer.Exit(code=7) from exc
         except AnalysisError as exc:
             typer.echo("analysis rejected: "
@@ -594,6 +632,8 @@ def run(
                 _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                     ok=False, error_class="AnalysisError")
             _echo_flow_md(output_dir, cve_id, quiet)
+            _emit_report(report_options, output_dir, cve_id, 9, pipeline=pipeline_slot[0],
+                         error_class="AnalysisError", error_detail=str(exc), input_root=work)
             raise typer.Exit(code=9) from exc
 
         rc = None
@@ -613,6 +653,9 @@ def run(
                 typer.echo("root-cause analysis failed: "
                            f"{sanitise_for_terminal(str(exc), max_len=300)}",
                            err=True)
+                _emit_report(report_options, output_dir, cve_id, 9, pipeline=pipeline_slot[0], bundle=result.bundle,
+                             root_cause_requested=True, root_cause_error=str(exc),
+                             error_class=type(exc).__name__, error_detail=str(exc), input_root=work)
                 raise typer.Exit(code=9) from exc
 
         # Consensus-confirmed discovery → run-local verified outcome
@@ -668,6 +711,8 @@ def run(
                 typer.echo(f"wrote {extra_path}")
         if not quiet:
             api_status.print_to_stderr(api_status.render_rate_limit_summary())
+        _emit_report(report_options, output_dir, cve_id, 0, pipeline=pipeline_slot[0], bundle=result.bundle,
+                     root_cause=rc, root_cause_requested=with_root_cause, input_root=work)
     finally:
         _restore_termination_handlers(sig_restore)
         set_sink(None)
