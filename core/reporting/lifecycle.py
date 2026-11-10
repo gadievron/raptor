@@ -107,6 +107,9 @@ def find_input_snapshot(source: Path, data):
     positions = {}
     artifact_digests = {a.get("digest") for a in context.artifacts
                         if Path(a.get("path") or a.get("uri") or "").name == source.name and a.get("canonical_digest") == content_digest}
+    # Equal canonical content and basenames cannot choose a byte-distinct artifact.
+    if len(artifact_digests) > 1:
+        return None
     for finding in context.findings:
         ref = finding.get("source_occurrence_ref") or finding["occurrence_ref"]
         parts = ref.split(":")
