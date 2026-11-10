@@ -691,15 +691,18 @@ class TestForeignAppenderAcrossCheckpoint:
 
         t = threading.Thread(
             target=_append, name="foreign-appender", daemon=True)
-        t.start()
-        assert at_flock.wait(timeout=30.0)
-        # The appender holds an fd on the pre-swap inode, gated before
-        # its flock. Checkpoint swaps underneath it.
-        outcome = checkpoint_journal(tmp_path, boundary="test")
-        assert outcome.fired
-        release.set()
-        t.join(timeout=30.0)
-        assert not t.is_alive() and errors == []
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads([t], release=release.set, timeout=30.0):
+            t.start()
+            assert at_flock.wait(timeout=30.0)
+            # The appender holds an fd on the pre-swap inode, gated before
+            # its flock. Checkpoint swaps underneath it.
+            outcome = checkpoint_journal(tmp_path, boundary="test")
+            assert outcome.fired
+            release.set()
+            t.join(timeout=30.0)
+            assert not t.is_alive() and errors == []
         live = _journal_path(tmp_path).read_bytes()
         backup = (tmp_path / (JOURNAL_FILENAME + ".pre-supersede"))
         assert b"foreign_row" in live
