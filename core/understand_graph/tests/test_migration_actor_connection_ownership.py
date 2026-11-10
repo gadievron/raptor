@@ -28,6 +28,7 @@ def _exercise(tmp_path, name, phase, error=None, after=True, deny=False):
                 raise failure
             result = super().execute(*args, **kwargs)
             if selected:
+                result.close()
                 raise failure
             return result
 
