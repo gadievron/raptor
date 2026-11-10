@@ -2679,43 +2679,18 @@ def _lexical_var_reaches_sink(
     var: str, source_text: str, validator_line: int,
     sink_line: int, sink_line_text: str, *, language: str = "javascript",
 ) -> bool:
-    r"""AST-free analogue of ``_python_chain_reaches_sink``'s rebind-KILL,
-    for languages without a parsed tree (JS/TS/Java).
+    r"""Reject direct writes that invalidate a non-Python validator epoch.
 
-    Full-file language views exclude comments and literals from sink
-    membership and plain-assignment self references. ``sink_line_text``
-    remains diagnostic input; production callers supply ``language``.
+    Full-file language views exclude comment and literal decoys. Only
+    exact bare-name self-assignment, with optional balanced wrapping
+    parentheses, retains the earlier constraint. Referencing the old
+    value does not establish that a mixed or transformed RHS preserves
+    its character language. Compound assignments also require a separate
+    transfer proof, including literal-only RHSs.
 
-    Returns ``True`` iff ``var`` appears in executable sink code AND is not
-    rebound between the validator and the sink. Previously the non-Python
-    path was a bare ``\bvar\b`` match at the sink with NO rebind-KILL
-    (a204f309): ``x = validate(raw); x = req.query.evil; sink(x)`` left
-    ``x`` "validated" at the sink and the charset prescreen suppressed a
-    live flow. A reassignment ``var = <expr not referencing var>`` between
-    validator and sink rebinds it to a value the validator never
-    constrained, so it must KILL the reach.
-
-    Compound assignments (``var += rhs`` and the other ``op=`` forms,
-    including JS logical assignment ``||= &&= ??=``) MIX new data into
-    the validated value; they KILL the reach whenever the RHS
-    references any identifier other than ``var`` itself — the mixed-in
-    operand's characters were never covered by the validator's charset
-    proof.  Pre-fix ``\bvar\b\s*=(?!=)`` matched only the plain
-    ``=`` spelling, so ``x += req.query.evil`` slid past the
-    rebind-KILL entirely (the lexical analogue of the AugAssign mixing
-    kill the AST path already had).  Identifier detection does not
-    strip string literals, so ``x += ".cfg"`` also kills — extra
-    conservatism in the sound direction.
-
-    Conservative by design: it detects reassignments lexically and errs
-    toward KILL (declining the suppression → the finding falls through to
-    LLM validation), which is the sound direction for a false-negative
-    fix. Member/index writes (``var.f = …``, ``var[i] = …``) and
-    comparisons (``==``/``!=``/``<=``/``>=``) do not count as rebinds.
-    Residual (documented): the self-referencing plain-assign mix
-    ``x = x + evil`` still passes — the AST path covers it for Python;
-    modelling it lexically without breaking ``x = validate(x)`` needs
-    a parser.
+    This is a local write filter, not callee-effect or alias analysis.
+    Endpoint-row ordering and exact sink argument binding need separate
+    source checks; a passing lexical filter is not sufficient by itself.
     """
     if java_unicode_unverified(source_text, language=language):
         return False
@@ -2730,21 +2705,18 @@ def _lexical_var_reaches_sink(
         rf"\b{_re.escape(var)}\b\s*"
         r"(?:[-+*/%&|^]|<<|>>|\*\*|\|\||&&|\?\?)=(?!=)"
     )
-    self_re = _re.compile(rf"\b{_re.escape(var)}\b")
-    ident_re = _re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*")
     for lineno in range(validator_line + 1, sink_line):
         if 1 <= lineno <= len(lines):
-            text = lines[lineno - 1]
-            m = compound_re.search(text)
-            if m:
-                rhs_idents = set(ident_re.findall(text[m.end():]))
-                if rhs_idents - {var}:
-                    return False  # compound assign mixes taint -> KILL
-                continue
             view = views[lineno - 1]
+            if compound_re.search(view):
+                return False
             m = assign_re.search(view)
-            if m and not self_re.search(view[m.end():]):
-                return False  # rebind from a non-self RHS -> KILL
+            if m:
+                rhs = view[m.end():].strip().removesuffix(";").strip()
+                while rhs.startswith("(") and rhs.endswith(")"):
+                    rhs = rhs[1:-1].strip()
+                if rhs != var:
+                    return False
     return True
 
 
