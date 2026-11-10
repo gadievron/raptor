@@ -1633,7 +1633,8 @@ def _python_operator_dispatch(node: ast.AST) -> bool:
 
     This is a negative effect boundary, not a transfer or purity contract.
     """
-    return isinstance(node, (ast.BinOp, ast.UnaryOp, ast.Compare, ast.BoolOp, ast.IfExp))
+    return isinstance(node, (ast.BinOp, ast.AugAssign, ast.UnaryOp, ast.Compare,
+                             ast.BoolOp, ast.IfExp))
 
 
 def _python_iteration_dispatch(node: ast.AST) -> bool:
