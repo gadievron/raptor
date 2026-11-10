@@ -245,7 +245,10 @@ def _sweep_marked_processes(token: str) -> list:
     per-run random UUID, so a false-positive kill requires the exact
     128-bit value in a foreign process env. Returns the pids killed.
     """
-    needle = f"_SBX_RUN_ID={token}".encode()
+    # Only a complete environment entry proves this marker. Substrings in
+    # another variable/value, or a read truncated before NUL, do not.
+    needle = f"_SBX_RUN_ID={token}".encode() + b"\0"
+    boundary = b"\0" + needle
     me = os.getpid()
     killed: list = []
     for _pass in range(2):
@@ -262,7 +265,7 @@ def _sweep_marked_processes(token: str) -> list:
                     env_blob = f.read(1024 * 1024)
             except OSError:
                 continue
-            if needle not in env_blob:
+            if not (env_blob.startswith(needle) or boundary in env_blob):
                 continue
             found = True
             try:
