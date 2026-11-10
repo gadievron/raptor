@@ -310,3 +310,22 @@ def test_stage_preserves_relative_repository_inputs(tmp_path, monkeypatch):
     path, stats = run_config_resolved_stage(type(tmp_path)('repo'), type(tmp_path)('out'))
     assert path is not None and stats.get('emitted') == 1
     assert len(json.loads(path.read_text())['runs'][0]['results']) == 1
+
+
+@pytest.mark.parametrize('selector, algorithm, reports', [
+    ('MessageDigest', 'MD5', True), ('MessageDigest', 'md5', True),
+    ('MessageDigest', 'MD5/extra', False), ('MessageDigest', 'MD5 ', False),
+    ('java.security.SecureRandom', 'SHA1PRNG', True),
+    ('java.security.SecureRandom', 'SHA1PRNG/extra', False),
+    ('java.security.SecureRandom', 'SHA1PRNG ', False),
+    ('javax.crypto.Cipher', 'DES/ECB/PKCS5Padding', True),
+    ('javax.crypto.Cipher', ' DES / ECB / PKCS5Padding ', True),
+])
+def test_selector_normalisation_matches_api_family(tmp_path, selector, algorithm, reports):
+    (tmp_path / 'app.properties').write_text('hashAlg=' + algorithm + '\n')
+    source = _src('app.properties', '"hashAlg"').replace(
+        'MessageDigest.getInstance', selector + '.getInstance').replace(
+        'MessageDigest md = ', 'Object configured = ')
+    findings, stats = _scan(tmp_path, source)
+    assert stats['resolver:resolved'] == 1
+    assert bool(findings) is reports, (selector, algorithm, findings)
