@@ -246,6 +246,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fuzz-dir", help="For binary --map: existing /fuzz run directory to ingest.")
     p.add_argument("--constraint-file", help="For binary --map: JSON file with explicit SMT path conditions.")
     p.add_argument("--compare", help="For binary --map: older compiled artefact to compare against.")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p)
     return p
 
 
@@ -1315,6 +1317,13 @@ def _do_resume(args) -> int:
         print(f"error: target not found: {target}", file=sys.stderr)
         return 1
 
+    from packages.code_understanding.reporting import prepare_understand_report
+    try:
+        prepare_understand_report(args, out_dir, target)
+    except (ValueError, OSError) as exc:
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 1
+
     models = config.get("models")
     if (not isinstance(models, list) or not models
             or not all(isinstance(m, str) and m.strip() for m in models)):
@@ -1514,6 +1523,9 @@ def _do_resume(args) -> int:
         per_model_cost=per_model_cost, segment=segment,
         drift_count=len(drifted),
     )
+    # Presentation is invocation-local; never pin it into analysis identity.
+    for name in ("report_format", "report_output", "no_report", "_report_options"):
+        setattr(ns, name, getattr(args, name, None))
 
     rc = _run_modes(ns, out_dir)
 
@@ -1553,6 +1565,8 @@ def _do_resume(args) -> int:
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
+    from core.reporting.options import options_from_args
+    args._report_options = options_from_args(args, parser)
     # The slopsquat hunt backend is offline and model-independent
     # (--model is documented as ignored there), so requiring a dummy
     # --model would gate nothing. --hunt-tool has no effect on --trace,
@@ -1622,6 +1636,12 @@ def _run_modes(args, out_dir: Path) -> int:
     """Dispatch + result write + summary — shared by the fresh path
     and ``--resume`` (which hands in a namespace rebuilt from the
     run's pinned config)."""
+    from packages.code_understanding.reporting import prepare_understand_report
+    try:
+        prepare_understand_report(args, out_dir, Path(args.target).resolve())
+    except (ValueError, OSError) as exc:
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 1
     prior_sigterm = _install_sigterm_interrupt()
     try:
         # Opt the hunt/trace dispatch into trajectory persistence —
@@ -1692,6 +1712,8 @@ def _run_modes(args, out_dir: Path) -> int:
             file=sys.stderr,
         )
     _print_summary(payload, output_path)
+    from packages.code_understanding.reporting import complete_understand_report
+    complete_understand_report(args, payload, output_path)
 
     # SAGE store: persist results for cross-run learning.
     try:

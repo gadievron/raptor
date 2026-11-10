@@ -155,7 +155,14 @@ class TestInterruptThenResume:
         # Segment 2: only the remainder dispatches.
         run2_calls: list = []
         _patch_hunt_dispatch(monkeypatch, run2_calls)
-        rc = _run_shim(mod, monkeypatch, ["--resume", str(run_dir)])
+        refused = _run_shim(mod, monkeypatch, [
+            "--resume", str(run_dir), "--report-format", "json",
+            "--report-output", str(repo / "receipt.json"),
+        ])
+        assert refused == 1
+        assert run2_calls == [], "refused export must not spend or reopen the segment"
+        assert load_json(run_dir / RUN_METADATA_FILE)["status"] == "interrupted"
+        rc = _run_shim(mod, monkeypatch, ["--resume", str(run_dir), "--report-format", "json"])
         assert rc == 0
 
         assert [c[0] for c in run2_calls] == ["model-c"], (
@@ -173,6 +180,13 @@ class TestInterruptThenResume:
         assert result["total_cost_usd"] == pytest.approx(3.75)
         assert result["resumed_segment"] == 2
         assert result["carried_models"] == ["model-a", "model-b"]
+        receipt = json.loads((run_dir / "portable-reports" / "report-context.json").read_text())
+        captured = receipt["extensions"]["raptor.result"]
+        assert captured["resumed_segment"] == 2
+        assert captured["carried_models"]["names"] == ["model-a", "model-b"]
+        assert captured["total_cost_usd"] == pytest.approx(3.75)
+        config = json.loads((run_dir / "understand-run-config.json").read_text())
+        assert not any(key.startswith("report_") for key in config)
 
         meta = load_json(run_dir / RUN_METADATA_FILE)
         assert meta["status"] == "completed"

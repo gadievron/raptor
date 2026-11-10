@@ -626,6 +626,7 @@ _REPORT_WRITER_FILES = (
     # Standalone diagram CLI moved out of its trusted dispatch shim.
     "packages/diagram/cli.py",
     "packages/diagram/cli_reporting.py",
+    "packages/code_understanding/reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
