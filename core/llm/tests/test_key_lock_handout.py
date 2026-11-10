@@ -79,10 +79,13 @@ def test_concurrent_handles_serialise_on_one_lock() -> None:
 
     t1 = threading.Thread(target=holder)
     t2 = threading.Thread(target=waiter)
-    t1.start()
-    t2.start()
-    first_acquired.wait(timeout=5)
-    release_first.set()
-    t1.join(timeout=5)
-    t2.join(timeout=5)
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads([t1, t2], release=release_first.set, timeout=5):
+        t1.start()
+        t2.start()
+        first_acquired.wait(timeout=5)
+        release_first.set()
+        t1.join(timeout=5)
+        t2.join(timeout=5)
     assert order == ["first", "second"]
