@@ -1,11 +1,9 @@
 """SMT invariant-preservation harness.
 
-Adjudicates invariant-shaped refutations: a review hypothesis (or its
-refutation) states an invariant like ``obuf_len <= obuf_size`` and the
-function mutates the involved variables. Existing channels could find
-the taint flows but nothing could check the invariant itself, so these
-verdicts stayed suspicious/inconclusive forever — blocking both
-promotion and clean-conversion.
+Reports conditional preservation or violation of a supplied invariant at
+source mutation sites. These mathematical inductive steps do not establish
+the base case, source reachability or C integer semantics. Pipeline
+observations remain diagnostic and cannot refute a source-level claim.
 
 For each mutation site of an invariant variable the harness encodes
 one inductive preservation step::
@@ -13,8 +11,8 @@ one inductive preservation step::
     invariant(pre)  ∧  transition(site)  ∧  ¬invariant(post)
 
 * **unsat** — the site preserves the invariant (assuming it held
-  before). All sites unsat → outcome ``preserved`` (supports the
-  refutation / clean conversion).
+  before). All sites unsat → outcome ``preserved``: a conditional
+  observation, without source-claim refutation or clean-conversion authority.
 * **sat** — re-asked in a second regime with every pre-state operand
   constrained ``>= 0`` (C size/length domains): still sat →
   ``violable`` with the non-negative model as receipt; unsat in the
