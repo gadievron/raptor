@@ -205,49 +205,63 @@ def _pct(v: float | None) -> str:
     return "n/a" if v is None else f"{100 * v:.1f}%"
 
 
-def render_markdown(report: RecallReport) -> str:
-    """Human-facing report; the JSON is the machine record."""
-    lines = [
-        f"# Detector recall — {report.manifest_name}",
-        "",
-        f"- label class: **{LABEL_CLASS}** (never feed FP/scorecard "
-        "learning stores)",
-        f"- language: {report.language}  |  profile: {report.profile}",
-        f"- pinned sha: `{report.pinned_sha}`",
-        f"- overall recall: **{_pct(report.recall)}** "
-        f"({report.found_total}/{report.expected_total})",
-        f"- findings on labelled-clean regions: "
-        f"{report.clean_region_fp_count}",
+def build_recall_document(report: RecallReport):
+    """Build a portable presentation; native JSON remains the measurement record.
+
+    The snapshot identifies the displayed projection, including its miss cap,
+    rather than claiming a complete inventory or a validation finding set.
+    """
+    from core.reporting.document import Block, ReportDocument, digest
+
+    metadata = {
+        "label class": LABEL_CLASS, "language": report.language,
+        "profile": report.profile, "pinned sha": report.pinned_sha,
+        "label digest": report.label_digest,
+    }
+    if report.run_output_dir:
+        metadata["pipeline run dir"] = report.run_output_dir
+    blocks = [
+        Block("paragraph", text=SEGREGATION_NOTE),
+        Block("table", title="Recall by CWE", columns=["CWE", "expected", "found", "recall"],
+              rows=[[row.cwe, row.expected, row.found, _pct(row.recall)] for row in report.per_cwe]),
     ]
     if report.toolchain:
-        lines.append("- toolchain: " + ", ".join(
-            f"{k} {v}" for k, v in sorted(report.toolchain.items())))
-    if report.run_output_dir:
-        lines.append(f"- pipeline run dir: {report.run_output_dir}")
-    lines += ["", "| CWE | expected | found | recall |",
-              "|-----|----------|-------|--------|"]
-    for row in report.per_cwe:
-        lines.append(
-            f"| {row.cwe} | {row.expected} | {row.found} "
-            f"| {_pct(row.recall)} |")
+        blocks.append(Block("table", title="Toolchain", columns=["Tool", "Version"],
+                            rows=[[key, value] for key, value in sorted(report.toolchain.items())]))
     if report.tool_attribution:
-        lines += ["", "Tool attribution (expected findings co-found):"]
-        for tool, n in sorted(report.tool_attribution.items()):
-            lines.append(f"- {tool}: {n}")
+        blocks.append(Block("table", title="Tool attribution (expected findings co-found)",
+                            columns=["Tool", "Expected findings co-found"],
+                            rows=[[tool, count] for tool, count in sorted(report.tool_attribution.items())]))
     if report.missed:
-        lines += ["", f"## Missed ({len(report.missed)} total, "
-                      f"showing up to {MISS_LIST_CAP})", ""]
+        rows = []
         for entry in report.missed[:MISS_LIST_CAP]:
-            loc = entry["file"]
+            location = entry["file"]
             if entry.get("line_start"):
-                loc += f":{entry['line_start']}"
-            lines.append(f"- {entry['cwe']}  {entry['id']}  ({loc})")
+                location += f":{entry['line_start']}"
+            rows.append([entry["cwe"], entry["id"], location])
+        blocks.append(Block("table", title=f"Missed ({len(report.missed)} total, showing up to {MISS_LIST_CAP})",
+                            columns=["CWE", "Expected finding", "Location"], rows=rows))
         if len(report.missed) > MISS_LIST_CAP:
-            lines.append(
-                f"- … {len(report.missed) - MISS_LIST_CAP} more in "
-                "report.json")
-    lines.append("")
-    return "\n".join(lines)
+            blocks.append(Block("paragraph", text=f"{len(report.missed) - MISS_LIST_CAP} more in report.json"))
+    document = ReportDocument(
+        title=f"Detector recall — {report.manifest_name}", kind="recall-evaluation", snapshot_id="",
+        metadata=metadata,
+        summary={"overall recall": f"{_pct(report.recall)} ({report.found_total}/{report.expected_total})",
+                 "findings on labelled-clean regions": report.clean_region_fp_count,
+                 "labelled-clean regions": report.clean_region_total},
+        blocks=blocks,
+        extensions={"raptor.measurement_role": LABEL_CLASS,
+                    "raptor.missed_total": len(report.missed),
+                    "raptor.missed_displayed": min(MISS_LIST_CAP, len(report.missed))},
+    )
+    document.snapshot_id = digest(document.to_dict())
+    return document
+
+
+def render_markdown(report: RecallReport) -> str:
+    """Render through the common engine without changing scoring or JSON."""
+    from core.reporting.renderers import get_renderer
+    return get_renderer("markdown").render(build_recall_document(report)).content.decode("utf-8")
 
 
 def compare_reports(base: dict[str, Any],
