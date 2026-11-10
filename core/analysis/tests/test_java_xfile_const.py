@@ -806,3 +806,111 @@ class Other { String valueOf(String ignored) { return System.getenv("OWNED"); } 
         rhs = index.rhs_at(3, "value")
         assert rhs is not None
         assert fold_expr_at(reaching_defs(graph), sink, rhs, index) is REFUSE
+
+
+class TestMemberReceiverScope:
+    @pytest.mark.parametrize("method_window", [False, True])
+    @pytest.mark.parametrize("case", [
+        "after", "static", "member-method", "record", "capture",
+        "unrelated", "local-shadow", "outer-field", "interface", "enum",
+    ])
+    def test_actual_consumer_checks_ancestor_value_bindings(self, tmp_path,
+                                                           method_window, case):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        (tmp_path / "Cfg.java").write_text(
+            'class Cfg { static final String SAFE="class-literal"; '
+            'String literal() { return "class-literal"; } }'
+        )
+        (tmp_path / "Other.java").write_text(
+            'class Other { String SAFE=System.getenv("OWNED"); '
+            'String separator=System.getenv("OWNED"); String literal() { return SAFE; } }'
+        )
+        prefix, suffix = "class T {\n", "}\n"
+        body = "String value = Cfg.SAFE;"
+        method_prefix = ""
+        expected = False
+        if case == "after":
+            suffix = "Other Cfg = new Other();\n" + suffix
+        elif case == "static":
+            prefix += "static Other File = new Other();\n"
+            body = "String value = File.separator;"
+        elif case == "member-method":
+            prefix += "Other Cfg;\nT(Other supplied) { this.Cfg = supplied; }\n"
+            body = "{ Cfg Cfg = new Cfg(); }\nString value = Cfg.literal();"
+        elif case == "record":
+            prefix = "record T(Other Cfg) {\n"
+        elif case == "capture":
+            prefix += "void outer(Other Cfg) { class Inner {\n"
+            suffix = "} }\n" + suffix
+        elif case == "unrelated":
+            prefix = "class Unrelated { Other Cfg; }\n" + prefix
+            expected = True
+        elif case == "local-shadow":
+            prefix += "Other Cfg;\n"
+            body = "Cfg Cfg = new Cfg();\nString value = Cfg.literal();"
+            expected = True
+        elif case == "outer-field":
+            prefix += "Other Cfg = new Other();\nclass Inner {\n"
+            suffix = "}\n" + suffix
+        elif case == "interface":
+            prefix = "interface T { Other File = new Other();\n"
+            body = "String value = File.separator;"
+            method_prefix = "default "
+        elif case == "enum":
+            prefix = "enum T { ONE; Other Cfg = new Other();\n"
+        source = (prefix + method_prefix + "void m(java.io.PrintWriter out) {\n"
+                  + body + "\nout.println(value);\n}\n" + suffix)
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        lines = source.splitlines()
+        sink_line = lines.index("out.println(value);") + 1
+        method_start = next(i + 1 for i, line in enumerate(lines) if "void m(" in line)
+        span = (method_start, sink_line + 1) if method_window else (1, len(lines))
+        index = JavaConstIndex(source, span, str(caller), str(tmp_path))
+        assert index.ok
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+
+class TestMemberReceiverCoverage:
+    @pytest.mark.parametrize("binding,qualified,expected", [
+        ("field", False, False),
+        ("parameter", False, False),
+        ("unrelated", False, True),
+        ("field", True, True),
+        ("none", False, True),
+    ])
+    def test_actual_constant_reason_requires_scoped_sibling_coverage(
+            self, tmp_path, binding, qualified, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.sanitizer_cut import _sink_arg_constant_reason
+
+        field = "Other File = new Other();\n" if binding == "field" else ""
+        parameter = "Other File, " if binding == "parameter" else ""
+        receiver = "java.io.File" if qualified else "File"
+        sibling = "class Unrelated { Other File; }\n" if binding == "unrelated" else ""
+        source = (
+            "import java.io.File;\nclass T {\n" + field
+            + f"void m({parameter}java.io.PrintWriter out) {{\n"
+            + 'String format = "%s";\n'
+            + f"out.printf(format, {receiver}.separator);\n"
+            + "}\n}\n" + sibling
+            + 'class Other { String separator=System.getenv("OWNED"); }\n'
+        )
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        sink_line = next(i + 1 for i, line in enumerate(source.splitlines())
+                         if "out.printf" in line)
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        # Empty taint front exercises the guard's independent fold-or-refuse duty.
+        reason = _sink_arg_constant_reason(
+            graph, set(), sink, "format", frozenset({"File"}), source,
+            str(caller), str(tmp_path), "CWE-79",
+        )
+        assert (reason is not None) is expected

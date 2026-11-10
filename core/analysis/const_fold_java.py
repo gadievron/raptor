@@ -123,7 +123,7 @@ class _FoldExt:
         self.xfile = xfile
         self.shadowed_receiver_names = frozenset(shadowed_receiver_names)
         self.receiver_is_value = receiver_is_value
-        # receiver_type(name) -> exact created class name, or None.
+        # receiver_type(name, node) -> exact locally-created class, or None.
         # Sound only when EVERY indexed definition of the local is a
         # creation of that same class (see JavaConstIndex).
         self.receiver_type = receiver_type
@@ -373,6 +373,42 @@ class JavaConstIndex:
                     innermost = (s, e, scopes)
         return innermost is not None and \
             innermost[2].vouches(name, node.start_byte)
+
+    def _is_value_receiver(self, node: Node, name: str) -> bool:
+        # Reads can capture an outer local; stores still use the innermost oracle.
+        for start, end, scopes in self._scopes:
+            if start <= node.start_byte and node.end_byte <= end \
+                    and scopes.vouches(name, node.start_byte):
+                return True
+        from core.analysis.cfg_node_tables import JAVA_TABLES
+        current = node.parent
+        while current is not None:
+            # Inspect ancestor-owned declarations, never sibling/nested bodies.
+            for member in current.named_children:
+                if member.type not in ("field_declaration", "constant_declaration"):
+                    continue
+                for declaration in member.named_children:
+                    if declaration.type == "variable_declarator":
+                        ident = declaration.child_by_field_name("name")
+                        if ident is not None and ident.text.decode() == name:
+                            return True
+            body = current.child_by_field_name("body")
+            parameters = current.child_by_field_name("parameters")
+            if body is not None and body.type in JAVA_TABLES.scope_barriers \
+                    and parameters is not None:
+                # A record header's parameters also declare implicit fields.
+                for parameter in parameters.named_children:
+                    ident = parameter.child_by_field_name("name")
+                    if ident is not None and ident.text.decode() == name:
+                        return True
+            current = current.parent
+        return False
+
+    def receiver_type_at(self, name: str, node: Node) -> str | None:
+        # A member/capture must not borrow a same-named local's creation proof.
+        if not self._is_scoped_local(node, name):
+            return None
+        return self.receiver_type(name)
 
     def _note_creation(self, name: str, value: Node) -> None:
         """Track exact-creation-typed locals: usable as a method-call
@@ -771,7 +807,7 @@ def _fold_xfile_call(node: Node, ext) -> Any:
             cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
     elif obj.type == "identifier":
         recv = obj.text.decode("utf-8", "replace")  # type: ignore[union-attr]
-        typed = ext.receiver_type(recv) if ext.receiver_type else None
+        typed = ext.receiver_type(recv, obj) if ext.receiver_type else None
         if _receiver_is_shadowed(obj, ext) and typed is None:
             return _REFUSE
         cls = typed or recv
@@ -1036,8 +1072,8 @@ def _index_ext(index: JavaConstIndex, allow_taint_free: bool):
     """
     return _FoldExt(allow_taint_free=allow_taint_free,
                     xfile=index.xfile,
-                    receiver_type=index.receiver_type,
-                    receiver_is_value=index._is_scoped_local)
+                    receiver_type=index.receiver_type_at,
+                    receiver_is_value=index._is_value_receiver)
 
 
 def _make_point_resolver(rd, index: JavaConstIndex, array_resolver=None,

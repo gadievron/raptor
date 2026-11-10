@@ -804,7 +804,8 @@ def _xfile_covered_names(index, java_source_text, sink):
         if xfile is None or not java_source_text:
             return frozenset()
         return frozenset(xfile.covered_identifiers(
-            java_source_text, getattr(sink, "lineno", 0)))
+            java_source_text, getattr(sink, "lineno", 0),
+            receiver_is_value=index._is_value_receiver))
     except Exception:  # noqa: BLE001 — refusal direction
         return frozenset()
 
