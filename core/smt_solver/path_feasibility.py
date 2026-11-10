@@ -725,6 +725,9 @@ _ASSIGNMENT_SHAPED_RE = re.compile(
     r'|[+\-*/%&|^]='             # compound assignment ops `+= -= *= /= %= &= |= ^=`
     r'|<<=|>>='                  # shift compound assignment
     r'|\+\+|--'                  # post/pre-increment, decrement
+    # Alternative C++ assignments need a preceding operand. Preserve
+    # bare C-profile identifiers such as `or_eq == 0` and longer names.
+    r'|(?<=[A-Za-z0-9_)\]])\s*(?<![A-Za-z0-9_])(?:and_eq|or_eq|xor_eq)\b'
 )
 
 # Oversized inputs are not inspected even for effects. Their rejection
@@ -734,7 +737,10 @@ _STATE_EFFECT_KINDS = frozenset({
     RejectionKind.UNMODELED_STATE_EFFECT,
     RejectionKind.INPUT_TOO_LONG,
 })
-_ADDRESS_ARGUMENT_RE = re.compile(r"(?<!&)&(?!&)")
+_ADDRESS_ARGUMENT_RE = re.compile(
+    r"(?<!&)&(?!&)"
+    r"|\bbitand\b(?=\s*[A-Za-z_(:*])"  # Alternative unary &: a following operand is required.
+)
 
 
 def _possible_template_callee(masked: str, ending: int) -> bool:
