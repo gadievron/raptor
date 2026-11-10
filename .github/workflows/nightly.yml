@@ -200,7 +200,7 @@ jobs:
       - name: Install Chromium for native browser tests
         run: |
           source "$VENV_PATH/bin/activate"
-          python -m playwright install --with-deps chromium
+          python -m playwright install --with-deps --only-shell chromium
 
       - name: Install semgrep
         # semgrep is deliberately NOT a pyproject.toml dep (optional
