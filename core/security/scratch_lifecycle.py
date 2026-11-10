@@ -93,22 +93,35 @@ def _open_registry(*, create: bool = False) -> int:
     # traversal is pinned and refuses symlinks at the registry/root boundary.
     parent = path.parent.resolve(strict=not create)
     node = scratch()._open_directory(parent, create=create)
+    result: int | None = None
     try:
-        if create:
-            try:
-                os.mkdir(path.name, 0o700, dir_fd=node)
-            except FileExistsError:
-                pass
-        result = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                         dir_fd=node)
+        failed = False
         try:
+            if create:
+                try:
+                    os.mkdir(path.name, 0o700, dir_fd=node)
+                except FileExistsError:
+                    pass
+            result = os.open(path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                             dir_fd=node)
             scratch()._private(os.fstat(result), True)
         except BaseException:
-            os.close(result)
+            failed = True
             raise
+        finally:
+            try:
+                os.close(node)
+            except BaseException:
+                if not failed:
+                    raise
         return result
-    finally:
-        os.close(node)
+    except BaseException:
+        if result is not None:
+            try:
+                os.close(result)
+            except BaseException:
+                pass  # Preserve validation or parent retirement as the primary error.
+        raise
 
 
 def _read_file(node: int, name: str) -> bytes:
