@@ -932,7 +932,8 @@ def compute_tier_dispatch(
         if path.startswith(("bin/", "libexec/"))
         for literal in (path, Path(path).name)
     }
-    if changed_py or resource_files or script_literals:
+    graph_seeds = changed_py.intersection(all_py)
+    if graph_seeds or resource_files or script_literals:
         print(f"Building import graph for {total} Python files...")
     fixture_dirs_by_test = None
     if resource_files:
@@ -956,11 +957,11 @@ def compute_tier_dispatch(
         reverse_graph, parse_failures = build_graph(
             all_py, repo, literal_references=script_literals,
         )
-    elif changed_py:
+    elif graph_seeds:
         reverse_graph, parse_failures = build_graph(all_py, repo)
     else:
-        # Metadata and tier-owned data have no graph seeds. Tier-specific extra
-        # triggers below still run (for example workflow lint checks).
+        # Metadata, tier-owned data and Python paths outside this graph have
+        # no graph seeds. Tier-specific extra triggers below still run.
         reverse_graph, parse_failures = {}, 0
     reverse_graph = with_private_test_drivers(reverse_graph, repo)
     if parse_failures:
