@@ -85,6 +85,11 @@ def _markdown(document: ReportDocument) -> RenderedReport:
                 lines.append(f"```mermaid\n{md_fence(source, max_chars=100_000)}\n```")
             else:
                 notes.append("Diagram visual unavailable; textual equivalent retained")
+                if isinstance(source, str) and source:
+                    # Retain labels/edges without admitting unsupported source
+                    # to an executable Mermaid fence. The normal code-block
+                    # path owns bounds and fence-break sanitisation.
+                    lines.append(block(Block("code", title="Captured diagram source", text=source, language="text"), level + 1))
         elif b.kind == "legacy_markdown":
             # A snapshot digest establishes byte identity, not the provenance
             # of producer-built Markdown. Preserve it as inert literal content.
