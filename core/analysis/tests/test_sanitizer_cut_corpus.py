@@ -61,16 +61,16 @@ _CORPUS_DIR = Path(__file__).parent / "fixtures" / "sanitizer_cut_corpus"
 # ``intraproc_verdict`` is the verdict with the intra-procedural gate
 # alone (no extra_bindings). ``interproc_verdict`` is the verdict when
 # Phase 14's synthetic inter-procedural bindings are passed through.
-# They differ only for ``sanitizer_in_helper.py`` — the design's
-# promise that the inter-proc phase flips exactly that one case from
-# no_suppress to suppress "without any of the others changing."
+# The helper gains a catalog candidate through its summary, but no
+# Python fixture proves the exact builtin-string input contract. Graph
+# cuts and wrappers alone must not turn those candidates into suppression.
 #
 # Source line == handle's def-line → Phase 5 uses params as source.
 _CORPUS_CASES = [
-    ("straight_line_safe.py", "CWE-79", 11, 13, VERDICT_SUPPRESS, "y",
-     VERDICT_SUPPRESS),
-    ("symmetric_sanitize.py", "CWE-79", 16, 21, VERDICT_SUPPRESS, "safe",
-     VERDICT_SUPPRESS),
+    ("straight_line_safe.py", "CWE-79", 11, 13, VERDICT_CANDIDATE_ONLY, "y",
+     VERDICT_CANDIDATE_ONLY),
+    ("symmetric_sanitize.py", "CWE-79", 16, 21, VERDICT_CANDIDATE_ONLY, "safe",
+     VERDICT_CANDIDATE_ONLY),
     ("wrong_variable.py", "CWE-79", 12, 14, VERDICT_CANDIDATE_ONLY, "user",
      VERDICT_CANDIDATE_ONLY),
     ("chained_sanitizer.py", "CWE-79", 17, 19, VERDICT_CANDIDATE_ONLY, "y",
@@ -86,7 +86,7 @@ _CORPUS_CASES = [
      VERDICT_CANDIDATE_ONLY),
     # Phase 14 flips this one — intra-proc can't see into _sanitize.
     ("sanitizer_in_helper.py", "CWE-79", 21, 23, VERDICT_NO_SUPPRESS, "y",
-     VERDICT_SUPPRESS),
+     VERDICT_CANDIDATE_ONLY),
 ]
 
 
@@ -191,6 +191,10 @@ def test_corpus_fixture_verdict(
         f"{fixture}: verdict={result.verdict!r}, "
         f"expected {expected_verdict!r}. Reason: {result.reason}"
     )
+    if expected_verdict == VERDICT_CANDIDATE_ONLY:
+        assert not result.suppress
+        assert any("exact_builtin_str_default_call" in binding.unverified_source_contracts
+                   for binding in result.all_matched_bindings)
 
 
 @pytest.mark.parametrize(
@@ -316,12 +320,9 @@ def test_corpus_fixture_verdict_interproc(
     """Phase 14 — resolve the fixture and run the gate WITH the
     resolver's inter-procedural synthetic bindings.
 
-    Only ``sanitizer_in_helper.py`` changes verdict relative to the
-    intra-procedural baseline (no_suppress → suppress): its
-    ``_sanitize`` helper cleanly escapes its argument, so the
-    synthetic binding lets the value-bound cut hold. Every other
-    fixture is unchanged — they call ``html.escape`` directly or a
-    non-sanitizing callee, so no synthetic binding is produced."""
+    The helper gains a candidate (no_suppress to candidate_only).
+    Its summary carries the unresolved primitive-input requirement
+    rather than certifying an untyped caller argument."""
     finding = _native_finding(fixture, cwe, source_line, sink_line)
     resolved = resolve_finding(finding)
     assert isinstance(resolved, ResolvedFinding), (
@@ -338,6 +339,10 @@ def test_corpus_fixture_verdict_interproc(
         f"{fixture}: interproc verdict={result.verdict!r}, "
         f"expected {expected_verdict!r}. Reason: {result.reason}"
     )
+    if expected_verdict == VERDICT_CANDIDATE_ONLY:
+        assert not result.suppress
+        assert any("exact_builtin_str_default_call" in binding.unverified_source_contracts
+                   for binding in result.all_matched_bindings)
 
 
 def test_corpus_ablation_summary(capsys):
