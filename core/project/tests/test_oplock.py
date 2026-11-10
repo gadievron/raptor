@@ -174,13 +174,24 @@ class OpLockPrimitiveTest(unittest.TestCase):
         block the next contender — the kernel drops the flock with the
         process."""
         holder = _Holder(self.project_dir)
-        holder.proc.start()
-        assert holder.acquired.wait(timeout=10)
-        holder.proc.kill()
-        holder.proc.join(timeout=10)
-        with project_op_lock(self.project_dir, "recovery", grace=2.0):
-            stamped = read_holder(op_lock_path(self.project_dir))
-            self.assertEqual(stamped.get("operation"), "recovery")
+        try:
+            holder.proc.start()
+            assert holder.acquired.wait(timeout=10)
+            holder.proc.kill()
+            holder.proc.join(timeout=10)
+            with project_op_lock(self.project_dir, "recovery", grace=2.0):
+                stamped = read_holder(op_lock_path(self.project_dir))
+                self.assertEqual(stamped.get("operation"), "recovery")
+        finally:
+            try:
+                if holder.proc.pid is not None:
+                    if holder.proc.exitcode is None:
+                        holder.proc.kill()
+                    holder.proc.join(timeout=10)
+                    assert not holder.proc.is_alive(), "crash-probe holder survived cleanup"
+            finally:
+                holder.proc.close()
+
 
     def test_describe_holder_handles_empty(self):
         self.assertIn("unknown", describe_holder({}))
