@@ -62,6 +62,7 @@ class ReferenceAnswer:
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
 _MAX_TOPIC_CHARS = 512
+_MAX_ENTRY_ID_CHARS = 96
 _MAX_CANDIDATES = 3
 _MAX_PACK_ENTRIES = 256
 _STOP_WORDS = frozenset((
@@ -95,7 +96,7 @@ def lookup(
         return ReferenceAnswer(request_id, "unsupported", reason="invalid or oversized topic")
     if not isinstance(ENTRIES, tuple) or len(ENTRIES) > _MAX_PACK_ENTRIES:
         return ReferenceAnswer(request_id, "unsupported", reason="reference pack is outside immutable bounds")
-    if entry_id is not None and not isinstance(entry_id, str):
+    if entry_id is not None and (not isinstance(entry_id, str) or len(entry_id) > _MAX_ENTRY_ID_CHARS):
         return ReferenceAnswer(request_id, "unsupported", reason="invalid reference entry identity")
     terms = _tokens(topic) if entry_id is None else frozenset()
     pack_version = ReferenceAnswer("", "unsupported").pack_version
