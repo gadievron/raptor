@@ -44,11 +44,14 @@ def _open_directory(path: Path) -> int:
         for part in path.parts[1:]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                             dir_fd=node)
-            os.close(node)
-            node = child
+            previous, node = node, child
+            os.close(previous)
         return node
     except BaseException:
-        os.close(node)
+        try:
+            os.close(node)
+        except BaseException:
+            pass
         raise
 
 
