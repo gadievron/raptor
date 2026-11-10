@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 CHECK_RESULTS_FILENAME = "verification-checks.json"
+CLAIM_OBSERVATIONS_FILENAME = "claim-observations.json"
 SOURCE_VALIDATION_RULE = "source-version-drift"
 
 # Keep each observation comfortably below the audit log's 1 MiB row limit.
@@ -264,7 +265,7 @@ def _summarize_observations(checks: list[dict]) -> dict:
     }
 
 
-def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
+def _admit_observation_events(rows, *, action: str, valid_payload: Callable[[dict], bool]) -> tuple[list[dict], list[dict], dict]:
     """Deduplicate deliveries and quarantine every variant of a reused ID.
 
     Authentication is the caller's responsibility. This admission concerns
@@ -277,14 +278,14 @@ def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
     events: dict[str, dict[bytes, dict]] = {}
     input_records = duplicate_records = invalid_records = 0
     for row in rows:
-        if row.get("action") != "verification_check" or row.get("schema_version") != 1:
+        if row.get("action") != action or row.get("schema_version") != 1:
             continue
         input_records += 1
         event_id = row.get("id")
         if not isinstance(event_id, str) or not event_id.strip():
             invalid_records += 1
             continue
-        if not isinstance(row.get("scope"), dict):
+        if not valid_payload(row):
             invalid_records += 1
             # Keep its identity: a malformed variant must also quarantine a
             # well-formed event carrying the same ID, in either arrival order.
@@ -301,7 +302,7 @@ def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
     for variants in events.values():
         if len(variants) == 1:
             payload = next(iter(variants.values()))
-            if isinstance(payload.get("scope"), dict):
+            if valid_payload(payload):
                 checks.append(payload)
         else:
             conflicting_ids += 1
@@ -312,6 +313,45 @@ def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
         "conflicting_ids": conflicting_ids, "quarantined_records": len(quarantined),
     }
     return checks, quarantined, admission
+
+
+def _admit_check_events(rows) -> tuple[list[dict], list[dict], dict]:
+    return _admit_observation_events(rows, action="verification_check",
+                                     valid_payload=lambda row: isinstance(row.get("scope"), dict))
+
+
+def _claim_event_shape(row: dict) -> bool:
+    """Validate the observation envelope, never the claims' truth or scope."""
+    count = row.get("observation_count")
+    snapshot = row.get("observations")
+    if (row.get("role") != "unadjudicated_observation" or type(count) is not int or count < 0
+            or not isinstance(snapshot, dict) or type(snapshot.get("complete")) is not bool):
+        return False
+    if snapshot["complete"]:
+        data = snapshot.get("data")
+        details = data.get("details") if isinstance(data, dict) else None
+        if not isinstance(details, list) or len(details) != count:
+            return False
+    elif not isinstance(snapshot.get("reason"), str) or not snapshot["reason"]:
+        return False
+    for field in ("consumer_scope", "producer_bindings", "claim_revisions"):
+        if field == "claim_revisions" and field not in row:
+            continue  # Earlier signed summaries have unavailable lineage.
+        value = row.get(field)
+        complete = row.get(field + "_complete")
+        if type(complete) is not bool or complete != (value is not None):
+            return False
+        if complete:
+            if field == "consumer_scope":
+                if not isinstance(value, dict):
+                    return False
+            elif not isinstance(value, list) or len(value) != count:
+                return False
+    return True
+
+
+def _admit_claim_events(rows) -> tuple[list[dict], list[dict], dict]:
+    return _admit_observation_events(rows, action="ihv_claim_observations", valid_payload=_claim_event_shape)
 
 
 def write_check_results(export: dict, out_dir: Path) -> None:
@@ -328,8 +368,14 @@ def write_check_results(export: dict, out_dir: Path) -> None:
     retained_summary = _summarize_observations([])
     admission = None
     source_validation = None
+    claim_observations: list[dict] = []
+    claim_admission = None
+    events = []
+    events_available = False
     try:
-        checks, quarantined, admission = _admit_check_events(load_verified_audit_log(out_dir))
+        events = load_verified_audit_log(out_dir)
+        events_available = True
+        checks, quarantined, admission = _admit_check_events(events)
         source_validation = _apply_source_invalidations(checks)
         retained_summary = _summarize_observations(checks)
         save_json(out_dir / CHECK_RESULTS_FILENAME, {
@@ -354,6 +400,33 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         source_validation = None
         retained_summary = _summarize_observations([])
         logger.warning("could not export verification checks", exc_info=True)
+
+    claim_artifact = None
+    claim_status = "unavailable"
+    try:
+        if not events_available:
+            raise ValueError("authenticated audit observations unavailable")
+        claim_observations, quarantined_claims, claim_admission = _admit_claim_events(events)
+        save_json(out_dir / CLAIM_OBSERVATIONS_FILENAME, {
+            "schema_version": 1, "role": "unadjudicated_observation", "history_complete": False,
+            "claim_observations": claim_observations,
+            "quarantined_claim_observations": quarantined_claims,
+            "event_admission": claim_admission,
+            "limitations": [
+                "Authentication and event admission establish provenance, not claim truth or applicability.",
+                "Retained events are not distinct claims or checker executions.",
+                "Lineage describes intake history, not fresh source or binary image identity.",
+                "Missing or partial statements and metadata remain unavailable.",
+                "Proposed refutations and receipt labels confer no verdict authority.",
+            ],
+        })
+        claim_artifact = CLAIM_OBSERVATIONS_FILENAME
+        claim_status = "recorded" if claim_observations else "unavailable"
+    except Exception:
+        claim_status = "export_error"
+        claim_observations = []
+        claim_admission = None
+        logger.warning("could not export claim observations", exc_info=True)
 
     by_location = defaultdict(list)
     for check in checks:
@@ -429,6 +502,11 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         "schema_version": 1, "history_complete": False, "artifact": artifact, "export_status": status,
         "event_admission": admission,
         "source_validation": source_validation,
+        "claim_observations": {
+            "role": "unadjudicated_observation", "history_complete": False,
+            "artifact": claim_artifact, "retained_events": len(claim_observations),
+            "event_admission": claim_admission, "status": claim_status,
+        },
         "findings": {"total": len(findings), "with_matching_observations": findings_with_matches,
                      "without_matching_observations": len(findings) - findings_with_matches,
                      "trace_statuses": dict(trace_statuses)},
