@@ -98,14 +98,16 @@ def test_fixture_extraction_reuses_source_and_read_only_tree(tmp_path, source, m
 
 
 @pytest.mark.parametrize("extra", [None, "core/pkg/value.py", "libexec/raptor-demo"])
-def test_resource_dispatch_preserves_results_and_bounded_parses(tmp_path, monkeypatch, extra):
+@pytest.mark.parametrize("incomplete", [False, True], ids=["complete", "incomplete"])
+def test_resource_dispatch_preserves_results_and_bounded_parses(tmp_path, monkeypatch, extra, incomplete):
     value = _write(tmp_path, "core/pkg/value.py", "VALUE = 1\n")
     first = _write(tmp_path, "core/pkg/tests/test_first.py",
                    'import core.pkg.value\nDATA = Path(__file__).parent / "fixtures"\n'
                    'SCRIPT = "libexec/raptor-demo"\n')
     second = _write(tmp_path, "core/pkg/tests/test_second.py",
                     'import core.pkg.tests.test_first\nDATA = "fixtures"\n')
-    broken = _write(tmp_path, "core/pkg/tests/test_broken.py", 'DATA = "fixtures"\ndef broken(:\n')
+    broken = _write(tmp_path, "core/pkg/tests/test_broken.py",
+                    'DATA = "fixtures"\ndef broken(:\n' if incomplete else 'IGNORED = 1\n')
     resource = _write(tmp_path, "core/pkg/tests/fixtures/input.json", "{}")
     changed = [str(resource), *([extra] if extra else [])]
     counts = {}
@@ -120,9 +122,15 @@ def test_resource_dispatch_preserves_results_and_bounded_parses(tmp_path, monkey
     monkeypatch.setattr(graph, "ast", view)
     monkeypatch.setattr(scope, "ast", view)
     result = scope.compute_tier_dispatch(changed, tmp_path)
+    if incomplete:
+        assert result["_scope"]["full"]
+        assert all(row["run"] for name, row in result.items() if not name.startswith("_"))
+        assert set(result["python"]["files"]) == {first, second, broken}
+        assert counts == {str(value): 1, str(first): 1, str(second): 1, str(broken): 1}
+        return
     assert not result.get("_scope", {}).get("full", False)
     assert set(result["python"]["files"]) == {first, second}
-    # Fixture and script references share the graph's single parse.
+    # Both fixture and script references reuse the graph's single parse.
     expected = {str(value): 1, str(first): 1, str(second): 1, str(broken): 1}
     assert counts == expected
     assert not any(row["run"] for name, row in result.items()

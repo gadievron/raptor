@@ -965,7 +965,13 @@ def compute_tier_dispatch(
         reverse_graph, parse_failures = {}, 0
     reverse_graph = with_private_test_drivers(reverse_graph, repo)
     if parse_failures:
-        print(f"  Parse failures: {parse_failures}")
+        print(f"Import graph incomplete ({parse_failures} parse failures) — full tier dispatch")
+        result = _force_all_dispatch(repo)
+        result["_stats"] = {
+            "closure": total, "total": total,
+            "changed": len(changed_files), "dependents": 0,
+        }
+        return result
 
     script_seeds, unmapped_scripts = script_reference_seeds(
         changed_files, all_py, repo, references=script_literals,
