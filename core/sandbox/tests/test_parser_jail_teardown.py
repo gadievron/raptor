@@ -1,5 +1,6 @@
 """Worker cleanup failures must not corrupt parser-manager state."""
 
+from contextlib import ExitStack
 import socket
 import subprocess
 import sys
@@ -11,6 +12,7 @@ from core.sandbox import parser_jail as parser
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import reap_on_exit
 
 class TestParserWorkerTeardown:
     @pytest.mark.parametrize("stage", ["poll", "kill", "wait"])
@@ -118,29 +120,34 @@ class TestParserWorkerTeardown:
 
 
     def test_signal_error_still_reaps_real_child(self, monkeypatch):
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(60)"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        )
-        sock, peer = socket.socketpair()
-        original_kill = proc.kill
-        jail = parser.ParserJail()
-        jail._proc, jail._sock = proc, sock
+        with ExitStack() as resources:
+            proc = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            resources.enter_context(reap_on_exit(proc))
+            sock, peer = socket.socketpair()
+            resources.callback(sock.close)
+            resources.callback(peer.close)
+            original_kill = proc.kill
+            resources.callback(setattr, proc, "kill", original_kill)
+            jail = parser.ParserJail()
+            jail._proc, jail._sock = proc, sock
 
-        def signal_race():
-            original_kill()
-            raise ProcessLookupError("worker disappeared during signal")
-
-        monkeypatch.setattr(proc, "kill", signal_race)
-        try:
-            jail.stop()
-            assert proc.returncode is not None
-            assert jail._proc is None and jail._sock is None
-            peer.settimeout(1)
-            assert peer.recv(1) == b""
-        finally:
-            if proc.poll() is None:
+            def signal_race():
                 original_kill()
-            proc.wait(timeout=5)
-            sock.close()
-            peer.close()
+                raise ProcessLookupError("worker disappeared during signal")
+
+            monkeypatch.setattr(proc, "kill", signal_race)
+            try:
+                jail.stop()
+                assert proc.returncode is not None
+                assert jail._proc is None and jail._sock is None
+                peer.settimeout(1)
+                assert peer.recv(1) == b""
+            finally:
+                if proc.poll() is None:
+                    original_kill()
+                proc.wait(timeout=5)
+                sock.close()
+                peer.close()
