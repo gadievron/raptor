@@ -1624,6 +1624,11 @@ class TestSemgrepSurfaceFences:
             "test_pbkdf2_keysize_argument_forms",
         }
 
+    def test_engine_asym_jvm_go_regressions(self) -> None:
+        calls = _function_call_map("../../../engine/semgrep/tests/test_asym_jvm_go_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_asymmetric_jvm_go_language_identity"}
+
     def test_engine_asym_python_regressions(self) -> None:
         calls = _function_call_map("../../../engine/semgrep/tests/test_asym_python_precision.py")
         assert _callers_of(calls, "run") == set()
