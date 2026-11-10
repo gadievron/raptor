@@ -81,7 +81,7 @@ class NativeResult:
         findings = self.findings
         diagnostics = list(self.diagnostics or [])
         if findings is not None and len(findings) > MAX_FINDINGS:
-            diagnostics.append(f"Report finding table truncated: {MAX_FINDINGS} of {len(findings)} observations; complete domain payload retained")
+            diagnostics.append(f"Report finding table truncated: {MAX_FINDINGS} of {len(findings)} observations; additional finding details are not retained unless supplied separately in the captured payload or native source artifacts")
         normalized = native_findings((findings or [])[:MAX_FINDINGS], run_id=self.run_id, producer=self.kind, triage=self.triage,
                                      pass_id=self.pass_id, attempt_id=self.attempt_id)
         context = ReportContext(self.kind, self.run_id, target=self.target, state=self.state,
