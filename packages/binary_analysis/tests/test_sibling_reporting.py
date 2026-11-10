@@ -7,7 +7,7 @@ from packages.binary_analysis import cli, siblings
 
 
 def _payload(run):
-    return {"binary": "owned", "claim": "structural_lead_only", "clusters": [],
+    return {"binary": str(run / "input.json"), "claim": "structural_lead_only", "clusters": [],
             "asymmetries": [{"property": "check", "disproof_recipe": "Review dominance", "outliers": ["owned"]} for _ in range(101)],
             "hypothesis_seeds_emitted": 7, "honesty": ["consistent clusters are unexamined, not safe"],
             "substrate_notes": ["call graph partial"], "notes": ["native cap warning"],
@@ -36,7 +36,7 @@ def test_siblings_json_export_preserves_lead_semantics_and_native_stdout(tmp_pat
     assert "never confirmed findings" in streams.err
 
 
-@pytest.mark.parametrize("destination", ["sibling-clusters.json", "re-database.json", "binary-hunt-owned.json"])
+@pytest.mark.parametrize("destination", ["sibling-clusters.json", "re-database.json", "binary-hunt-owned.json", "input.json"])
 def test_siblings_report_cannot_replace_native_inputs_or_outputs(tmp_path, monkeypatch, capsys, destination):
     payload = _payload(tmp_path)
     target = tmp_path / destination
