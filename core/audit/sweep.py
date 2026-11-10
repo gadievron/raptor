@@ -1051,7 +1051,7 @@ def run_semgrep_sweep(
                 getattr(result, "files_examined", None), fixture,
             ) and not _fixture_in_failed_files(
                 getattr(result, "files_failed", None), fixture,
-            ):
+            ) and (control_findings or not getattr(result, "skipped_rules", ())):
                 # The fixture leg verifiably ran — bank its verdict so
                 # the negative-control check below (and the expanded
                 # second pass) reads it from the cache instead of
@@ -1142,6 +1142,13 @@ def run_semgrep_sweep(
                     f"presence detector: rule for {rule_keyword!r} also "
                     "matches the guarded negative-control fixture"
                 )
+
+        if not in_function and getattr(result, "skipped_rules", ()):
+            capped_reason = "rule coverage incomplete: semgrep skipped one or more incompatible rules"
+            witness_cov = Coverage(
+                covered=None, tier="rule-coverage", reason=capped_reason,
+                unknown_policy=UNKNOWN_INCONCLUSIVE,
+            )
 
         if capped_reason:
             logger.info(
@@ -1840,6 +1847,9 @@ def _rule_matches_negative_control(
         # rejected, timeout): its empty findings say nothing about
         # the rule. Do NOT cache matched=False — that permanently
         # disarmed the presence-detector cap for this keyword.
+        return None
+    if not result.findings and getattr(result, "skipped_rules", ()):
+        # A scanned fixture does not prove the skipped rule was exercised.
         return None
     matched = bool(result.findings)
     _negative_control_cache[cache_key] = matched
