@@ -22,31 +22,30 @@ from core.understand_graph.store import GRAPH_FILENAME, open_graph
 def _create_graph(output_dir: Path, *, nodes=None, edges=None):
     """Seed a minimal graph DB under output_dir/graph/."""
     db_path = output_dir / "graph" / GRAPH_FILENAME
-    conn = open_graph(db_path)
-    conn.execute(
-        "INSERT INTO snapshots (id, target_path, created_at, producer_run) "
-        "VALUES (?, ?, datetime('now'), ?)",
-        ("snap-1", "/some/target", "test"),
-    )
-    for i, node in enumerate(nodes or [], start=1):
+    with contextlib.closing(open_graph(db_path)) as conn:
         conn.execute(
-            "INSERT INTO nodes (id, snapshot_id, stable_key, kind, name, "
-            "file, line_start, line_end, props_json) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (f"n{i}", "snap-1", f"k{i}", node.get("kind", "function"),
-             node.get("name", "f"), node.get("file", "a.py"),
-             1, 10, json.dumps({})),
+            "INSERT INTO snapshots (id, target_path, created_at, producer_run) "
+            "VALUES (?, ?, datetime('now'), ?)",
+            ("snap-1", "/some/target", "test"),
         )
-    for i, edge in enumerate(edges or [], start=1):
-        conn.execute(
-            "INSERT INTO edges (id, snapshot_id, kind, src_id, dst_id, "
-            "props_json) VALUES (?, ?, ?, ?, ?, ?)",
-            (f"e{i}", "snap-1", edge.get("kind", "CONTAINS"),
-             edge.get("src", "n1"), edge.get("dst", "n2"),
-             json.dumps({})),
-        )
-    conn.commit()
-    conn.close()
+        for i, node in enumerate(nodes or [], start=1):
+            conn.execute(
+                "INSERT INTO nodes (id, snapshot_id, stable_key, kind, name, "
+                "file, line_start, line_end, props_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (f"n{i}", "snap-1", f"k{i}", node.get("kind", "function"),
+                 node.get("name", "f"), node.get("file", "a.py"),
+                 1, 10, json.dumps({})),
+            )
+        for i, edge in enumerate(edges or [], start=1):
+            conn.execute(
+                "INSERT INTO edges (id, snapshot_id, kind, src_id, dst_id, "
+                "props_json) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"e{i}", "snap-1", edge.get("kind", "CONTAINS"),
+                 edge.get("src", "n1"), edge.get("dst", "n2"),
+                 json.dumps({})),
+            )
+        conn.commit()
     return db_path
 
 
