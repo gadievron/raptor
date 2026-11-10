@@ -42,7 +42,9 @@ def fix_diff_result(results, *, dropped=0, findings_path=None, summary_path=None
         notes.append("Some successful native discovery entries have no recorded fix pointer; missing pointers remain unavailable.")
     if dropped:
         notes.append(f"{dropped} CVE entries beyond the native discovery cap were not attempted.")
-    notes.append("Report includes at most 100 result rows and 2000 characters per text field; native summary.json retains full discovery output.")
+    retention = ("native summary.json retains full discovery output" if summary_path is not None
+                 else "no native discovery summary was recorded for this result")
+    notes.append("Report includes at most 100 result rows and 2000 characters per text field; " + retention + ".")
     artifacts = [{"path": str(path)} for path in (findings_path, summary_path) if path is not None]
     return NativeResult("sca-fix-diff", str(findings_path) if findings_path else "explicit CVE selection", "sca-fix-diff",
                         {"results": rows, "recorded counts": metrics, "input error": error},
