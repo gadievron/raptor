@@ -1,5 +1,6 @@
 """Cgroup control protocol checks; these do not claim kernel enforcement."""
 import os
+from contextlib import ExitStack
 
 import pytest
 
@@ -13,8 +14,13 @@ def scope(tmp_path):
     (node / 'cgroup.events').write_text('populated 0\nfrozen 0\n')
     (node / 'cgroup.procs').touch()
     (node / 'cgroup.kill').touch()
-    result = cgroup_scope.Scope(node, os.open(node, os.O_RDONLY | os.O_DIRECTORY),
-                               os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY))
+    with ExitStack() as setup:
+        node_fd = os.open(node, os.O_RDONLY | os.O_DIRECTORY)
+        setup.callback(os.close, node_fd)
+        parent_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+        setup.callback(os.close, parent_fd)
+        result = cgroup_scope.Scope(node, node_fd, parent_fd)
+        setup.pop_all()
     try:
         yield result
     finally:
