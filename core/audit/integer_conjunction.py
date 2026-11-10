@@ -11,17 +11,17 @@ from .integer_comparison_model import COMPARISONS, ComparisonModel, UnsupportedC
 from .integer_condition import CONDITION_GOALS
 from .integer_conversion import _frame
 from .integer_goal import parse_integer_goal
-from .integer_literals import source_integer_atom
+from .integer_literals import integer_literal_value, source_integer_atom
 from .integer_witness import source_model_scope, validate_integer_witness
 
 _RELATIONS = {'<': {-1}, '<=': {-1, 0}, '>': {1}, '>=': {0, 1}, '==': {0}, '!=': {-1, 1}}
 
 
-def _shape(node, data, *, selected=True):
+def _shape(node, data, *, selected=True, logical_operator='&&'):
     def text(item):
         return data[item.start_byte:item.end_byte].decode() if item is not None else ''
 
-    if node is None or node.type != 'binary_expression' or text(node.child_by_field_name('operator')) != '&&':
+    if node is None or node.type != 'binary_expression' or text(node.child_by_field_name('operator')) != logical_operator:
         return None
     if selected:
         current, parent = node, node.parent
@@ -52,7 +52,7 @@ def _shape(node, data, *, selected=True):
     return tuple(leaves)
 
 
-def _claim(hypothesis, language, abi):
+def _claim(hypothesis, language, abi, logical_operator):
     expression = hypothesis.split('`')[1]
     if len(expression) > 512:
         return None
@@ -64,7 +64,7 @@ def _claim(hypothesis, language, abi):
     if len(statements) != 1 or statements[0].type != 'return_statement':
         return None
     values = [n for n in statements[0].named_children if n.type != 'comment']
-    return _shape(_unwrap(values[0]), data, selected=False) if len(values) == 1 else None
+    return _shape(_unwrap(values[0]), data, selected=False, logical_operator=logical_operator) if len(values) == 1 else None
 
 
 def conjunction_candidates(source, *, language, integer_abi):
@@ -90,25 +90,60 @@ def conjunction_candidates(source, *, language, integer_abi):
     return candidates
 
 
-def check_integer_conjunction(source, hypothesis, *, language, integer_abi):
+def disjunction_candidates(source, *, language, integer_abi):
+    """Pure complementary relations or unequal exclusions in one common frame."""
+    frame = _frame(source, integer_abi, language)
+    if frame is None:
+        return []
+    data, _, nodes = frame
+    candidates = []
+    for node in nodes:
+        leaves = _shape(node, data, logical_operator='||')
+        if leaves is None:
+            continue
+        left, right = leaves
+        atoms = [left[0], left[2], right[0], right[2]]
+        model = model_for_integer_terms(node, data, atoms, (), integer_abi, language=language)
+        if model.status != 'bound':
+            continue
+        kinds = [common_integer_type([a, b], model.types, integer_abi) for a, _, b in leaves]
+        if any(kind is None for kind in kinds) or kinds[0] != kinds[1]:
+            continue
+        same_operands = (left[0], left[2]) == (right[0], right[2])
+        complementary = same_operands and _RELATIONS[left[1]] | _RELATIONS[right[1]] == {-1, 0, 1}
+        constants = [integer_literal_value(leaf[2]) for leaf in leaves]
+        exclusions = (left[0] == right[0] and left[1] == right[1] == '!='
+                      and integer_literal_value(left[0]) is None and all(value is not None for value in constants))
+        if exclusions:
+            kind = kinds[0]
+            exclusions = constants[0] % (1 << kind.width) != constants[1] % (1 << kind.width)
+        if complementary or exclusions:
+            candidates.append((node, leaves))
+        if len(candidates) >= 16:
+            break
+    return candidates
+
+
+def _check_boolean_condition(source, hypothesis, *, language, integer_abi, logical_operator):
     """Check nonvacuous constant truth with per-comparison C conversions."""
     unavailable = {'comparison_status': 'unavailable', 'matches_claim': None, 'entry_witness_validated': False}
     goal = parse_integer_goal(hypothesis, CONDITION_GOALS)
     if goal is None or not z3_available():
         return unavailable
-    wanted = _claim(hypothesis, language, integer_abi)
+    wanted = _claim(hypothesis, language, integer_abi, logical_operator)
     frame = _frame(source, integer_abi, language) if wanted is not None else None
     if frame is None:
         return unavailable
     data, body, nodes = frame
-    matches = [node for node in nodes if _shape(node, data) == wanted]
+    matches = [node for node in nodes if _shape(node, data, logical_operator=logical_operator) == wanted]
     if len(matches) != 1:
         return unavailable
     target = matches[0]
     model = ComparisonModel(target, data, integer_abi, language)
     try:
         # Every selected leaf is pure and total before guards may skip its subtree.
-        condition = z3.And(*(model.predicate(*leaf) for leaf in wanted))
+        combine = z3.And if logical_operator == '&&' else z3.Or
+        condition = combine(*(model.predicate(*leaf) for leaf in wanted))
         names = tuple(model.registry)
         guards = guards_for_operation(body, target, data, names, language=language,
                                       integer_abi=integer_abi, selected_condition=True)
@@ -119,7 +154,8 @@ def check_integer_conjunction(source, hypothesis, *, language, integer_abi):
         constraints.extend(model.storage_constraints())
     except (UnsupportedComparison, ValueError, TypeError):
         return unavailable
-    details = {**unavailable, 'comparison_status': 'checked', 'checked_property': 'constant-integer-conjunction',
+    property_name = 'conjunction' if logical_operator == '&&' else 'disjunction'
+    details = {**unavailable, 'comparison_status': 'checked', 'checked_property': 'constant-integer-' + property_name,
                **source_model_scope()}
     requested = goal == 'true'
     with query_budget(DEFAULT_TIMEOUT_MS):
@@ -132,7 +168,8 @@ def check_integer_conjunction(source, hypothesis, *, language, integer_abi):
                                           tuple(model.types.items()), (), integer_abi)
         if values is None or any(not model.evaluate(*parts, values) for parts in premises):
             return details
-        if all(model.evaluate(*leaf, values) for leaf in wanted) != requested:
+        replay = all if logical_operator == '&&' else any
+        if replay(model.evaluate(*leaf, values) for leaf in wanted) != requested:
             return {**details, 'matches_claim': False}
         solver.add(z3.Not(condition) if requested else condition)
         contrary = check_solver(solver)
@@ -143,5 +180,15 @@ def check_integer_conjunction(source, hypothesis, *, language, integer_abi):
     return {**details, 'matches_claim': True, 'constant_truth': requested,
             'entry_witness_validated': True, 'entry_witness': values,
             'source_operation': {'line': target.start_point[0] + 1, 'column': target.start_point[1] + 1,
-                                 'operator': '&&', 'comparisons': [list(leaf) for leaf in wanted],
+                                 'operator': logical_operator, 'comparisons': [list(leaf) for leaf in wanted],
                                  'types': dict(model.types), 'premises': list(guards.premises)}}
+
+
+def check_integer_conjunction(source, hypothesis, *, language, integer_abi):
+    """Check the exact whole-if conjunction without weakening its entry frame."""
+    return _check_boolean_condition(source, hypothesis, language=language, integer_abi=integer_abi, logical_operator='&&')
+
+
+def check_integer_disjunction(source, hypothesis, *, language, integer_abi):
+    """Check the exact whole-if disjunction with independent per-leaf replay."""
+    return _check_boolean_condition(source, hypothesis, language=language, integer_abi=integer_abi, logical_operator='||')

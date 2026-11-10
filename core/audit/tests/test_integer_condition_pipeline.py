@@ -26,7 +26,7 @@ def test_source_truth_receipt_binds_new_goal_and_actual_ast():
     assert result.details['constant_truth'] is False and result.details['entry_witness_validated']
     assert result.details['checked_property']=='constant-bitwise-condition'
     assert result.details['source_scope']==source_binding(SOURCE,'Read',verb=VERB,hypothesis=CLAIM,integer_abi='lp64')
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v6'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v7'
 
 @pytest.mark.parametrize('suffix',['',':witness',':model',':unknown'])
 def test_constant_condition_is_not_defect_intent_or_function_refutation(suffix):
@@ -66,5 +66,5 @@ def test_real_confined_actual_condition_receipt():
     result=sweep.run_smt_verb_direct(file_path='unit.c',function_name='Read',verb=VERB,source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
     assert result.details['constant_truth'] is False and result.details['entry_witness_validated']
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v6'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v7'
     assert result.details['checked_property']=='constant-bitwise-condition'
