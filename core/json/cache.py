@@ -591,7 +591,7 @@ class JsonCache:
                 "ttl_seconds": envelope.ttl_seconds,
                 "value": envelope.value,
             }, allow_nan=False)
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, RecursionError) as e:
             # Caller passed a non-JSON-serialisable value (datetime,
             # NaN). Cache degrades, never crashes the consumer.
             logger.warning("core.json.cache: failed to write %s: %s", path, e)
