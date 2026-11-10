@@ -181,6 +181,43 @@ public class H {
 
 
 class TestRowsAndScan:
+    @pytest.mark.parametrize("outside", [False, True])
+    def test_scan_tree_symlink_stays_within_root(self, tmp_path, outside):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        target = (tmp_path if outside else repo) / "owned-source.txt"
+        target.write_text(_PKG + '''
+class H {
+    public String grab(HttpServletRequest request) {
+        return request.getQueryString();
+    }
+}
+''')
+        (repo / "Linked.java").symlink_to(target)
+        summaries, refusals, scanned = scan_tree(repo)
+        assert scanned == 1
+        assert [s.owner for s in summaries] == ([] if outside else ["H"])
+        assert refusals == ({"unreadable": 1} if outside else {})
+
+    @pytest.mark.parametrize("overflow", [False, True])
+    def test_scan_tree_source_byte_budget(self, tmp_path, monkeypatch, overflow):
+        from core.analysis import java_source_summaries as stage
+
+        source = (_PKG + '''
+class H {
+    public String grab(HttpServletRequest request) {
+        return request.getQueryString();
+    }
+}
+''').encode("utf-8")
+        cap = len(source) + 16
+        monkeypatch.setattr(stage, "DEFAULT_MAX_SOURCE_CHARS", cap)
+        (tmp_path / "H.java").write_bytes(source + b" " * (16 + int(overflow)))
+        summaries, refusals, scanned = scan_tree(tmp_path)
+        assert scanned == 1
+        assert [s.owner for s in summaries] == ([] if overflow else ["H"])
+        assert refusals == ({"source_cap_hit": 1} if overflow else {})
+
     def test_rows_validate_for_java(self):
         from core.dataflow.extension_pack import _validate
         s, _ = _summaries(_PKG + """

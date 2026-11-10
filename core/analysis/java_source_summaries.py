@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
+
 # Shared parsing bones (deliberate private-name imports; the summary
 # modules form one family — see java_wrapper_summaries).
 from core.analysis.java_wrapper_summaries import (
@@ -367,7 +369,8 @@ def scan_tree(
 
     Returns ``(summaries, refusal_counts, files_scanned)``. Hidden,
     build, and test trees are skipped; the file cap is loud in the
-    counts (``file_cap_hit``).
+    counts (``file_cap_hit``). Reads stay within the source root and
+    refuse files beyond the shared source-byte budget (``source_cap_hit``).
     """
     skip_parts = {".git", "target", "build", "out", "node_modules", "test",
                   "tests", ".idea"}
@@ -390,11 +393,15 @@ def scan_tree(
             refusals["file_cap_hit"] = refusals.get("file_cap_hit", 0) + 1
             break
         scanned += 1
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        content = read_contained_bytes(root_path, path.absolute(), DEFAULT_MAX_SOURCE_CHARS)
+        if content is None:
             refusals["unreadable"] = refusals.get("unreadable", 0) + 1
             continue
+        data, truncated = content
+        if truncated:
+            refusals["source_cap_hit"] = refusals.get("source_cap_hit", 0) + 1
+            continue
+        text = data.decode("utf-8", errors="replace")
         if "ServletRequest" not in text:
             continue        # cheap pre-filter: no receiver type mentioned
         r = derive_source_summaries(text)
