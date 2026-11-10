@@ -1639,7 +1639,7 @@ def _python_operator_dispatch(node: ast.AST) -> bool:
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
     return _python_operator_dispatch(node) or isinstance(
-        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While)
+        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While, ast.For)
     ) or bool(
         getattr(node, "decorator_list", [])
     ) or any(_python_operator_dispatch(part)
