@@ -195,6 +195,8 @@ language splices).
 
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import re
 import unicodedata
 from bisect import bisect_left
@@ -426,6 +428,8 @@ def _build_view(
 ) -> str:
     if not source:
         return source
+    if reasons is not None and java_unicode_unverified(source, language=language, file_path=file_path):
+        reasons.add(JAVA_UNICODE_UNVERIFIED)
     if language:
         lang = language.lower()
         if lang == "lua":

@@ -64,6 +64,8 @@ suppression through it).
 """
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import logging
 from dataclasses import dataclass
 from typing import (
@@ -1636,6 +1638,9 @@ def build_java_intraproc_cfg(
     ``parser.parse()``.  Internal optimisation for the finding
     resolver (one parse per finding instead of two).
     """
+    if java_unicode_unverified(source_text, language="java"):
+        logger.debug("%s: Java CFG source mapping unavailable", JAVA_UNICODE_UNVERIFIED)
+        return None
     if _ts_tree is not None:
         tree = _ts_tree
     else:

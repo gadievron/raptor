@@ -40,6 +40,8 @@ assertion.
 
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import json
 import re as _re
 from collections.abc import Callable
@@ -225,6 +227,8 @@ def _find_best_validator_line(
         ``sink_line``, pick the closest.
       * Returns ``None`` if no usable occurrence exists.
     """
+    if java_unicode_unverified(source_text, language=language):
+        return None
     needle = claimed_line_text.strip()
     if not needle:
         return None
@@ -769,6 +773,12 @@ def try_tier1b(
             f"Tier 1B: could not read source {sink_uri!r}",
         )
     source_text = got[0]
+    if java_unicode_unverified(source_text, language=language):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            JAVA_UNICODE_UNVERIFIED + ": raw Java source has no verified translation mapping",
+            spec=spec, extras={"unverified_source_profile": JAVA_UNICODE_UNVERIFIED},
+        )
 
     if language == "python" and spec.kind in ("charset", "charset_sub", "known_safe_call"):
         library_root = ("re" if spec.kind != "known_safe_call"

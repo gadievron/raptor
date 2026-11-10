@@ -43,6 +43,8 @@ core.inventory). The pipeline hook lives in
 
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import ast
 import re as _re
 import threading
@@ -326,6 +328,8 @@ def _step_refutes_path(
     """Full soundness pipeline for one lifted validator on one path:
     dominance (same file, patch-flow AST machinery), value-chain
     reach, then the language-emptiness proof for every sink class."""
+    if java_unicode_unverified(source_text, language=language):
+        return False, JAVA_UNICODE_UNVERIFIED + ": source mapping unavailable", 0.0
     if step_file != sink_file:
         return False, "validator and sink in different files", 0.0
     if language == "python" and repo_root is not None:
