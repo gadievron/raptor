@@ -121,7 +121,7 @@ def test_validate_kind_entries_document_raising_semantics():
 def test_html_escape_declares_exact_string_input_contract():
     entry = ksc.find("html.escape", "xss", "python")
     assert entry is not None and entry.requires_exact_str is True
-    for library, sink_class in (("shlex.quote", "cmdi"), ("markupsafe.escape", "xss")):
+    for library, sink_class in (("shlex.quote", "cmdi"), ("markupsafe.escape", "xss"), ("django.utils.html.escape", "xss")):
         scoped = ksc.find(library, sink_class, "python")
         assert scoped is not None and scoped.requires_exact_str is True
     normaliser = ksc.find("werkzeug.utils.secure_filename", "pathtrav", "python")

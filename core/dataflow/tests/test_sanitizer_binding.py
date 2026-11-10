@@ -125,7 +125,7 @@ def test_dotted_callable_name_resolution():
     )
     b = _single(_bindings(src))
     assert b.callable == "django.utils.html.escape"
-    assert b.unverified_source_contracts == frozenset()
+    assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
     assert b.input_symbols == frozenset({"x"})
     assert b.output_symbols == frozenset({"y"})
 
