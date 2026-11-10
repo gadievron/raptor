@@ -57,13 +57,15 @@ def test_checker_receipt_reuses_serialized_result_and_retains_native_exit_zero(t
 
 
 @isolated_cli_logging()
-def test_provenance_refusal_receipt_still_precedes_llm(tmp_path, monkeypatch):
+def test_provenance_refusal_receipt_still_precedes_llm(tmp_path, monkeypatch, capsys):
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setattr(bridge, "_build_llm", lambda: pytest.fail("provenance first"))
     assert bridge.cli_main([str(empty), "--repo", str(tmp_path), "--report-format", "json"]) == 2
     context, _, _ = load_committed_report(empty / "checkers-bridge")
     assert context.state == "failed" and context.extensions["raptor.metrics"]["Derived seeds"] is None
+    assert capsys.readouterr().out == ""
+    assert not any("Native JSON/rule files remain" in note for note in context.diagnostics)
 
 
 @isolated_cli_logging()
@@ -74,6 +76,7 @@ def test_unavailable_llm_receipt_does_not_synthesise(tmp_path, monkeypatch):
     assert bridge.cli_main([str(output), "--repo", str(tmp_path), "--report-format", "json"]) == 3
     context, _, _ = load_committed_report(output / "checkers-bridge")
     assert context.state == "failed" and context.extensions["raptor.result"]["native exit status"] == 3
+    assert not any("Native JSON/rule files remain" in note for note in context.diagnostics)
 
 
 @isolated_cli_logging()
@@ -102,6 +105,7 @@ def test_checker_capture_bounds_preserve_full_counts_and_native_payload(tmp_path
     assert payload["recorded counts"]["Recorded promoted rule IDs"] == 2
     assert "body" not in payload["results"][0]["rule"]
     assert len(native["results"]) == 2 and "body" in native["results"][0]["rule"]
+    assert any("Native JSON/rule files remain" in note for note in context.diagnostics)
 
 
 def test_checker_report_preflight_precedes_provenance(tmp_path, monkeypatch):
