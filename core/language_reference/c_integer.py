@@ -67,6 +67,28 @@ ENTRIES = (
         ("c.integer-promotion",),
     ),
     ReferenceEntry(
+        "c.integer-shift", 1, "c", ("c11",),
+        "Shift operands and counts",
+        ("shift", "shifts", "left", "right", "count", "promotion"),
+        "Count validity and shifted values depend on independently promoted operands.",
+        "Both operands must be integers. Promote each independently; the result "
+        "uses the promoted left type. A negative count or a count not below that "
+        "type's width makes behaviour undefined. Unsigned left shift scales by "
+        "two to the count, reducing modulo one plus the result maximum. Signed "
+        "left shift requires a nonnegative left value and a scaled value "
+        "representable in the result type; otherwise behaviour is undefined. "
+        "Right shift of unsigned or nonnegative signed values yields the "
+        "truncated quotient by that power of two. Negative signed right shift "
+        "is implementation-defined.",
+        ("Shifts do not apply the usual common-type arithmetic conversions.",
+         "Compound shifts evaluate the left lvalue once and convert for assignment; check atomic and concurrency semantics separately.",
+         "These C11 conditions do not establish target applicability or safe operand ranges."),
+        ("configured language edition", "promoted operand types", "promoted-left width and range",
+         "operand values", "implementation choice for negative signed right shift"),
+        (_N1570 + " sections 6.5.7, 6.3.1.1 and 6.5.16.2",),
+        ("c.integer-promotion", "c.integer-conversion"),
+    ),
+    ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
         "Integer arithmetic definedness",
         ("overflow", "wrap", "wrapping", "definedness", "undefined", "arithmetic"),
