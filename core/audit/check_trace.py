@@ -410,9 +410,13 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         if not events_available:
             raise ValueError("authenticated audit observations unavailable")
         claim_observations, quarantined_claims, claim_admission = _admit_claim_events(events)
+        from .claim_observations import index_claim_observations
+
+        claim_index = index_claim_observations(claim_observations, checks)
         save_json(out_dir / CLAIM_OBSERVATIONS_FILENAME, {
             "schema_version": 1, "role": "unadjudicated_observation", "history_complete": False,
             "claim_observations": claim_observations,
+            "claim_index": claim_index, "producer_checks_artifact": artifact,
             "quarantined_claim_observations": quarantined_claims,
             "event_admission": claim_admission,
             "limitations": [
@@ -421,6 +425,7 @@ def write_check_results(export: dict, out_dir: Path) -> None:
                 "Lineage describes intake history, not fresh source or binary image identity.",
                 "Missing or partial statements and metadata remain unavailable.",
                 "Proposed refutations and receipt labels confer no verdict authority.",
+                "Revision definitions and producer links are correspondence only, not adjudicated support.",
             ],
         })
         claim_artifact = CLAIM_OBSERVATIONS_FILENAME

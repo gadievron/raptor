@@ -391,6 +391,7 @@ concerns or incomplete coverage.
 | `findings.json` | Findings for review and `/validate` |
 | `findings-graded.json` | Graded findings with a per-finding `verification_trace`: claim, scope, evidence markers, recorded tool states, scoped checks, assumptions, and evidence limitations |
 | `verification-checks.json` | Retained tool-chain check observations: original claim and source identity, effective outcome, rule, reason, parameters, and checker payload |
+| `claim-observations.json` | Unadjudicated claim history, revision conflicts, and links to recorded checker observations |
 | `review-journal.jsonl` | Per-function decisions, hypotheses, tools, and costs |
 | `gaps.json` | Functions selected for review in this run |
 | `.audit-log.jsonl` | Detailed event trail; large logs may have numbered sibling files |
@@ -414,6 +415,13 @@ unserializable payloads are marked incomplete. These are recorded observations,
 not an exhaustive check history or a fresh validation of the source. Checks
 outside the recorded tool-chain path and results from older runs can remain
 unavailable.
+
+Use `claim-observations.json` to inspect hypotheses considered before verdict
+selection, including untested claims and proposed refutations. Its index links
+claim revisions to recorded checker observations when an exact match is
+available. Incomplete inputs remain unavailable; conflicting revisions remain
+quarantined for inspection. This is review history, not additional findings or
+proof that a claim is correct.
 
 The graded JSON's `verification_summary` counts findings with and without
 matching observations, separates other claims and unlinked records, and

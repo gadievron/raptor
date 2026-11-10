@@ -816,3 +816,55 @@ def test_claim_history_does_not_expand_checker_artifact(tmp_path):
     assert (tmp_path / "verification-checks.json").read_bytes() == before
     claims = json.loads((tmp_path / "claim-observations.json").read_text())
     assert len(claims["claim_observations"]) == 1
+
+
+def test_normal_export_indexes_revision_without_promoting_raw_checks(tmp_path):
+    from core.audit.claims import ClaimRevision
+    from core.audit.claim_verification import ClaimVerification
+
+    hyp = {"mechanism": "Fixture assertion"}
+    revision = ClaimRevision(hyp, pass_id="intake", file="a.c", function="f", line_start=1)
+    producer = ToolChainResult(file="a.c", function="f", line_start=1, hypothesis=hyp["mechanism"],
+                               claim_revision=revision)
+    check_trace.record_claim_observations(tmp_path, file="a.c", function="f", line_start=1,
+        verifications=[ClaimVerification(hyp, claim_revision=revision)])
+    check_trace.record_check_observation(tmp_path, producer, tool="semgrep", verdict="confirmed",
+                                       rule_id="fixture", result=_result(FIXTURES[0]))
+    finding = ReviewOutcome(file="a.c", function="f", line=1, status="suspicious", body="Fixture",
+                            hypothesis=hyp["mechanism"])
+    write_graded_findings(export_findings([finding]), tmp_path)
+    claims = json.loads((tmp_path / "claim-observations.json").read_text())
+    checks = json.loads((tmp_path / "verification-checks.json").read_text())
+    indexed, = claims["claim_index"]["claims"]
+    assert indexed["claim_reference"] == revision.event_reference()
+    assert indexed["producer_check_ids"] == [checks["checks"][0]["id"]]
+    assert indexed["adjudication"] == "unadjudicated"
+    assert "hypothesis" not in indexed and "statement" not in indexed
+    assert claims["producer_checks_artifact"] == "verification-checks.json"
+    assert finding.status == "suspicious"
+
+
+def test_conflicting_revision_definitions_do_not_change_checker_export(tmp_path):
+    from copy import deepcopy
+    from uuid import uuid4
+    from core.audit.claims import ClaimRevision
+    from core.audit.claim_verification import ClaimVerification
+    from core.audit.record import append_audit_log, load_verified_audit_log
+
+    hyp = {"mechanism": "Fixture assertion"}
+    revision = ClaimRevision(hyp, pass_id="intake", file="a.c", function="f", line_start=1)
+    check_trace.record_claim_observations(tmp_path, file="a.c", function="f", line_start=1,
+        verifications=[ClaimVerification(hyp, claim_revision=revision)])
+    original = load_verified_audit_log(tmp_path)[0]
+    variant = deepcopy({k: v for k, v in original.items() if k != "integrity"})
+    variant["id"] = uuid4().hex
+    variant["observations"]["data"]["details"][0]["hypothesis"]["mechanism"] = "different concern"
+    append_audit_log(tmp_path, variant)
+    _record(tmp_path, FIXTURES[0])
+    write_graded_findings(export_findings([]), tmp_path)
+    claims = json.loads((tmp_path / "claim-observations.json").read_text())
+    assert claims["claim_index"]["claims"] == []
+    quarantine, = claims["claim_index"]["quarantined_revisions"]
+    assert quarantine["revision_id"] == revision.revision_id
+    assert len(claims["claim_observations"]) == 2
+    assert len(json.loads((tmp_path / "verification-checks.json").read_text())["checks"]) == 1
