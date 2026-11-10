@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 #   // nosemgrep
 _NOSEMGREP_RE = re.compile(
     r"""(?://|[#]|/\*)       # comment opener
-        \s*nosemgrep         # keyword
+        \s*(?ai:nosem(?:grep)?)  # ASCII keyword aliases, case-insensitive
         (?::[ \t]*           # optional colon + rule list
           ([\w.:/-]+(?:[ \t]*,[ \t]*[\w.:/-]+)*)  # group 1: rule IDs
         )?

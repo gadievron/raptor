@@ -528,6 +528,11 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
         "subject(value) # nosemgrep\n"
         "# nosemgrep: group.alpha\n"
         "subject(value) # nosemgrep: group.beta\n"
+        "subject(value) # nosem: group.alpha\n"
+        "subject(value) # NOSEMGREP: group.alpha\n"
+        "subject(value) # NoSeM: group.alpha\n"
+        "subject(value) # NOSEM\n"
+        "subject(value) # NoSeMgReP\n"
     )
     command = ["semgrep", "scan", "--config", str(config), "--metrics", "off",
                "--disable-version-check", "--jobs", "1"]
@@ -552,7 +557,7 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
                     for result in rows}
     active = {(result["check_id"], result["start"]["line"])
               for result in native_data["results"]}
-    assert len(rows) == len(all_findings) == 27
+    assert len(rows) == len(all_findings) == 42
     expected_suppressed = all_findings - active
     assert expected_suppressed and active
     assert annotate_sarif(sarif, str(tmp_path)) == len(expected_suppressed)
@@ -565,6 +570,25 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
     report = tmp_path / "annotated.sarif"
     report.write_text(json.dumps(sarif))
     metrics = generate_scan_metrics([str(report)])
-    assert metrics["total_findings"] == 27
+    assert metrics["total_findings"] == 42
     assert metrics["nosemgrep_suppressed_count"] == len(expected_suppressed)
     assert metrics["total_findings"] - metrics["nosemgrep_suppressed_count"] == len(active)
+
+
+@pytest.mark.parametrize("marker", ["nosem", "NOSEM", "NoSeM", "NOSEMGREP", "NoSeMgReP"])
+def test_native_marker_aliases_keep_rule_scope(tmp_path, marker):
+    (tmp_path / "a.py").write_text(f"subject(value) # {marker}: test.rule\n")
+    matching = _make_result("a.py", 1)
+    other = _make_result("a.py", 1)
+    other["ruleId"] = "other.rule"
+    sarif = _make_sarif_data([matching, other])
+    assert annotate_sarif(sarif, str(tmp_path)) == 1
+    assert matching["properties"]["nosemgrep"]["rule_ids"] == ["test.rule"]
+    assert "nosemgrep" not in other.get("properties", {})
+
+
+@pytest.mark.parametrize("marker", ["nosemgrepx", "nosem_not", "xNOSEM"])
+def test_marker_alias_requires_complete_keyword(tmp_path, marker):
+    source = tmp_path / "a.py"
+    source.write_text(f"subject(value) # {marker}: test.rule\n")
+    assert extract_nosemgrep(source, 1) is None
