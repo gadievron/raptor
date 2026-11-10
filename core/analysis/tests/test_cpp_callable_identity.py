@@ -10,10 +10,10 @@ pytest.importorskip("tree_sitter_cpp")
 BASE = "extern char *g_shell_quote(const char *);\nextern char *replacement(const char *);\nextern void consume(const char *);\n"
 
 
-def _check(prefix="", before="", params="", expression="g_shell_quote(raw)", language="c", nested=False):
+def _check(prefix="", before="", params="", expression="g_shell_quote(raw)", language="c", nested=False, base=BASE, after="", between=""):
     body = (f"void handle(char *raw{params}) {{\n" + before +
-            f"    char *safe = {expression};\n    consume(safe);\n}}\n")
-    source = BASE + prefix + ("namespace own {\n" + body + "}\n" if nested else body)
+            f"    char *safe = {expression};\n" + between + "    consume(safe);\n}\n")
+    source = base + prefix + ("namespace own {\n" + body + "}\n" if nested else body) + after
     graph = build_cpp_intraproc_cfg(source, "handle", language=language)
     assert graph is not None
     sink = next(node for node in graph.nodes() if "consume" in node.calls)
@@ -87,3 +87,80 @@ def test_prototype_parameter_cannot_vouch_a_later_global_store(language):
     assert graph is not None
     store = next(node for node in graph.nodes() if "saved" in node.defs)
     assert store.may_escape
+
+
+NO_LIBRARY_PROTOTYPE = "extern char *replacement(const char *);\nextern void consume(const char *);\n"
+OWN_NAMESPACE = "namespace own { char *g_shell_quote(const char *raw) { return (char *)raw; } }\n"
+
+
+@pytest.mark.parametrize("prefix", [
+    OWN_NAMESPACE + "using own::g_shell_quote;\n",
+    OWN_NAMESPACE + "using namespace own;\n",
+    OWN_NAMESPACE + "namespace alias = own; using namespace alias;\n",
+    "using g_shell_quote = char *;\n",
+    "typedef char *g_shell_quote;\n",
+    "typedef char *Other, *g_shell_quote;\n",
+    "struct g_shell_quote { g_shell_quote(char *); operator char *() const; };\n",
+], ids=["using-declaration", "using-namespace", "namespace-alias", "type-alias", "typedef", "multi-typedef", "constructor-type"])
+def test_global_imports_and_aliases_do_not_establish_library_identity(prefix):
+    graph, result = _check(prefix, language="cpp", base=NO_LIBRARY_PROTOTYPE)
+    assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+    assert not result.suppress
+
+
+@pytest.mark.parametrize("before", [
+    "    using own::g_shell_quote;\n", "    using namespace own;\n",
+    "    using g_shell_quote = char *;\n", "    typedef char *g_shell_quote;\n",
+], ids=["using-declaration", "using-namespace", "type-alias", "typedef"])
+def test_local_imports_and_aliases_are_positionally_untrusted(before):
+    graph, result = _check(OWN_NAMESPACE, before, language="cpp", base=NO_LIBRARY_PROTOTYPE)
+    assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+    assert not result.suppress
+
+
+@pytest.mark.parametrize("before", [
+    "    { using namespace own; }\n", "    { using own::g_shell_quote; }\n",
+    "    { using g_shell_quote = char *; }\n", "    { typedef char *g_shell_quote; }\n",
+    "    using ::g_shell_quote;\n",
+], ids=["expired-namespace", "expired-using", "expired-type-alias", "expired-typedef", "global-qualification"])
+def test_expired_or_global_identity_aliases_preserve_library_control(before):
+    _, result = _check(OWN_NAMESPACE, before, language="cpp")
+    assert result.suppress
+
+
+def test_unrelated_using_declaration_does_not_poison_library_call():
+    prefix = "namespace own { void helper(void); } using own::helper;\n"
+    _, result = _check(prefix, language="cpp")
+    assert result.suppress
+
+
+def test_sibling_namespace_import_does_not_escape_its_function():
+    prefix = OWN_NAMESPACE + "void sibling(void) { using namespace own; }\n"
+    _, result = _check(prefix, language="cpp")
+    assert result.suppress
+
+
+@pytest.mark.parametrize("before", [
+    "    typedef char *Other, *g_shell_quote;\n",
+    "    struct g_shell_quote { g_shell_quote(char *); operator char *() const; };\n",
+], ids=["multi-typedef", "constructor-type"])
+def test_additional_local_alias_shapes_are_not_library_functions(before):
+    graph, result = _check(before=before, language="cpp", base=NO_LIBRARY_PROTOTYPE)
+    assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
+    assert not result.suppress
+
+
+def test_later_global_namespace_import_does_not_rewrite_earlier_lookup():
+    _, result = _check(OWN_NAMESPACE, language="cpp", after="using namespace own;\n")
+    assert result.suppress
+
+
+def test_later_local_namespace_import_does_not_rewrite_allocating_call():
+    _, result = _check(OWN_NAMESPACE, language="cpp", between="    using namespace own;\n")
+    assert result.suppress
+
+
+def test_unrelated_class_method_name_does_not_shadow_global_function():
+    prefix = "struct Other { char *g_shell_quote(const char *); };\n"
+    _, result = _check(prefix, language="cpp")
+    assert result.suppress
