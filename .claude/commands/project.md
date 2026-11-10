@@ -53,6 +53,11 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `unset <key> [<name>]` | Remove a setting |
 | `get <key> [<name>]` | Print one setting's bare value (exit 1 when unset) |
 
+Unsigned project imports retain canonical analysis graph databases, SQLite
+sidecars and validation outcome files under `_imported-quarantine/`. They are
+not restored as locally earned validation evidence. Graph rebuild can use the
+remaining run artefacts; it does not replay the quarantine.
+
 ## Trust markers — consumer doctrine
 
 **Trust markers** are operator assertions persisted on the project (never
