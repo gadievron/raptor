@@ -285,9 +285,9 @@ class TestDirReaping:
         # blows past it. Same workaround as test_proxy_netns_enforcement.
         import tempfile
         short_root = tempfile.mkdtemp(prefix="rpt_", dir="/tmp")
-        monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: short_root)
-        monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
         try:
+            monkeypatch.setattr(_tempfile_owner.tempfile, 'gettempdir', lambda: short_root)
+            monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
             d = _make_old_dir(Path(short_root),
                               "raptor-llm-raptor-cafe0004-livesk")
             srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
