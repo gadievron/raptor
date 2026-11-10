@@ -126,7 +126,9 @@ class TestTimeoutKillsTargetTree(unittest.TestCase):
                 capture_output=True, text=True,
             )
         time.sleep(1.5)
-        size_a = os.path.getsize(beat) if os.path.exists(beat) else 0
+        self.assertTrue(os.path.isfile(beat), "target never wrote a heartbeat")
+        size_a = os.path.getsize(beat)
+        self.assertGreater(size_a, 0, "target heartbeat is empty")
         time.sleep(2.5)
         size_b = os.path.getsize(beat) if os.path.exists(beat) else 0
         self.assertEqual(size_a, size_b, (
