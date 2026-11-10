@@ -19,6 +19,7 @@ class CommandCapability:
 
 
 CAPABILITIES = (
+    CommandCapability("gadget-scan", "gadget-oracle", "explicit destination or native --out required", "native text/JSON; snapshot summary on stderr", "captured hint witnesses and census only; native absence tier unchanged"),
     CommandCapability("sanitizer-cut-parity-report", "sanitizer-cut-parity", "explicit destination required", "native Markdown; snapshot summary on stderr", "one synthetic baseline capture; native gate preserved and not a real horizon window"),
     CommandCapability("trust-report --synth-db", "trust-corpus", "explicit destination required", "native text; requested snapshot summary on stderr", "single read-only query, source-read stage and unknown corpus completion; attempts are not measured tokens or money"),
     CommandCapability("scorecard-audit", "scorecard-audit", "explicit destination required", "native Markdown/JSON; requested quick summary on stderr", "calibration readiness and integrity flags; native green/amber/red/no-data gate retained"),
