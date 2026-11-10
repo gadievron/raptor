@@ -17,6 +17,7 @@ from typing import Any
 
 from core.audit._json_protocol import ALLOWED_ENTRIES, MAX_REQUEST_BYTES, MAX_REPLY_BYTES, decode, encode
 from core.sandbox import run as _sandbox_run
+from core.source.streams import preserving_stream_error
 
 from core.security.log_sanitisation import escape_nonprintable
 
@@ -63,6 +64,7 @@ def run_json_child(entry: str, request: Any, *, env: dict, timeout: int = 10, la
     child_env = {name: env.get(name, value) for name, value in safe.items()}
     child_env = RaptorConfig.strip_target_exec_markers(RaptorConfig.strip_llm_env_vars(child_env))
     cpu = max(1, math.ceil(timeout))
+    io_failed = False
     try:
         with tempfile.TemporaryDirectory(prefix='raptor-smt-child-', dir=subprocess_tmpdir()) as scratch:
             policy = inspection_options(None, sys.executable, scratch)
@@ -72,18 +74,24 @@ def run_json_child(entry: str, request: Any, *, env: dict, timeout: int = 10, la
             # Anonymous owned files avoid unbounded pipe buffering in backend
             # subprocess implementations. FSIZE bounds child-written storage;
             # only cap+1 stdout bytes and a diagnostic tail enter the parent.
-            with tempfile.TemporaryFile(dir=scratch) as output, tempfile.TemporaryFile(dir=scratch) as errors:
-                proc = _sandbox_run(command, **policy, env=child_env,
-                                    input=request_bytes, capture_output=False,
-                                    stdout=output, stderr=errors,
-                                    timeout=timeout, start_new_session=True,
-                                    limits=dict(memory_mb=_MEMORY_MB, cpu_seconds=cpu, max_file_mb=16))
-                output.seek(0)
-                reply = output.read(MAX_REPLY_BYTES + 1)
-                errors.seek(0, 2)
-                errors.seek(max(0, errors.tell() - 2048))
-                diagnostic = errors.read(2048)
+            with preserving_stream_error(tempfile.TemporaryFile(dir=scratch)) as output, \
+                    preserving_stream_error(tempfile.TemporaryFile(dir=scratch)) as errors:
+                try:
+                    proc = _sandbox_run(command, **policy, env=child_env,
+                                        input=request_bytes, capture_output=False,
+                                        stdout=output, stderr=errors,
+                                        timeout=timeout, start_new_session=True,
+                                        limits=dict(memory_mb=_MEMORY_MB, cpu_seconds=cpu, max_file_mb=16))
+                    output.seek(0)
+                    reply = output.read(MAX_REPLY_BYTES + 1)
+                    errors.seek(0, 2)
+                    errors.seek(max(0, errors.tell() - 2048))
+                    diagnostic = errors.read(2048)
+                except (OSError, subprocess.TimeoutExpired):
+                    io_failed = True
     except (OSError, subprocess.TimeoutExpired):
+        io_failed = True
+    if io_failed:
         logger.debug('SMT child unavailable or timed out (%s)', tag)
         return None
     if proc.returncode != 0:
