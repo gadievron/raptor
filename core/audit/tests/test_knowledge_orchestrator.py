@@ -44,13 +44,20 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
                     "reason": "Other users are not supplied", "material_ids": ["material-0"]}]}
             assert task == "audit"
             if sum(t == "audit" for t, _ in calls) == 1:
+                # Demand genuinely new material: the initial foundation already
+                # contains the promotion/conversion cores.
+                assert "c.integer-promotion v1:" in prompt
+                assert "c.integer-conversion v1:" in prompt
+                assert "c.integer-definedness v1:" not in prompt
                 payload = {"status": "suspicious", "body": "Length may wrap before its caller checks it.",
                     "hypothesis": "length wraps before caller validation", "confidence": "medium",
                     "reading_list": [{"subject": "foo_t", "resolution": "identifier", "context": "role of the target type"}],
-                    "language_reference_requests": [{"topic": "integer promotion"}]}
+                    "language_reference_requests": [{"topic": "integer arithmetic definedness",
+                                                      "entry_id": "c.integer-definedness"}]}
             else:
                 assert "The target type carries length" in prompt
-                assert "integer" in prompt.lower() and "language reference" in prompt.lower()
+                assert "c.integer-definedness v1:" in prompt
+                assert "language reference" in prompt.lower()
                 payload = {"status": second_status, "body": "The reviewer has reassessed it.",
                            "reading_list": [], "language_reference_requests": []}
                 if second_status == "suspicious":

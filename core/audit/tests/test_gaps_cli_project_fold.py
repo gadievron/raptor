@@ -26,6 +26,12 @@ from core.coverage.journal import (
     now_iso,
 )
 from core.staleness import hash_span
+from core.audit.context import format_context_for_prompt
+from core.audit.reference_foundation import foundation_answers
+from core.audit.reference_inputs import reference_inputs_from_delivery, review_context_digest
+from core.audit.review_context_inputs import context_inputs_from_sources
+from core.audit.refutation_source import capture_source_identity
+from core.audit.source_anchor import make_context_source_anchor
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
 
@@ -77,13 +83,33 @@ def gaps_env(tmp_path, monkeypatch):
     project = tmp_path / "project"
     run1 = project / "run1"
     run1.mkdir(parents=True)
+    # The indexed row represents a current C review, including the actual
+    # conditional reference core fitted by the real context renderer. The CLI
+    # continues to test its default policy rather than bypassing admission.
+    answers = foundation_answers("c", request_id="cli-foundation-fixture")
+    context = {"file": "auth.c", "function": "check_pw", "line_start": 1,
+               "line_end": 5, "source": _SOURCE, "language": "c",
+               "language_reference_answers": answers}
+    format_context_for_prompt(context, budget_limit=100_000)
+    references = reference_inputs_from_delivery(context["language_reference_delivery"], answers)
+    identity = capture_source_identity(target, "auth.c")
+    assert identity is not None
+    sources = context_inputs_from_sources((("target", "auth.c", identity.sha256),))
+    history = {"version": 1, "role": "review-history-only", "review": None,
+               "intakes": [], "complete": False, "omissions": [],
+               "source_inputs": sources, "reference_inputs": references}
+    digest = review_context_digest(sources, references)
+    assert digest is not None
+    source_hash = make_context_source_anchor(identity.sha256, hash_span(target / "auth.c", 1, 5),
+                                             digest, context_version=3)
     append_entry(run1, ReviewJournalEntry(
         ts=now_iso(),
         run_id="run1",
         file="auth.c",
         function="check_pw",
         verdict="clean",
-        source_hash=hash_span(target / "auth.c", 1, 5),
+        source_hash=source_hash,
+        review_claims=history,
         line_start=1,
         line_end=5,
     ))

@@ -205,6 +205,7 @@ def compute_gaps(
     seed_rereview_keys: set | None = None,
     current_tools: frozenset[str] | None = None,
     source_roots: dict[str, Path] | None = None,
+    require_c_foundation: bool = True,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -287,6 +288,11 @@ def compute_gaps(
             unchanged (they are ordinary gaps); ``None``/empty is
             byte-identical to today's behaviour.
 
+        require_c_foundation: Require current delivered C foundation entries
+            for model-review retirement. Human/operator review authority and
+            scanner/runtime observations keep their existing trust rules.
+            False explicitly selects the legacy review policy.
+
     Returns:
         List of gap dicts sorted by priority, each containing:
         - file, name, line_start, line_end, priority, strategies,
@@ -296,6 +302,7 @@ def compute_gaps(
         coverage_records,
         target_path=checklist.get("target_path", "") or "",
         checklist=checklist,
+        require_c_foundation=require_c_foundation,
     )
     # Span-bound credits from the hash-verified journal fold: each
     # verified per-site entry credits ITS OWN line_start under the
@@ -501,6 +508,7 @@ def compute_gaps(
         project_dir,
         target_path=Path(target_path_str) if target_path_str else None,
         source_roots=source_roots,
+        require_c_foundation=require_c_foundation,
         current_spans=current_spans,
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
@@ -2101,6 +2109,7 @@ def _build_covered_set(
     records: list[dict[str, Any]],
     target_path: str = "",
     checklist: dict[str, Any] | None = None,
+    *, require_c_foundation: bool = False,
 ) -> set:
     """Build set of file:function keys that have coverage.
 
@@ -2160,6 +2169,7 @@ def _build_covered_set(
     # (hash_spans batches the file read) and only for files that
     # actually have unstamped rows to verify.
     spans_by_file: dict[str, list[tuple[str, tuple[int, int]]]] = {}
+    binary_sites: set[tuple[str, str]] = set()
     files_val = (checklist or {}).get("files")
     for file_info in files_val if isinstance(files_val, list) else []:
         if not isinstance(file_info, dict):
@@ -2173,6 +2183,9 @@ def _build_covered_set(
                 continue
             name = item.get("name", "")
             ls = item.get("line_start", 0)
+            if (isinstance(name, str) and name and item.get("address") is not None
+                    and not (type(ls) is int and ls > 0)):
+                binary_sites.add((fp, name))
             if (name and isinstance(name, str) and isinstance(ls, int)
                     and not isinstance(ls, bool) and ls > 0):
                 le = item.get("line_end")
@@ -2215,6 +2228,7 @@ def _build_covered_set(
 
     covered = set()
     refused_rows = 0
+    old_c_policy_rows = 0
     legacy_shape_records = 0
     for record in records:
         # Runtime records (coverage-fuzz.json) never fold: a fuzzer
@@ -2256,6 +2270,16 @@ def _build_covered_set(
             if not (isinstance(file_path, str) and file_path
                     and isinstance(func_name, str) and func_name):
                 continue
+            binary_review = ((file_path, func_name) in binary_sites
+                             and isinstance(fa.get("hash"), str) and fa["hash"].startswith("bin:"))
+            if require_c_foundation and not binary_review and tool not in {"mark", "annotations"}:
+                from .reference_foundation import foundation_required_for_file
+                if foundation_required_for_file(file_path):
+                    # Model-review projections lose their delivered inputs.
+                    # Retain history, but obtain current-policy credit only
+                    # from an independently admitted journal occurrence.
+                    old_c_policy_rows += 1
+                    continue
             prov = journal_mac.coverage_row_provenance(fa, tool)
             if prov != journal_mac.ROW_VERIFIED:
                 if fa.get("status") in ("finding", "suspicious"):
@@ -2278,6 +2302,9 @@ def _build_covered_set(
                     )
                     continue
             covered.add(make_function_key(file_path, func_name))
+    if old_c_policy_rows:
+        logger.info("C reference policy: %d projected model reviews require a current source-bound journal; history retained",
+                    old_c_policy_rows)
     if refused_rows or legacy_shape_records:
         logger.warning(
             "coverage records: %d unverified functions_analysed row(s) "
@@ -2455,6 +2482,7 @@ def _fold_journal_into_covered(
     reuse_stats: dict | None = None,
     current_tools: frozenset[str] | None = None,
     source_roots: dict[str, Path] | None = None,
+    require_c_foundation: bool = False,
 ) -> None:
     """Fold review-journal entries into the covered-function set so
     LLM-reviewed functions suppress gaps mid-run.
@@ -2558,6 +2586,7 @@ def _fold_journal_into_covered(
                     _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
                     source_roots=source_roots,
+                    require_c_foundation=require_c_foundation,
                     current_spans=current_spans or {},
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
@@ -2608,6 +2637,7 @@ def _fold_journal_into_covered(
                     _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
                     source_roots=source_roots,
+                    require_c_foundation=require_c_foundation,
                     current_spans=current_spans or {},
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
@@ -2646,6 +2676,7 @@ def _fold_journal_into_covered(
                 covered, project_dir,
                 target_path=target_path,
                 source_roots=source_roots,
+                require_c_foundation=require_c_foundation,
                 current_spans=current_spans or {},
                 current_raw_ends=current_raw_ends or {},
                 site_raw_ends=site_raw_ends or {},
@@ -3321,6 +3352,7 @@ def _fold_project_index(
     context_barriers: _ContextReviewBarriers | None = None,
     full_entries: list | None = None,
     source_roots: dict[str, Path] | None = None,
+    require_c_foundation: bool = False,
 ) -> None:
     """Fold the project journal index into ``covered``, hash-aware.
 
@@ -3420,6 +3452,7 @@ def _fold_project_index(
         list(latest_function_grade_collapse(full_entries).values()),
         target_path=target_path,
         source_roots=source_roots,
+        require_c_foundation=require_c_foundation,
         current_spans=current_spans,
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
@@ -3492,6 +3525,7 @@ def _verify_entries_fold(
     current_tools: frozenset[str] | None = None,
     context_barriers: _ContextReviewBarriers | None = None,
     source_roots: dict[str, Path] | None = None,
+    require_c_foundation: bool = False,
 ) -> None:
     """Hash-verify journal *entries* and fold them into ``covered``.
 
@@ -3649,6 +3683,19 @@ def _verify_entries_fold(
             if reuse_stats is not None:
                 reuse_stats.setdefault(key, "review_context_inputs")
             return False
+        if require_c_foundation:
+            from .reference_foundation import foundation_required_for_file, review_has_current_foundation
+            producer = getattr(entry, "producer", None)
+            operator_review = ((producer == "mark" and getattr(entry, "model", None) == "operator")
+                               or producer == "annotations")
+            binary_review = (key in (binary_hashes or {}) and isinstance(entry.source_hash, str)
+                             and entry.source_hash.startswith("bin:"))
+            if (not operator_review and not binary_review and foundation_required_for_file(entry.file)
+                    and not review_has_current_foundation(getattr(entry, "review_claims", None))):
+                reuse_blocked["reference_foundation"] = reuse_blocked.get("reference_foundation", 0) + 1
+                if reuse_stats is not None:
+                    reuse_stats.setdefault(key, "reference_foundation")
+                return False
         return True
 
     to_verify: dict[str, list] = {}

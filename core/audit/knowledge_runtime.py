@@ -14,7 +14,7 @@ from functools import wraps
 from pathlib import Path
 from threading import Event, Lock, RLock
 from time import monotonic
-from uuid import uuid4
+from uuid import UUID, uuid4, uuid5
 from typing import TypedDict
 
 from core.concepts.subject_study import StudySubjects, SubjectExplanation
@@ -58,6 +58,7 @@ class AuditKnowledgeRuntime:
         self.deadline = deadline
         self.bindings = StudyInputBindings(self.target_root)
         self._lock = RLock()
+        self._foundation_namespace = uuid4().hex
         self._write_lock = Lock()
         self._wakeup = Event()
         self._required_calls = 1
@@ -176,6 +177,16 @@ class AuditKnowledgeRuntime:
                                          captured.line_start, captured.line_end, captured.source_identity)
             else:
                 origin = captured
+            from .reference_foundation import foundation_answers, foundation_required_for_file
+            owned_references = reservation.packet.references if reservation is not None else ()
+            if origin.source_identity is not None and foundation_required_for_file(origin.file):
+                foundation_id = "foundation:" + uuid5(UUID(self._foundation_namespace),
+                    repr((self._key(origin), origin.source_identity))).hex
+                initial_answers = foundation_answers(ctx.get("language"), request_id=foundation_id)
+                owned_references = (*owned_references, *initial_answers)
+            # These immutable answers have stable identities across the unit's
+            # panel. Shared compatibility fields never establish delivery.
+            ctx["language_reference_answers"] = owned_references
             attempt_id = uuid4().hex
             with self._lock:
                 if getattr(review_fn, "_knowledge_observed_client_contract", None) is not True:
@@ -209,7 +220,7 @@ class AuditKnowledgeRuntime:
                 origin, reservation, outcome.review_result)
             reference_manifest = reference_inputs_from_delivery(
                 outcome.review_result.get("language_reference_delivery"),
-                reservation.packet.references if reservation is not None else ())
+                owned_references)
             if reference_manifest is not None:
                 history["reference_inputs"] = reference_manifest
                 # Reference-only assessments still bind their original target,
@@ -255,7 +266,7 @@ class AuditKnowledgeRuntime:
                     "hypothesis": outcome.hypothesis, "hypotheses": deepcopy(outcome.hypotheses),
                     "model": outcome.model, "cost_usd": outcome.cost_usd,
                     "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity})
-            self._register(origin, ctx, outcome.review_result)
+            self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
             self._register_caller_requests(origin, outcome.review_result)
             self.notify()
             return outcome
@@ -397,7 +408,7 @@ class AuditKnowledgeRuntime:
         return (not answers or not any(a.materials for a in answers)
                 or any(self.bindings.admit(a)[0] for a in answers if a.materials))
 
-    def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result) -> None:
+    def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result, *, delivered_references=None) -> None:
         batch = register_requests(review_result, origin)
         key = self._key(origin)
         current = capture_source_identity(self.target_root, origin.file)
@@ -417,6 +428,27 @@ class AuditKnowledgeRuntime:
                     self._semantic_requests[signature] = request.request_id
                     accepted.append(request)
                     self._request_status[request.request_id] = {"state": "registered"}
+        # A repeated question about text this exact invocation already saw
+        # is not materially new information and must not buy another pass.
+        if (delivered_references is not None and origin.source_identity is not None
+                and current == origin.source_identity):
+            from .reference_inputs import reference_answer_already_delivered
+            unresolved = []
+            language = ctx.get("language")
+            reference_context = ReferenceContext(language if isinstance(language, str) else "")
+            for request in accepted:
+                if request.kind == "language_reference":
+                    answer = lookup(request.request_id, request.subject, reference_context, entry_id=request.entry_id)
+                    if reference_answer_already_delivered(answer, delivered_references):
+                        with self._lock:
+                            self._request_status[request.request_id] = {"state": "already_delivered",
+                                "reason": "identical_reference_entries_already_in_this_prompt"}
+                            self._events.append({"event": "reference_already_delivered",
+                                "request_id": request.request_id, "pass_id": origin.pass_id,
+                                "entries": [entry.entry_id for entry in answer.entries]})
+                        continue
+                unresolved.append(request)
+            accepted = unresolved
         active_batch = KnowledgeBatch(tuple(accepted), batch.rejected)
         with self._lock:
             self._events.append({"event": "requests_registered", "origin": asdict(origin),

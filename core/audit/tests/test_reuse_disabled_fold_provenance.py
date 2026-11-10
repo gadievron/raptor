@@ -32,6 +32,17 @@ from core.coverage.journal import (
 )
 from core.staleness import hash_span
 
+
+def _legacy_policy_gaps(*args, **kwargs):
+    """Exercise provenance independently of the newer C-foundation policy.
+
+    Current-policy retirement is covered by test_foundation_rollout. Keeping
+    this policy explicit ensures the stamp/hash discriminator still decides
+    these positive and negative controls.
+    """
+    return compute_gaps(*args, require_c_foundation=False, **kwargs)
+
+
 _SOURCE = """\
 int check_pw(const char *pw) {
     if (!pw)
@@ -106,14 +117,14 @@ class TestPlantedRows:
         target = _write_target(tmp_path)
         run_dir = tmp_path / "run1"
         _plant_raw_row(run_dir)
-        gaps = compute_gaps(_checklist(target), [], out_dir=run_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=run_dir)
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_planted_row_with_forged_hash_resurfaces(self, tmp_path):
         target = _write_target(tmp_path)
         run_dir = tmp_path / "run1"
         _plant_raw_row(run_dir, source_hash="f" * 12)
-        gaps = compute_gaps(_checklist(target), [], out_dir=run_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=run_dir)
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_stamp_is_the_only_discriminator(self, tmp_path):
@@ -125,12 +136,12 @@ class TestPlantedRows:
 
         stamped_dir = tmp_path / "run-stamped"
         append_entry(stamped_dir, ReviewJournalEntry(**fields))
-        gaps = compute_gaps(_checklist(target), [], out_dir=stamped_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=stamped_dir)
         assert "auth.c:check_pw" not in _gap_keys(gaps)
 
         planted_dir = tmp_path / "run-planted"
         _plant_raw_row(planted_dir, **fields)
-        gaps = compute_gaps(_checklist(target), [], out_dir=planted_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=planted_dir)
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -144,7 +155,7 @@ class TestLegacyTolerance:
         run_dir = tmp_path / "run1"
         real = hash_span(target / "auth.c", 1, 5)
         _plant_raw_row(run_dir, source_hash=real)
-        gaps = compute_gaps(_checklist(target), [], out_dir=run_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=run_dir)
         assert "auth.c:check_pw" not in _gap_keys(gaps)
 
     def test_unstamped_exact_hash_stale_source_resurfaces(self, tmp_path):
@@ -156,7 +167,7 @@ class TestLegacyTolerance:
         _plant_raw_row(run_dir, source_hash=real)
         (target / "auth.c").write_text(
             _SOURCE.replace("strcmp", "memcmp"), encoding="utf-8")
-        gaps = compute_gaps(_checklist(target), [], out_dir=run_dir)
+        gaps = _legacy_policy_gaps(_checklist(target), [], out_dir=run_dir)
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
@@ -179,7 +190,7 @@ class TestCollapseScreens:
             verdict="suspicious", model=None,
             strategies=["post-loop-mechanical"],
             body="[mechanical] pattern match in check_pw")))
-        gaps = compute_gaps(
+        gaps = _legacy_policy_gaps(
             _checklist(target), [], out_dir=run_dir,
             reuse_sink={}, own_run_reuse=True, current_model="model-a",
         )

@@ -75,9 +75,17 @@ def test_changed_studied_type_cannot_reuse_unchanged_function(tmp_path, monkeypa
     from dataclasses import asdict
 
     entries = load_entries(out, fresh=True)
-    bound = [row for row in entries if context_source_anchor_version(row.source_hash) == 2]
+    # Initial C reference delivery is already context-bound. Select the
+    # corrective row that actually acknowledges the studied header, rather
+    # than assuming every context anchor denotes source-study enrichment.
+    bound = [row for row in entries
+             if context_source_anchor_version(row.source_hash) is not None
+             and isinstance(row.review_claims, dict)
+             and any(dependency.get("file") == "types.h"
+                     for dependency in row.review_claims.get("source_inputs", {}).get("sources", []))]
     assert len(bound) == 1, "unchanged and retained assessments need acknowledged history corrections"
     latest = bound[0]
+    assert context_source_anchor_version(latest.source_hash) == 3
     assert latest.verdict == initial_status
     roots = {"study": study_root} if separate_root else {}
     manifest = latest.review_claims["source_inputs"]
