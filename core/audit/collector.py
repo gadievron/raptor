@@ -722,6 +722,8 @@ def append_journal_for_outcome(
             if isinstance(s, dict)
         ] or None
 
+    from .review_claims import read_history
+
     entry = ReviewJournalEntry(
         ts=now_iso(),
         run_id=run_id,
@@ -744,6 +746,7 @@ def append_journal_for_outcome(
         body=getattr(outcome, "body", "") or "",
         reading_list_items=reading_list_items,
         study_receipts=study_receipts,
+        review_claims=read_history(review_result.get("review_claims")) if review_result else None,
         model=getattr(outcome, "model", None) or None,
         evidence_tools=evidence_tools,
         tools_dispatched=tools_dispatched,

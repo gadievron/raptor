@@ -503,6 +503,11 @@ class ReviewJournalEntry:
     # (question, tier, file, line, sha256, verified) — makes a bad
     # study answer's blast radius traceable from the journal.
     study_receipts: list[dict] = field(default_factory=list)
+    # Bounded pipeline claim history, supplied by the audit producer.
+    # IDs and originating snapshots are historical context only, never
+    # verification receipts. Keep inline: project-index stubs have no
+    # route back to an offloaded run-side history.
+    review_claims: dict | None = None
     model: str | None = None
     # Tools whose OUTPUT the verdict carries (the confirming receipt
     # stamp) — never the dispatched union. Downstream verdict-weight
@@ -2771,6 +2776,7 @@ def _entry_from_validated(
         body=raw.get("body", ""),
         reading_list_items=raw.get("reading_list_items", []),
         study_receipts=raw.get("study_receipts", []),
+        review_claims=raw.get("review_claims"),
         model=raw.get("model"),
         evidence_tools=raw.get("evidence_tools", []),
         tools_dispatched=raw.get("tools_dispatched", []),

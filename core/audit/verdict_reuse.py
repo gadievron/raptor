@@ -91,6 +91,11 @@ def outcome_from_entry(entry: Any) -> Any:
         "reused": True,
         "reused_from_run": origin,
     }
+    from .review_claims import read_history
+
+    history = read_history(entry.review_claims)
+    if history is not None:
+        review_result["review_claims"] = history
     if entry.cwe:
         review_result["cwe"] = entry.cwe
     if entry.evidence_tools:

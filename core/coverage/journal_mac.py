@@ -235,6 +235,7 @@ _GENERATION_VOCABULARY: dict[int, frozenset[str]] = {
         "producer",
         "provisional",
         "reading_list_items",
+        "review_claims",
         "reused",
         "reused_from_run",
         "run_id",

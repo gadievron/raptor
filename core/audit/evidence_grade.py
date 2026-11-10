@@ -736,7 +736,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "precondition_verification", "premise_blocked_confirms", "primitive",
     "promotion_gate_demoted", "prompt_budget_event",
     "rationale_consistency_demotion", "rationale_consistency_mismatch",
-    "reused", "reused_from_run",
+    "reused", "reused_from_run", "review_claims",
     "rationale_consistency_note", "refuted_hypothesis_confirmed",
     "secondary_confirmations", "secondary_hypothesis_confirmed",
     "security_impact", "smt_caller_gate", "study_receipts",

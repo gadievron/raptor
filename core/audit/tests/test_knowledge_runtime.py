@@ -42,6 +42,10 @@ def test_actual_reviewer_requests_retain_pre_call_source_and_pass(tmp_path):
     assert any(e.get("reason") == "source_changed_during_review" for e in runtime.events())
     assert outcome.status == "clean" and not outcome.evidence_tool
     assert not outcome.review_result.get("immediate_verified")
+    history = outcome.review_result["review_claims"]
+    assert history["review"]["origin"]["source_identity"]["sha256"] == identity.sha256
+    assert history["intakes"] == [] and not history["complete"]
+    assert history["omissions"] == ["not-intaken"]
 
 
 def test_current_review_queues_source_and_resolves_reference_without_an_extra_call(tmp_path):

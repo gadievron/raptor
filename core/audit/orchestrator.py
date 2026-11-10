@@ -25145,10 +25145,15 @@ def _verify_hypotheses_immediate(
 
     pass_id = uuid4().hex
     verifications: list[ClaimVerification] = []
+    revisions = [ClaimRevision(hyp, pass_id=pass_id, file=file_path,
+                              function=function_name, line_start=outcome.line or 0)
+                 for hyp in hypotheses]
+    from .review_claims import record_intake
 
-    for hyp in hypotheses:
-        claim_revision = ClaimRevision(hyp, pass_id=pass_id, file=file_path,
-                                       function=function_name, line_start=outcome.line or 0)
+    outcome.review_result = dict(outcome.review_result or {})
+    outcome.review_result["review_claims"] = record_intake(outcome.review_result.get("review_claims"), revisions)
+
+    for hyp, claim_revision in zip(hypotheses, revisions):
         verifications.append(ClaimVerification(hyp, claim_revision=claim_revision))
         mechanism = hyp["mechanism"]
         hyp_cwe = hyp.get("cwe", cwe) or cwe
@@ -34845,6 +34850,11 @@ def _merge_unverified_study_candidates(
         return None
     prior_review = deepcopy(prior.review_result or {})
     prior_review["hypotheses"] = deepcopy(hypotheses)
+    from .review_claims import merge_history
+
+    history = merge_history(prior_review.get("review_claims"), (fresh.review_result or {}).get("review_claims"))
+    if history is not None:
+        prior_review["review_claims"] = history
     # Published state carries the contributing rounds' financial metadata;
     # the caller books only this round into the run ledger, without retallying.
     return replace(prior, hypotheses=hypotheses, review_result=prior_review,
@@ -35061,6 +35071,7 @@ def _re_review_study_enriched(
             knowledge_runtime.fail(knowledge_reservation, "context_unavailable", ctx=ctx)
             continue
         ctx["study_re_review"] = True
+        ctx["prior_review_claims"] = (prior_outcome.review_result or {}).get("review_claims")
         ctx["prior_verdict"] = {
             "status": prior_outcome.status,
             "body": prior_outcome.body[:800] if prior_outcome.body else "",
