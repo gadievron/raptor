@@ -221,6 +221,11 @@ def render_document(document: ReportDocument, format: str = "markdown") -> Rende
     renderer = get_renderer(format)
     try:
         rendered = renderer.render(document)
+        if (not isinstance(rendered, RenderedReport)
+                or not isinstance(rendered.content, bytes)
+                or not isinstance(rendered.diagnostics, tuple)
+                or not all(isinstance(note, str) for note in rendered.diagnostics)):
+            raise ValueError(f"{renderer.name} renderer returned invalid report content or diagnostics")
     except (OSError, ValueError, TypeError):
         raise
     except Exception as exc:  # noqa: BLE001 — isolate optional plugins; cancellation still propagates
