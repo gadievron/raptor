@@ -29,9 +29,10 @@ def exclusive_session(path: Path):
 class WorkQueue:
     def __init__(self, out_dir: Path, namespace: str):
         self.db = sqlite3.connect(out_dir/"cross-entry-work.sqlite")
-        self.db.row_factory = sqlite3.Row
-        self.namespace = namespace
-        self.db.executescript("""
+        try:
+            self.db.row_factory = sqlite3.Row
+            self.namespace = namespace
+            self.db.executescript("""
             CREATE TABLE IF NOT EXISTS views (
                 namespace TEXT, id TEXT, extra_file TEXT, fingerprint TEXT DEFAULT '',
                 status TEXT DEFAULT 'pending', last_turn INTEGER DEFAULT 0, dependencies TEXT DEFAULT '{}',
@@ -60,6 +61,12 @@ class WorkQueue:
             CREATE INDEX IF NOT EXISTS queue_runnable_jobs ON jobs(namespace,view_id)
                 WHERE status NOT IN ('complete','prepared','not_applicable','blocked','obsolete');
         """)
+        except BaseException:
+            try:
+                self.db.close()
+            except BaseException:
+                pass
+            raise
 
     def close(self):
         self.db.close()
