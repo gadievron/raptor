@@ -487,15 +487,28 @@ def _open_regular_nofollow(path: Path) -> int | None:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     except OSError:
         return None
+    pending = True
+    failed = False
     try:
         post = os.fstat(fd)
         if not stat_module.S_ISREG(post.st_mode):
+            pending = False
             os.close(fd)
             return None
+        pending = False
+        return fd
     except OSError:
-        os.close(fd)
         return None
-    return fd
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        if pending:
+            try:
+                os.close(fd)
+            except BaseException:
+                if not failed:
+                    raise
 
 
 def _bounded_read(path: Path, cap: int) -> bytes | None:
