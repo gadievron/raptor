@@ -46,7 +46,11 @@ def main() -> int:
     p.add_argument("--kind", help="Filter edges by kind")
     p.add_argument("--tier", help="Filter evidence records by tier")
     p.add_argument("--json", action="store_true", help="Emit JSON")
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(p)
     args = p.parse_args()
+    args._report_options = options_from_args(args, p)
+    from packages.binary_analysis.graph_reporting import complete_graph_report
     if args.edges and args.evidence:
         p.error("--edges and --evidence are mutually exclusive")
     if args.kind and not args.edges:
@@ -56,6 +60,7 @@ def main() -> int:
     db_path = Path(args.db) if args.db else graph_path_for_run(Path(args.run_dir))
     if not db_path.is_file() and (args.db or args.edges or args.evidence):
         print(f"raptor-binary-graph-query: database not found: {db_path}", file=sys.stderr)
+        complete_graph_report(args, None, db_path, 1)
         return 1
     if args.edges:
         payload = {"edges": query_edges(db_path, kind=args.kind)}
@@ -70,9 +75,11 @@ def main() -> int:
         # ASCII output stays valid JSON for parsing consumers.
         print(json.dumps(payload, indent=2, sort_keys=True,
                          ensure_ascii=True, default=str))
+        complete_graph_report(args, payload, db_path, 0)
         return 0
     if not payload.get("exists"):
         print(f"✗ Binary graph: not found ({db_path})", file=sys.stderr)
+        complete_graph_report(args, payload, db_path, 1)
         return 1
     # The graph rows derive from the analysed (hostile) binary —
     # paths and kind/tier labels are attacker-influenced bytes.
@@ -90,6 +97,7 @@ def main() -> int:
     print("Evidence:")
     for tier, count in sorted((payload.get("evidence") or {}).items()):
         print(f"  {_sft(str(tier), max_len=64)}: {count}")
+    complete_graph_report(args, payload, db_path, 0)
     return 0
 
 

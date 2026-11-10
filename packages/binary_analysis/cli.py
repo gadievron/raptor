@@ -244,6 +244,7 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_p.add_argument("--kind", help="Filter graph edges by kind")
     graph_p.add_argument("--tier", help="Filter evidence by tier")
     graph_p.add_argument("--json", action="store_true", help="Emit JSON")
+    add_report_arguments(graph_p)
 
     report_p = sub.add_parser("report", help="Print the investigation report, or the map report when no investigation exists")
     report_p.add_argument("run_dir", help="Binary map output directory")
@@ -693,11 +694,11 @@ def _run_runtime(args: argparse.Namespace) -> int:
         unsafe_attach=args.unsafe_attach,
         host=args.host,
         usb=args.usb,
-        report_args=_forward_trace_report_args(args),
+        report_args=_forward_report_args(args),
     ), env=RaptorConfig.get_safe_env())
 
 
-def _forward_trace_report_args(args):
+def _forward_report_args(args):
     options = getattr(args, "_report_options", None)
     if options is None:
         return []
@@ -820,7 +821,7 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
             unsafe_attach=args.unsafe_attach,
             host=args.host,
             usb=args.usb,
-            report_args=_forward_trace_report_args(args),
+            report_args=_forward_report_args(args),
         ),
     )
     if phase["status"] != "completed":
@@ -1266,6 +1267,7 @@ def _run_graph(args: argparse.Namespace) -> int:
         cmd.extend(["--tier", args.tier])
     if args.json:
         cmd.append("--json")
+    cmd.extend(_forward_report_args(args))
     return subprocess.run(cmd, env=RaptorConfig.get_safe_env(), timeout=60).returncode
 
 
@@ -1376,7 +1378,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt", "harness"}:
+    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt", "harness", "graph"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
