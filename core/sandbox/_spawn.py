@@ -1824,6 +1824,11 @@ def run_sandboxed(
             msg = f"rootfs is not a directory: {rootfs}"
             raise ValueError(msg)
 
+    # Capture requests are per stream; uncaptured destinations remain borrowed.
+    _capture_stdout = bool(capture_output or stdout == subprocess.PIPE)
+    _capture_stderr = bool(capture_output or stderr == subprocess.PIPE)
+    _capture_any = _capture_stdout or _capture_stderr
+
     # Sandbox root directory. Created by the parent via tempfile.mkdtemp
     # so the path is random-suffixed (mode 0700) — a same-UID attacker
     # can't pre-plant the stub as a symlink pointing at /etc or another
@@ -2235,7 +2240,7 @@ def run_sandboxed(
         _parent_fds.update({status_r, status_w})
 
         # Output capture pipes (optional).
-        if capture_output:
+        if _capture_any:
             out_r, out_w, err_r, err_w = _open_capture_pipes()
             _parent_fds.update({out_r, out_w, err_r, err_w})
         else:
@@ -2893,46 +2898,32 @@ def run_sandboxed(
             if _audit_engaged:
                 os.close(t_ready_r)  # type: ignore[arg-type]
                 os.close(t_ready_w)  # type: ignore[arg-type]
-            if capture_output:
+            if _capture_any:
                 os.close(out_r)  # type: ignore[arg-type]
                 os.close(err_r)  # type: ignore[arg-type]
-                os.dup2(out_w, 1)  # type: ignore[arg-type]
-                os.dup2(err_w, 2)  # type: ignore[arg-type]
+            # Establish stdout before stderr so STDOUT follows its final sink.
+            for _redir, _fdnum, _capture_stream, _writer in (
+                    (stdout, 1, _capture_stdout, out_w),
+                    (stderr, 2, _capture_stderr, err_w)):
+                if _capture_stream:
+                    os.dup2(_writer, _fdnum)  # type: ignore[arg-type]
+                    continue
+                if _redir is None:
+                    continue
+                if _redir == subprocess.DEVNULL:
+                    _dn = os.open("/dev/null", os.O_WRONLY)
+                    os.dup2(_dn, _fdnum)
+                    os.close(_dn)
+                    continue
+                if _fdnum == 2 and _redir == subprocess.STDOUT:
+                    os.dup2(1, 2)
+                    continue
+                _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
+                if _rfd != _fdnum:
+                    os.dup2(_rfd, _fdnum)
+            if _capture_any:
                 os.close(out_w)  # type: ignore[arg-type]
                 os.close(err_w)  # type: ignore[arg-type]
-            else:
-                # stdout=/stderr= redirects (int fd, file-like, DEVNULL,
-                # STDOUT for stderr). Pre-fix these kwargs were silently
-                # DROPPED on this path — the child inherited the parent's
-                # fd 1/2 regardless, which also defeated run_untrusted's
-                # write-only tty reopen (the child kept the O_RDWR pty
-                # slave and could read() the operator's keystrokes
-                # through its own stdout). PIPE is unsupported here, same
-                # as stdin: fail closed to /dev/null with a stderr note.
-                for _redir, _fdnum, _label in ((stdout, 1, b"stdout"),
-                                               (stderr, 2, b"stderr")):
-                    if _redir is None:
-                        continue
-                    if _redir == subprocess.PIPE:
-                        try:
-                            os.write(2, b"sandbox: %s=subprocess."
-                                        b"PIPE not supported via the "
-                                        b"mount-ns path; falling back to "
-                                        b"/dev/null.\n" % _label)
-                        except OSError:
-                            pass
-                        _redir = subprocess.DEVNULL
-                    if _redir == subprocess.DEVNULL:
-                        _dn = os.open("/dev/null", os.O_WRONLY)
-                        os.dup2(_dn, _fdnum)
-                        os.close(_dn)
-                        continue
-                    if _fdnum == 2 and _redir == subprocess.STDOUT:
-                        os.dup2(1, 2)
-                        continue
-                    _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
-                    if _rfd != _fdnum:
-                        os.dup2(_rfd, _fdnum)
             # stdin: caller-supplied fd/file if any, else /dev/null (defence
             # against tty-based escapes — a child with an inherited tty can
             # TIOCSTI-inject or ^Z into the parent's job control). The
@@ -4039,7 +4030,7 @@ def run_sandboxed(
         # and EOF reaches the parent when they exit pre-fork.
         if pid_w is not None:
             _close_parent_fd(pid_w)
-        if capture_output:
+        if _capture_any:
             _close_parent_fd(out_w)  # type: ignore[arg-type]
             _close_parent_fd(err_w)  # type: ignore[arg-type]
 
@@ -4541,8 +4532,8 @@ def run_sandboxed(
     # exception) still cleans up the mkdtemp stub — otherwise every
     # sandboxed command that exceeds `timeout` would leak a
     # .raptor-sbx-* dir under /tmp.
-    stdout_buf = b"" if capture_output else None
-    stderr_buf = b"" if capture_output else None
+    stdout_buf = b"" if _capture_any else None
+    stderr_buf = b"" if _capture_any else None
     # Effective per-stream capture ceiling: callers that only consume
     # bounded tails (SandboxHandle.exec keeps kilobytes) request a
     # tighter transient bound than the 64 MiB default; never above
@@ -4565,7 +4556,7 @@ def run_sandboxed(
     # status_r reclaimed on EVERY exit path (success, timeout, exception).
     setup_status = None
     try:
-        if capture_output:
+        if _capture_any:
             fds = [out_r, err_r]
             # Exit/drain decoupling: waiting for plain pipe EOF couples
             # this run's return to every retained sibling write-end
@@ -4639,6 +4630,10 @@ def run_sandboxed(
                         _materialize()
                         out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
                         err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
+                        if not _capture_stdout:
+                            out_str = None
+                        if not _capture_stderr:
+                            err_str = None
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
                         )
@@ -4713,6 +4708,11 @@ def run_sandboxed(
                         _teardown_target(child_pid, death_w, _parent_fds)
                         out_str = (stdout_buf or b"").decode("utf-8", errors="replace") if text else stdout_buf
                         err_str = (stderr_buf or b"").decode("utf-8", errors="replace") if text else stderr_buf
+                        if _capture_any:
+                            if not _capture_stdout:
+                                out_str = None
+                            if not _capture_stderr:
+                                err_str = None
                         raise subprocess.TimeoutExpired(
                             list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
                         )
@@ -4780,8 +4780,9 @@ def run_sandboxed(
             and _exec_pid_delivered and returncode < 0):
         setup_status = None
     stdout_out = stderr_out = None
-    if capture_output:
+    if _capture_stdout:
         stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
+    if _capture_stderr:
         stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
 
     cp = subprocess.CompletedProcess(
