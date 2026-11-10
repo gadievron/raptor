@@ -115,6 +115,14 @@ def validator_control_scope_unverified(source: str, validator_line: int, sink_li
                 owner = _owner(validator, owners)
                 if owner is None or owner != _owner(sink, owners):
                     return True
+                parent = sink.parent
+                while parent is not None and parent != owner:
+                    visited += 1
+                    if visited > _MAX_NODES or parent.type in unsupported:
+                        return True
+                    parent = parent.parent
+                if parent is None:
+                    return True
                 parent = validator.parent
                 while parent is not None and parent != owner:
                     visited += 1
