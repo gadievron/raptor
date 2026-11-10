@@ -199,24 +199,33 @@ class TestConcurrentFirstCallers:
 
         t1 = threading.Thread(target=caller, args=("a",))
         t2 = threading.Thread(target=caller, args=("b",))
-        t1.start()
-        t2.start()
-        t1.join(timeout=30)
-        t2.join(timeout=30)
-        live = [d for d in results if d is not None]
+        from contextlib import ExitStack
+
+        from core.testing.threads import retiring_threads
+
         try:
-            assert len(constructed) == 1, (
-                "concurrent first callers constructed "
-                f"{len(constructed)} dispatchers"
-            )
-            assert len(live) == 1
-            assert os.environ["RAPTOR_LLM_SOCKET"] == str(
-                live[0].socket_path)
+            with retiring_threads([t1, t2], release=lambda: None, timeout=30):
+                t1.start()
+                t2.start()
+                t1.join(timeout=30)
+                t2.join(timeout=30)
+                live = [d for d in results if d is not None]
+                assert len(constructed) == 1, (
+                    "concurrent first callers constructed "
+                    f"{len(constructed)} dispatchers"
+                )
+                assert len(live) == 1
+                assert os.environ["RAPTOR_LLM_SOCKET"] == str(
+                    live[0].socket_path)
         finally:
             os.environ.pop("RAPTOR_LLM_SOCKET", None)
             os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
-            for d in live:
-                d.shutdown()
+            with ExitStack() as cleanup:
+                for d in results:
+                    if d is not None:
+                        cleanup.callback(lifecycle.atexit.unregister, d.shutdown)
+                        cleanup.callback(d.shutdown)
+
 
 
 class TestEnsureRouteForModelConfigs:
