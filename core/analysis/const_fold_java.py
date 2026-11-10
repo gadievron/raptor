@@ -418,6 +418,8 @@ class JavaConstIndex:
             ty = value.child_by_field_name("type")
             cls = (ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
                    if ty is not None else None)
+            if cls and _type_receiver_is_shadowed(ty, cls):
+                cls = None
         else:
             cls = None
         if name in self._creation_types:
@@ -521,9 +523,19 @@ def _tf_string_members_clear(ext, members) -> bool:
     return chk is not None and bool(chk(strs))
 
 
+def _type_receiver_is_shadowed(node, chain: str) -> bool:
+    from core.analysis.cfg_builder_java import _type_shadow_names_at
+
+    return chain.split(".", 1)[0] in _type_shadow_names_at(node)
+
+
 def _receiver_is_shadowed(node, ext) -> bool:
     chain = _receiver_chain(node)
-    if ext is None or chain is None:
+    if chain is None:
+        return False
+    if _type_receiver_is_shadowed(node, chain):
+        return True
+    if ext is None:
         return False
     head = chain.split(".", 1)[0]
     return (head in ext.shadowed_receiver_names
@@ -544,7 +556,7 @@ def _fold_field_access(node: Node, ext) -> Any:
     chain = _receiver_chain(obj)
     if chain is None or _receiver_is_shadowed(obj, ext):
         return _REFUSE
-    if ext.allow_taint_free and chain.rsplit(".", 1)[-1] == "File" \
+    if ext.allow_taint_free and chain in ("File", "java.io.File") \
             and field in _TF_FILE_FIELDS:
         return TAINT_FREE
     if ext.xfile is not None:
@@ -805,6 +817,8 @@ def _fold_xfile_call(node: Node, ext) -> Any:
         ty = obj.child_by_field_name("type")
         if ty is not None:
             cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
+            if _type_receiver_is_shadowed(ty, cls):
+                return _REFUSE
     elif obj.type == "identifier":
         recv = obj.text.decode("utf-8", "replace")  # type: ignore[union-attr]
         typed = ext.receiver_type(recv, obj) if ext.receiver_type else None
