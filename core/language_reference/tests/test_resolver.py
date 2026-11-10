@@ -66,7 +66,8 @@ def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edi
 
 @pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
                          ids=["other-c-edition", "cpp"])
-@pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update"], ids=["shift", "update"])
+@pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update", "c.integer-unary-sign"],
+                         ids=["shift", "update", "unary-sign"])
 def test_operator_entries_do_not_guess_language_mode(context, entry_id):
     answer = lookup("owned", "", context, entry_id=entry_id)
     assert answer.status == "unsupported" and answer.entries == ()
@@ -84,6 +85,19 @@ def test_update_reading_keeps_intermediate_and_storage_rules_distinct(edition):
                       "precedes the object update", "lvalue once", "convert for storage",
                       "representable promoted computation", "implementation-defined result",
                       "Pointer, floating and atomic updates", "sequencing"):
+        assert condition in core
+    assert answer.missing_facts == (("language edition",) if edition is None else ())
+
+
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_unary_sign_core_uses_promoted_type_without_common_type_conversions(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.integer-unary-sign")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == ["c.integer-promotion", "c.integer-unary-sign"]
+    core = answer.entries[-1].render_core()
+    for condition in ("promoted operand type", "plus keeps", "mathematical negative",
+                      "modulo one plus", "unrepresentable negation result",
+                      "promote to signed int", "actual promoted range", "bitwise complement"):
         assert condition in core
     assert answer.missing_facts == (("language edition",) if edition is None else ())
 

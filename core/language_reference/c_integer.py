@@ -113,6 +113,27 @@ ENTRIES = (
         ("c.integer-definedness", "c.integer-conversion"),
     ),
     ReferenceEntry(
+        "c.integer-unary-sign", 1, "c", ("c11",),
+        "Unary plus and minus",
+        ("unary", "plus", "minus", "negation", "negative", "promote"),
+        "Promoted operand types control negation, not the declared storage type.",
+        "For integer operands of unary plus and minus, apply integer promotions "
+        "first; the result uses the promoted operand type. Unary plus keeps the "
+        "promoted value. Unary minus forms its mathematical negative. If the "
+        "promoted type is unsigned, negation reduces modulo one plus that type's "
+        "maximum. If it is signed, an unrepresentable negation result is "
+        "undefined. An unsigned declared object can promote to signed int, "
+        "so its negation need not be unsigned. A later cast or assignment "
+        "cannot repair undefined negation.",
+        ("Use the actual promoted range, not an assumed host width or two's-complement representation.",
+         "Floating or complex arithmetic, bitwise complement, logical negation and pointer operators need other rules.",
+         "Value rules do not settle volatile or atomic reads, representation details or sequencing of larger expressions."),
+        ("configured language edition", "original operand type and rank", "promotion ranges",
+         "promoted type and range", "operand value", "access and sequencing constraints"),
+        (_N1570 + " sections 6.5.3.3 paragraphs 2-3, 6.3.1.1, 6.2.5 paragraph 9 and 6.5 paragraph 5",),
+        ("c.integer-promotion",),
+    ),
+    ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
         "Integer arithmetic definedness",
         ("overflow", "wrap", "wrapping", "definedness", "undefined", "arithmetic"),
