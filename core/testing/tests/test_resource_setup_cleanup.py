@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.mark.parametrize(
@@ -147,8 +148,23 @@ def test_process_setup_failure_reaps_and_closes(case, error, tmp_path, monkeypat
         return process
 
     try:
-        with monkeypatch.context() as patcher:
-            patcher.setattr(subprocess, "Popen", popen)
+        with contextlib.ExitStack() as import_scopes, monkeypatch.context() as patcher:
+            local_functions = {
+                "cache": "test_cross_process_scan_lease",
+                "stress": "test_sigterm_prints_in_flight_and_partial_summary",
+            }
+            local_name = local_functions.get(case)
+            if local_name is None:
+                popen_consumer = module
+            else:
+                original_function = getattr(module, local_name)
+                popen_consumer = import_scopes.enter_context(scoped_function_imports(
+                    module, (local_name,), {"subprocess": subprocess},
+                ))
+                assert getattr(module, local_name) is not original_function
+            patch_module_attribute(patcher, popen_consumer, "subprocess", "Popen", popen)
+            assert popen_consumer.subprocess.Popen is popen
+            assert subprocess.Popen is real_popen
             if case.startswith("scratch"):
                 invoke = lambda: (
                     module.test_parallel_instances_keep_operator_base_and_separate_child_contexts(
