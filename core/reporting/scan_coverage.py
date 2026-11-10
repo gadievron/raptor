@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from core.json import load_json
+from core.security.log_sanitisation import sanitise_excerpt
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -207,7 +208,7 @@ def render_scan_coverage(out_dir: Path) -> str | None:
         if failed_packs:
             detail_parts.append(
                 f"⚠️  {len(failed_packs)} pack(s) failed: "
-                f"{', '.join(failed_packs[:3])}"
+                f"{', '.join(sanitise_excerpt(pack) for pack in failed_packs[:3])}"
                 + ("..." if len(failed_packs) > 3 else "")
             )
         detail = (
