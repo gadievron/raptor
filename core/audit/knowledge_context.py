@@ -22,7 +22,7 @@ def _labels(answers: tuple[ReferenceAnswer, ...]) -> list[str]:
     groups: dict[tuple, str] = {}
     labels = []
     for index, answer in enumerate(answers):
-        key = (answer.entries, answer.missing_facts)
+        key = (answer.entries, answer.missing_facts, answer.status, answer.reason)
         labels.append(groups.setdefault(key, f"language_reference_{index}"))
     return labels
 
@@ -49,6 +49,9 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
                if "language edition" in answer.missing_facts else "")
             + ("Several reading candidates were retrieved; applicability is unresolved.\n"
                if answer.status == "ambiguous" else "")
+            + (wrap_untrusted(dumps_display({"resolution_reason": answer.reason}),
+                              kind="reference_resolution", origin="language-reference") + "\n"
+               if answer.reason else "")
             + "\n\n".join(entry.render_core() for entry in answer.entries),
             1,
         ))
@@ -72,6 +75,7 @@ def reference_delivery(
             "entries": [{"id": entry.entry_id, "version": entry.version}
                         for entry in answer.entries],
             "missing_facts": list(answer.missing_facts),
+            "resolution_reason": answer.reason,
             "reason": ("delivered" if delivered else omission_reason
                        if answer.entries else answer.reason),
         })

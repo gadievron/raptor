@@ -15,24 +15,26 @@ _MAX_PACK_ENTRIES = 256
 _UNAVAILABLE = "initial_reference_foundation_unavailable"
 
 
-def _initial_ids(source: object, file: object) -> tuple[str, ...]:
+def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], str]:
     """Select conditional integer reading from syntax, never inferred types.
 
     Parsing unavailable, erroneous or oversized input preserves the foundation.
     Comments and strings cannot become operator facts. The selected entries
     retain their integer/type/edition preconditions in full.
     """
-    if (not isinstance(source, str) or not source or len(source) > 256 * 1024
-            or not isinstance(file, str) or not foundation_required_for_file(file)):
-        return _FOUNDATION_IDS
+    if (not isinstance(source, str) or not source or not isinstance(file, str)
+            or not foundation_required_for_file(file)):
+        return _FOUNDATION_IDS, "Initial construct selection unavailable: no supported source supplied; fixed foundation only."
+    if len(source) > 256 * 1024:
+        return _FOUNDATION_IDS, "Initial construct selection unavailable: source limit reached; fixed foundation only."
     from .ts_extract import _parse_file
 
     parsed = _parse_file(file, source)
     if parsed is None:
-        return _FOUNDATION_IDS
+        return _FOUNDATION_IDS, "Initial construct selection unavailable: parser unavailable; fixed foundation only."
     tree, language, raw = parsed
     if language != "c" or tree.root_node.has_error:
-        return _FOUNDATION_IDS
+        return _FOUNDATION_IDS, "Initial construct selection unavailable: source has parse errors; fixed foundation only."
     arithmetic = False
     comparison = False
     stack = [tree.root_node]
@@ -41,7 +43,7 @@ def _initial_ids(source: object, file: object) -> tuple[str, ...]:
         node = stack.pop()
         visited += 1
         if visited > 4096:
-            return _FOUNDATION_IDS
+            return _FOUNDATION_IDS, "Initial construct selection incomplete: traversal limit reached; fixed foundation only."
         if node.type == "binary_expression":
             operator = node.child_by_field_name("operator")
             if operator is not None:
@@ -54,7 +56,7 @@ def _initial_ids(source: object, file: object) -> tuple[str, ...]:
         selected += ("c.integer-usual-conversions",)
     if arithmetic:
         selected += ("c.integer-definedness",)
-    return selected
+    return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
 
 
 def _closed_pack(entry_ids: tuple[str, ...]) -> bool:
@@ -116,7 +118,7 @@ def foundation_answers(
     def unavailable() -> tuple[ReferenceAnswer, ...]:
         return (ReferenceAnswer(request_id, "unsupported", reason=_UNAVAILABLE),)
 
-    entry_ids = _initial_ids(source, file)
+    entry_ids, selection_reason = _initial_selection(source, file)
     if not _closed_pack(entry_ids):
         return unavailable()
     combined: dict[str, ReferenceEntry] = {}
@@ -161,7 +163,7 @@ def foundation_answers(
                             for required in entry.prerequisites)):
         return unavailable()
     return (ReferenceAnswer(request_id, "needs_target_facts", tuple(combined.values()),
-                            "conditional initial C11 foundation; target applicability remains unestablished",
+                            "conditional initial C11 foundation; target applicability remains unestablished. " + selection_reason,
                             ("language edition",), pack),)
 
 
