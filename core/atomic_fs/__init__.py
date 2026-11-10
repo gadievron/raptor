@@ -178,9 +178,12 @@ def _close_write_fd(fd: int, *, write_failed: bool) -> None:
     except BaseException:
         if not write_failed:
             raise
-        logging.getLogger(__name__).warning(
-            "artifact descriptor cleanup failed", exc_info=True,
-        )
+        try:
+            logging.getLogger(__name__).warning(
+                "artifact descriptor cleanup failed", exc_info=True,
+            )
+        except BaseException:
+            pass  # Diagnostics must not replace the active operation error.
 
 
 def write_text_atomically(
