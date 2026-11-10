@@ -420,3 +420,31 @@ def test_source_aware_cache_resolves_one_captured_selection(monkeypatch):
     monkeypatch.setattr(ts_extract, "_parse_file", counted)
     assert review_has_current_foundation({"reference_inputs": references}, source=_ARITHMETIC, file="unit.c")
     assert calls == [("unit.c", _ARITHMETIC)]
+
+
+@requires_ts("c")
+def test_warm_parse_cache_cannot_hide_parser_loss_or_prevent_recovery(monkeypatch):
+    from collections import OrderedDict
+    from copy import deepcopy
+    from core.audit import ts_extract
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(ts_extract, {"_PARSE_CACHE": OrderedDict()},
+                               lock=ts_extract._PARSE_CACHE_LOCK):
+        answers = foundation_answers("c", request_id="prior", source=_ARITHMETIC, file="unit.c")
+        references = reference_inputs_from_delivery(
+            reference_delivery(answers, reference_sections(answers)), answers)
+        history = {"reference_inputs": references}
+        original_history = deepcopy(history)
+        cached = ts_extract._parse_file("unit.c", _ARITHMETIC)
+        assert cached is not None
+        assert review_has_current_foundation(history, source=_ARITHMETIC, file="unit.c")
+        with monkeypatch.context() as patch:
+            patch.setattr(ts_extract, "_get_parser", lambda language: None)
+            fallback = foundation_answers("c", request_id="degraded", source=_ARITHMETIC, file="unit.c")
+            assert _ids(fallback) == {"c.integer-promotion", "c.integer-conversion"}
+            assert "parser unavailable" in fallback[0].reason
+            assert not review_has_current_foundation(history, source=_ARITHMETIC, file="unit.c")
+        assert ts_extract._parse_file("unit.c", _ARITHMETIC) is cached
+        assert review_has_current_foundation(history, source=_ARITHMETIC, file="unit.c")
+        assert history == original_history
