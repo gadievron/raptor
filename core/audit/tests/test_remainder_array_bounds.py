@@ -94,5 +94,5 @@ def test_real_confined_remainder_index_receipt():
                                     source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
     assert result.details['witness_index']<0
-    assert result.details['source_scope']['query_contract']=='common-width-array-guards-v16'
+    assert result.details['source_scope']['query_contract']=='common-width-array-guards-v17'
     assert '(Index%4)' in result.details['obligation']

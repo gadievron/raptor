@@ -492,7 +492,17 @@ def _operations(source, language, abi):
                          f"Potential unsigned {'increment' if op == '++' else 'decrement'} wrap in `{op + name if prefix else name + op}`.",
                          {'binding_status': 'candidate'})
                         for target, name, op, prefix in unsigned_update_candidates(source, language=language, integer_abi=abi)]
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains + unsigned_updates
+    writes = []
+    for target, array, index in accesses:
+        from .array_bounds import array_access_candidate
+        mechanism = f"Potential out-of-bounds write at `{array}[{index}]`."
+        if len(mechanism) > 300:
+            continue
+        access = array_access_candidate(source, mechanism, language=language, integer_abi=abi, access_kind="write")
+        if access.status == "candidate":
+            writes.append((target, "[]", (array, index), "fixed-array-write", mechanism,
+                           {"object_extent": access.extent, "access_kind": "write", "binding_status": "candidate"}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains + unsigned_updates + writes
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
