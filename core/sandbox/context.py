@@ -5571,8 +5571,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _audit_no_engage_instr = ""
         # Both native backends preserve audited pass_fds. Linux input=
         # uses an unlinked, read-only spool mapped onto stdin, including
-        # calls which also pass additional descriptors.
-        if (sys.platform != "darwin" and (use_mount or need_unshare)
+        # calls which also pass additional descriptors. The Landlock-only
+        # audit backend also consumes stdin directly rather than input=.
+        if (sys.platform != "darwin"
+                and (use_mount or need_unshare or nonlocal_audit_mode)
                 and kwargs.get("input") is not None):
             # subprocess.run's own contract, enforced here because the
             # conversion below would otherwise silently prefer input=.
