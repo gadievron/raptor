@@ -228,17 +228,28 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
         current = adopt_fd(fd, "wb")
         current_size = 0
 
-    def _cleanup() -> None:
+    def _log_cleanup(
+        level: str, message: str, *args: object, preserve_error: bool = True,
+    ) -> None:
+        try:
+            getattr(logger, level)(message, *args, exc_info=True)
+        except BaseException:
+            if not preserve_error:
+                raise
+
+    def _cleanup(*, preserve_error: bool = True) -> None:
         if current is not None:
             try:
                 current.close()
             except BaseException:
-                logger.warning("Cannot close rotation temporary", exc_info=True)
+                _log_cleanup("warning", "Cannot close rotation temporary",
+                             preserve_error=preserve_error)
         for tmp in temps:
             try:
                 tmp.unlink(missing_ok=True)
             except OSError:
-                logger.warning("Cannot remove rotation temporary %s", tmp, exc_info=True)
+                _log_cleanup("warning", "Cannot remove rotation temporary %s", tmp,
+                             preserve_error=preserve_error)
 
     try:
         _open_next()
@@ -348,6 +359,7 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
     backups: list[str] = []
     retired: list[tuple[Path, Path]] = []
     published: list[Path] = []
+    swap_failed = False
     try:
         for p in existing:
             backup = _backup_path(p)
@@ -359,21 +371,22 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
             os.rename(tmp, target)
             published.append(target)
     except BaseException:
+        swap_failed = True
         # Remove only this invocation's published shards. If rollback
         # fails, retain backups for manual recovery and preserve the cause.
         for target in reversed(published):
             try:
                 target.unlink(missing_ok=True)
             except OSError:
-                logger.exception("Cannot remove partially published shard %s", target)
+                _log_cleanup("exception", "Cannot remove partially published shard %s", target)
         for target, backup in reversed(retired):
             try:
                 os.rename(backup, target)
             except OSError:
-                logger.exception("Restore %s manually from %s", target, backup)
+                _log_cleanup("exception", "Restore %s manually from %s", target, backup)
         raise
     finally:
-        _cleanup()
+        _cleanup(preserve_error=swap_failed)
     try:
         dir_fd = os.open(out_dir, os.O_RDONLY)  # raw-open: directory fsync handle — no bytes read; a symlinked out_dir must still fsync (renames above traversed it)
         try:
