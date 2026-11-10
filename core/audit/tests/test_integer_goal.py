@@ -75,4 +75,4 @@ def test_confined_worker_cannot_promote_a_negated_division_goal():
     assert result.outcome == 'inconclusive', result.errors
     assert result.errors == []
     assert result.matches == []
-    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v3'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v4'

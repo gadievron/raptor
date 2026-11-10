@@ -24,8 +24,11 @@ def check_integer_division(source, hypothesis, *, language, integer_abi=None):
     """Find a defined-prefix input causing zero division or signed MIN/-1."""
     details = {'division_status': 'unavailable', 'violation': None, 'witness_validated': False}
     claim = parse_division_claim(hypothesis)
-    if claim is None or integer_abi_record(integer_abi) is None or not z3_available():
+    if integer_abi_record(integer_abi) is None or not z3_available():
         return details
+    if claim is None:
+        from .integer_affine_division import check_affine_division
+        return check_affine_division(source, hypothesis, language=language, integer_abi=integer_abi)
     requested = parse_integer_goal(hypothesis, DIVISION_GOALS)
     if requested is None:
         details["reason"] = "closed positive integer goal required"

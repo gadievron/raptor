@@ -387,7 +387,15 @@ def _operations(source, language, abi):
             deferred_guards.append((target, op, (name, str(value)),
                                     f"constant-comparison-{'true' if truth else 'false'}", mechanism,
                                     {"binding_status": "candidate", "candidate_basis": "masked-out-bits"}))
-    return result + deferred_guards + affine_candidates
+    from .integer_affine_division import affine_division_candidates
+    affine_divisions = []
+    for target, numerator, count, operation, offset, op, kind in affine_division_candidates(source, language=language, integer_abi=abi):
+        subject = 'zero divisor' if kind == 'zero-divisor' else 'division overflow'
+        mechanism = f"Potential {subject} in `{numerator} {op} ({count}{operation}{offset})`."
+        if len(mechanism) <= 300:
+            affine_divisions.append((target, op, (numerator, count), kind, mechanism,
+                                     {'binding_status': 'candidate', 'candidate_basis': 'affine-divisor'}))
+    return result + deferred_guards + affine_candidates + affine_divisions
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
