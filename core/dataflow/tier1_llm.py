@@ -762,9 +762,23 @@ def try_tier1b(
         # adjudication paths.  Z3 proof + chain check.
         verdict = prove_neutralizes(mech, sink_class)
         if not verdict.sound:
+            diagnostic = None
+            if language == "python":
+                from core.dataflow.string_slice_diagnostic import diagnose_validator_slice
+
+                observed_line = _find_best_validator_line(
+                    source_text, spec.validator_source_line, sink_line, language,
+                )
+                if observed_line is not None:
+                    diagnostic = diagnose_validator_slice(
+                        source_text, observed_line, sink_line, mech, sink_class,
+                    )
+            detail = (f"; conditional slice model: {diagnostic['status']} "
+                      "(not source-bound)" if diagnostic else "")
             return Tier0Result(
-                Tier0Status.DECLINED, verdict.reasoning, spec=mech,
+                Tier0Status.DECLINED, verdict.reasoning + detail, spec=mech,
                 counterexample=verdict.counterexample,
+                extras={"smt_slice_model": diagnostic} if diagnostic else {},
             )
         # Sound on language intersection — now confirm the variable
         # reaches the sink (chain check below), and for Python also
@@ -835,11 +849,21 @@ def try_tier1b(
                 sink_line_text, language=language,
             )
         if not chain_ok:
+            diagnostic = None
+            if language == "python":
+                from core.dataflow.string_slice_diagnostic import diagnose_validator_slice
+
+                diagnostic = diagnose_validator_slice(
+                    source_text, validator_line, sink_line, mech, sink_class,
+                )
+            detail = (f"; conditional slice model: {diagnostic['status']} "
+                      "(not source-bound)" if diagnostic else "")
             return Tier0Result(
                 Tier0Status.NOT_APPLICABLE,
                 f"Tier 1B: variable {mech.var_name!r} does not reach "
-                f"sink at line {sink_line}",
+                f"sink at line {sink_line}" + detail,
                 spec=mech,
+                extras={"smt_slice_model": diagnostic} if diagnostic else {},
             )
         if language == "python" and source_text:
             if mech.kind == "charset_sub":

@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import ast
 from hashlib import sha256
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.dataflow.smt_barrier import ValidatorSpec
 
 
 def _constant_index(node: ast.expr | None) -> int | None:
@@ -125,3 +129,26 @@ def slice_model_diagnostic(
         "input_value": result.input_value,
         "output_value": result.output_value,
     }
+
+
+def diagnose_validator_slice(
+    source_text: str, validator_line: int, sink_line: int,
+    spec: ValidatorSpec, sink_class: str,
+) -> dict | None:
+    """Lower the existing regex frontend's model for shared diagnostics."""
+    from core.dataflow.smt_barrier import (
+        _charset_body_is_safe, _iter_charclass_atoms, danger_chars_for,
+    )
+
+    if spec.kind != "charset" or not _charset_body_is_safe(spec.charset):
+        return None
+    intervals = tuple(
+        (ord(atom[1]), ord(atom[2] if atom[0] == "range" else atom[1]))
+        for atom in _iter_charclass_atoms(spec.charset)
+    )
+    return slice_model_diagnostic(
+        source_text, validator_line, sink_line, spec.var_name, intervals,
+        allows_empty=spec.allows_empty,
+        optional_final_lf=spec.accepts_trailing_newline,
+        forbidden=tuple(ord(char) for char in (danger_chars_for(sink_class) or ())),
+    )
