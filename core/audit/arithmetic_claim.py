@@ -48,16 +48,24 @@ def _operator(token):
     return _WORD_OPERATORS.get(token.value.lower()) if token.kind == "identifier" else None
 
 
-def _atom(tokens, index, step=1, depth=0):
+def _atom(tokens, index, step=1, depth=0, *, negative_literals=False):
     if depth > _MAX_DEPTH or not 0 <= index < len(tokens):
         return None
     token = tokens[index]
+    if negative_literals and step == 1 and token.value == "-":
+        inner = _atom(tokens, index + 1, step, depth + 1, negative_literals=False)
+        if inner is not None and _INTEGER_LITERAL_RE.fullmatch(inner[0]):
+            from .integer_literals import integer_literal_value
+            value = integer_literal_value(inner[0])
+            if value is not None:
+                return str(-value), inner[1]
+        return None
     if token.kind in {"atom", "identifier", "number"}:
         if IDENTIFIER_RE.fullmatch(token.value) or _INTEGER_LITERAL_RE.fullmatch(token.value):
             return token.value, index + step
     opening, closing = ("(", ")") if step == 1 else (")", "(")
     if token.value == opening:
-        inner = _atom(tokens, index + step, step, depth + 1)
+        inner = _atom(tokens, index + step, step, depth + 1, negative_literals=negative_literals)
         if inner is not None:
             value, after = inner
             if 0 <= after < len(tokens) and tokens[after].value == closing:
@@ -65,7 +73,7 @@ def _atom(tokens, index, step=1, depth=0):
     return None
 
 
-def _binary(tokens, *, operators=None):
+def _binary(tokens, *, operators=None, negative_literals=False):
     # Strip only parentheses enclosing the complete expression.
     for _ in range(_MAX_DEPTH):
         if not tokens or tokens[0].value != "(":
@@ -78,18 +86,25 @@ def _binary(tokens, *, operators=None):
         if depth != 0 or index != len(tokens) - 1:
             break
         tokens = tokens[1:-1]
-    first = _atom(tokens, 0)
+    first = _atom(tokens, 0, negative_literals=negative_literals)
     if first is None:
         return None
     left, index = first
     if index >= len(tokens):
         return None
     token = tokens[index]
+    after_operator = index + 1
     operator = (_operator(token) if operators is None else
                 token.value if token.kind == "symbol" and token.value in operators else None)
+    if operator is None and operators is not None and index + 1 < len(tokens):
+        following = tokens[index + 1]
+        combined = token.value + following.value
+        if token.kind == following.kind == "symbol" and token.end == following.start and combined in operators:
+            operator = combined
+            after_operator += 1
     if operator is None:
         return None
-    second = _atom(tokens, index + 1)
+    second = _atom(tokens, after_operator, negative_literals=negative_literals)
     if second is None or second[1] != len(tokens):
         return None
     return ArithmeticClaim((left, second[0]), operator)
@@ -197,7 +212,7 @@ def has_integer_overflow_subject(hypothesis: str) -> bool:
     return isinstance(hypothesis, str) and len(hypothesis) <= _MAX_CHARS and bool(_INTEGER_SUBJECT.search(hypothesis))
 
 
-def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
+def _quoted_arithmetic_claim(hypothesis, operators, *, negative_literals=False):
     """One explicitly quoted atomic division/remainder; never a compound prefix."""
     if not isinstance(hypothesis, str) or len(hypothesis) > _MAX_CHARS:
         return None
@@ -208,11 +223,21 @@ def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
         if match.lastgroup != "quoted":
             continue
         text = match.group()[1:-1]
-        if "/" not in text and "%" not in text:
+        if not any(operator in text for operator in operators):
             continue
         tokens = _tokens(text, code=True)
-        expression = _binary(tokens, operators={"/", "%"}) if tokens else None
+        expression = _binary(tokens, operators=operators, negative_literals=negative_literals) if tokens else None
         if expression is None or (selected is not None and selected != expression):
             return None
         selected = expression
     return selected
+
+
+def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """One quoted atomic quotient/remainder, preserving the existing grammar."""
+    return _quoted_arithmetic_claim(hypothesis, {"/", "%"})
+
+
+def parse_shift_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """One quoted atomic shift with an independently typed count operand."""
+    return _quoted_arithmetic_claim(hypothesis, {"<<", ">>"}, negative_literals=True)
