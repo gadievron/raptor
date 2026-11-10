@@ -133,3 +133,66 @@ def test_existing_later_gap_seeds_reserve_the_run_budget_before_new_gaps():
     sources["old0.c"] = source.replace("Value % Count", "(Value >> Count)")
     assert seed_arithmetic_hypotheses(old, sources, mode="quality", integer_abi="lp64") == 3
     assert sum(len(g.get("injected_hypotheses", [])) for g in old) <= MAX_SEEDS_PER_RUN
+
+
+def test_type_range_comparison_seed_reaches_the_source_bound_oracle():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.hypothesis_mapping import hypothesis_to_smt_verb
+    from core.audit.integer_comparison import check_integer_comparison
+
+    source = "int Read(unsigned Value){if(Value<0)return 1;return 0;}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 1
+    seed = gap["injected_hypotheses"][0]
+    assert seed["arithmetic_site"]["claim_kind"] == "constant-comparison-false"
+    assert hypothesis_to_smt_verb(seed["mechanism"]) == "check-integer-comparison"
+    assert "verdict" not in seed and seed["confidence"] == "low"
+    checked = check_integer_comparison(source, seed["mechanism"], language="c", integer_abi="lp64")
+    assert checked["matches_claim"] is True
+    assert checked["entry_witness_validated"] is True
+
+
+@pytest.mark.parametrize("spelling,expression,expected", [
+    ("int", "Value<0", None),
+    ("unsigned char", "Value<128", None),
+    ("signed char", "Value<128", True),
+    ("unsigned", "Value>=0", True),
+    ("unsigned", "Value== -1", None),
+    ("int", "Value!=Value", False),
+])
+def test_only_type_constant_comparisons_create_quality_leads(spelling, expression, expected):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.integer_comparison import check_integer_comparison
+
+    source = f"int Read({spelling} Value){{if({expression})return 1;return 0;}}"
+    gap = {"file": "math.cpp", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.cpp": source}, mode="quality", integer_abi="lp64") == (expected is not None)
+    if expected is not None:
+        seed = gap["injected_hypotheses"][0]
+        checked = check_integer_comparison(source, seed["mechanism"], language="cpp", integer_abi="lp64")
+        assert checked["matches_claim"] is True
+        assert checked["constant_truth"] is expected
+
+
+def test_many_ordinary_comparisons_do_not_evict_arithmetic_discovery():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+
+    source = "int Read(int Value,int Count){" + "".join(f"if(Value>{i})return 0;" for i in range(25)) + "return Value/Count;}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 2
+    assert all(s["arithmetic_site"]["operator"] == "/" for s in gap["injected_hypotheses"])
+
+
+@pytest.mark.parametrize("expression,verb", [("Value / 0", "division"), ("Value << 32", "shift")])
+def test_literal_atoms_are_typed_without_requiring_a_parameter_declaration(expression, verb):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.integer_division import check_integer_division
+    from core.audit.integer_shift import check_shift_count
+
+    source = f"int Read(int Value){{return {expression};}}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") > 0
+    seed = next(s for s in gap["injected_hypotheses"] if s["arithmetic_site"]["claim_kind"] == ("zero-divisor" if verb == "division" else "invalid-shift-count"))
+    check = check_integer_division if verb == "division" else check_shift_count
+    checked = check(source, seed["mechanism"], language="c", integer_abi="lp64")
+    assert checked["violation"] is True and checked["witness_validated"] is True
