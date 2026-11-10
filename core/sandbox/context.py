@@ -3751,6 +3751,25 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # this is the unified view exposed as `run.events`.
     _sandbox_events: list = []
 
+    def _own_input_spools(execute):
+        from contextlib import ExitStack
+        from functools import wraps
+        from ._retirement import retire_parent_resources
+
+        @wraps(execute)
+        def owned(cmd, **kwargs):
+            if '_input_spool_files' in kwargs:
+                raise TypeError('_input_spool_files is an internal sandbox argument')
+            files = ExitStack()
+            try:
+                return execute(cmd, _input_spool_files=files, **kwargs)
+            finally:
+                # Exceptions retain frames. File lifetime must end with this
+                # call, even while the caller keeps an execution traceback.
+                retire_parent_resources(files.close)
+        return owned
+
+    @_own_input_spools
     def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         """Run a command inside the sandbox namespace defined by the enclosing
         `with sandbox(...)` block.
@@ -3775,6 +3794,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         """
         from core.config import RaptorConfig
         _job_controller = kwargs.pop('_job_controller', None)
+        _input_spool_files = kwargs.pop('_input_spool_files')
 
         # Reject sandbox kwargs — they'd be silently ignored otherwise and
         # callers would wrongly assume per-call overrides took effect.
@@ -5551,25 +5571,29 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             if isinstance(_in_payload, str):
                 _enc = kwargs.get("encoding") or "utf-8"
                 _in_payload = _in_payload.encode(_enc, "strict")
+            from ._retirement import retire_parent_resources
             _stdin_spool = _tf_mod.TemporaryFile()
-            _stdin_spool.write(_in_payload)
-            _stdin_spool.flush()
-            # Re-open the spool read-only through the fd-path so the
-            # target's fd 0 carries no write capability — the RW
-            # description would let it grow a host-tmp file to
-            # RLIMIT_FSIZE. The new description starts at offset 0.
-            _ro_fd = os.open(f"/proc/self/fd/{_stdin_spool.fileno()}",
-                             os.O_RDONLY)
-            _stdin_spool.close()
-            _stdin_spool_ro = open(_ro_fd, "rb")
+            try:
+                _stdin_spool.write(_in_payload)
+                _stdin_spool.flush()
+                # Re-open read-only before closing the unlinked writer. The
+                # child receives no capability to grow the host temp file.
+                _stdin_spool_ro = open(
+                    f"/proc/self/fd/{_stdin_spool.fileno()}", "rb")
+                try:
+                    _input_spool_files.callback(_stdin_spool_ro.close)
+                except BaseException:
+                    retire_parent_resources(_stdin_spool_ro.close)
+                    raise
+            finally:
+                retire_parent_resources(_stdin_spool.close)
             # Integrity gate on the description the child will read:
             # a short or empty spool silently turns a witness-driven
             # run into "input never arrived" — the target exits clean
             # and the caller records a wrong verdict instead of an
             # error. Fail loud here instead.
-            _spool_size = os.fstat(_ro_fd).st_size
+            _spool_size = os.fstat(_stdin_spool_ro.fileno()).st_size
             if _spool_size != len(_in_payload):
-                _stdin_spool_ro.close()
                 from .errors import SandboxSetupError
                 msg_0 = (
                     f"sandbox stdin spool integrity check failed: "
@@ -5584,10 +5608,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "filesystem) or pass stdin=<fd> directly.",
                 )
             kwargs["stdin"] = _stdin_spool_ro
-            # Lifetime: this frame outlives the synchronous spawn (the
-            # child dup2s the fd before exec), and CPython closes the
-            # unlinked spool at frame exit — no path ever exists for
-            # any principal to race, and nothing leaks.
+            # The per-call owner closes this description after synchronous
+            # execution or refusal, independently of traceback/frame lifetime.
         # need_unshare joins the eligibility predicate: with the
         # unshare-CLI lane deleted, the fork-based spawn backend is
         # the ONLY namespace lane, so every namespace-needing shape —
