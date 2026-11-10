@@ -771,6 +771,14 @@ def _metadata_lock(meta_path: Path):
         )
         yield
         return
+    except BaseException:
+        if fd is not None:
+            retiring_fd, fd = fd, None
+            try:
+                os.close(retiring_fd)
+            except BaseException:
+                pass  # Preserve the unexpected setup error after consuming the descriptor.
+        raise
     try:
         if not acquire_flock_bounded(
                 fd, lock_path, subject="metadata", stamp=True,
