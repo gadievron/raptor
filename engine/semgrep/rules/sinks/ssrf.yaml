@@ -219,6 +219,8 @@ rules:
                   - pattern: $REQ.body.$PROP
                   - pattern: $REQ.headers[...]
                   - pattern: $REQ.headers.$PROP
+                  - pattern: $REQ.get($FIELD)
+                  - pattern: $REQ.header($FIELD)
               - metavariable-regex:
                   metavariable: $REQ
                   regex: '(?i)^(req|request)$'

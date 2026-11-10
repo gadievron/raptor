@@ -196,6 +196,8 @@ _MATRICES["javascript"][2].extend([
 ])
 for _source in ('req.params.sql', 'req.body.sql', 'req.headers["x-query"]',
                 'req.headers.host', 'request.headers.host',
+                'req.get("host")', 'req.header("host")',
+                'request.get("host")', 'request.header("host")',
                 'ctx.query.sql', 'ctx.params.sql', 'ctx.request.body.sql', 'ctx.request.body["sql"]',
                 'process.env.QUERY', 'process.argv[2]'):
     _MATRICES["javascript"][2].extend([
@@ -211,6 +213,8 @@ _MATRICES["javascript"][2].extend([
     ('search.query({...req.query});', False),
     ('connection.query(req);', False),
     ('connection.query(local.headers.host);', False),
+    ('connection.query(local.get("host"));', False),
+    ('connection.query(local.header("host"));', False),
 ])
 
 _MATRICES["typescript"] = (
