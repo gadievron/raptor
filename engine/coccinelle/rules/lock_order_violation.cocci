@@ -1,16 +1,13 @@
-// lock_order_violation.cocci — Detect ABBA deadlock patterns within a
-// single function.
+// lock_order_violation.cocci — Review opposite lock-acquisition sequences.
 //
-// The pattern: lock A is acquired, then lock B, establishing an A→B
-// ordering. On an error or alternate path in the same function, lock B
-// is acquired before lock A, creating a B→A ordering. If two threads
-// execute the two paths concurrently, deadlock results.
-//
-// Simple intra-function version — cross-function lock ordering is too
-// complex for Coccinelle's pattern matching.
+// Opposite orders can create an ABBA cycle when both sequences use the
+// same lock objects and can execute concurrently without common outer
+// serialisation. Receiver replacement and execution context are not proved
+// by repeated expression syntax, so a match remains a review candidate.
+// This intra-function pattern does not establish cross-function ordering.
 //
 // Covers CWE-833 (deadlock) and CWE-667 (improper locking).
-// @role: verification
+// @role: detection
 
 // spin_lock ABBA — normal path locks A then B, alternate path locks B then A
 @spin_abba@
@@ -51,7 +48,7 @@ for _p in p_b:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "lock_order_violation",
-          "message": "ABBA deadlock: spin_lock %s then %s, but alternate path locks %s first" % (A, B, B)}
+          "message": "Candidate: opposite spin_lock order for %s and %s; verify lock-object identity, concurrent reachability and outer serialisation before concluding an ABBA deadlock (CWE-833/CWE-667)." % (A, B)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // mutex_lock ABBA — same pattern with mutexes
@@ -93,5 +90,5 @@ for _p in p_b:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "lock_order_violation",
-          "message": "ABBA deadlock: mutex_lock %s then %s, but alternate path locks %s first" % (A, B, B)}
+          "message": "Candidate: opposite mutex_lock order for %s and %s; verify lock-object identity, concurrent reachability and outer serialisation before concluding an ABBA deadlock (CWE-833/CWE-667)." % (A, B)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")

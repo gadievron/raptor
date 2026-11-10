@@ -1,8 +1,7 @@
-"""Fixture tests for the lock_order_violation rule.
+"""Lock-order candidates need object-identity and concurrency review.
 
-ABBA requires lock B still HELD when A is acquired on the reversed
-path; an intervening release of B makes the two critical sections
-non-overlapping and must not be reported.
+An intervening release of B still excludes the reversed nesting shape.
+A retained syntactic match alone does not establish an ABBA deadlock.
 """
 
 from __future__ import annotations
@@ -105,3 +104,50 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.slow
+def test_receiver_changes_require_lock_identity_review(tmp_path):
+    import json
+
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    lines = ['struct lock { int value; };',
+             'struct pair { struct lock a, b; };']
+    expected = set()
+    for family in ['spin', 'mutex']:
+        for variant in ['stable', 'rebound', 'released']:
+            acquire, release = family + '_lock', family + '_unlock'
+            lines += [f'void {family}_{variant}(struct pair *left, struct pair *right) {{',
+                      'if (left == right) return;', 'struct pair *ctx = left;',
+                      f'{acquire}(&ctx->a);', f'{acquire}(&ctx->b);',
+                      f'{release}(&ctx->b);', f'{release}(&ctx->a);']
+            if variant == 'rebound':
+                lines += ['ctx = right;']
+            lines += [f'{acquire}(&ctx->b);']
+            second_b = len(lines)
+            if variant == 'released':
+                lines += [f'{release}(&ctx->b);']
+            lines += [f'{acquire}(&ctx->a);', f'{release}(&ctx->a);']
+            if variant != 'released':
+                lines += [f'{release}(&ctx->b);']
+                expected.add(second_b)
+            lines += ['}']
+    target = tmp_path / 'owned.c'
+    target.write_text('\n'.join(lines) + '\n')
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Owned lock receiver identity syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert {row['line'] for row in rows} == expected
+    assert len(rows) == len(expected) == 4
+    assert {row['rule'] for row in rows} == {'lock_order_violation'}
+    assert all(row['message'].startswith('Candidate:')
+               and 'lock-object identity' in row['message']
+               and 'concurrent reachability' in row['message'] for row in rows)
