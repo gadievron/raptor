@@ -12,6 +12,7 @@ import pytest
 from core.atomic_fs import rmtree_hardened
 from core.build import artifacts
 from core.inventory.binary_oracle_corpora import _cache
+from core.testing.threads import retiring_threads
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="corpus caches require POSIX locks")
 
@@ -294,16 +295,11 @@ def test_concurrent_preparations_build_once(case, monkeypatch):
         except BaseException as exc:
             errors.append(exc)
     workers = [threading.Thread(target=prepare), threading.Thread(target=prepare)]
-    try:
+    with retiring_threads(workers, release=release.set, timeout=15):
         workers[0].start()
         assert entered.wait(10), "first build did not enter"
         workers[1].start()
         assert second_attempt.wait(10), "second prepare did not attempt the lock"
-    finally:
-        release.set()
-        for worker in workers:
-            if worker.ident is not None:
-                worker.join(timeout=15)
     assert not any(worker.is_alive() for worker in workers), "owned prepare workers did not exit"
     assert not errors
     assert len(results) == 2 and state["calls"] == 1
