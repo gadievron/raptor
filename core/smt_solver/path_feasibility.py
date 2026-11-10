@@ -737,6 +737,30 @@ _STATE_EFFECT_KINDS = frozenset({
 _ADDRESS_ARGUMENT_RE = re.compile(r"(?<!&)&(?!&)")
 
 
+def _possible_template_callee(masked: str, ending: int) -> bool:
+    """Recognise a possible template suffix only for negative effect checks.
+
+    Angle syntax is type-dependent. This does not admit a template call
+    or distinguish every comparison; an ambiguous address exposure must
+    not preserve scalar values merely because expression parsing declines.
+    """
+    depth = 1
+    index = ending - 1
+    while index >= 0:
+        char = masked[index]
+        if char == '>':
+            depth += 1
+        elif char == '<':
+            depth -= 1
+            if depth == 0:
+                index -= 1
+                while index >= 0 and masked[index].isspace():
+                    index -= 1
+                return index >= 0 and (masked[index].isalnum() or masked[index] in '_)]')
+        index -= 1
+    return False
+
+
 def _call_may_expose_state(masked: str) -> bool:
     """Decline ambiguous address/bitwise syntax inside opaque arguments.
 
@@ -750,13 +774,17 @@ def _call_may_expose_state(masked: str) -> bool:
     while index < len(masked):
         head = _CALL_HEAD_RE.match(masked, index)
         if head is None:
-            # A parenthesised callee or a function-pointer table entry
-            # can expose the same address as a directly named call.
+            # Grouped, indexed, lambda and template callees can expose
+            # addresses even though the arithmetic grammar declines them.
             previous = index - 1
-            if masked[index] == "(":
+            if masked[index] in "({":
                 while previous >= 0 and masked[previous].isspace():
                     previous -= 1
-            if masked[index] != "(" or previous < 0 or masked[previous] not in ")]":
+            possible_callee = previous >= 0 and (
+                masked[previous] in ")]}"
+                or (masked[previous] == '>' and _possible_template_callee(masked, previous))
+            )
+            if masked[index] not in "({" or not possible_callee:
                 index += 1
                 continue
             opening = index
@@ -764,8 +792,19 @@ def _call_may_expose_state(masked: str) -> bool:
             opening = head.end()
             while opening < len(masked) and masked[opening].isspace():
                 opening += 1
-        if opening < len(masked) and masked[opening] == "(":
-            end = find_call_end(masked, opening)
+        if opening < len(masked) and masked[opening] in "({":
+            if masked[opening] == '(':
+                end = find_call_end(masked, opening)
+            else:
+                # Non-code has already been masked. Balance nested braced
+                # construction without mistaking a later predicate's &
+                # for an argument. This supplies no expression admission.
+                end, depth = opening + 1, 1
+                while end < len(masked) and depth:
+                    depth += (masked[end] == '{') - (masked[end] == '}')
+                    end += 1
+                if depth:
+                    end = None
             if _ADDRESS_ARGUMENT_RE.search(masked[opening + 1:end if end is not None else len(masked)]):
                 return True
             if end is None:
