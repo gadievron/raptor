@@ -50,6 +50,7 @@ from collections.abc import Callable
 
 from core.llm.config import ModelConfig
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 from core.llm.providers import create_provider
 from packages.coccinelle.models import SpatchResult
 from packages.coccinelle.runner import is_available as spatch_is_available
@@ -458,56 +459,53 @@ def cocci_hunt_dispatch(
     # ``spatch_runner=`` wins (used by tests to inject mocks). Built
     # before the rule tempfile so failure here has nothing to clean up.
     effective_runner = spatch_runner
-    _scratch_stack = contextlib.ExitStack()
-    if effective_runner is None and sandbox:
+    with preserving_stream_error(contextlib.ExitStack()) as _scratch_stack:
+        if effective_runner is None and sandbox:
+            try:
+                # Writable scratch for the sandbox: hosts the fake $HOME
+                # (fake_home requires an output dir) and bounds Landlock's
+                # writable scope. Removed when the stack closes in the
+                # finally below; the raptor-cocci-hunt- prefix is listed in
+                # the tmp reaper's static tuple, so a SIGKILLed hunt
+                # strands nothing past the age floor.
+                scratch_output = _scratch_stack.enter_context(
+                    scratch_dir("raptor-cocci-hunt-"))
+                effective_runner = _make_locked_sandbox_runner(
+                    Path(repo_path), scratch_output,
+                )
+            except Exception as exc:  # noqa: BLE001 - fail closed, surface as error variant
+                return [{"error": (
+                    f"sandbox unavailable for spatch — refusing to run the "
+                    f"LLM-emitted rule unisolated: {type(exc).__name__}: {exc}"
+                )}]
+
+        # Step 2: write the rule to a temp file and hand it to spatch.
+        # The runner's harness auto-injection writes the harnessed
+        # text to its own tempfile when needed (fixed by the
+        # runner-fix PR).
+
+        from core.run.scratch import write_temp_text
+
+        rule_path = None
         try:
-            # Writable scratch for the sandbox: hosts the fake $HOME
-            # (fake_home requires an output dir) and bounds Landlock's
-            # writable scope. Removed when the stack closes in the
-            # finally below; the raptor-cocci-hunt- prefix is listed in
-            # the tmp reaper's static tuple, so a SIGKILLed hunt
-            # strands nothing past the age floor.
-            scratch_output = _scratch_stack.enter_context(
-                scratch_dir("raptor-cocci-hunt-"))
-            effective_runner = _make_locked_sandbox_runner(
-                Path(repo_path), scratch_output,
+            rule_path = write_temp_text(rule_text, prefix="tmp", suffix=".cocci")
+            result: SpatchResult = spatch_run_rule(
+                target=Path(repo_path),
+                rule=rule_path,
+                timeout=rule_timeout_s,
+                no_includes=True,  # operator targets are untrusted
+                subprocess_runner=effective_runner,
             )
-        except Exception as exc:  # noqa: BLE001 - fail closed, surface as error variant
-            _scratch_stack.close()
+        except Exception as exc:  # noqa: BLE001 - spatch wrapper failure
             return [{"error": (
-                f"sandbox unavailable for spatch — refusing to run the "
-                f"LLM-emitted rule unisolated: {type(exc).__name__}: {exc}"
+                f"spatch invocation failed: {type(exc).__name__}: {exc}"
             )}]
-
-    # Step 2: write the rule to a temp file and hand it to spatch.
-    # The runner's harness auto-injection writes the harnessed
-    # text to its own tempfile when needed (fixed by the
-    # runner-fix PR).
-
-    from core.run.scratch import write_temp_text
-
-    rule_path = None
-    try:
-        rule_path = write_temp_text(rule_text, prefix="tmp", suffix=".cocci")
-        result: SpatchResult = spatch_run_rule(
-            target=Path(repo_path),
-            rule=rule_path,
-            timeout=rule_timeout_s,
-            no_includes=True,  # operator targets are untrusted
-            subprocess_runner=effective_runner,
-        )
-    except Exception as exc:  # noqa: BLE001 - spatch wrapper failure
-        return [{"error": (
-            f"spatch invocation failed: {type(exc).__name__}: {exc}"
-        )}]
-    finally:
-        try:
-            if rule_path is not None:
-                rule_path.unlink(missing_ok=True)
-        except OSError:
-            pass
         finally:
-            _scratch_stack.close()
+            try:
+                if rule_path is not None:
+                    rule_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     if not result.ok:
         err = "; ".join(result.errors)[:500] if result.errors else (
