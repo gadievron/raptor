@@ -14,6 +14,7 @@ class TestAddDirectory(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         self.output_dir = str(Path(self.tmpdir.name) / "output")
         # Per-test scratch target; lives under the same tmpdir, so no
@@ -126,6 +127,7 @@ class TestRemoveRun(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         # Isolate the output base: two tests here call create("myapp")
         # without an explicit output_dir, which defaults to the shared
@@ -179,6 +181,7 @@ class TestAdoptionProjections(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         self.output_dir = str(Path(self.tmpdir.name) / "output")
         self.target_code = str(Path(self.tmpdir.name) / "code")

@@ -237,6 +237,7 @@ class TestProjectManager(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         self.projects_dir = Path(self.tmpdir.name) / "projects"
         # Isolate the output base. ProjectManager.create() defaults
         # output_dir to the shared repo-relative DEFAULT_OUTPUT_BASE
