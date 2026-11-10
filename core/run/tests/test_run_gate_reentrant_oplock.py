@@ -194,29 +194,34 @@ class TestReentrantGateOpLock:
             finally:
                 done.set()
 
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            os.write(fd, json.dumps({
-                "pid": os.getpid(),
-                "operation": "journal-reindex-sweep",
-                "since": datetime.now(timezone.utc).isoformat(),
-            }).encode("utf-8"))
+        from core.testing.threads import retiring_threads
 
-            thread = threading.Thread(target=worker, daemon=True)
-            thread.start()
-            wrote_while_held = done.wait(timeout=1.5)
-            assert not wrote_while_held, (
-                "re-entrant start_run completed while .op.lock was "
-                "held — it wrote without queueing behind the holder")
-        finally:
-            os.close(fd)   # releases the flock with it
+        workers = []
+        with retiring_threads(workers, release=lambda: None, timeout=5.0):
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                os.write(fd, json.dumps({
+                    "pid": os.getpid(),
+                    "operation": "journal-reindex-sweep",
+                    "since": datetime.now(timezone.utc).isoformat(),
+                }).encode("utf-8"))
 
-        assert done.wait(timeout=15.0), (
-            "start_run did not proceed after the lock was released")
-        thread.join(timeout=5.0)
-        assert not failure, failure
-        meta = json.loads(
-            (env.run_dir / metadata.RUN_METADATA_FILE).read_text(
-                encoding="utf-8"))
-        assert meta["status"] == "running"
-        assert _op_lock_is_free(env.project_dir)
+                thread = threading.Thread(target=worker, daemon=True)
+                workers.append(thread)
+                thread.start()
+                wrote_while_held = done.wait(timeout=1.5)
+                assert not wrote_while_held, (
+                    "re-entrant start_run completed while .op.lock was "
+                    "held — it wrote without queueing behind the holder")
+            finally:
+                os.close(fd)   # releases the flock with it
+
+            assert done.wait(timeout=15.0), (
+                "start_run did not proceed after the lock was released")
+            thread.join(timeout=5.0)
+            assert not failure, failure
+            meta = json.loads(
+                (env.run_dir / metadata.RUN_METADATA_FILE).read_text(
+                    encoding="utf-8"))
+            assert meta["status"] == "running"
+            assert _op_lock_is_free(env.project_dir)
