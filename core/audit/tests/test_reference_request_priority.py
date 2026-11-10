@@ -23,7 +23,7 @@ def test_exact_id_priority_survives_owned_continuation(tmp_path, exact_first):
     origin = KnowledgeOrigin("owned", "unit.c", "f", 1, 1,
                              capture_source_identity(tmp_path, "unit.c"))
     requests = [{"topic": "integer division", "entry_id": "c.integer-division"},
-                {"topic": "integer conversion"}]
+                {"topic": "scalar logical"}]
     if not exact_first:
         requests.reverse()
     ctx = {"file": "unit.c", "function": "f", "line_start": 1, "line_end": 1,
@@ -38,6 +38,10 @@ def test_exact_id_priority_survives_owned_continuation(tmp_path, exact_first):
         answers = ctx["language_reference_answers"]
         assert {a.request_id for a in answers} == {exact.request_id, topic.request_id}
         exact_answer, = (a for a in answers if a.request_id == exact.request_id)
+        topic_answer, = (a for a in answers if a.request_id == topic.request_id)
+        # This is an ordering control, not an incidental shared-content omission.
+        assert {e.entry_id for e in exact_answer.entries}.isdisjoint(
+            e.entry_id for e in topic_answer.entries)
         # Establish that the whole exact answer fits beside the same source.
         alone = {**ctx, "language_reference_answers": (exact_answer,)}
         single = format_context_for_prompt(alone, budget_limit=6000)
