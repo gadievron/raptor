@@ -1198,10 +1198,13 @@ class TestUpdateStatusConcurrency(unittest.TestCase):
 
             threads = [threading.Thread(target=writer, args=(i,))
                        for i in range(n_writers)]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join(timeout=30)
+            from core.testing.threads import retiring_threads
+
+            with retiring_threads(threads, release=barrier.abort, timeout=30):
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=30)
 
             self.assertEqual(errors, [])
             meta = load_json(run_dir / RUN_METADATA_FILE)
