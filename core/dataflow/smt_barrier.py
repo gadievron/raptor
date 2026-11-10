@@ -1060,8 +1060,39 @@ def _line_in_try_body_with_catching_handler(
     return False
 
 
+def _exit_call_identity_unverified(source_text: str, tree: ast.Module, line: int) -> bool:
+    """Refuse known conflicts for exit spellings credited in this scope.
+
+    Use the existing source identity checker, not a second name binder.
+    Each spelling has one lexical binding within the current function;
+    at most three representative checks cover exit, quit and sys.exit.
+    Definition headers and nested scopes supply no exit credit here.
+    """
+    scope = _function_containing(tree, line)
+    body = scope.body if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else tree.body
+    root = ast.Module(body=body, type_ignores=[])
+    checked: set[str] = set()
+    for node in _walk_same_scope(root):
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and _is_sys_exit_call(node.value)):
+            continue
+        call = node.value
+        if isinstance(call.func, ast.Attribute):
+            canonical = "sys.exit"
+        elif isinstance(call.func, ast.Name):
+            canonical = call.func.id
+        else:
+            continue
+        if canonical in checked:
+            continue
+        checked.add(canonical)
+        if known_python_identity_conflict(source_text, call.lineno, (canonical,)):
+            return True
+    return False
+
+
 def _validator_call_error_may_reach_sink(
-    tree: ast.AST, validator_line: int, sink_line: int,
+    tree: ast.Module, validator_line: int, sink_line: int, *, source_text: str,
 ) -> bool:
     """A caught call error must not bypass validation on the sink path.
 
@@ -1070,6 +1101,8 @@ def _validator_call_error_may_reach_sink(
     in the same protected body is skipped by the exception edge; otherwise
     suppression can leave the input unvalidated at the sink.
     """
+    if _exit_call_identity_unverified(source_text, tree, validator_line):
+        return True
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
             continue
@@ -2129,7 +2162,7 @@ def _lexical_validator_dominates(
         return False
     if not _validator_block_exits_on_failure(tree, validator_line):
         return False
-    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line):
+    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line, source_text=source_text):
         return False
     if not _if_test_contains_call(tree, validator_line):
         return False
@@ -2853,7 +2886,7 @@ def _lexical_substitution_dominates(
         return False
     if not _same_function_in_order(tree, validator_line, sink_line):
         return False
-    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line):
+    if _validator_call_error_may_reach_sink(tree, validator_line, sink_line, source_text=source_text):
         return False
     if _variable_reassigned_between(tree, var_name, validator_line, sink_line):
         return False

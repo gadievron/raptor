@@ -557,7 +557,7 @@ def _try_known_safe_call(
         if conflict:
             return Tier0Result(Tier0Status.NOT_APPLICABLE, conflict)
     if tree is not None and _validator_call_error_may_reach_sink(
-        tree, validator_line, sink_line,
+        tree, validator_line, sink_line, source_text=source_text,
     ):
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
