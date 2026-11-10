@@ -1229,6 +1229,12 @@ def _pin_open_verified(
             return fh
     except OSError:
         pass
+    except BaseException:
+        try:
+            fh.close()
+        except BaseException:
+            pass  # Retire the unreturned reader without replacing setup failure.
+        raise
     try:
         fh.close()
     except OSError:
