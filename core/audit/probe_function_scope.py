@@ -173,7 +173,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-division":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "source-integer-division-v1"
+        binding["query_contract"] = "source-integer-division-v2"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-array-bounds":
         from .integer_abi import integer_abi_record

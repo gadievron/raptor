@@ -31,6 +31,7 @@ def test_worker_routes_only_a_real_fault_to_a_scoped_positive_receipt(safe):
     assert result.outcome == ('inconclusive' if safe else 'confirmed')
     assert result.rule_id == 'smt:' + VERB
     assert result.details['source_scope']['function'] == 'Read'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v2'
     assert result.details['oracle_scope'] == 'integer-division-fault'
     assert bool(result.matches) is not safe
 
@@ -82,3 +83,16 @@ def test_real_confined_worker_returns_a_source_bound_zero_divisor():
     assert result.details['witness_validated'] is True
     assert result.details['model']['Right'] == 0
     assert result.details['source_scope']['integer_abi']['name'] == 'ilp32'
+
+
+@pytest.mark.slow
+def test_real_confined_worker_preserves_a_negative_literal_fault_subject():
+    source = 'int Read(int Value){return Value/-1;}'
+    claim = 'division overflow in `Value / -1`'
+    result = sweep.run_smt_verb_direct(file_path='record.c', function_name='Read', verb=VERB,
+                                      source=source, hypothesis=claim, integer_abi='lp64')
+    assert result.outcome == 'confirmed', result.errors
+    assert result.details['fault_kind'] == 'signed-division-overflow'
+    assert result.details['model']['Value'] == -(1 << 31)
+    assert result.details['witness_validated'] is True
+    assert result.details['source_scope']['query_contract'] == 'source-integer-division-v2'

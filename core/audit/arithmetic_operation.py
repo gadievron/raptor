@@ -46,7 +46,7 @@ def _unwrap(node):
 def _select_arithmetic_site(source, operands, operator, *, language):
     return _select_atomic_site(source, operands, operator, language=language,
                                operators={"+", "-", "*", "/", "%", "<<", ">>"},
-                               negative_literals=operator in {"<<", ">>"})
+                               negative_literals=operator in {"/", "%", "<<", ">>"})
 
 
 def _select_comparison_site(source, operands, operator, *, language):

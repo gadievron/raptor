@@ -234,8 +234,8 @@ def _quoted_arithmetic_claim(hypothesis, operators, *, negative_literals=False):
 
 
 def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
-    """One quoted atomic quotient/remainder, preserving the existing grammar."""
-    return _quoted_arithmetic_claim(hypothesis, {"/", "%"})
+    """One quoted atomic quotient/remainder with bounded signed int literals."""
+    return _quoted_arithmetic_claim(hypothesis, {"/", "%"}, negative_literals=True)
 
 
 def parse_shift_claim(hypothesis: str) -> ArithmeticClaim | None:
