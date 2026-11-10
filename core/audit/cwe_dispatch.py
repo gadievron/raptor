@@ -949,6 +949,14 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "codeql": None,
         "sinks": [],
     },
+    # Source-bound integer division/remainder faults; caller reachability is separate.
+    "CWE-369": {
+        "smt": "check-integer-division",
+        "cocci": ["division_by_zero.cocci"],
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+    },
     # Incorrect calculation — the pillar over the arithmetic family.
     # The SMT overflow verb plus the calculation-shape rules
     # (shift-exceeds-width, unchecked division) cover the mechanisms

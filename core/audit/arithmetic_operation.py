@@ -55,7 +55,7 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
         return ArithmeticOperation("unavailable")
     if len(source) > _MAX_SOURCE_CHARS:
         return ArithmeticOperation("unavailable")
-    if len(operands) != 2 or operator not in {"+", "-", "*"}:
+    if len(operands) != 2 or operator not in {"+", "-", "*", "/", "%"}:
         return ArithmeticOperation("unbound")
     try:
         parser = _get_parser(language)
