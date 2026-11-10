@@ -6,7 +6,7 @@ from core.smt_solver.witness import format_vars
 
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_operation import _unwrap
-from .arithmetic_types import common_integer_type, model_for_integer_terms
+from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
 from .integer_comparison_model import COMPARISONS, ComparisonModel, UnsupportedComparison
 from .integer_condition import CONDITION_GOALS
 from .integer_conversion import _frame
@@ -119,6 +119,69 @@ def disjunction_candidates(source, *, language, integer_abi):
             exclusions = constants[0] % (1 << kind.width) != constants[1] % (1 << kind.width)
         if complementary or exclusions:
             candidates.append((node, leaves))
+        if len(candidates) >= 16:
+            break
+    return candidates
+
+
+def _literal_intervals(op, value, low, high):
+    """Exact closed storage intervals for one value-preserving comparison."""
+    ranges = {'<': [(low, value - 1)], '<=': [(low, value)],
+              '>': [(value + 1, high)], '>=': [(value, high)],
+              '==': [(value, value)], '!=': [(low, value - 1), (value + 1, high)]}[op]
+    return [(max(low, start), min(high, end)) for start, end in ranges if max(low, start) <= min(high, end)]
+
+
+def range_condition_candidates(source, *, language, integer_abi):
+    """Pure leads from distinct literal bounds in one value-preserving frame."""
+    frame = _frame(source, integer_abi, language)
+    if frame is None:
+        return []
+    data, _, nodes = frame
+    candidates = []
+    for node in nodes:
+        operator_node = node.child_by_field_name('operator') if node.type == 'binary_expression' else None
+        logical_operator = data[operator_node.start_byte:operator_node.end_byte].decode() if operator_node is not None else ''
+        if logical_operator not in {'&&', '||'}:
+            continue
+        leaves = _shape(node, data, logical_operator=logical_operator)
+        if leaves is None or leaves[0][0] != leaves[1][0] or integer_literal_value(leaves[0][0]) is not None:
+            continue
+        if logical_operator == '||' and leaves[0][1] == leaves[1][1] == '!=':
+            continue  # already handled by unequal-exclusion discovery
+        values = [integer_literal_value(leaf[2]) for leaf in leaves]
+        if any(value is None for value in values) or values[0] == values[1]:
+            continue
+        atoms = [leaves[0][0], leaves[0][2], leaves[1][2]]
+        model = model_for_integer_terms(node, data, atoms, (), integer_abi, language=language)
+        kind = integer_type(dict(model.types).get(atoms[0]), integer_abi)
+        if model.status != 'bound' or kind is None:
+            continue
+        frames = [common_integer_type([a, b], model.types, integer_abi) for a, _, b in leaves]
+        if any(item is None for item in frames) or frames[0] != frames[1]:
+            continue
+        common = frames[0]
+        low = -(1 << (kind.width - 1)) if kind.signed else 0
+        high = (1 << (kind.width - (1 if kind.signed else 0))) - 1
+        frame_low = -(1 << (common.width - 1)) if common.signed else 0
+        frame_high = (1 << (common.width - (1 if common.signed else 0))) - 1
+        if any(value < frame_low or value > frame_high for value in [low, high, *values]):
+            continue  # no interval arithmetic across a modular conversion
+        left, right = [_literal_intervals(leaf[1], value, low, high) for leaf, value in zip(leaves, values)]
+        if logical_operator == '&&':
+            if any(max(a, c) <= min(b, d) for a, b in left for c, d in right):
+                continue
+            truth = False
+        else:
+            cursor = low
+            for start, end in sorted(left + right):
+                if start > cursor:
+                    break
+                cursor = max(cursor, end + 1)
+            if cursor <= high:
+                continue
+            truth = True
+        candidates.append((node, logical_operator, leaves, truth))
         if len(candidates) >= 16:
             break
     return candidates
