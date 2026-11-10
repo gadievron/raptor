@@ -201,6 +201,9 @@ class _OwnerOnlyFileHandler(logging.FileHandler):
     """
 
     def _open(self):
+        # Resolve the consumer before allocating a descriptor.
+        from core.source.streams import adopt_fd
+
         # delay=True must defer directory creation as well as file creation.
         # Logging setup must not initialize unrelated analysis/tool storage.
         os.makedirs(os.path.dirname(self.baseFilename), exist_ok=True)
@@ -209,11 +212,7 @@ class _OwnerOnlyFileHandler(logging.FileHandler):
             os.O_WRONLY | os.O_CREAT | os.O_APPEND,
             0o600,
         )
-        try:
-            return open(fd, self.mode, encoding=self.encoding, errors=self.errors)
-        except Exception:
-            os.close(fd)
-            raise
+        return adopt_fd(fd, self.mode, os.close, encoding=self.encoding, errors=self.errors)
 
 
 def _file_log_level() -> int:
