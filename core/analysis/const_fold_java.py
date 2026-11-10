@@ -523,9 +523,9 @@ def _member_value_names_at(node: Node) -> frozenset[str]:
 
 
 def _exact_creation_class(node: Node) -> str | None:
-    """Named construction identity; an anonymous body creates a subtype."""
+    """Named construction without an enclosing instance or anonymous body."""
     if node.type != "object_creation_expression" or any(
-            child.type == "class_body" for child in node.named_children):
+            child.type in ("class_body", ".") for child in node.children):
         return None
     ty = node.child_by_field_name("type")
     if ty is None:
