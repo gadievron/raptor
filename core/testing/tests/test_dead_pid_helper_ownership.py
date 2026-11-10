@@ -17,6 +17,8 @@ from core.testing.processes import reap_on_exit
 
 ROOT = Path(__file__).resolve().parents[3]
 CASES = [
+    ("packages/joern/tests/test_workspace_sweep.py", "_dead_pid"),
+    ("core/llm/dispatcher/tests/test_inproc_scratch_cleanup.py", "_dead_pid"),
     ("core/run/tests/test_emu_basetemp_sweep.py", "_dead_pid"),
     ("core/run/tests/test_metadata.py", "_dead_pid"),
     ("core/run/tests/test_session_scratch_sweep.py", "_dead_pid"),
