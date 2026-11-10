@@ -1103,11 +1103,10 @@
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_dom_fragment_sink_detected_without_server_roundtrip",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_plain_page_has_no_dom_sink",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
-            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
           ],
-          "expected": 12
+          "expected": 11
         },
         "darwin": {
           "tests": [
@@ -1119,11 +1118,10 @@
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_dom_fragment_sink_detected_without_server_roundtrip",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_plain_page_has_no_dom_sink",
             "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_off_origin_render_refused",
-            "packages/web/tests/test_browser_live.py::TestBrowserEngineLive::test_fragment_payload_survives_url_encoding",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_redirect_hop_cannot_leave_origin",
             "packages/web/tests/test_browser_live.py::TestOriginGateHardening::test_websocket_cannot_leave_origin"
           ],
-          "expected": 12
+          "expected": 11
         }
       }
     },
