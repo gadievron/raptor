@@ -26,10 +26,10 @@ def test_source_binding_and_observation(safe):
                                     source=source,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome==('inconclusive' if safe else 'confirmed'),result.errors
     assert bool(result.matches) is not safe
-    assert result.details['oracle_scope']=='source-signed-update'
+    assert result.details['oracle_scope']=='source-integer-update'
     binding=source_binding(source,'Update',verb=VERB,hypothesis=CLAIM,integer_abi='lp64')
     assert result.details['source_scope']==binding
-    assert binding['query_contract']=='source-signed-update-v2'
+    assert binding['query_contract']=='source-integer-update-v3'
     assert binding['integer_abi']['name']=='lp64' and binding['hypothesis_sha256']
 
 @pytest.mark.parametrize('suffix',['',':witness',':model',':unknown'])
@@ -75,5 +75,5 @@ def test_actual_confined_update_receipt():
                                     source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
     assert result.details['model']=={'Value':2147483647}
-    assert result.details['witness_validated'] and result.details['source_scope']['query_contract']=='source-signed-update-v2'
-    assert result.details['oracle_scope']=='source-signed-update'
+    assert result.details['witness_validated'] and result.details['source_scope']['query_contract']=='source-integer-update-v3'
+    assert result.details['oracle_scope']=='source-integer-update'

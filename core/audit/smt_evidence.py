@@ -32,7 +32,7 @@ _DIAGNOSTIC_ORACLE_SCOPES = {
     "invariant-preservation": "assumed-invariant-transition",
     "check-integer-conversion": "source-unsigned-conversion",
     "check-unary-negation": "source-signed-negation",
-    "check-integer-update": "source-signed-update",
+    "check-integer-update": "source-integer-update",
     # Predicate truth alone does not establish an unintended coding defect.
     "check-integer-comparison": "source-integer-comparison",
     # These adapters infer numeric operands from text but do not bind an

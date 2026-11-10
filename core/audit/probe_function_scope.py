@@ -166,7 +166,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-update":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "source-signed-update-v2"
+        binding["query_contract"] = "source-integer-update-v3"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-unary-negation":
         from .integer_abi import integer_abi_record
