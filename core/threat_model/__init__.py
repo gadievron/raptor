@@ -13,7 +13,6 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
-import heapq
 import logging
 import os
 from pathlib import Path
@@ -1017,85 +1016,10 @@ def render_report(
     lint: list[dict[str, Any]] | None = None,
     drift: dict[str, Any] | None = None,
 ) -> str:
-    """Render a higher-signal threat-model report for assessment output."""
-    lint = lint if lint is not None else lint_model(model)
-    def _safe_risk(t: dict) -> int:
-        try:
-            return int(t.get("risk_score") or 0)
-        except (TypeError, ValueError):
-            return 0
-
-    top_threats = heapq.nlargest(10, model.threats, key=_safe_risk)
-    lines = []
-    logo = _read_raptor_logo()
-    if logo:
-        lines.extend(["```", logo, "```", ""])
-    lines.extend([
-        "# Threat Model Report",
-        "",
-        f"Project: {_safe_for_render(model.project_name)}",
-        f"Target: {_safe_for_render(model.target)}",
-        f"Updated: {_safe_for_render(model.updated_at)}",
-        "",
-        "## Executive View",
-        "",
-        f"- Assets: {len(model.assets)}",
-        f"- Entry points: {len(model.entry_points)}",
-        f"- Trust boundaries: {len(model.trust_boundaries) + len(model.trust_zones)}",
-        f"- Data flows: {len(model.data_flows)}",
-        f"- Threats: {len(model.threats)}",
-        f"- Controls: {len(model.controls)}",
-        f"- Evidence records: {len(model.evidence)}",
-        f"- Open quality issues: {len([i for i in lint if i.get('severity') in ('error', 'warning')])}",
-        "",
-        "## Top Threats",
-        "",
-    ])
-    if top_threats:
-        lines.extend("- {id} [{status}] risk={risk} severity={severity}: {title}".format(
-                    id=_safe_for_render(threat.get("id", "?")),
-                    status=_safe_for_render(threat.get("status", "needs_evidence")),
-                    risk=_safe_for_render(threat.get("risk_score", 0)),
-                    severity=_safe_for_render(threat.get("severity", "unknown")),
-                    title=_safe_for_render(threat.get("title", "Untitled threat")),
-                ) for threat in top_threats)
-    else:
-        lines.append("- No threats recorded yet.")
-    lines.extend(["", "## Evidence Loop", ""])
-    if model.evidence:
-        lines.extend("- {id} [{oracle}/{status}] {summary}".format(
-                    id=_safe_for_render(ev.get("id", "?")),
-                    oracle=_safe_for_render(ev.get("oracle", "?")),
-                    status=_safe_for_render(ev.get("status", "?")),
-                    summary=_safe_for_render(ev.get("summary", "no summary")),
-                ) for ev in model.evidence[:20])
-    else:
-        lines.append("- No oracle evidence linked yet.")
-    lines.extend(["", "## Quality Gates", ""])
-    if lint:
-        lines.extend("- {severity}: {message}".format(
-                    severity=_safe_for_render(str(issue.get("severity", "info")).title()),
-                    message=_safe_for_render(issue.get("message", "")),
-                ) for issue in lint)
-    else:
-        lines.append("- No quality issues found.")
-    if drift:
-        lines.extend(["", "## Drift", ""])
-        for key in ("new_entry_points", "missing_entry_points", "new_trust_boundaries",
-                    "missing_trust_boundaries", "new_unchecked_flows"):
-            values = drift.get(key) or []
-            lines.append(f"- {key}: {len(values)}")
-            lines.extend(f"  - {_safe_for_render(value)}" for value in values[:8])
-    lines.extend(["", "## Mermaid", "", "```mermaid", "flowchart LR"])
-    for flow in model.data_flows[:25]:
-        src = _mermaid_id(str(flow.get("source") or flow.get("id") or "source"))
-        sink = _mermaid_id(str(flow.get("sink") or "sink"))
-        label = str(flow.get("id") or "")
-        lines.append(f'  {src}["{_mermaid_label(flow.get("source") or "Source")}"] -->|"{_mermaid_label(label)}"| {sink}["{_mermaid_label(flow.get("sink") or "Sink")}"]')
-    if not model.data_flows:
-        lines.append('  A["No data flows recorded"]')
-    lines.extend(["```", ""])
-    return "\n".join(lines)
+    """Render the assessment through the shared portable report engine."""
+    from core.reporting.renderers import get_renderer
+    from .reporting import build_threat_model_document
+    return get_renderer("markdown").render(build_threat_model_document(model, lint=lint, drift=drift)).content.decode("utf-8")
 
 
 def prompt_context(model: ThreatModel, *, max_items: int = 8) -> str:
