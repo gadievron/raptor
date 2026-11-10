@@ -296,18 +296,21 @@ def _worker_token(d: LLMDispatcher) -> str:
 def _raw_worker_request(d: LLMDispatcher, token: str) -> socket.socket:
     """Speak HTTP over the worker UDS directly — the test needs exact
     control over WHEN the worker side abandons the connection."""
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(10.0)
-    s.connect(str(d.socket_path))
-    body = json.dumps({"model": "m", "messages": []}).encode()
-    s.sendall(
-        b"POST /anthropic/v1/messages HTTP/1.1\r\n"
-        b"Host: dispatcher\r\n"
-        + f"{_TOKEN_HEADER}: {token}\r\n".encode()
-        + f"Content-Length: {len(body)}\r\n\r\n".encode()
-        + body,
-    )
-    return s
+    with ExitStack() as cleanup:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        cleanup.callback(s.close)
+        s.settimeout(10.0)
+        s.connect(str(d.socket_path))
+        body = json.dumps({"model": "m", "messages": []}).encode()
+        s.sendall(
+            b"POST /anthropic/v1/messages HTTP/1.1\r\n"
+            b"Host: dispatcher\r\n"
+            + f"{_TOKEN_HEADER}: {token}\r\n".encode()
+            + f"Content-Length: {len(body)}\r\n\r\n".encode()
+            + body,
+        )
+        cleanup.pop_all()
+        return s
 
 
 def _recv_until(s: socket.socket, marker: bytes, timeout: float = 5.0) -> bytes:
@@ -544,6 +547,7 @@ class TestOrphanCancel:
             cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             assert _SSE_CHUNK_ONE in _recv_until(s, _SSE_CHUNK_ONE)
             s.close()  # the abandonment
 
@@ -642,6 +646,7 @@ class TestOrphanCancel:
             cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             raw = _recv_until(s, b'{"ok": true}')
             assert b"200" in raw.split(b"\r\n", 1)[0]
             s.close()
@@ -683,6 +688,7 @@ class TestOrphanCancel:
             cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             raw = _recv_until(s, b'{"ok": true}')
             assert b"200" in raw.split(b"\r\n", 1)[0]
             s.close()
@@ -720,6 +726,7 @@ class TestOrphanCancel:
             cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             raw = _recv_until(s, b'{"ok": true}')
             assert b"200" in raw.split(b"\r\n", 1)[0]
             s.close()
@@ -748,6 +755,7 @@ class TestOrphanCancel:
             cleanup.callback(d.shutdown)
             token = _worker_token(d)
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             # Close only after the request provably reached the
             # upstream, so the pre-upstream check cannot win the race
             # and the head dwell is the seam under test.
@@ -803,6 +811,7 @@ class TestAcquireFailureRetiresWatcher:
             baseline = len(self._live_watchers())
 
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             # The relay dies before any upstream open; the handler
             # drops the connection without writing a response.
             assert _recv_until(s, b"HTTP/", timeout=3.0) == b""
@@ -854,6 +863,7 @@ class TestWatcherAbortIsNotShardEvidence:
             pooled = shards.clients[0]
 
             s = _raw_worker_request(d, token)
+            cleanup.callback(s.close)
             assert _SSE_CHUNK_ONE in _recv_until(s, _SSE_CHUNK_ONE)
             s.close()  # abandonment → the watcher shuts the upstream
 
