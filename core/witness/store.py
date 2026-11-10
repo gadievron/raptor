@@ -33,6 +33,7 @@ from pathlib import Path
 
 from core.atomic_fs import write_bytes_atomically, write_text_atomically
 from core.json import append_jsonl, load_json
+from core.source.streams import owned_fd, preserving_stream_error
 from core.witness.provenance import (
     PROVENANCE_KEY as _PROVENANCE_TOKEN_KEY,
 )
@@ -337,6 +338,16 @@ class WitnessStore:
             | getattr(os, "O_NONBLOCK", 0)
             | getattr(os, "O_CLOEXEC", 0)
         )
+        adopted = False
+
+        def close_blob(value: int) -> None:
+            try:
+                os.close(value)
+            except OSError as exc:
+                if adopted:
+                    msg = f"cannot read blob at {blob_path}: {exc}"
+                    raise WitnessStoreError(msg) from exc
+
         try:
             fd = os.open(str(blob_path), flags)
         except FileNotFoundError:
@@ -348,7 +359,7 @@ class WitnessStore:
         except OSError as exc:
             msg = f"cannot open blob at {blob_path}: {exc}"
             raise WitnessStoreError(msg) from exc
-        try:
+        with owned_fd(fd, close_fd=close_blob):
             st = os.fstat(fd)
             if not _stat_mod.S_ISREG(st.st_mode):
                 msg = f"blob at {blob_path} is not a regular file"
@@ -361,18 +372,13 @@ class WitnessStore:
                 )
                 raise WitnessStoreError(msg)
             try:
-                with os.fdopen(fd, "rb") as fh:
-                    fd = -1  # fdopen owns it now
+                stream = os.fdopen(fd, "rb", closefd=False)
+                adopted = True
+                with preserving_stream_error(stream) as fh:
                     data = fh.read(_MAX_BLOB_BYTES + 1)
             except OSError as exc:
                 msg = f"cannot read blob at {blob_path}: {exc}"
                 raise WitnessStoreError(msg) from exc
-        finally:
-            if fd >= 0:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
         if len(data) > _MAX_BLOB_BYTES:
             msg = (
                 f"blob at {blob_path} grew past the "
