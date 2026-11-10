@@ -112,6 +112,9 @@ def check_integer_condition(source, hypothesis, *, language, integer_abi=None):
     if goal is None or not z3_available():
         return unavailable
     wanted = _claim(hypothesis, language, integer_abi)
+    if wanted is None:
+        from .integer_conjunction import check_integer_conjunction
+        return check_integer_conjunction(source, hypothesis, language=language, integer_abi=integer_abi)
     frame = _frame(source, integer_abi, language) if wanted is not None else None
     if frame is None:
         return unavailable

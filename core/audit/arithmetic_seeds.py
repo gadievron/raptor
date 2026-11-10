@@ -435,7 +435,16 @@ def _operations(source, language, abi):
         if len(mechanism) <= 300:
             conditions.append((target, '&', (name, left, right), 'constant-condition-false', mechanism,
                                {'binding_status': 'candidate', 'candidate_basis': 'actual-bitwise-condition'}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions
+    from .integer_conjunction import conjunction_candidates
+    conjunctions = []
+    for target, leaves in conjunction_candidates(source, language=language, integer_abi=abi):
+        expression = ' && '.join(' '.join(leaf) for leaf in leaves)
+        mechanism = f"Condition is always false in `{expression}`."
+        if len(mechanism) <= 300:
+            conjunctions.append((target, '&&', tuple(atom for leaf in leaves for atom in (leaf[0], leaf[2])),
+                                 'constant-condition-false', mechanism,
+                                 {'binding_status': 'candidate', 'candidate_basis': 'disjoint-comparison-relations'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
