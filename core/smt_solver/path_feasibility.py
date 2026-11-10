@@ -153,7 +153,7 @@ from core.smt_solver.bitvec import ge, gt, le, lt
 from core.smt_solver.assertion_frames import track_frames
 from core.smt_solver.call_arguments import find_call_end, mask_non_code, split_call_arguments
 from core.smt_solver.csem import ashr as _ashr, lshr as _lshr
-from core.smt_solver._validation import require_bool
+from core.smt_solver._validation import require_bool, require_symbol_name
 from core.smt_solver.witness import format_witness as _format_witness
 from core.smt_solver.witness import format_vars as _format_vars
 from core.smt_solver.session import check_solver, solver_reason_unknown
@@ -1716,7 +1716,8 @@ def is_literal_identifier(name: str) -> bool:
 def _validate_var_binding(name, value, profile, context):
     """Uniform-profile registries cannot silently change width or context."""
     from ._validation import require_bv
-    if not isinstance(name, str) or not name:
+    require_symbol_name(name, argument="variable registry name")
+    if not name:
         raise ValueError("variable registry names must be nonempty strings")
     if is_literal_identifier(name):
         raise ValueError("NULL is a reserved zero literal, not a source variable")

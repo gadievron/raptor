@@ -45,3 +45,12 @@ def require_bv_pair(a: Any, b: Any) -> None:
         raise ValueError("bitvector operands must share the same Z3 context")
     if a.size() != b.size():
         raise ValueError("bitvector operands must have the same width")
+
+
+def require_symbol_name(name: Any, *, argument: str = "symbol name") -> str:
+    """Preserve string identity across the native NUL-terminated name API."""
+    if not isinstance(name, str):
+        raise ValueError(f"{argument} must be a string")
+    if "\x00" in name:
+        raise ValueError(f"{argument} must not contain NUL")
+    return name
