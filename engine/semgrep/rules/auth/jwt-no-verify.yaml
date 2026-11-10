@@ -39,21 +39,18 @@ rules:
 
   # ---------------------------------------------------------------------------
   # JavaScript / TypeScript — JWT decoded without signature verification
-  # jsonwebtoken: decode() never verifies; verify() with empty secret is
-  # equivalent to no verification.
+  # Decode APIs parse claims without signature verification. Empty verification
+  # keys are a separate configuration lead with version-dependent behaviour.
   # ---------------------------------------------------------------------------
   - id: raptor.auth.jwt-no-verify.javascript
     message: >-
       JWT is decoded without signature verification. jwt.decode() never
       verifies the signature — use jwt.verify() with a trusted secret.
-      An empty string secret is effectively no verification.
     languages: [javascript, typescript]
     severity: CRITICAL
     pattern-either:
       - patterns:
-          - pattern-either:
-              - pattern: $JWT.decode($TOKEN, ...)
-              - pattern: $JWT.verify($TOKEN, "", ...)
+          - pattern: $JWT.decode($TOKEN, ...)
           - pattern-either:
               - pattern-inside: |
                   import $JWT from "jsonwebtoken";
@@ -82,6 +79,32 @@ rules:
           - pattern: $DECODE($TOKEN)
           - pattern-inside: |
               import { decodeJwt as $DECODE } from "jose";
+              ...
+    metadata:
+      cwe: ["CWE-345"]
+      owasp_top_10: ["A2:2021-Cryptographic Failures"]
+      tags: ["security", "auth", "jwt", "misconfiguration"]
+
+  - id: raptor.auth.jwt-empty-secret.javascript
+    message: >-
+      JWT verification is configured with an empty string key. This is a
+      configuration review lead: signed tokens may be rejected, and unsigned
+      token handling depends on the library version and verification options.
+      Check key configuration and the intended algorithm policy before treating
+      this as an authentication bypass.
+    languages: [javascript, typescript]
+    severity: MEDIUM
+    patterns:
+      - pattern: $JWT.verify($TOKEN, "", ...)
+      - pattern-either:
+          - pattern-inside: |
+              import $JWT from "jsonwebtoken";
+              ...
+          - pattern-inside: |
+              import * as $JWT from "jsonwebtoken";
+              ...
+          - pattern-inside: |
+              const $JWT = require("jsonwebtoken");
               ...
     metadata:
       cwe: ["CWE-345"]
