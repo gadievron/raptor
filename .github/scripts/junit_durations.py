@@ -164,6 +164,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    if any(not math.isfinite(seconds) for seconds in merged.values()):
+        print(
+            "junit_durations: non-finite aggregated duration; refusing to write map",
+            file=sys.stderr,
+        )
+        return 1
+
     out_path = Path(args.out)
     out_path.write_text(
         json.dumps(dict(sorted(merged.items())), indent=4) + "\n",
