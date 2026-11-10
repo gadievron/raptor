@@ -196,3 +196,50 @@ def test_literal_atoms_are_typed_without_requiring_a_parameter_declaration(expre
     check = check_integer_division if verb == "division" else check_shift_count
     checked = check(source, seed["mechanism"], language="c", integer_abi="lp64")
     assert checked["violation"] is True and checked["witness_validated"] is True
+
+
+def test_supported_fixed_array_read_is_discovered_without_a_model_proposal():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.array_bounds import check_array_bounds
+    from core.audit.hypothesis_mapping import hypothesis_to_smt_verb
+
+    source = "int Read(int Index){int Data[4]={0};if(Index<=4)return Data[Index];return 0;}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 1
+    seed = gap["injected_hypotheses"][0]
+    site = seed["arithmetic_site"]
+    assert site["claim_kind"] == "fixed-array-read"
+    assert site["object_extent"] == 4 and site["access_kind"] == "read"
+    assert hypothesis_to_smt_verb(seed["mechanism"]) == "check-array-bounds"
+    checked = check_array_bounds(source, seed["mechanism"], language="c", integer_abi="lp64")
+    assert checked["violation"] is True
+    assert checked["witness_index"] < 0 or checked["witness_index"] >= 4
+    assert "verdict" not in seed
+
+
+@pytest.mark.parametrize("source", [
+    "int Read(int Index,int *Data){return Data[Index];}",
+    "int Read(int Index,int Data[4]){return Data[Index];}",
+    "int Read(int Index,int Size){int Data[Size];return Data[Index];}",
+    "int Read(int Index){int Data[4]={0};Data[Index]=1;return 0;}",
+    "int Read(int Index){int Data[4]={0};return Data[Index]+Data[Index];}",
+])
+def test_unsupported_array_shapes_never_borrow_a_fixed_read_extent(source):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 0
+
+
+def test_cpp_array_lead_still_requires_the_native_oracle_for_a_safe_read():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.array_bounds import check_array_bounds
+
+    source = "int Read(int Index){int Data[4]={0};if(Index>=0 && Index<4)return Data[Index];return 0;}"
+    gap = {"file": "math.cpp", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.cpp": source}, mode="quality", integer_abi="lp64") == 1
+    seed = gap["injected_hypotheses"][0]
+    assert seed["arithmetic_site"]["object_extent"] == 4
+    assert "verdict" not in seed
+    checked = check_array_bounds(source, seed["mechanism"], language="cpp", integer_abi="lp64")
+    assert checked["violation"] is False

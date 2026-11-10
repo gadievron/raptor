@@ -1,4 +1,4 @@
-"""Bounded QUALITY review obligations from supported source operations.
+"""Bounded QUALITY integer and fixed-array source review obligations.
 
 These are leads, never findings or proof receipts. The source-bound oracle
 must still establish defined-prefix satisfiability and replay its witness.
@@ -71,12 +71,21 @@ def _operations(source, language, abi):
             return data[node.start_byte:node.end_byte].decode("utf-8")
         return source_integer_atom(node, data)
 
-    pending, candidates, comparisons, visited = [root], [], [], 0
+    pending, candidates, comparisons, accesses, visited = [root], [], [], [], 0
     while pending:
         node = pending.pop()
         visited += 1
         if visited > _MAX_NODES:
             return []
+        if node.type == "subscript_expression" and len(accesses) < _MAX_CANDIDATES:
+            array = _unwrap(node.child_by_field_name("argument"))
+            index = _unwrap(node.child_by_field_name("index"))
+            if language == "cpp":
+                indices = node.child_by_field_name("indices")
+                index = _unwrap(indices.named_children[0]) if indices is not None and len(indices.named_children) == 1 else None
+            if array is not None and index is not None and array.type == index.type == "identifier":
+                accesses.append((node, data[array.start_byte:array.end_byte].decode(),
+                                 data[index.start_byte:index.end_byte].decode()))
         if node.type == "binary_expression":
             op_node = node.child_by_field_name("operator")
             op = data[op_node.start_byte:op_node.end_byte].decode() if op_node else ""
@@ -125,7 +134,16 @@ def _operations(source, language, abi):
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:
-                result.append((target, op, atoms, claim_kind, mechanism))
+                result.append((target, op, atoms, claim_kind, mechanism, {}))
+    for target, array, index in accesses:
+        from .array_bounds import bind_array_access
+        mechanism = f"Potential out-of-bounds read at `{array}[{index}]`."
+        if len(mechanism) > 300:
+            continue
+        access = bind_array_access(source, mechanism, language=language, integer_abi=abi)
+        if access.status == "bound":
+            result.append((target, "[]", (array, index), "fixed-array-read", mechanism,
+                           {"object_extent": access.extent, "access_kind": "read"}))
     return result
 
 
@@ -184,7 +202,7 @@ def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
         own = [h for h in existing if isinstance(h, dict) and h.get("source") == SEED_SOURCE]
         if total >= MAX_SEEDS_PER_RUN:
             continue
-        for target, op, atoms, claim_kind, mechanism in _operations(source, language, integer_abi):
+        for target, op, atoms, claim_kind, mechanism, extra in _operations(source, language, integer_abi):
             site = {
                 "file": file, "function": gap.get("name", ""),
                 "function_line_start": lo, "function_line_end": hi,
@@ -193,6 +211,7 @@ def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
                 "byte_start": target.start_byte, "byte_end": target.end_byte,
                 "operator": op, "operands": list(atoms), "claim_kind": claim_kind,
                 "integer_abi": abi,
+                **extra,
             }
             if any(h.get("arithmetic_site") == site for h in own):
                 continue
