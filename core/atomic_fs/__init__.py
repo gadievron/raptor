@@ -400,9 +400,12 @@ def write_bytes_atomically(
         except FileNotFoundError:
             pass
         except OSError:
-            logging.getLogger(__name__).warning(
-                "atomic write temporary cleanup failed for %s", tmp, exc_info=True,
-            )
+            try:
+                logging.getLogger(__name__).warning(
+                    "atomic write temporary cleanup failed for %s", tmp, exc_info=True,
+                )
+            except BaseException:
+                pass  # Diagnostics must not replace the active operation error.
         raise
 
 
@@ -477,7 +480,10 @@ def _write_bytes_beneath(path: Path, content: Buffer | Iterable[Buffer], *, root
                 except OSError:
                     if not operation_failed:
                         raise
-                    logging.getLogger(__name__).warning("anchored atomic temporary cleanup failed", exc_info=True)
+                    try:
+                        logging.getLogger(__name__).warning("anchored atomic temporary cleanup failed", exc_info=True)
+                    except BaseException:
+                        pass  # Diagnostics must not replace the active operation error.
         finally:
             _close_write_fd(parent_fd, write_failed=operation_failed)
 
