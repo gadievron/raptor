@@ -461,6 +461,7 @@ def extract_direct_call_edges(
             "(no binary evidence)",
             escape_nonprintable(key))
         return BinaryEdgeIndex(binary_path=key)
+    failed = False
     try:
         idx = _extract_direct_call_edges_impl(
             binary_path, timeout=timeout, use_cache=use_cache)
@@ -473,11 +474,15 @@ def extract_direct_call_edges(
                 escape_nonprintable(key))
             return BinaryEdgeIndex(binary_path=key)
         return idx
+    except BaseException:
+        failed = True
+        raise
     finally:
         try:
             held.close()
-        except OSError:
-            pass
+        except BaseException as exc:
+            if not failed and not isinstance(exc, OSError):
+                raise
 
 
 def _extract_direct_call_edges_impl(
