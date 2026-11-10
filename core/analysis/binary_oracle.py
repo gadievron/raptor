@@ -1425,11 +1425,18 @@ def enrich_inventory_with_binary_oracle(
             verdicts = classify_binary_evidence(names, bp)
         finally:
             if held is not None and pin is not None:
-                post_ok = _pin_still_holds(held, bp, pin)
+                post_failed = False
                 try:
-                    held.close()
-                except OSError:
-                    pass
+                    post_ok = _pin_still_holds(held, bp, pin)
+                except BaseException:
+                    post_failed = True
+                    raise
+                finally:
+                    try:
+                        held.close()
+                    except BaseException as exc:
+                        if not post_failed and not isinstance(exc, OSError):
+                            raise
                 if not post_ok:
                     held = None  # demoted below
         if key in _pins and held is None:
