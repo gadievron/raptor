@@ -17,6 +17,7 @@ from core.testing.treesitter import requires_ts
 
 
 _ARITHMETIC = "unsigned f(unsigned short a, int b) { return (unsigned)(a + b) < a; }"
+_COMPOUND_ARITHMETIC = "unsigned f(unsigned a, unsigned b) { a += b; return a; }"
 
 
 @pytest.fixture(autouse=True)
@@ -29,8 +30,9 @@ def _ids(answers):
 
 
 @requires_ts("c")
-def test_initial_arithmetic_review_receives_conditional_rules_without_request(tmp_path):
-    (tmp_path / "unit.c").write_text(_ARITHMETIC + "\n")
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC], ids=["binary", "compound"])
+def test_initial_arithmetic_review_receives_conditional_rules_without_request(tmp_path, source):
+    (tmp_path / "unit.c").write_text(source + "\n")
     runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
     prompts = []
 
@@ -41,7 +43,7 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
                 "reading_list": [], "language_reference_requests": []}, raw="", cost=0, model="scripted")
 
     ctx = {"file": "unit.c", "function": "f", "line_start": 1, "line_end": 1,
-           "source": _ARITHMETIC, "language": "c"}
+           "source": source, "language": "c"}
     runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(
         ctx, orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / "out"))
     assert len(prompts) == 1
@@ -53,13 +55,31 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
 @pytest.mark.parametrize("source,extra", [
     (_ARITHMETIC, {"c.integer-usual-conversions", "c.integer-definedness"}),
     ("int f(int a, int b) { return a < b; }", {"c.integer-usual-conversions"}),
-    ('int f(void) { /* a + b */ const char *s = "a * b"; return 0; }', set()),
+    ('int f(void) { /* a + b; a += b */ const char *s = "a * b; a *= b"; return 0; }', set()),
     ("int f(void) { return 0; }", set()),
 ])
 @requires_ts("c")
 def test_selection_uses_parsed_operators_not_comments_or_strings(source, extra):
     answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
     assert _ids(answers) == {"c.integer-promotion", "c.integer-conversion"} | extra
+
+
+@pytest.mark.parametrize("operator", ["+=", "-=", "*=", "/=", "%="],
+                         ids=["add", "subtract", "multiply", "divide", "remainder"])
+@requires_ts("c")
+def test_compound_arithmetic_selects_conditional_integer_reading(operator):
+    source = f"unsigned f(unsigned a, unsigned b) {{ a {operator} b; return a; }}"
+    answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
+    assert _ids(answers) == {"c.integer-promotion", "c.integer-conversion",
+                             "c.integer-usual-conversions", "c.integer-definedness"}
+
+
+@pytest.mark.parametrize("operator", ["=", "<<=", "&="], ids=["plain", "shift", "bitwise"])
+@requires_ts("c")
+def test_other_assignments_do_not_imply_arithmetic_reading(operator):
+    source = f"unsigned f(unsigned a, unsigned b) {{ a {operator} b; return a; }}"
+    assert _ids(foundation_answers("c", request_id="owned", source=source, file="unit.c")) == {
+        "c.integer-promotion", "c.integer-conversion"}
 
 
 def test_missing_parser_keeps_foundation_without_claiming_construct_coverage(monkeypatch):
@@ -75,21 +95,23 @@ def test_parse_errors_keep_foundation():
 
 
 @pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC], ids=["binary", "compound"])
 @requires_ts("c")
-def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_path, reuse):
+def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_path, reuse, source):
     root = _target(tmp_path)
-    (root / "unit.c").write_text(_ARITHMETIC + "\n")
+    (root / "unit.c").write_text(source + "\n")
     old = _signed(tmp_path / "old", _entry(root, current=True))
     assert not _fold(root, [old], reuse=reuse)[0]
 
 
 @pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC], ids=["binary", "compound"])
 @requires_ts("c")
-def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse):
+def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
     root = _target(tmp_path)
-    (root / "unit.c").write_text(_ARITHMETIC + "\n")
+    (root / "unit.c").write_text(source + "\n")
     row = _entry(root, current=True)
-    answers = foundation_answers("c", request_id="owned", source=_ARITHMETIC, file="unit.c")
+    answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
     references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
     history = {**row.review_claims, "reference_inputs": references}
     primary, span = parse_source_anchor(row.source_hash)

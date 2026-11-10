@@ -50,6 +50,11 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+", b"-", b"*", b"/", b"%")
                 comparison = comparison or token in (b"<", b">", b"<=", b">=", b"==", b"!=")
+        elif node.type == "assignment_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is not None:
+                token = raw[operator.start_byte:operator.end_byte]
+                arithmetic = arithmetic or token in (b"+=", b"-=", b"*=", b"/=", b"%=")
         stack.extend(node.children)
     selected: tuple[str, ...] = _FOUNDATION_IDS
     if arithmetic or comparison:
