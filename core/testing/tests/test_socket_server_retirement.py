@@ -15,29 +15,29 @@ from core.sandbox.tests import socket_server as module
 @pytest.mark.parametrize("error", [OSError, KeyboardInterrupt])
 def test_constructor_failure_closes_listener(stage, error, monkeypatch):
     listener = socket.socket()
-    listener.bind(("127.0.0.1", 0))
-    listener.listen()
     retained = listener
-    failure = error("injected constructor failure")
-    threads = SimpleNamespace(**vars(threading))
-    fake_thread = Mock(ident=None)
-    threads.Thread = Mock(return_value=fake_thread)
-    if stage in ("Event", "Lock", "Thread"):
-        setattr(threads, stage, Mock(side_effect=failure))
-    elif stage == "start":
-        fake_thread.start.side_effect = failure
-    else:
-        class Listener:
-            def settimeout(self, value):
-                raise failure
-
-            def close(self):
-                retained.close()
-
-            def shutdown(self, how):
-                retained.shutdown(how)
-        listener = Listener()
     try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        failure = error("injected constructor failure")
+        threads = SimpleNamespace(**vars(threading))
+        fake_thread = Mock(ident=None)
+        threads.Thread = Mock(return_value=fake_thread)
+        if stage in ("Event", "Lock", "Thread"):
+            setattr(threads, stage, Mock(side_effect=failure))
+        elif stage == "start":
+            fake_thread.start.side_effect = failure
+        else:
+            class Listener:
+                def settimeout(self, value):
+                    raise failure
+
+                def close(self):
+                    retained.close()
+
+                def shutdown(self, how):
+                    retained.shutdown(how)
+            listener = Listener()
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "threading", threads)
             with pytest.raises(error, match="injected constructor failure"):
