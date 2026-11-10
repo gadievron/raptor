@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .document import Block, ReportContext, ReportDocument
+from .document import Block, ReportContext, ReportDocument, json_value
 from .spec import ReportSpec
 from .summary import OperatorSummary, build_operator_summary
 
@@ -60,7 +60,13 @@ def build_document(context: ReportContext, *, title: str | None = None,
 
 def document_from_spec(spec: ReportSpec, context: ReportContext) -> ReportDocument:
     """Preserve old producer-built Markdown explicitly, without claiming portability."""
+    captured_summary = json_value(spec.summary)
+    scalar_summary = {key: value for key, value in captured_summary.items() if not isinstance(value, (dict, list))}
+    structured_summary = {key: value for key, value in captured_summary.items() if isinstance(value, (dict, list))}
     blocks = []
+    if structured_summary:
+        blocks.append(Block("code", title="Structured legacy summary", language="json",
+                            text=json.dumps(structured_summary, ensure_ascii=True, indent=2)))
     def section(s):
         if s.blocks is not None:
             return Block("section", title=s.title, children=s.blocks)
@@ -77,7 +83,7 @@ def document_from_spec(spec: ReportSpec, context: ReportContext) -> ReportDocume
                             rows=[[f"F{i:05d}", f.get("source_id"), f.get("rule_id")] for i, f in enumerate(context.findings, 1)]))
     if spec.output_files:
         blocks.append(Block("list", title="Output Files", items=spec.output_files))
-    return ReportDocument(spec.title, context.kind, context.snapshot_id, metadata=spec.metadata, summary=spec.summary,
+    return ReportDocument(spec.title, context.kind, context.snapshot_id, metadata=spec.metadata, summary=scalar_summary,
                           blocks=blocks, diagnostics=[*context.diagnostics, *spec.warnings],
                           extensions={"raptor.summary": build_operator_summary(context).to_dict(),
                                       "raptor.artifacts": context.artifacts,
