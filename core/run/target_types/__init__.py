@@ -403,6 +403,8 @@ def _read_magic(path: Path) -> bytes | None:
     swap between the lstat and the open. Nothing is executed or
     parsed beyond the 8-byte read.
     """
+    from core.source.streams import owned_fd
+
     try:
         if not stat.S_ISREG(os.lstat(str(path)).st_mode):
             return None
@@ -414,14 +416,13 @@ def _read_magic(path: Path) -> bytes | None:
         fd = os.open(str(path), flags)
     except OSError:
         return None
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+    with owned_fd(fd, close_fd=os.close):
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            return os.read(fd, 8)
+        except OSError:
             return None
-        return os.read(fd, 8)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
 
 
 def _is_compiled_artifact(head: bytes) -> bool:

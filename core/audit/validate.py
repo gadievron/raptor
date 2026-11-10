@@ -260,24 +260,25 @@ def _read_child_tail_untrusted(path: Path) -> str | None:
         sanitise_for_terminal,
     )
 
+    from core.source.streams import owned_fd
+
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError:
         return None
-    try:
-        st = os.fstat(fd)
-        if not _stat.S_ISREG(st.st_mode):
+    with owned_fd(fd, close_fd=os.close):
+        try:
+            st = os.fstat(fd)
+            if not _stat.S_ISREG(st.st_mode):
+                return None
+            head = os.read(fd, _CHILD_TAIL_HEAD_BYTES)
+            if st.st_size > _CHILD_TAIL_READ_BYTES:
+                os.lseek(fd, st.st_size - _CHILD_TAIL_READ_BYTES, os.SEEK_SET)
+            else:
+                os.lseek(fd, 0, os.SEEK_SET)
+            data = os.read(fd, _CHILD_TAIL_READ_BYTES)
+        except OSError:
             return None
-        head = os.read(fd, _CHILD_TAIL_HEAD_BYTES)
-        if st.st_size > _CHILD_TAIL_READ_BYTES:
-            os.lseek(fd, st.st_size - _CHILD_TAIL_READ_BYTES, os.SEEK_SET)
-        else:
-            os.lseek(fd, 0, os.SEEK_SET)
-        data = os.read(fd, _CHILD_TAIL_READ_BYTES)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
     text = data.decode("utf-8", errors="replace")
     escaped = escape_nonprintable(text, preserve_newlines=True)
     window = escaped[-_CHILD_TAIL_WINDOW_CHARS:]
