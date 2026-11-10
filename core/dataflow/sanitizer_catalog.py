@@ -70,6 +70,10 @@ class SanitizerBinding:
       4. removing the value-bound subset of bindings cuts every
          source → sink path
 
+    Additional source contracts must also be established before a match
+    becomes eligible for any proof. Structural/name matching leaves these
+    requirements unresolved and visible on the binding.
+
     Bindings synthesised from C/C++ call-graph nodes (no value
     layer) carry empty ``input_symbols`` / ``output_symbols`` —
     condition 2 always fails, so Phase 4 downgrades to
@@ -80,6 +84,12 @@ class SanitizerBinding:
     input_symbols: frozenset[str]
     output_symbols: frozenset[str]
     lineno: int
+    unverified_source_contracts: frozenset[str] = frozenset()
+
+    def __post_init__(self):
+        if (type(self.unverified_source_contracts) is not frozenset
+                or any(type(value) is not str or not value for value in self.unverified_source_contracts)):
+            raise ValueError("unverified source contracts must be a frozenset of nonempty strings")
 
 
 def nodes_of(bindings: Iterable[SanitizerBinding]) -> set[Any]:
@@ -187,7 +197,8 @@ def sanitizer_callables_for_cwe(
     cwe: str, language: str,
 ) -> set[str]:
     """Return the set of ``library_call`` identifiers from the
-    known-safe catalog that neutralize ``cwe`` for ``language``.
+    known-safe catalogue candidates for ``cwe`` and ``language``.
+    Membership does not establish additional source contracts.
 
     The set this function returns is the input to Phase 7's
     vertex-cut deletion: nodes in the CFG whose called callables
@@ -204,14 +215,27 @@ def sanitizer_callables_for_cwe(
 
 
 def all_sanitizer_callables(language: str) -> set[str]:
-    """Every catalog entry for ``language``, irrespective of sink class.
-    Useful for callers that haven't tagged the finding with a CWE
-    (they get over-broad suppression rather than none)."""
+    """Every candidate for ``language``, irrespective of sink class.
+
+    This is a census, never authority for an unclassified sink or an
+    unresolved source contract.
+    """
     return {
         entry.library_call
         for entry in all_entries()
         if language in entry.languages
     }
+
+
+def source_contracts_for_callable(callable_name: str, cwe: str, language: str) -> frozenset[str]:
+    """Derive requirements from the live catalogue, without a second allowlist."""
+    classes = sink_classes_for_cwe(cwe)
+    contracts: set[str] = set()
+    for entry in all_entries():
+        if (entry.library_call == callable_name and entry.sink_class in classes
+                and language in entry.languages):
+            contracts.update(entry.source_contracts)
+    return frozenset(contracts)
 
 
 def repo_shadows_module_root(
@@ -311,6 +335,7 @@ def match_sanitizers_in_cfg(
                         input_symbols=cs.arg_names,
                         output_symbols=cs.assigned_names,
                         lineno=cs.lineno,
+                        unverified_source_contracts=source_contracts_for_callable(cs.name, cwe, language),
                     ) for cs in call_sites if cs.name in sanitizer_names)
             continue
         # Legacy / call-graph fallback: matched names with empty
@@ -322,6 +347,7 @@ def match_sanitizers_in_cfg(
                 input_symbols=frozenset(),
                 output_symbols=frozenset(),
                 lineno=getattr(node, "lineno", 0),
+                unverified_source_contracts=source_contracts_for_callable(matched_name, cwe, language),
             ) for matched_name in node_calls & sanitizer_names)
     return frozenset(bindings)
 
@@ -333,5 +359,6 @@ __all__ = [
     "repo_shadows_module_root",
     "nodes_of",
     "sanitizer_callables_for_cwe",
+    "source_contracts_for_callable",
     "sink_classes_for_cwe",
 ]

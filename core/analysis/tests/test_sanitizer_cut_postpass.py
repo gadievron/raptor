@@ -398,7 +398,9 @@ class TestGrammarAbsentDegradation:
         stats = run_postpass([sarif_path], repo, out)
         assert stats["examined"] == 1
         assert stats["refused_reasons"].get("language-unsupported") is None
-        assert stats["recorded_suppress"] == 1
+        assert stats["recorded_suppress"] == 0
+        assert stats["recorded_candidate"] == 1
+        assert stats["enforced"] == 0
 
 
 _WRAPPER_SOURCE_JAVA = """import org.owasp.encoder.Encode;

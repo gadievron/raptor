@@ -1,7 +1,7 @@
 """Phase 14 — inter-procedural evaluate_finding tests.
 
-Exercises the synthetic-binding builder and the end-to-end verdict
-flip through the resolver. Covers the design's named cases:
+Exercises the synthetic-binding builder and end-to-end candidate
+lineage through the resolver. Covers the design's named cases:
 sanitizer-in-helper, sanitizer-only-on-some-branches, bypass via
 non-sanitizing callee, recursive/transitive sanitization, and the
 multi-arg positional-mapping correctness that distinguishes a
@@ -20,6 +20,7 @@ from core.analysis.python_module_callgraph import build_python_module_callgraph
 from core.analysis.interproc import synthetic_sanitizer_bindings
 from core.analysis.taint_summaries import build_taint_summaries
 from core.analysis.sanitizer_cut import (
+    VERDICT_CANDIDATE_ONLY,
     VERDICT_NO_SUPPRESS,
     VERDICT_SUPPRESS,
     evaluate_finding,
@@ -81,6 +82,7 @@ class TestBindingGeneration:
         assert b.callable == "_sanitize"
         assert b.input_symbols == frozenset({"x"})
         assert b.output_symbols == frozenset({"y"})
+        assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
 
     def test_passthrough_helper_no_binding(self):
         # Helper returns its arg unchanged — no sanitization.
@@ -320,7 +322,7 @@ class TestBindingGeneration:
 
 
 class TestVerdicts:
-    def test_sanitizer_in_helper_suppresses(self):
+    def test_sanitizer_in_helper_remains_a_structural_candidate(self):
         src = (
             "import html\n"
             "def _sanitize(s):\n"
@@ -330,7 +332,11 @@ class TestVerdicts:
             "    render(y)\n"
         )
         result = _evaluate(src, "handle", ["x"], "y", 6)
-        assert result.verdict == VERDICT_SUPPRESS, result.reason
+        assert result.verdict == VERDICT_CANDIDATE_ONLY, result.reason
+        assert result.suppress is False
+        assert result.value_bound_bindings  # original input/output role proof still holds
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+                   for binding in result.value_bound_bindings)
 
     def test_bypass_via_passthrough_no_suppress(self):
         src = (
@@ -357,7 +363,7 @@ class TestVerdicts:
         result = _evaluate(src, "handle", ["x"], "y", 8)
         assert result.verdict == VERDICT_NO_SUPPRESS, result.reason
 
-    def test_transitive_sanitization_suppresses(self):
+    def test_transitive_sanitization_preserves_unverified_contracts(self):
         src = (
             "import html\n"
             "def inner(s):\n"
@@ -369,7 +375,11 @@ class TestVerdicts:
             "    render(y)\n"
         )
         result = _evaluate(src, "handle", ["x"], "y", 8)
-        assert result.verdict == VERDICT_SUPPRESS, result.reason
+        assert result.verdict == VERDICT_CANDIDATE_ONLY, result.reason
+        assert result.suppress is False
+        assert result.value_bound_bindings  # original input/output role proof still holds
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+                   for binding in result.value_bound_bindings)
 
     def test_same_symbol_dual_position_not_suppressed(self):
         # End-to-end of the review #1 repro: taint reaches the sink via
@@ -399,6 +409,7 @@ class TestVerdicts:
         )
         result = _evaluate(src, "handle", ["user", "other"], "user", 6)
         assert result.verdict != VERDICT_SUPPRESS, result.reason
+        assert result.value_bound_bindings == frozenset()  # wrong consumed symbol still fails condition 3
 
 
 # ---------------------------------------------------------------------------
@@ -425,7 +436,7 @@ class TestResolverIntegration:
         resolved = resolve_finding(finding)
         assert isinstance(resolved, ResolvedFinding)
         assert len(resolved.inter_proc_bindings) == 1
-        # And the gate flips with them.
+        # The summary remains visible, but carries no primitive input proof.
         result = evaluate_finding(
             resolved.cfg, [resolved.source_node], resolved.sink_node,
             cwe=resolved.cwe, language=resolved.language,
@@ -433,7 +444,12 @@ class TestResolverIntegration:
             sink_arg=resolved.sink_arg,
             extra_bindings=resolved.inter_proc_bindings,
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        assert result.verdict == VERDICT_CANDIDATE_ONLY, result.reason
+        assert result.suppress is False
+        assert result.value_bound_bindings
+        assert {binding.callable for binding in result.value_bound_bindings} == {"_sanitize"}
+        assert all(binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
+                   for binding in result.value_bound_bindings)
 
     def test_resolver_no_helper_empty_bindings(self, tmp_path):
         src = (

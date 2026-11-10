@@ -30,6 +30,7 @@ from core.dataflow.sanitizer_catalog import (
     match_sanitizers_in_cfg,
     sanitizer_callables_for_cwe,
     sink_classes_for_cwe,
+    source_contracts_for_callable,
 )
 from core.analysis.cfg_builder import (
     build_cpp_callgraph,
@@ -183,6 +184,7 @@ def test_recognizes_bare_call_sanitizer():
     assert len(matched) == 1
     binding = next(iter(matched))
     assert binding.callable == "html.escape"
+    assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
 
 
 def test_recognizes_dotted_attribute_call():
@@ -356,3 +358,27 @@ class TestArgvContextMapping:
         argv = set(danger_chars_for("cmdi_argv"))
         assert cmdi < argv
         assert {"-", " ", "\t", "'", '"'} <= argv
+
+
+def test_conditional_requirements_preserve_candidate_census():
+    assert "html.escape" in sanitizer_callables_for_cwe("CWE-79", "python")
+    assert "html.escape" in all_sanitizer_callables("python")
+    assert source_contracts_for_callable("html.escape", "CWE-79", "python") == frozenset({
+        "exact_builtin_str_default_call",
+    })
+    assert source_contracts_for_callable("html.escape", "CWE-89", "python") == frozenset()
+    assert source_contracts_for_callable("html.escape", "CWE-79", "java") == frozenset()
+    assert source_contracts_for_callable("werkzeug.utils.secure_filename", "CWE-22", "python") == frozenset()
+
+
+def test_malformed_catalogue_contract_cannot_turn_into_unconditional_match(monkeypatch):
+    from dataclasses import replace
+    from core.dataflow import sanitizer_catalog as catalog
+
+    entry = next(entry for entry in all_entries() if entry.library_call == "html.escape")
+    malformed = replace(entry)
+    object.__setattr__(malformed, "requires_exact_str", "false")
+    monkeypatch.setattr(catalog, "all_entries", lambda: (malformed,))
+    assert source_contracts_for_callable("html.escape", "CWE-79", "python") == frozenset({
+        "invalid_catalog_contract",
+    })

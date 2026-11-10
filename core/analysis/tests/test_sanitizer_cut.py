@@ -6,8 +6,8 @@ Coverage:
   ``else`` branches. The existing lexical dominance check at
   ``core/dataflow/smt_barrier.py:1189`` (``line < sink_line``)
   cannot decide this correctly because neither sanitizer call
-  lexically precedes the sink uniformly. The vertex-cut suppresses
-  it. This is the motivating test for the whole project.
+  lexically precedes the sink uniformly. The vertex-cut retains the
+  complete candidate; unresolved primitive requirements prevent a drop.
 * Bypass case — sanitizer present on one branch only; the other
   branch bypasses. Must NOT suppress.
 * Loop body sanitizer — must NOT suppress when the loop can exit
@@ -32,7 +32,8 @@ from core.analysis.cfg_builder import (
 )
 from core.analysis.dominators import AdjacencyGraph
 from core.analysis.sanitizer_cut import (
-    VERDICT_SANITIZER_DOMINATED,
+    VERDICT_CANDIDATE_ONLY,
+    VERDICT_SANITIZER_CANDIDATE,
     SanitizerCutResult,
     evaluate_finding,
     record_sanitizer_cut_suppression,
@@ -57,6 +58,20 @@ def _node_with_call(cfg, call_name):
         if isinstance(n, PyCFGNode) and call_name in n.calls
     )
 
+
+
+def _assert_unverified_html_candidate(result, *, value_bound=False):
+    assert result.verdict == VERDICT_CANDIDATE_ONLY
+    assert result.suppress is False
+    assert result.cut_set == frozenset()
+    assert result.all_matched_bindings
+    assert {binding.callable for binding in result.all_matched_bindings} == {"html.escape"}
+    assert all("exact_builtin_str_default_call" in binding.unverified_source_contracts
+               for binding in result.all_matched_bindings)
+    if value_bound:
+        assert result.value_bound_bindings
+    else:
+        assert not result.value_bound_bindings
 
 # ---------------------------------------------------------------------------
 # Pure vertex-cut algorithm
@@ -126,10 +141,9 @@ class TestCanonicalSiblingBranch:
             cfg, [cfg.entry_node], sink,
             cwe="CWE-79", language="python",
         )
-        assert result.suppress is True
-        assert "vertex-cut" in result.reason
-        # The cut set contains BOTH sanitizer nodes (one per branch).
-        assert len(result.cut_set) == 2
+        _assert_unverified_html_candidate(result)
+        # Both branch nodes remain recognisable, without an authorised cut.
+        assert len(result.all_matched_bindings) == 2
 
     def test_only_one_branch_sanitizes_does_not_suppress(self):
         src = (
@@ -155,8 +169,7 @@ class TestCanonicalSiblingBranch:
 
 
 class TestStraightLineSanitize:
-    """A linear function with a single sanitizer call should
-    suppress — every path crosses it."""
+    """A linear call remains a complete control-flow candidate."""
 
     def test_linear_sanitize_then_sink_suppresses(self):
         src = (
@@ -171,7 +184,7 @@ class TestStraightLineSanitize:
             cfg, [cfg.entry_node], sink,
             cwe="CWE-79", language="python",
         )
-        assert result.suppress is True
+        _assert_unverified_html_candidate(result)
 
     def test_sink_then_sanitize_does_not_suppress(self):
         """Sanitizer AFTER the sink — bypass; current model treats
@@ -232,7 +245,7 @@ class TestMatch:
             cfg, [cfg.entry_node], sink,
             cwe="CWE-79", language="python",
         )
-        assert result.suppress is True
+        _assert_unverified_html_candidate(result)
 
 
 class TestLoops:
@@ -376,7 +389,7 @@ class TestSuppressionRecord:
             cfg, [cfg.entry_node], sink,
             cwe="CWE-79", language="python",
         )
-        assert result.suppress is True
+        _assert_unverified_html_candidate(result)
         finding = {
             "finding_id": "F1",
             "rule_id": "py/xss",
@@ -392,12 +405,12 @@ class TestSuppressionRecord:
         record = json.loads(lines[0])
         assert record["finding_id"] == "F1"
         assert record["rule_id"] == "py/xss"
-        assert record["verdict"] == VERDICT_SANITIZER_DOMINATED
-        assert "vertex-cut" in record["reason"]
+        assert record["verdict"] == VERDICT_SANITIZER_CANDIDATE
+        assert record["dropped"] is False
+        assert record["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
 
     def test_does_not_write_when_suppress_is_false(self, tmp_path: Path):
-        """No-op for non-suppressed findings — the chokepoint records
-        dropped findings, not surviving ones."""
+        """No candidate or suppression means there is no cut record."""
         result = SanitizerCutResult(
             suppress=False, reason="bypass",
             cut_set=frozenset(), candidate_callables=frozenset(),
@@ -433,7 +446,7 @@ class TestSuppressionRecord:
         assert len(lines) == 2
         verdicts = [json.loads(line)["verdict"] for line in lines]
         assert "binary_oracle_absent" in verdicts
-        assert VERDICT_SANITIZER_DOMINATED in verdicts
+        assert VERDICT_SANITIZER_CANDIDATE in verdicts
 
 
 # ---------------------------------------------------------------------------
@@ -441,7 +454,7 @@ class TestSuppressionRecord:
 # ---------------------------------------------------------------------------
 
 
-def test_cut_set_contains_actual_cfg_nodes():
+def test_candidate_witness_contains_actual_cfg_nodes():
     src = (
         "import html\n"
         "def handle(x):\n"
@@ -454,18 +467,19 @@ def test_cut_set_contains_actual_cfg_nodes():
         cfg, [cfg.entry_node], sink,
         cwe="CWE-79", language="python",
     )
-    # Every node in cut_set should be a PyCFGNode from the actual CFG
-    for n in result.cut_set:
-        assert isinstance(n, PyCFGNode)
-        assert n in set(cfg.nodes())
+    _assert_unverified_html_candidate(result)
+    # Candidate node identity remains visible even without an authorised cut.
+    for binding in result.all_matched_bindings:
+        assert isinstance(binding.node, PyCFGNode)
+        assert binding.node in set(cfg.nodes())
 
 
 class TestLegacySinkInCutNotTrivial:
     """Legacy (no value context) path: a sanitizer ON the sink node
     used to count as a trivial cut — sink(escape(other), tainted)
     read as fully sanitized one caller-invariant away from
-    enforcement. The cut is re-asked over the non-sink sanitizer
-    nodes; on-path sanitizers keep suppressing."""
+    enforcement. Candidate cuts still exclude the sink itself, and
+    unresolved source contracts independently prevent suppression."""
 
     def _cfg(self, src):
         from core.analysis.cfg_builder import build_python_cfg
@@ -499,7 +513,6 @@ class TestLegacySinkInCutNotTrivial:
 
     def test_on_path_sanitizer_still_suppresses_legacy(self):
         from core.analysis.sanitizer_cut import (
-            VERDICT_SUPPRESS,
             evaluate_finding,
         )
         src = (
@@ -513,13 +526,12 @@ class TestLegacySinkInCutNotTrivial:
             cfg, [cfg.entry_node], self._sink(cfg, "render"),
             cwe="CWE-79", language="python",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result)
 
     def test_value_bound_same_node_sanitize_at_sink_unchanged(self):
         # The VALUE-BOUND path keeps its same-node semantics — this
         # guard is scoped to the legacy branch only.
         from core.analysis.sanitizer_cut import (
-            VERDICT_SUPPRESS,
             evaluate_finding,
         )
         src = (
@@ -534,4 +546,4 @@ class TestLegacySinkInCutNotTrivial:
             cwe="CWE-79", language="python",
             source_symbols={"x"}, sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result, value_bound=True)
