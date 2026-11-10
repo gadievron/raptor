@@ -673,3 +673,10 @@ When `--no-report` leaves an earlier portable receipt in the run directory,
 RAPTOR warns that those report files were not refreshed. Native summaries and
 evidence remain available. The retained portable files remain an earlier
 snapshot, rather than output from this invocation.
+
+Corpus profiling also accepts `--report-format` and `--report-output`. For example,
+`/binary corpus ./samples --out ./profile --report-format json` adds a portable
+receipt alongside the native profile. It preserves sample/skip totals and caps,
+and includes up to 100 family summaries. It does not repeat profiling or copy
+sample contents, sample filenames or seed bytes into the receipt. Corpus
+statistics remain uncorroborated observations.
