@@ -198,6 +198,12 @@ def _run_semgrep_rule(rule_path: Path, target_path: Path) -> dict[str, Any]:
             "match_count": len(result.findings),
             "matches": [_finding_to_match(f) for f in result.findings],
             "errors": list(getattr(result, "errors", []) or []),
+            "files_examined": list(getattr(result, "files_examined", []) or []),
+            "files_failed": list(getattr(result, "files_failed", []) or []),
+            "skipped_rules": list(getattr(result, "skipped_rules", []) or []),
+            "skipped_summary": dict(getattr(result, "skipped_summary", {}) or {}),
+            "semgrep_version": getattr(result, "semgrep_version", ""),
+            "returncode": getattr(result, "returncode", 0),
         }
     except Exception as exc:
         return {"error": str(exc)}
