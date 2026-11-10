@@ -23,6 +23,8 @@ position p;
   sizeof(unsigned char)@p
 |
   sizeof(BYTE)@p
+|
+  sizeof@p BYTE
 )
 
 @double_sizeof_alloc@
@@ -89,6 +91,14 @@ position p2 != one_byte_width.p;
   P - N * sizeof(*P)@p2
 |
   P - N * sizeof(P[0])@p2
+|
+  P + N * sizeof@p2 *P
+|
+  P + N * sizeof@p2 P[0]
+|
+  P - N * sizeof@p2 *P
+|
+  P - N * sizeof@p2 P[0]
 )
 
 @script:python pointer_scaled_report depends on pointer_scaled_twice@

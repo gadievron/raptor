@@ -189,3 +189,39 @@ def test_scaling_rule_silence_is_inconclusive(tmp_path, rule_name, other_hit):
     assert scoped.outcome == "inconclusive"
     assert scoped.details["confirm_only"]
     assert not scoped.matches
+
+
+def test_pointer_sizeof_expression_forms(tmp_path):
+    import json
+
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    lines = []
+    for op in ("+", "-"):
+        for width in ("sizeof(*p)", "sizeof(p[0])", "sizeof *p", "sizeof p[0]"):
+            lines.append(f"int *candidate{len(lines)}(int *p, int n) {{ return p {op} n * {width}; }}")
+    expected = {(line, "pointer_scaling_double") for line in range(1, len(lines) + 1)}
+    for byte_type in ("char", "signed char", "unsigned char", "const char", "volatile unsigned char"):
+        for op in ("+", "-"):
+            for width in ("sizeof *p", "sizeof p[0]"):
+                lines.append(
+                    f"{byte_type} *unit{len(lines)}({byte_type} *p, int n) "
+                    f"{{ return p {op} n * {width}; }}"
+                )
+    lines.append("int *plain(int *p, int n) { return p + n; }")
+    source = tmp_path / "strides.c"
+    source.write_text("\n".join(lines) + "\n")
+    result = run_pinned_subprocess(
+        ["spatch", "--sp-file", str(_RULE), str(source), "--no-show-diff"],
+        timeout=45, context="Owned pointer sizeof expression forms",
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert result.returncode == 0, result.stderr
+    rows = [
+        json.loads(line.removeprefix("COCCIRESULT:"))
+        for stream in (result.stdout, result.stderr)
+        for line in stream.splitlines() if line.startswith("COCCIRESULT:")
+    ]
+    assert {(int(row["line"]), row["rule"]) for row in rows} == expected
+    assert len(rows) == len(expected)
