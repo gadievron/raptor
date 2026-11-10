@@ -463,7 +463,17 @@ def _operations(source, language, abi):
             range_conditions.append((target, op, tuple(atom for leaf in leaves for atom in (leaf[0], leaf[2])),
                                      'constant-condition-' + direction, mechanism,
                                      {'binding_status': 'candidate', 'candidate_basis': 'literal-comparison-ranges'}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions
+    from .integer_chain_condition import chain_condition_candidates
+    chains = []
+    for target, shape, truth in chain_condition_candidates(source, language=language, integer_abi=abi):
+        literal, inner_op, name, outer_op, outer_literal = shape
+        expression = f'({literal} {inner_op} {name}) {outer_op} {outer_literal}'
+        direction = 'true' if truth else 'false'
+        mechanism = f"Condition is always {direction} in `{expression}`."
+        if len(mechanism) <= 300:
+            chains.append((target, outer_op, (literal, name, outer_literal), 'constant-condition-' + direction,
+                           mechanism, {'binding_status': 'candidate', 'candidate_basis': 'promoted-comparison-result'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
