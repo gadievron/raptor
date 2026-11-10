@@ -2570,6 +2570,11 @@ def _sink_reads_chain_directly(
     if not isinstance(statement, (ast.Return, ast.Expr, ast.Assign, ast.AnnAssign)):
         return False
     value = statement.value
+    # A line-only sink location cannot choose between calls in a target,
+    # receiver or callee and the direct value-consuming call.
+    expected_calls = int(isinstance(value, ast.Call))
+    if sum(isinstance(node, ast.Call) for node in ast.walk(statement)) != expected_calls:
+        return False
     if isinstance(value, ast.Call):
         if len(value.args) != 1 or value.keywords:
             return False
