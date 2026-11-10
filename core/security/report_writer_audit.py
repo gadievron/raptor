@@ -629,6 +629,7 @@ _REPORT_WRITER_FILES = (
     "packages/code_understanding/reporting.py",
     "core/recall/score.py",
     "core/recall/reporting.py",
+    "core/threat_model/reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
@@ -1702,28 +1703,6 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "rendered under a :.2f format spec — a non-numeric value "
             "raises at format time instead of reaching the terminal; "
             "every string field on the same line is sanitised"
-        ),
-    ),
-    AllowlistEntry(
-        file="core/threat_model/__init__.py",
-        func_name="render_report",
-        kind="unsanitised_llm_value",
-        detail="source",
-        audit_note=(
-            "the raw read feeds _mermaid_id, which renders a sha256 "
-            "hex digest of the value — content-destroying; the label "
-            "render of the same field routes through _mermaid_label"
-        ),
-    ),
-    AllowlistEntry(
-        file="core/threat_model/__init__.py",
-        func_name="render_report",
-        kind="unsanitised_llm_value",
-        detail="sink",
-        audit_note=(
-            "the raw read feeds _mermaid_id, which renders a sha256 "
-            "hex digest of the value — content-destroying; the label "
-            "render of the same field routes through _mermaid_label"
         ),
     ),
     AllowlistEntry(
