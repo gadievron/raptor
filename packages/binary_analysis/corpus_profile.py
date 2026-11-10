@@ -1494,19 +1494,20 @@ def _write_seed_bytes(dest: Path, data: bytes) -> str | None:
     manifest record instead of following/truncating the target (plain
     ``write_bytes`` opens with O_TRUNC and follows symlinks).
     """
+    from core.source.streams import owned_fd
+
     try:
         fd = open_exclusive_artifact(dest)
     except OSError as exc:
         return f"destination not exclusively creatable: {type(exc).__name__}"
-    try:
-        view = memoryview(data)
-        while view:
-            written = os.write(fd, view)
-            view = view[written:]
-    except OSError as exc:
-        return f"write failed: {type(exc).__name__}"
-    finally:
-        os.close(fd)
+    with owned_fd(fd, close_fd=os.close):
+        try:
+            view = memoryview(data)
+            while view:
+                written = os.write(fd, view)
+                view = view[written:]
+        except OSError as exc:
+            return f"write failed: {type(exc).__name__}"
     return None
 
 
