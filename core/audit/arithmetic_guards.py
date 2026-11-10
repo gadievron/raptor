@@ -32,7 +32,7 @@ def _nodes(node):
         stack.extend(reversed(item.named_children))
 
 
-def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None, selected_value=None):
+def guards_for_operation(body, target, data, operands, *, language=None, integer_abi=None, selected_value=None, selected_condition=False):
     """Collect conjunctions with known branch polarity and unchanged names."""
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -228,10 +228,12 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
             selected_test = _unwrap(test)
             if selected_test is not None and selected_test.type == "condition_clause":
                 selected_test = _unwrap(selected_test.child_by_field_name("value"))
-            if selected_test == target and text(target.child_by_field_name("operator")) in {
+            if selected_test == target and (selected_condition or text(target.child_by_field_name("operator")) in {
                 "<", "<=", ">", ">=", "==", "!=",
-            }:
-                return facts  # classify the test, never assume its own truth
+            }):
+                # selected_condition callers separately bind the complete pure
+                # typed subtree; never assume the selected test's own truth.
+                return facts
             for field, truth in (("consequence", True), ("alternative", False)):
                 branch = node.child_by_field_name(field)
                 if contains(branch):

@@ -267,6 +267,8 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("condition is always false", "check-integer-comparison"),
+    ("condition is always true", "check-integer-comparison"),
     ("signed compound overflow", "check-integer-update"),
     ("signed increment overflow", "check-integer-update"),
     ("signed decrement overflow", "check-integer-update"),
