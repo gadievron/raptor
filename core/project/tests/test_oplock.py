@@ -38,6 +38,7 @@ from core.project.oplock import (
 )
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 
 @pytest.fixture(autouse=True)
@@ -147,22 +148,26 @@ class OpLockPrimitiveTest(unittest.TestCase):
         with holder:
             # Release the holder shortly after the contender starts
             # polling — well inside the grace window.
-            threading.Timer(0.3, holder.release.set).start()
-            err = io.StringIO()
-            with contextlib.redirect_stderr(err), \
-                    project_op_lock(self.project_dir, "contender",
-                                    grace=5.0):
-                pass
-            self.assertEqual(err.getvalue(), "")
+            timer = threading.Timer(0.3, holder.release.set)
+            with retiring_threads([timer], release=timer.cancel, timeout=5):
+                timer.start()
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err), \
+                        project_op_lock(self.project_dir, "contender",
+                                        grace=5.0):
+                    pass
+                self.assertEqual(err.getvalue(), "")
 
     def test_wait_blocks_until_release(self):
         holder = _Holder(self.project_dir)
         with holder:
-            threading.Timer(0.5, holder.release.set).start()
-            t0 = time.monotonic()
-            with project_op_lock(self.project_dir, "waiter", wait=True):
-                waited = time.monotonic() - t0
-            self.assertGreaterEqual(waited, 0.3)
+            timer = threading.Timer(0.5, holder.release.set)
+            with retiring_threads([timer], release=timer.cancel, timeout=5):
+                timer.start()
+                t0 = time.monotonic()
+                with project_op_lock(self.project_dir, "waiter", wait=True):
+                    waited = time.monotonic() - t0
+                self.assertGreaterEqual(waited, 0.3)
 
     def test_crashed_holder_recovery(self):
         """A holder killed outright (no unlock path runs) must not
@@ -230,9 +235,11 @@ class OpLockCliTest(unittest.TestCase):
     def test_set_wait_queues_and_lands(self):
         holder = _Holder(self.out_dir)
         with holder:
-            threading.Timer(0.5, holder.release.set).start()
-            code, _, err = self._run(
-                "set", "notes", "queued write", "--wait")
+            timer = threading.Timer(0.5, holder.release.set)
+            with retiring_threads([timer], release=timer.cancel, timeout=5):
+                timer.start()
+                code, _, err = self._run(
+                    "set", "notes", "queued write", "--wait")
         self.assertEqual(code, 0, err)
         data = json.loads(
             (self.projects_dir / "myapp.json").read_text(encoding="utf-8"))
