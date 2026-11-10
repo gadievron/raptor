@@ -268,3 +268,59 @@ def test_unchanged_full_gap_does_not_spend_discovery_work_needed_by_other_gaps()
     assert full["injected_hypotheses"] == original
     assert calls == [next_source]
     assert len(later["injected_hypotheses"]) == 1
+
+
+def test_converted_negative_literal_comparison_is_discovered():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.integer_comparison import check_integer_comparison
+
+    source = "int Read(unsigned Value){if(Value > -1)return 1;return 0;}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 1
+    seed = gap["injected_hypotheses"][0]
+    assert seed["arithmetic_site"]["claim_kind"] == "constant-comparison-false"
+    assert "verdict" not in seed
+    checked = check_integer_comparison(source, seed["mechanism"], language="c", integer_abi="lp64")
+    assert checked["matches_claim"] is True and checked["constant_truth"] is False
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("spelling,abi,truth", [
+    ("unsigned short", "lp64", True),
+    ("unsigned short", "i16", False),
+    ("unsigned long", "lp64", False),
+    ("unsigned char", "lp64", True),
+])
+def test_discovered_truth_uses_the_target_promotion_and_conversion(spelling, abi, truth, language):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.integer_comparison import check_integer_comparison
+
+    source = f"int Read({spelling} Value){{if(Value > -1)return 1;return 0;}}"
+    file = "math." + language
+    gap = {"file": file, "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {file: source}, mode="quality", integer_abi=abi) == 1
+    seed = gap["injected_hypotheses"][0]
+    assert seed["arithmetic_site"]["claim_kind"] == "constant-comparison-" + str(truth).lower()
+    assert "verdict" not in seed
+    checked = check_integer_comparison(source, seed["mechanism"], language=language, integer_abi=abi)
+    assert checked["matches_claim"] is True and checked["constant_truth"] is truth
+
+
+@pytest.mark.parametrize("op", ["<", "<=", ">", ">=", "==", "!="])
+def test_wrapping_signed_ranges_do_not_create_constant_comparison_leads(op):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+
+    source = f"int Read(int Value,unsigned Other){{if(Value {op} Other)return 1;return 0;}}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 0
+
+
+def test_wrapped_interval_encloses_independent_byte_conversions():
+    from core.smt_solver.integer_types import IntegerType
+    from core.audit.integer_comparison_types import converted_interval
+
+    low, high = converted_interval(-128, 127, IntegerType(16, False, 16, False))
+    for value in range(-128, 128):
+        converted = int.from_bytes(value.to_bytes(2, "little", signed=True), "little", signed=False)
+        assert low <= converted <= high
+    assert converted_interval(0, 65535, IntegerType(16, True, 16, True)) is None
