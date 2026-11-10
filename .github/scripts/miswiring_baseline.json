@@ -469,6 +469,9 @@
   "artifacts:write_only_artifact::provenance.md": {
    "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
   },
+  "artifacts:write_only_artifact::python-sql.sarif": {
+   "note": "Additive Python SQL recovery SARIF consumed through returned paths, not an orphan/operator-only diagnostic. scanner.run_python_sql_stage returns the emitted python-sql.sarif path through _write_stage_report; main adds python_sql_sarifs to sarif_inputs and calls core.sarif.parser.merge_sarif, whose accumulate_file loads each supplied path. Findings and invocation/coverage diagnostics feed combined.sarif, exclusion/suppression handling and scan metrics; on merge failure metrics consume the individual sarif_inputs. The composition regression test_recovery_provenance_survives_scan_merge_exclusion_and_suppression exercises the existing stage/merge/exclusion/annotation path. The artifact index sees no literal-name reader because the consumer receives path variables. No new reader or detection/coverage authority is implied."
+  },
   "artifacts:write_only_artifact::r.yml": {
    "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
   },
