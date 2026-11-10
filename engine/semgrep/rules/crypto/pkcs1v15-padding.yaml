@@ -12,7 +12,7 @@ rules:
       # (?i): JCA transformation lookup is case-insensitive per spec.
       # Bare "RSA" defaults to PKCS1 padding on every mainstream
       # provider, hence the optional suffix.
-      - pattern: Cipher.getInstance($ALGO, ...)
+      - pattern: javax.crypto.Cipher.getInstance($ALGO, ...)
       - metavariable-regex:
           metavariable: $ALGO
           regex: (?i)^"rsa(/ecb/pkcs1padding)?"$
@@ -27,16 +27,7 @@ rules:
       Use Crypto.Cipher.PKCS1_OAEP instead.
     languages: [python]
     severity: HIGH
-    pattern-either:
-      - pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
-      - patterns:
-        - pattern: PKCS1_v1_5.new(...)
-        - pattern-not-inside: |
-            from Crypto.Signature import PKCS1_v1_5
-            ...
-        - pattern-not-inside: |
-            import Crypto.Signature.PKCS1_v1_5
-            ...
+    pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]
