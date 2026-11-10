@@ -36,9 +36,11 @@ def detect_format(path) -> str | None:
     bytes, or ``None`` if it is not a recognised archive/compressed file
     (or can't be read). Never raises.
     """
+    from core.source.streams import preserving_stream_error
+
     p = Path(path)
     try:
-        with Path(p).open("rb") as fh:
+        with preserving_stream_error(Path(p).open("rb")) as fh:
             head = fh.read(_PEEK_BYTES)
     except OSError:
         return None
