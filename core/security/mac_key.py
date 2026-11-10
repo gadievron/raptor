@@ -54,10 +54,11 @@ import os
 import secrets
 import stat
 import time
+from contextlib import contextmanager as _contextmanager
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
 class Refused:
@@ -117,6 +118,23 @@ def _recently_modified(path: Path) -> bool:
     return abs(time.time() - st.st_mtime) < _FRESH_WINDOW_S
 
 
+@_contextmanager
+def _owned_key_fd(fd: int) -> Iterator[int]:
+    """Close a key descriptor once, retaining an active operation error."""
+    failed = False
+    try:
+        yield fd
+    except BaseException:
+        failed = True
+        raise
+    finally:
+        try:
+            os.close(fd)
+        except BaseException:
+            if not failed:
+                raise
+
+
 def read_existing_key(
     path: Path,
     *,
@@ -147,48 +165,48 @@ def read_existing_key(
             "got there; a fresh key is created on the next stamp",
         )
         return REFUSED
-    try:
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            warn(
-                path, "not a regular file",
-                "remove the object at that path and investigate",
-            )
-            return REFUSED
-        if st.st_uid != os.geteuid():
-            warn(
-                path,
-                f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
-                "investigate the foreign-owned key; restore your own "
-                "0600 key file",
-            )
-            return REFUSED
-        if st.st_mode & 0o077:
-            warn(
-                path,
-                f"mode {stat.S_IMODE(st.st_mode):04o} grants group/other "
-                "access",
-                f"chmod 600 {path}",
-            )
-            return REFUSED
-        # A single os.read may return fewer bytes than requested
-        # (network filesystems); a short read would land a healthy key
-        # in the wrong-length refusal, so loop to EOF. The cap stays at
-        # key_len * 4 — genuinely oversized files still fail-close in
-        # the caller's length check.
-        chunks: list[bytes] = []
-        remaining = key_len * 4
-        while remaining > 0:
-            chunk = os.read(fd, remaining)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        return b"".join(chunks)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
+    with _owned_key_fd(fd):
+        try:
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode):
+                warn(
+                    path, "not a regular file",
+                    "remove the object at that path and investigate",
+                )
+                return REFUSED
+            if st.st_uid != os.geteuid():
+                warn(
+                    path,
+                    f"owned by uid={st.st_uid}, expected uid={os.geteuid()}",
+                    "investigate the foreign-owned key; restore your own "
+                    "0600 key file",
+                )
+                return REFUSED
+            if st.st_mode & 0o077:
+                warn(
+                    path,
+                    f"mode {stat.S_IMODE(st.st_mode):04o} grants group/other "
+                    "access",
+                    f"chmod 600 {path}",
+                )
+                return REFUSED
+            # A single os.read may return fewer bytes than requested
+            # (network filesystems); a short read would land a healthy key
+            # in the wrong-length refusal, so loop to EOF. The cap stays at
+            # key_len * 4 — genuinely oversized files still fail-close in
+            # the caller's length check.
+            chunks: list[bytes] = []
+            remaining = key_len * 4
+            while remaining > 0:
+                chunk = os.read(fd, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            return b"".join(chunks)
+        except OSError:
+            return None
+
 
 
 def load_or_create_key(
@@ -276,7 +294,7 @@ def load_or_create_key(
                 f"remove the suspect key and investigate; {recreate_hint}",
             )
         return None
-    try:
+    with _owned_key_fd(fd):
         # Write to completion: os.write may legally write fewer bytes
         # than asked, and an unchecked short write would leave a torn
         # key that every later load refuses until an operator rm.
@@ -284,6 +302,4 @@ def load_or_create_key(
         while view:
             written = os.write(fd, view)
             view = view[written:]
-    finally:
-        os.close(fd)
     return key
