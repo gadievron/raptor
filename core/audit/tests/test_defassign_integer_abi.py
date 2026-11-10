@@ -1,10 +1,13 @@
 """Definite-assignment SMT proofs require the owning target integer frame."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from core.audit import defassign as da
 from core.audit.defassign import check_definite_assignment
+from core.audit.refutation import _ProbeContext, _probe_definite_assignment, rescue_self_refuted
 from core.audit.integer_abi import integer_abi_key, integer_abi_record
 
 
@@ -194,3 +197,100 @@ def test_post_loop_probe_context_receives_the_same_layout(tmp_path, abi, dominat
     else:
         assert result.demote_to == 'suspicious'
         assert records == []
+
+
+WIDTH_SENSITIVE = "int f(long a){int v; if(a == 0xffffffff){if(a < 0) return v;} return 0;}"
+
+
+CONTRADICTION = "int f(int a){int v; if(a > 5) v=1; if(a > 5) return v; return 0;}"
+
+
+@pytest.mark.parametrize("abi", [None, "unknown", {"name": "incomplete"}])
+def test_unadmitted_layout_cannot_supply_a_source_proof(abi):
+    result = da.check_definite_assignment(WIDTH_SENSITIVE, "v", integer_abi=abi)
+    assert not result.proven, result.reason
+    assert result.integer_abi is None and result.smt_paths_discharged == 0
+
+
+@pytest.mark.parametrize("abi,expected", [("ilp32", False), ("llp64", False), ("lp64", True)])
+def test_atomic_long_guard_uses_target_width(abi, expected):
+    result = da.check_definite_assignment(WIDTH_SENSITIVE, "v", integer_abi=abi)
+    assert result.proven is expected, result.reason
+    if expected:
+        assert result.method == "structural+smt"
+        assert result.to_dict()["integer_abi"] == integer_abi_record(abi)
+
+
+@pytest.mark.parametrize("abi", ["i16", "ilp32", "lp64", "ilp64"])
+def test_known_builtin_formal_contradiction_retains_its_layout(abi):
+    result = da.check_definite_assignment(CONTRADICTION, "v", integer_abi=abi)
+    assert result.proven and result.method == "structural+smt", result.reason
+    assert result.integer_abi == integer_abi_record(abi)
+
+
+@pytest.mark.parametrize("spelling", ["size_t", "uint32_t", "int64_t", "volatile int"])
+def test_aliases_and_unstable_formals_do_not_borrow_builtin_widths(spelling):
+    source = CONTRADICTION.replace("int a", spelling + " a")
+    result = da.check_definite_assignment(source, "v", integer_abi="lp64")
+    assert not result.proven, result.reason
+
+
+def test_structural_assignment_needs_no_integer_layout():
+    result = da.check_definite_assignment("int f(void){int v=1; return v;}", "v")
+    assert result.proven and result.method == "structural"
+    assert result.integer_abi is None
+
+
+def test_source_probe_passes_layout_and_records_it(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "app.c").write_text(WIDTH_SENSITIVE)
+    outcome = SimpleNamespace(file="app.c")
+    hypothesis = {"mechanism": "Variable v may be returned uninitialized"}
+    receipt = {"description": "Variable 'v' may be returned uninitialized"}
+    def probe(abi):
+        return _probe_definite_assignment(outcome, hypothesis, _ProbeContext(
+            source=WIDTH_SENSITIVE, target_path=target, repo_trusted=True,
+            detector_finding=receipt, integer_abi=abi,
+        ))
+    assert probe(None) is None
+    assert probe("ilp32") is None
+    result = probe("lp64")
+    assert result is not None and result.refuter_grade == "proof"
+    assert '"long_bits":64' in result.reason
+    assert '"name":"lp64"' in result.reason
+
+
+@pytest.mark.parametrize("abi,dominates", [(None, False), ("llp64", False), ("lp64", True)])
+def test_config_layout_reaches_the_actual_receipt_floor(tmp_path, abi, dominates):
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "app.c").write_text(WIDTH_SENSITIVE)
+    out = tmp_path / "out"
+    hypothesis = {"mechanism": "Variable v may be returned uninitialized",
+                  "confidence": "refuted", "counter": "Every branch assigns v"}
+    outcome = SimpleNamespace(file="app.c", function="f", line=1, status="clean",
+                              body="", hypothesis="", hypotheses=[hypothesis],
+                              evidence_tool="", review_result=None)
+    receipt = {"detector": "cocci:uninitialized_return", "file": "app.c",
+               "function": "f", "line": 1,
+               "description": "Variable 'v' may be returned uninitialized"}
+    config = SimpleNamespace(target_path=target, out_dir=out, repo_trusted=True, integer_abi=abi)
+    result = rescue_self_refuted(outcome, config=config, source=WIDTH_SENSITIVE,
+                                detector_findings=[receipt])
+    if dominates:
+        assert result is None
+        records = [json.loads(line) for line in (out / "suppressions.jsonl").read_text().splitlines()]
+        assert len(records) == 1 and records[0]["verdict"] == "refuter_dominates_receipt"
+        assert '"long_bits":64' in records[0]["reason"]
+    else:
+        assert result is not None and result.demote_to == "suspicious"
+
+
+LEGACY_ARITHMETIC_WIDTH_SENSITIVE = 'int f(unsigned long a){int v; if(a <= 0xffffffff){if(a + 1 > a) v=1; return v;} return 0;}'
+
+
+@pytest.mark.parametrize("abi", ["ilp32", "llp64", "lp64", "ilp64"])
+def test_arithmetic_width_obligation_retains_the_typed_source_refusal(abi):
+    result = da.check_definite_assignment(LEGACY_ARITHMETIC_WIDTH_SENSITIVE, "v", integer_abi=abi)
+    assert not result.proven and result.method != "structural+smt", result.to_dict()
