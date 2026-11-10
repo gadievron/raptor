@@ -81,6 +81,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
 from . import _pathpin, state
+from ._exec_signals import restore_exec_signals
 from ._retirement import retire_parent_resources as _retire_parent_resources
 from ._pipe_poll import readable_fds as _readable_fds
 from ._tracer_launch import prepare_tracer_launch
@@ -1666,6 +1667,7 @@ def run_sandboxed(
     stderr=None,
     pass_fds: Sequence[int] = (),
     start_new_session: bool = True,
+    restore_signals: bool = True,
     audit_mode: bool = False,
     audit_run_dir: str | None = None,
     audit_required: bool = False,
@@ -3668,6 +3670,8 @@ def run_sandboxed(
                 # setup child's wait status as a genuine-looking
                 # target result. The parent now refuses typed on
                 # EOF-without-confirmation ('!').
+                if restore_signals:
+                    restore_exec_signals()
                 _write_setup_status(status_w, b"G")
                 try:
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args

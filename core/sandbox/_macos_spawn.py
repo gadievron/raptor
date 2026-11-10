@@ -676,6 +676,7 @@ def run_sandboxed(cmd: list[str], *,
                   observe_nonce: str | None = None,
                   restrict_reads: bool = False,
                   start_new_session: bool = True,
+                  restore_signals: bool = True,  # noqa: ARG001 — Linux-native exec option; signature parity only
                   use_egress_proxy: bool = False,
                   proxy_port: int | None = None,
                   fake_home: bool = False,
