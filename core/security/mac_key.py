@@ -153,8 +153,11 @@ def read_existing_key(
     guard covers only the read-existing branch.
     """
     try:
-        from core.atomic_fs import open_hardened_read
-        fd = open_hardened_read(path)
+        # Keep metadata reads inside the key's ownership/error-policy guard.
+        # Nonblocking open lets that guard reject a FIFO before any read.
+        fd = os.open(
+            str(path), os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+        )
     except FileNotFoundError:
         return None
     except OSError as exc:
