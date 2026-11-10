@@ -33,6 +33,7 @@ from dataclasses import dataclass
 
 
 EXACT_STR_DEFAULT_CALL = "exact_builtin_str_default_call"
+PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 
 
 @dataclass(frozen=True)
@@ -72,17 +73,25 @@ class KnownSafeCall:
     # Supported primitive contract: one exact-str positional argument,
     # using library defaults. Source annotations/isinstance do not suffice.
     requires_exact_str: bool = False
+    required_source_contracts: frozenset[str] = frozenset()
 
     def __post_init__(self):
         if type(self.requires_exact_str) is not bool:
             raise ValueError("requires_exact_str must be a boolean")
+        if (type(self.required_source_contracts) is not frozenset
+                or any(type(item) is not str or not item for item in self.required_source_contracts)):
+            raise ValueError("required_source_contracts must be a frozenset of nonempty strings")
 
     @property
     def source_contracts(self) -> frozenset[str]:
         """Additional premises; name or value matching cannot establish them."""
         if type(self.requires_exact_str) is not bool:
             return frozenset({"invalid_catalog_contract"})
-        return frozenset({EXACT_STR_DEFAULT_CALL}) if self.requires_exact_str else frozenset()
+        if (type(self.required_source_contracts) is not frozenset
+                or any(type(item) is not str or not item for item in self.required_source_contracts)):
+            return frozenset({"invalid_catalog_contract"})
+        primitive = frozenset({EXACT_STR_DEFAULT_CALL}) if self.requires_exact_str else frozenset()
+        return self.required_source_contracts | primitive
 
 
 _TABLE: tuple[KnownSafeCall, ...] = (
@@ -100,11 +109,14 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         # value may start the chain; the None return cannot traverse (a
         # path sink consuming None fails with TypeError, not escape).
         input_arg_kind="transform",
+        required_source_contracts=frozenset({PATH_JOIN_CONTAINMENT}),
         soundness_note=(
+            "Given a trusted base and supported component semantics, "
             "werkzeug.security.safe_join (since werkzeug 0.5) returns "
             "None if the joined path escapes the base directory or "
             "contains traversal sequences.  Return value, when not None, "
-            "is provably inside the base directory."
+            "is lexically relative to the base directory. Filesystem containment "
+            "requires separate resolution and symlink premises."
         ),
     ),
     KnownSafeCall(

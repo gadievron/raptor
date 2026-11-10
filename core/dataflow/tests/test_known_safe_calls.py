@@ -134,3 +134,19 @@ def test_exact_string_input_contract_flag_is_strict(flag):
     assert entry is not None
     with pytest.raises(ValueError, match="requires_exact_str"):
         replace(entry, requires_exact_str=flag)
+
+
+@pytest.mark.parametrize("contracts", [set(), [], ("x",), frozenset({""}), frozenset({1})])
+def test_additional_source_contracts_are_strict(contracts):
+    entry = ksc.find("html.escape", "xss", "python")
+    with pytest.raises(ValueError, match="required_source_contracts"):
+        replace(entry, required_source_contracts=contracts)
+
+
+def test_primitive_and_path_contracts_are_distinct_and_composable():
+    entry = ksc.find("werkzeug.security.safe_join", "pathtrav", "python")
+    assert entry is not None and not entry.requires_exact_str
+    assert entry.source_contracts == frozenset({ksc.PATH_JOIN_CONTAINMENT})
+    assert replace(entry, requires_exact_str=True).source_contracts == frozenset({
+        ksc.PATH_JOIN_CONTAINMENT, ksc.EXACT_STR_DEFAULT_CALL,
+    })

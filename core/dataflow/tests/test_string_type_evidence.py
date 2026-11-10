@@ -27,7 +27,7 @@ def _review(tmp_path: Path, prefix="", argument="raw", parameters="raw", claimed
 def test_untyped_input_cannot_certify_an_overridable_escaper(tmp_path: Path):
     result = _review(tmp_path)
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
-    assert "exact builtin" in result.reasoning
+    assert result.extras["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
 
 
 @pytest.mark.parametrize("prefix,argument,claim", [

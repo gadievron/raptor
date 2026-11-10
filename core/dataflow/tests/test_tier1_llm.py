@@ -190,9 +190,8 @@ def test_whitespace_only_claim_rejected_everywhere():
 # Curated-table dispatch (known_safe_call)
 # ---------------------------------------------------------------------------
 
-def test_sound_via_known_safe_call_table(tmp_path: Path):
-    """werkzeug.security.safe_join — in the curated table — assigned
-    to abs_path which then reaches the sink.  Tier 1B SOUND."""
+def test_known_safe_call_table_preserves_unverified_path_contract(tmp_path: Path):
+    """Return-value flow does not establish trusted-base containment."""
     (tmp_path / "app.py").write_text(
         "from werkzeug.security import safe_join\n"        # line 1
         "def f(path):\n"                                    # line 2
@@ -215,9 +214,9 @@ def test_sound_via_known_safe_call_table(tmp_path: Path):
         sink_uri="app.py", sink_line=4, sink_class="pathtrav",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
-    assert "werkzeug.security.safe_join" in r.artifact
-    assert r.artifact.startswith("library:")
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert r.artifact is None
+    assert r.extras["unverified_source_contracts"] == ["trusted_path_base_components_and_containment"]
 
 
 def test_known_safe_call_refuses_on_unparseable_python(tmp_path: Path):
@@ -308,21 +307,21 @@ def test_find_best_validator_line_picks_same_function_match(tmp_path: Path):
     Pre-fix this took the first occurrence (often in an unrelated helper)
     and falsely failed the dominance check."""
     (tmp_path / "app.py").write_text(
-        "from werkzeug.security import safe_join\n"                     # line 1
+        "from werkzeug.utils import secure_filename\n"                     # line 1
         "def other_handler(path):\n"                                    # line 2
-        "    abs_path = safe_join(BASE, path)\n"                        # line 3 — first occurrence
+        "    abs_path = secure_filename(path)\n"                        # line 3 — first occurrence
         "    return open(abs_path)\n"                            # line 4
         "def main_handler(path):\n"                                     # line 5
-        "    abs_path = safe_join(BASE, path)\n"                        # line 6 — second occurrence
+        "    abs_path = secure_filename(path)\n"                        # line 6 — second occurrence
         "    return open(abs_path)\n"                                   # line 7 = sink
     )
-    diff = "+    abs_path = safe_join(BASE, path)\n"
+    diff = "+    abs_path = secure_filename(path)\n"
     reply = json.dumps({
         "kind": "known_safe_call",
-        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "validator_source_line": "abs_path = secure_filename(path)",
         "variable_name": "abs_path",
         "charset": "", "forbidden": "",
-        "library_call": "werkzeug.security.safe_join",
+        "library_call": "werkzeug.utils.secure_filename",
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
@@ -750,21 +749,21 @@ def test_sink_uri_inner_dotdot_resolving_inside_still_reads(tmp_path: Path):
     not reject it."""
     (tmp_path / "sub").mkdir()
     (tmp_path / "app.py").write_text(
-        "from werkzeug.security import safe_join\n"
+        "from werkzeug.utils import secure_filename\n"
         "def f(path):\n"
-        "    abs_path = safe_join(BASE, path)\n"
+        "    abs_path = secure_filename(path)\n"
         "    return open(abs_path)\n"
     )
     diff = (
-        "+from werkzeug.security import safe_join\n"
-        "+    abs_path = safe_join(BASE, path)\n"
+        "+from werkzeug.utils import secure_filename\n"
+        "+    abs_path = secure_filename(path)\n"
     )
     reply = json.dumps({
         "kind": "known_safe_call",
-        "validator_source_line": "abs_path = safe_join(BASE, path)",
+        "validator_source_line": "abs_path = secure_filename(path)",
         "variable_name": "abs_path",
         "charset": "", "forbidden": "",
-        "library_call": "werkzeug.security.safe_join",
+        "library_call": "werkzeug.utils.secure_filename",
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
@@ -1230,9 +1229,8 @@ def test_safe_join_discarded_result_declines(tmp_path: Path):
     assert "not bound" in r.reasoning
 
 
-def test_safe_join_bound_result_at_sink_still_sound(tmp_path: Path):
-    """Two-direction: the canonical correct fix — sink consumes the
-    safe_join RETURN value — keeps certifying."""
+def test_safe_join_bound_result_still_needs_trusted_base(tmp_path: Path):
+    """A joined return value cannot establish the base parameter as trusted."""
     (tmp_path / "app.py").write_text(
         "from werkzeug.security import safe_join\n"
         "def f(base, fn):\n"
@@ -1251,7 +1249,9 @@ def test_safe_join_bound_result_at_sink_still_sound(tmp_path: Path):
         sink_uri="app.py", sink_line=4, sink_class="pathtrav",
         language="python", complete=_fake_complete(reply),
     )
-    assert r.status is t1.Tier0Status.SOUND
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert r.artifact is None
+    assert r.extras["unverified_source_contracts"] == ["trusted_path_base_components_and_containment"]
 
 
 def test_lexical_transform_semicolon_joined_first_target_declines(
