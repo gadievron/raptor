@@ -237,16 +237,24 @@ def _read_target_text(
     return raw.decode("utf-8", errors="replace")
 
 
-def _read_target_text_prefix(full_path: Path, max_chars: int) -> str | None:
+def _read_target_text_prefix(
+    full_path: Path, max_chars: int, *, target_root: Path | None = None,
+) -> str | None:
     """Retain only a UTF-8 prefix, preserving whole-file refusal policy."""
     from core.source.windows import read_bytes_prefix_capped
 
     # A UTF-8 character (including a replacement for malformed input) uses
     # at most four input bytes. Any incomplete sequence at this byte cut
     # therefore lies after the requested decoded-character prefix.
-    got = read_bytes_prefix_capped(
-        full_path, 4 * max_chars, max_bytes=_MAX_SOURCE_FILE_BYTES,
-    )
+    if target_root is None:
+        got = read_bytes_prefix_capped(
+            full_path, 4 * max_chars, max_bytes=_MAX_SOURCE_FILE_BYTES,
+        )
+    else:
+        got = read_bytes_prefix_capped(
+            full_path, 4 * max_chars, max_bytes=_MAX_SOURCE_FILE_BYTES,
+            target_root=target_root,
+        )
     if got is None:
         return None
     raw, truncated = got
@@ -260,14 +268,20 @@ def _read_target_text_prefix(full_path: Path, max_chars: int) -> str | None:
 
 
 def _read_target_line_window(
-    full_path: Path, start: int, end: int,
+    full_path: Path, start: int, end: int, *, target_root: Path | None = None,
 ) -> list[str] | None:
     """Apply audit's byte cap and rejection policy to a streamed window."""
     from core.source.windows import read_line_window_capped
 
-    got = read_line_window_capped(
-        full_path, start, end, max_bytes=_MAX_SOURCE_FILE_BYTES,
-    )
+    if target_root is None:
+        got = read_line_window_capped(
+            full_path, start, end, max_bytes=_MAX_SOURCE_FILE_BYTES,
+        )
+    else:
+        got = read_line_window_capped(
+            full_path, start, end, max_bytes=_MAX_SOURCE_FILE_BYTES,
+            target_root=target_root,
+        )
     if got is None:
         return None
     lines, truncated = got
@@ -948,7 +962,7 @@ def _file_has_kernel_markers(ctx: dict[str, Any]) -> bool:
         if target:
             full = _safe_path(Path(target), fp)
             if full is not None and full.is_file():
-                head = _read_target_text_prefix(full, 4096)
+                head = _read_target_text_prefix(full, 4096, target_root=Path(target))
                 if head is not None:
                     result = any(
                         m in head for m in _KERNEL_SOURCE_MARKERS
@@ -3385,13 +3399,13 @@ def _read_source(
     if end < 0:
         # Preserve Python's negative-end slice semantics for malformed
         # inventory ranges; these require knowing the whole line list.
-        text = _read_target_text(full_path)
+        text = _read_target_text(full_path, target_root=target_path)
         if text is None:
             return "(read error)"
         lines = split_lines(text)
         selected = lines[start:end]
     else:
-        window = _read_target_line_window(full_path, start, end)
+        window = _read_target_line_window(full_path, start, end, target_root=target_path)
         if window is None:
             return "(read error)"
         selected = window
@@ -3623,12 +3637,13 @@ def _enrich_callers_with_call_sites(
             window_start = max(0, search_start - margin)
             lines = _read_target_line_window(
                 full_path, window_start, max(window_start, search_end + margin),
+                target_root=target_path,
             )
             if lines is None:
                 continue
         else:
             # Unknown caller locations historically search the entire file.
-            text = _read_target_text(full_path)
+            text = _read_target_text(full_path, target_root=target_path)
             if text is None:
                 continue
             lines = split_lines(text)
@@ -4011,7 +4026,9 @@ def _enrich_callees_with_source(
             continue
         start = max(0, line_start - 1) if line_start else 0
         end = min(line_end or start + max_lines, start + max_lines)
-        selected = _read_target_line_window(full_path, start, max(start, end))
+        selected = _read_target_line_window(
+            full_path, start, max(start, end), target_root=target_path,
+        )
         if selected is None:
             continue
 
@@ -5694,7 +5711,9 @@ def _read_flow_node_source(
 
     start = max(0, node_line - 1) if node_line else 0
     end = min(line_end or start + max_lines, start + max_lines)
-    selected = _read_target_line_window(full_path, start, max(start, end))
+    selected = _read_target_line_window(
+        full_path, start, max(start, end), target_root=target_path,
+    )
     if selected is None:
         return ""
     return "\n".join(

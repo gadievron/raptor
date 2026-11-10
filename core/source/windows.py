@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TypeVar
 
-from core.source.contained import DEFAULT_MAX_SOURCE_CHARS, open_regular
+from core.source.contained import DEFAULT_MAX_SOURCE_CHARS, _open_contained, open_regular
 from core.source.lines import split_lines
 
 _CHUNK_BYTES = 64 * 1024
@@ -47,7 +47,7 @@ def _after_newlines(chunk: bytes, count: int, offset: int = 0) -> int:
 
 
 def read_bytes_prefix_capped(
-    path: Path, prefix_bytes: int, *, max_bytes: int,
+    path: Path, prefix_bytes: int, *, max_bytes: int, target_root: str | Path | None = None,
 ) -> tuple[bytes, bool] | None:
     """Retain a byte prefix while probing the whole-file byte budget.
 
@@ -55,10 +55,12 @@ def read_bytes_prefix_capped(
     so late read errors and oversized files cannot become early successes.
     Oversize input returns an empty prefix and True; unreadable/nonregular
     paths return None. Temporary buffers stay bounded by prefix plus chunks.
+    A supplied target_root requires an anchored, contained open beneath it.
     """
     if prefix_bytes < 0 or max_bytes < 0:
         raise ValueError("prefix length and byte cap must be nonnegative")
-    stream = open_regular(path, "rb")
+    stream = (open_regular(path, "rb") if target_root is None
+              else _open_contained(target_root, path, "rb"))
     if stream is None:
         return None
     selected = bytearray()
@@ -78,7 +80,7 @@ def read_bytes_prefix_capped(
 
 
 def read_line_window_capped(
-    path: Path, start: int, end: int, *, max_bytes: int,
+    path: Path, start: int, end: int, *, max_bytes: int, target_root: str | Path | None = None,
 ) -> tuple[list[str], bool] | None:
     """Read the zero-based, half-open line window under a whole-file cap.
 
@@ -88,10 +90,12 @@ def read_line_window_capped(
     must still reject the snippet. No stat-based early acceptance and
     no retained state between calls. Memory is bounded by the selected
     bytes plus one chunk, rather than the entire file's decoded lines.
+    A supplied target_root requires an anchored, contained open beneath it.
     """
     if start < 0 or end < 0 or max_bytes < 0:
         raise ValueError("window bounds and byte cap must be nonnegative")
-    stream = open_regular(path, "rb")
+    stream = (open_regular(path, "rb") if target_root is None
+              else _open_contained(target_root, path, "rb"))
     if stream is None:
         return None
     selected = bytearray()

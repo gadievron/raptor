@@ -191,7 +191,7 @@ def _infer_def_end(
 
     start = max(0, line_start - 1)
     end = max(0, line_start - 1 + _MAX_DEF_SCAN_LINES)
-    lines = _read_target_line_window(resolved, start, end)
+    lines = _read_target_line_window(resolved, start, end, target_root=target_path)
     if lines is None:
         return line_start
     depth = 0
@@ -229,7 +229,7 @@ def _site_excerpt(
                 # buffered (+200 MiB RSS for one 100 MiB file).
                 from .context import _read_target_text
 
-                text = _read_target_text(resolved)
+                text = _read_target_text(resolved, target_root=target_path)
                 file_cache[rel_file] = (
                     split_lines(text) if text is not None else None
                 )
