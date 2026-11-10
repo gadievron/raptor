@@ -1,5 +1,7 @@
 // sizeof_array_param.cocci — Review sizeof on array-notation parameters.
 // C adjusts array parameters to pointers, including variable-length bounds.
+// Both sizeof expression spellings are matched; C99 bracket qualifiers are
+// not currently covered by these parameter patterns.
 // The pointer width can be intentional; a match is not a verified copy defect.
 // Recognised local redeclarations end the parameter binding. After nested
 // shadowing, this conservative rule may also omit a later parameter use.
@@ -21,7 +23,11 @@ position p;
         when != LOCAL PARAM[...] = ...;
         when != LOCAL PARAM;
         when != LOCAL PARAM = ...;
+(
     sizeof(PARAM)@p
+|
+    sizeof PARAM@p
+)
     ... when any
   }
 
@@ -51,7 +57,11 @@ position p;
         when != LOCAL PARAM[...] = ...;
         when != LOCAL PARAM;
         when != LOCAL PARAM = ...;
+(
     sizeof(PARAM)@p
+|
+    sizeof PARAM@p
+)
     ... when any
   }
 

@@ -106,3 +106,30 @@ class TestDocumentedLimits:
             "}\n"
         )
         assert _run_rule(tmp_path, source) == []
+
+
+
+def test_unparenthesized_sizeof_preserves_parameter_binding(tmp_path):
+    cases = [
+        ("char buf[32]", "sizeof buf", "sizeof_array_param"),
+        ("char buf[n]", "sizeof buf", "sizeof_array_param"),
+        ("char buf[]", "sizeof buf", "sizeof_array_param_unsized"),
+        ("char buf[4][8]", "sizeof buf", "sizeof_array_param"),
+        ("char buf[][8]", "sizeof buf", "sizeof_array_param_unsized"),
+        ("char buf[32]", "sizeof (buf)", "sizeof_array_param"),
+    ]
+    lines = ["void consume(unsigned long);"]
+    expected = set()
+    for parameter, expression, rule_id in cases:
+        lines.extend([f"void f{len(lines)}(int n, {parameter}) {{",
+                      f"  consume({expression});", "}"])
+        expected.add((len(lines) - 1, rule_id))
+    lines.extend([
+        "void pointer(char (*buf)[32]) { consume(sizeof buf); }",
+        "void element(char buf[32]) { consume(sizeof buf[0]); }",
+        "void local(void) { char buf[32]; consume(sizeof buf); }",
+        "void shadow(char buf[32]) { { char buf[8]; consume(sizeof buf); } }",
+    ])
+    results = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert {(row["line"], row["rule"]) for row in results} == expected
+    assert len(results) == len(expected)
