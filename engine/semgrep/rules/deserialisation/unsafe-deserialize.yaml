@@ -193,6 +193,7 @@ rules:
                   - pattern: $CTX.query[...]
                   - pattern: $CTX.query.$PROP
                   - pattern: $CTX.request.body[...]
+                  - pattern: $CTX.request.body.$PROP
               - metavariable-regex:
                   metavariable: $CTX
                   regex: '(?i)^(c|ctx|context)$'
