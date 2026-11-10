@@ -351,6 +351,20 @@ def _no_native_review_tools(monkeypatch):
 
 
 @pytest.fixture
+def _no_layer_disagreement_review(monkeypatch):
+    """Keep first-review contracts separate from disagreement reconsideration.
+
+    Knowledge history makes a canned result non-empty, so mechanical evidence
+    can legitimately schedule another review. These callers exercise the
+    initial review and recall seams; disagreement tests retain the real path.
+    """
+    monkeypatch.setattr(
+        "core.audit.orchestrator._check_layer_disagreement",
+        lambda *a, **k: None,
+    )
+
+
+@pytest.fixture
 def _no_post_review_witness_synthesis(monkeypatch):
     """Keep canned-review transitions separate from later witness synthesis."""
     monkeypatch.setattr(
@@ -714,7 +728,9 @@ class TestRunOrchestrator:
         assert len(orch_entries) == 2
         assert orch_entries[0]["model"] == "test-m"
 
-    def test_prioritize_with_context_map(self, tmp_path: Path):
+    def test_prioritize_with_context_map(
+        self, tmp_path: Path, _no_layer_disagreement_review,
+    ):
         target, out = _setup_target(tmp_path)
 
         context_map = {
@@ -5920,7 +5936,9 @@ class TestSageRecallGate:
     """
 
     @pytest.fixture(autouse=True)
-    def _stub_mechanical_detectors(self, monkeypatch, _no_native_review_tools) -> None:
+    def _stub_mechanical_detectors(
+        self, monkeypatch, _no_native_review_tools, _no_layer_disagreement_review,
+    ) -> None:
         """Keep SAGE recall checks independent of unrelated host phases."""
         from core.sage import hooks
 
@@ -6064,7 +6082,9 @@ class TestSageFpPrimer:
     """
 
     @pytest.fixture(autouse=True)
-    def _stub_mechanical_detectors(self, monkeypatch, _no_native_review_tools) -> None:
+    def _stub_mechanical_detectors(
+        self, monkeypatch, _no_native_review_tools, _no_layer_disagreement_review,
+    ) -> None:
         """Keep SAGE recall checks independent of unrelated host phases."""
         from core.sage import hooks
 
