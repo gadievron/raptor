@@ -3,6 +3,7 @@ identity, and source-flow path coverage — one behavioural pin each."""
 
 import hashlib
 import time
+from contextlib import closing
 
 from core.json import save_json
 from core.understand_graph import (
@@ -111,7 +112,7 @@ def test_created_at_minted_in_one_format(tmp_path):
         binary_path="/bin/app",
     ) == 1
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         stamps = {r["producer"]: r["created_at"] for r in conn.execute(
             "SELECT producer, created_at FROM snapshots")}
     assert "T" in stamps["binary_oracle"], stamps
@@ -144,7 +145,7 @@ def test_binary_verdict_snapshot_key_is_content_hashed(tmp_path):
     assert propagate_binary_verdicts(
         graph_path, {"server.c::fn_b": "absent"}, binary_path="/bin/app") == 1
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         snaps = conn.execute(
             "SELECT COUNT(*) AS c FROM snapshots WHERE producer='binary_oracle'"
         ).fetchone()["c"]
