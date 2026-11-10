@@ -315,7 +315,7 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
     try:
         from cve_diff.report.markdown import render_failure
         text = render_failure(cve_id, error_class, error_text)
-        (output_dir / f"{cve_id}.md").write_text(text, encoding="utf-8")
+        write_text_atomically(output_dir / f"{cve_id}.md", text)
     except Exception as exc:  # noqa: BLE001 — report write must not abort bench
         import logging as _logging
         _logging.getLogger(__name__).debug(
