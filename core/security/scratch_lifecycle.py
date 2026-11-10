@@ -126,6 +126,7 @@ def _open_registry(*, create: bool = False) -> int:
 
 def _read_file(node: int, name: str) -> bytes:
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=node)
+    failed = False
     try:
         info = os.fstat(fd)
         scratch()._private(info, False)
@@ -135,8 +136,15 @@ def _read_file(node: int, name: str) -> bytes:
         if len(raw) > MAX_RECORD:
             raise ValueError('oversized scratch control record')
         return raw
+    except BaseException:
+        failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            if not failed:
+                raise
 
 
 def _write(node: int, name: str, value: dict) -> None:
