@@ -743,3 +743,66 @@ class PackageValue { Other Cfg = new Other(); }
 ''')
         value, _ = _xfold(xroot, f"new Cfg().{method}({argument})", allow_tf=True)
         assert (value is REFUSE) if expected is None else (value == expected)
+
+
+class TestIndexReceiverScope:
+    @pytest.mark.parametrize("case,params,body,expected", [
+        ("parameter-field", "Other Cfg", "String value = Cfg.SAFE;", False),
+        ("parameter-method", "Other Cfg", "String value = Cfg.literal();", False),
+        ("parameter-jvm", "Other File", "String value = File.separator;", False),
+        ("parameter-pure", "Other String", 'String value = String.valueOf("fixed");', False),
+        ("local-field", "Other other", "Other Cfg = other;\nString value = Cfg.SAFE;", False),
+        ("local-method", "Other other", "Other Cfg = other;\nString value = Cfg.literal();", False),
+        ("created-method", "Other other", "Cfg receiver = new Cfg();\nString value = receiver.literal();", True),
+        ("created-shadow", "Other other", "Cfg Cfg = new Cfg();\nString value = Cfg.literal();", True),
+        ("reassigned", "Cfg unknown", "Cfg Cfg = new Cfg();\nCfg = unknown;\nString value = Cfg.literal();", False),
+        ("dead-block", "Other other", "{ Other Cfg = other; }\nString value = Cfg.SAFE;", True),
+        ("cross-scope", "Other receiver", "String value = receiver.literal();", False),
+    ])
+    def test_actual_definer_consumer_respects_value_receiver_scope(self, tmp_path,
+                                                                  case, params, body, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        (tmp_path / "Cfg.java").write_text(
+            'class Cfg { static final String SAFE="class-literal"; '
+            'String literal() { return "class-literal"; } }'
+        )
+        (tmp_path / "Other.java").write_text(
+            'class Other { String SAFE=System.getenv("OWNED"); '
+            'String separator=System.getenv("OWNED"); '
+            'String literal() { return SAFE; } String valueOf(String ignored) { return SAFE; } }'
+        )
+        setup = "void setup() { Cfg receiver = new Cfg(); }" if case == "cross-scope" else ""
+        lines = ["class T {", setup, f"void m({params}, java.io.PrintWriter out) {{",
+                 *body.splitlines(), "out.println(value);", "}", "}"]
+        source = "\n".join(lines) + "\n"
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        sink_line = lines.index("out.println(value);") + 1
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        index = JavaConstIndex(source, (1, len(lines)), str(caller), str(tmp_path))
+        assert index.ok
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    def test_value_only_consumer_without_xfile_keeps_receiver_scope(self, tmp_path):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        source = '''class T {
+ void m(Other String, java.io.PrintWriter out) {
+  String value = String.valueOf("fixed");
+  out.println(value);
+ }
+}
+class Other { String valueOf(String ignored) { return System.getenv("OWNED"); } }
+'''
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, source.count("\n") + 1))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
+        rhs = index.rhs_at(3, "value")
+        assert rhs is not None
+        assert fold_expr_at(reaching_defs(graph), sink, rhs, index) is REFUSE
