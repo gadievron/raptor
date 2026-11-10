@@ -1591,6 +1591,11 @@ def _stmt_order(
 
 
 class TestSemgrepSurfaceFences:
+    def test_block_mode_python_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/semgrep/tests/test_block_mode_python_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_block_mode_python_argument_and_import_identity"}
+
     def test_jwt_js_import_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_jwt_js_import_identity.py")
         assert _callers_of(calls, "run") == set()
