@@ -113,6 +113,26 @@ def test_topic_validation_precedes_warm_exact_id_lookup():
     assert resolver._lookup_cached.cache_info() == before
 
 
+def test_oversized_exact_id_is_refused_without_changing_cache():
+    assert lookup("warm", "", ReferenceContext("c"), entry_id="c.integer-conversion").entries
+    before = resolver._lookup_cached.cache_info()
+    answer = lookup("invalid", "conversion", ReferenceContext("c"), entry_id="x" * 97)
+    assert answer.request_id == "invalid" and answer.status == "unsupported" and not answer.entries
+    assert resolver._lookup_cached.cache_info() == before
+
+
+def test_exact_id_at_limit_still_resolves_current_pack_entry(monkeypatch):
+    from dataclasses import replace
+    entry_id = "c." + "x" * 94
+    original = next(entry for entry in c_integer.ENTRIES if entry.entry_id == "c.integer-conversion")
+    entry = replace(original, entry_id=entry_id)
+    monkeypatch.setattr(c_integer, "ENTRIES", (entry,))
+    answer = lookup("owned", "unrelated topic", ReferenceContext("c", "c11"), entry_id=entry_id)
+    assert answer.request_id == "owned" and answer.status == "answered"
+    assert answer.entries == (entry,)
+    assert resolver._lookup_cached.cache_info().currsize == 1
+
+
 def test_empty_exact_id_is_not_treated_as_topic_lookup():
     assert lookup("topic", "conversion", ReferenceContext("c")).entries
     answer = lookup("id", "conversion", ReferenceContext("c"), entry_id="")
