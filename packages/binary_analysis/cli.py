@@ -165,6 +165,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Per-sample read cap in bytes (default: {DEFAULT_MAX_BYTES_PER_SAMPLE})",
     )
     corpus_p.add_argument("--out", help="Explicit output directory")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(corpus_p)
     hunt_p = sub.add_parser(
         "hunt",
         help="Operator-steered anchor-family and call-graph hunt over a mapped binary",
@@ -911,6 +913,7 @@ def _run_corpus(args: argparse.Namespace) -> int:
     except (OpLockContention, ProjectArgvError) as e:
         print(f"raptor-binary: {e}", file=sys.stderr)
         return 1
+    _capture_map_lifecycle(args, out_dir)
     try:
         profile = profile_corpus(CorpusProfileOptions(
             samples_dir=samples_dir,
@@ -932,6 +935,8 @@ def _run_corpus(args: argparse.Namespace) -> int:
               f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
         return 1
     _print_corpus_summary(profile)
+    from .corpus_reporting import complete_corpus_report
+    complete_corpus_report(args, profile, samples_dir, out_dir)
     return 0
 
 
@@ -1358,7 +1363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser"}:
+    if args.command in {"runtime", "trace-parser", "corpus"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
