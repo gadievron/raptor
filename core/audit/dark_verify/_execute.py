@@ -1157,20 +1157,32 @@ def _open_untrusted_regular(path: Path) -> BinaryIO | None:
     """
     import stat as _stat
 
+    from typing import cast
+
+    from core.source.streams import adopt_fd, owned_fd
+
     try:
         fd = os.open(
             str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
         )
     except OSError:
         return None
-    try:
-        if not _stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
+    close_pending = True
+
+    def close_unreturned(value):
+        if close_pending:
+            os.close(value)
+
+    with owned_fd(fd, close_fd=close_unreturned):
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                close_pending = False
+                os.close(fd)
+                return None
+            close_pending = False
+            return cast(BinaryIO, adopt_fd(fd, "rb", os.close))
+        except OSError:
             return None
-        return os.fdopen(fd, "rb")
-    except OSError:
-        os.close(fd)
-        return None
 
 
 def _scan_anchor_offsets(
