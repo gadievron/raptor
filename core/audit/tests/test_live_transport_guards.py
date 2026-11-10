@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_signal_handler_candidate_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_signal_handler_unsafe_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_nonlocal_jump_calls_are_review_candidates"}
+
     def test_signed_widening_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_sign_extension_widen_rule.py")
         assert _callers_of(calls, "run") == set()
