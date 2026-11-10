@@ -21,6 +21,7 @@ _ARITHMETIC = "unsigned f(unsigned short a, int b) { return (unsigned)(a + b) < 
 _COMPOUND_ARITHMETIC = "unsigned f(unsigned a, unsigned b) { a += b; return a; }"
 _SHIFT = "unsigned f(unsigned a, unsigned n) { return a << n; }"
 _BITWISE = "unsigned f(unsigned a, unsigned b) { return a & b; }"
+_UPDATE = "int f(int a) { return a++; }"
 
 
 @pytest.fixture(autouse=True)
@@ -33,8 +34,8 @@ def _ids(answers):
 
 
 @requires_ts("c")
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE],
-                         ids=["binary", "compound", "shift", "bitwise"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
+                         ids=["binary", "compound", "shift", "bitwise", "update"])
 def test_initial_arithmetic_review_receives_conditional_rules_without_request(tmp_path, source):
     (tmp_path / "unit.c").write_text(source + "\n")
     runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
@@ -62,13 +63,15 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
             assert "c.integer-shift v1:" not in prompts[0]
         else:
             assert "c.integer-definedness v1:" in prompts[0]
+            if source == _UPDATE:
+                assert "c.integer-update v1:" in prompts[0]
     assert "Target language edition is unknown" in prompts[0]
 
 
 @pytest.mark.parametrize("source,extra", [
     (_ARITHMETIC, {"c.integer-usual-conversions", "c.integer-definedness"}),
     ("int f(int a, int b) { return a < b; }", {"c.integer-usual-conversions"}),
-    ('int f(void) { /* a + b; a += b; a << n; a & b */ const char *s = "a * b; a *= b; a >>= n; a |= b"; return 0; }', set()),
+    ('int f(void) { /* a + b; a += b; a << n; a & b; a++ */ const char *s = "a * b; a *= b; a >>= n; a |= b; --a"; return 0; }', set()),
     ("int f(void) { return 0; }", set()),
 ])
 @requires_ts("c")
@@ -97,6 +100,25 @@ def test_bitwise_operators_select_conversion_reading(expression):
         "c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions"}
 
 
+@pytest.mark.parametrize("expression", ["a++", "a--", "++a", "--a"],
+                         ids=["post-increment", "post-decrement", "pre-increment", "pre-decrement"])
+@requires_ts("c")
+def test_update_syntax_selects_value_and_store_composition(expression):
+    source = f"int f(int a) {{ return {expression}; }}"
+    assert _ids(foundation_answers("c", request_id="owned", source=source, file="unit.c")) == {
+        "c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions",
+        "c.integer-definedness", "c.integer-update"}
+
+
+@pytest.mark.parametrize("expression", ["+a", "-a", "~a", "!a"],
+                         ids=["plus", "minus", "complement", "logical-not"])
+@requires_ts("c")
+def test_other_unary_operators_do_not_select_update_composition(expression):
+    source = f"int f(int a) {{ return {expression}; }}"
+    assert "c.integer-update" not in _ids(foundation_answers(
+        "c", request_id="owned", source=source, file="unit.c"))
+
+
 @pytest.mark.parametrize("expression", ["a && b", "a || b", "!a"], ids=["and", "or", "not"])
 @requires_ts("c")
 def test_logical_operators_do_not_select_bitwise_conversion_reading(expression):
@@ -115,20 +137,24 @@ def test_shift_syntax_selects_its_own_conditional_rule(expression):
 
 
 @pytest.mark.parametrize("budget", [1, 100_000], ids=["omitted", "delivered"])
+@pytest.mark.parametrize("source,entry_ids", [
+    (_SHIFT, {"c.integer-promotion", "c.integer-conversion", "c.integer-shift"}),
+    (_UPDATE, {"c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions",
+               "c.integer-definedness", "c.integer-update"}),
+], ids=["shift", "update"])
 @requires_ts("c")
-def test_shift_core_and_prerequisites_fit_as_one_bundle(budget):
-    answers = foundation_answers("c", request_id="owned", source=_SHIFT, file="unit.c")
+def test_operator_core_and_prerequisites_fit_as_one_bundle(budget, source, entry_ids):
+    answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
     sections = reference_sections(answers)
     kept, shed = fit_to_budget(sections, budget_tokens=budget)
     delivery = reference_delivery(answers, kept)
     references = reference_inputs_from_delivery(delivery, answers)
     expected = budget > 1
     assert delivery[0]["delivered"] is expected
-    assert review_has_current_foundation({"reference_inputs": references}, source=_SHIFT, file="unit.c") is expected
+    assert review_has_current_foundation({"reference_inputs": references}, source=source, file="unit.c") is expected
     if expected:
         assert kept == sections and shed == []
-        assert {row["id"] for row in references["entries"]} == {
-            "c.integer-promotion", "c.integer-conversion", "c.integer-shift"}
+        assert {row["id"] for row in references["entries"]} == entry_ids
     else:
         assert kept == [] and shed == sections and references is None
 
@@ -156,8 +182,8 @@ def test_parse_errors_keep_foundation():
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE],
-                         ids=["binary", "compound", "shift", "bitwise"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
+                         ids=["binary", "compound", "shift", "bitwise", "update"])
 @requires_ts("c")
 def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_path, reuse, source):
     root = _target(tmp_path)
@@ -167,8 +193,8 @@ def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_p
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE],
-                         ids=["binary", "compound", "shift", "bitwise"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
+                         ids=["binary", "compound", "shift", "bitwise", "update"])
 @requires_ts("c")
 def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
     root = _target(tmp_path)

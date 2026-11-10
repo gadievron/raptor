@@ -39,6 +39,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
     comparison = False
     shift = False
     bitwise = False
+    update = False
     stack = [tree.root_node]
     visited = 0
     while stack:
@@ -61,6 +62,10 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
                 arithmetic = arithmetic or token in (b"+=", b"-=", b"*=", b"/=", b"%=")
                 shift = shift or token in (b"<<=", b">>=")
                 bitwise = bitwise or token in (b"&=", b"^=", b"|=")
+        elif node.type == "update_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is not None:
+                update = update or raw[operator.start_byte:operator.end_byte] in (b"++", b"--")
         stack.extend(node.children)
     selected: tuple[str, ...] = _FOUNDATION_IDS
     if arithmetic or comparison or bitwise:
@@ -69,6 +74,8 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         selected += ("c.integer-definedness",)
     if shift:
         selected += ("c.integer-shift",)
+    if update:
+        selected += ("c.integer-update",)
     return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
 
 

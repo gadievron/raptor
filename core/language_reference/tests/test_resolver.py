@@ -66,9 +66,26 @@ def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edi
 
 @pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
                          ids=["other-c-edition", "cpp"])
-def test_shift_entry_does_not_guess_language_mode(context):
-    answer = lookup("owned", "shift", context, entry_id="c.integer-shift")
+@pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update"], ids=["shift", "update"])
+def test_operator_entries_do_not_guess_language_mode(context, entry_id):
+    answer = lookup("owned", "", context, entry_id=entry_id)
     assert answer.status == "unsupported" and answer.entries == ()
+
+
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_update_reading_keeps_intermediate_and_storage_rules_distinct(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.integer-update")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == [
+        "c.integer-promotion", "c.integer-usual-conversions", "c.integer-definedness",
+        "c.integer-conversion", "c.integer-update"]
+    core = answer.entries[-1].render_core()
+    for condition in ("non-atomic integer", "updated stored value", "prior value",
+                      "precedes the object update", "lvalue once", "convert for storage",
+                      "representable promoted computation", "implementation-defined result",
+                      "Pointer, floating and atomic updates", "sequencing"):
+        assert condition in core
+    assert answer.missing_facts == (("language edition",) if edition is None else ())
 
 
 @pytest.mark.parametrize("topic", ["does the caller enforce a bound", "", "x" * 513])
