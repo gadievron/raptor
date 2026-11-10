@@ -12,6 +12,7 @@ NO edge.
 
 import hashlib
 import json
+from contextlib import closing
 
 from core.json import save_json
 from core.understand_graph import (
@@ -61,7 +62,7 @@ def _write_two_flow_run(run_dir, target, *, flow_ids=("FLOW-1", "FLOW-2")):
 
 
 def _validates_targets(graph_path):
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         return sorted(
             row["stable_key"] for row in conn.execute(
                 "SELECT n.stable_key FROM edges e "
@@ -142,7 +143,7 @@ def test_props_id_equality_joins_scan_findings(tmp_path):
     targets = _validates_targets(graph_path)
     assert len(targets) == 1
     assert "SCAN-7" in targets[0] or targets[0].startswith("scan_finding://")
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         joined = conn.execute(
             "SELECT props_json FROM nodes WHERE id IN "
             "(SELECT dst_id FROM edges WHERE kind='VALIDATES')"
