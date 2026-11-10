@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+
 
 @pytest.mark.parametrize(
     "name",
@@ -41,7 +43,7 @@ def test_broker_lease_survives_later_setup_failure(name, error, tmp_path, monkey
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "_lease", acquire)
             if "killed_client" in name:
-                patcher.setattr(subprocess, "Popen", fail)
+                patch_module_attribute(patcher, module, "subprocess", "Popen", fail)
             with pytest.raises(error, match="injected later acquisition"):
                 getattr(module, name)(
                     (owner, graph, []),
