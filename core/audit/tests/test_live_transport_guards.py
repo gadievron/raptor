@@ -1591,6 +1591,11 @@ def _stmt_order(
 
 
 class TestSemgrepSurfaceFences:
+    def test_jwt_js_import_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/semgrep/tests/test_jwt_js_import_identity.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_jwt_javascript_typescript_import_identity"}
+
     """Every live semgrep call site routes through the guarded
     runner, enumerated per file. A new live test that calls the raw
     sweep — or a guard silently dropped — flips these."""
