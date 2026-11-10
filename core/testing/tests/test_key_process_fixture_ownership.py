@@ -132,8 +132,7 @@ def _exercise(method, operation, after, index, error, tmp_path):
     finally:
         # Recovery uses raw native objects so a regressed owner cannot leak
         # children or pipe endpoints through the injected boundary wrappers.
-        for value in barriers:
-            value.abort()
+        # Never reacquire barrier state after a creator may have been killed.
         for process in processes:
             real = process.real
             if real._closed:

@@ -402,7 +402,7 @@ class TestParallelCreators:
                                 args=(str(key_path), barrier, queue))
                 cleanup.callback(_retire_creator, p)
                 procs.append(p)
-            cleanup.callback(barrier.abort)
+            # Abrupt child exit can leave barrier state locked; retire children directly.
             for p in procs:
                 p.start()
             results = [queue.get(timeout=30) for _ in range(n)]
