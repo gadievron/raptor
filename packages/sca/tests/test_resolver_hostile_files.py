@@ -201,11 +201,21 @@ class _StopAfterCopy(Exception):
     not the (absent) package-manager tool."""
 
 
+def _copy_only_resolver(resolver_type):
+    class CopyResolver(resolver_type):
+        @property
+        def proxy_hosts(self):
+            return ["copy-fixture.invalid"]
+
+    return CopyResolver()
+
+
 def _stub_run_recording(record: dict):
     """Return a ``_run`` stand-in that snapshots the temp dir the
     resolver populated, then aborts the dry_run."""
     def _fake_run(cmd, cwd, timeout, proxy_hosts, env=None,
                   block_network=False):
+        record["proxy_hosts"] = proxy_hosts
         record["files"] = {
             p.name: p.read_bytes()
             for p in Path(cwd).iterdir() if p.is_file()
@@ -261,11 +271,12 @@ def test_resolver_copy_refuses_symlink_and_fifo(
     if hasattr(mod, "_detect_major_version"):
         monkeypatch.setattr(mod, "_detect_major_version", lambda: 1)
 
-    resolver = getattr(mod, cls_name)()
+    resolver = _copy_only_resolver(getattr(mod, cls_name))
     with pytest.raises(_StopAfterCopy):
         resolver.dry_run(hostile)
 
     copied = record["files"]
+    assert record["proxy_hosts"] == ["copy-fixture.invalid"]
     assert lock_name not in copied, "FIFO lockfile must be refused"
     for content in copied.values():
         assert b"hunter2" not in content, (
@@ -290,7 +301,7 @@ def test_bundler_copy_refuses_symlinked_gemspec(
     monkeypatch.setattr(bundler, "_run", _stub_run_recording(record))
     monkeypatch.setattr(bundler, "_check_tool", lambda *a, **k: True)
     with pytest.raises(_StopAfterCopy):
-        bundler.BundlerResolver().dry_run(hostile)
+        _copy_only_resolver(bundler.BundlerResolver).dry_run(hostile)
 
     assert "evil.gemspec" not in record["files"]
 
@@ -315,7 +326,7 @@ def test_gomod_go_file_copy_refuses_symlink_target(
     monkeypatch.setattr(gomod, "_run", _stub_run_recording(record))
     monkeypatch.setattr(gomod, "_check_tool", lambda *a, **k: True)
     with pytest.raises(_StopAfterCopy):
-        gomod.GoResolver().dry_run(hostile)
+        _copy_only_resolver(gomod.GoResolver).dry_run(hostile)
 
     assert "main.go" in record["files"]
     assert "leak.go" not in record["files"]
