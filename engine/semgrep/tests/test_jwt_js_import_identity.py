@@ -20,19 +20,24 @@ def test_jwt_javascript_typescript_import_identity(tmp_path):
         "aliased_jose": ('import {decodeJwt as unpack} from "jose";\nunpack("owned-inert-input");\n', True),
         "required_jose": ('const tokenApi = require("jose");\ntokenApi.decodeJwt("owned-inert-input");\n', True),
         "verify_empty": ('import tokenApi from "jsonwebtoken";\ntokenApi.verify("owned-inert-input", "");\n', True),
+        "verify_empty_options": ('import tokenApi from "jsonwebtoken";\ntokenApi.verify("owned-inert-input", "", {algorithms: ["RS256"]});\n', True),
         "verify_key": ('import tokenApi from "jsonwebtoken";\ntokenApi.verify("owned-inert-input", key);\n', False),
         "other_verify": ('import jwt from "owned-unrelated-module";\njwt.verify("owned-inert-input", "");\n', False),
         "other_named": ('import {decodeJwt} from "owned-unrelated-module";\ndecodeJwt("owned-inert-input");\n', False),
         "other_jwt": ('import jwt from "owned-unrelated-module";\njwt.decode("owned-inert-input");\n', False),
         "other_jose": ('import * as jose from "owned-unrelated-module";\njose.decodeJwt("owned-inert-input");\n', False),
     }
-    expected = set()
+    expected = {}
     for extension in ("js", "ts"):
         for name, (source, reports) in cases.items():
             filename = f"{name}.{extension}"
             (target / filename).write_text(source)
             if reports:
-                expected.add(filename)
+                expected[filename] = (
+                    ("raptor.auth.jwt-empty-secret.javascript", "MEDIUM")
+                    if name.startswith("verify_empty") else
+                    ("raptor.auth.jwt-no-verify.javascript", "CRITICAL")
+                )
     rule = Path(__file__).resolve().parents[1] / "rules/auth/jwt-no-verify.yaml"
     result = run_pinned_subprocess(
         ["semgrep", "scan", "--config", str(rule), "--metrics", "off", "--disable-version-check", "--jobs", "1", "--json", *map(str, sorted(target.iterdir()))],
@@ -43,5 +48,11 @@ def test_jwt_javascript_typescript_import_identity(tmp_path):
     data = json.loads(result.stdout)
     assert not data.get("errors"), data.get("errors")
     assert {Path(p).name for p in data["paths"]["scanned"]} == {p.name for p in target.iterdir()}
-    actual = {Path(row["path"]).name for row in data["results"] if row["check_id"].endswith("raptor.auth.jwt-no-verify.javascript")}
+    actual = {
+        Path(row["path"]).name: (
+            "raptor." + row["check_id"].split("raptor.")[-1],
+            row["extra"]["severity"],
+        ) for row in data["results"]
+    }
     assert actual == expected
+    assert len(data["results"]) == len(expected)
