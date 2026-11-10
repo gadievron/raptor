@@ -4,11 +4,12 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from contextlib import closing
+from contextlib import ExitStack, closing
 from dataclasses import asdict, replace
 from pathlib import Path
 
 from core.json import save_json, load_json
+from core.source.streams import preserving_stream_error
 
 from .cache import load_or_build_index
 from .catalogue import Catalogue
@@ -200,7 +201,9 @@ def prepare(target,gaps,*,mode,out_dir,limits=None,client=None,entry_points=(),m
     namespace = digest({"root":str(root),"target":str(target),"mode":mode,
                         "include_dirs":[str(p) for p in include_dirs],
                         "model":[model_key,identity],"settings":limits.content_settings(),"code":implementation})
-    with exclusive_session(out_dir/"cross-entry-lease.sqlite"), closing(Catalogue(root,out_dir)) as catalogue, closing(WorkQueue(out_dir,namespace)) as queue:
+    with exclusive_session(out_dir/"cross-entry-lease.sqlite"), preserving_stream_error(ExitStack()) as owned:
+        catalogue = owned.enter_context(closing(Catalogue(root,out_dir)))
+        queue = owned.enter_context(closing(WorkQueue(out_dir,namespace)))
         queue.add_requests(gaps)
         gaps = queue.requests()
         for gap in gaps:
