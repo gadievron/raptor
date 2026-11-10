@@ -30,8 +30,9 @@ def _target_mentions(target, name: bytes) -> bool:
         visited += 1
         if visited > 256:
             return True  # Unresolved large binding patterns cannot preserve an epoch.
-        if node.type in {"identifier", "shorthand_property_identifier_pattern"} and node.text == name:
-            return True
+        if node.type in {"identifier", "shorthand_property_identifier_pattern"}:
+            if node.text == name or b"\\" in node.text:
+                return True  # Escaped binding names require identity resolution.
         pending.extend(node.named_children)
     return False
 
@@ -112,7 +113,7 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = _write_target(node)
             elif node.type in {"assignment_expression", "augmented_assignment_expression"}:
                 target = _write_target(node)
-                if target is not None and target.type == "identifier":
+                if target is not None and target.type == "identifier" and b"\\" not in target.text:
                     continue  # Bare names retain the lexical self-assignment check.
             elif node.type == "variable_declarator":
                 target = _write_target(node)
