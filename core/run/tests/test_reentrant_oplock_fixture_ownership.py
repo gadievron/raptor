@@ -8,7 +8,9 @@ import pytest
 from core.run.tests import test_run_gate_reentrant_oplock as native
 from core.testing.module_bindings import patch_module_attribute
 
-pytest_plugins = ["core.run.tests.test_run_gate_reentrant_oplock"]
+_user_state_in_tmp = native._user_state_in_tmp
+monkeypatch = native.monkeypatch
+env = native.env
 
 
 @pytest.mark.parametrize("operation", ["start", "held_wait"])
