@@ -5,6 +5,7 @@ for the write lock."""
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 
 import core.understand_graph.store as store
 from core.understand_graph.store import (
@@ -69,11 +70,10 @@ def test_migrate_is_write_free_when_schema_current(tmp_path):
     locker = sqlite3.connect(db_path)
     try:
         locker.execute("BEGIN IMMEDIATE")
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5")
-        migrate(conn)  # raises "database is locked" if it writes
-        conn.close()
+        with closing(sqlite3.connect(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout=5")
+            migrate(conn)  # raises "database is locked" if it writes
     finally:
         locker.rollback()
         locker.close()
