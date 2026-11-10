@@ -72,6 +72,7 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
     total = 0
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
     directories = []
+    failed = False
     try:
         directories.append(os.open(root, flags | os.O_DIRECTORY))
         for part in ("notices", "sha256"):
@@ -124,9 +125,22 @@ def load_notices(root: Path, native: dict, native_sha256: str, report: dict, *, 
             elif len(blobs[sha]) != size:
                 raise ValueError("conflicting notice sizes")
             validated.append(row)
+    except BaseException:
+        failed = True
+        raise
     finally:
+        close_error: BaseException | None = None
         for directory in reversed(directories):
-            os.close(directory)
+            try:
+                os.close(directory)
+            except BaseException as exc:
+                if not failed and close_error is None:
+                    close_error = exc
+        if close_error is not None:
+            try:
+                raise close_error
+            finally:
+                close_error = None
     aliases = report.get("common_license_aliases", []) if report["version"] >= 4 else []
     if not isinstance(aliases, list) or len(aliases) > len(common_probes):
         raise ValueError("invalid common-license alias inventory")
