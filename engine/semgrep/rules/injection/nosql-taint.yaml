@@ -39,6 +39,7 @@ rules:
                   - pattern: $CTX.params[...]
                   - pattern: $CTX.params.$PROP
                   - pattern: $CTX.request.body[...]
+                  - pattern: $CTX.request.body.$PROP
                   - pattern: $CTX.request.body
               - metavariable-regex:
                   metavariable: $CTX
