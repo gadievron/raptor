@@ -8,13 +8,14 @@ import re
 
 from core.analysis import validator_control_scope as _syntax
 
+_COMMENTS = frozenset({"comment", "line_comment", "block_comment", "html_comment"})
 _DOTTED_NAME = re.compile(r"[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*")
 
 
 def _parenthesised_value(value):
     while value is not None and value.type == "parenthesized_expression":
         children = [node for node in value.named_children
-                    if node.type not in {"comment", "line_comment", "block_comment", "html_comment"}]
+                    if node.type not in _COMMENTS]
         if len(children) != 1:
             return None
         value = children[0]
@@ -81,3 +82,70 @@ def native_transform_binding_targets(source: str, line: int, library_call: str,
         return targets
     except Exception:  # noqa: BLE001 -- failed syntax binding supplies no targets
         return set()
+
+
+
+def _sink_statement_value(statement):
+    if statement.type in {"expression_statement", "return_statement"}:
+        children = [node for node in statement.named_children if node.type not in _COMMENTS]
+        return children[0] if len(children) == 1 else None
+    if statement.type in {"lexical_declaration", "variable_declaration", "local_variable_declaration"}:
+        declarations = [node for node in statement.named_children if node.type == "variable_declarator"]
+        return declarations[0].child_by_field_name("value") if len(declarations) == 1 else None
+    return None
+
+
+def native_sink_reads_name(source: str, line: int, name: str, *, language: str) -> bool:
+    """Observe one direct native sink value, not a property or callee name.
+
+    Without a column/slot contract, multiple statements, extra arguments,
+    containers and transformed expressions are unverified. This is a
+    syntax-shape check; name binding, epochs, types and effects remain
+    separate consumer obligations.
+    """
+    if line <= 0:
+        return False
+    try:
+        tree = _syntax._native_source_tree(source, language)
+        if tree is None:
+            return False
+        statements = []
+        pending = [tree.root_node]
+        visited = 0
+        while pending:
+            node = pending.pop()
+            visited += 1
+            if visited > _syntax._MAX_NODES:
+                return False
+            row = line - 1
+            if (node.start_point[0] < row <= node.end_point[0]
+                    and (node.end_point[0] > row or node.end_point[1] > 0)
+                    and _sink_statement_value(node) is not None):
+                return False
+            if node.start_point[0] + 1 == line and (
+                node.type.endswith("_statement") or node.type in {
+                    "statement_block", "block", "lexical_declaration", "variable_declaration",
+                    "local_variable_declaration", "class_declaration", "function_declaration",
+                    "generator_function_declaration",
+                }
+            ):
+                statements.append(node)
+            pending.extend(node.named_children)
+        if len(statements) != 1:
+            return False
+        value = _parenthesised_value(_sink_statement_value(statements[0]))
+        if value is not None and value.type == "assignment_expression":
+            if not any(child.type == "=" for child in value.children):
+                return False
+            value = _parenthesised_value(value.child_by_field_name("right"))
+        if value is not None and value.type in {"call_expression", "method_invocation"}:
+            arguments = value.child_by_field_name("arguments")
+            if arguments is None:
+                return False
+            children = [node for node in arguments.named_children if node.type not in _COMMENTS]
+            if len(children) != 1:
+                return False
+            value = _parenthesised_value(children[0])
+        return value is not None and value.type == "identifier" and value.text == name.encode("utf-8")
+    except Exception:  # noqa: BLE001 -- unverified syntax cannot establish a consumed value
+        return False

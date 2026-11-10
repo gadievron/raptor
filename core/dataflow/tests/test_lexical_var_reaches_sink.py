@@ -40,8 +40,8 @@ def test_rebind_from_nonself_rhs_kills():
     assert _reaches(src, "p", 2, 4) is False
 
 
-def test_self_referencing_rebind_does_not_kill():
-    # p = p + '/' keeps p's validated constraint tie -> not a KILL
+def test_self_referencing_mixture_requires_a_transfer_contract():
+    # A self reference does not certify the concatenated output.
     src = (
         "function h(req){\n"
         "  let p = validate(req.q);\n"  # 2
@@ -49,7 +49,7 @@ def test_self_referencing_rebind_does_not_kill():
         "  exec(p);\n"                  # 4
         "}\n"
     )
-    assert _reaches(src, "p", 2, 4) is True
+    assert _reaches(src, "p", 2, 4) is False
 
 
 def test_member_and_index_writes_are_not_rebinds():
@@ -113,9 +113,8 @@ def test_other_compound_operators_kill_too():
         assert _reaches(src, "p", 2, 4) is False, op
 
 
-def test_compound_assign_pure_self_survives():
-    """``p += p`` references only the validated value itself — no new
-    data enters, the reach survives (mirrors the AST rule)."""
+def test_compound_assign_pure_self_requires_a_transfer_contract():
+    """Compound operations need a result contract even when both names match."""
     src = (
         "function h(req){\n"
         "  let p = validate(req.q);\n"
@@ -123,7 +122,7 @@ def test_compound_assign_pure_self_survives():
         "  exec(p);\n"
         "}\n"
     )
-    assert _reaches(src, "p", 2, 4) is True
+    assert _reaches(src, "p", 2, 4) is False
 
 
 def test_comparison_operators_still_not_rebinds():

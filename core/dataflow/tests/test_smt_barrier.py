@@ -1426,8 +1426,8 @@ def test_extract_unknown_language_returns_none():
 
 
 @_requires_z3
-def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
-    """End-to-end JS: guard-and-exit + path-traversal sink -> SOUND."""
+def test_try_tier0_declines_js_path_join_without_transfer_contract(tmp_path: Path):
+    """A nested path builder needs a transfer contract beyond name membership."""
     (tmp_path / "app.js").write_text(
         "function get_config(name) {\n"                                    # line 1
         "  if (!/^[A-Za-z0-9_+-]+$/.test(name)) return error();\n"        # line 2
@@ -1445,12 +1445,12 @@ def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
         sink_uri="app.js", sink_line=3, sink_class="pathtrav",
         language="javascript",
     )
-    assert r.status is sb.Tier0Status.SOUND
-    assert "UNSAT" in r.reasoning
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in r.reasoning
 
 
 @_requires_z3
-def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
+def test_try_tier0_declines_java_path_builder_without_transfer_contract(tmp_path: Path):
     (tmp_path / "App.java").write_text(
         "void load(String name) {\n"                                                       # line 1
         '    if (!name.matches("^[A-Za-z0-9_+-]+$")) throw new IllegalArgumentException();\n'  # line 2
@@ -1468,7 +1468,8 @@ def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
         sink_uri="App.java", sink_line=3, sink_class="pathtrav",
         language="java",
     )
-    assert r.status is sb.Tier0Status.SOUND
+    assert r.status is sb.Tier0Status.NOT_APPLICABLE
+    assert "no chain member reaches" in r.reasoning
 
 
 @_requires_z3
