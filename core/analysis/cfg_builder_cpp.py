@@ -905,6 +905,45 @@ def _declarator_is_function(decl) -> bool:
     return operator == _FN_DECLARATOR
 
 
+def _identity_alias_names(node) -> frozenset[str]:
+    """Names introduced by non-object declarations; identity evidence only.
+
+    ``*`` is an impossible identifier reserved for unresolved unqualified
+    namespace lookup. It never vouches for a local value store.
+    """
+    if node.type == "using_declaration":
+        if any(child.type == "namespace" for child in node.children):
+            return frozenset({"*"})
+        qualified = next((child for child in node.named_children
+                          if child.type == "qualified_identifier"), None)
+        if qualified is not None and qualified.child_by_field_name("scope") is not None:
+            name = qualified.child_by_field_name("name")
+            return frozenset({_node_text(name)}) if name is not None else frozenset({"*"})
+        return frozenset()  # using ::name preserves global qualification
+    if node.type == "alias_declaration" or node.type in (
+        _LOCAL_SCOPE_BARRIERS - {_FN_DEFINITION, _LAMBDA_EXPR}
+    ):
+        name = node.child_by_field_name("name")
+        return frozenset({_node_text(name)}) if name is not None else frozenset()
+    if node.type != "type_definition":
+        return frozenset()
+    from core.inventory.extractors import _typedef_name
+
+    first = _typedef_name(node)
+    names: set[str] = {first} if first else set()
+    # The inventory helper yields one alias. Follow every declarator spine
+    # to include additional aliases and wrapped type_identifier leaves.
+    for decl in node.children_by_field_name("declarator"):
+        while decl is not None and decl.type not in {_IDENT, "type_identifier"}:
+            child = decl.child_by_field_name("declarator")
+            if child is None and decl.type == _PARENTHESIZED_DECLARATOR:
+                child = next((part for part in decl.named_children
+                              if part.type in _DECLARATOR_TYPES | {"type_identifier"}), None)
+            decl = child
+        names.add(_node_text(decl) if decl is not None else "*")
+    return frozenset(names or {"*"})
+
+
 def _declared_local_scopes(
     fn_def: Node, *, identity_bindings: bool = False,
 ) -> _LocalNameScopes:
@@ -937,6 +976,9 @@ def _declared_local_scopes(
     while stack:
         cur, bound = stack.pop()
         t = cur.type
+        if identity_bindings:
+            for name in _identity_alias_names(cur):
+                add(name, cur.start_byte, bound)
         if t in _LOCAL_SCOPE_BARRIERS or t == _FN_DECLARATOR:
             # Target parameters are populated separately. Prototype and
             # function-pointer type parameters do not bind in this frame.
@@ -999,11 +1041,15 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
     separate from bare global library spelling.
     """
     bindings: set[str] = set()
+    import_windows: dict[str, list[tuple[int, int]]] = {}
     target_scoped = False
     scoped_types = (_LOCAL_SCOPE_BARRIERS - {_FN_DEFINITION, _LAMBDA_EXPR}) | {"namespace_definition"}
     stack = [(root, False, False)]
     while stack:
         cur, scoped, in_function = stack.pop()
+        if not scoped and not in_function:
+            for name in _identity_alias_names(cur):
+                import_windows.setdefault(name, []).append((cur.start_byte, root.end_byte))
         if cur.type in {"preproc_def", "preproc_function_def"}:
             name = cur.child_by_field_name("name")
             if name is not None:
@@ -1029,14 +1075,18 @@ def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
         stack.extend((child, scoped or cur.type in scoped_types, in_function or cur.type == _FN_DEFINITION)
                      for child in cur.named_children)
     local = _declared_local_scopes(fn_def, identity_bindings=True)
+    imported = _LocalNameScopes({name: tuple(windows) for name, windows in import_windows.items()})
     conflicts: set[tuple[str, int]] = set()
     pending = [fn_def]
     while pending:
         cur = pending.pop()
         if cur.type == _CALL_EXPR:
             name = _resolve_callable_name(cur.child_by_field_name("function"))
+            unqualified = bool(name and "::" not in name and "." not in name)
             if name and (name in bindings or local.vouches(name, cur.start_byte)
-                         or (target_scoped and "::" not in name)):
+                         or imported.vouches(name, cur.start_byte)
+                         or (unqualified and (target_scoped or local.vouches("*", cur.start_byte)
+                                             or imported.vouches("*", cur.start_byte)))):
                 conflicts.add((name, cur.start_point[0] + 1))
         pending.extend(cur.named_children)
     return frozenset(conflicts)
