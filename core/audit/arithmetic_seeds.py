@@ -395,7 +395,11 @@ def _operations(source, language, abi):
         if len(mechanism) <= 300:
             affine_divisions.append((target, op, (numerator, count), kind, mechanism,
                                      {'binding_status': 'candidate', 'candidate_basis': 'affine-divisor'}))
-    return result + deferred_guards + affine_candidates + affine_divisions
+    from .integer_negation import negation_candidates
+    negations = [(target, '-', (name,), 'signed-negation-overflow',
+                  f"Potential signed negation overflow in `-{name}`.", {'binding_status': 'candidate'})
+                 for target, name in negation_candidates(source, language=language, integer_abi=abi)]
+    return result + deferred_guards + affine_candidates + affine_divisions + negations
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

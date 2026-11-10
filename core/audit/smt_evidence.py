@@ -31,6 +31,7 @@ _DIAGNOSTIC_ORACLE_SCOPES = {
     # source reachability or C integer semantics, even with a witness.
     "invariant-preservation": "assumed-invariant-transition",
     "check-integer-conversion": "source-unsigned-conversion",
+    "check-unary-negation": "source-signed-negation",
     # Predicate truth alone does not establish an unintended coding defect.
     "check-integer-comparison": "source-integer-comparison",
     # These adapters infer numeric operands from text but do not bind an
