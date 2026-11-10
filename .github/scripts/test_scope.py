@@ -930,16 +930,9 @@ def compute_tier_dispatch(
     if changed_py or resource_files or script_literals:
         print(f"Building import graph for {total} Python files...")
     fixture_dirs_by_test = None
-    if script_literals:
-        # Collect references during the existing AST walk: reparsing the tree
-        # here costs tens of seconds on this repository's complete source set.
-        reverse_graph, parse_failures = build_graph(
-            all_py, repo, literal_references=script_literals,
-        )
-    elif resource_files:
-        # The resource lane will need fixture consumers after the graph.
-        # Collect only directory paths while each tree is already live;
-        # failed parses keep empty entries, matching the standalone census.
+    if resource_files:
+        # Resources need fixture consumers even when the same change also
+        # edits a script. Reuse each graph tree for both consumers.
         fixture_dirs_by_test = {f: [] for f in all_py if is_test_file(f)}
 
         def collect_fixture_dirs(path, source, tree):
@@ -950,6 +943,13 @@ def compute_tier_dispatch(
 
         reverse_graph, parse_failures = build_graph(
             all_py, repo, on_parsed=collect_fixture_dirs,
+            literal_references=script_literals or None,
+        )
+    elif script_literals:
+        # Collect references during the existing AST walk: reparsing the tree
+        # here costs tens of seconds on this repository's complete source set.
+        reverse_graph, parse_failures = build_graph(
+            all_py, repo, literal_references=script_literals,
         )
     elif changed_py:
         reverse_graph, parse_failures = build_graph(all_py, repo)
