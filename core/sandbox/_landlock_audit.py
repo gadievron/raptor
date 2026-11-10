@@ -526,6 +526,10 @@ def run_landlock_audit(
         if not isinstance(descriptor, int) or descriptor < 0:
             raise ValueError("pass_fds must contain nonnegative descriptors")
         os.fstat(descriptor)
+    _capture_stdout = bool(capture_output or stdout == subprocess.PIPE)
+    _capture_stderr = bool(capture_output or stderr == subprocess.PIPE)
+    _capture_any = _capture_stdout or _capture_stderr
+
     # F11: create the evidence JSONL up-front in <run_dir>/.audit/
     # (O_EXCL, held fd, inode recorded — see core/sandbox/evidence.py).
     # The tracer inherits the fd and appends through it.
@@ -596,8 +600,8 @@ def run_landlock_audit(
         # The tracer subprocess inherits t_ready_w via execvpe →
         # mark inheritable (PEP 446 sets O_CLOEXEC by default).
         os.set_inheritable(t_ready_w, True)
-        # Capture pipes (only when capture_output=True).
-        if capture_output:
+        # Both bounded pipe owners are retained when either stream requests capture.
+        if _capture_any:
             out_r, out_w = os.pipe()
             err_r, err_w = os.pipe()
         # env=None → scrubbed allowlist env, NOT the full host
@@ -650,41 +654,19 @@ def run_landlock_audit(
             # child-runs-parent-code double execution _spawn's
             # child guard already refuses.
             try:
-                if capture_output:
+                if _capture_any:
                     _close_safely(out_r)
                     _close_safely(err_r)
-                    try:
-                        os.dup2(out_w, 1)
-                        os.dup2(err_w, 2)
-                    finally:
-                        _close_safely(out_w)
-                        _close_safely(err_w)
-                else:
-                    # stdout=/stderr= redirects (int fd, file-like,
-                    # DEVNULL, STDOUT for stderr). Same shape as
-                    # _spawn's mount-ns child: pre-fix these kwargs
-                    # were silently DROPPED on this lane — the child
-                    # inherited the parent's fd 1/2 regardless, which
-                    # also defeated run_untrusted's write-only tty
-                    # reopen (the child kept the O_RDWR pty slave and
-                    # could read() the operator's keystrokes through
-                    # its own stdout). PIPE is unsupported here, same
-                    # as stdin: fail closed to /dev/null with a
-                    # stderr note.
-                    for _redir, _fdnum, _label in ((stdout, 1,
-                                                    b"stdout"),
-                                                   (stderr, 2,
-                                                    b"stderr")):
+                try:
+                    # Establish stdout first: STDERR=STDOUT follows its final sink.
+                    for _redir, _fdnum, _capture_stream, _writer in (
+                            (stdout, 1, _capture_stdout, out_w),
+                            (stderr, 2, _capture_stderr, err_w)):
+                        if _capture_stream:
+                            os.dup2(_writer, _fdnum)
+                            continue
                         if _redir is None:
                             continue
-                        if _redir == subprocess.PIPE:
-                            with contextlib.suppress(OSError):
-                                os.write(2, b"sandbox: %s=subprocess."
-                                            b"PIPE not supported via "
-                                            b"the Landlock-audit path;"
-                                            b" falling back to "
-                                            b"/dev/null.\n" % _label)
-                            _redir = subprocess.DEVNULL
                         if _redir == subprocess.DEVNULL:
                             _dn = os.open("/dev/null", os.O_WRONLY)
                             os.dup2(_dn, _fdnum)
@@ -697,6 +679,10 @@ def run_landlock_audit(
                                 else _redir.fileno())
                         if _rfd != _fdnum:
                             os.dup2(_rfd, _fdnum)
+                finally:
+                    if _capture_any:
+                        _close_safely(out_w)
+                        _close_safely(err_w)
                 # stdin: caller-supplied or /dev/null. Same shape as
                 # _spawn for parity (no PIPE on this path; that's a
                 # caller-side construct that wouldn't survive exec).
@@ -787,7 +773,7 @@ def run_landlock_audit(
         # the target owns them now.
         _closing_fd, p_go_r = p_go_r, -1
         _close_safely(_closing_fd)
-        if capture_output:
+        if _capture_any:
             _closing_fd, out_w = out_w, -1
             _close_safely(_closing_fd)
             _closing_fd, err_w = err_w, -1
@@ -923,7 +909,7 @@ def run_landlock_audit(
             time.monotonic() + timeout if timeout is not None else None
         )
         stdout_bytes = stderr_bytes = b""
-        if capture_output:
+        if _capture_any:
             drained = _drain_pipes_until_eof(
                 (out_r, err_r), target_pid, deadline,
             )
@@ -967,14 +953,14 @@ def run_landlock_audit(
                     if tracer_pid > 0:
                         _reaping_pid, tracer_pid = tracer_pid, -1
                         _kill_and_reap(_reaping_pid)
+                    timeout_stdout = (stdout_bytes if text is False else
+                                      stdout_bytes.decode(errors="replace"))
+                    timeout_stderr = (stderr_bytes if text is False else
+                                      stderr_bytes.decode(errors="replace"))
                     raise subprocess.TimeoutExpired(
                         cmd=list(cmd), timeout=timeout,  # type: ignore[arg-type]
-                        output=stdout_bytes if text is False else (
-                            stdout_bytes.decode(errors="replace")
-                        ),
-                        stderr=stderr_bytes if text is False else (
-                            stderr_bytes.decode(errors="replace")
-                        ),
+                        output=(timeout_stdout if not _capture_any or _capture_stdout else None),
+                        stderr=(timeout_stderr if not _capture_any or _capture_stderr else None),
                     )
                 time.sleep(0.02)
         else:
@@ -1045,8 +1031,8 @@ def run_landlock_audit(
         result = subprocess.CompletedProcess(
             args=list(cmd),
             returncode=target_rc,
-            stdout=stdout_out if capture_output else None,
-            stderr=stderr_out if capture_output else None,
+            stdout=stdout_out if _capture_stdout else None,
+            stderr=stderr_out if _capture_stderr else None,
         )
         result.evidence_verified = evidence_ok  # type: ignore[attr-defined]
         return result
