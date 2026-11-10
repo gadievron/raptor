@@ -623,6 +623,9 @@ _REPORT_WRITER_FILES = (
     "packages/sca/sbom_inventory/reporting.py",
     "core/project/sbom_reports.py",
     "packages/diagram/reporting.py",
+    # Standalone diagram CLI moved out of its trusted dispatch shim.
+    "packages/diagram/cli.py",
+    "packages/diagram/cli_reporting.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
@@ -1925,7 +1928,7 @@ _ALLOWLIST += tuple(
          ("tool", "file", "line", "rule_id", "message", "function", "suppressed"),
          "Committed scan findings are returned as native DATA for existing project grouping/merging APIs, never rendered here. Status is the fixed unconfirmed label. Project Markdown and console consumers retain their existing escaping boundaries."),
         ("core/reporting/renderers.py", "_markdown.block", ("block",),
-         "Recursive block rendering returns sanitised Markdown. Text uses md_prose, table cells/titles md_inline, code and legacy literals md_fence; imported legacy content is never trusted as active Markdown."),
+         "Recursive block rendering returns sanitised Markdown. Text uses md_prose, table cells/titles md_inline, code and legacy literals md_fence; imported legacy content is never trusted as active Markdown. Unsupported-diagram source is passed to a fixed text code block through that same md_fence branch; rejected Mermaid is never made active."),
         ("core/reporting/renderers.py", "_markdown", ("block", "k", "v"),
          "Metadata keys/values call md_inline directly; block() recursively sanitises the structured document fields and preserves only explicitly marked producer-built legacy Markdown."),
     )

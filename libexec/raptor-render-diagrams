@@ -26,77 +26,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 
 
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: raptor-render-diagrams <output_dir> [--target <name>] [--force] [--stdout]",
-              file=sys.stderr)
-        sys.exit(1)
-
-    out_dir = Path(sys.argv[1])
-    # --force opts into clobbering an existing diagrams.md. Without it,
-    # a re-render refuses so an operator's hand-edits aren't silently
-    # overwritten. Ported from the now-deleted generate_diagram.py
-    # (commit a94fd36b) which had the protection but was never the
-    # live entry point.
-    force = "--force" in sys.argv
-    stdout = "--stdout" in sys.argv
-    target = None
-    if "--target" in sys.argv:
-        idx = sys.argv.index("--target")
-        # Reject `--target` without a value. Pre-fix the trailing
-        # `--target` (no following arg) was silently treated as
-        # "no target" — operator typo went undetected. Worse, an
-        # operator who passed `raptor-render-diagrams out --target`
-        # then later flags (e.g. `--target --some-flag`) silently
-        # consumed `--some-flag` as the target VALUE, producing
-        # nonsensical diagram headers.
-        if idx + 1 >= len(sys.argv):
-            print(
-                "ERROR: --target requires a value (e.g. --target my-app)",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        target = sys.argv[idx + 1]
-        # Reject value that itself looks like a flag — same
-        # protection against accidental flag-as-value capture.
-        if target.startswith("--"):
-            print(
-                f"ERROR: --target value {target!r} looks like a flag; "
-                f"--target requires a non-flag value",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    if not out_dir.exists():
-        print(f"ERROR: directory not found: {out_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    # Pre-flight overwrite check — render_and_write writes to
-    # out_dir/diagrams.md unconditionally; refuse here unless --force.
-    # ``--stdout`` is read-only and must not care whether a previous
-    # diagrams.md exists.
-    default_out = out_dir / "diagrams.md"
-    if default_out.exists() and not force and not stdout:
-        print(
-            f"ERROR: {default_out} already exists. Pass --force to overwrite.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    try:
-        from packages.diagram import render_and_write, render_directory
-        if stdout:
-            print(render_directory(out_dir, target=target), end="")
-        else:
-            output_file = render_and_write(out_dir, target=target)
-            print(f"Diagrams: {output_file}")
-    except Exception as e:
-        # Renderer exceptions can quote LLM-written artifact content.
-        from core.security.log_sanitisation import sanitise_for_terminal
-        print(f"Diagram error: {sanitise_for_terminal(str(e))}",
-              file=sys.stderr)
-        sys.exit(1)
+from packages.diagram.cli import main  # noqa: E402
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

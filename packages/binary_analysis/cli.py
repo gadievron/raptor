@@ -260,6 +260,7 @@ def _build_parser() -> argparse.ArgumentParser:
     diagram_p.add_argument("--target", help="Display name to use in the diagram heading")
     diagram_p.add_argument("--stdout", action="store_true", help="Print diagrams rather than writing diagrams.md")
     diagram_p.add_argument("--force", action="store_true", help="Overwrite an existing diagrams.md")
+    add_report_arguments(diagram_p)
 
     return parser
 
@@ -1337,6 +1338,7 @@ def _run_diagram(args: argparse.Namespace) -> int:
         cmd.append("--stdout")
     if args.force:
         cmd.append("--force")
+    cmd.extend(_forward_report_args(args))
     return subprocess.run(cmd, env=RaptorConfig.get_safe_env(), timeout=120).returncode
 
 
@@ -1378,7 +1380,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt", "harness", "graph"}:
+    if args.command in {"runtime", "trace-parser", "corpus", "siblings", "hunt", "harness", "graph", "diagram"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:

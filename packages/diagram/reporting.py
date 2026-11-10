@@ -83,13 +83,26 @@ def capture_directory_blocks(output_dir: Path) -> list[Block]:
         return [Block("paragraph", title="Additional diagrams",
                       text="Diagram capture unavailable; the finding results and other report sections are retained.",
                       extensions={"raptor.diagram_export": True})]
+    blocks = directory_blocks_from_rendered(content)
+    for note in dict.fromkeys(refusals):
+        blocks.append(Block("paragraph", title="Additional diagram limitations", text=note,
+                            extensions={"raptor.diagram_export": True}))
+    return blocks
+
+
+def directory_blocks_from_rendered(content: str, *, include_findings_summary: bool = False) -> list[Block]:
+    """Adapt the fixed directory renderer's output, never arbitrary Markdown.
+
+    Standalone diagram exports retain pies; finding reports already supply
+    typed summary pies and omit those duplicates through the default mode.
+    """
     blocks = []
     fence = re.compile(r"(?ms)^```mermaid\n(.*?)^```[ \t]*$")
     for match in re.finditer(r"(?ms)^## ([^\n]+)\n(.*?)(?=^## |\Z)", content):
         title, body = match.groups()
         # Summary pies already have a typed equivalent for this population.
         # Filter during the existing section walk instead of rescanning text.
-        if title == "Findings Summary":
+        if title == "Findings Summary" and not include_findings_summary:
             continue
         sources = [m.group(1).strip() for m in fence.finditer(body)]
         prose = fence.sub("", body).strip()
@@ -101,7 +114,4 @@ def capture_directory_blocks(output_dir: Path) -> list[Block]:
                                 text=title + ": " + (prose or "Recorded domain graph; the captured source retains node and edge evidence."),
                                 extensions={"raptor.diagram_export": True, "mermaid": source,
                                             "generator": "raptor.diagram.directory/v1"}))
-    for note in dict.fromkeys(refusals):
-        blocks.append(Block("paragraph", title="Additional diagram limitations", text=note,
-                            extensions={"raptor.diagram_export": True}))
     return blocks
