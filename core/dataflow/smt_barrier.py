@@ -1646,13 +1646,41 @@ def _python_iteration_dispatch(node: ast.AST) -> bool:
                              ast.DictComp, ast.GeneratorExp))
 
 
+def _python_unpack_assignment(node: ast.AST) -> bool:
+    """Whether target binding may acquire an opaque iterable.
+
+    Pairable tuple/list displays use builtin storage; nested opaque
+    values can still require user iteration during target assignment.
+    """
+    if not isinstance(node, ast.Assign):
+        return False
+    pending = [(target, node.value) for target in node.targets]
+    while pending:
+        target, value = pending.pop()
+        if not isinstance(target, (ast.Tuple, ast.List)):
+            continue
+        if (not isinstance(value, (ast.Tuple, ast.List))
+                or len(target.elts) != len(value.elts)
+                or any(isinstance(part, ast.Starred) for part in (*target.elts, *value.elts))):
+            return True
+        pending.extend(zip(target.elts, value.elts))
+    return False
+
+
+def _python_unpack_load(node: ast.AST) -> bool:
+    """An iterable display/call unpack can dispatch before a later read."""
+    return isinstance(node, ast.Starred) and isinstance(node.ctx, ast.Load)
+
+
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
-    return _python_operator_dispatch(node) or _python_iteration_dispatch(node) or isinstance(
+    return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
+            or _python_unpack_assignment(node) or _python_unpack_load(node)) or isinstance(
         node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While, ast.With)
     ) or bool(
         getattr(node, "decorator_list", [])
     ) or any(_python_operator_dispatch(part) or _python_iteration_dispatch(part)
+             or _python_unpack_load(part)
              or isinstance(part, (ast.Call, ast.Attribute, ast.Subscript))
              for value in _python_definition_headers(node) for part in ast.walk(value))
 
@@ -1660,7 +1688,8 @@ def _python_possible_call(node: ast.AST) -> bool:
 def _python_evaluation_dispatch(node: ast.AST) -> bool:
     """Protocol dispatch may precede a same-row consumed name read."""
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
-            or isinstance(node, ast.With)) or (
+            or isinstance(node, ast.With) or _python_unpack_assignment(node)
+            or _python_unpack_load(node)) or (
         isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     )
 
@@ -2797,7 +2826,7 @@ def _python_chain_reaches_sink(
                 for var in list(chain):
                     if _node_rebinds_var(part, var):
                         chain.discard(var)
-        if class_decls is None and (
+        if class_decls is None and not _python_unpack_assignment(node) and (
             _python_suspension(node)
             or (_python_possible_call(node) and validator_line < node.lineno < sink_line)
             or (_python_evaluation_dispatch(node) and validator_line < node.lineno <= sink_line)
@@ -2875,6 +2904,15 @@ def _python_chain_reaches_sink(
         # evaluated against the PRE-statement chain; kill wins when a
         # name lands in both sets (conservative).
         chain = (chain | grows) - kills
+        if _python_unpack_assignment(node):
+            # RHS fields were captured before target unpacking. Keep
+            # their new local aliases, but expire shared slots that the
+            # opaque iterator can rebind during target assignment.
+            for var in list(chain):
+                if var not in local_slots:
+                    local_slots[var] = _python_name_has_local_slot(scope_root, var)
+                if not local_slots[var]:
+                    chain.discard(var)
     # Loop back-edge kill: a rebind textually AFTER the sink (or before
     # the validator) still reaches the sink on the next iteration when
     # it shares a loop with the sink — the flat forward pass cannot see
