@@ -78,6 +78,32 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
     return sections
 
 
+def dedupe_reference_sections(
+    answers: tuple[ReferenceAnswer, ...], kept: list[PromptSection],
+) -> list[PromptSection]:
+    """Remove redundant whole sections after fitting, keeping every alias covered.
+
+    Strictly increasing bundle size leaves a retained supplier at every end
+    of a containment chain. Never readmit shed sections or alter rule cores.
+    """
+    labels = {section.label for section in kept}
+    supplied: dict[str, ReferenceAnswer] = {}
+    aliases: dict[str, list[ReferenceAnswer]] = {}
+    for label, answer in zip(_labels(answers), answers, strict=True):
+        aliases.setdefault(label, []).append(answer)
+        if label in labels:
+            supplied.setdefault(label, answer)
+    redundant = {label for label, answer in supplied.items() if answer.entries and any(
+        len(other.entries) > len(answer.entries) and all(
+            alias.pack_version == other.pack_version
+            and alias.status == other.status and alias.reason == other.reason
+            and alias.missing_facts == other.missing_facts
+            and all(entry in other.entries for entry in alias.entries)
+            for alias in aliases[label])
+        for other in supplied.values())}
+    return [section for section in kept if section.label not in redundant]
+
+
 def reference_delivery(
     answers: tuple[ReferenceAnswer, ...], kept: list[PromptSection],
     *, omission_reason: str = "reference_too_large",
