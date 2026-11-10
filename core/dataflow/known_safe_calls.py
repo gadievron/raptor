@@ -11,7 +11,8 @@ justified; growth should be driven by concrete corpus cases.
 
 Immutable-return invariant: every transform entry's return value must
 be an IMMUTABLE value (str / str subclass; for C, a newly-allocated
-string the callee never retains).  The chain trackers and the
+string the callee never retains, with caller-side buffer integrity
+established separately). The chain trackers and the
 sanitizer-cut value gate reason about NAME bindings only — they cannot
 see mutation through an alias.  A sanitizer returning a mutable
 container would let ``alias = clean_list; alias += [tainted]``
@@ -382,8 +383,8 @@ _TABLE: tuple[KnownSafeCall, ...] = (
     # noise. Such patterns will become value-bound under Phase 12-14's
     # inter-procedural taint or a future alias-tracking refinement.
     #
-    # All four entries below are GLib / SQLite library calls because
-    # those libraries publish soundness contracts in their API docs.
+    # The entries below are GLib library calls whose API docs specify
+    # newly allocated output. Caller-side alias integrity is still required.
     # Adding entries from other libraries should follow the same
     # bar: a documented "returns sanitized output" contract.
     KnownSafeCall(
