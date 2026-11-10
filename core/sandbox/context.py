@@ -364,7 +364,8 @@ def _run_teardown_first_timeout(
             try:
                 bounded.stop_input()
             except BaseException as cleanup_error:
-                failure.add_note("sandbox input cleanup: " + type(cleanup_error).__name__)
+                with suppress(BaseException):
+                    failure.add_note("sandbox input cleanup: " + type(cleanup_error).__name__)
         _finish_teardown_first(proc, death_w_holder, failure, bounded=bounded,
                                teardown_first=teardown_first)
         raise
@@ -393,7 +394,8 @@ def _close_teardown_streams(proc, *, failure: BaseException | None = None) -> tu
         primary = failure if failure is not None else errors[0]
         for cleanup_error in errors:
             if cleanup_error is not primary:
-                primary.add_note("sandbox stream cleanup: " + type(cleanup_error).__name__)
+                with suppress(BaseException):
+                    primary.add_note("sandbox stream cleanup: " + type(cleanup_error).__name__)
         if failure is None:
             raise primary
     return tuple(pending)
@@ -451,7 +453,7 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
         deadline = time.monotonic() + budget
         if killing and proc.returncode is None:
             if teardown_first:
-                with suppress(OSError, ValueError):
+                with suppress(BaseException):
                     logger.warning(
                         "Sandbox: teardown-first sweep did not finish within "
                         "its grace period; killing the owned sweeper")
@@ -496,7 +498,8 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
         setattr(failure, "sandbox_pipes", pending_pipes)
         issues.append("owned pipes remain open; retry sandbox_pipes close")
     for issue in issues:
-        failure.add_note("sandbox cleanup: " + issue)
+        with suppress(BaseException):
+            failure.add_note("sandbox cleanup: " + issue)
 
 
 def _apply_capture_ceiling(
