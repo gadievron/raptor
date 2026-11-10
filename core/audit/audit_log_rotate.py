@@ -68,6 +68,8 @@ from core.audit.record import (
     audit_log_paths,
 )
 
+from core.source.streams import adopt_fd
+
 logger = logging.getLogger(__name__)
 
 _BACKUP_SUFFIX = ".pre-rotate"
@@ -223,11 +225,7 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
             0o644,
         )
         temps.append(tmp)
-        try:
-            current = os.fdopen(fd, "wb")
-        except BaseException:
-            os.close(fd)
-            raise
+        current = adopt_fd(fd, "wb")
         current_size = 0
 
     def _cleanup() -> None:
@@ -261,11 +259,7 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
                     f"{src.name} without following links ({exc}) — "
                     "nothing was replaced."
                 ) from exc
-            try:
-                source_stream = os.fdopen(src_fd, "rb")
-            except BaseException:
-                os.close(src_fd)
-                raise
+            source_stream = adopt_fd(src_fd, "rb")
             with source_stream as fh:
                 while True:
                     chunk = fh.readline(_CHUNK_BYTES)

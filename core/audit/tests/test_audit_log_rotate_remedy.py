@@ -600,16 +600,30 @@ def test_stream_setup_failure_closes_fd_and_removes_temp(tmp_path, monkeypatch, 
     source = tmp_path / record.AUDIT_LOG_FILENAME
     _plant_rows(source, 60)
     before = source.read_bytes()
-    fdopen = os.fdopen
+    import io
+    from types import FunctionType, SimpleNamespace
+
+    from core.source import streams
+
+    adopt = rotate_mod.adopt_fd
     failed_fds = []
+
+    def fail_before_native(*args, **kwargs):
+        raise OSError("stream setup failed")
+
+    bindings = dict(streams.adopt_fd.__globals__)
+    bindings["io"] = SimpleNamespace(**{**vars(io), "open": fail_before_native})
+    failed_adopt = FunctionType(streams.adopt_fd.__code__, bindings,
+                               streams.adopt_fd.__name__, streams.adopt_fd.__defaults__)
+    failed_adopt.__kwdefaults__ = streams.adopt_fd.__kwdefaults__
 
     def fail_setup(fd, requested_mode):
         if requested_mode == mode:
             failed_fds.append(fd)
-            raise OSError("stream setup failed")
-        return fdopen(fd, requested_mode)
+            return failed_adopt(fd, requested_mode)
+        return adopt(fd, requested_mode)
 
-    patch_module_attribute(monkeypatch, _os_fault_consumer, "os", "fdopen", fail_setup)
+    monkeypatch.setattr(rotate_mod, "adopt_fd", fail_setup)
     with pytest.raises(OSError, match="stream setup failed"):
         rotate_audit_log(tmp_path)
     for fd in failed_fds:
