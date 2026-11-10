@@ -37,6 +37,22 @@ def _target_mentions(target, name: bytes) -> bool:
     return False
 
 
+def _write_reaches_later_iteration(node, validator_line: int, sink_line: int) -> bool:
+    """An enclosing loop can revisit a sink without refreshing an outer guard."""
+    parent = node.parent
+    visited = 0
+    while parent is not None:
+        visited += 1
+        if visited > 256:
+            return True
+        if parent.type in _syntax._JAVA_LOOPS | _syntax._JS_LOOPS:
+            first, last = parent.start_point[0] + 1, parent.end_point[0] + 1
+            if first <= sink_line <= last and not first <= validator_line <= last:
+                return True
+        parent = parent.parent
+    return False
+
+
 def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
                                     *, language: str) -> bool:
     """Refuse same-row writes beyond the independently established validation.
@@ -103,8 +119,8 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
             if visited > _syntax._MAX_NODES:
                 return True
             pending.extend(node.named_children)
-            if not after_line < node.start_point[0] + 1 <= through_line:
-                continue
+            row = node.start_point[0] + 1
+            forward_write = after_line < row <= through_line
             if node.type == "for_in_statement":
                 target = node.child_by_field_name("left")
             elif node.type == "enhanced_for_statement":
@@ -113,7 +129,8 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = _write_target(node)
             elif node.type in {"assignment_expression", "augmented_assignment_expression"}:
                 target = _write_target(node)
-                if target is not None and target.type == "identifier" and b"\\" not in target.text:
+                if (forward_write and target is not None and target.type == "identifier"
+                        and b"\\" not in target.text):
                     continue  # Bare names retain the lexical self-assignment check.
             elif node.type == "variable_declarator":
                 target = _write_target(node)
@@ -133,6 +150,10 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                                "class_declaration", "enum_declaration"}:
                 target = _write_target(node)
             else:
+                continue
+            if not forward_write and (
+                row <= through_line or not _write_reaches_later_iteration(node, after_line, through_line)
+            ):
                 continue
             if target is None or _target_mentions(target, encoded_name):
                 return True
