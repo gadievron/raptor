@@ -354,3 +354,144 @@ def test_prefix_excludes_overflow_before_output_validation(mini_repo, tmp_path):
         "--prefix", "core/pkga/tests/test_other.py",
     ]) == 0
     assert output.read_text() == '{\n    "core/pkga/tests/test_other.py": 2.5\n}\n'
+
+
+def test_nested_testcase_preorder_preserves_float_accumulation(mini_repo, tmp_path):
+    report = tmp_path / "nested.xml"
+    report.write_text(
+        '<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1e16">'
+        '<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1"/>'
+        '<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1"/>'
+        '</testcase>'
+    )
+    files, nodeids, dropped = collect_run(report, mini_repo)
+    assert files == {"core/pkga/tests/test_mod.py": 1e16}
+    assert nodeids == {"core/pkga/tests/test_mod.py::test_a": 1e16}
+    assert dropped == 0
+
+
+def test_malformed_suffix_does_not_resolve_or_overwrite(
+    mini_repo, tmp_path, monkeypatch,
+):
+    import xml.etree.ElementTree as ET
+    report = tmp_path / "broken.xml"
+    report.write_text(
+        '<testsuite><testcase classname="core.pkga.tests.test_mod" '
+        'name="test_a" time="1"/></broken>'
+    )
+    output = tmp_path / "durations.json"
+    prior = b'{"preserved": 1}\n'
+    output.write_bytes(prior)
+    def unexpected_resolution(*args):
+        pytest.fail("resolver ran before XML validation completed")
+    monkeypatch.setitem(collect_run.__globals__, "resolve_classname", unexpected_resolution)
+    with pytest.raises(ET.ParseError, match="mismatched tag"):
+        main([str(output), str(report), "--repo", str(mini_repo)])
+    assert output.read_bytes() == prior
+
+
+@pytest.mark.parametrize("failure", [None, OSError, KeyboardInterrupt],
+                         ids=["success", "read-error", "interrupted"])
+def test_owned_incremental_input_closes(mini_repo, tmp_path, monkeypatch, failure):
+    import io
+    class OwnedInput(io.BytesIO):
+        def read(self, *args):
+            if failure is not None:
+                raise failure("owned input failure")
+            return super().read(*args)
+    owned = OwnedInput(
+        b'<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1"/>'
+    )
+    path = tmp_path / "owned.xml"
+    def open_owned(actual_path, mode):
+        assert actual_path == path
+        assert mode == "rb"
+        return owned
+    monkeypatch.setitem(collect_run.__globals__, "open", open_owned)
+    if failure is None:
+        files, _, dropped = collect_run(path, mini_repo)
+        assert files == {"core/pkga/tests/test_mod.py": 1.0}
+        assert dropped == 0
+    else:
+        with pytest.raises(failure, match="owned input failure"):
+            collect_run(path, mini_repo)
+    assert owned.closed
+
+
+@pytest.mark.parametrize("malformed", [False, True], ids=["valid", "malformed"])
+def test_incremental_input_preserves_borrowed_stream_ownership(mini_repo, malformed):
+    import io
+    import xml.etree.ElementTree as ET
+    data = b'<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1"/>'
+    if malformed:
+        data += b'</broken>'
+    with io.BytesIO(data) as borrowed:
+        if malformed:
+            with pytest.raises(ET.ParseError):
+                collect_run(borrowed, mini_repo)
+        else:
+            files, _, dropped = collect_run(borrowed, mini_repo)
+            assert files == {"core/pkga/tests/test_mod.py": 1.0}
+            assert dropped == 0
+        assert not borrowed.closed
+
+
+def test_owned_malformed_xml_closes_before_error(mini_repo, tmp_path, monkeypatch):
+    import io
+    import xml.etree.ElementTree as ET
+    owned = io.BytesIO(b"<testsuite><testcase/></broken>")
+    monkeypatch.setitem(collect_run.__globals__, "open", lambda path, mode: owned)
+    with pytest.raises(ET.ParseError, match="mismatched tag"):
+        collect_run(tmp_path / "broken.xml", mini_repo)
+    assert owned.closed
+
+
+def test_borrowed_read_interruption_keeps_stream_open(mini_repo):
+    import io
+    interruption = KeyboardInterrupt("borrowed read interrupted")
+    class BorrowedInput(io.BytesIO):
+        def read(self, *args):
+            raise interruption
+    with BorrowedInput(b"<testsuite/>") as borrowed:
+        with pytest.raises(KeyboardInterrupt) as caught:
+            collect_run(borrowed, mini_repo)
+        assert caught.value is interruption
+        assert not borrowed.closed
+
+
+@pytest.mark.parametrize("borrowed", [False, True], ids=["owned", "borrowed"])
+def test_resolution_error_keeps_primary_exception_and_input_ownership(
+    mini_repo, tmp_path, monkeypatch, borrowed,
+):
+    import io
+    failure = RuntimeError("resolution failed")
+    with io.BytesIO(
+        b'<testcase classname="core.pkga.tests.test_mod" name="test_a" time="1"/>'
+    ) as source:
+        def fail_resolution(*args):
+            assert source.closed is (not borrowed)
+            raise failure
+        monkeypatch.setitem(collect_run.__globals__, "resolve_classname", fail_resolution)
+        if borrowed:
+            supplied = source
+        else:
+            supplied = tmp_path / "owned.xml"
+            monkeypatch.setitem(collect_run.__globals__, "open", lambda path, mode: source)
+        with pytest.raises(RuntimeError) as caught:
+            collect_run(supplied, mini_repo)
+        assert caught.value is failure
+        assert source.closed is (not borrowed)
+
+
+def test_namespaced_cases_and_irrelevant_children_do_not_change_totals(mini_repo, tmp_path):
+    report = tmp_path / "namespaced.xml"
+    report.write_text(
+        '<testsuite xmlns:n="urn:owned">'
+        '<n:testcase classname="core.pkga.tests.test_mod" name="test_ignored" time="100"/>'
+        '<testcase classname="core.pkga.tests.test_mod" name="test_a" time="2.5">'
+        '<ignored>owned text</ignored></testcase></testsuite>'
+    )
+    files, nodeids, dropped = collect_run(report, mini_repo)
+    assert files == {"core/pkga/tests/test_mod.py": 2.5}
+    assert nodeids == {"core/pkga/tests/test_mod.py::test_a": 2.5}
+    assert dropped == 0
