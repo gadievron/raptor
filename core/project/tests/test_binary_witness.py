@@ -23,6 +23,7 @@ class BinaryWitnessCliTest(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
         root = Path(self.tmpdir.name)
         self.mgr = ProjectManager(projects_dir=root / "projects")
         self.target = root / "code"
