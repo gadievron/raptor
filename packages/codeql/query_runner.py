@@ -911,8 +911,10 @@ class QueryRunner:
                 suite_name=suite_name,
             )
 
-    def _compatible_query_args(self, query_path: Path) -> tuple[list[str], list[str]]:
-        """Filter only explicitly incompatible queries; retain native suite selection."""
+    def _compatible_query_args(
+        self, query_path: Path, *, excluded_queries: tuple[Path, ...] = (),
+    ) -> tuple[list[str], list[str]]:
+        """Retain native suite membership, excluding explicit utility paths."""
         import json
 
         from core.sandbox import run as sandbox_run
@@ -942,9 +944,12 @@ class QueryRunner:
                                   if text is None else rule_version_refusal(text, installed))
             return decisions[key]
 
+        excluded = {path.resolve() for path in excluded_queries}
         refused = {str(path.resolve()): reason for path in candidates
-                   if (reason := refusal(path)) is not None}
-        if not refused and query_path.suffix != ".qls":
+                   if (not excluded or path.resolve() not in excluded)
+                   and (reason := refusal(path)) is not None}
+        has_excluded = bool(excluded) and any(path.resolve() in excluded for path in candidates)
+        if not refused and not has_excluded and query_path.suffix != ".qls":
             return [str(query_path)], []
         try:
             resolved = sandbox_run(
@@ -968,6 +973,9 @@ class QueryRunner:
         eligible, skipped = [], []
         for name in selected:
             path = Path(name)
+            if path.resolve() in excluded:
+                logger.debug("Excluded internal utility query from security selection")
+                continue
             reason = refusal(path)
             if reason:
                 skipped.append(f"{name}: {reason}")
@@ -1372,17 +1380,20 @@ class QueryRunner:
     ) -> "QueryResult":
         """Per-language worker for `analyze_iris_packs` — pack install
         followed by analyze."""
+        probe = pack_dir / "Raptor" / "CallableInventory.ql"
         return self._run_local_pack(
             lang, db, pack_dir, out_dir,
             suite_name="raptor-iris-local",
             sarif_name=f"codeql_{lang}_iris.sarif",
             label="IRIS LocalFlowSource",
+            excluded_queries=(probe,) if probe.is_file() else (),
         )
 
     def _run_local_pack(
         self, lang: str, db: Path, pack_dir: Path, out_dir: Path,
         *, suite_name: str, sarif_name: str, label: str,
         extra_analyze_args: tuple[str, ...] = (), skip_install: bool = False,
+        excluded_queries: tuple[Path, ...] = (),
     ) -> QueryResult:
         # Share offline stdlib discovery with the custom-query entry point.
         # Explicit caller resolution settings retain their existing contract.
@@ -1390,7 +1401,11 @@ class QueryRunner:
             roots = self._local_dependency_roots(lang, pack_dir)
             extra_analyze_args = tuple(f"--additional-packs={root}" for root in roots)
             skip_install = bool(roots)
-        args, skipped = self._compatible_query_args(Path(pack_dir))
+        if excluded_queries:
+            args, skipped = self._compatible_query_args(
+                Path(pack_dir), excluded_queries=excluded_queries)
+        else:
+            args, skipped = self._compatible_query_args(Path(pack_dir))
         if not args:
             self._log_rule_skips(skipped)
             return QueryResult(
