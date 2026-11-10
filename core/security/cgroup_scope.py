@@ -174,8 +174,20 @@ class Scope:
         os.rmdir(self.path.name, dir_fd=self.parent)
 
     def close(self) -> None:
+        failure = None
         for attribute in ('node', 'parent'):
             fd = getattr(self, attribute)
+            setattr(self, attribute, None)
             if fd is not None:
-                os.close(fd)
-                setattr(self, attribute, None)
+                try:
+                    os.close(fd)
+                except BaseException as error:
+                    if failure is None:
+                        failure = error
+                    else:
+                        try:
+                            failure.add_note('scope descriptor cleanup: ' + type(error).__name__)
+                        except BaseException:
+                            pass
+        if failure is not None:
+            raise failure
