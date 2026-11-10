@@ -102,14 +102,14 @@ def test_crash_mid_swap_recovery_restores_legacy_rows(tmp_path):
     db = tmp_path / "raptor.graph.sqlite"
     _make_v1_db(db)
 
-    crashed = sqlite3.connect(db)
-    crashed.execute("PRAGMA legacy_alter_table=ON")
-    crashed.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
-    crashed.execute(_NEW_NODES)
-    crashed.execute(_COPY)
-    # close() without commit == the process died: the copy's implicit
-    # transaction rolls back, the DDL above already autocommitted.
-    crashed.close()
+    with closing(sqlite3.connect(db)) as crashed:
+        crashed.execute("PRAGMA legacy_alter_table=ON")
+        crashed.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
+        crashed.execute(_NEW_NODES)
+        crashed.execute(_COPY)
+        # close() without commit == the process died: the copy's implicit
+        # transaction rolls back, the DDL above already autocommitted.
+        crashed.close()
 
     assert _node_count(db) == 0  # the mid-crash state under test
 
@@ -126,24 +126,24 @@ def test_concurrent_first_open_mid_swap_preserves_rows(tmp_path):
     db = tmp_path / "raptor.graph.sqlite"
     _make_v1_db(db)
 
-    a = sqlite3.connect(db)
-    a.execute("PRAGMA busy_timeout=5000")
-    a.execute("PRAGMA legacy_alter_table=ON")
-    a.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
-    a.execute(_NEW_NODES)
+    with closing(sqlite3.connect(db)) as a:
+        a.execute("PRAGMA busy_timeout=5000")
+        a.execute("PRAGMA legacy_alter_table=ON")
+        a.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
+        a.execute(_NEW_NODES)
 
-    b = open_graph(db)
-    b.close()
+        b = open_graph(db)
+        b.close()
 
-    # A is a raced/crashed migrator: its copy may fail (the recovery
-    # already consumed the tmp table) — that is fine as long as the
-    # rows survived in the real store.
-    try:
-        a.execute(_COPY)
-        a.commit()
-    except sqlite3.OperationalError:
-        pass
-    a.close()
+        # A is a raced/crashed migrator: its copy may fail (the recovery
+        # already consumed the tmp table) — that is fine as long as the
+        # rows survived in the real store.
+        try:
+            a.execute(_COPY)
+            a.commit()
+        except sqlite3.OperationalError:
+            pass
+        a.close()
 
     assert _node_count(db) == 3
 
@@ -155,13 +155,13 @@ def test_completed_swap_recovery_drops_leftover_tmp(tmp_path):
     db = tmp_path / "raptor.graph.sqlite"
     _make_v1_db(db)
 
-    c = sqlite3.connect(db)
-    c.execute("PRAGMA legacy_alter_table=ON")
-    c.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
-    c.execute(_NEW_NODES)
-    c.execute(_COPY)
-    c.commit()  # copy landed; DROP never ran
-    c.close()
+    with closing(sqlite3.connect(db)) as c:
+        c.execute("PRAGMA legacy_alter_table=ON")
+        c.execute("ALTER TABLE nodes RENAME TO nodes_v1_tmp")
+        c.execute(_NEW_NODES)
+        c.execute(_COPY)
+        c.commit()  # copy landed; DROP never ran
+        c.close()
 
     conn = open_graph(db)
     conn.close()
