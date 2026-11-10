@@ -727,7 +727,8 @@ class TestPreexecLandlockGate(unittest.TestCase):
         calls = []
 
         def fake_make(writable_paths, allowed_tcp_ports,
-                      readable_paths=None, deny_all_tcp_connect=False):
+                      readable_paths=None, deny_all_tcp_connect=False,
+                      deny_all_udp=False):
             calls.append({
                 "writable_paths": writable_paths,
                 "readable_paths": readable_paths,

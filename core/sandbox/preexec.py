@@ -307,12 +307,14 @@ def _make_preexec_fn(limits: dict, writable_paths: list | None = None,
     # gate, a restrict_reads-only caller (no writable paths, no ports,
     # no connect-deny) silently got no Landlock at all.
     if ((writable_paths or allowed_tcp_ports or deny_all_tcp_connect
+         or (seccomp_block_udp and _get_landlock_abi() >= 10)
          or readable_paths is not None)
             and check_landlock_available()):
         effective_paths = list(writable_paths) if writable_paths else []
         landlock_fn = _make_landlock_preexec(effective_paths, allowed_tcp_ports,
                                              readable_paths=readable_paths,
-                                             deny_all_tcp_connect=deny_all_tcp_connect)
+                                             deny_all_tcp_connect=deny_all_tcp_connect,
+                                             deny_all_udp=seccomp_block_udp)
 
     if reaper_cell is not None:
         # Parent-side posture record for the per-run sandbox_info

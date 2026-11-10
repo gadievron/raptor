@@ -7735,7 +7735,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 _wp or allowed_tcp_ports
                                 or _la_readable is not None
                                 or _degraded_tcp_deny
-                                or _demoted_net_deny)
+                                or _demoted_net_deny
+                                or (seccomp_block_udp
+                                    and _get_landlock_abi() >= 10))
                             _ll_preexec = None
                             if _la_engages:
                                 _ll_preexec = _la_make_landlock(
@@ -7761,6 +7763,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     deny_all_tcp_connect=(
                                         _degraded_tcp_deny
                                         or _demoted_net_deny),
+                                    deny_all_udp=(seccomp_block_udp
+                                                  or _demoted_net_deny),
                                 )
                             _sc_preexec = _la_make_seccomp(
                                 seccomp_profile,  # type: ignore[arg-type]
