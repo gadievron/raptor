@@ -135,7 +135,7 @@ def host_recon_threshold_for_profile(profile_name: str,
 # parameter, add it here too.
 _SANDBOX_KWARGS = frozenset({
     "block_network", "target", "output", "allowed_tcp_ports",
-    "profile", "disabled", "limits", "map_root",
+    "profile", "disabled", "limits", "map_root", "job_budget",
     "use_egress_proxy", "proxy_hosts", "proxy_allowed_ports",
     "require_proxy_netns",
     "restrict_reads", "readable_paths",

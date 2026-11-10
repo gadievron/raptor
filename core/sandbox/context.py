@@ -873,6 +873,13 @@ def _persist_proxy_events(
                     token = _tmac.mint(_tmac.proxy_event_fields(
                         stamped, run=_run_binding))
                     line = {**stamped, "mac": token} if token else e
+                    try:
+                        activity_token = _tmac.mint(_tmac.proxy_activity_fields(
+                            stamped, run=_run_binding))
+                    except (ValueError, TypeError, RecursionError):
+                        activity_token = None
+                    if activity_token:
+                        line = {**line, 'activity_mac': activity_token}
                     _f.write(_json.dumps(line) + "\n")
                     _written += 1
                 # The count sidecar is durable; its healthy count must never
@@ -1630,7 +1637,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             omit_etc_reads: bool = False,
             require_proxy_netns: bool = False,
             rootfs: str | None = None,
-            output_run_root_ok: bool = False):
+            output_run_root_ok: bool = False,
+            job_budget: dict | None = None):
     """Context manager for sandboxed subprocess execution.
 
     Each run() call inside the context runs the target command with the
@@ -1963,6 +1971,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     (Complete member list, kept in sync with profiles.PROFILES — the
     operator-facing help in cli.py derives from the same table.)
     """
+    from .job_budget import Budget as _JobBudget
+    try:
+        _budget_spec = _JobBudget.parse(job_budget)
+    except (ValueError, TypeError) as exc:
+        raise _errors.SandboxSetupError('Invalid sandbox job budget') from exc
     # Rootfs pre-flight: cheap shape errors raise here (caller bug,
     # ValueError); "the backend can't honour rootfs on this host/config"
     # raises SandboxSetupError at the use_mount decision below.
@@ -3761,6 +3774,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         child SHOULD resolve the name against its own PATH.
         """
         from core.config import RaptorConfig
+        _job_controller = kwargs.pop('_job_controller', None)
 
         # Reject sandbox kwargs — they'd be silently ignored otherwise and
         # callers would wrongly assume per-call overrides took effect.
@@ -4522,6 +4536,15 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     lane,
                     _waived_exposure,
                     _once_suffix,
+                )
+            if _job_controller is not None:
+                _job_controller.ensure_lane(
+                    lane, namespace_isolated=(delivered == _tiers.ContainmentTier.MOUNT_NS))
+                _job_controller.ensure_exports(
+                    [target, output, rootfs, *(writable_paths or []),
+                     *(readable_paths or []), *(tool_paths or [])],
+                    [0, 1, 2, *(kwargs.get('pass_fds') or []),
+                     *(kwargs.get(k) for k in ('stdin', 'stdout', 'stderr'))],
                 )
             _executed = executor()
             if _max_capture_bytes is not None:
@@ -6213,6 +6236,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 stderr=kwargs.get("stderr"),
                                 pass_fds=kwargs.get("pass_fds", ()),
                                 max_capture_bytes=_max_capture_bytes,
+                                job_controller=_job_controller,
                                 audit_mode=nonlocal_audit_mode,
                                 audit_run_dir=_audit_run_dir,
                                 audit_required=audit_required,
@@ -8701,6 +8725,59 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             )
         return result
 
+    # Each invocation owns its job, including retries of the namespace
+    # backend. Only this wrapper can supply the private controller channel.
+    from functools import wraps as _wraps
+    from .job_budget import Job as _Job
+    _execute_call = run
+
+    @_wraps(_execute_call)
+    def _budgeted_run(cmd, **kwargs):
+        if '_job_controller' in kwargs:
+            raise TypeError('_job_controller is an internal sandbox argument')
+        from .summary import get_active_run_dir as _active_run_dir
+        _attributed_run_dir = _active_run_dir() or audit_run_dir or output
+        job = None
+        result = None
+        failure = None
+        try:
+            job = _Job(_budget_spec, namespace_backend=bool(
+                sys.platform == 'linux' and use_mount and not effectively_disabled),
+                run_dir=_attributed_run_dir)
+            result = _execute_call(cmd, _job_controller=job, **kwargs)
+            return result
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            try:
+                if job is not None:
+                    job.close()
+            except BaseException as cleanup_error:
+                if failure is None:
+                    failure = cleanup_error
+                    raise
+                failure.add_note('job cleanup: ' + type(cleanup_error).__name__)
+            finally:
+                budget_record = (job.record if job is not None else
+                                 getattr(failure, 'job_budget', {}))
+                if result is not None:
+                    result.sandbox_info['job_budget'] = budget_record
+                if failure is not None:
+                    try:
+                        failure.job_budget = budget_record
+                    except Exception:
+                        failure.add_note('job budget receipt available in the run activity report')
+                # Retain parent-owned observations before run finalisation.
+                from . import activity as _activity
+                _activity.record_execution(
+                    _attributed_run_dir,
+                    result=result, error=failure, job_budget=budget_record,
+                    observation_dir=audit_run_dir or output,
+                )
+
+    run = _budgeted_run
+
     # Expose the cumulative per-sandbox event view as an attribute on the
     # yielded run. Each inner run() call appends its per-call slice to this
     # list, so callers can do `run.events` after one or more run()s for a
@@ -9008,6 +9085,7 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
         omit_etc_reads: bool = False,
         rootfs: str | None = None,
         output_run_root_ok: bool = False,
+        job_budget: dict | None = None,
         **kwargs) -> subprocess.CompletedProcess:
     """Run a single command in a sandbox. Convenience wrapper.
 
@@ -9063,7 +9141,8 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
                 omit_proc_reads=omit_proc_reads,
                 omit_etc_reads=omit_etc_reads,
                 rootfs=rootfs,
-                output_run_root_ok=output_run_root_ok))
+                output_run_root_ok=output_run_root_ok,
+                job_budget=job_budget))
         except SandboxSetupError as _construction_refusal:
             # Refusal PRIORITY at the one-shot boundary. Context
             # construction refuses on capability grounds (e.g.
@@ -10005,6 +10084,7 @@ def untrusted_fresh_procfs_required() -> bool:
 
 def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | None = None,
                   limits: dict | None = None,
+                  job_budget: dict | None = None,
                   restrict_reads: bool = True,
                   readable_paths: list | None = None,
                   writable_paths: list | None = None,
@@ -10073,6 +10153,12 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     keystrokes); callers needing varied network/session policy use
     sandbox() directly.
     """
+    from .job_budget import load_budget
+    try:
+        _configured_job = load_budget(job_budget)
+    except (OSError, ValueError, TypeError) as exc:
+        raise _errors.SandboxSetupError("Invalid untrusted job budget configuration") from exc
+    job_budget = _configured_job.as_dict() if _configured_job is not None else None
     # Truthy check — `target=""` and `output=""` must also be rejected,
     # otherwise the caller thinks they engaged Landlock but got no
     # isolation whatsoever (every downstream check is truthy-based).
@@ -10203,7 +10289,7 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     # branch of run()'s containment-floor check).
     try:
         return run(cmd, block_network=True, target=target, output=output,
-                   limits=limits,
+                   limits=limits, job_budget=job_budget,
                    restrict_reads=restrict_reads,
                    readable_paths=readable_paths,
                    writable_paths=writable_paths,
@@ -10234,6 +10320,7 @@ def run_untrusted_networked(
     output: str | None = None,
     proxy_hosts: list,
     limits: dict | None = None,
+    job_budget: dict | None = None,
     restrict_reads: bool = True,
     readable_paths: list | None = None,
     writable_paths: list | None = None,
@@ -10309,6 +10396,12 @@ def run_untrusted_networked(
     (libexec/raptor-bq-query → core/forensics/bq_query.py), and other
     hostname-allowlisted egress consumers; see THREAT_MODEL.md.
     """
+    from .job_budget import load_budget
+    try:
+        _configured_job = load_budget(job_budget)
+    except (OSError, ValueError, TypeError) as exc:
+        raise _errors.SandboxSetupError("Invalid untrusted job budget configuration") from exc
+    job_budget = _configured_job.as_dict() if _configured_job is not None else None
     if not (target or output):
         msg = (
             "run_untrusted_networked() requires at least one non-empty of "
@@ -10385,7 +10478,7 @@ def run_untrusted_networked(
             cmd,
             block_network=False,
             target=target, output=output,
-            limits=limits,
+            limits=limits, job_budget=job_budget,
             restrict_reads=restrict_reads,
             readable_paths=readable_paths,
             writable_paths=writable_paths,

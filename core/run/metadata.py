@@ -1974,6 +1974,19 @@ def _finalize_egress_summary(output_dir: Path) -> None:
         )
 
 
+    # Activity joins the existing sources after their final writers have run.
+    # It is independent of the egress convenience summary's success.
+    try:
+        from core.sandbox.activity import finalize as finalize_activity
+        finalize_activity(output_dir)
+        import logging
+        logging.getLogger(__name__).info('sandbox activity → %s', output_dir / 'sandbox-activity.txt')
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning('sandbox activity report unavailable for %s', output_dir,
+                                            exc_info=True)
+
+
 # Sandbox summary + triage are finalized BEFORE the status update in every
 # terminal-state transition. If the process crashes between them:
 #  - finalize-then-status-update path: status stays "running", summary/triage

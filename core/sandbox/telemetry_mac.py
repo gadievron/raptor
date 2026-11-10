@@ -62,6 +62,8 @@ as another.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import errno
 import hashlib
 import hmac
@@ -576,6 +578,29 @@ def mint(fields: Mapping[str, object]) -> str | None:
     return hmac.new(key, _canonical(fields), hashlib.sha256).hexdigest()
 
 
+
+def prepare_signer() -> Callable[[Mapping[str, object]], str | None]:
+    """Capture the existing signing key before a trusted lifecycle fork.
+
+    The returned writer does no configuration/key-file access or logging.
+    It is for the outside job watcher, never for payload inheritance. Its
+    tokens use exactly the existing purpose-separated canonical encoding.
+    """
+    try:
+        key = _load_or_create_key()
+    except OSError:
+        key = None
+    canonical, digest, new = _canonical, hashlib.sha256, hmac.new
+
+    def sign(fields: Mapping[str, object]) -> str | None:
+        if 'kind' not in fields:
+            raise ValueError('telemetry signer: fields must carry kind')
+        if not key:
+            return None
+        return new(key, canonical(fields), digest).hexdigest()
+    return sign
+
+
 def verify(fields: Mapping[str, object], token: str | None) -> bool:
     """Whether *token* is a valid MAC over *fields* under this
     install's key. Constant-time; never raises — any failure is the
@@ -627,6 +652,24 @@ def proxy_event_fields(event: Mapping[str, object], run: str) -> dict:
         "result": event.get("result") or "",
         "resolved_ip": event.get("resolved_ip") or "",
     }
+
+
+
+def proxy_activity_fields(event: Mapping[str, object], run: str) -> dict:
+    """Additional activity fields; leave existing triage tokens compatible."""
+    fields = {key: event.get(key) for key in (
+        'seq', 't', 'caller', 'host', 'port', 'result', 'resolved_ip',
+        'bytes_c2u', 'bytes_u2c', 'duration')}
+    encoded = json.dumps(fields, sort_keys=True, ensure_ascii=True, allow_nan=False)
+    return {'kind': 'sandbox-proxy-activity', 'run': run,
+            'sha256': hashlib.sha256(encoded.encode('ascii')).hexdigest()}
+
+
+def allowed_activity_fields(records: list, run: str) -> dict:
+    """Bind informational allowed operations without changing denial roles."""
+    encoded = json.dumps(records, sort_keys=True, ensure_ascii=True, allow_nan=False)
+    return {'kind': 'sandbox-allowed-policy-activity', 'run': run,
+            'sha256': hashlib.sha256(encoded.encode('ascii')).hexdigest()}
 
 
 def proxy_events_count_fields(
