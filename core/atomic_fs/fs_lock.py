@@ -223,20 +223,34 @@ def release_flock_fd(fd: int, acquired: bool, *, failed: bool) -> None:
     OSError cleanup failures are logged. Other cleanup failures propagate
     after both attempts unless ``failed`` preserves an active operation error.
     """
-    pending = None
-    if acquired:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except BaseException as exc:
-            logger.warning('Sidecar lock unlock failed; closing descriptor', exc_info=True)
-            if not failed and not isinstance(exc, OSError):
-                pending = exc
+    unlock_error = close_error = None
     try:
-        os.close(fd)
-    except BaseException as exc:
-        logger.warning('Sidecar lock descriptor close failed', exc_info=True)
-        if not failed and not isinstance(exc, OSError) and pending is None:
-            pending = exc
+        if acquired:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException as exc:
+                unlock_error = exc
+    finally:
+        try:
+            os.close(fd)
+        except BaseException as exc:
+            close_error = exc
+    pending = next((error for error in (unlock_error, close_error)
+                    if error is not None and not isinstance(error, OSError)), None)
+    if failed:
+        pending = None
+    # Diagnostics run only after both retirement attempts. Their own failure
+    # must not replace an existing operation or cleanup error.
+    for message, error in (
+        ('Sidecar lock unlock failed; closing descriptor', unlock_error),
+        ('Sidecar lock descriptor close failed', close_error),
+    ):
+        if error is not None:
+            try:
+                logger.warning(message, exc_info=(type(error), error, error.__traceback__))
+            except BaseException as diagnostic:
+                if not failed and pending is None:
+                    pending = diagnostic
     if pending is not None:
         raise pending
 
