@@ -155,13 +155,17 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         "verb": verb,
         "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
     }
-    if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass", "check-array-bounds", "check-integer-division"}:
+    if verb in {"check-overflow", "check-oob", "check-overflow-to-oob", "check-negative-bypass", "check-array-bounds", "check-integer-division", "check-shift-count"}:
         binding["hypothesis_sha256"] = hashlib.sha256(hypothesis.encode("utf-8", "surrogatepass")).hexdigest()
     if verb == "check-overflow":
         # Matching source is insufficient: replies must satisfy the current
         # explicit claim, operation, guard, type and variable-identity contract.
         from .integer_abi import integer_abi_record
         binding["query_contract"] = "common-width-integer-operands-v25"
+        binding["integer_abi"] = integer_abi_record(integer_abi)
+    elif verb == "check-shift-count":
+        from .integer_abi import integer_abi_record
+        binding["query_contract"] = "independent-shift-count-v1"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-division":
         from .integer_abi import integer_abi_record

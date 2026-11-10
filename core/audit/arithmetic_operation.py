@@ -43,7 +43,7 @@ def _unwrap(node):
     return node
 
 
-def bind_arithmetic_operation(source, operands, operator, *, language, integer_abi=None):
+def _select_arithmetic_site(source, operands, operator, *, language):
     """Select a unique atomic binary operation or decline the query.
 
     C/C++ parenthesized identifiers preserve operand identity. Casts,
@@ -52,23 +52,23 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     subtraction must retain source order.
     """
     if language not in {"c", "cpp"}:
-        return ArithmeticOperation("unavailable")
+        return "unavailable", b"", None, None
     if len(source) > _MAX_SOURCE_CHARS:
-        return ArithmeticOperation("unavailable")
-    if len(operands) != 2 or operator not in {"+", "-", "*", "/", "%"}:
-        return ArithmeticOperation("unbound")
+        return "unavailable", b"", None, None
+    if len(operands) != 2 or operator not in {"+", "-", "*", "/", "%", "<<", ">>"}:
+        return "unbound", b"", None, None
     try:
         parser = _get_parser(language)
         if parser is None:
-            return ArithmeticOperation("unavailable")
+            return "unavailable", b"", None, None
         data = source.encode("utf-8")
         root = parser.parse(data).root_node
         if root.has_error:
-            return ArithmeticOperation("unavailable")
+            return "unavailable", b"", None, None
     except Exception:
         # Optional parser setup and bounded-parse failures decline source credit.
         logger.debug("arithmetic operation parse unavailable", exc_info=True)
-        return ArithmeticOperation("unavailable")
+        return "unavailable", b"", None, None
 
     def text(node):
         return data[node.start_byte:node.end_byte].decode("utf-8") if node is not None else ""
@@ -79,40 +79,40 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
     while stack:
         visited += 1
         if visited > _MAX_NODES:
-            return ArithmeticOperation("unavailable")
+            return "unavailable", b"", None, None
         node = stack.pop()
         if node.type == "function_definition":
             if not ordinary_function_frame(node, data, language):
-                return ArithmeticOperation("unavailable")
+                return "unavailable", b"", None, None
             body = node.child_by_field_name("body")
             if body is not None:
                 bodies.append(body)
             continue
         stack.extend(node.named_children)
     if len(bodies) != 1:
-        return ArithmeticOperation("unbound" if not bodies else "ambiguous")
+        return ("unbound" if not bodies else "ambiguous"), b"", None, None
 
     matches = []
     stack = [bodies[0]]
     while stack:
         visited += 1
         if visited > _MAX_NODES:
-            return ArithmeticOperation("unavailable")
+            return "unavailable", b"", None, None
         node = stack.pop()
         if node.type in {"function_definition", "lambda_expression"}:
             continue  # another callable does not execute in this function's body
         if node.type == "generic_expression" or node.type.startswith("preproc_"):
-            return ArithmeticOperation("unavailable")  # selected arms are not modeled
+            return "unavailable", b"", None, None  # selected arms are not modeled
         if node.type == "if_statement" and any(
             child.type in {"constexpr", "consteval"} for child in node.children
         ):
-            return ArithmeticOperation("unavailable")
+            return "unavailable", b"", None, None
         if node.type == "sizeof_expression":
             pending = list(node.named_children)
             while pending:
                 item = pending.pop()
                 if item.type in {"array_declarator", "abstract_array_declarator"}:
-                    return ArithmeticOperation("unavailable")  # VLA extents may execute
+                    return "unavailable", b"", None, None  # VLA extents may execute
                 pending.extend(item.named_children)
         # The sizeof VLA check above must run before skipping operands.
         if unevaluated_context(node, data, language):
@@ -120,29 +120,47 @@ def bind_arithmetic_operation(source, operands, operator, *, language, integer_a
         if node.type == "binary_expression" and text(node.child_by_field_name("operator")) == operator:
             left = _unwrap(node.child_by_field_name("left"))
             right = _unwrap(node.child_by_field_name("right"))
-            if left is not None and right is not None and all(
-                item.type == "identifier" or (
-                    item.type == "number_literal" and _INTEGER_LITERAL_RE.fullmatch(text(item))
-                ) for item in (left, right)
-            ):
-                pair = (text(left), text(right))
+            def atom(item):
+                if item is None:
+                    return None
+                if item.type == "identifier":
+                    return text(item)
+                if operator in {"<<", ">>"}:
+                    from .integer_literals import source_integer_atom
+                    return source_integer_atom(item, data)
+                return text(item) if item.type == "number_literal" and _INTEGER_LITERAL_RE.fullmatch(text(item)) else None
+
+            pair = (atom(left), atom(right))
+            if None not in pair:
                 wanted = tuple(operands)
                 if pair == wanted or (operator in {"+", "*"} and pair == wanted[::-1]):
                     matches.append(node)
                     if len(matches) > 1:
-                        return ArithmeticOperation("ambiguous")
+                        return "ambiguous", b"", None, None
         stack.extend(node.named_children)
     if not matches:
+        return "unbound", b"", None, None
+    return "bound", data, bodies[0], matches[0]
+
+
+def bind_arithmetic_operation(source, operands, operator, *, language, integer_abi=None):
+    """Bind the existing common-type arithmetic fragment to one source site."""
+    if language not in {"c", "cpp"} or len(source) > _MAX_SOURCE_CHARS:
+        return ArithmeticOperation("unavailable")
+    if len(operands) != 2 or operator not in {"+", "-", "*", "/", "%"}:
         return ArithmeticOperation("unbound")
+    status, data, body, target = _select_arithmetic_site(source, operands, operator, language=language)
+    if status != "bound":
+        return ArithmeticOperation(status)
     from .arithmetic_guards import guards_for_operation
-    guards = guards_for_operation(bodies[0], matches[0], data, operands,
+    guards = guards_for_operation(body, target, data, operands,
                                   language=language, integer_abi=integer_abi)
     from .arithmetic_types import ArithmeticModel, model_for_operation
     # An incomplete execution frame has no complete integer model. Do not
     # silently rebuild a typed query from the now-empty guard tuple.
     model = (ArithmeticModel("unavailable") if guards.status == "unavailable"
-             else model_for_operation(matches[0], data, operands, operator, guards.premises, integer_abi, language=language))
-    row, column = matches[0].start_point
+             else model_for_operation(target, data, operands, operator, guards.premises, integer_abi, language=language))
+    row, column = target.start_point
     return ArithmeticOperation(
         "bound", row + 1, column + 1, guards.status, guards.premises,
         model.status, model.profile, model.kind, model.domains, model.types,

@@ -267,6 +267,11 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("invalid shift count", "check-shift-count"),
+    ("negative shift count", "check-shift-count"),
+    ("oversized shift count", "check-shift-count"),
+    ("shift count too large", "check-shift-count"),
+    ("shift count out of range", "check-shift-count"),
     ("division by zero", "check-integer-division"),
     ("division by 0", "check-integer-division"),
     ("remainder by 0", "check-integer-division"),
