@@ -66,10 +66,18 @@ def acquire_lock() -> Path:
         logger.warning("stale lockfile %s already exists; replacing", path)
         path.unlink(missing_ok=True)
         fd = os.open(str(path), flags, 0o644)
+    failed = False
     try:
         os.write(fd, str(os.getpid()).encode())
+    except BaseException:
+        failed = True
+        raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            if not failed:
+                raise
     return path
 
 
