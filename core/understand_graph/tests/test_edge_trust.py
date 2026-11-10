@@ -14,6 +14,7 @@ lane at all).
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from core.understand_graph import integrity
@@ -55,10 +56,9 @@ _V3_SCHEMA = """
 
 def _make_v3_db(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.executescript(_V3_SCHEMA)
-    conn.commit()
-    conn.close()
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(_V3_SCHEMA)
+        conn.commit()
 
 
 class TestMigrationV4:
