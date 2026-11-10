@@ -143,9 +143,23 @@ def _operations(source, language, abi):
             frame = common_integer_type(atoms, model.types, abi)
             if model.status != "bound" or frame is None:
                 continue
-            kinds = [("zero-divisor", "Potential zero divisor")]
+            divisor = integer_literal_value(atoms[1])
+            kinds = [("zero-divisor", "Potential zero divisor")] if divisor is None or divisor == 0 else []
             if frame.signed:
-                kinds.append(("signed-division-overflow", "Potential division overflow"))
+                minimum = -(1 << (frame.width - 1))
+                numerator = integer_literal_value(atoms[0])
+                if numerator is None:
+                    kind = operand_kinds[0]
+                    low = -(1 << (kind.width - 1)) if kind.signed else 0
+                    high = (1 << (kind.width - (1 if kind.signed else 0))) - 1
+                    can_reach_minimum = low <= minimum <= high
+                else:
+                    can_reach_minimum = numerator == minimum
+                # Admitted promotions preserve values. Unsigned storage
+                # cannot supply -1 even when promoted to a signed int.
+                can_reach_minus_one = operand_kinds[1].signed if divisor is None else divisor == -1
+                if can_reach_minimum and can_reach_minus_one:
+                    kinds.append(("signed-division-overflow", "Potential division overflow"))
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:

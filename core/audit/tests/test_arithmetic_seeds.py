@@ -324,3 +324,38 @@ def test_wrapped_interval_encloses_independent_byte_conversions():
         converted = int.from_bytes(value.to_bytes(2, "little", signed=True), "little", signed=False)
         assert low <= converted <= high
     assert converted_interval(0, 65535, IntegerType(16, True, 16, True)) is None
+
+
+def test_safe_literal_divisor_does_not_consume_seed_budget():
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+
+    source = "int Read(int Value){return Value / 2;}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 0
+    assert not gap.get("injected_hypotheses")
+
+
+@pytest.mark.parametrize("op", ["/", "%"])
+@pytest.mark.parametrize("parameters,left,right,abi,expected", [
+    ("int Value", "Value", "0", "lp64", {"zero-divisor"}),
+    ("int Value", "Value", "-1", "lp64", {"signed-division-overflow"}),
+    ("short Value", "Value", "-1", "lp64", set()),
+    ("short Value", "Value", "-1", "i16", {"signed-division-overflow"}),
+    ("int Count", "10", "Count", "lp64", {"zero-divisor"}),
+    ("int Value,unsigned short Count", "Value", "Count", "lp64", {"zero-divisor"}),
+    ("int Value", "Value", "-2", "lp64", set()),
+    ("int Value", "Value", "1", "lp64", set()),
+])
+def test_division_leads_require_reachable_fault_operand_values(op, parameters, left, right, abi, expected):
+    from core.audit.arithmetic_seeds import seed_arithmetic_hypotheses
+    from core.audit.integer_division import check_integer_division
+
+    source = f"int Read({parameters}){{return {left} {op} {right};}}"
+    gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi=abi) == len(expected)
+    seeds = gap.get("injected_hypotheses", [])
+    assert {s["arithmetic_site"]["claim_kind"] for s in seeds} == expected
+    for seed in seeds:
+        checked = check_integer_division(source, seed["mechanism"], language="c", integer_abi=abi)
+        assert checked["violation"] is True and checked["witness_validated"] is True
+        assert checked["fault_kind"] == seed["arithmetic_site"]["claim_kind"]

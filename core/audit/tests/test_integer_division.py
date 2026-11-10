@@ -115,3 +115,47 @@ def test_unrecognised_or_combined_subject_cannot_select_an_arbitrary_fault(monke
     result = check_integer_division('int Read(int Left,int Right){return Left/Right;}',
                                     subject + ' in `Left / Right`', language='c', integer_abi='ilp32')
     assert result['division_status'] == 'unavailable' and result['violation'] is None
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("op", [pytest.param("/", id="quotient"), pytest.param("%", id="remainder")])
+def test_negative_literal_divisor_has_a_source_bound_overflow_witness(language, op):
+    source = f"int Read(int Value){{return Value {op} -1;}}"
+    result = check_integer_division(source, f"division overflow in `Value {op} -1`", language=language, integer_abi="lp64")
+    assert result["violation"] is True, result
+    assert result["fault_kind"] == "signed-division-overflow"
+    assert result["witness_validated"] is True
+    assert result["model"]["Value"] == -(1 << 31)
+
+
+@pytest.mark.parametrize("abi,expected", [("lp64", False), ("i16", True)])
+@pytest.mark.parametrize("op", ["/", "%"])
+def test_negative_literal_fault_uses_the_promoted_result_range(abi, expected, op):
+    result = check_integer_division(f"int Read(short Value){{return Value {op} -1;}}",
+                                    f"division overflow in `Value {op} -1`", language="c", integer_abi=abi)
+    assert result["violation"] is expected, result
+    assert result["witness_validated"] is expected
+
+
+@pytest.mark.parametrize("source,claim", [
+    ("int Read(int Value){return Value/-1;}", "division by zero in `Value / -1`"),
+    ("int Read(int Value){return Value/0;}", "division overflow in `Value / 0`"),
+])
+def test_literal_fault_cannot_confirm_a_different_subject(source, claim):
+    result = check_integer_division(source, claim, language="c", integer_abi="lp64")
+    assert result["violation"] is False
+    assert result["witness_validated"] is False
+
+
+def test_parenthesized_negative_hex_literal_preserves_its_value():
+    result = check_integer_division("int Read(int Value){return Value/(-0x1);}",
+                                    "division overflow in `Value / -1`", language="cpp", integer_abi="lp64")
+    assert result["violation"] is True
+    assert result["model"]["Value"] == -(1 << 31)
+
+
+@pytest.mark.parametrize("expression", ["Value / -Other", "Value / -(-1)", "Value / -1L", "Value / -(1+1)"])
+def test_negative_literal_extension_never_admits_a_negated_expression(expression):
+    source = f"int Read(int Value,int Other){{return {expression};}}"
+    result = check_integer_division(source, f"division overflow in `{expression}`", language="c", integer_abi="lp64")
+    assert result["violation"] is None
