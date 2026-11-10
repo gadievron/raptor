@@ -57,6 +57,7 @@ class ReferenceAnswer:
     pack_version: str = "c-integers-1"
     # Presentation provenance only, never applicability or delivery authority.
     selection_origin: Literal["requested", "initial"] = "requested"
+    selection_kind: Literal["topic", "entry_id"] = "topic"
 
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
@@ -102,7 +103,8 @@ def lookup(
         answer = _lookup_cached(terms, context, entry_id, ENTRIES, pack_version)
     except TypeError:
         return ReferenceAnswer(request_id, "unsupported", reason="reference lookup inputs are not immutable")
-    return replace(answer, request_id=request_id, pack_version=pack_version)
+    return replace(answer, request_id=request_id, pack_version=pack_version,
+                   selection_kind="entry_id" if entry_id is not None else "topic")
 
 
 @lru_cache(maxsize=128)
