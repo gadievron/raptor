@@ -463,6 +463,7 @@ def _resolve_path_div_chain(node: ast.expr) -> list[str]:
 def _extract_fixture_dirs(
     path: Path, repo: Path, *, source: str | None = None,
     source_tree: ast.Module | None = None,
+    division_nodes: list[ast.BinOp] | None = None,
 ) -> list[Path]:
     """Find fixture/data directories referenced by a test file.
 
@@ -470,7 +471,8 @@ def _extract_fixture_dirs(
     chains, resolving the deepest directory that exists on disk.
     Falls back to scanning for sibling fixture directories when the
     AST doesn't yield results. A graph consumer can supply the matching
-    source and read-only tree to avoid another file read and parse.
+    source and read-only tree to avoid another file read and parse, or its
+    division inventory to avoid repeating the tree walk too.
     """
     if source is None:
         try:
@@ -483,7 +485,7 @@ def _extract_fixture_dirs(
     dirs: set[Path] = set()
     test_dir = (repo / path).parent
 
-    if source_tree is None:
+    if source_tree is None and division_nodes is None:
         try:
             source_tree = ast.parse(source, filename=str(path))
         except (SyntaxError, ValueError):
@@ -491,16 +493,19 @@ def _extract_fixture_dirs(
 
     # Collect BinOp / nodes that are NOT the left child of another /.
     # This gives us only the outermost (longest) chain, not sub-chains.
-    divisions = []
-    pending = deque([source_tree])
-    while pending:
-        node = pending.popleft()
-        # Parsed names and constants cannot contain path divisions.
-        if isinstance(node, (ast.Name, ast.Constant)):
-            continue
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-            divisions.append(node)
-        pending.extend(ast.iter_child_nodes(node))
+    if division_nodes is None:
+        divisions = []
+        pending = deque([source_tree])
+        while pending:
+            node = pending.popleft()
+            # Parsed names and constants cannot contain path divisions.
+            if isinstance(node, (ast.Name, ast.Constant)):
+                continue
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                divisions.append(node)
+            pending.extend(ast.iter_child_nodes(node))
+    else:
+        divisions = division_nodes
     inner_lefts = {id(node.left) for node in divisions}
 
     for node in divisions:
@@ -935,14 +940,14 @@ def compute_tier_dispatch(
         # edits a script. Reuse each graph tree for both consumers.
         fixture_dirs_by_test = {f: [] for f in all_py if is_test_file(f)}
 
-        def collect_fixture_dirs(path, source, tree):
+        def collect_fixture_dirs(path, source, divisions):
             if path in fixture_dirs_by_test:
                 fixture_dirs_by_test[path] = _extract_fixture_dirs(
-                    path, repo, source=source, source_tree=tree,
+                    path, repo, source=source, division_nodes=divisions,
                 )
 
         reverse_graph, parse_failures = build_graph(
-            all_py, repo, on_parsed=collect_fixture_dirs,
+            all_py, repo, on_divisions=collect_fixture_dirs,
             literal_references=script_literals or None,
         )
     elif script_literals:

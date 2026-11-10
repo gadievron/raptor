@@ -168,6 +168,52 @@ class TestExtractImports:
 
 
 class TestBuildGraph:
+    @pytest.mark.parametrize("parsed_consumer", [False, True])
+    def test_divisions_share_each_parsed_source_and_keep_graph(self, tmp_path, parsed_consumer):
+        import ast
+
+        files = self._make_repo(tmp_path)
+        leaf = tmp_path / "core/leaf.py"
+        leaf.write_text(leaf.read_text() + "VALUE = Path(__file__).parent / 'fixtures' / 'nested'\n"
+                        "def make(arg=Path(__file__).parent / 'fixtures'): pass\n")
+        broken = Path("core/broken.py")
+        (tmp_path / broken).write_text("def broken(\n")
+        files.append(broken)
+        expected = build_graph(files, tmp_path)
+        events, trees = [], {}
+
+        def parsed(path, source, tree):
+            events.append((path, "parsed"))
+            trees[path] = (tree, ast.dump(tree, include_attributes=True))
+
+        def divisions(path, source, nodes):
+            events.append((path, "divisions"))
+            assert source == (tmp_path / path).read_text()
+            tree = trees[path][0] if parsed_consumer else ast.parse(source)
+            expected_nodes = [node for node in ast.walk(tree)
+                              if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div)]
+            assert [ast.dump(node) for node in nodes] == [ast.dump(node) for node in expected_nodes]
+            if parsed_consumer:
+                assert nodes == expected_nodes
+                assert ast.dump(tree, include_attributes=True) == trees[path][1]
+
+        actual = build_graph(files, tmp_path, on_parsed=parsed if parsed_consumer else None,
+                             on_divisions=divisions)
+        assert actual == expected
+        assert actual[1] == 1
+        kinds = ["parsed", "divisions"] if parsed_consumer else ["divisions"]
+        assert events == [(path, kind) for path in files if path != broken for kind in kinds]
+
+    @pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
+    def test_division_consumer_failure_is_not_a_parse_failure(self, tmp_path, error):
+        files = self._make_repo(tmp_path)
+
+        def refuse(*args):
+            raise error("consumer failed")
+
+        with pytest.raises(error, match="consumer failed"):
+            build_graph(files, tmp_path, on_divisions=refuse)
+
     def _make_repo(self, tmp_path):
         """Create a minimal repo structure for graph tests."""
         # core/base.py — no internal imports
