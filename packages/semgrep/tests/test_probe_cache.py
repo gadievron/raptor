@@ -349,3 +349,76 @@ def test_waiter_revalidates_identity_after_receiving_answer(executable, monkeypa
             release.set()
         assert first.result(timeout=5)
         assert not second.result(timeout=5)
+
+
+@pytest.mark.parametrize('finish_old_first', [False, True])
+@pytest.mark.parametrize('old_failure', [False, True])
+def test_replacement_callers_share_probe_while_old_identity_is_pending(
+    executable, monkeypatch, finish_old_first, old_failure,
+):
+    from concurrent.futures import Future
+    from threading import Event, Lock
+    from subprocess import TimeoutExpired
+
+    old_entered, new_entered = Event(), Event()
+    release_old, release_new, follower_decided = Event(), Event(), Event()
+    count_lock = Lock()
+    probes = 0
+
+    class ObservedFuture(Future):
+        def result(self, timeout=None):
+            follower_decided.set()
+            return super().result(timeout=timeout)
+
+    def probe():
+        nonlocal probes
+        with count_lock:
+            probes += 1
+            ordinal = probes
+        if ordinal == 1:
+            old_entered.set()
+            assert release_old.wait(10)
+            if old_failure:
+                raise TimeoutExpired('owned semgrep probe', 15)
+        else:
+            new_entered.set()
+            if ordinal > 2:
+                follower_decided.set()
+            assert release_new.wait(10)
+        return _info(executable)
+
+    monkeypatch.setattr(runner, 'Future', ObservedFuture)
+    monkeypatch.setattr(runner, '_version_probe', probe)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        old = pool.submit(runner.scope_isolation_available)
+        try:
+            assert old_entered.wait(10)
+            replacement = executable.with_name('replacement')
+            replacement.write_text('#!/bin/sh\nexit 1\n')
+            replacement.chmod(0o755)
+            replacement.replace(executable)
+            first = pool.submit(runner.scope_isolation_available)
+            assert new_entered.wait(10)
+            if finish_old_first:
+                release_old.set()
+                if old_failure:
+                    with pytest.raises(TimeoutExpired):
+                        old.result(timeout=5)
+                else:
+                    assert old.result(timeout=5) is False
+            second = pool.submit(runner.scope_isolation_available)
+            assert follower_decided.wait(10)
+            with count_lock:
+                assert probes == 2, 'replacement callers started duplicate version probes'
+        finally:
+            release_old.set()
+            release_new.set()
+        if old_failure:
+            with pytest.raises(TimeoutExpired):
+                old.result(timeout=5)
+        else:
+            assert old.result(timeout=5) is False
+        assert first.result(timeout=5) and second.result(timeout=5)
+    # The stale completion must not overwrite the replacement's cached answer.
+    assert runner.scope_isolation_available()
+    assert probes == 2
