@@ -1,5 +1,9 @@
 """Tests for core.audit.topo_order — topological ordering + SCC detection."""
 
+import sys
+
+import pytest
+
 from core.audit.topo_order import (
     SCC,
     build_adjacency_from_gaps,
@@ -352,10 +356,17 @@ def _recursive_reference_sccs(adj):
 
 
 class TestDetectSCCsIterative:
-    def test_deep_linear_chain_completes(self):
+    @pytest.mark.parametrize("n", [
+        pytest.param(None, id="recursion-limit"),
+        pytest.param(100_000, id="100k", marks=pytest.mark.slow),
+    ])
+    def test_deep_linear_chain_completes(self, n):
         """A call chain longer than the recursion limit must not
         raise RecursionError (the recursive formulation died here)."""
-        n = 100_000
+        # The default tier proves stack safety; retain the original scale
+        # in the nightly tier without changing the interpreter's limit.
+        if n is None:
+            n = 2 * sys.getrecursionlimit()
         adj = {f"n{i:06d}": [f"n{i + 1:06d}"] for i in range(n)}
         sccs = detect_sccs(adj)
         assert len(sccs) == n + 1
@@ -363,9 +374,14 @@ class TestDetectSCCsIterative:
         # Reverse topological: the chain's tail comes out first.
         assert sccs[0].members == frozenset({f"n{n:06d}"})
 
-    def test_deep_chain_of_two_cycles(self):
+    @pytest.mark.parametrize("n", [
+        pytest.param(None, id="recursion-limit"),
+        pytest.param(30_000, id="30k", marks=pytest.mark.slow),
+    ])
+    def test_deep_chain_of_two_cycles(self, n):
         """Deep recursion through SCC back-edges, not just tree edges."""
-        n = 30_000
+        if n is None:
+            n = 2 * sys.getrecursionlimit()
         adj = {}
         for i in range(n):
             adj[f"a{i:06d}"] = [f"b{i:06d}"]
