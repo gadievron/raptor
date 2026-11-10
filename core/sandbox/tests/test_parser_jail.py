@@ -66,6 +66,7 @@ from core.sandbox._request_head import (
 )
 
 from core.testing.sockets import socket_worker_setup
+from core.testing.processes import reap_on_exit
 from core.testing.proxy_scope import isolated_proxy_scope
 
 from core.testing.threads import retiring_threads
@@ -1184,52 +1185,56 @@ class TestStartupAttribution:
         platform X and nobody knows why"."""
         child_argv, env = parser_jail._worker_launch(parser_jail._raptor_dir())
 
-        parent_sock, child_sock = socket.socketpair()
-        try:
-            proc = subprocess.Popen(
-                child_argv + [str(child_sock.fileno())],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                close_fds=True,
-                pass_fds=(child_sock.fileno(),),
-                cwd=parser_jail._raptor_dir(),
-                env=env,
-            )
-        finally:
-            child_sock.close()
-        frame_id = payload = None
-        try:
-            parent_sock.settimeout(parser_jail._READY_TIMEOUT_S)
+        with ExitStack() as resources:
+            parent_sock, child_sock = socket.socketpair()
+            resources.callback(parent_sock.close)
+            resources.callback(child_sock.close)
             try:
-                header = _recv_exact(parent_sock, FRAME_HEADER.size)
-                length, frame_id = FRAME_HEADER.unpack(header)
-                payload = json.loads(_recv_exact(parent_sock, length))
-            except (OSError, ValueError) as exc:
+                proc = subprocess.Popen(
+                    child_argv + [str(child_sock.fileno())],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                    pass_fds=(child_sock.fileno(),),
+                    cwd=parser_jail._raptor_dir(),
+                    env=env,
+                )
+                resources.enter_context(reap_on_exit(proc))
+            finally:
+                child_sock.close()
+            frame_id = payload = None
+            try:
+                parent_sock.settimeout(parser_jail._READY_TIMEOUT_S)
                 try:
-                    _, stderr = proc.communicate(timeout=10)
+                    header = _recv_exact(parent_sock, FRAME_HEADER.size)
+                    length, frame_id = FRAME_HEADER.unpack(header)
+                    payload = json.loads(_recv_exact(parent_sock, length))
+                except (OSError, ValueError) as exc:
+                    try:
+                        _, stderr = proc.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        _, stderr = proc.communicate()
+                    pytest.fail(
+                        "worker died before the ready frame: read failed "
+                        f"with {exc!r}; exit status {proc.returncode}; "
+                        "child stderr:\n"
+                        + stderr.decode("utf-8", "backslashreplace"))
+                assert frame_id == READY_FRAME_ID
+                # ready:false here is a real confinement failure — surface
+                # the attributed error (this is exactly the signal the
+                # attribution frame exists to carry).
+                assert payload.get("ready") is True, (
+                    f"worker refused to confine: {payload}")
+                assert isinstance(payload.get("landlock"), bool)
+            finally:
+                parent_sock.close()  # EOF -> clean child exit
+                try:
+                    proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    _, stderr = proc.communicate()
-                pytest.fail(
-                    "worker died before the ready frame: read failed "
-                    f"with {exc!r}; exit status {proc.returncode}; "
-                    "child stderr:\n"
-                    + stderr.decode("utf-8", "backslashreplace"))
-            assert frame_id == READY_FRAME_ID
-            # ready:false here is a real confinement failure — surface
-            # the attributed error (this is exactly the signal the
-            # attribution frame exists to carry).
-            assert payload.get("ready") is True, (
-                f"worker refused to confine: {payload}")
-            assert isinstance(payload.get("landlock"), bool)
-        finally:
-            parent_sock.close()  # EOF -> clean child exit
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+                    proc.wait(timeout=10)
 
     def test_startup_exception_reports_stage_in_ready_frame(
         self, monkeypatch,
@@ -1242,30 +1247,34 @@ class TestStartupAttribution:
         from core.sandbox import _parser_jail_child as child_mod
         from core.sandbox import landlock as landlock_mod
 
-        parent_sock, worker_sock = socket.socketpair()
-        wfd = worker_sock.detach()  # main() adopts sole ownership
-        monkeypatch.setattr(child_mod, "_close_inherited_fds",
-                            lambda keep_fd: None)
-        monkeypatch.setattr(child_mod, "_SOCK_FD", wfd)
+        with ExitStack() as resources:
+            parent_sock, worker_sock = socket.socketpair()
+            resources.callback(parent_sock.close)
+            resources.callback(worker_sock.close)
+            wfd = worker_sock.fileno()  # keep ownership through fault setup
+            monkeypatch.setattr(child_mod, "_close_inherited_fds",
+                                lambda keep_fd: None)
+            monkeypatch.setattr(child_mod, "_SOCK_FD", wfd)
 
-        def boom() -> bool:
-            raise RuntimeError("forced by test")
+            def boom() -> bool:
+                raise RuntimeError("forced by test")
 
-        monkeypatch.setattr(landlock_mod, "check_landlock_available",
-                            boom)
-        try:
-            rc = child_mod.main(["prog", str(wfd)])
-            assert rc == 1
-            parent_sock.settimeout(5.0)
-            header = _recv_exact(parent_sock, FRAME_HEADER.size)
-            length, frame_id = FRAME_HEADER.unpack(header)
-            payload = json.loads(_recv_exact(parent_sock, length))
-            assert frame_id == READY_FRAME_ID
-            assert payload["ready"] is False
-            assert "startup failed at landlock probe" in payload["error"]
-            assert "RuntimeError: forced by test" in payload["error"]
-        finally:
-            parent_sock.close()
+            monkeypatch.setattr(landlock_mod, "check_landlock_available",
+                                boom)
+            try:
+                wfd = worker_sock.detach()  # main() adopts sole ownership
+                rc = child_mod.main(["prog", str(wfd)])
+                assert rc == 1
+                parent_sock.settimeout(5.0)
+                header = _recv_exact(parent_sock, FRAME_HEADER.size)
+                length, frame_id = FRAME_HEADER.unpack(header)
+                payload = json.loads(_recv_exact(parent_sock, length))
+                assert frame_id == READY_FRAME_ID
+                assert payload["ready"] is False
+                assert "startup failed at landlock probe" in payload["error"]
+                assert "RuntimeError: forced by test" in payload["error"]
+            finally:
+                parent_sock.close()
 
     def test_rlimit_failures_are_best_effort_and_reported(
         self, monkeypatch,
