@@ -58,6 +58,7 @@ def test_adapted_backend_before_private_import_is_not_trusted(constructor):
     exec(compile(Path(original.__file__).read_text(), original.__file__, 'exec'), namespace)
     assert namespace['_NATIVE_SHA256'] is None
     assert namespace['try_sha256_ascii']('x' * 300000, hashlib) is None
+    assert namespace['try_sha256_utf8_replace']('é' * 300000, hashlib) is None
 
 
 @pytest.mark.parametrize('kind', ['object', 'str-subclass'])
@@ -112,3 +113,45 @@ finally:
         capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('fragment', ['é', '🙂', '\ud800', '\udcff', '\ud800\udfff', '\0'])
+def test_replace_encoding_across_chunk_boundaries(fragment):
+    # Put the fragment on both sides of an encoding chunk boundary. Surrogate
+    # pairs remain two replacement bytes, including when split across chunks.
+    text = ('a' * (original._CHUNK_CHARS - 1) + fragment) * 5
+    result = original.try_sha256_utf8_replace(text, hashlib)
+    eligible = (original._NATIVE_SHA256 is not None
+                and hashlib.sha256 is original._NATIVE_SHA256
+                and not any(0xd800 <= ord(char) <= 0xdfff for char in fragment))
+    assert result == (hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
+                      if eligible else None)
+
+
+def test_replace_helper_declines_adapters_and_borrowed_hash_backend():
+    class Text(str):
+        def encode(self, *args):
+            pytest.fail('foreign encoder called by eligibility')
+
+        def __getitem__(self, key):
+            pytest.fail('foreign slice called by eligibility')
+
+    class Backend(ModuleType):
+        def __getattribute__(self, name):
+            pytest.fail('foreign backend looked up by eligibility')
+
+    assert original.try_sha256_utf8_replace(Text('é' * 300000), hashlib) is None
+    assert original.try_sha256_utf8_replace('é' * 300000, Backend('owned')) is None
+    view = module_function_view(original, bindings={'_NATIVE_SHA256': None})
+    assert view.try_sha256_utf8_replace('é' * 300000, hashlib) is None
+
+
+@pytest.mark.parametrize('size', [0, 262143, 262144, 262145])
+def test_replace_helper_threshold(size):
+    text = 'é' * size
+    value = original.try_sha256_utf8_replace(text, hashlib)
+    eligible = (size >= original._MIN_CHARS
+                and original._NATIVE_SHA256 is not None
+                and hashlib.sha256 is original._NATIVE_SHA256)
+    assert value == (hashlib.sha256(text.encode('utf-8', 'replace')).hexdigest()
+                     if eligible else None)

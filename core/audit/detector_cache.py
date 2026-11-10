@@ -40,6 +40,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from core.hash.text import try_sha256_utf8_replace
+
 from .prep_cache import (
     content_fingerprint,
     load_prep_cache,
@@ -100,6 +102,7 @@ _GLUE_MODULES: tuple[str, ...] = (
     "core.audit.orchestrator",
     "core.audit.detector_cache",
     "core.audit.prep_cache",
+    "core.hash.text",  # source-content digest bytes used by the cache keys
 )
 
 #: Modules reachable from the entry points that provably do NOT shape
@@ -328,6 +331,9 @@ def detector_set_fingerprint(
 
 
 def _sha_text(text: str) -> str:
+    digest = try_sha256_utf8_replace(text, hashlib)
+    if digest is not None:
+        return digest
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 

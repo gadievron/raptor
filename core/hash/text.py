@@ -1,4 +1,4 @@
-"""Bounded UTF-8 encoding for large native ASCII SHA-256 inputs.
+"""Bounded UTF-8 encoding for large native SHA-256 inputs.
 
 This optional fast path hashes already-serialised text. Callers retain their
 original expression when it returns None, preserving foreign encoders and
@@ -44,19 +44,38 @@ Only the native hashlib module with its unchanged OpenSSL constructor is
 admitted. Unknown backends, text adapters, small and non-ASCII strings stay
 with the caller's original UTF-8 expression, including its error behaviour.
 """
+    return _try_sha256_text(text, backend, ascii_only=True)
+
+
+def try_sha256_utf8_replace(text: object, backend: object) -> str | None:
+    """Hash large native text with UTF-8/errors=replace, or decline.
+
+    Only valid UTF-8 text is streamed. Surrogates decline so the original
+    whole-string encoder retains its error-processing behaviour.
+    Unknown text and hash adapters remain untouched.
+    """
+    return _try_sha256_text(text, backend, ascii_only=False)
+
+
+def _try_sha256_text(
+    text: object, backend: object, *, ascii_only: bool,
+) -> str | None:
     native = _NATIVE_SHA256
     if native is None or _TYPE_IMPL(text) is not _TEXT_TYPE:
         return None
     native_text = cast(str, text)
-    if (_LEN_IMPL(native_text) < _MIN_CHARS or not native_text.isascii()
+    if (_LEN_IMPL(native_text) < _MIN_CHARS or (ascii_only and not native_text.isascii())
             or backend is not _HASHLIB_MODULE
             or _TYPE_IMPL(backend) is not ModuleType):
         return None
     constructor = _HASHLIB_MODULE.__dict__.get("sha256")
     if constructor is native and native is not None:
         digest = native()
-        for offset in _RANGE_IMPL(0, _LEN_IMPL(native_text), _CHUNK_CHARS):
-            digest.update(native_text[offset:offset + _CHUNK_CHARS].encode("utf-8"))
+        try:
+            for offset in _RANGE_IMPL(0, _LEN_IMPL(native_text), _CHUNK_CHARS):
+                digest.update(native_text[offset:offset + _CHUNK_CHARS].encode("utf-8"))
+        except UnicodeEncodeError:
+            return None
         return digest.hexdigest()
     # A borrowed callable may have a destructor; release it before fallback.
     del constructor
