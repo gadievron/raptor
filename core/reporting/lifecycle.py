@@ -84,7 +84,7 @@ def _link_same_attempt(context, previous):
     links = context.extensions.setdefault("raptor.continuation_lineage", {})
     for finding in context.findings:
         key = _site(finding)
-        if key[0] and counts[key] == current_counts[key] == 1:
+        if (key[0] or type(key[0]) is int) and counts[key] == current_counts[key] == 1:
             links[finding["occurrence_ref"]] = {"snapshot_id": previous.snapshot_id,
                                                  "occurrence_ref": old[key]["occurrence_ref"], "policy": "same-attempt-stable-producer-id-and-site/v1"}
 
