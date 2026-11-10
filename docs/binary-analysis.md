@@ -668,3 +668,8 @@ the caller's working directory before the child starts. The destination must
 remain writable under the existing child sandbox. These options do not
 request another trace or change attach/spawn consent. `--no-report` disables
 the portable receipt while retaining native capture artifacts.
+
+When `--no-report` leaves an earlier portable receipt in the run directory,
+RAPTOR warns that those report files were not refreshed. Native summaries and
+evidence remain available. The retained portable files remain an earlier
+snapshot, rather than output from this invocation.

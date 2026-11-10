@@ -1338,6 +1338,14 @@ def _capture_map_lifecycle(args, out_dir):
 
 def _complete_map_report(args, payload, result, out_dir, status, *, active_phases=()):
     options = getattr(args, "_report_options", None)
+    if options is not None and not options.enabled:
+        args._report_done = True
+        if out_dir is not None:
+            from core.reporting.service import unrefreshed_report_notice
+            notice = unrefreshed_report_notice(out_dir)
+            if notice:
+                print("Warning: " + notice, file=sys.stderr)
+        return
     if options is not None and options.enabled and (args.report_format or args.report_output):
         args._report_done = True
         from .reporting import complete_map_report

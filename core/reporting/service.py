@@ -37,6 +37,17 @@ def capture_failure_summary(kind: str, run_id: str, target: str, output_dir: Pat
     return result
 
 
+def unrefreshed_report_notice(output_dir: Path) -> str | None:
+    """A disabled export retains previous files; never parse them as current."""
+    try:
+        present = (Path(output_dir) / "reporting-manifest.json").exists()
+    except OSError:
+        return "Full report files disabled; prior artifact freshness could not be checked"
+    if present:
+        return "Full report files disabled; prior report artifacts were not refreshed"
+    return None
+
+
 def complete_reporting(context: ReportContext, output_dir: Path, *, stem: str = "report",
                        options: ReportOptions | None = None, document: ReportDocument | None = None,
                        blocks: list[Block] | None = None, stream: TextIO | None = None,
@@ -50,8 +61,10 @@ def complete_reporting(context: ReportContext, output_dir: Path, *, stem: str = 
                                   len(context.findings), [], {},
                                   diagnostics=[f"Detailed summary unavailable ({type(exc).__name__}); inspect source artifacts"])
     result = ReportingResult(summary)
-    if not options.enabled and (Path(output_dir) / "reporting-manifest.json").exists():
-        summary.diagnostics.append("Full report files disabled; prior report artifacts were not refreshed")
+    if not options.enabled:
+        notice = unrefreshed_report_notice(output_dir)
+        if notice:
+            summary.diagnostics.append(notice)
     # Print useful results before optional persistence/rendering. A failed
     # filesystem cannot take the completed scanner's quick view away.
     if stream is not None:
