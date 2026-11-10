@@ -339,14 +339,57 @@ def append_journal_for_outcome(
 
     source_hash = ""
     from .refutation_source import capture_source_identity
-    from .source_anchor import make_source_anchor, parse_source_anchor
+    from .source_anchor import (
+        make_context_source_anchor, make_source_anchor,
+        parse_context_source_anchor, parse_source_anchor,
+    )
+    from .review_claims import read_history
+    from .review_context_inputs import context_inputs_current, context_inputs_digest
+
+    initial_review = getattr(outcome, "review_result", None) or {}
+    raw_history = initial_review.get("review_claims")
+    history = read_history(raw_history)
+    has_context_inputs = isinstance(raw_history, dict) and "source_inputs" in raw_history
+    context_inputs = history.get("source_inputs") if history is not None else None
+    context_digest = context_inputs_digest(context_inputs) if has_context_inputs else None
+    context_primary: str | None = None
+    if has_context_inputs:
+        # A lost or incomplete dependency envelope must not become a legacy
+        # primary-only row. These inputs narrow reuse, never certify evidence.
+        if history is None or not isinstance(context_inputs, dict) or context_digest is None:
+            logger.warning("journal review context input binding is incomplete")
+            return None
+        primary_inputs = [row["sha256"] for row in context_inputs["sources"]
+                          if row["file"] == outcome.file]
+        if len(primary_inputs) != 1:
+            logger.warning("journal review context has no unique primary source")
+            return None
+        context_primary = primary_inputs[0]
+
+    def context_current():
+        current_review = getattr(outcome, "review_result", None) or {}
+        current_history = current_review.get("review_claims")
+        current_has_inputs = isinstance(current_history, dict) and "source_inputs" in current_history
+        if current_has_inputs != has_context_inputs:
+            return False
+        if not has_context_inputs:
+            return True
+        if not isinstance(current_history, dict) or current_history.get("source_inputs") != context_inputs:
+            return False
+        admitted, _ = context_inputs_current(context_inputs, target_path)
+        return admitted
 
     inherited_anchor = getattr(outcome, "reused_source_anchor", None) if getattr(outcome, "reused", False) else None
     inherited_parts = parse_source_anchor(inherited_anchor)
+    inherited_context = parse_context_source_anchor(inherited_anchor)
     inherited_before = None
     if inherited_anchor is not None:
         if inherited_parts is None:
             logger.warning("journal reused source anchor is invalid")
+            return None
+        if inherited_context is not None and (
+                not has_context_inputs or inherited_context[2] != context_digest):
+            logger.warning("journal reused context anchor does not match its inputs")
             return None
         inherited_before = capture_source_identity(target_path, outcome.file)
         if inherited_before is None or inherited_before.sha256 != inherited_parts[0]:
@@ -420,6 +463,8 @@ def append_journal_for_outcome(
             logger.warning("could not record review publication rejection", exc_info=True)
         return False
 
+    if not context_current():
+        return None
     if verification_scope is not None and not binding_current():
         return None
     if publication_scope is not None and not publication_current():
@@ -464,6 +509,8 @@ def append_journal_for_outcome(
     except Exception:
         logger.debug("source hash computation failed for %s", outcome.file, exc_info=True)
 
+    if not context_current():
+        return None
     if verification_scope is not None and not binding_current(after_hash=True):
         return None
     if publication_scope is not None and not publication_current(after_hash=True):
@@ -485,6 +532,20 @@ def append_journal_for_outcome(
             source_hash = make_source_anchor(publication_scope.source_identity.sha256, source_hash)
         except ValueError:
             logger.warning("journal publication source cannot be represented by a source anchor")
+            return None
+
+    if has_context_inputs:
+        if context_primary is None:
+            return None
+        bound_primary = parse_source_anchor(source_hash)
+        if bound_primary is not None and bound_primary[0] != context_primary:
+            logger.warning("journal review context primary differs from its source scope")
+            return None
+        span_hash = bound_primary[1] if bound_primary is not None else source_hash
+        try:
+            source_hash = make_context_source_anchor(context_primary, span_hash, context_digest)
+        except ValueError:
+            logger.warning("journal review context source cannot be represented by an anchor")
             return None
 
     hypotheses_list: list[dict[str, str]] = []
@@ -722,8 +783,6 @@ def append_journal_for_outcome(
             if isinstance(s, dict)
         ] or None
 
-    from .review_claims import read_history
-
     entry = ReviewJournalEntry(
         ts=now_iso(),
         run_id=run_id,
@@ -746,7 +805,8 @@ def append_journal_for_outcome(
         body=getattr(outcome, "body", "") or "",
         reading_list_items=reading_list_items,
         study_receipts=study_receipts,
-        review_claims=read_history(review_result.get("review_claims")) if review_result else None,
+        review_claims=(history if has_context_inputs else
+                       read_history(review_result.get("review_claims")) if review_result else None),
         model=getattr(outcome, "model", None) or None,
         evidence_tools=evidence_tools,
         tools_dispatched=tools_dispatched,
@@ -795,6 +855,8 @@ def append_journal_for_outcome(
             if outcome.status == "clean" else None
         ),
     )
+    if not context_current():
+        return None
     try:
         append_entry(out_dir, entry)
         return entry

@@ -1188,6 +1188,7 @@ def format_context_for_prompt(
     budget_limit: int = 0,
     patterns_in_system: bool = False,
     *, claim_delivery_sink: Callable[[dict], None] | None = None,
+    caller_delivery_sink: Callable[[list[dict]], None] | None = None,
 ) -> str:
     """Format a context slice as text for the LLM prompt.
 
@@ -1217,16 +1218,32 @@ def format_context_for_prompt(
     ctx.pop("cross_entry_rendered", None)
     ctx.pop("language_reference_delivery", None)
     ctx.pop("source_study_delivery", None)
+    ctx.pop("caller_context_delivery", None)
 
     from .knowledge_context import (
         context_answers, context_explanations, context_subjects,
         reference_delivery, reference_sections, study_delivery, study_sections,
     )
 
+    from .caller_review_prompt import (
+        caller_context_answers, caller_context_delivery, caller_context_requests, caller_context_sections,
+    )
+
+    caller_requests = caller_context_requests(ctx.get("caller_context_requests"))
+    caller_answers = caller_context_answers(ctx.get("caller_context_answers"))
     reference_answers = context_answers(ctx.get("language_reference_answers"))
     study_requests = context_subjects(ctx.get("knowledge_requests"))
     study_explanations = context_explanations(ctx.get("study_explanations"))
     study_scope = (ctx.get("file", ""), ctx.get("function", ""), ctx.get("line_start", 0))
+
+    def deliver_caller_context(kept, *, omission_reason="caller_context_too_large"):
+        from copy import deepcopy
+
+        rows = caller_context_delivery(caller_requests, caller_answers, kept,
+                                       scope=study_scope, omission_reason=omission_reason)
+        ctx["caller_context_delivery"] = rows
+        if caller_delivery_sink is not None:
+            caller_delivery_sink(deepcopy(rows))
 
     if ctx.get("triage_bucket") == "glance":
         if reference_answers:
@@ -1237,6 +1254,8 @@ def format_context_for_prompt(
             ctx["source_study_delivery"] = study_delivery(
                 study_requests, study_explanations, [], scope=study_scope, omission_reason="glance_packet",
             )
+        if caller_requests:
+            deliver_caller_context([], omission_reason="glance_packet")
         return _format_glance_prompt(ctx)
 
     from core.llm.prompt_budget import PromptSection, fit_to_budget_report
@@ -2702,6 +2721,7 @@ def format_context_for_prompt(
 
     sections.extend(reference_sections(reference_answers))
     sections.extend(study_sections(study_requests, study_explanations, scope=study_scope))
+    sections.extend(caller_context_sections(caller_requests, caller_answers, scope=study_scope))
 
     if "prior_review_claims" in ctx:
         sections.append(PromptSection("prior_review_claims", (
@@ -3014,6 +3034,8 @@ def format_context_for_prompt(
             ctx["language_reference_delivery"] = reference_delivery(reference_answers, kept)
         if study_requests:
             ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, kept, scope=study_scope)
+        if caller_requests:
+            deliver_caller_context(kept)
         deliver_claim_context(kept, source_elided=any(item.label == "source" for item in report.elisions))
         return "\n".join(s.text for s in kept)
 
@@ -3023,6 +3045,8 @@ def format_context_for_prompt(
         ctx["language_reference_delivery"] = reference_delivery(reference_answers, sections)
     if study_requests:
         ctx["source_study_delivery"] = study_delivery(study_requests, study_explanations, sections, scope=study_scope)
+    if caller_requests:
+        deliver_caller_context(sections)
     deliver_claim_context(sections)
     return "\n".join(s.text for s in sections)
 

@@ -18,6 +18,7 @@ from uuid import uuid4
 from core.concepts.subject_study import SubjectExplanation
 from core.language_reference import ReferenceAnswer
 
+from .caller_review_context import CallerContextAnswer, CallerContextRequest
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin
 from .refutation_source import SourceIdentity
 
@@ -29,6 +30,7 @@ class KnowledgeContinuation:
     explanations: tuple[SubjectExplanation, ...]
     delta_ids: tuple[str, ...]
     pending_ids: tuple[str, ...]
+    caller_contexts: tuple[CallerContextAnswer, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,7 @@ class KnowledgeCycle:
         self, origin: KnowledgeOrigin, batch: KnowledgeBatch, *, deadline: float,
         admit_study: Callable[[SubjectExplanation], tuple[bool, str]],
         window: float = 10.0, max_continuations: int = 2, max_model_calls: int = 6,
+        admit_caller_context: Callable[[CallerContextAnswer], tuple[bool, str]] | None = None,
     ):
         if any(request.origin != origin for request in batch.accepted):
             raise ValueError("request origin differs from the reviewed snapshot")
@@ -69,6 +72,9 @@ class KnowledgeCycle:
         self.max_model_calls = max_model_calls
         self.started = 0
         self._admit_study = admit_study
+        self._admit_caller_context = admit_caller_context
+        self.caller_requests: MappingProxyType[str, CallerContextRequest] = MappingProxyType({})
+        self._caller_answers: dict[str, CallerContextAnswer] = {}
         self._lock = RLock()
         self._references: dict[str, ReferenceAnswer] = {}
         self._explanations: dict[str, list[SubjectExplanation]] = {}
@@ -106,7 +112,7 @@ class KnowledgeCycle:
                         "rejected_requests", reason="different_review_snapshot"))
                     return False
             additions = {r.request_id: r for r in batch.accepted}
-            if len(additions) != len(batch.accepted) or any(
+            if len(additions) != len(batch.accepted) or set(additions) & set(self.caller_requests) or any(
                 key in self.requests and self.requests[key] != request
                 for key, request in additions.items()
             ):
@@ -117,6 +123,62 @@ class KnowledgeCycle:
             self.requests = MappingProxyType({**self.requests, **additions})
             if new_ids:
                 self._events.append(KnowledgeCycleEvent("requests_added", new_ids))
+            return True
+
+    def _request_ids(self) -> set[str]:
+        return set(self.requests) | set(self.caller_requests)
+
+    def add_caller_requests(self, requests: tuple[CallerContextRequest, ...]) -> bool:
+        """Share round ownership without treating code requests as knowledge."""
+        with self._lock:
+            origin = self.origin
+            if self._retired or any(
+                (r.origin.file, r.origin.function, r.origin.line_start, r.origin.line_end, r.origin.source_identity) !=
+                (origin.file, origin.function, origin.line_start, origin.line_end, origin.source_identity)
+                for r in requests
+            ):
+                self._events.append(KnowledgeCycleEvent("rejected_caller_requests", reason="different_review_snapshot"))
+                return False
+            additions = {r.request_id: r for r in requests}
+            if (len(additions) != len(requests) or set(additions) & set(self.requests)
+                    or any(key in self.caller_requests and self.caller_requests[key] != request
+                           for key, request in additions.items())):
+                self._events.append(KnowledgeCycleEvent("rejected_caller_requests", reason="conflicting_request_identity"))
+                return False
+            new_ids = tuple(sorted(set(additions) - set(self.caller_requests)))
+            self.caller_requests = MappingProxyType({**self.caller_requests, **additions})
+            if new_ids:
+                self._events.append(KnowledgeCycleEvent("caller_requests_added", new_ids))
+            return True
+
+    def caller_context(self, answer: CallerContextAnswer, *, now: float, changed: bool = True) -> bool:
+        """Accept locally supplied code as context, never a review verdict."""
+        if not math.isfinite(now):
+            raise ValueError("invalid coordinator clock")
+        with self._lock:
+            request = self.caller_requests.get(answer.request_id)
+            if request is None or answer.origin != request.origin:
+                self._events.append(KnowledgeCycleEvent("rejected_caller_context", reason="unknown_or_wrong_origin"))
+                return False
+            if (answer.material is not None
+                    and (answer.material.file, answer.material.function, answer.material.line_start) !=
+                    (request.caller_file, request.caller_function, request.caller_line)):
+                self._events.append(KnowledgeCycleEvent("rejected_caller_context", reason="requested_endpoint_mismatch"))
+                return False
+            self._terminal.add(answer.request_id)
+            previous = self._caller_answers.get(answer.request_id)
+            self._caller_answers[answer.request_id] = answer
+            if answer.status in ("ready", "partial") and answer.material is not None:
+                if self._admit_caller_context is None:
+                    self._events.append(KnowledgeCycleEvent(
+                        "rejected_caller_context", (answer.request_id,), "caller_context_admission_unavailable"))
+                    return False
+                admitted, reason = self._admit_caller_context(answer)
+                if not admitted:
+                    self._events.append(KnowledgeCycleEvent("rejected_caller_context", (answer.request_id,), reason))
+                    return False
+                if changed and answer != previous:
+                    self._changed(answer.request_id, now)
             return True
 
     def reference(self, answer: ReferenceAnswer, *, now: float) -> bool:
@@ -156,7 +218,7 @@ class KnowledgeCycle:
 
     def finished(self, request_id: str) -> bool:
         with self._lock:
-            if request_id not in self.requests:
+            if request_id not in self._request_ids():
                 self._events.append(KnowledgeCycleEvent("rejected_completion", reason="unknown_request"))
                 return False
             self._terminal.add(request_id)
@@ -200,7 +262,7 @@ class KnowledgeCycle:
             first_ready = self._first_ready
             if first_ready is None:
                 return None
-            pending = tuple(sorted(set(self.requests) - self._terminal))
+            pending = tuple(sorted(self._request_ids() - self._terminal))
             if pending and now < first_ready + self.window:
                 return None
             explanations = []
@@ -217,6 +279,19 @@ class KnowledgeCycle:
                 if not valid:
                     self._delta.discard(request_id)
                 explanations.extend(valid)
+            caller_contexts: list[CallerContextAnswer] = []
+            for request_id, caller_answer in self._caller_answers.items():
+                if caller_answer.status not in ("ready", "partial") or caller_answer.material is None:
+                    continue
+                if self._admit_caller_context is None:
+                    self._delta.discard(request_id)
+                    continue
+                admitted, reason = self._admit_caller_context(caller_answer)
+                if admitted:
+                    caller_contexts.append(caller_answer)
+                else:
+                    self._delta.discard(request_id)
+                    self._events.append(KnowledgeCycleEvent("rejected_caller_context", (request_id,), reason))
             if not self._delta:
                 self._first_ready = None
                 return None
@@ -225,7 +300,7 @@ class KnowledgeCycle:
                 return None
             packet = KnowledgeContinuation(
                 uuid4().hex, tuple(a for a in self._references.values() if a.entries),
-                tuple(explanations), tuple(sorted(self._delta)), pending,
+                tuple(explanations), tuple(sorted(self._delta)), pending, tuple(caller_contexts),
             )
             self.started += 1
             self._active = packet
@@ -246,7 +321,9 @@ class KnowledgeCycle:
             if self._active is None or self._active.pass_id != pass_id:
                 self._events.append(KnowledgeCycleEvent("rejected_completion", reason="inactive_pass", pass_id=pass_id))
                 return False
-            candidates = {a.request_id for a in self._active.references} | {a.request_id for a in self._active.explanations}
+            candidates = ({a.request_id for a in self._active.references}
+                          | {a.request_id for a in self._active.explanations}
+                          | {a.request_id for a in self._active.caller_contexts})
             if not set(delivered) <= candidates:
                 self._events.append(KnowledgeCycleEvent("rejected_completion", reason="unknown_information", pass_id=pass_id))
                 return False
@@ -293,7 +370,7 @@ class KnowledgeCycle:
             first_ready = self._first_ready
             if first_ready is None:
                 return None
-            pending = set(self.requests) - self._terminal
+            pending = self._request_ids() - self._terminal
             return max(0.05, min(1.0, first_ready + self.window - now)) if pending else 0.05
 
     def state_record(self) -> dict:
@@ -301,7 +378,8 @@ class KnowledgeCycle:
             return {"origin": asdict(self.origin), "started": self.started,
                     "deadline": self.deadline if math.isfinite(self.deadline) else None,
                     "max_continuations": self.max_continuations, "max_model_calls": self.max_model_calls,
-                    "pending_ids": sorted(set(self.requests) - self._terminal),
+                    "pending_ids": sorted(self._request_ids() - self._terminal),
                     "delta_ids": sorted(self._delta), "retired": self._retired,
+                    "caller_request_ids": sorted(self.caller_requests),
                     "active_pass_id": self._active.pass_id if self._active else None,
                     "events": [asdict(event) for event in self._events]}

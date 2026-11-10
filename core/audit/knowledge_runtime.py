@@ -21,6 +21,8 @@ from core.concepts.subject_study import StudySubjects, SubjectExplanation
 from core.language_reference import ReferenceContext, lookup
 from core.source.lines import split_lines
 
+from .caller_review_context import (CallerContextAnswer, CallerContextRequest, register_caller_context_requests,
+                                    resolve_caller_context, validate_caller_context)
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin, KnowledgeRequest, register_requests
 from .refutation_source import capture_source_identity
 from .review_cycle import KnowledgeContinuation, KnowledgeCycle
@@ -49,7 +51,7 @@ class AuditKnowledgeRuntime:
     """
 
     def __init__(self, target_root: Path, study_queue, *, deadline: float, window: float = 10.0,
-                 max_continuations: int = 2, max_model_calls: int = 6):
+                 max_continuations: int = 2, max_model_calls: int = 6, caller_inventory: dict | None = None):
         self.target_root = Path(target_root)
         self.study_queue = study_queue
         self.deadline = deadline
@@ -67,6 +69,7 @@ class AuditKnowledgeRuntime:
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
         self._contexts: dict[str, list[dict]] = {}
+        self._caller_deliveries: dict[str, list[list[dict]]] = {}
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
         self._written_events: dict[str, int] = {}
@@ -77,6 +80,10 @@ class AuditKnowledgeRuntime:
         self._events: list[dict] = []
         self._source_jobs: list[StudySubjects] = []
         self._closed = False
+        self._caller_inventory = caller_inventory
+        self._caller_requests: dict[str, CallerContextRequest] = {}
+        self._caller_answers: dict[str, CallerContextAnswer] = {}
+        self._caller_semantic: dict[tuple, str] = {}
 
     @staticmethod
     def _key(origin: KnowledgeOrigin) -> tuple[str, str, int]:
@@ -189,8 +196,19 @@ class AuditKnowledgeRuntime:
             from .review_claims import begin_review
             # Pipeline-owned: a model cannot supply the original source stamp.
             outcome.review_result = dict(outcome.review_result or {})
-            outcome.review_result["review_claims"] = begin_review(origin, attempt_id)
+            history = begin_review(origin, attempt_id)
+            if "caller_context_delivery" in outcome.review_result:
+                from .review_context_inputs import context_inputs_from_delivery
+                dependencies = context_inputs_from_delivery(outcome.review_result["caller_context_delivery"], origin)
+                if dependencies is not None:
+                    history["source_inputs"] = dependencies
+            outcome.review_result["review_claims"] = history
             current = capture_source_identity(self.target_root, origin.file)
+            if reservation is not None:
+                delivered = outcome.review_result.get("caller_context_delivery")
+                if isinstance(delivered, list):
+                    with self._lock:
+                        self._caller_deliveries.setdefault(reservation.packet.pass_id, []).append(deepcopy(delivered))
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
                     "pass_id": origin.pass_id, "status": outcome.status,
@@ -200,6 +218,7 @@ class AuditKnowledgeRuntime:
                     "model": outcome.model, "cost_usd": outcome.cost_usd,
                     "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity})
             self._register(origin, ctx, outcome.review_result)
+            self._register_caller_requests(origin, outcome.review_result)
             self.notify()
             return outcome
 
@@ -250,7 +269,8 @@ class AuditKnowledgeRuntime:
             cycle = self._cycles.get(key)
             if cycle is None:
                 cycle = KnowledgeCycle(origin, active_batch, deadline=self.deadline,
-                                       admit_study=self.bindings.admit, **self._policy)
+                                       admit_study=self.bindings.admit, admit_caller_context=self._admit_caller_context,
+                                       **self._policy)
                 self._cycles[key] = cycle
                 created = True
             else:
@@ -287,6 +307,84 @@ class AuditKnowledgeRuntime:
                     self._request_status[request.request_id] = {"state": "queued"}
                 if not self.study_queue.enqueue_knowledge(request):
                     self._defer_source(request, cycle, "study_queue_closed")
+        self.notify()
+
+    def _admit_caller_context(self, answer: CallerContextAnswer) -> tuple[bool, str]:
+        with self._lock:
+            request = self._caller_requests.get(answer.request_id)
+            owned = self._caller_answers.get(answer.request_id)
+        material = answer.material
+        if (request is None or owned is not answer or answer.origin != request.origin
+                or material is None or (material.file, material.function, material.line_start) !=
+                (request.caller_file, request.caller_function, request.caller_line)):
+            return False, "caller_context_request_mismatch"
+        try:
+            return validate_caller_context(answer, self.target_root)
+        except Exception:
+            return False, "caller_context_validation_error"
+
+    def _register_caller_requests(self, origin: KnowledgeOrigin, review_result) -> None:
+        batch = register_caller_context_requests(review_result, origin)
+        if not batch.accepted and not batch.rejected:
+            return
+        key = self._key(origin)
+        with self._lock:
+            self._events.append({"event": "caller_requests_registered", "origin": asdict(origin),
+                                 "accepted": [asdict(r) for r in batch.accepted],
+                                 "rejected": [asdict(r) for r in batch.rejected]})
+            for request in batch.accepted:
+                self._caller_requests[request.request_id] = request
+            if not batch.accepted:
+                return
+            cycle = self._cycles.get(key)
+            if cycle is None:
+                cycle = KnowledgeCycle(origin, KnowledgeBatch((), ()), deadline=self.deadline,
+                    admit_study=self.bindings.admit, admit_caller_context=self._admit_caller_context, **self._policy)
+                self._cycles[key] = cycle
+            closed = self._closed
+            unknown_calls = key in self._unknown_calls
+            calls = self._calls.get(key, 0)
+        if not cycle.add_caller_requests(batch.accepted):
+            with self._lock:
+                for request in batch.accepted:
+                    self._request_status[request.request_id] = {
+                        "state": "deferred", "reason": "different_review_snapshot"}
+            return
+        current = capture_source_identity(self.target_root, origin.file)
+        for request in batch.accepted:
+            reason = ("runtime_closed" if closed else
+                      "binary_context_binding_unavailable" if origin.file.startswith("binary:")
+                      or request.caller_file.startswith("binary:") else
+                      "source_identity_unavailable" if origin.source_identity is None else
+                      "source_changed_during_review" if current != origin.source_identity else
+                      "model_call_count_unavailable" if unknown_calls else
+                      "deadline" if monotonic() >= self.deadline else
+                      "continuation_limit" if cycle.started >= cycle.max_continuations else
+                      "model_call_limit" if calls >= cycle.max_model_calls else "")
+            try:
+                answer = (CallerContextAnswer(request.request_id, request.origin, None, "deferred", reason)
+                          if reason else resolve_caller_context(request, self.target_root, self._caller_inventory))
+            except Exception:
+                answer = CallerContextAnswer(request.request_id, request.origin, None, "deferred",
+                                             "caller_context_resolution_error")
+            signature = (key, origin.source_identity, request.caller_file,
+                         request.caller_function, request.caller_line)
+            with self._lock:
+                prior_id = self._caller_semantic.get(signature)
+                prior = self._caller_answers.get(prior_id) if prior_id else None
+                unchanged = (prior is not None and prior.material == answer.material
+                             and prior.status == answer.status and prior.reason == answer.reason)
+                self._caller_semantic[signature] = request.request_id
+                self._caller_answers[request.request_id] = answer
+                self._request_status[request.request_id] = {
+                    "state": "duplicate" if unchanged else "context_available"
+                    if answer.material is not None else "deferred" if answer.status == "deferred" else "unavailable",
+                    "answer_status": answer.status, "reason": answer.reason,
+                    **({"duplicate_of": prior_id} if unchanged else {}),
+                }
+                self._events.append({"event": "caller_context_answer", "answer": asdict(answer),
+                                     "changed_information": not unchanged})
+            cycle.caller_context(answer, now=monotonic(), changed=not unchanged)
         self.notify()
 
     def _defer_source(self, request: KnowledgeRequest, cycle: KnowledgeCycle, reason: str) -> None:
@@ -378,6 +476,10 @@ class AuditKnowledgeRuntime:
         with self._lock:
             return tuple(self._requests.values())
 
+    def caller_requests(self) -> tuple[CallerContextRequest, ...]:
+        with self._lock:
+            return tuple(self._caller_requests.values())
+
     def events(self) -> tuple[dict, ...]:
         with self._lock:
             return tuple(deepcopy(self._events))
@@ -425,6 +527,20 @@ class AuditKnowledgeRuntime:
         ctx["knowledge_requests"] = tuple(cycle.requests.values())
         ctx["language_reference_answers"] = reservation.packet.references
         ctx["study_explanations"] = reservation.packet.explanations
+        caller_requests = tuple(cycle.caller_requests.values())
+        admitted_ids = {answer.request_id for answer in reservation.packet.caller_contexts}
+        missing_answers = []
+        with self._lock:
+            for request in caller_requests:
+                if request.request_id in admitted_ids:
+                    continue
+                answer = self._caller_answers.get(request.request_id)
+                if answer is None or answer.material is not None:
+                    answer = CallerContextAnswer(request.request_id, request.origin, None, "deferred",
+                                                 "caller_context_not_admitted_to_this_pass")
+                missing_answers.append(answer)
+        ctx["caller_context_requests"] = caller_requests
+        ctx["caller_context_answers"] = (*reservation.packet.caller_contexts, *missing_answers)
         with self._lock:
             self._contexts.setdefault(reservation.packet.pass_id, []).append(ctx)
         return True
@@ -443,6 +559,18 @@ class AuditKnowledgeRuntime:
                 if not admitted:
                     reason = why
                     break
+            if not reason:
+                for caller_answer in reservation.packet.caller_contexts:
+                    admitted, why = self._admit_caller_context(caller_answer)
+                    if not admitted:
+                        reason = why
+                        break
+            if not reason:
+                for caller_answer in reservation.packet.caller_contexts:
+                    material = caller_answer.material
+                    if material is None or capture_source_identity(self.target_root, material.file) != material.source_identity:
+                        reason = "caller_source_changed_after_admission"
+                        break
             if not reason and capture_source_identity(self.target_root, origin.file) != current:
                 reason = "review_source_changed"
         if reason:
@@ -459,7 +587,9 @@ class AuditKnowledgeRuntime:
             contexts = list(self._contexts.get(reservation.packet.pass_id, ()))
         if ctx is not None and all(ctx is not prior for prior in contexts):
             contexts.append(ctx)
-        allowed = {a.request_id for a in reservation.packet.references} | {a.request_id for a in reservation.packet.explanations}
+        allowed = ({a.request_id for a in reservation.packet.references}
+                   | {a.request_id for a in reservation.packet.explanations}
+                   | {a.request_id for a in reservation.packet.caller_contexts})
         delivered = set()
         rows = []
         seen = set()
@@ -477,6 +607,14 @@ class AuditKnowledgeRuntime:
                         if row.get("delivered") is True:
                             delivered.add(row["request_id"])
         with self._lock:
+            caller_deliveries = deepcopy(self._caller_deliveries.get(reservation.packet.pass_id, ()))
+        for assessment in caller_deliveries:
+            for row in assessment:
+                if isinstance(row, dict) and row.get("request_id") in allowed:
+                    rows.append({"field": "caller_context_delivery", **row})
+                    if row.get("delivered") is True:
+                        delivered.add(row["request_id"])
+        with self._lock:
             self._events.append({"event": "review_prompt_context", "pass_id": reservation.packet.pass_id,
                                  "records": rows, "renderer_observed": bool(rows),
                                  "meaning": "fitted into review prompt; not provider acknowledgement or model use"})
@@ -487,6 +625,7 @@ class AuditKnowledgeRuntime:
             self._active.pop(reservation.packet.pass_id, None)
             self._active_units.pop(self._key(reservation.origin), None)
             self._contexts.pop(reservation.packet.pass_id, None)
+            self._caller_deliveries.pop(reservation.packet.pass_id, None)
         self.notify()
 
     def complete(self, reservation: KnowledgeReservation, ctx: dict, *, published_status: str = "",
@@ -501,6 +640,12 @@ class AuditKnowledgeRuntime:
         if not cycle.complete(reservation.packet.pass_id, delivered):
             return False
         with self._lock:
+            for answer in reservation.packet.caller_contexts:
+                self._request_status[answer.request_id] = {
+                    "state": "review_completed" if answer.request_id in delivered else "deferred",
+                    "reason": "context_delivered_for_review" if answer.request_id in delivered else "context_not_delivered",
+                    "adjudication": "unverified", "pass_id": reservation.packet.pass_id,
+                }
             self._events.append({"event": "continuation_completed", "pass_id": reservation.packet.pass_id,
                                  "published_status": published_status, "reason": reason,
                                  "delivered_request_ids": list(delivered)})
@@ -516,6 +661,10 @@ class AuditKnowledgeRuntime:
         if not cycle.failed(reservation.packet.pass_id, reason=reason):
             return False
         with self._lock:
+            for answer in reservation.packet.caller_contexts:
+                self._request_status[answer.request_id] = {
+                    "state": "deferred", "reason": reason, "adjudication": "unverified",
+                }
             self._events.append({"event": "continuation_failed", "pass_id": reservation.packet.pass_id,
                                  "reason": reason, "published_status": ""})
         self._release(reservation)
@@ -573,6 +722,8 @@ class AuditKnowledgeRuntime:
                 events = deepcopy(self._events)
                 requests = [{**asdict(r), "processing": deepcopy(self._request_status.get(r.request_id, {}))}
                             for r in self._requests.values()]
+                caller_requests = [{**asdict(r), "processing": deepcopy(self._request_status.get(r.request_id, {}))}
+                                   for r in self._caller_requests.values()]
                 cycles = tuple(self._cycles.items())
                 counts = dict(self._calls)
                 unknown = set(self._unknown_calls)
@@ -591,7 +742,8 @@ class AuditKnowledgeRuntime:
                         refs.append(material_id)
                     answer[field] = refs
             payload = {"schema_version": 1, "role": "context_provenance_not_verification_evidence",
-                       "requests": requests, "events": events, "materials": materials,
+                       "requests": requests, "caller_context_requests": caller_requests,
+                       "events": events, "materials": materials,
                        "bindings": self.bindings.records(),
                        "units": [{"unit": list(key), "owned_dispatch_attempts": counts.get(key, 0),
                                   "all_model_calls": None if key in unknown else counts.get(key, 0),

@@ -740,6 +740,21 @@ REVIEW_SCHEMA = {
                 ]
             }
         },
+        "caller_context_requests": {
+            "type": "array",
+            "description": "Additional code needed to review the current function with a known caller. Name an observed related occurrence; do not invent an endpoint or treat provided code as exhaustive caller coverage. Empty is valid. These are review requests, never study subjects or verification receipts.",
+            "maxItems": 4,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "file": {"type": "string"},
+                    "function": {"type": "string"},
+                    "line_start": {"type": "integer", "minimum": 1},
+                    "reason": {"type": "string", "description": "What additional review needs this code; a question is allowed."},
+                },
+                "required": ["file", "function", "line_start", "reason"],
+            },
+        },
         "language_reference_requests": {
             "type": "array",
             "description": "Language rules needed to interpret the supplied implementation; resolved from local references separately from source study. Empty is valid. Caller behaviour is a code-review/context need, not a language topic.",
@@ -900,6 +915,7 @@ REVIEW_SCHEMA_BLIND = {
         "constraints": REVIEW_SCHEMA["properties"]["constraints"],  # type: ignore[index]
         "reading_list": REVIEW_SCHEMA["properties"]["reading_list"],  # type: ignore[index]
         "language_reference_requests": REVIEW_SCHEMA["properties"]["language_reference_requests"],  # type: ignore[index]
+        "caller_context_requests": REVIEW_SCHEMA["properties"]["caller_context_requests"],  # type: ignore[index]
         "intent_trace": REVIEW_SCHEMA["properties"]["intent_trace"],  # type: ignore[index]
         "verdict_rationale": REVIEW_SCHEMA["properties"]["verdict_rationale"],  # type: ignore[index]
         "status": _STATUS_NO_DORMANT,
@@ -1041,6 +1057,11 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "Review the actual supplied implementation. Remembering a safe implementation "
     "does not establish that this one is safe. Return provisional hypotheses and "
     "assessment while requesting materially missing knowledge in the same response. "
+    "Use caller_context_requests when additional code from a known caller is needed "
+    "to review the current function. Supply its observed file, function, start line "
+    "and the review question. Do not invent an unknown caller identity. Missing "
+    "caller code is not evidence that all callers enforce a bound; keep the premise "
+    "unverified. Caller requests do not belong on the study reading list. "
     "Use reading_list for unfamiliar source identifiers or target concepts, such as "
     "foo_t or page tables, with a learning context. For other languages, omit "
     "reading_list. Use language_reference_requests for language rules, such as "
@@ -1414,10 +1435,12 @@ def make_review_fn(
         # The callback belongs to THIS invocation. A shared context dictionary
         # can be formatted concurrently by panel members with different caps.
         delivered_claim_context: list[dict] = []
+        delivered_caller_context: list[list[dict]] = []
         prompt = format_context_for_prompt(
             ctx, budget_limit=budget,
             patterns_in_system=patterns_in_system,
             claim_delivery_sink=delivered_claim_context.append,
+            caller_delivery_sink=delivered_caller_context.append,
         )
         t0 = time.monotonic()
 
@@ -1490,6 +1513,8 @@ def make_review_fn(
             result = defang_model_fields(drop_pipeline_owned(result))
             if delivered_claim_context:
                 result["claim_review_delivery"] = delivered_claim_context[0]
+            if delivered_caller_context:
+                result["caller_context_delivery"] = delivered_caller_context[0]
             if isinstance(result.get("body"), str):
                 result["body"] = defang_model_body(result["body"])
 

@@ -2245,6 +2245,10 @@ def _build_covered_set(
                 # coverage record back into the dark pass), so a dark
                 # functions_analysed row must not suppress the gap.
                 continue
+            if isinstance(fa.get("hash"), str) and fa["hash"].startswith("src:ctx"):
+                # Dependency-bound reviews use the journal admission path;
+                # existence-only projections cannot establish currentness.
+                continue
             file_path = fa.get("file") or ""
             func_name = fa.get("function") or ""
             if not (isinstance(file_path, str) and file_path
@@ -2329,6 +2333,96 @@ def _consume_covered_key(
     return seen == 0
 
 
+_ContextReviewSite = tuple[str, str, int]
+_ContextReviewBinding = tuple[str, str | None]
+_ContextReviewBarrier = tuple[str, frozenset[_ContextReviewBinding]]
+_ContextReviewBarriers = dict[tuple[str, str], dict[int, _ContextReviewBarrier]]
+
+
+def _review_context_binding(entry) -> tuple[bool, _ContextReviewBinding]:
+    """Recognise durable input bindings without granting them authority."""
+    from .review_context_inputs import context_inputs_digest
+
+    history = getattr(entry, "review_claims", None)
+    present = isinstance(history, dict) and "source_inputs" in history
+    snapshot = history.get("source_inputs") if isinstance(history, dict) and present else None
+    source_hash = getattr(entry, "source_hash", "")
+    source_hash = source_hash if isinstance(source_hash, str) else ""
+    return (present or source_hash.startswith("src:ctx"),
+            (source_hash, context_inputs_digest(snapshot) if present else None))
+
+
+def _review_context_current(entry, target_path: Path | None) -> bool:
+    """Require the portable dependency record and its admission tag together."""
+    from .review_context_inputs import context_inputs_current
+    from .source_anchor import parse_context_source_anchor
+
+    bound, (source_hash, digest) = _review_context_binding(entry)
+    if not bound:
+        return True
+    anchor = parse_context_source_anchor(source_hash)
+    if anchor is None or digest is None or anchor[2] != digest:
+        return False
+    history = getattr(entry, "review_claims", None)
+    if not isinstance(history, dict):
+        return False
+    snapshot = history.get("source_inputs")
+    if not isinstance(snapshot, dict) or not isinstance(snapshot.get("sources"), list):
+        return False
+    primary_sources = [row for row in snapshot["sources"]
+               if isinstance(row, dict) and row.get("file") == entry.file]
+    return (len(primary_sources) == 1 and primary_sources[0].get("sha256") == anchor[0]
+            and context_inputs_current(snapshot, target_path)[0])
+
+
+def _review_context_site(entry) -> _ContextReviewSite:
+    line = getattr(entry, "line_start", 0)
+    return (entry.file, entry.function, line if type(line) is int and line > 0 else 0)
+
+
+def _review_context_barriers(entries: list) -> _ContextReviewBarriers:
+    """Keep trusted context-review floors across both journal sources.
+
+    A newer bound assessment supersedes older input assumptions even when
+    its own currentness check fails. Untrusted rows cannot invalidate another
+    source. Equal-time conflicting bindings remain ambiguous and earn no credit.
+    """
+    from core.coverage import journal_mac
+    from .journal import is_agent_mark, is_function_grade, is_mechanical_echo
+
+    barriers: _ContextReviewBarriers = {}
+    for entry in entries:
+        if (not is_function_grade(entry) or is_mechanical_echo(entry)
+                or is_agent_mark(entry) or getattr(entry, "edge_callee", None)):
+            continue
+        bound, binding = _review_context_binding(entry)
+        if not bound or journal_mac.entry_provenance(entry) != journal_mac.ROW_VERIFIED:
+            continue
+        file, function, line = _review_context_site(entry)
+        sites = barriers.setdefault((file, function), {})
+        previous = sites.get(line)
+        if previous is None or entry.ts > previous[0]:
+            sites[line] = (entry.ts, frozenset({binding}))
+        elif entry.ts == previous[0]:
+            sites[line] = (entry.ts, previous[1] | {binding})
+    return barriers
+
+
+def _review_context_preceded(entry, barriers: _ContextReviewBarriers) -> bool:
+    """Do not let an older row, including a span-less one, restore credit."""
+    file, function, line = _review_context_site(entry)
+    bound, binding = _review_context_binding(entry)
+    sites = barriers.get((file, function), {})
+    applicable = ([sites[site] for site in (line, 0) if site in sites]
+                  if line else list(sites.values()))
+    for timestamp, bindings in applicable:
+        if entry.ts < timestamp:
+            return True
+        if entry.ts == timestamp and (not bound or len(bindings) != 1 or binding not in bindings):
+            return True
+    return False
+
+
 def _fold_journal_into_covered(
     covered: set,
     out_dir: Path | None,
@@ -2384,7 +2478,44 @@ def _fold_journal_into_covered(
     store's ``import_journal`` at run completion is the durable
     persistence path — this helper is the mid-run read path.
     """
+    # Load both sources before either can award credit. A later context-bound
+    # review must not fall back to an older row in the other source when its
+    # inputs are no longer current. Keep these exact loaded rows for the fold;
+    # a second load would detach the barrier from the rows it governs.
+    own_entries: list | None = None
+    project_entries: list | None = None
     if out_dir is not None:
+        try:
+            from .journal import load_entries, require_complete_entries
+            own_entries = (require_complete_entries(out_dir)
+                           if own_run_reuse and reuse_sink is not None
+                           else load_entries(out_dir, fresh=True))
+        except Exception as exc:
+            from core.coverage.journal import JournalIncomplete
+            if isinstance(exc, JournalIncomplete):
+                raise
+            logger.warning("journal-fold: per-run rows unavailable", exc_info=True)
+    if project_dir is not None:
+        try:
+            from core.coverage.journal import load_index_full
+            project_entries = list(load_index_full(project_dir).values())
+        except Exception:
+            logger.warning("journal-fold: project rows unavailable", exc_info=True)
+    context_barriers = _review_context_barriers(
+        [*(own_entries or []), *(project_entries or [])])
+    # Coverage records only retain an unlocated existence mark. Once a
+    # trusted contextual review exists, that lossy projection must defer to
+    # the per-occurrence journal fold, including when its inputs went stale.
+    # Located sibling reviews are credited independently below.
+    for file, function in context_barriers:
+        key = make_function_key(file, function)
+        covered.discard(key)
+        if credits is not None:
+            credits.pop(key, None)
+        if reuse_sink is not None:
+            reuse_sink.pop(key, None)
+
+    if out_dir is not None and own_entries is not None:
         try:
             if own_run_reuse and reuse_sink is not None:
                 # Same-run resume: the process died between segments,
@@ -2408,8 +2539,6 @@ def _fold_journal_into_covered(
                 # require_complete_entries raises JournalIncomplete
                 # with the compaction remedy, and the except arm
                 # below re-raises it past the best-effort boundary.
-                from .journal import require_complete_entries
-                own_entries = require_complete_entries(out_dir)
                 _verify_entries_fold(
                     covered,
                     _latest_review_rows_per_site(own_entries),
@@ -2430,9 +2559,9 @@ def _fold_journal_into_covered(
                     # for the context-staleness relevance diff.
                     sidecar_dir=out_dir,
                     current_tools=current_tools,
+                    context_barriers=context_barriers,
                 )
             else:
-                from .journal import load_entries
                 # Reuse-DISABLED fold (cold-profile --no-verdict-reuse
                 # + interrupt + resume, and every mid-run recompute):
                 # same MAC-tier + exact-hash verification as the
@@ -2461,8 +2590,7 @@ def _fold_journal_into_covered(
                 # re-reviews, the safe direction.
                 _verify_entries_fold(
                     covered,
-                    _latest_review_rows_per_site(
-                        load_entries(out_dir, fresh=True)),
+                    _latest_review_rows_per_site(own_entries),
                     target_path=target_path,
                     current_spans=current_spans or {},
                     current_raw_ends=current_raw_ends or {},
@@ -2481,6 +2609,7 @@ def _fold_journal_into_covered(
                     # the own-run fold).
                     sidecar_dir=out_dir,
                     current_tools=current_tools,
+                    context_barriers=context_barriers,
                 )
         except Exception as exc:
             from core.coverage.journal import JournalIncomplete
@@ -2495,7 +2624,7 @@ def _fold_journal_into_covered(
                 "gap computation will treat this run's reviews as absent",
                 out_dir, exc_info=True,
             )
-    if project_dir is not None:
+    if project_dir is not None and project_entries is not None:
         try:
             _fold_project_index(
                 covered, project_dir,
@@ -2511,6 +2640,8 @@ def _fold_journal_into_covered(
                 domain_ctx=domain_ctx,
                 reuse_stats=reuse_stats,
                 current_tools=current_tools,
+                context_barriers=context_barriers,
+                full_entries=project_entries,
             )
         except Exception:
             logger.warning(
@@ -3170,6 +3301,8 @@ def _fold_project_index(
     domain_ctx: dict | None = None,
     reuse_stats: dict | None = None,
     current_tools: frozenset[str] | None = None,
+    context_barriers: _ContextReviewBarriers | None = None,
+    full_entries: list | None = None,
 ) -> None:
     """Fold the project journal index into ``covered``, hash-aware.
 
@@ -3223,7 +3356,10 @@ def _fold_project_index(
         load_index_full,
     )
 
-    full_entries = list(load_index_full(project_dir).values())
+    if full_entries is None:
+        full_entries = list(load_index_full(project_dir).values())
+    if context_barriers is None:
+        context_barriers = _review_context_barriers(full_entries)
 
     strategy_backfill = None
     if reuse_sink is not None:
@@ -3279,6 +3415,7 @@ def _fold_project_index(
         strategy_backfill=strategy_backfill,
         known_run_ids=known_run_ids,
         current_tools=current_tools,
+        context_barriers=context_barriers,
     )
 
 
@@ -3334,6 +3471,7 @@ def _verify_entries_fold(
     known_run_ids: set[str] | None = None,
     sidecar_dir: Path | None = None,
     current_tools: frozenset[str] | None = None,
+    context_barriers: _ContextReviewBarriers | None = None,
 ) -> None:
     """Hash-verify journal *entries* and fold them into ``covered``.
 
@@ -3443,6 +3581,8 @@ def _verify_entries_fold(
     unstamped_credited = 0
     unstamped_unverifiable = 0
     reuse_blocked: dict[str, int] = {}
+    barriers = (context_barriers if context_barriers is not None
+                else _review_context_barriers(entries))
 
     def _log_blocked_split() -> None:
         if not reuse_blocked:
@@ -3481,6 +3621,15 @@ def _verify_entries_fold(
             "journal-fold: %s row is dark with no re-adjudication "
             "route (%s) — resurfacing for re-review", key, why,
         )
+
+    def _context_admitted(entry, key: str) -> bool:
+        if (_review_context_preceded(entry, barriers)
+                or not _review_context_current(entry, target_path)):
+            reuse_blocked["review_context_inputs"] = reuse_blocked.get("review_context_inputs", 0) + 1
+            if reuse_stats is not None:
+                reuse_stats.setdefault(key, "review_context_inputs")
+            return False
+        return True
 
     to_verify: dict[str, list] = {}
     for entry in entries:
@@ -3536,6 +3685,11 @@ def _verify_entries_fold(
             # edge_review.reviewed_edge_keys.
             continue
         key = make_function_key(entry.file, entry.function)
+        # These gates precede every credit path, including verified hashless
+        # rows and reuse-disabled folds. The barrier is authority owned by this
+        # fold, never optional diagnostic bookkeeping in reuse_stats.
+        if not _context_admitted(entry, key):
+            continue
         dark_row = entry.verdict == "dark"
         if dark_row and reuse_sink is None:
             # Reuse disabled: no import route exists at all, so no
@@ -3789,6 +3943,8 @@ def _verify_entries_fold(
                     key, source_label, stored, computable[0],
                 )
                 continue
+            if not _context_admitted(entry, key):
+                continue
             if not verified_row:
                 # Unstamped row, hash checks out: the historical
                 # suppression (legacy tolerance). The run_id check
@@ -3925,6 +4081,11 @@ def _verify_entries_fold(
                         "reusable (%s) — resurfacing for re-review",
                         key, reason,
                     )
+                    continue
+                # Eligibility can consult current context through callbacks.
+                # Recheck delivered code after those callbacks, before either
+                # importing the verdict or giving its occurrence credit.
+                if not _context_admitted(entry, key):
                     continue
                 reuse_sink.setdefault(key, entry)
             # Credit the span WHERE VERIFICATION SUCCEEDED: for an

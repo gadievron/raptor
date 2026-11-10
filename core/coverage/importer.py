@@ -808,6 +808,10 @@ def import_functions_analysed(
             # re-imported raw at every render; same discipline as the
             # audit gap fold (core.audit.gaps._build_covered_set).
             continue
+        if review_grade and isinstance(fa.get("hash"), str) and fa["hash"].startswith("src:ctx"):
+            # A legacy or external projection must not discard the original
+            # review's dependency admission, even when its MAC verifies.
+            continue
         f = _to_inventory_path(fa.get("file") or "", inventory_paths, inv_index)
         rng = ranges.get((f, fa.get("function")))
         if rng is None:

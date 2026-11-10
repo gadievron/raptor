@@ -79,6 +79,9 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
         "review": previous.get("review") if previous else None,
         "intakes": [{"claims": [], "candidate_count": len(revisions), "omitted_count": 0}],
         "complete": True, "omissions": []}
+    if isinstance(value, dict) and "source_inputs" in value:
+        from .review_context_inputs import merge_context_inputs
+        history["source_inputs"] = merge_context_inputs(value["source_inputs"] if value["source_inputs"] is not None else {})
     review = history["review"]
     origin = review.get("origin") if isinstance(review, dict) else None
     occurrence = (origin.get("file"), origin.get("function"), origin.get("line_start")) if isinstance(origin, dict) else None
@@ -111,12 +114,20 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
 def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
     """Retain contributing attempts without attributing new text to old IDs."""
     left, right = read_history(prior), read_history(fresh)
-    if left is None and right is None:
+    has_dependencies = any(isinstance(value, dict) and "source_inputs" in value for value in (prior, fresh))
+    if left is None and right is None and not has_dependencies:
         return None
     histories = [history for history in (left, right) if history is not None]
     result: dict[str, Any] = {"version": 1, "role": _ROLE, "review": None,
                               "intakes": [], "complete": False,
                               "omissions": ["merged-candidate-projection-unmapped"]}
+    # Dependencies survive even when contributor intake rows hit their cap.
+    from .review_context_inputs import merge_context_inputs
+    dependencies = merge_context_inputs(*(value["source_inputs"] if value["source_inputs"] is not None else {}
+                                          for value in (prior, fresh)
+                                          if isinstance(value, dict) and "source_inputs" in value))
+    if dependencies is not None:
+        result["source_inputs"] = dependencies
     # All producer omission reasons are fixed strings. Keep them distinct so
     # repeated merges cannot grow the envelope through repeated warnings.
     for history in histories:
@@ -134,6 +145,38 @@ def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
                     result["omissions"].append("contributor-limit")
     return result
 
+
+
+
+def panel_context_history(primary_history: object, member_results: list[dict]) -> dict[str, Any] | None:
+    """Union source dependencies without crediting another member's delivery.
+
+    Member judgments can affect consensus and contribute hypotheses even when
+    the selected member did not receive their caller code. The union narrows
+    reuse only; selected prompt-delivery records and claim authority stay intact.
+    """
+    from .review_context_inputs import merge_context_inputs
+
+    dependencies = []
+    for member in member_results:
+        history = member.get("review_claims")
+        if isinstance(history, dict) and "source_inputs" in history:
+            value = history["source_inputs"]
+            dependencies.append(value if value is not None else {})
+    merged = merge_context_inputs(*dependencies)
+    if merged is None:
+        return None
+    history = read_history(primary_history)
+    if history is None:
+        history = {"version": 1, "role": _ROLE, "review": None, "intakes": [],
+                   "complete": False, "omissions": ["panel-primary-history-unavailable"]}
+    history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), merged)
+    # Never silently shed the dependency set to fit large primary metadata.
+    if read_history(history) is None:
+        history = {"version": 1, "role": _ROLE, "review": None, "intakes": [],
+                   "complete": False, "omissions": ["panel-history-byte-limit"],
+                   "source_inputs": history["source_inputs"]}
+    return history
 
 
 def prompt_history(value: object, *, max_bytes: int = 8192) -> str:

@@ -1635,6 +1635,8 @@ class TestReviewKeyScannerWrites:
         # The pin binds the expression's content: an edit to a pinned
         # write (the selected record or copy input) is a new, unpinned
         # site, and its old pin goes stale.
+        import ast
+
         from core.audit.tests._review_keys import pin_violations, scan_full
         src = (_REPO / rel).read_text()
         pins = {p: why for p, why in PINNED_REVIEW_RESULT_WRITES.items()
@@ -1646,8 +1648,17 @@ class TestReviewKeyScannerWrites:
         _, _, unresolved = scan_full(tmp_path)
         assert pin_violations(unresolved, pins) == ([], [])
         statement = f"{binding} = {old}"
-        assert src.count(statement) == 1
-        dst.write_text(src.replace(statement, f"{binding} = {new}"))
+        # Different reviewed copy sites can legitimately share an expression.
+        # Mutate the pinned owner, retaining the other sites and their pins.
+        owners = [node for node in ast.walk(ast.parse(src))
+                  if isinstance(node, ast.FunctionDef) and node.name == qualname]
+        assert len(owners) == 1
+        owner = owners[0]
+        lines = src.splitlines(keepends=True)
+        block = "".join(lines[owner.lineno - 1:owner.end_lineno])
+        assert block.count(statement) == 1
+        edited = block.replace(statement, f"{binding} = {new}", 1)
+        dst.write_text("".join(lines[:owner.lineno - 1]) + edited + "".join(lines[owner.end_lineno:]))
         _, _, unresolved = scan_full(tmp_path)
         unpinned, stale = pin_violations(unresolved, pins)
         assert [(s.file, s.qualname, s.shape, s.digest) for s in unpinned] \
@@ -1749,6 +1760,25 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
         "deepcopy(prior.review_result or {}): isolated prior admitted review; "
         "existing key classifications retained. Only model-authored hypotheses "
         "are updated; fresh receipt/tool fields cannot enter the copy",
+    ("core/audit/orchestrator.py", "_retain_delivered_context_history",
+     "value-expression", "4430a3d6d01e27ff"):
+        "deepcopy(prior.review_result or {}): retain canonical model/pipeline fields; "
+        "only pipeline review_claims history gains delivered source dependencies, "
+        "without copying fresh verdict or tool authority",
+    ("core/audit/orchestrator.py", "_select_refuted_claim",
+     "value-expression", "f8d435454ebf36ec"):
+        "deepcopy(outcome.review_result or {}): selected-claim copy retains "
+        "classified model and pipeline keys; only hypothesis/hypotheses/cwe/"
+        "cwe_class are selected, never new checker authority",
+    ("core/audit/orchestrator.py", "_promote_clean_refuted",
+     "value-expression", "590cd925cae38590"):
+        "deepcopy(_l2_selected.review_result): owned selected or held review "
+        "copy; classified keys retained and the held claim keeps its own stamp",
+    ("core/audit/orchestrator.py", "_model_withdrawal_assessment",
+     "value-expression", "c163db8b11cd3c53"):
+        "fresh.review_result or {}: assessed model record; only pipeline-owned "
+        "review_claims history is written after source/delivery/intake guards; "
+        "model withdrawal grants no mechanical refutation",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).

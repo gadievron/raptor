@@ -2876,6 +2876,13 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
     rows into durable coverage or review-retirement must screen
     through THIS predicate.
     """
+    # Existence-only projections cannot express delivered-code dependencies.
+    # Leave these reviews in the journal, whose reader admits their current
+    # inputs before awarding occurrence-specific credit. A stamped projection
+    # would otherwise turn a stale caller into permanent review coverage.
+    if ((isinstance(entry.source_hash, str) and entry.source_hash.startswith("src:ctx"))
+            or (isinstance(entry.review_claims, dict) and "source_inputs" in entry.review_claims)):
+        return False
     return (
         entry.verdict not in ("error", "dark")
         and not entry.edge_callee
