@@ -1998,9 +1998,9 @@
   },
   "packages/semgrep/nosemgrep.py\u001f_NOSEMGREP_RE": {
    "digests": [
-    "e43573eb894c"
+    "0e3708676ed1"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "rules": [
     "C"
    ],
