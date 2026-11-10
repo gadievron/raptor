@@ -1,10 +1,8 @@
 """Fixture tests for the signal_handler_unsafe rule.
 
-Verification-role rule (fires mint confirmed CWE-364 verdicts):
-async-signal-unsafe functions called from a handler registered via
-signal() are undefined behaviour per POSIX. The positive pins a
-printf call inside the handler body; the negative pins the safe
-sig_atomic_t-flag idiom.
+Detection-role rule reports calls for signal-context review. Registration,
+interrupted operations and nonlocal-jump restrictions require independent
+evidence; a direct call is not a confirmed CWE-364 verdict.
 """
 
 from __future__ import annotations
@@ -65,3 +63,52 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.slow
+def test_nonlocal_jump_calls_are_review_candidates(tmp_path):
+    import json
+
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    lines = ['#include <signal.h>', '#include <setjmp.h>', '#include <stdio.h>',
+             '#include <unistd.h>', 'jmp_buf plain_env;', 'sigjmp_buf saved_env;']
+    expected = set()
+    for registration in ['signal', 'sa_handler', 'sa_sigaction']:
+        for operation in ['longjmp', 'siglongjmp', 'printf', '_exit']:
+            name = registration + '_' + operation
+            args = 'int sig, siginfo_t *info, void *context' if registration == 'sa_sigaction' else 'int sig'
+            call = {'longjmp': 'longjmp(plain_env, 1);',
+                    'siglongjmp': 'siglongjmp(saved_env, 1);',
+                    'printf': 'printf("caught");', '_exit': '_exit(0);'}[operation]
+            lines += [f'void handler_{name}({args}) {{', '    ' + call, '}']
+            if operation != '_exit':
+                expected.add(len(lines) - 1)
+            if registration == 'signal':
+                lines += [f'void install_{name}(void) {{ signal(SIGUSR1, handler_{name}); }}']
+            else:
+                lines += [f'void install_{name}(void) {{ struct sigaction sa; sa.{registration} = handler_{name}; sigaction(SIGUSR1, &sa, 0); }}']
+    for registration in ['sa_handler', 'sa_sigaction']:
+        name = 'uninstalled_' + registration
+        args = 'int sig, siginfo_t *info, void *context' if registration == 'sa_sigaction' else 'int sig'
+        lines += [f'void handler_{name}({args}) {{', '    malloc(8);', '}']
+        expected.add(len(lines) - 1)
+        lines += [f'void prepare_{name}(void) {{ struct sigaction sa; sa.{registration} = handler_{name}; }}']
+    target = tmp_path / 'owned.c'
+    target.write_text('\n'.join(lines) + '\n')
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Owned signal-handler candidate classification',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert {row['line'] for row in rows} == expected
+    assert len(rows) == len(expected) == 11
+    assert {row['rule'] for row in rows} == {'signal_handler_unsafe'}
+    assert all(row['message'].startswith('Candidate:')
+               and 'interrupted operations' in row['message']
+               and 'subsequent calls' in row['message'] for row in rows)

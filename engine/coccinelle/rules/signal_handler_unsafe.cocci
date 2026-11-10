@@ -1,16 +1,13 @@
-// signal_handler_unsafe.cocci — Detect async-signal-unsafe functions
-// called directly from a signal handler.
+// signal_handler_unsafe.cocci — Review direct calls in potential signal handlers.
 //
-// POSIX mandates that only async-signal-safe functions may be called
-// from a signal handler (§2.4.3). Calling malloc/free/printf-family/
-// syslog/exit/longjmp from a handler is undefined behaviour — can
-// deadlock (re-entering malloc's internal lock), corrupt heap
-// metadata, or produce garbled output from non-reentrant stdio.
+// Stdio and allocator calls may violate async-signal-safety requirements.
+// Nonlocal jumps require checking interrupted operations and subsequent calls;
+// direct call syntax alone does not establish undefined behaviour.
+// Assigning sa_handler or sa_sigaction does not prove that the descriptor
+// was installed. Keep these call sites as candidates for context review.
 //
 // CWE-364: Signal Handler Race Condition
-// Zero-FP: a direct call to these functions inside a handler body
-// registered via signal() or sigaction() is always wrong per POSIX.
-// @role: verification
+// @role: detection
 
 // --- signal() registration ---
 
@@ -22,11 +19,9 @@ signal(..., handler)
 
 @unsafe_in_signal depends on handler_signal@
 identifier handler_signal.handler;
-// Allocators only, deliberately: learned DEALLOCATORS (project free
-// wrappers) are equally async-signal-unsafe, but the renderer splices
-// exactly one bucket per marked construct, and a second marked list
-// would need its own rule + report pair per handler shape. Accepted
-// FN; seed free/longjmp/etc. stay in the literal list below.
+// Learned allocator names are review candidates too. The renderer splices
+// one bucket per marked construct; learned deallocator names are not added
+// here. Literal free and nonlocal-jump names remain in the list for review.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
@@ -48,7 +43,7 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
-  "message": "Async-signal-unsafe function %s() called from signal handler — undefined behaviour per POSIX §2.4.3 (CWE-364). Use only async-signal-safe functions." % unsafe_fn
+  "message": "Candidate: %s() appears in a potential signal handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -63,11 +58,9 @@ SA.sa_handler = handler;
 
 @unsafe_sa_handler depends on handler_sa_handler@
 identifier handler_sa_handler.handler;
-// Allocators only, deliberately: learned DEALLOCATORS (project free
-// wrappers) are equally async-signal-unsafe, but the renderer splices
-// exactly one bucket per marked construct, and a second marked list
-// would need its own rule + report pair per handler shape. Accepted
-// FN; seed free/longjmp/etc. stay in the literal list below.
+// Learned allocator names are review candidates too. The renderer splices
+// one bucket per marked construct; learned deallocator names are not added
+// here. Literal free and nonlocal-jump names remain in the list for review.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
@@ -89,7 +82,7 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
-  "message": "Async-signal-unsafe function %s() called from sigaction handler — undefined behaviour per POSIX §2.4.3 (CWE-364). Use only async-signal-safe functions." % unsafe_fn
+  "message": "Candidate: %s() appears in a potential sigaction handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -104,11 +97,9 @@ SA.sa_sigaction = handler;
 
 @unsafe_sa_sigaction depends on handler_sa_sigaction@
 identifier handler_sa_sigaction.handler;
-// Allocators only, deliberately: learned DEALLOCATORS (project free
-// wrappers) are equally async-signal-unsafe, but the renderer splices
-// exactly one bucket per marked construct, and a second marked list
-// would need its own rule + report pair per handler shape. Accepted
-// FN; seed free/longjmp/etc. stay in the literal list below.
+// Learned allocator names are review candidates too. The renderer splices
+// one bucket per marked construct; learned deallocator names are not added
+// here. Literal free and nonlocal-jump names remain in the list for review.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
@@ -130,6 +121,6 @@ msg = {
   "file":  p_call[0].file,
   "line":  int(p_call[0].line),
   "col":   int(p_call[0].column),
-  "message": "Async-signal-unsafe function %s() called from sigaction handler — undefined behaviour per POSIX §2.4.3 (CWE-364). Use only async-signal-safe functions." % unsafe_fn
+  "message": "Candidate: %s() appears in a potential sigaction handler (CWE-364). Review registration, interrupted operations and async-signal-safety requirements; nonlocal jumps also require checking subsequent calls." % unsafe_fn
 }
 print("COCCIRESULT:" + json.dumps(msg))

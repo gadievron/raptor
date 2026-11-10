@@ -320,3 +320,17 @@ def test_signed_widening_requires_negative_value_and_use_evidence(monkeypatch, t
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_signal_handler_calls_require_execution_context(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/signal_handler_unsafe.cocci'
+    receipt = 'coccinelle:signal_handler_unsafe'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
