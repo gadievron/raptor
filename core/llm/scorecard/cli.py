@@ -461,63 +461,10 @@ def _render_compare(
 
 
 def _render_samples(stat: DecisionClassStats) -> str:
-    """Show disagreement-sample reasoning for a single cell.
-    Used for the "why did this model get it wrong?" research
-    question — operator reads through the LLM's reasoning when
-    cheap and full disagreed."""
-    if not stat.disagreement_samples:
-        return (
-            f"_(no disagreement samples for {_scrub_cell(stat.decision_class)} on "
-            f"{_scrub_cell(stat.model)})_"
-        )
-    lines = [
-        f"# {_scrub_cell(stat.decision_class)} on {_scrub_cell(stat.model)}",
-        f"_{len(stat.disagreement_samples)} sample(s); "
-        f"trust math: cheap claimed FP and was actually wrong_",
-        "",
-    ]
-    # Persisted reasoning text originates from LLM output that can
-    # quote analysed-repo tool output — escape control/ANSI bytes so a
-    # planted escape sequence can't rewrite the operator's terminal.
-    from core.security.log_sanitisation import escape_nonprintable
-
-    def _esc(s: str) -> str:
-        return escape_nonprintable(s, preserve_newlines=True)
-
-    for i, sample in enumerate(stat.disagreement_samples, 1):
-        lines.append(f"## Sample {i} — {_esc(str(sample.get('ts', '?')))} ({_esc(str(sample.get('event_type', '?')))})")
-        cheap_r = _esc(sample.get("this_reasoning", ""))
-        full_r = _esc(sample.get("other_reasoning", ""))
-        note = _esc(sample.get("note", ""))
-        if cheap_r:
-            lines.append("**Cheap (clear_fp):**")
-            lines.append(cheap_r)
-            lines.append("")
-        if full_r:
-            lines.append("**Full (overruled):**")
-            lines.append(full_r)
-            lines.append("")
-        if note:
-            # Operator-feedback shape: a single ``note`` field rather
-            # than the cheap-vs-full disagreement pair.
-            lines.append("**Operator note:**")
-            lines.append(note)
-            lines.append("")
-        # Producer-specific fields (self-consistency verdict pair,
-        # dataflow method, cross-family trigger, validate-feedback join
-        # keys, ...): render any remaining string-valued field so no
-        # producer's samples come out empty-bodied.
-        handled = {"ts", "event_type", "this_reasoning",
-                   "other_reasoning", "note"}
-        for key in sorted(sample):
-            if key in handled:
-                continue
-            value = sample.get(key)
-            if isinstance(value, str) and value:
-                lines.append(f"**{_esc(key)}:**")
-                lines.append(_esc(value))
-                lines.append("")
-    return "\n".join(lines)
+    """Present recorded reasoning through the shared, sanitised renderer."""
+    from core.reporting.renderers import render_document
+    from .sample_document import build_sample_document
+    return render_document(build_sample_document(stat), "markdown").content.decode("utf-8")
 
 
 # ---------------------------------------------------------------------------
