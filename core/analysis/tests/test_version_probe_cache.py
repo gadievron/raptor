@@ -106,3 +106,60 @@ def test_forked_owner_discards_parent_lock_and_cached_answer(binary, monkeypatch
                 assert pending.result(timeout=2) == '2.0.0'
             finally:
                 parent_lock.release()
+
+
+def test_replacement_identity_coalesces_while_old_probe_is_pending(tmp_path, monkeypatch):
+    binary=tmp_path/"owned-tool"
+    binary.write_text("old owned executable identity")
+    binary.chmod(0o755)
+    old_ready=threading.Event()
+    new_ready=threading.Event()
+    second_boundary=threading.Event()
+    release=threading.Event()
+    lock=threading.Lock()
+    new_calls=[]
+    flight_refs=[]
+    class ObservedFuture(Future):
+        def __init__(self):
+            super().__init__()
+            flight_refs.append(weakref.ref(self))
+        def result(self,*args,**kwargs):
+            second_boundary.set()
+            return super().result(*args,**kwargs)
+    monkeypatch.setattr(rule_versions,"Future",ObservedFuture)
+    cache=VersionProbeCache()
+    def old_probe():
+        old_ready.set()
+        assert release.wait(5)
+        return "1.0.0"
+    def new_probe():
+        with lock:
+            new_calls.append(1)
+            if len(new_calls)==2:
+                second_boundary.set()
+        new_ready.set()
+        assert release.wait(5)
+        return "2.0.0"
+    executable=lambda:str(binary)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        old=pool.submit(cache.get,old_probe,executable)
+        new_one=new_two=None
+        try:
+            assert old_ready.wait(5)
+            binary.write_text("replacement owned executable identity with different size")
+            new_one=pool.submit(cache.get,new_probe,executable)
+            assert new_ready.wait(5)
+            new_two=pool.submit(cache.get,new_probe,executable)
+            assert second_boundary.wait(5)
+            with lock:
+                observed=len(new_calls)
+        finally:
+            release.set()
+        old_result=old.result(timeout=5)
+        new_results=[f.result(timeout=5) for f in [new_one,new_two] if f is not None]
+    assert old_result is None
+    assert new_results==["2.0.0","2.0.0"]
+    assert observed==1
+
+    gc.collect(0)
+    assert all(reference() is None for reference in flight_refs)

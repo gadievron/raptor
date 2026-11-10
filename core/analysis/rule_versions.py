@@ -36,7 +36,7 @@ class VersionProbeCache:
         self._lock = threading.Lock()
         self._key: tuple[object, ...] | None = None
         self._value: str | None = None
-        self._pending: tuple[tuple[object, ...], Future[str | None]] | None = None
+        self._pending: dict[tuple[object, ...], Future[str | None]] = {}
         self._pid = _process_id()
 
     @staticmethod
@@ -67,14 +67,11 @@ class VersionProbeCache:
         with self._lock:
             if key == self._key:
                 return self._value
-            if self._pending is not None and self._pending[0] == key:
-                future = self._pending[1]
-                owner = False
-            else:
+            future = self._pending.get(key)
+            owner = future is None
+            if future is None:
                 future = Future()
-                owner = True
-                if self._pending is None:
-                    self._pending = (key, future)
+                self._pending[key] = future
         if not owner:
             value = future.result()
             return value if self._identity(executable()) == key else None
@@ -85,15 +82,15 @@ class VersionProbeCache:
             valid = version_tuple(value) is not None
         except BaseException as exc:
             with self._lock:
-                if self._pending is not None and self._pending[1] is future:
-                    self._pending = None
+                if self._pending.get(key) is future:
+                    del self._pending[key]
             future.set_exception(exc)
             raise
         with self._lock:
             if valid:
                 self._key, self._value = key, value
-            if self._pending is not None and self._pending[1] is future:
-                self._pending = None
+            if self._pending.get(key) is future:
+                del self._pending[key]
         future.set_result(value)
         return value
 
