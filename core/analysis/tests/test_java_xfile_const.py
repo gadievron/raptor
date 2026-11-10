@@ -667,3 +667,36 @@ class TestDeclaringClassOwnership:
         value, resolver = _xfold(xroot, "Cfg.SAFE")
         assert value == "own-constant"
         assert resolver.resolve_method("Cfg", "ownLiteral", 0, False) == "own-constant"
+
+
+class TestMethodParameterScope:
+    @pytest.mark.parametrize("method,expected", [
+        ("echo", None),
+        ("concat", None),
+        ("echoReceiver", None),
+        ("echoMany", None),
+        ("constant", "literal"),
+        ("manyConstant", "literal"),
+        ("qualified", "class-literal"),
+        ("derived", "class-literal-derived"),
+        ("composed", "literal"),
+    ])
+    def test_parameter_shadows_field_only_in_method_expression(self, xroot, method, expected):
+        root, _ = xroot
+        (root / "app" / "Cfg.java").write_text('''package app;
+class Cfg {
+    static final String SAFE = "class-literal";
+    static final String DERIVED = SAFE + "-derived";
+    String echo(String SAFE) { return SAFE; }
+    String concat(String SAFE) { return "prefix" + SAFE; }
+    String echoReceiver(Cfg this, String SAFE) { return SAFE; }
+    String[] echoMany(String... SAFE) { return SAFE; }
+    String constant(String SAFE) { return "literal"; }
+    String manyConstant(String... SAFE) { return "literal"; }
+    String qualified(String SAFE) { return Cfg.SAFE; }
+    String derived(String SAFE) { return DERIVED; }
+    String composed(String SAFE) { return new Cfg().constant(SAFE); }
+}
+''')
+        value, _ = _xfold(xroot, f"new Cfg().{method}(x)")
+        assert (value is REFUSE) if expected is None else (value == expected)

@@ -120,6 +120,28 @@ def _declared_members(root):
             yield node
 
 
+def _method_parameter_names(decl) -> frozenset[str] | None:
+    params = decl.child_by_field_name("parameters")
+    if params is None:
+        return None
+    names = set()
+    for param in params.named_children:
+        if param.type == "receiver_parameter":
+            continue
+        if param.type == "formal_parameter":
+            name = param.child_by_field_name("name")
+        elif param.type == "spread_parameter":
+            variable = next((n for n in param.named_children
+                             if n.type == "variable_declarator"), None)
+            name = variable.child_by_field_name("name") if variable is not None else None
+        else:
+            return None
+        if name is None:
+            return None
+        names.add(_text(name))
+    return frozenset(names)
+
+
 class XFileConst:
     """Per-finding cross-file resolver; every lookup memoized, every
     failure a refusal (``None``)."""
@@ -258,17 +280,19 @@ class XFileConst:
         return None
 
     def _fold_restricted(self, node, root, _depth: int,
-                         allow_taint_free: bool) -> Any:
+                         allow_taint_free: bool,
+                         shadowed_names: frozenset[str] = frozenset()) -> Any:
         """Fold with identifiers resolving ONLY to static-final fields
         of the same class — parameters and locals refuse."""
         from core.analysis.const_fold_java import REFUSE, fold_expr
 
         def resolve_name(name: str, d: int) -> Any:
-            if d > _MAX_FIELD_DEPTH:
+            if d > _MAX_FIELD_DEPTH or name in shadowed_names:
                 return REFUSE
             rhs = self._class_static_final_rhs(root, name)
             if rhs is None:
                 return REFUSE
+            # Initializers have class scope, outside method-parameter bindings.
             return self._fold_restricted(rhs, root, d + 1,
                                          allow_taint_free)
 
@@ -476,8 +500,11 @@ class XFileConst:
                     if len(stmts) == 1 and stmts[0].type == "return_statement":
                         exprs = [c for c in stmts[0].children if c.is_named]
                         if len(exprs) == 1:
-                            val = self._fold_restricted(
-                                exprs[0], root, 0, allow_taint_free=True)
+                            names = _method_parameter_names(decls[0])
+                            if names is not None:
+                                val = self._fold_restricted(
+                                    exprs[0], root, 0, allow_taint_free=True,
+                                    shadowed_names=names)
             self._method_cache[key] = val
         if val is TAINT_FREE and not allow_taint_free:
             return REFUSE
