@@ -1222,7 +1222,7 @@ def format_context_for_prompt(
     ctx.pop("caller_context_delivery", None)
 
     from .knowledge_context import (
-        context_answers, context_explanations, context_subjects,
+        admit_complete_reference_reading, context_answers, context_explanations, context_subjects,
         dedupe_reference_sections, reference_delivery, reference_sections, study_delivery, study_sections,
     )
 
@@ -3013,6 +3013,10 @@ def format_context_for_prompt(
         # return — see the top of format_context_for_prompt)
         report = fit_to_budget_report(
             sections, budget_limit, elide_priority0=True,
+        )
+        report = admit_complete_reference_reading(
+            reference_answers, sections, report,
+            rendered_sections=reference_blocks, budget_tokens=budget_limit,
         )
         kept, shed = report.kept, report.shed
         if shed:
