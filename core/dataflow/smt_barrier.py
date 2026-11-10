@@ -1608,6 +1608,34 @@ def _python_suspension(node: ast.AST) -> bool:
     )
 
 
+def _python_definition_headers(node: ast.AST) -> list[ast.AST]:
+    """Possible definition-time effects, never positive binding authority.
+
+    Annotation evaluation varies with the source's Python version/settings;
+    an unbound evaluation profile cannot certify an unchanged external slot.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        args = node.args
+        parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        parameters += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+        annotations = [arg.annotation for arg in parameters if arg.annotation is not None]
+        if getattr(node, "returns", None) is not None:
+            annotations.append(node.returns)
+        return [*getattr(node, "decorator_list", []), *args.defaults,
+                *(value for value in args.kw_defaults if value is not None), *annotations]
+    if isinstance(node, ast.ClassDef):
+        return [*node.decorator_list, *node.bases, *(kw.value for kw in node.keywords)]
+    return []
+
+
+def _python_possible_call(node: ast.AST) -> bool:
+    """Negative effect boundary; this never certifies purity or a callee."""
+    return isinstance(node, (ast.Call, ast.ClassDef)) or bool(
+        getattr(node, "decorator_list", [])
+    ) or any(isinstance(part, ast.Call)
+             for value in _python_definition_headers(node) for part in ast.walk(value))
+
+
 def _python_name_has_local_slot(scope_root: ast.AST, name: str) -> bool:
     """A function-owned slot, excluding global/nonlocal declarations.
 
@@ -1677,8 +1705,10 @@ def _variable_reassigned_between(
     """
     scope_root = _function_containing(tree, before_line) or tree
     if not _python_name_has_local_slot(scope_root, var_name) and any(
-        _python_suspension(node)
-        and after_line <= (getattr(node, "lineno", None) or -1) <= before_line
+        (_python_suspension(node)
+         and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
+        or (_python_possible_call(node)
+            and after_line < (getattr(node, "lineno", None) or -1) < before_line)
         for node in _walk_same_scope(scope_root)
     ):
         return True
@@ -2718,9 +2748,19 @@ def _python_chain_reaches_sink(
     )
     local_slots: dict[str, bool] = {}
     for node, class_decls in window:
-        if class_decls is None and _python_suspension(node):
-            # Suspending preserves a captured local value, but does not
-            # freeze module or enclosing-function name slots. Kill here,
+        # Header bindings are kill-only: defaults/decorators can execute
+        # here, whereas a nested function's body is still deferred.
+        for value in _python_definition_headers(node):
+            for part in ast.walk(value):
+                for var in list(chain):
+                    if _node_rebinds_var(part, var):
+                        chain.discard(var)
+        if class_decls is None and (
+            _python_suspension(node)
+            or (_python_possible_call(node) and validator_line < node.lineno < sink_line)
+        ):
+            # A call or suspension can preserve a captured local value,
+            # but cannot freeze externally owned name slots. Kill here,
             # before any later alias could borrow the stale certificate.
             for var in list(chain):
                 if var not in local_slots:

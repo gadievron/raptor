@@ -97,8 +97,8 @@ def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
         return True
 
 
-def _suspension_slot_unverified(tree, name: bytes, after_line: int, through_line: int) -> bool:
-    """A suspended JS frame does not freeze shared name bindings.
+def _shared_slot_epoch_unverified(tree, name: bytes, after_line: int, through_line: int) -> bool:
+    """Opaque calls and suspensions cannot freeze shared name bindings.
 
     Preserve only simple parameters and direct function-body local slots,
     with no possible nested writer. This is negative ownership filtering,
@@ -126,14 +126,15 @@ def _suspension_slot_unverified(tree, name: bytes, after_line: int, through_line
     if not owners or any(owner is None or owner != owners[0] for owner in owners):
         return True
     owner = owners[0]
-    suspends = any(
-        (node.type in {"await_expression", "yield_expression"}
-         or (node.type == "for_in_statement" and any(child.type == "await" for child in node.children)))
-        and after_line < node.start_point[0] + 1 <= through_line
-        and ownership[node.id] == owner
-        for node in nodes
+    exposes_slot = any(
+        ((node.type in {"await_expression", "yield_expression"}
+          or (node.type == "for_in_statement" and any(child.type == "await" for child in node.children)))
+         and after_line < node.start_point[0] + 1 <= through_line)
+        or (node.type in {"call_expression", "new_expression"}
+            and after_line < node.start_point[0] + 1 < through_line)
+        for node in nodes if ownership[node.id] == owner
     )
-    if not suspends:
+    if not exposes_slot:
         return False
     if owner.type == "program":
         return True
@@ -179,7 +180,7 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
         if tree is None:
             return True
         encoded_name = name.encode("utf-8")
-        if language in {"javascript", "typescript", "tsx"} and _suspension_slot_unverified(
+        if language in {"javascript", "typescript", "tsx"} and _shared_slot_epoch_unverified(
             tree, encoded_name, after_line, through_line,
         ):
             return True
