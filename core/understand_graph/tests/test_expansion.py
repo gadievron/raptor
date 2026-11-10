@@ -1,6 +1,7 @@
 """Tests for graph store Phase A expansion — new producers, consumers, and hardening."""
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from core.json import save_json
@@ -198,14 +199,14 @@ def test_content_hash_differs_on_content():
 
 def test_v3_migration_creates_composite_index_and_producer(tmp_path):
     db_path = tmp_path / "test.db"
-    conn = open_graph(db_path)
-    indexes = {row["name"] for row in conn.execute("PRAGMA index_list(nodes)").fetchall()}
-    assert "idx_nodes_snap_kind_stale" in indexes
-    cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
-    assert "producer" in cols
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    assert version == SCHEMA_VERSION
-    conn.close()
+    with closing(open_graph(db_path)) as conn:
+        indexes = {row["name"] for row in conn.execute("PRAGMA index_list(nodes)").fetchall()}
+        assert "idx_nodes_snap_kind_stale" in indexes
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+        assert "producer" in cols
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        assert version == SCHEMA_VERSION
+
 
 
 # ---------------------------------------------------------------------------
@@ -600,7 +601,7 @@ def test_ingest_annotations(tmp_path):
     result = ingest_annotations(run_dir, str(target))
     assert result is not None
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         ann_nodes = conn.execute(
             "SELECT * FROM nodes WHERE kind='annotation' AND stale=0",
         ).fetchall()
@@ -648,7 +649,7 @@ def test_imports_edges(tmp_path):
     graph_path = ingest_run(run_dir, str(target))
     assert graph_path is not None
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         dep_nodes = conn.execute(
             "SELECT * FROM nodes WHERE kind='dependency' AND stale=0",
         ).fetchall()
@@ -712,7 +713,7 @@ def test_rebuild_graph(tmp_path, monkeypatch):
     assert result is not None
     assert result.exists()
 
-    with open_graph(result) as conn:
+    with closing(open_graph(result)) as conn, conn:
         entries = conn.execute("SELECT * FROM nodes WHERE kind='entry_point' AND stale=0").fetchall()
         assert len(entries) >= 1
         findings = conn.execute("SELECT * FROM nodes WHERE kind='scan_finding' AND stale=0").fetchall()
@@ -826,7 +827,7 @@ def test_codeql_ingest_infers_target_from_run_metadata(tmp_path):
     })
     graph_path = ingest_codeql_sarif(run_dir)
     assert graph_path is not None
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         targets = {r["target_path"] for r in conn.execute(
             "SELECT target_path FROM snapshots WHERE producer='codeql'"
         )}
@@ -889,7 +890,7 @@ def test_alternative_paths_orders_by_confidence_rank(tmp_path):
     from core.understand_graph import alternative_paths
     target = tmp_path / "target"
     graph_path = _write_confidence_run(tmp_path / "understand-run", target)
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         sink_id = conn.execute(
             "SELECT id FROM nodes WHERE kind='sink' AND name='system'"
         ).fetchone()["id"]
