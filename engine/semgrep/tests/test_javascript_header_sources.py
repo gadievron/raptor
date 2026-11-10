@@ -79,6 +79,12 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
             ('ctx.request.body.value', True),
             ('context.request.body.value', True),
             ('c.request.body.value', True),
+            ('ctx.get("host")', True),
+            ('ctx.request.get("host")', True),
+            ('context.get("host")', True),
+            ('c.request.get("host")', True),
+            ('ctx.response.get("host")', False),
+            ('local.request.get("host")', False),
             ('local.request.body.value', False),
             ('"constant body"', False),
         ])
