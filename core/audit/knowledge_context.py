@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from core.language_reference import ReferenceAnswer, ReferenceEntry
-from core.llm.prompt_budget import PromptSection
+from core.llm.prompt_budget import FitReport, PromptSection
 from core.concepts.subject_study import SubjectExplanation
 from core.json import dumps_display
 from core.security.prompt_envelope import wrap_untrusted
@@ -197,6 +197,65 @@ def reference_delivery(
                        if answer.entries else answer.reason),
         })
     return records
+
+
+def admit_complete_reference_reading(
+    answers: tuple[ReferenceAnswer, ...], sections: list[PromptSection], report: FitReport,
+    *, rendered_sections: list[PromptSection], budget_tokens: int,
+) -> FitReport:
+    """Restore reading only when a complete shared packet fits without shedding.
+
+    Keep the baseline fitter's other choices, including omitted limitations.
+    Never restore elided evidence or submit shared-core dependants to another
+    shedding pass that could remove their suppliers. A refused candidate leaves
+    the exact original report untouched.
+    """
+    if budget_tokens <= 0 or report.elisions or report.overshoot_tokens or not report.shed:
+        return report
+    positive_labels = {label for label, answer in zip(_labels(answers), answers, strict=True)
+                       if answer.entries}
+    if not any(section.label in positive_labels for section in report.shed):
+        return report
+    if all(row["delivered"] for row in reference_delivery(answers, report.kept) if row["entries"]):
+        return report
+
+    # The fitter returns original section objects in their original order when
+    # there was no elision. Refuse foreign or ambiguous reconstruction inputs.
+    original_ids = {id(section) for section in sections}
+    kept_ids = {id(section) for section in report.kept}
+    shed_ids = {id(section) for section in report.shed}
+    owned = {section.label: section for section in rendered_sections}
+    if (len(original_ids) != len(sections)
+            or len({section.label for section in sections}) != len(sections)
+            or len(kept_ids) != len(report.kept) or len(shed_ids) != len(report.shed)
+            or kept_ids & shed_ids or kept_ids | shed_ids != original_ids
+            or len(owned) != len(rendered_sections)
+            or not positive_labels <= owned.keys()):
+        return report
+    if any(section is not owned.get(section.label)
+           for section in sections if section.label in positive_labels):
+        return report
+    if not positive_labels <= {section.label for section in sections}:
+        return report
+    for label, answer in zip(_labels(answers), answers, strict=True):
+        if answer.entries and not owned[label].text.endswith(
+                "\n\n".join(entry.render_core() for entry in answer.entries)):
+            return report
+
+    candidate = [section for section in sections
+                 if id(section) in kept_ids or section.label in positive_labels]
+    retained_other = [section for section in report.kept if section.label not in positive_labels]
+    if [id(section) for section in candidate if section.label not in positive_labels] != [
+            id(section) for section in retained_other]:
+        return report
+    candidate = dedupe_reference_sections(answers, candidate, rendered_sections=rendered_sections)
+    if sum(section.token_estimate for section in candidate) > budget_tokens:
+        return report
+    reference_text = "\n".join(section.text for section in candidate if section.label in positive_labels)
+    if not all(entry.render_core() in reference_text for answer in answers for entry in answer.entries):
+        return report
+    return FitReport(candidate, [section for section in report.shed
+                                 if section.label not in positive_labels], 0, [])
 
 
 def context_subjects(value: object) -> tuple[KnowledgeRequest, ...]:
