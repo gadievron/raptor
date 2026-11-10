@@ -1,10 +1,23 @@
 rules:
   - id: raptor.crypto.pbkdf2.low-iterations.java
     message: PBKDF2 iterations too low. Set >= 100000. Verify using configuration tests.
-    languages: [java, kotlin]
+    languages: [java]
     severity: HIGH
     patterns:
-      - pattern: new PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
+      - pattern: new javax.crypto.spec.PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
+      - metavariable-comparison:
+          metavariable: $ITERS
+          comparison: $ITERS < 100000
+    metadata:
+      cwe: ["CWE-916"]
+      asvs: ["V2.4"]
+
+  - id: raptor.crypto.pbkdf2.low-iterations.kotlin
+    message: PBKDF2 iterations too low. Set >= 100000. Verify using configuration tests.
+    languages: [kotlin]
+    severity: HIGH
+    patterns:
+      - pattern: javax.crypto.spec.PBEKeySpec($PW, $SALT, $ITERS, $KEYLEN)
       - metavariable-comparison:
           metavariable: $ITERS
           comparison: $ITERS < 100000
