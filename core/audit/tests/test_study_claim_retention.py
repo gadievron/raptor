@@ -155,7 +155,7 @@ def test_assessment_write_failure_preserves_prior_and_spend(study_case, monkeypa
     assert "study reassessment event could not be written" in caplog.text
 
 
-def _knowledge_reassess(case, candidate, *, during_review=None, verify=False):
+def _knowledge_reassess(case, candidate, *, during_review=None, verify=False, review_fn=None):
     from core.audit.knowledge_runtime import AuditKnowledgeRuntime
 
     case["config"].immediate_verify = verify
@@ -171,8 +171,10 @@ def _knowledge_reassess(case, candidate, *, during_review=None, verify=False):
     def review(context, config):
         if during_review is not None:
             during_review()
-        return candidate
+        return review_fn(context, config) if review_fn is not None else candidate
 
+    if getattr(review_fn, "_knowledge_observed_client_contract", None) is True:
+        setattr(review, "_knowledge_observed_client_contract", True)
     with isolated_audit_shutdown(orch):
         orch._re_review_study_enriched(case["result"], case["config"], review,
             case["checklist"], None, {}, None, set(), {("owned.c", "f", 1)}, monotonic(), None,
@@ -544,3 +546,93 @@ def test_status_change_cancel_after_commit_keeps_one_spend_and_committed_state(s
     assert case["result"].outcomes[0] is candidate
     assert case["result"].clean == 0 and case["result"].suspicious == 1
     assert case["result"].reviewed == 1 and case["result"].total_cost_usd == 0.7
+
+
+@pytest.mark.parametrize("fault", ["none", "journal_unacknowledged", "history_ack_stripped", "source_changed", "wrong_id", "mechanical_support", "unknown_caller", "validation_cancelled"])
+def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publication(study_case, monkeypatch, fault):
+    import re
+    from dataclasses import replace
+
+    from core.audit import collector
+    from core.audit.claims import ClaimRevision
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.audit.llm_review import make_review_fn
+    from core.audit.review_claims import begin_review, record_intake
+    from core.coverage.journal import load_entries
+    from core.llm.providers import StructuredResponse
+
+    case = study_case
+    prior, config = case["prior"], case["config"]
+    prior.hypothesis = "a negative signed n reaches this return"
+    prior.hypotheses = None
+    prior.review_result = {"cwe": "CWE-195"}
+    source = (config.target_path / "owned.c").read_text()
+    ctx = {"file": "owned.c", "function": "f", "line_start": 1, "source": source}
+    origin = AuditKnowledgeRuntime(config.target_path, orch.StudyQueue(), deadline=float("inf"))._origin(ctx)
+    revisions = [ClaimRevision(h, pass_id="owned-intake", file="owned.c", function="f", line_start=1)
+                 for h in orch._extract_all_hypotheses(prior)]
+    prior.review_result["review_claims"] = record_intake(begin_review(origin, "first-review"), revisions)
+    reference = revisions[0].reference()
+    monkeypatch.setattr("core.audit.llm_review._prompt_budget", lambda *_: 100000)
+    calls = []
+    class Client:
+        def generate_structured(self, prompt, schema, **kwargs):
+            calls.append(prompt)
+            assert "claim_withdrawals" in schema["properties"]
+            assert reference["revision_id"] in prompt
+            fragment_id = re.search(r"Source fragment:\*\* ([a-f0-9]{32})", prompt)[1]
+            if fault == "source_changed":
+                path = config.target_path / "owned.c"
+                path.write_text(source + "/* edited during review */\n")
+            return StructuredResponse(result={"status": "clean", "body": "The prior signedness premise was mistaken.",
+                "hypothesis": "", "claim_withdrawals": [{"claim_id": reference["claim_id"],
+                    "revision_id": "a" * 32 if fault == "wrong_id" else reference["revision_id"],
+                    "corrected_premise": "The declaration gives n an unsigned type.",
+                    "reason": "The negative signed input theory does not describe this declaration.",
+                    "source_anchors": [{"fragment_id": fragment_id, "line_start": 1, "line_end": 1}],
+                    "remaining_unknowns": ["caller contract"] if fault == "unknown_caller" else []}]},
+                raw="", cost=0.2, model="scripted")
+    if fault == "journal_unacknowledged":
+        monkeypatch.setattr(collector, "append_journal_for_outcome", lambda **_: None)
+    elif fault == "history_ack_stripped":
+        original = collector.append_journal_for_outcome
+        def stripped(**kwargs):
+            actual = original(**kwargs)
+            assert actual is not None and actual.review_claims
+            return replace(actual, review_claims=None)
+        monkeypatch.setattr(collector, "append_journal_for_outcome", stripped)
+    elif fault == "mechanical_support":
+        prior.evidence_tool = "frida:runtime"
+    if fault == "validation_cancelled":
+        def cancel_validation(*args):
+            raise KeyboardInterrupt("cancelled during local judgment validation")
+        monkeypatch.setattr(orch, "_model_withdrawal_assessment", cancel_validation)
+        with pytest.raises(KeyboardInterrupt, match="local judgment validation"):
+            _knowledge_reassess(case, None, review_fn=make_review_fn(Client(), escalate_clean=False))
+        assert len(calls) == 1
+        assert case["result"].total_cost_usd == 0.7
+        assert case["result"].outcomes[0] is prior and case["result"].suspicious == 1
+        assert load_entries(config.out_dir, fresh=True) == []
+        return
+    runtime = _knowledge_reassess(case, None, review_fn=make_review_fn(Client(), escalate_clean=False))
+    assert len(calls) == 1
+    result = case["result"]
+    assert result.total_cost_usd == 0.7 and result.reviewed == 1
+    if fault == "none":
+        assert result.clean == 1 and result.suspicious == 0
+        assert result.outcomes[0].status == "clean" and result.outcomes[0] is not prior
+        assert not result.outcomes[0].claim_refutations and not result.outcomes[0].evidence_tool
+        entry, = load_entries(config.out_dir, fresh=True)
+        assert entry.review_claims["assessment_basis"] == "model_judgment_withdrawal"
+        assert entry.review_claims["withdrawal_decisions"]["accepted"][0]["adjudication"] == "model_withdrawn"
+        assert entry.evidence_tools == []
+        assert any(e.get("published_status") == "clean" for e in runtime.events())
+    else:
+        assert result.outcomes[0] is prior and result.clean == 0 and result.suspicious == 1
+        if fault == "history_ack_stripped":
+            # Actual row remains historical when its acknowledgement fails.
+            entry, = load_entries(config.out_dir, fresh=True)
+            assert entry.review_claims["withdrawal_decisions"]
+            assert any(e.get("reason") == "study_history_ack_mismatch" for e in runtime.events())
+        else:
+            assert load_entries(config.out_dir, fresh=True) == []

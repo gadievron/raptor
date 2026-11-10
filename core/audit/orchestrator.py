@@ -15039,14 +15039,37 @@ def _multi_pass_review(
                     for raw_list in mr_result.per_model_raw.values()
                     for r in raw_list
                 ]
-                seen_mechanisms: set = set()
+                from copy import deepcopy
+                from .claims import hypothesis_material_key
+
+                seen_material: dict[tuple[str, ...], int] = {}
                 merged_hypotheses: list[dict[str, Any]] = []
+
+                def confidence_rank(hypothesis):
+                    confidence = hypothesis.get("confidence")
+                    levels = ("low", "medium", "high")
+                    return levels.index(confidence.lower()) if isinstance(confidence, str) and confidence.lower() in levels else -1
+
                 for r in all_raw:
                     for h in r.get("hypotheses") or []:
                         mech = h.get("mechanism", "")
-                        if mech and mech not in seen_mechanisms:
-                            seen_mechanisms.add(mech)
-                            merged_hypotheses.append(h)
+                        if not mech:
+                            continue
+                        material = hypothesis_material_key(h)
+                        if material is None:
+                            hash(mech)  # preserve the existing malformed-key refusal
+                            merged_hypotheses.append(deepcopy(h))
+                            continue
+                        # Preserve the panel's exact mechanism spelling. Only
+                        # confidence can choose between otherwise equal material;
+                        # never copy it onto a different counter or assumption.
+                        key = (mech, *material[1:])
+                        previous = seen_material.get(key)
+                        if previous is None:
+                            seen_material[key] = len(merged_hypotheses)
+                            merged_hypotheses.append(deepcopy(h))
+                        elif confidence_rank(h) > confidence_rank(merged_hypotheses[previous]):
+                            merged_hypotheses[previous] = deepcopy(h)
                 total_cost = sum(r.get("cost_usd", 0) or 0 for r in all_raw)
                 total_duration = max(
                     (r.get("duration_s", 0) or 0 for r in all_raw),
@@ -34805,6 +34828,108 @@ def _callee_contract_requeue(
     return re_reviewed
 
 
+
+def _model_withdrawal_assessment(config, prior, fresh, current_source):
+    """Admit an explicit model judgment, never a negative checker receipt.
+
+    Structural correspondence cannot establish that the explanation is true.
+    Whole-assessment replacement is deliberately limited to unsupported,
+    unambiguous prior intakes and complete current-function prompt delivery.
+    """
+    from .claim_withdrawal import _definitions, evaluate_withdrawals
+    from .review_claims import MAX_HISTORY_CLAIMS, read_history
+
+    review = fresh.review_result or {}
+    proposals = review.get("claim_withdrawals")
+    report = {"admissible": False, "accepted": [], "rejected": [], "reason": "no_proposal"}
+    if proposals is None:
+        return report
+    if (fresh.file, fresh.function, fresh.line or 0) != (prior.file, prior.function, prior.line or 0):
+        return {**report, "reason": "assessment_occurrence_mismatch"}
+    packet = review.get("claim_review_delivery")
+    if (not isinstance(packet, dict) or type(packet.get("version")) is not int
+            or packet.get("version") != 1 or packet.get("role") != "review-delivery-only"):
+        return {**report, "reason": "delivery_unavailable"}
+    fragment = packet.get("source_fragment")
+    delivered = packet.get("claims")
+    evaluated = evaluate_withdrawals(proposals, delivered_claims=delivered,
+        source_fragment=fragment, file=prior.file, function=prior.function, line_start=prior.line or 0)
+    report.update(evaluated)
+    if _is_verification_evidence_for_gate(prior):
+        return {**report, "reason": "prior_mechanical_support"}
+    if (fresh.status != "clean" or _extract_all_hypotheses(fresh)
+            or review.get("reading_list") or review.get("language_reference_requests")):
+        return {**report, "reason": "remaining_concerns_or_knowledge_gaps"}
+    history = read_history((prior.review_result or {}).get("review_claims"))
+    if history is None or history["complete"] is not True:
+        return {**report, "reason": "prior_history_unavailable"}
+    occurrence = (prior.file, prior.function, prior.line or 0)
+    definitions = _definitions([row for intake in history["intakes"] for row in intake["claims"]], occurrence)
+    expected = {}
+    hypotheses = _extract_all_hypotheses(prior)
+    from .claims import hypothesis_material_key
+
+    prior_review = prior.review_result or {}
+    default_cwe = prior_review.get("cwe_class") or prior_review.get("cwe") or ""
+    raw = prior.hypotheses or prior_review.get("hypotheses") or []
+    if not isinstance(raw, list) or len(raw) > MAX_HISTORY_CLAIMS:
+        return {**report, "reason": "prior_variant_collection_unavailable"}
+    represented = {hypothesis_material_key(h, default_cwe=default_cwe) for h in hypotheses}
+    primary_mechanism = str(prior_review.get("hypothesis") or prior.hypothesis or "").strip().casefold()
+    for row in raw:
+        if not isinstance(row, dict) or not isinstance(row.get("mechanism"), str):
+            return {**report, "reason": "prior_variant_material_unavailable"}
+        mechanism = row["mechanism"].strip().casefold()
+        confidence = row.get("confidence")
+        actionable = mechanism == primary_mechanism or (isinstance(confidence, str)
+                                               and confidence.lower() in _SECONDARY_CONFIDENCES_IHV)
+        if actionable:
+            key = hypothesis_material_key(row, default_cwe=default_cwe)
+            if key is None or key not in represented:
+                return {**report, "reason": "prior_variant_identity_unavailable"}
+    if not hypotheses or (prior.hypothesis and not any(h["mechanism"] == prior.hypothesis for h in hypotheses)):
+        return {**report, "reason": "prior_selected_claim_unmapped"}
+    for hypothesis in hypotheses:
+        matches = [(key, row) for key, row in definitions.items() if row["hypothesis"] == hypothesis]
+        if len(matches) != 1:
+            return {**report, "reason": "prior_definition_unmapped_or_ambiguous"}
+        expected[matches[0][0]] = matches[0][1]
+    accepted = report["accepted"]
+    if not accepted:
+        return {**report, "reason": "no_admitted_model_withdrawal"}
+    if (report["rejected"] or any(expected.get(row["reference"]["revision_id"]) != {
+            "reference": row["reference"], "hypothesis": row["hypothesis"]} for row in accepted)):
+        return {**report, "reason": "prior_claims_not_explicitly_withdrawn"}
+    # A narrow negative receipt may settle one prior claim while a separate,
+    # unsupported theory is explicitly withdrawn. Never infer either state
+    # from prose agreement or the absence of a current hypothesis.
+    negative = {key for key, row in expected.items() if claims_refuted(
+        fresh, [row["hypothesis"]["mechanism"]], source_identity=current_source)}
+    withdrawn = {row["reference"]["revision_id"] for row in accepted}
+    if set(expected) - negative - withdrawn:
+        return {**report, "reason": "prior_claims_not_explicitly_withdrawn"}
+    report["scoped_refuted_references"] = [expected[key]["reference"] for key in sorted(negative)]
+    current_history = read_history(review.get("review_claims"))
+    origin_record = current_history.get("review") if current_history else None
+    origin = origin_record.get("origin") if isinstance(origin_record, dict) else None
+    if (not isinstance(origin, dict) or not isinstance(fragment, dict) or current_source is None
+            or (origin.get("file"), origin.get("function"), origin.get("line_start")) != occurrence
+            or origin.get("line_end") != fragment.get("line_end")
+            or origin.get("source_identity") != {"sha256": current_source.sha256, "version": list(current_source.version)}
+            or capture_source_identity(config.target_path, prior.file, excerpt=fragment.get("source"),
+                                       line_start=prior.line) != current_source):
+        return {**report, "reason": "current_review_source_unbound"}
+    report.update(admissible=True, reason="explicit_model_withdrawal", source_fragment=fragment)
+    assert current_history is not None
+    current_history["withdrawal_decisions"] = report
+    current_history["assessment_basis"] = "model_judgment_withdrawal"
+    bounded = read_history(current_history)
+    if bounded is None:
+        return {**report, "admissible": False, "reason": "decision_history_payload_limit"}
+    fresh.review_result = {**review, "review_claims": bounded}
+    return report
+
+
 def _merge_unverified_study_candidates(
     prior: ReviewOutcome, fresh: ReviewOutcome,
 ) -> ReviewOutcome | None:
@@ -34943,6 +35068,11 @@ def _publish_study_outcome(
                 candidate.file, candidate.function, candidate.line, origin.line_end, candidate.status)
                 or source_anchor is None or source_anchor[0] != origin.source_identity.sha256):
             return "study_journal_ack_mismatch"
+        from .review_claims import read_history
+
+        expected_history = read_history((candidate.review_result or {}).get("review_claims"))
+        if expected_history is not None and acknowledgement.review_claims != expected_history:
+            return "study_history_ack_mismatch"
         if config._verdicts_finalized:
             return "verdicts_finalized"
         if result.outcomes[index] is not prior:
@@ -35260,8 +35390,23 @@ def _re_review_study_enriched(
             same_occurrence = (outcome.file, outcome.function, outcome.line or 0) == (
                 prior_outcome.file, prior_outcome.function, prior_outcome.line or 0)
             refuted_prior = same_occurrence and claims_refuted(outcome, prior_claims, source_identity=current_source)
-            conflicting_support = refuted_prior and _is_verification_evidence_for_gate(prior_outcome)
-            if not refuted_prior or conflicting_support:
+            try:
+                model_withdrawal = (_model_withdrawal_assessment(config, prior_outcome, outcome, current_source)
+                                    if knowledge_runtime is not None else {"admissible": False, "reason": "unowned_review"})
+            except Exception:
+                logger.warning("model withdrawal validation failed; retaining prior assessment", exc_info=True)
+                model_withdrawal = {"admissible": False, "reason": "withdrawal_validation_failed"}
+            except BaseException:
+                # The model call completed before this local validation. Keep
+                # its spend even when cancellation prevents any publication.
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                if knowledge_runtime is not None:
+                    knowledge_runtime.fail(knowledge_reservation, "withdrawal_validation_cancelled", ctx=ctx)
+                raise
+            model_withdrawn = same_occurrence and model_withdrawal["admissible"] is True
+            conflicting_support = (refuted_prior or model_withdrawn) and _is_verification_evidence_for_gate(prior_outcome)
+            if not (refuted_prior or model_withdrawn) or conflicting_support:
                 # Keep the canonical object and all of its evidence. This row
                 # records a counter-assessment, never a completed clean review.
                 if config.out_dir is not None:
@@ -35274,6 +35419,7 @@ def _re_review_study_enriched(
                             "reason": ("conflicting_verification_evidence" if conflicting_support
                                        else "prior_claims_lack_scoped_refutation"),
                             "prior_claims": prior_claims, "prior_evidence_tool": prior_outcome.evidence_tool,
+                            "model_withdrawal": model_withdrawal,
                             "claim_refutations": [r.to_record() for r in outcome.claim_refutations
                                                   if isinstance(r, ClaimRefutation)],
                             "body": (outcome.body or "")[:4000],

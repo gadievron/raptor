@@ -67,3 +67,29 @@ class ClaimRevision:
         return {"claim_id": self.claim_id, "revision_id": self.revision_id, "revision": self.revision,
                 "parent_revision": self.parent_revision, "pass_id": self.pass_id,
                 "file": self.file, "function": self.function, "line_start": self.line_start}
+
+
+def hypothesis_material_key(hypothesis: object, *, default_cwe: str = "") -> tuple[str, ...] | None:
+    """Compare declared claim material, without inventing revision lineage.
+
+    Confidence and primary selection are review opinions/ranking. Counter
+    conditions and external assumptions must not disappear through a shared
+    mechanism label. Malformed material is unavailable, never equivalent.
+    """
+    if not isinstance(hypothesis, dict) or not isinstance(default_cwe, str):
+        return None
+    mechanism = hypothesis.get("mechanism")
+    if not isinstance(mechanism, str) or not mechanism.strip():
+        return None
+    values = []
+    for key in ("cwe", "counter", "counter_scope", "guard_type", "assumed_property"):
+        value = hypothesis.get(key, "")
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            return None
+        values.append(value.strip())
+    values[0] = (values[0] or default_cwe.strip()).upper()
+    values[2] = values[2].lower()
+    values[3] = values[3].lower()
+    return (mechanism.strip().casefold(), *values)

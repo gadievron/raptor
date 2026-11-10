@@ -722,7 +722,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "aggregated_promotion", "all_refuted_demotion",
     "all_refuted_demotion_withheld", "all_refuted_grounding",
     "backlog_drain", "bug_a", "bug_b", "calibrated_downgrade",
-    "caller_evidence", "chain",
+    "caller_evidence", "chain", "claim_review_delivery",
     "confidence", "consistency_receipts", "context_reduced",
     "cost_usd", "cross_entry_receipt", "cross_entry_rendered",
     "duration_s", "file", "function", "merge_decision",
@@ -755,7 +755,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
 #: authority, the model may set them too.
 MODEL_AUTHORED_REVIEW_KEYS: frozenset[str] = frozenset({
     "anchor", "body", "bug_class", "callees", "callers",
-    "chain_exhausted", "claim",
+    "chain_exhausted", "claim", "claim_withdrawals",
     "constraints", "counter_direction", "counter_hypothesis", "cwe",
     "dataflow_sink", "dataflow_source",
     "dangerous_callees", "edge_verdicts", "entry_point",

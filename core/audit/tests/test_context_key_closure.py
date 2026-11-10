@@ -285,3 +285,20 @@ class TestContextScanPrefilter:
         (tmp_path / "sample.py").write_text("ordinary = (\n")
         with pytest.raises(SyntaxError):
             _scan()
+
+
+def test_annotated_context_literal_is_a_producer_with_missing_key_control(tmp_path, monkeypatch):
+    import core.audit.tests.test_context_key_closure as owner
+
+    producer = tmp_path / "producer.py"
+    renderer = tmp_path / "context.py"
+    producer.write_text('def build():\n    ctx: dict = {"line_start": 7}\n    return ctx\n')
+    renderer.write_text('def format_context_for_prompt(ctx):\n    return ctx.get("line_start")\n')
+    monkeypatch.setattr(owner, "_AUDIT", tmp_path)
+    writes, reads = owner._scan()
+    assert writes["line_start"] == {"producer.py"}
+    assert "line_start" in reads
+    assert owner._renderer_reads() <= set(writes)
+    producer.write_text('def build():\n    ctx: dict = {}\n    ctx["line_start"]: int\n    return ctx\n')
+    writes, _ = owner._scan()
+    assert owner._renderer_reads() - set(writes) == {"line_start"}

@@ -151,3 +151,17 @@ def test_oversized_lineage_is_explicitly_unavailable(tmp_path):
     assert not row["claim_revisions_complete"]
     assert "claim_revisions_size_limit" in row["metadata_omissions"]
     assert row["observations"]["complete"]
+
+
+def test_material_variants_ignore_ranking_but_keep_counter_contracts_distinct():
+    from core.audit.claims import hypothesis_material_key
+
+    original = {"mechanism": "length controls a copy", "counter_scope": "cross_function",
+                "guard_type": "bounds", "assumed_property": "count <= allocation", "confidence": "low"}
+    first = hypothesis_material_key(original, default_cwe="CWE-787")
+    assert first == hypothesis_material_key({**original, "confidence": "high", "is_primary": True,
+                                            "counter": "", "cwe": " CWE-787 "})
+    assert first != hypothesis_material_key({**original, "assumed_property": "byte_count <= allocation"}, default_cwe="CWE-787")
+    assert first != hypothesis_material_key({**original, "counter_scope": "local"}, default_cwe="CWE-787")
+    assert first != hypothesis_material_key({**original, "cwe": "CWE-190"}, default_cwe="CWE-787")
+    assert hypothesis_material_key({**original, "counter": {"unknown": "shape"}}) is None

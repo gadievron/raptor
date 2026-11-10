@@ -202,6 +202,32 @@ _SPEC_CLAIM_ITEM = {
     "required": ["claim"],
 }
 
+# Add this optional field only when prior definitions and complete source
+# actually reached this invocation; ordinary first-pass schemas stay unchanged.
+_CLAIM_WITHDRAWALS_SCHEMA = {
+    "type": "array", "maxItems": 32,
+    "description": (
+        "Explicitly withdraw an unsupported prior theory only when its exact IDs "
+        "were supplied. Correct its specific premise using this function's source "
+        "fragment. Omission retains the theory. This is a model judgment, not a "
+        "mechanical refutation. List remaining unknowns instead of inventing caller "
+        "or platform guarantees. If no concern remains, leave hypothesis empty."
+    ),
+    "items": {"type": "object", "properties": {
+        "claim_id": {"type": "string"}, "revision_id": {"type": "string"},
+        "corrected_premise": {"type": "string", "maxLength": 1024},
+        "reason": {"type": "string", "maxLength": 2048},
+        "remaining_unknowns": {"type": "array", "items": {"type": "string"}},
+        "source_anchors": {"type": "array", "minItems": 1, "maxItems": 8,
+            "items": {"type": "object", "properties": {
+                "fragment_id": {"type": "string"}, "line_start": {"type": "integer"},
+                "line_end": {"type": "integer"}},
+                "required": ["fragment_id", "line_start", "line_end"]}},
+        }, "required": ["claim_id", "revision_id", "corrected_premise", "reason",
+                          "remaining_unknowns", "source_anchors"]},
+}
+
+
 REVIEW_SCHEMA = {
     "type": "object",
     "properties": {
@@ -1385,9 +1411,13 @@ def make_review_fn(
         config: OrchestratorConfig,
     ) -> ReviewOutcome:
         budget = _prompt_budget(ctx, effective_system_prompt)
+        # The callback belongs to THIS invocation. A shared context dictionary
+        # can be formatted concurrently by panel members with different caps.
+        delivered_claim_context: list[dict] = []
         prompt = format_context_for_prompt(
             ctx, budget_limit=budget,
             patterns_in_system=patterns_in_system,
+            claim_delivery_sink=delivered_claim_context.append,
         )
         t0 = time.monotonic()
 
@@ -1425,6 +1455,10 @@ def make_review_fn(
             pass
 
         active_schema = deepen_schema if ctx.get("deepen") else first_pass_schema
+        if (delivered_claim_context and delivered_claim_context[0].get("claims")
+                and delivered_claim_context[0].get("source_fragment")):
+            active_schema = {**active_schema, "properties": {
+                **active_schema.get("properties", {}), "claim_withdrawals": _CLAIM_WITHDRAWALS_SCHEMA}}
 
         try:
             result, cost, resolved_model, usage = _single_pass(
@@ -1454,6 +1488,8 @@ def make_review_fn(
                 drop_pipeline_owned,
             )
             result = defang_model_fields(drop_pipeline_owned(result))
+            if delivered_claim_context:
+                result["claim_review_delivery"] = delivered_claim_context[0]
             if isinstance(result.get("body"), str):
                 result["body"] = defang_model_body(result["body"])
 
