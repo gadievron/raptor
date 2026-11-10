@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
 
 def render_dataflow_validation_lines(
     dv: dict[str, Any] | None,
@@ -65,7 +67,7 @@ def render_dataflow_validation_lines(
         # but couldn't help — vs the silent "no findings to validate"
         # case which is genuinely no signal).
         if skipped_reason:
-            return [f"{indent}Dataflow validation skipped: {skipped_reason}"]
+            return [sanitise_for_terminal(f"{indent}Dataflow validation skipped: {skipped_reason}", max_len=4000)]
         return []
 
     out: list[str] = []
@@ -171,4 +173,6 @@ def render_dataflow_validation_lines(
             outcome.append(f"applied: {', '.join(bits)}")
         out.append(f"{indent}  downgrades: {' · '.join(outcome)}")
 
-    return out
+    # Both native callers print these lines directly. Escape only the view;
+    # captured telemetry remains unchanged for structured report consumers.
+    return [sanitise_for_terminal(line, max_len=4000) for line in out]
