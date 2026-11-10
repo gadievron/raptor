@@ -300,7 +300,7 @@ class XFileConst:
                          shadowed_names: frozenset[str] = frozenset()) -> Any:
         """Fold with identifiers resolving ONLY to static-final fields
         of the same class — parameters and locals refuse."""
-        from core.analysis.const_fold_java import REFUSE, fold_expr
+        from core.analysis.const_fold_java import REFUSE, _member_value_names_at, fold_expr
 
         def resolve_name(name: str, d: int) -> Any:
             if d > _MAX_FIELD_DEPTH or name in shadowed_names:
@@ -319,7 +319,7 @@ class XFileConst:
         return fold_expr(node, resolve_name,
                          allow_taint_free=allow_taint_free,
                          xfile_resolver=self,
-                         shadowed_receiver_names=shadowed_names)
+                         shadowed_receiver_names=shadowed_names | _member_value_names_at(node))
 
     # ---- public resolutions ---------------------------------------------
 

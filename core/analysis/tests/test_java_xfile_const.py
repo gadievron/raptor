@@ -1178,3 +1178,57 @@ class TestDeclaringSourceContext:
         assert (result == "safe") is expected
         if not expected:
             assert result is REFUSE
+
+
+class TestWrapperMemberReceiver:
+    @pytest.mark.parametrize("case,expected", [
+        ("field", False), ("after", False), ("method", False),
+        ("record", False), ("unrelated", True), ("plain", True),
+        ("constructor", True), ("initializer", False),
+    ])
+    def test_actual_consumer_applies_declaring_member_bindings(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        (tmp_path / "Other.java").write_text(
+            'class Other { String VALUE=System.getenv("OWNED"); '
+            'String literal() { return VALUE; } }')
+        (tmp_path / "Helper.java").write_text(
+            'class Helper { static final String VALUE="safe"; '
+            'String literal() { return "safe"; } }')
+        member = 'static Other Helper=new Other(); '
+        prefix, suffix = "class Cfg { ", " }"
+        expression = "Helper.VALUE"
+        if case == "after":
+            suffix = member + suffix
+            member = ""
+        elif case == "method":
+            expression = "Helper.literal()"
+        elif case == "record":
+            prefix = "record Cfg(Other Helper) { "
+            member = ""
+        elif case == "unrelated":
+            prefix = "class Unrelated { " + member + " } " + prefix
+            member = ""
+        elif case == "plain":
+            member = ""
+        elif case == "constructor":
+            expression = "new Helper().literal()"
+        expression_in_caller = "Cfg.wrapper()"
+        wrapper = 'static String wrapper() { return ' + expression + '; } '
+        if case == "record":
+            wrapper = 'String wrapper() { return ' + expression + '; } '
+            expression_in_caller = "new Cfg(new Other()).wrapper()"
+        elif case == "initializer":
+            wrapper = 'static final String VALUE=Helper.VALUE; '
+            expression_in_caller = "Cfg.VALUE"
+        (tmp_path / "Cfg.java").write_text(prefix + member + wrapper + suffix)
+        source = ('class T {\nvoid m(java.io.PrintWriter out) {\nString value='
+                  + expression_in_caller + ';\nout.println(value);\n}\n}\n')
+        caller = tmp_path / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, 6), str(caller), str(tmp_path))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 4)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
