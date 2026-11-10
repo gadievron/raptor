@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
+
 
 def _owned(fd, identity):
     try:
@@ -53,8 +56,12 @@ def test_descriptor_argument_failure_closes_duplicate(
         def fail(*args, **kwargs):
             raise error("injected descriptor handoff failure")
 
-        with monkeypatch.context() as patcher:
-            patcher.setattr(os, "dup", dup)
+        with scoped_function_imports(
+            module,
+            ("test_descriptor_input_reads_pinned_inode_without_reopening_alias",),
+            {"os": os},
+        ) as imports, monkeypatch.context() as patcher:
+            patch_module_attribute(patcher, imports, "os", "dup", dup)
             if fault == "constructor":
                 patcher.setattr(child, "_DescriptorInput", fail)
             elif fault == "label":
