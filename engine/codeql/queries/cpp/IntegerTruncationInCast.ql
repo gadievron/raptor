@@ -1,11 +1,9 @@
 /**
- * @name Integer truncation in explicit cast flowing to allocation or buffer operation
- * @description An explicit cast from a wider integer type (long, long long,
- *              size_t, uint64_t, ssize_t) to a narrower type (int, short,
- *              uint16_t, uint32_t) without a prior range check.  When the
- *              truncated value reaches an allocation (malloc, calloc, new[])
- *              or a buffer-size parameter (memcpy, read, recv), the result
- *              can be a heap overflow from an undersized allocation.
+ * @name Potential integer truncation in an explicit cast
+ * @description An explicit cast converts a wider integral value to a narrower
+ *              destination without sufficient static evidence that the value
+ *              fits. Allocation or buffer-size use adds risk context when
+ *              observed; it is not required for a finding.
  * @kind path-problem
  * @problem.severity error
  * @security-severity 8.0
