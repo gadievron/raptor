@@ -9,10 +9,10 @@ from core.atomic_fs import rmtree_hardened
 def restricted_tree(path: Path, mode: int = 0o000):
     """Leave a nested tool-output directory unwritable until cleanup."""
     nested = path / "locked" / "nested"
-    nested.mkdir(parents=True)
-    (nested / "payload").write_bytes(b"x" * 4096)
-    (path / "locked").chmod(mode)
     try:
+        nested.mkdir(parents=True)
+        (nested / "payload").write_bytes(b"x" * 4096)
+        (path / "locked").chmod(mode)
         yield path
     finally:
         rmtree_hardened(path)
