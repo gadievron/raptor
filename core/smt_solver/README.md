@@ -257,3 +257,9 @@ literal. The source checker preserves promoted signedness: a signed remainder
 can be negative. Independent source and literal-caller replay uses truncating
 C division, rather than Python's negative-operand modulo. Invalid divisors and
 unsupported source expressions remain unavailable; safe reads never refute a function.
+
+Fixed local-array reads also support a parameter AND a small nonnegative int
+mask. The query and independent source/caller replay use the actual promoted
+bitwise operation. Signed narrow inputs may expose promoted bits through sign
+extension; unsigned narrow inputs do not. A mask below the extent is a safe
+bound, while a mask equal to the extent can still select an invalid index.
