@@ -223,6 +223,8 @@ def _sniff(path: Path) -> bytes | None:
     swap between the lstat and the open — same idiom as
     ``core.run.target_types._read_magic``.
     """
+    from core.source.streams import owned_fd
+
     if not _lstat_is_regular(path):
         return None
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
@@ -231,14 +233,13 @@ def _sniff(path: Path) -> bytes | None:
         fd = os.open(str(path), flags)
     except OSError:
         return None
-    try:
-        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+    with owned_fd(fd, close_fd=os.close):
+        try:
+            if not _stat.S_ISREG(os.fstat(fd).st_mode):
+                return None
+            return os.read(fd, _MAX_SNIFF_BYTES)
+        except OSError:
             return None
-        return os.read(fd, _MAX_SNIFF_BYTES)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
 
 
 def census_fuzz_harnesses(path: Path) -> FuzzHarnessCensus:
