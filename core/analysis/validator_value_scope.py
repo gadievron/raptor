@@ -130,8 +130,10 @@ def _shared_slot_epoch_unverified(tree, name: bytes, after_line: int, through_li
         ((node.type in {"await_expression", "yield_expression"}
           or (node.type == "for_in_statement" and any(child.type == "await" for child in node.children)))
          and after_line < node.start_point[0] + 1 <= through_line)
-        or (node.type in {"call_expression", "new_expression"}
-            and (after_line < node.start_point[0] + 1 < through_line
+        or (node.type in {"call_expression", "new_expression", "member_expression", "subscript_expression"}
+            and ((after_line < node.start_point[0] + 1 < through_line)
+                 or (node.type in {"member_expression", "subscript_expression"}
+                     and after_line < node.start_point[0] + 1 <= through_line)
                  or _write_reaches_later_iteration(node, after_line, through_line)))
         for node in nodes if ownership[node.id] == owner
     )
