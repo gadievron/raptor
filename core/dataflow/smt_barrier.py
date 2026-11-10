@@ -1065,12 +1065,13 @@ def _validator_call_error_may_reach_sink(
 ) -> bool:
     """A caught call error must not bypass validation on the sink path.
 
-    Handler types are not a complete call-exception contract. A sink in
-    the same protected body is skipped by the exception edge; otherwise
-    a falling-through handler leaves the input unvalidated at the sink.
+    Handler types are not a complete call-exception contract, and context
+    managers may suppress exceptions without any explicit handler. A sink
+    in the same protected body is skipped by the exception edge; otherwise
+    suppression can leave the input unvalidated at the sink.
     """
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Try, ast.TryStar)):
+        if not isinstance(node, (ast.Try, ast.TryStar, ast.With, ast.AsyncWith)):
             continue
 
         body = node.body
@@ -1083,6 +1084,8 @@ def _validator_call_error_may_reach_sink(
 
         if not in_body(validator_line) or in_body(sink_line):
             continue
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            return True  # No source contract establishes a non-suppressing exit.
         if any(not _block_always_exits(handler.body) for handler in node.handlers):
             return True
     return False
