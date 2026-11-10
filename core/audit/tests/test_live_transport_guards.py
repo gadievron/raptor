@@ -1609,7 +1609,7 @@ class TestSemgrepSurfaceFences:
     def test_nonce_reuse_receiver_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_nonce_reuse_receiver_precision.py")
         assert _callers_of(calls, "run") == set()
-        assert _callers_of(calls, "run_pinned_subprocess") == {"test_nonce_reuse_receiver_reassignment"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_nonce_reuse_receiver_reassignment", "test_nonce_reuse_messages_require_api_context"}
 
     def test_pycryptodome_nonce_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_pycryptodome_nonce_precision.py")

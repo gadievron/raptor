@@ -1,9 +1,8 @@
 rules:
-  # Actual reuse heuristics. Literal / constant nonces are reported by
-  # insecure-iv-or-nonce.yaml; the rules here fire only on evidence of the
-  # SAME nonce value feeding more than one encryption, which is the
-  # catastrophic case for AES-GCM / ChaCha20-Poly1305 (key stream and auth
-  # key recovery).
+  # Repeated-argument heuristics. Literal nonces are reported separately by
+  # insecure-iv-or-nonce.yaml. Python encrypt APIs differ: the first argument
+  # may be plaintext rather than a nonce. Confirm the API, effective key,
+  # value stability and operation context before concluding nonce reuse.
 
   - id: raptor.crypto.nonce.reuse.spec.java
     message: >
@@ -32,10 +31,10 @@ rules:
       asvs: ["V7.3"]
 
   - id: raptor.crypto.nonce.reuse.two-calls.python
-    message: >
-      Potential nonce reuse. The same nonce variable is passed to two encrypt
-      calls on the same AEAD object without being reassigned in between.
-      Generate a fresh nonce per encryption.
+    message: >-
+      Candidate: two encrypt calls share a first-argument expression. Confirm
+      that this API takes a nonce in that position, and verify the effective
+      key and argument value across both calls before treating this as nonce reuse.
     languages: [python]
     severity: HIGH
     patterns:
@@ -63,10 +62,10 @@ rules:
       asvs: ["V7.3"]
 
   - id: raptor.crypto.nonce.reuse.loop.python
-    message: >
-      Potential nonce reuse. A nonce assigned once outside a loop is used for
-      an encrypt call inside the loop, so every iteration encrypts under the
-      same nonce. Generate a fresh nonce inside the loop.
+    message: >-
+      Candidate: an encrypt call in a loop uses an expression assigned outside
+      the loop. Confirm that this API takes a nonce in that position, and verify
+      multiple iterations and key/value stability before treating this as nonce reuse.
     languages: [python]
     severity: HIGH
     patterns:
