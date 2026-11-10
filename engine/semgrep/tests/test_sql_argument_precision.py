@@ -17,6 +17,13 @@ pytestmark = [pytest.mark.slow, pytest.mark.skipif(
 _MATRICES = {
     "python": ("injection/sql-concat.yaml", "raptor.injection.sql.taint.python", [
         ('cursor.execute(input())', True),
+        ('cursor.executescript(input())', True),
+        ('cursor.executescript("SELECT " + input())', True),
+        ('sqlite3.connect(":memory:").executescript(input())', True),
+        ('cursor.executescript("SELECT " + str(int(input())))', False),
+        ('cursor = get_cursor(input())\ncursor.executescript("SELECT 1")', False),
+        ('cursor.execute("SELECT ?", (cursor.executescript(input()),))', True),
+        ('cursor.executescript("SELECT 1;")', False),
         ('cursor.execute(input(), ())', True),
         ('cursor.executemany(input(), [(1,)])', True),
         ('cursor.execute(query=input(), params=())', True),

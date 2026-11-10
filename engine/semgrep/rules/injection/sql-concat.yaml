@@ -90,6 +90,7 @@ rules:
           - pattern-either:
               - pattern: $DB.execute($QUERY, ...)
               - pattern: $DB.executemany($QUERY, ...)
+              - pattern: $DB.executescript($QUERY)
               - pattern: $DB.execute(query=$QUERY, ...)
               - pattern: $DB.executemany(query=$QUERY, ...)
               - pattern: $DB.execute(statement=$QUERY, ...)
