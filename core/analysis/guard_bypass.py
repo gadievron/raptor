@@ -225,6 +225,8 @@ def check_guard_coverage(
     cfg,
     read_line: int,
     required_guard_text: str,
+    *,
+    required_polarity: bool = True,
 ) -> bool:
     """Check if a required guard dominates all paths to a read site.
 
@@ -234,6 +236,22 @@ def check_guard_coverage(
 
     Returns True if the guard is on every path (no bypass).
     """
+    if type(required_guard_text) is not str or not required_guard_text.strip() \
+            or type(required_polarity) is not bool:
+        return False
+    if getattr(cfg, "branch_guards", None) is not None:
+        from .dominators import build_dom_tree
+        from .lifecycle_collector import GuardEpochUnavailable, collect_guards_at_site
+
+        try:
+            guards = collect_guards_at_site(cfg, build_dom_tree(cfg), read_line, cfg.file_path)
+        except GuardEpochUnavailable:
+            return False
+        return any(
+            guard.polarity is required_polarity
+            and guard.condition.strip() == required_guard_text.strip()
+            for guard in guards
+        )
     read_node = _find_node_at_line(cfg, read_line)
     if read_node is None:
         return False
@@ -241,23 +259,23 @@ def check_guard_coverage(
     entry_node = cfg.entry_node if hasattr(cfg, "entry_node") else cfg.entry
     condition_edges = extract_conditions_from_cfg(cfg)
 
-    # TRUE-polarity edges of matching guards, keyed src_line ->
+    # Selected-polarity edges of matching guards, keyed src_line ->
     # {dst_line}. Line MEMBERSHIP can never distinguish branches —
     # the condition node's line lies on both branch paths by
     # construction, so an else-branch read and a post-merge read both
     # counted as "guard on every path". Coverage demands the path to
-    # TRAVERSE the guard's true edge (consecutive line pair); a path
+    # TRAVERSE the guard's selected edge (consecutive line pair); a path
     # arriving via the false edge answers "not covered", and the
     # consumer keeps its missing-guard finding (refusal direction).
-    guard_true_edges: dict[int, set[int]] = {}
+    selected_edges: dict[int, set[int]] = {}
     for edge in condition_edges:
-        if edge.condition is None or not edge.condition.polarity:
+        if edge.condition is None or edge.condition.polarity is not required_polarity:
             continue
-        if edge.condition.text.strip().lower() == required_guard_text.strip().lower():
-            guard_true_edges.setdefault(
+        if edge.condition.text.strip() == required_guard_text.strip():
+            selected_edges.setdefault(
                 edge.src_line, set()).add(edge.dst_line)
 
-    if not guard_true_edges:
+    if not selected_edges:
         return False
 
     paths, complete = _enumerate_paths(cfg, entry_node, read_node)
@@ -273,12 +291,12 @@ def check_guard_coverage(
         return complete
 
     for path in paths:
-        traversed_true_edge = any(
-            path[i] in guard_true_edges
-            and path[i + 1] in guard_true_edges[path[i]]
+        traversed_selected_edge = any(
+            path[i] in selected_edges
+            and path[i + 1] in selected_edges[path[i]]
             for i in range(len(path) - 1)
         )
-        if not traversed_true_edge:
+        if not traversed_selected_edge:
             return False
 
     # Every ENUMERATED path carries the guard — but when the DFS was
