@@ -26,25 +26,53 @@ rules:
     patterns:
       - pattern-either:
           - pattern: cryptography.hazmat.primitives.ciphers.aead.AESGCM($K).encrypt($NONCE, ...)
-          - pattern: |
-              $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
-              ...
-              $A.encrypt($NONCE, ...)
+          - patterns:
+              - pattern: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
+                  ...
+                  $A.encrypt($NONCE, ...)
+              - pattern-not: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
+                  ...
+                  $A = ...
+                  ...
+                  $A.encrypt($NONCE, ...)
           - pattern: cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K).encrypt($NONCE, ...)
-          - pattern: |
-              $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
-              ...
-              $A.encrypt($NONCE, ...)
+          - patterns:
+              - pattern: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
+                  ...
+                  $A.encrypt($NONCE, ...)
+              - pattern-not: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
+                  ...
+                  $A = ...
+                  ...
+                  $A.encrypt($NONCE, ...)
           - pattern: cryptography.hazmat.primitives.ciphers.aead.AESCCM($K).encrypt($NONCE, ...)
-          - pattern: |
-              $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
-              ...
-              $A.encrypt($NONCE, ...)
+          - patterns:
+              - pattern: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
+                  ...
+                  $A.encrypt($NONCE, ...)
+              - pattern-not: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
+                  ...
+                  $A = ...
+                  ...
+                  $A.encrypt($NONCE, ...)
           - pattern: cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K).encrypt($NONCE, ...)
-          - pattern: |
-              $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
-              ...
-              $A.encrypt($NONCE, ...)
+          - patterns:
+              - pattern: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
+                  ...
+                  $A.encrypt($NONCE, ...)
+              - pattern-not: |
+                  $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
+                  ...
+                  $A = ...
+                  ...
+                  $A.encrypt($NONCE, ...)
       - metavariable-pattern:
           metavariable: $NONCE
           patterns:

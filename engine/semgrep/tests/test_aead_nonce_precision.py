@@ -46,3 +46,41 @@ def test_aead_nonce_constructor_identity(tmp_path):
     assert len(data["results"])==len(expected)
     assert all(row["check_id"].endswith("raptor.crypto.nonce.literal.python") for row in data["results"])
     assert all(row["extra"]["message"].startswith("Candidate:") for row in data["results"])
+
+
+def test_aead_direct_reassignment_ends_constructor_origin(tmp_path):
+    rule = Path(__file__).resolve().parents[1] / "rules/crypto/insecure-iv-or-nonce.yaml"
+    target = tmp_path / "receivers"
+    target.mkdir()
+    expected = set()
+    cases = {
+        "retained": ('    a = {name}(key)\n    a.encrypt(b"0" * 12, data, None)\n', 6),
+        "rebound": ('    a = {name}(key)\n    a = Echo()\n    a.encrypt(b"0" * 12, data, None)\n', None),
+        "unknown": ('    a = {name}(key)\n    a = other\n    a.encrypt(b"0" * 12, data, None)\n', None),
+        "fresh": ('    a = {name}(key)\n    a = {name}(other)\n    a.encrypt(b"0" * 12, data, None)\n', 7),
+        "early": ('    a = {name}(key)\n    a.encrypt(b"0" * 12, data, None)\n    a = Echo()\n    a.encrypt(b"0" * 12, data, None)\n', 6),
+    }
+    for name in ("AESGCM", "ChaCha20Poly1305", "AESCCM", "AESOCB3"):
+        prefix = (
+            f"from cryptography.hazmat.primitives.ciphers.aead import {name}\n"
+            "class Echo:\n    def encrypt(self, nonce, data, associated_data): return nonce\n"
+            "def owned(key, data, other):\n"
+        )
+        for case, (body, line) in cases.items():
+            filename = f"{name}_{case}.py"
+            (target / filename).write_text(prefix + body.format(name=name))
+            if line is not None:
+                expected.add((filename, line))
+    result = run_pinned_subprocess(
+        ["semgrep", "scan", "--config", str(rule), "--metrics", "off",
+         "--disable-version-check", "--jobs", "1", "--json", *map(str, sorted(target.iterdir()))],
+        timeout=60, context="Owned inert AEAD receiver reassignment controls",
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert not data.get("errors"), data.get("errors")
+    assert {Path(p).name for p in data["paths"]["scanned"]} == {p.name for p in target.iterdir()}
+    actual = {(Path(row["path"]).name, row["end"]["line"]) for row in data["results"]}
+    assert actual == expected
+    assert len(data["results"]) == len(expected)
