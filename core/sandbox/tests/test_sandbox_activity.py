@@ -239,3 +239,40 @@ def test_observe_reader_failure_does_not_drop_execution_receipt(tmp_path, monkey
     assert report['execution_count'] == 1
     assert report['counts'] == [{'action': 'process_exit', 'outcome': 'succeeded', 'count': 1}]
     assert 'observe_receipt_failed:OSError' in report['coverage']['issues']
+
+
+def test_decode_error_without_completed_posture_cannot_verify_activity(tmp_path):
+    from core.sandbox import sandbox
+
+    output = tmp_path / 'output'
+    output.mkdir()
+    # A benign operator opt-out can execute without key-hiding isolation.
+    # Decode failure happens before CompletedProcess posture publication.
+    with isolated_module_state(summary, {'_active_run_dir': output}, lock=summary._lock):
+        with sandbox(profile='none') as run:
+            with pytest.raises(UnicodeDecodeError):
+                run(['/bin/sh', '-c', "printf '\\377'"], encoding='ascii', errors='strict',
+                    capture_output=True, timeout=5)
+    assert summary.get_run_posture(output) is None
+    report = activity.finalize(output)
+    assert report['execution_count'] == 1
+    assert report['integrity'] == 'unavailable'
+    assert 'execution_posture_unavailable' in report['coverage']['issues']
+    assert 'telemetry_key_hiding_unavailable' in report['coverage']['issues']
+    assert 'telemetry_key_exposed' not in report['coverage']['issues']
+    row = json.loads((output / activity.EVENTS_FILE).read_text())
+    assert row['outcome'] == 'failed'
+    assert row['details']['error_type'] == 'UnicodeDecodeError'
+
+
+def test_unknown_error_posture_cannot_be_upgraded_by_a_previous_hidden_call(tmp_path):
+    receipt(tmp_path)
+    activity.record_execution(tmp_path, error=RuntimeError('owned error with unknown posture'))
+    report = activity.finalize(tmp_path)
+    assert report['execution_count'] == 2
+    assert report['integrity'] == 'unavailable'
+    assert 'execution_posture_unavailable' in report['coverage']['issues']
+    assert 'telemetry_key_hiding_unavailable' in report['coverage']['issues']
+    assert 'telemetry_key_exposed' not in report['coverage']['issues']
+    rows = [json.loads(line) for line in (tmp_path / activity.EVENTS_FILE).read_text().splitlines()]
+    assert [row['outcome'] for row in rows] == ['succeeded', 'failed']

@@ -162,6 +162,12 @@ def record_execution(run_dir, *, result=None, error=None, job_budget=None, obser
                 state['issues'].add('proxy_enforcement_advisory')
             if result is not None:
                 state['key_hidden'] &= bool(info.get('mount_ns_active') or info.get('restrict_reads'))
+            else:
+                # An exception can occur after an unconfined child executed,
+                # but before its CompletedProcess posture was published. A
+                # receipt is not independent proof that the key stayed hidden.
+                state['key_hidden'] = False
+                state['issues'].add('execution_posture_unavailable')
             _append(state, 'execution', 'process_exit' if result is not None else 'setup_or_execution_error',
                     outcome=('failed' if error is not None else
                              'succeeded' if result is not None and result.returncode == 0 else
@@ -208,7 +214,9 @@ def _merge_verified_inputs(run_dir: Path, state: dict) -> None:
     if posture is not None and not posture.get('mac_key_hidden', False):
         state['key_hidden'] = False
     if not state['key_hidden']:
-        state['issues'].add('telemetry_key_exposed')
+        unknown = {'execution_posture_unavailable', 'independent_key_hiding_posture_unavailable'}
+        state['issues'].add('telemetry_key_hiding_unavailable' if unknown & state['issues']
+                            else 'telemetry_key_exposed')
     raw_summary = triage._load_json(run_dir / summary.SUMMARY_FILE)
     usable, integrity = triage._verify_summary(raw_summary, binding, allow_legacy=False)
     if raw_summary is not None and integrity != 'verified':
