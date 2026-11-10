@@ -61,6 +61,7 @@ class _AuthorizeBootPayloadCase(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.authorized = self.dir / ".sage" / "boot-payload.authorized"
         self.driver = DRIVER_TEMPLATE.replace(

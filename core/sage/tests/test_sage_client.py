@@ -615,6 +615,7 @@ class TestHardenIdentityKeyPerms(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = __import__("pathlib").Path(self.tmp.name) / "ids"
         self.dir.mkdir(mode=0o755)
         self.key = self.dir / "agent.key"

@@ -40,6 +40,7 @@ exit 0
 class TestSgReExec(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.bindir = self.dir / "bin"
         self.bindir.mkdir()

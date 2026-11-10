@@ -110,6 +110,7 @@ class _GuardHarness(unittest.TestCase):
     def setUp(self):
         import tempfile
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
         self.fixture = self.dir / "fixture_server.py"
         self.fixture.write_text(FIXTURE_SERVER, encoding="utf-8")
