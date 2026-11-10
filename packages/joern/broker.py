@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import ctypes
 import errno
+from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 import hashlib
@@ -32,6 +33,8 @@ if __package__ in (None, ""):
 
 from core.atomic_fs.fs_lock import sidecar_flock
 from core.json import dumps_canonical
+from core.security.file_policy import FilePermissionRefused, validate_file_permissions
+from core.source.gated import open_regular_gated
 from packages.joern.heap_ledger import _pid_starttime
 from packages.joern.artifacts import toolchain_identity
 from packages.joern.models import JoernCPG, JoernResult, TaintFlow
@@ -107,16 +110,25 @@ def _darwin_peer_uid(connection):
 
 def _private(path: Path):
     info = path.lstat()
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
-        raise ValueError("Joern runtime directory must be private and owned by this user")
+    message = "Joern runtime directory must be private and owned by this user"
+    if not stat.S_ISDIR(info.st_mode):
+        raise ValueError(message)
+    try:
+        validate_file_permissions(info, owner_uid=os.geteuid(), forbidden_mode_bits=0o077)
+    except FilePermissionRefused:
+        raise ValueError(message) from None
 
 
 def _record(path: Path):
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077 or info.st_nlink != 1:
-            raise ValueError("unsafe Joern controller record")
+    try:
+        stream = open_regular_gated(
+            path, follow_symlinks=False,
+            stat_validator=partial(validate_file_permissions, owner_uid=os.geteuid(),
+                                   forbidden_mode_bits=0o077, require_single_link=True),
+        )
+    except ValueError:
+        raise ValueError("unsafe Joern controller record") from None
+    with stream:
         raw = stream.read(8193)
         if len(raw) > 8192:
             raise ValueError("oversized Joern controller record")

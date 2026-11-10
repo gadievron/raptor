@@ -75,6 +75,8 @@ import time
 from collections.abc import MutableMapping
 from pathlib import Path
 
+from core.security.file_policy import FilePermissionRefused, validate_file_permissions
+
 from . import state
 
 logger = logging.getLogger(__name__)
@@ -201,12 +203,9 @@ def _nonce_file_consents(path: Path, nonce: str) -> bool:
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return False
-        if st.st_uid != os.geteuid():
-            return False
-        if st.st_mode & 0o077:
-            # Group/other-accessible consent files are refused: a
-            # loosely-permissioned file is not evidence the account
-            # owner minted it.
+        try:
+            validate_file_permissions(st, owner_uid=os.geteuid(), forbidden_mode_bits=0o077)
+        except FilePermissionRefused:
             return False
         if st.st_size > NONCE_FILE_MAX_BYTES:
             return False
