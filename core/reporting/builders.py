@@ -13,9 +13,9 @@ def build_document(context: ReportContext, *, title: str | None = None,
     summary = summary or build_operator_summary(context)
     sections = [Block("paragraph", text=f"Outcome: {summary.state}." + (f" Captured findings: {summary.total}." if summary.findings_available else " Structured command result captured."))]
     if context.findings:
-        sections.append(Block("table", title="Findings", columns=["Ref", "Tool", "Rule", "Location", "Status", "Scanner level", "Security severity", "Scanner security score"], rows=[
+        sections.append(Block("table", title="Findings", columns=["Ref", "Tool", "Rule", "Location", "Status", "Scanner level", "Security severity", "Scanner security score", "Suppressed"], rows=[
             [f"F{i:05d}", f.get("tool"), f.get("rule_id"), f"{f.get('file') or 'unknown'}" + (f":{f['line']}" if f.get("line") else ""),
-             f.get("status", "Unknown"), f.get("scanner_level"), f.get("severity"), f.get("security_score")]
+             f.get("status", "Unknown"), f.get("scanner_level"), f.get("severity"), f.get("security_score"), bool(f.get("suppressed"))]
             for i, f in enumerate(context.findings, 1)
         ]))
         details = []
