@@ -63,6 +63,12 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
         ('req.headers["host"]', True),
         ('req.headers.host', True),
         ('request.headers.host', True),
+        ('req.get("host")', True),
+        ('req.header("host")', True),
+        ('request.get("host")', True),
+        ('request.header("host")', True),
+        ('local.get("host")', False),
+        ('local.header("host")', False),
         ('local.headers.host', False),
         ('"constant"', False),
     ]
