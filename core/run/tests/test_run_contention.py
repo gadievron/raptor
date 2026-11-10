@@ -230,14 +230,16 @@ class StartRunGateTest(RunContentionBase):
             meta["status"] = "completed"
             save_json(sibling / RUN_METADATA_FILE, meta)
 
+        from core.testing.threads import retiring_threads
+
         timer = threading.Timer(0.5, _finish)
-        timer.start()
-        self.addCleanup(timer.cancel)
-        out = self.project_out / "agentic_20260102_000000"
-        with patch("time.sleep"):  # collapse the 2s poll interval
-            start_run(out, "agentic", wait_for_project=True)
-        meta = load_json(out / RUN_METADATA_FILE)
-        self.assertEqual(meta["status"], "running")
+        with retiring_threads([timer], release=timer.cancel, timeout=5):
+            timer.start()
+            out = self.project_out / "agentic_20260102_000000"
+            with patch("time.sleep"):  # collapse the 2s poll interval
+                start_run(out, "agentic", wait_for_project=True)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "running")
 
 
 if __name__ == "__main__":
