@@ -175,3 +175,13 @@ destinations, aliases, non-atomic initializers, mutation and ambiguous sites
 receive no source-conversion credit. The older width-only narrowing diagnostic
 keeps its existing scope. Candidate preparation does not enter the solver;
 new conversion leads follow existing leads within the same finite budgets.
+
+QUALITY comparison candidates may also use simple controlling parameter/literal
+comparisons and direct early-return checks to propose a constant test. This
+preparation uses bounded, value-preserving storage intervals, without solver or
+SSA credit. It does not assume a test's own truth, flatten disjunctions, guess
+literal widths, or generate a constant from an empty candidate range. These
+hints follow prior source leads within the existing budgets. The comparison
+oracle must still validate the complete prefix, typed guards, source identity
+and reachable entry; mutation or unsupported control flow cannot earn a proof
+from candidate metadata.
