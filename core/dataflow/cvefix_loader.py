@@ -92,7 +92,7 @@ def load_pairs(
           AND f.repo_url LIKE 'https://github.com/%'
         ORDER BY f.cve_id
     """
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    con = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         rows = con.execute(sql, (*cwes, *languages)).fetchall()
     finally:
