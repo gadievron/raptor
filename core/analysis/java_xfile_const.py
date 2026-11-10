@@ -148,6 +148,7 @@ class XFileConst:
 
     def __init__(self, java_file_path: str, repo_root: str | None) -> None:
         self._file = Path(java_file_path)
+        self._contexts: dict[Path, XFileConst] = {self._file.resolve(): self}
         self._root = Path(repo_root) if repo_root else None
         self._parser = _parser()
         self.ok = self._parser is not None and self._root is not None \
@@ -179,6 +180,21 @@ class XFileConst:
                 self._imports = dict(types)
             except Exception:  # noqa: BLE001 — no imports, same-package only
                 self._imports = {}
+
+    def _context_for_file(self, path: Path) -> XFileConst | None:
+        """Reuse bounded source-owned import/package and recursion caches."""
+        key = path.resolve()
+        context = self._contexts.get(key)
+        if context is not None:
+            return context
+        if len(self._contexts) >= _MAX_CLASS_CACHE:
+            return None
+        context = XFileConst(str(path), str(self._root) if self._root else None)
+        if not context.ok:
+            return None
+        context._contexts = self._contexts
+        self._contexts[key] = context
+        return context
 
     # ---- class location -------------------------------------------------
 
@@ -398,11 +414,12 @@ class XFileConst:
             val = REFUSE
             located = self._locate_class(chain) if self.ok else None
             if located is not None:
-                root, _path = located
+                root, path = located
                 rhs = self._class_static_final_rhs(root, field)
-                if rhs is not None:
-                    val = self._fold_restricted(rhs, root, 0,
-                                                allow_taint_free=True)
+                context = self._context_for_file(path)
+                if rhs is not None and context is not None:
+                    val = context._fold_restricted(rhs, root, 0,
+                                                   allow_taint_free=True)
             self._field_cache[key] = val
         if val is TAINT_FREE and not allow_taint_free:
             return REFUSE
@@ -495,7 +512,8 @@ class XFileConst:
             val = REFUSE
             located = self._locate_class(chain) if self.ok else None
             if located is not None:
-                root, _path = located
+                root, path = located
+                context = self._context_for_file(path)
                 decls = []
                 for n in _declared_members(root):
                     if n.type == "method_declaration":
@@ -510,8 +528,8 @@ class XFileConst:
                         exprs = [c for c in stmts[0].children if c.is_named]
                         if len(exprs) == 1:
                             names = _method_parameter_names(decls[0])
-                            if names is not None:
-                                val = self._fold_restricted(
+                            if names is not None and context is not None:
+                                val = context._fold_restricted(
                                     exprs[0], root, 0, allow_taint_free=True,
                                     shadowed_names=names)
             self._method_cache[key] = val

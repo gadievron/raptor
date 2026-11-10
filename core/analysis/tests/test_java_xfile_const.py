@@ -1106,3 +1106,75 @@ class TestAnonymousCreationIdentity:
         index = JavaConstIndex(source, (1, 1))
         assert index.ok
         assert index.receiver_type("receiver") == (None if anonymous else "Cfg")
+
+
+class TestDeclaringSourceContext:
+    @pytest.mark.parametrize("case,expected", [
+        ("mutable-field", False), ("imported-mutable", False),
+        ("literal-field", True), ("imported-literal", True),
+        ("method", False), ("creation", False),
+        ("initializer", False), ("method-cycle", False), ("field-cycle", False),
+    ])
+    def test_actual_consumer_uses_declaring_namespace(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        for package in ("app", "lib", "safe", "owned"):
+            (tmp_path / package).mkdir()
+        imports = ""
+        value = 'public static String VALUE=System.getenv("OWNED");'
+        method = 'public static String literal() { return System.getenv("OWNED"); }'
+        wrapper = 'public static String wrapper() { return Other.VALUE; }'
+        expression = "Cfg.wrapper()"
+        if case in ("literal-field", "imported-literal"):
+            value = 'public static final String VALUE="safe";'
+        if case.startswith("imported-"):
+            imports = "import owned.Other; "
+        if case == "method":
+            wrapper = 'public static String wrapper() { return Other.literal(); }'
+        elif case == "creation":
+            wrapper = 'public static String wrapper() { return new Other().literal(); }'
+        elif case == "initializer":
+            wrapper = 'public static final String RESULT=Other.VALUE;'
+            expression = "Cfg.RESULT"
+        elif case == "method-cycle":
+            wrapper = 'public static String wrapper() { return Other.literal(); }'
+            method = 'public static String literal() { return Cfg.wrapper(); }'
+        elif case == "field-cycle":
+            wrapper = 'public static final String RESULT=Other.VALUE;'
+            value = 'public static final String VALUE=Cfg.RESULT;'
+            expression = "Cfg.RESULT"
+        (tmp_path / "lib/Cfg.java").write_text(
+            'package lib; ' + imports + 'public class Cfg { ' + wrapper + ' }')
+        other = 'public class Other { ' + value + method + ' }'
+        (tmp_path / "lib/Other.java").write_text('package lib; ' + other)
+        (tmp_path / "owned/Other.java").write_text('package owned; ' + other)
+        (tmp_path / "safe/Other.java").write_text(
+            'package safe; public class Other { public static final String VALUE="safe"; '
+            'public static String literal() { return "safe"; } }')
+        source = ('package app;\nimport lib.Cfg;\nimport safe.Other;\nclass T {\n'
+                  'void m(java.io.PrintWriter out) {\nString value=' + expression
+                  + ';\nout.println(value);\n}\n}\n')
+        caller = tmp_path / "app/T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, 9), str(caller), str(tmp_path))
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == 7)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+
+    @pytest.mark.parametrize("hops,expected", [(2, True), (34, False)])
+    def test_source_context_chain_is_bounded(self, tmp_path, hops, expected):
+        from core.analysis.java_xfile_const import XFileConst
+
+        caller = tmp_path / "T.java"
+        caller.write_text("class T {}")
+        for number in range(hops):
+            expression = '"safe"' if number == hops - 1 else f"C{number + 1}.literal()"
+            (tmp_path / f"C{number}.java").write_text(
+                f"class C{number} {{ static String literal() {{ return {expression}; }} }}")
+        resolver = XFileConst(str(caller), str(tmp_path))
+        result = resolver.resolve_method("C0", "literal", 0, False)
+        assert (result == "safe") is expected
+        if not expected:
+            assert result is REFUSE
