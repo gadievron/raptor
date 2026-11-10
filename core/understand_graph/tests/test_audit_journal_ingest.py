@@ -11,6 +11,7 @@ provenance, and never commits a junk empty ``audit`` snapshot.
 
 import hashlib
 import json
+from contextlib import closing
 
 from core.coverage import journal_mac
 from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
@@ -86,7 +87,7 @@ def test_real_producer_rows_mint_hypothesis_and_verdict_nodes(tmp_path):
     assert summary["edges"].get("TESTED_BY", 0) >= 1
     assert summary["edges"].get("AFFECTS", 0) >= 1
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         hyp = conn.execute(
             "SELECT props_json FROM nodes WHERE kind='hypothesis'"
         ).fetchone()
@@ -111,7 +112,7 @@ def test_rows_without_review_content_commit_no_snapshot(tmp_path):
     result = ingest_audit_hypotheses(run_dir, str(target))
     assert result is None
 
-    with open_graph(graph_path) as conn:
+    with closing(open_graph(graph_path)) as conn, conn:
         audit_snaps = conn.execute(
             "SELECT COUNT(*) AS c FROM snapshots WHERE producer='audit'"
         ).fetchone()["c"]
@@ -163,7 +164,7 @@ def test_mac_provenance_recorded_on_minted_nodes(tmp_path):
 
     result = ingest_audit_hypotheses(run_dir, str(target))
     assert result is not None
-    with open_graph(result) as conn:
+    with closing(open_graph(result)) as conn, conn:
         rows = conn.execute(
             "SELECT props_json FROM nodes WHERE kind='hypothesis'"
         ).fetchall()
