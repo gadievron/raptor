@@ -456,19 +456,9 @@ def render_failure(cve_id: str, error_class: str, error_text: str) -> str:
     to make the rationale the report's headline content. Helps users
     understand WHY a CVE was refused without diving into ``summary.json``.
     """
-    # The rationale is agent prose over hostile advisory/repo content —
-    # a prompt-injection relay into the operator deliverable unless the
-    # markdown structure is defanged. Same one-home discipline as the
-    # root-cause block below.
-    rationale = md_prose(_strip_surrender_prefix(error_text))
-    classification = _humanize_class(error_class)
-    return (
-        f"# {md_inline(cve_id)}\n\n"
-        f"**Outcome:** {classification}\n\n"
-        f"**Class:** `{md_inline(error_class)}`\n\n"
-        f"## Why no fix was extracted\n\n"
-        f"{rationale}\n"
-    )
+    from core.reporting.renderers import get_renderer
+    from .failure_document import build_failure_document
+    return get_renderer("markdown").render(build_failure_document(cve_id, error_class, error_text)).content.decode("utf-8")
 
 
 def _strip_surrender_prefix(error_text: str) -> str:
@@ -492,6 +482,25 @@ def _strip_surrender_prefix(error_text: str) -> str:
     return s or "(no rationale recorded)"
 
 
+_ERROR_LABELS = {
+    "UnsupportedSource": "Out of scope (closed-source vendor)",
+    "no_evidence": "No public commit reference",
+    "budget_cost_usd": "Budget cap reached",
+    "budget_iterations": "Iteration cap reached",
+    "budget_tokens": "Token cap reached",
+    "budget_s": "Wall-clock cap reached",
+    "AnalysisError": "Diff invariant rejected the agent's pick",
+    "AcquisitionError": "Repository / commit unavailable",
+    "IdenticalCommitsError": "Fix commit and its parent resolved to the same commit",
+    "DiscoveryError": "Discovery failed",
+    "repeated_tool_call": "Agent repeated the same tool call",
+    "sha_not_found_in_repo": "Submitted SHA not on the named repo",
+    "submit_unverified_sha": "Agent submitted a SHA without verifying it via gh_commit_detail",
+    "PerCveTimeout": "Per-CVE wall-clock timeout",
+    "llm_error": "Anthropic API failure after retries",
+}
+
+
 def _humanize_class(error_class: str) -> str:
     # Pre-fix the fallback was `.get(error_class, error_class)` —
     # an unknown class fell through as the raw class name. For
@@ -510,27 +519,7 @@ def _humanize_class(error_class: str) -> str:
     # maintainer to find and add a mapping. Existing 5 tests
     # for known classes pass unchanged; the 6th covers this
     # fallback.
-    return {
-        "UnsupportedSource": "Out of scope (closed-source vendor)",
-        "no_evidence": "No public commit reference",
-        "budget_cost_usd": "Budget cap reached",
-        "budget_iterations": "Iteration cap reached",
-        "budget_tokens": "Token cap reached",
-        "budget_s": "Wall-clock cap reached",
-        "AnalysisError": "Diff invariant rejected the agent's pick",
-        "AcquisitionError": "Repository / commit unavailable",
-        "IdenticalCommitsError": "Fix commit and its parent resolved to the same commit",
-        "DiscoveryError": "Discovery failed",
-        "repeated_tool_call": "Agent repeated the same tool call",
-        "sha_not_found_in_repo": "Submitted SHA not on the named repo",
-        "submit_unverified_sha": "Agent submitted a SHA without verifying it via gh_commit_detail",
-        "PerCveTimeout": "Per-CVE wall-clock timeout",
-        "llm_error": "Anthropic API failure after retries",
-        # The fallback interpolates the raw class name; machine-typed
-        # today (exception class names / validated enums), but the slot
-        # is a rendered header — route it through the identifier
-        # defence so a future free-text class cannot carry structure.
-    }.get(error_class, f"Other ({md_inline(error_class)})")
+    return _ERROR_LABELS.get(error_class, f"Other ({md_inline(error_class)})")
 
 
 def _commit_url(repository_url: str, sha: str) -> str:
