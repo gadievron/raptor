@@ -88,7 +88,10 @@ rules:
 
   # pycryptodome: literal nonce / IV passed to AES.new
   - id: raptor.crypto.iv.literal.pycryptodome.python
-    message: IV or nonce is a constant literal. Use get_random_bytes() or let the library generate it. Verify randomness.
+    message: >-
+      Candidate: an AES constructor receives a literal IV or nonce. Review
+      mode-specific unpredictability or uniqueness requirements, the key,
+      and encryption/decryption context. A literal alone does not prove misuse.
     languages: [python]
     severity: HIGH
     patterns:

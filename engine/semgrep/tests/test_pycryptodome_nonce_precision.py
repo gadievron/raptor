@@ -60,6 +60,14 @@ def test_pycryptodome_nonce_imports_and_arguments(tmp_path):
             'from Crypto.Cipher import AES\nAES.new(b"literal key", AES.MODE_GCM, nonce=nonce)\n',
             False,
         ),
+        "decrypt_existing": (
+            'from Crypto.Cipher import AES\ndef restore(key, ciphertext):\n    return AES.new(key, AES.MODE_CBC, iv=b"0" * 16).decrypt(ciphertext)\n',
+            True,
+        ),
+        "encrypt_candidate": (
+            'from Crypto.Cipher import AES\ndef produce(key, plaintext):\n    return AES.new(key, AES.MODE_GCM, nonce=b"0" * 12).encrypt(plaintext)\n',
+            True,
+        ),
     }
     expected = set()
     for name, (source, reports) in cases.items():
@@ -117,3 +125,7 @@ def test_pycryptodome_nonce_imports_and_arguments(tmp_path):
     )
     assert actual == expected
     assert len(data["results"]) == len(expected)
+
+    assert all(
+        row["extra"]["message"].startswith("Candidate:") for row in data["results"]
+    )
