@@ -81,6 +81,7 @@ def results_to_sarif(
     rule_index = emit.RuleIndex()
     sarif_results: list[dict[str, Any]] = []
     notifications: list[dict[str, Any]] = []
+    relative_paths: dict[str, str] = {}
 
     for r in results:
         rule_id = r.rule or "(unnamed)"
@@ -95,7 +96,14 @@ def results_to_sarif(
         ))
 
         for match in r.matches:
-            file_rel = _rel_to_repo(match.file, resolved_root)
+            if type(match.file) is str:
+                file_rel = relative_paths.get(match.file)
+                if file_rel is None:
+                    file_rel = _rel_to_repo(match.file, resolved_root)
+                    relative_paths[match.file] = file_rel
+            else:
+                # String adapters may override operations or disable hashing.
+                file_rel = _rel_to_repo(match.file, resolved_root)
             sarif_results.append(emit.result(
                 rule_id,
                 match.message or f"{rule_id} matched",
