@@ -14,6 +14,7 @@ import errno
 import functools
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import time
@@ -755,6 +756,13 @@ def _probe_net_available() -> bool:
         logger.debug("Sandbox: %s", e)
         return False
 
+    # The probe payload must use the same trusted directories as unshare,
+    # independently of the caller's PATH. No extra cached state is needed.
+    true_path = shutil.which("true", path=os.pathsep.join(_SAFE_BIN_DIRS))
+    if true_path is None:
+        logger.debug("Sandbox: true not found in trusted system directories")
+        return False
+
     try:
         # Pre-fix this was `if sysctl.exists() and
         # sysctl.read_text() == "0": ...`. The exists() call
@@ -788,7 +796,7 @@ def _probe_net_available() -> bool:
         # polluted PATH can't shadow it at probe time either.
         from core.config import RaptorConfig
         result = subprocess.run(
-            [unshare_path, "--user", "--net", "true"],
+            [unshare_path, "--user", "--net", true_path],
             capture_output=True, timeout=5,
             env=RaptorConfig.get_safe_env(),
         )
