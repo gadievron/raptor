@@ -3690,12 +3690,25 @@ def _verify_entries_fold(
                                or producer == "annotations")
             binary_review = (key in (binary_hashes or {}) and isinstance(entry.source_hash, str)
                              and entry.source_hash.startswith("bin:"))
-            if (not operator_review and not binary_review and foundation_required_for_file(entry.file)
-                    and not review_has_current_foundation(getattr(entry, "review_claims", None))):
-                reuse_blocked["reference_foundation"] = reuse_blocked.get("reference_foundation", 0) + 1
-                if reuse_stats is not None:
-                    reuse_stats.setdefault(key, "reference_foundation")
-                return False
+            if not operator_review and not binary_review and foundation_required_for_file(entry.file):
+                # Recompute source-selected reading from the same bound site.
+                # An unreadable/stale span cannot fall back to foundation-only
+                # cache credit. This does not infer expression types or ABI.
+                from .refutation_source import capture_source_identity
+                from .source_anchor import parse_source_anchor
+                source = read_gap_source({"file": entry.file,
+                    "line_start": getattr(entry, "line_start", None),
+                    "line_end": getattr(entry, "line_end", None)}, target_path) if target_path is not None else ""
+                anchor = parse_source_anchor(entry.source_hash)
+                identity = capture_source_identity(target_path, entry.file, excerpt=source,
+                    line_start=entry.line_start) if source and target_path is not None else None
+                if (identity is None or anchor is None or identity.sha256 != anchor[0]
+                        or not review_has_current_foundation(getattr(entry, "review_claims", None),
+                                                            source=source, file=entry.file)):
+                    reuse_blocked["reference_foundation"] = reuse_blocked.get("reference_foundation", 0) + 1
+                    if reuse_stats is not None:
+                        reuse_stats.setdefault(key, "reference_foundation")
+                    return False
         return True
 
     to_verify: dict[str, list] = {}

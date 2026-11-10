@@ -9,11 +9,13 @@ from core.audit.llm_review import make_review_fn
 from core.llm.providers import StructuredResponse
 from core.testing.audit_shutdown import isolated_audit_shutdown
 from core.testing.wallclock import wall_deadline
+from core.testing.treesitter import ts_parser_available
 
 
 @pytest.mark.parametrize("workers,max_seconds", [(1, None), (2, 20)], ids=["serial", "parallel"])
 @pytest.mark.parametrize("second_status", ["clean", "suspicious"])
 def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path, monkeypatch, workers, max_seconds, second_status):
+    parsed_selection = ts_parser_available("c")
     target = tmp_path / "target"
     target.mkdir()
     (target / "types.h").write_text("typedef struct { unsigned length; } foo_t;\n")
@@ -44,11 +46,11 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
                     "reason": "Other users are not supplied", "material_ids": ["material-0"]}]}
             assert task == "audit"
             if sum(t == "audit" for t, _ in calls) == 1:
-                # Demand genuinely new material: the initial foundation already
-                # contains the promotion/conversion cores.
+                # Arithmetic selects definedness initially. Repeating that
+                # request buys no pass; the source-study answer is new.
                 assert "c.integer-promotion v1:" in prompt
                 assert "c.integer-conversion v1:" in prompt
-                assert "c.integer-definedness v1:" not in prompt
+                assert ("c.integer-definedness v1:" in prompt) is parsed_selection
                 payload = {"status": "suspicious", "body": "Length may wrap before its caller checks it.",
                     "hypothesis": "length wraps before caller validation", "confidence": "medium",
                     "reading_list": [{"subject": "foo_t", "resolution": "identifier", "context": "role of the target type"}],
@@ -91,7 +93,10 @@ def test_normal_audit_delivers_source_and_reference_then_retains_prior(tmp_path,
         assert canonical.hypothesis == "length wraps before caller validation"
         added = next(h for h in canonical.hypotheses if h["mechanism"] == "a distinct conversion needs review")
         assert added["confidence"] == "medium" and not canonical.evidence_tool
-    assert set(completed[0]["delivered_request_ids"]) == request_ids
+    already = [event for event in trace["events"] if event["event"] == "reference_already_delivered"]
+    assert len(already) == int(parsed_selection)
+    assert set(completed[0]["delivered_request_ids"]) == request_ids - {
+        event["request_id"] for event in already}
     assert completed[0]["published_status"] == "suspicious"
     assert trace["units"][0]["all_model_calls"] == 3
     assert trace["units"][0]["cycle"]["started"] == 1

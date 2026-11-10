@@ -15,7 +15,49 @@ _MAX_PACK_ENTRIES = 256
 _UNAVAILABLE = "initial_reference_foundation_unavailable"
 
 
-def _closed_pack() -> bool:
+def _initial_ids(source: object, file: object) -> tuple[str, ...]:
+    """Select conditional integer reading from syntax, never inferred types.
+
+    Parsing unavailable, erroneous or oversized input preserves the foundation.
+    Comments and strings cannot become operator facts. The selected entries
+    retain their integer/type/edition preconditions in full.
+    """
+    if (not isinstance(source, str) or not source or len(source) > 256 * 1024
+            or not isinstance(file, str) or not foundation_required_for_file(file)):
+        return _FOUNDATION_IDS
+    from .ts_extract import _parse_file
+
+    parsed = _parse_file(file, source)
+    if parsed is None:
+        return _FOUNDATION_IDS
+    tree, language, raw = parsed
+    if language != "c" or tree.root_node.has_error:
+        return _FOUNDATION_IDS
+    arithmetic = False
+    comparison = False
+    stack = [tree.root_node]
+    visited = 0
+    while stack:
+        node = stack.pop()
+        visited += 1
+        if visited > 4096:
+            return _FOUNDATION_IDS
+        if node.type == "binary_expression":
+            operator = node.child_by_field_name("operator")
+            if operator is not None:
+                token = raw[operator.start_byte:operator.end_byte]
+                arithmetic = arithmetic or token in (b"+", b"-", b"*", b"/", b"%")
+                comparison = comparison or token in (b"<", b">", b"<=", b">=", b"==", b"!=")
+        stack.extend(node.children)
+    selected: tuple[str, ...] = _FOUNDATION_IDS
+    if arithmetic or comparison:
+        selected += ("c.integer-usual-conversions",)
+    if arithmetic:
+        selected += ("c.integer-definedness",)
+    return selected
+
+
+def _closed_pack(entry_ids: tuple[str, ...]) -> bool:
     """Bound relevant resolver traversal and refuse conflicting pack IDs."""
     from core.language_reference import c_integer
 
@@ -52,11 +94,12 @@ def _closed_pack() -> bool:
         visited.add(entry_id)
         return True
 
-    return all(visit(entry_id) for entry_id in _FOUNDATION_IDS)
+    return all(visit(entry_id) for entry_id in entry_ids)
 
 
 def foundation_answers(
     language: object, *, request_id: str, binary: bool = False,
+    source: object = None, file: object = None,
 ) -> tuple[ReferenceAnswer, ...]:
     """Supply full current C11 cores conditionally, with one opaque identity.
 
@@ -73,12 +116,13 @@ def foundation_answers(
     def unavailable() -> tuple[ReferenceAnswer, ...]:
         return (ReferenceAnswer(request_id, "unsupported", reason=_UNAVAILABLE),)
 
-    if not _closed_pack():
+    entry_ids = _initial_ids(source, file)
+    if not _closed_pack(entry_ids):
         return unavailable()
     combined: dict[str, ReferenceEntry] = {}
     pack: str | None = None
     try:
-        for entry_id in _FOUNDATION_IDS:
+        for entry_id in entry_ids:
             answer = lookup(request_id, "", ReferenceContext("c", edition=None), entry_id=entry_id)
             if (not isinstance(answer, ReferenceAnswer) or answer.request_id != request_id
                     or answer.status != "needs_target_facts"
@@ -129,12 +173,14 @@ def foundation_required_for_file(file: object) -> bool:
     return isinstance(file, str) and not file.startswith("binary:") and file.endswith(".c")
 
 
-def review_has_current_foundation(history: object) -> bool:
+def review_has_current_foundation(
+    history: object, *, source: object = None, file: object = None,
+) -> bool:
     """Require actual current core identities, never a defaulted policy label."""
     from .reference_inputs import reference_answer_already_delivered
 
     if not isinstance(history, dict) or "reference_inputs" not in history:
         return False
-    required = foundation_answers("c", request_id="current-foundation-policy")
+    required = foundation_answers("c", request_id="current-foundation-policy", source=source, file=file)
     return bool(required) and all(reference_answer_already_delivered(answer, history["reference_inputs"])
                                   for answer in required)
