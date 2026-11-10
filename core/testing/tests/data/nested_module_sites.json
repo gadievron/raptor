@@ -744,7 +744,7 @@
     "attribute": "wait",
     "receiver": "stress",
     "old": "patch.setattr(stress.concurrent.futures, 'wait', stop_driver)",
-    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', stop_driver)",
+    "new": "patch_module_attribute(patch, stress, 'concurrent.futures', 'wait', wait_for_started_worker)",
     "kind": "monkey",
     "line": 162
   },
