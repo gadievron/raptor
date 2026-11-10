@@ -27,6 +27,8 @@ import os
 import re
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 _HEADER_EXTENSIONS = frozenset({".h", ".hpp", ".hxx", ".hh", ".h++"})
@@ -173,7 +175,7 @@ def scan_public_api(
             try:
                 if fpath.stat().st_size > 1_048_576:  # 1 MB cap
                     continue
-                with Path(fpath).open(encoding="utf-8", errors="replace") as f:
+                with preserving_stream_error(Path(fpath).open(encoding="utf-8", errors="replace")) as f:
                     content = f.read()
             except OSError:
                 continue

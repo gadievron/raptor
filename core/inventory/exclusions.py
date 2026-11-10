@@ -5,6 +5,8 @@ import os
 import re
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 # Default exclude patterns — comprehensive list for clean inventory
 DEFAULT_EXCLUDES = [
     # Test directories and files
@@ -161,7 +163,7 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
     wallclock minimal.
     """
     try:
-        with Path(filepath).open("rb") as f:
+        with preserving_stream_error(Path(filepath).open("rb")) as f:
             chunk = f.read(sample_size)
             if b'\x00' in chunk:
                 return True
