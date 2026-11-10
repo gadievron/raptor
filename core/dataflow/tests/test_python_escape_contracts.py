@@ -11,9 +11,9 @@ from core.dataflow import tier1_llm as t1
 from core.dataflow.smt_barrier import Tier0Status
 
 
-@pytest.mark.parametrize("library,sink_class", [("markupsafe.escape", "xss"), ("shlex.quote", "cmdi")])
+@pytest.mark.parametrize("library,sink_class", [("markupsafe.escape", "xss"), ("shlex.quote", "cmdi"), ("django.utils.html.escape", "xss")])
 def test_untyped_protocol_inputs_cannot_earn_library_certificates(tmp_path: Path, library, sink_class):
-    module = library.split(".", 1)[0]
+    module = library.rsplit(".", 1)[0]
     line = f"    safe = {library}(raw)"
     source = f"import {module}\ndef handle(raw):\n" + line + "\n    return consume(safe)\n"
     (tmp_path / "app.py").write_text(source)
@@ -36,9 +36,9 @@ def test_untyped_protocol_inputs_cannot_earn_library_certificates(tmp_path: Path
     assert result.extras["input_type_evidence"]["origin"] == "adjacent-exact-type-guard"
 
 
-@pytest.mark.parametrize("library,cwe", [("markupsafe.escape", "CWE-79"), ("shlex.quote", "CWE-78")])
+@pytest.mark.parametrize("library,cwe", [("markupsafe.escape", "CWE-79"), ("shlex.quote", "CWE-78"), ("django.utils.html.escape", "CWE-79")])
 def test_graph_and_wrapper_candidates_keep_the_same_unverified_contract(library, cwe):
-    module = library.split(".", 1)[0]
+    module = library.rsplit(".", 1)[0]
     source = (f"import {module}\ndef clean(value):\n    return {library}(value)\n"
               "def handle(raw):\n    safe = clean(raw)\n    consume(safe)\n")
     graph, bindings = _bindings_for(source, "handle", cwe)

@@ -153,8 +153,10 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("python",),
         input_arg_kind="transform",
+        requires_exact_str=True,
         soundness_note=(
-            "Django's escape (wraps stdlib html.escape; same semantics) "
+            "For an exact builtin str using defaults, "
+            "Django's escape wraps stdlib html.escape "
             "+ marks result as SafeString.  Output is HTML-safe."
         ),
     ),
