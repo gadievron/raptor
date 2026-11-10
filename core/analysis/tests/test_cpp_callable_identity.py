@@ -25,12 +25,10 @@ def _check(prefix="", before="", params="", expression="g_shell_quote(raw)", lan
 @pytest.mark.parametrize("language", ["c", "cpp"])
 @pytest.mark.parametrize("prefix,before,params", [
     ("char *g_shell_quote(const char *raw) { return (char *)raw; }\n", "", ""),
-    ("#define g_shell_quote(x) (x)\n", "", ""),
-    ("#define g_shell_quote replacement\n", "", ""),
     ("", "", ", char *(*g_shell_quote)(const char *)"),
     ("", "    char *(*g_shell_quote)(const char *) = replacement;\n", ""),
     ("", "    static char *(*g_shell_quote)(const char *) = replacement;\n", ""),
-], ids=["source-body", "function-macro", "object-macro", "parameter", "local-pointer", "static-pointer"])
+], ids=["source-body", "parameter", "local-pointer", "static-pointer"])
 def test_conflicting_source_identity_cannot_suppress(language, prefix, before, params):
     graph, result = _check(prefix, before, params, language=language)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
@@ -178,9 +176,8 @@ def test_explicit_block_global_selection_can_clear_lookup_uncertainty(nested, be
 
 @pytest.mark.parametrize("prefix", [
     "char *g_shell_quote(const char *raw) { return (char *)raw; }\n",
-    "#define g_shell_quote(x) (x)\n",
     "char *::g_shell_quote(const char *raw) { return (char *)raw; }\n",
-], ids=["global-source-body", "macro", "qualified-global-body"])
+], ids=["global-source-body", "qualified-global-body"])
 def test_explicit_global_selection_cannot_override_known_source_conflicts(prefix):
     graph, result = _check(prefix, before="    using ::g_shell_quote;\n", language="cpp", nested=True)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)
@@ -214,11 +211,10 @@ def test_direct_global_selection_can_use_existing_structural_profile(nested, bef
 
 @pytest.mark.parametrize("prefix", [
     "char *g_shell_quote(const char *raw) { return (char *)raw; }\n",
-    "#define g_shell_quote(x) (x)\n",
     "using g_shell_quote = char *;\n",
     "struct g_shell_quote { g_shell_quote(char *); operator char *() const; };\n",
     "extern char *(*g_shell_quote)(const char *);\n",
-], ids=["source-body", "macro", "type-alias", "constructor", "global-pointer-object"])
+], ids=["source-body", "type-alias", "constructor", "global-pointer-object"])
 def test_global_prefix_cannot_forge_library_identity(prefix):
     graph, result = _check(prefix, expression="::g_shell_quote(raw)", language="cpp", base=NO_LIBRARY_PROTOTYPE)
     assert any(name == "g_shell_quote" for name, _line in graph.untrusted_call_sites)

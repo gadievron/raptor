@@ -661,8 +661,7 @@ def _resolve_from_parsed_cpp(
         return ResolutionFailure(
             reason=(
                 f"CFG construction failed for {fn_name} in {parsed.file} "
-                "(tree-sitter grammar missing or function not found by "
-                "the builder)"
+                "(grammar/definition unavailable or preprocessing effects unverified)"
             ),
         )
 
