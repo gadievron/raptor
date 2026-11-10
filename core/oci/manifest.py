@@ -139,7 +139,7 @@ def parse_image_manifest(parsed: dict) -> ImageManifest:
             size = 0
         try:
             size = int(size)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             size = 0
         layers.append(LayerDescriptor(
             digest=digest, size=size, media_type=ltype,
@@ -167,7 +167,7 @@ def parse_image_index(parsed: dict) -> list[IndexEntry]:
             continue
         try:
             size = int(size)
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             size = 0
         out.append(IndexEntry(
             digest=digest, size=size, media_type=ltype,
