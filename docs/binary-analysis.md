@@ -693,3 +693,10 @@ query views. When anchor and caller queries run together, their populations stay
 separate: overlapping observations are not counted as additional findings.
 Degraded scans and native truncation warnings remain visible. Exporting adds no
 extra hunt; native `--json` still prints one JSON record per query on stdout.
+
+Harness planning accepts the same report flags, for example
+`/binary harness RUN_DIR --report-format json`. The receipt preserves the native
+plan status and outstanding prerequisites. Verification steps are requirements,
+not passed tests. Exporting neither repeats planning or ranking nor builds, runs
+or validates the generated candidate. Source and build scripts remain referenced
+artifacts rather than copied report content.
