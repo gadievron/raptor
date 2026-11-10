@@ -137,6 +137,47 @@ def test_skip_summary_escapes_only_a_bounded_prefix(monkeypatch, unit):
     assert lengths == [models._SKIPPED_REASON_MAXLEN] * 2 + [models._SKIPPED_PATH_MAXLEN]
 
 
+def test_skip_summary_does_not_format_structured_metadata():
+    class UnrenderedPayload(dict):
+        def __repr__(self):
+            pytest.fail('skip summaries must not format structured metadata')
+
+    summary = models._summarise_skipped([
+        {'reason': UnrenderedPayload(value='payload'), 'path': 'kept.py'},
+        {'reason': 'size_limit', 'path': UnrenderedPayload(value='payload')},
+    ])
+    assert summary == {
+        'total': 2,
+        'reasons': {
+            'size_limit': {'count': 1, 'sample': []},
+            'unspecified': {'count': 1, 'sample': ['kept.py']},
+        },
+        'reasons_truncated': 0,
+    }
+
+
+@pytest.mark.parametrize('reason', [True, 7, ['large'], {'detail': 'large'}])
+def test_skip_summary_non_string_reason_matches_coverage_reader(tmp_path, reason):
+    payload = {'paths': {'scanned': ['good.py'], 'skipped': [
+        {'path': 'kept.py', 'reason': reason},
+        {'path': {'invalid': 'path'}, 'reason': 'size_limit'},
+    ]}}
+    text = json.dumps(payload)
+    path = tmp_path / 'metadata.json'
+    path.write_text(text)
+    parsed = models.parse_json_output(text)
+    coverage = read_semgrep_outputs([path])
+    assert parsed['files_examined'] == ['good.py']
+    assert parsed['errors'] and coverage.input_errors == 1
+    assert coverage.skipped_paths == {'unspecified': 1}
+    summary = parsed['skipped_summary']
+    assert summary['total'] == 2
+    assert summary['reasons'] == {
+        'size_limit': {'count': 1, 'sample': []},
+        'unspecified': {'count': 1, 'sample': ['kept.py']},
+    }
+
+
 @pytest.mark.parametrize("mode", ["indexed", "legacy", "mixed"])
 def test_rule_table_walks_are_amortized_without_indexing_indexed_reports(mode):
     visits = []

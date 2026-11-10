@@ -341,7 +341,8 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
     ``_SKIPPED_SAMPLE_CAP`` paths in semgrep's own output order.
     ``total`` always counts EVERY entry, so truncation never hides the
     magnitude of the reported coverage limitations. Non-dict entries are ignored;
-    a missing reason buckets as ``"unspecified"``.
+    a missing or non-string reason buckets as ``"unspecified"``. Only string
+    paths contribute samples; malformed fields are never formatted as text.
 
     Only a bounded raw prefix needs escaping: every input character emits
     at least one output character, so later input cannot affect the displayed
@@ -356,8 +357,9 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
         if not isinstance(entry, dict):
             continue
         total += 1
+        raw_reason = entry.get("reason")
         reason = escape_nonprintable(
-            str(entry.get("reason") or "unspecified")[:_SKIPPED_REASON_MAXLEN],
+            (raw_reason if isinstance(raw_reason, str) and raw_reason else "unspecified")[:_SKIPPED_REASON_MAXLEN],
         )[:_SKIPPED_REASON_MAXLEN]
         counts[reason] = counts.get(reason, 0) + 1
     if not total:
@@ -372,13 +374,17 @@ def _summarise_skipped(raw: Any) -> dict[str, Any]:
             break
         if not isinstance(entry, dict):
             continue
+        raw_reason = entry.get("reason")
         reason = escape_nonprintable(
-            str(entry.get("reason") or "unspecified")[:_SKIPPED_REASON_MAXLEN],
+            (raw_reason if isinstance(raw_reason, str) and raw_reason else "unspecified")[:_SKIPPED_REASON_MAXLEN],
         )[:_SKIPPED_REASON_MAXLEN]
         bucket = samples.get(reason)
         if bucket is None or len(bucket) >= _SKIPPED_SAMPLE_CAP:
             continue
-        path = escape_nonprintable(str(entry.get("path") or "")[:_SKIPPED_PATH_MAXLEN])
+        raw_path = entry.get("path")
+        if not isinstance(raw_path, str):
+            continue
+        path = escape_nonprintable(raw_path[:_SKIPPED_PATH_MAXLEN])
         if path:
             bucket.append(path[:_SKIPPED_PATH_MAXLEN])
             if len(bucket) == _SKIPPED_SAMPLE_CAP:
