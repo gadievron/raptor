@@ -609,7 +609,10 @@ class _SidecarWriter:
             # Exception AND KeyboardInterrupt unwind: never leak the
             # fd (closing it also drops the flock; on SIGKILL the
             # kernel drops both with the process).
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
             raise
         self._fd = fd
         self._offset = st.st_size
@@ -650,13 +653,14 @@ class _SidecarWriter:
             os.fsync(self._fd)
 
     def close(self) -> None:
+        from core.source.streams import owned_fd
+
         if self._fd is not None:
-            try:
-                os.fsync(self._fd)
-            finally:
-                # close() drops the flock with the fd.
-                os.close(self._fd)
-                self._fd = None
+            fd = self._fd
+            self._fd = None
+            # close() drops the flock with the fd.
+            with owned_fd(fd, close_fd=os.close):
+                os.fsync(fd)
 
 
 def _slim_payload(raw):
