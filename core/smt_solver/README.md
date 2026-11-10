@@ -148,3 +148,9 @@ certify an overflow goal. Both source confirmation and auxiliary disproof,
 including literal-caller tuples, require a complete positive integer
 `overflow`/`underflow`/`wraparound` label. Source receipts carry a separate goal
 contract alongside their integer-model contract.
+
+Closed overflow goals also accept `arithmetic overflow`, `addition overflow`
+and `multiplication overflow`. The last two require `+` and `*` respectively
+in the bound expression; one operation cannot supply a witness for the other.
+`truncation overflow` is not an arithmetic-range objective and is not admitted
+by this checker.
