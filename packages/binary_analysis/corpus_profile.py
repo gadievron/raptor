@@ -513,22 +513,23 @@ def _open_regular_nofollow(path: Path) -> int | None:
 
 def _bounded_read(path: Path, cap: int) -> bytes | None:
     """Read at most ``cap`` bytes of a regular file; None on refusal."""
+    from core.source.streams import owned_fd
+
     fd = _open_regular_nofollow(path)
     if fd is None:
         return None
-    chunks: list[bytes] = []
-    remaining = cap
-    try:
-        while remaining > 0:
-            chunk = os.read(fd, min(_READ_CHUNK, remaining))
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
+    with owned_fd(fd, close_fd=os.close):
+        chunks: list[bytes] = []
+        remaining = cap
+        try:
+            while remaining > 0:
+                chunk = os.read(fd, min(_READ_CHUNK, remaining))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+        except OSError:
+            return None
     return b"".join(chunks)
 
 
