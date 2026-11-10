@@ -30117,6 +30117,8 @@ def _promote_suspicious_preconditions(
     dispatches are counted in tier telemetry under
     ``precondition_promotion``.
     """
+    from copy import deepcopy
+
     for i, outcome in enumerate(result.outcomes):
         if outcome.status != "suspicious":
             continue
@@ -30125,19 +30127,43 @@ def _promote_suspicious_preconditions(
             continue
 
         review = outcome.review_result or {}
+        if not review.get("preconditions"):
+            continue
+        if (outcome.hypothesis and review.get("hypothesis")
+                and outcome.hypothesis != review["hypothesis"]):
+            _note_ambiguous_claim_material(
+                outcome, outcome.hypothesis, config, phase="precondition-promotion",
+                reason="ambiguous-claim-selection",
+            )
+            continue
+        primary_fields = (outcome.hypothesis, review.get("hypothesis"))
+        hypothesis = review.get("hypothesis") or outcome.hypothesis
+        admission = _claim_material_admission(outcome, hypothesis)
+        if admission is None:
+            _note_ambiguous_claim_material(
+                outcome, hypothesis, config, phase="precondition-promotion",
+            )
+            continue
+        requested = deepcopy(review.get("preconditions") or [])
+        if not isinstance(requested, list):
+            continue
         preconditions = [
-            p for p in (review.get("preconditions") or [])
+            p for p in requested
             if isinstance(p, dict) and p.get("check_type")
         ]
         if not preconditions:
             continue
+        complete_request = (
+            len(preconditions) == len(requested)
+            and len(preconditions) <= _MAX_PRECONDITION_CHECKS_PER_FN
+        )
         preconditions = preconditions[:_MAX_PRECONDITION_CHECKS_PER_FN]
 
         try:
             from .precondition_check import verify_preconditions
 
             verdict = verify_preconditions(
-                preconditions,
+                deepcopy(preconditions),
                 target_path=config.target_path,
                 context_map=context_map,
                 graph_store=_graph_store_for_config(config),
@@ -30153,6 +30179,11 @@ def _promote_suspicious_preconditions(
         if not checks:
             continue
 
+        # A verifier may replace the review object while preserving its
+        # content. Keep observations on the current record, not an orphan.
+        if outcome.review_result is None:
+            outcome.review_result = {}
+        review = outcome.review_result
         # Record the per-check results regardless of the aggregate —
         # partial support is review money already spent; keep it.
         review["precondition_verification"] = {
@@ -30168,6 +30199,25 @@ def _promote_suspicious_preconditions(
             ],
             "all_supported": verdict.all_supported,
         }
+
+        current_review = outcome.review_result or {}
+        rejection = _claim_material_rejection(outcome, hypothesis, admission=admission)
+        if _claim_material_admission(outcome, hypothesis) != admission:
+            rejection = rejection or "claim-material-revised"
+        if (outcome.hypothesis, current_review.get("hypothesis")) != primary_fields:
+            rejection = "claim-selection-revised"
+        elif current_review.get("preconditions") != requested:
+            rejection = "precondition-request-revised"
+        elif not complete_request or len(checks) != len(preconditions):
+            rejection = "incomplete-precondition-verification"
+        if rejection:
+            _note_ambiguous_claim_material(
+                outcome, hypothesis, config, phase="precondition-promotion", reason=rejection,
+            )
+            _increment_tier_dict(
+                result.tier_counters, "precondition_promotion", "inconclusive",
+            )
+            continue
 
         if verdict.any_contradicted:
             _increment_tier_dict(
@@ -30249,6 +30299,7 @@ def _promote_suspicious_preconditions(
         promoted.tools_dispatched = (
             (outcome.tools_dispatched or set()) | {"precondition"}
         )
+        promoted.claim_refutations = outcome.claim_refutations
         promoted.tools_errored = outcome.tools_errored
         promoted.tools_inconclusive = outcome.tools_inconclusive
         promoted.tools_skipped = outcome.tools_skipped
