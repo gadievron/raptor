@@ -2829,6 +2829,9 @@ bedrock = [
 binary = [
     { name = "angr" },
 ]
+codex = [
+    { name = "websockets" },
+]
 cvss = [
     { name = "cvss" },
 ]
@@ -2961,9 +2964,10 @@ requires-dist = [
     { name = "tree-sitter-typescript", marker = "extra == 'grammars'", specifier = "==0.23.2" },
     { name = "typer", specifier = "==0.25.1" },
     { name = "urllib3", specifier = "==2.8.0" },
+    { name = "websockets", marker = "extra == 'codex'", specifier = "==16.1.1" },
     { name = "z3-solver", marker = "extra == 'smt'", specifier = ">=4.13.0.0,<4.15.5.0" },
 ]
-provides-extras = ["anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema"]
+provides-extras = ["codex", "anthropic", "google", "bedrock", "llm", "web", "smt", "binary", "sage", "grammars", "h2", "cvss", "orjson", "r2pipe", "pyghidra", "frida", "jsonschema"]
 
 [package.metadata.requires-dev]
 dev = [

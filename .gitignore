@@ -19,6 +19,7 @@ out/
 .env*
 .claude/*.local.json
 .claude/raptor.env
+.codex/raptor.env
 # Per-dispatch runtime state (webfetch anchor files + fetch logs)
 .claude/run/
 

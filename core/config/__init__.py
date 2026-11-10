@@ -557,17 +557,18 @@ class RaptorConfig:
         "PYTHONUNBUFFERED",
         # Trust markers — libexec/ scripts inspect these to verify they
         # were invoked from a trusted parent (bin/raptor, bin/cve-diff,
-        # or Claude Code). Pure boolean flags; not shell-interpreted.
-        # Must propagate through get_safe_env() because the sandbox
-        # spawns its own libexec scripts (raptor-run-sandboxed)
-        # using this env. Untrusted TARGETS do not see them: the
-        # sandbox strips the whole TARGET_ENV_STRIP_SET from the
-        # target-bound env by default (core/sandbox/context.py's
-        # target-env staging). RAPTOR's own Claude Code
-        # skill dispatches opt out via keep_trust_markers=True (see
-        # run_untrusted_networked) — those children drive libexec/
-        # helpers on the operator-approved run and need the marker.
-        "_RAPTOR_TRUSTED", "CLAUDECODE",
+        # Claude Code, or Codex). Pure boolean flags; not
+        # shell-interpreted. Must propagate through get_safe_env()
+        # because the sandbox spawns its own libexec scripts
+        # (raptor-run-sandboxed) using this env. Untrusted TARGETS
+        # do not see them: the sandbox strips the whole
+        # TARGET_ENV_STRIP_SET from the target-bound env by default
+        # (core/sandbox/context.py's target-env staging). RAPTOR's
+        # own Claude Code / Codex skill dispatches opt out via
+        # keep_trust_markers=True (see run_untrusted_networked) —
+        # those children drive libexec/ helpers on the
+        # operator-approved run and need the marker.
+        "_RAPTOR_TRUSTED", "CLAUDECODE", "CODEX",
         # RAPTOR runtime config that downstream subprocesses must
         # honour for the operator's intent to take effect:
         #   RAPTOR_OUT_DIR  output dir override (without this in the
@@ -638,7 +639,9 @@ class RaptorConfig:
         # grants. Target-bound envs strip both via
         # TARGET_ENV_STRIP_SET (sandboxed code never sees the
         # credential; see core/sandbox/context.py).
+        "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
+        "RAPTOR_CODEX_CONTEXT_ID",
         #   RAPTOR_REGISTRY_HOME  operator-registry relocation override
         #                    (core.project.registry_home — projects
         #                    registry, .active bookmark, sessions.d,
@@ -695,9 +698,11 @@ class RaptorConfig:
     #
     # Extend THIS constant; do not scatter per-caller strips.
     TARGET_ENV_STRIP_SET = frozenset({
-        "CLAUDECODE", "_RAPTOR_TRUSTED",
+        "CLAUDECODE", "CODEX", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODEX_TOOL_CALL_ID", "_RAPTOR_TRUSTED",
+        "RAPTOR_CODEX_ENVIRONMENT", "RAPTOR_CODEX_HOOK", "RAPTOR_CODEX_HOOK_ROOT",
         "_RAPTOR_JOERN_TMP_BASE", "_RAPTOR_SERVICE_TMP_BASE",
         "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN", "_RAPTOR_SCRATCH_AUTH",
+        "RAPTOR_CODEX_CONTEXT_ID", "RAPTOR_LAUNCH_TARGET",
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
         # Sandbox-disable consent nonce. Deliberately NOT in
         # SAFE_ENV_ALLOWLIST (a pinning test holds that direction):

@@ -1,0 +1,68 @@
+{
+  "description": "RAPTOR Codex lifecycle hooks; active only for launcher-owned sessions.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|fork|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${RAPTOR_CODEX_HOOK_ROOT-}\" ]; then case \"$RAPTOR_CODEX_HOOK_ROOT\" in /*) cd -- \"$RAPTOR_CODEX_HOOK_ROOT\" || { echo \"RAPTOR: launcher installation unavailable; restart through bin/raptor --codex\" >&2; exit 1; };; *) echo \"RAPTOR: invalid launcher hook root; restart through bin/raptor --codex\" >&2; exit 1;; esac; python3 -I \"${PLUGIN_ROOT}/hooks/dispatch.py\" session-start; fi",
+            "statusMessage": "RAPTOR: initialize session (SessionStart)"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${RAPTOR_CODEX_HOOK_ROOT-}\" ]; then case \"$RAPTOR_CODEX_HOOK_ROOT\" in /*) cd -- \"$RAPTOR_CODEX_HOOK_ROOT\" || { echo \"RAPTOR: launcher installation unavailable; restart through bin/raptor --codex\" >&2; exit 1; };; *) echo \"RAPTOR: invalid launcher hook root; restart through bin/raptor --codex\" >&2; exit 1;; esac; python3 -I \"${PLUGIN_ROOT}/hooks/dispatch.py\" stop; fi",
+            "timeout": 5,
+            "statusMessage": "RAPTOR: finalize turn (Stop)"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${RAPTOR_CODEX_HOOK_ROOT-}\" ]; then case \"$RAPTOR_CODEX_HOOK_ROOT\" in /*) cd -- \"$RAPTOR_CODEX_HOOK_ROOT\" || { echo \"RAPTOR: launcher installation unavailable; restart through bin/raptor --codex\" >&2; exit 1; };; *) echo \"RAPTOR: invalid launcher hook root; restart through bin/raptor --codex\" >&2; exit 1;; esac; python3 -I \"${PLUGIN_ROOT}/hooks/dispatch.py\" subagent-start; fi",
+            "statusMessage": "RAPTOR: bind subagent (SubagentStart)"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${RAPTOR_CODEX_HOOK_ROOT-}\" ]; then case \"$RAPTOR_CODEX_HOOK_ROOT\" in /*) cd -- \"$RAPTOR_CODEX_HOOK_ROOT\" || { echo \"RAPTOR: launcher installation unavailable; restart through bin/raptor --codex\" >&2; exit 1; };; *) echo \"RAPTOR: invalid launcher hook root; restart through bin/raptor --codex\" >&2; exit 1;; esac; python3 -I \"${PLUGIN_ROOT}/hooks/dispatch.py\" end; fi",
+            "timeout": 3,
+            "statusMessage": "RAPTOR: retire session (SessionEnd)"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"${RAPTOR_CODEX_HOOK_ROOT-}\" ]; then case \"$RAPTOR_CODEX_HOOK_ROOT\" in /*) cd -- \"$RAPTOR_CODEX_HOOK_ROOT\" || { echo \"RAPTOR: launcher installation unavailable; restart through bin/raptor --codex\" >&2; exit 1; };; *) echo \"RAPTOR: invalid launcher hook root; restart through bin/raptor --codex\" >&2; exit 1;; esac; python3 -I \"${PLUGIN_ROOT}/hooks/dispatch.py\" outcome; fi",
+            "timeout": 5,
+            "statusMessage": "RAPTOR: record command outcome (PostToolUse)"
+          }
+        ]
+      }
+    ]
+  }
+}
