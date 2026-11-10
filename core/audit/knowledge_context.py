@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from core.language_reference import ReferenceAnswer
+from core.language_reference import ReferenceAnswer, ReferenceEntry
 from core.llm.prompt_budget import PromptSection
 from core.concepts.subject_study import SubjectExplanation
 from core.json import dumps_display
@@ -78,13 +78,62 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
     return sections
 
 
+def _reading_metadata(answer: ReferenceAnswer) -> tuple[str, str, str, tuple[str, ...]]:
+    return answer.pack_version, answer.status, answer.reason, answer.missing_facts
+
+
+def _share_reference_entries(
+    answers: tuple[ReferenceAnswer, ...], kept: list[PromptSection],
+    rendered_sections: list[PromptSection],
+) -> list[PromptSection]:
+    # Capture original nonce-bearing text; never render its envelope again.
+    owned = {section.label: section.text for section in rendered_sections}
+    aliases: dict[str, list[ReferenceAnswer]] = {}
+    for label, answer in zip(_labels(answers), answers, strict=True):
+        aliases.setdefault(label, []).append(answer)
+    seen: dict[tuple[str, str, str, tuple[str, ...]], set[ReferenceEntry]] = {}
+    result = []
+    for section in kept:
+        members = aliases.get(section.label, [])
+        if not members or not members[0].entries or owned.get(section.label) != section.text:
+            result.append(section)
+            continue
+        answer = members[0]
+        tail = "\n\n".join(entry.render_core() for entry in answer.entries)
+        if not tail or not section.text.endswith(tail):
+            result.append(section)
+            continue
+        metadata = _reading_metadata(answer)
+        previous = seen.setdefault(metadata, set())
+        shared = tuple(entry for entry in answer.entries if entry in previous)
+        if shared and all(_reading_metadata(alias) == metadata for alias in members):
+            remaining = tuple(entry for entry in answer.entries if entry not in previous)
+            note = "Shared rule cores above: " + ", ".join(
+                f"{entry.entry_id} v{entry.version}" for entry in shared) + ".\n\n"
+            text = section.text[:-len(tail)] + note + "\n\n".join(
+                entry.render_core() for entry in remaining)
+            if len(text) < len(section.text):
+                # Keep even an all-shared label: its entries may have several
+                # earlier suppliers, rather than one complete superset.
+                result.append(PromptSection(section.label, text, section.priority))
+            else:
+                result.append(section)
+        else:
+            result.append(section)
+        previous.update(answer.entries)
+    return result
+
+
 def dedupe_reference_sections(
     answers: tuple[ReferenceAnswer, ...], kept: list[PromptSection],
+    *, rendered_sections: list[PromptSection] | None = None,
 ) -> list[PromptSection]:
-    """Remove redundant whole sections after fitting, keeping every alias covered.
+    """Share complete reading only after fitting, keeping every alias covered.
 
-    Strictly increasing bundle size leaves a retained supplier at every end
-    of a containment chain. Never readmit shed sections or alter rule cores.
+    Strictly increasing bundle size leaves a retained supplier when whole
+    sections are removed. Captured original rendering also permits sharing
+    individual complete cores while retaining their request labels and framing.
+    Never readmit shed sections or alter rule cores.
     """
     labels = {section.label for section in kept}
     supplied: dict[str, ReferenceAnswer] = {}
@@ -101,7 +150,9 @@ def dedupe_reference_sections(
             and all(entry in other.entries for entry in alias.entries)
             for alias in aliases[label])
         for other in supplied.values())}
-    return [section for section in kept if section.label not in redundant]
+    result = [section for section in kept if section.label not in redundant]
+    return (_share_reference_entries(answers, result, rendered_sections)
+            if rendered_sections is not None else result)
 
 
 def reference_delivery(

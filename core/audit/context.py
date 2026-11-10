@@ -2734,7 +2734,8 @@ def format_context_for_prompt(
             1,
         ))
 
-    sections.extend(reference_sections(reference_answers))
+    reference_blocks = reference_sections(reference_answers)
+    sections.extend(reference_blocks)
     sections.extend(study_sections(study_requests, study_explanations, scope=study_scope))
     sections.extend(caller_context_sections(caller_requests, caller_answers, scope=study_scope))
 
@@ -3045,7 +3046,8 @@ def format_context_for_prompt(
             }
         if ctx.get("cross_entry_analysis"):
             ctx["cross_entry_rendered"] = any(s.label == "cross_entry_analysis" for s in kept)
-        kept = dedupe_reference_sections(reference_answers, kept)
+        kept = dedupe_reference_sections(
+            reference_answers, kept, rendered_sections=reference_blocks)
         deliver_knowledge_context(kept)
         if caller_requests:
             deliver_caller_context(kept)
@@ -3054,7 +3056,8 @@ def format_context_for_prompt(
 
     if ctx.get("cross_entry_analysis"):
         ctx["cross_entry_rendered"] = True
-    sections = dedupe_reference_sections(reference_answers, sections)
+    sections = dedupe_reference_sections(
+        reference_answers, sections, rendered_sections=reference_blocks)
     deliver_knowledge_context(sections)
     if caller_requests:
         deliver_caller_context(sections)
