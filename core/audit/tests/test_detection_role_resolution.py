@@ -334,3 +334,17 @@ def test_signal_handler_calls_require_execution_context(monkeypatch, tmp_path):
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_uncatchable_signal_calls_require_action_and_error_review(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/signal_sigkill_sigstop.cocci'
+    receipt = 'coccinelle:signal_sigkill_sigstop'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
