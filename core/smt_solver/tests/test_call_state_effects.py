@@ -51,7 +51,7 @@ def test_independent_contradictions_keep_their_segment_proof(entry, texts, epoch
     'probe("&Value") == 0', "probe('&') == 0",
     'probe("Value = 1 && &Other") == 0',
     r'probe("escaped\"&Value") == 0',
-    "probe(A && B) == 0", "Flags & 1 == 0",
+    "probe(A && B) == 0", "(Flags & 1) == 0",
 ])
 def test_literal_bytes_and_non_call_bitmasks_do_not_create_state_effects(text):
     result = paths.check_path_feasibility(conditions(text), profile=BVProfile(8, False), reduce_constraints=False)
