@@ -248,6 +248,11 @@
     "count": 26,
     "kind": "literal"
   },
+  "core/analysis/validator_control_scope.py::_JAVA_UNSUPPORTED": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Ten tree-sitter Java AST node-kind strings implement a conservative unsupported-control veto. They are parser grammar API labels, not repository/user/domain function names; DomainVocabulary learning must not alter proof admission."
+  },
   "core/ast/view.py::_CALL_GRAPH_DISPATCH": {
     "count": 12,
     "kind": "literal"
@@ -1435,6 +1440,11 @@
   "core/dataflow/smt_barrier.py::_JS_NOT_FUNC": {
     "count": 14,
     "kind": "alternation"
+  },
+  "core/dataflow/string_slice_diagnostic.py::slice_model_diagnostic": {
+    "count": 18,
+    "kind": "literal",
+    "note": "Eighteen fixed output keys describe a conditional bounded-string model and source locations. source_bound=False and unverified_source_premises prevent source-authority promotion; keys are stable schema/provenance fields, not learned function names. Models flow intact through prescreen diagnostics into DataflowValidation.smt_diagnostics."
   },
   "core/dataflow/structural_validator.py::_EXTRACTORS": {
     "count": 10,
