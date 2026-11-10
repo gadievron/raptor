@@ -497,6 +497,12 @@ class TestNosemgrepFindingSurvivesAnnotation:
     ("alpha", "pack.beta", False),
     ("alpha", "", False),
     ("alpha, beta", "pack.beta", True),
+    ("alpha,", "pack.alpha", True),
+    ("alpha,", "pack.beta", False),
+    ("alpha, beta,", "pack.beta", True),
+    ("alpha, beta ,", "pack.alpha", True),
+    ("alpha, ", "pack.alpha", True),
+    ("alpha, ", "pack.notalpha", False),
 ])
 def test_annotation_respects_selected_rule(tmp_path, selected, rule_id, applies):
     (tmp_path / "a.py").write_text(f"subject(value) # nosemgrep: {selected}\n")
@@ -533,6 +539,10 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
         "subject(value) # NoSeM: group.alpha\n"
         "subject(value) # NOSEM\n"
         "subject(value) # NoSeMgReP\n"
+        "subject(value) # nosemgrep: group.alpha,\n"
+        "subject(value) # nosemgrep: group.alpha, group.beta,\n"
+        "subject(value) # nosemgrep: group.alpha, group.beta ,\n"
+        "subject(value) # nosemgrep: group.alpha, \n"
     )
     command = ["semgrep", "scan", "--config", str(config), "--metrics", "off",
                "--disable-version-check", "--jobs", "1"]
@@ -557,7 +567,7 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
                     for result in rows}
     active = {(result["check_id"], result["start"]["line"])
               for result in native_data["results"]}
-    assert len(rows) == len(all_findings) == 42
+    assert len(rows) == len(all_findings) == 54
     expected_suppressed = all_findings - active
     assert expected_suppressed and active
     assert annotate_sarif(sarif, str(tmp_path)) == len(expected_suppressed)
@@ -570,7 +580,7 @@ def test_native_rule_scoped_suppression_annotation(tmp_path):
     report = tmp_path / "annotated.sarif"
     report.write_text(json.dumps(sarif))
     metrics = generate_scan_metrics([str(report)])
-    assert metrics["total_findings"] == 42
+    assert metrics["total_findings"] == 54
     assert metrics["nosemgrep_suppressed_count"] == len(expected_suppressed)
     assert metrics["total_findings"] - metrics["nosemgrep_suppressed_count"] == len(active)
 
