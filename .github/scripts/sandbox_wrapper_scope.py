@@ -13,9 +13,11 @@ import ast
 from collections import deque
 from html import escape
 import json
+import keyword
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 
 from ci_change_scope import changed_paths
@@ -31,6 +33,30 @@ GLOBAL_INPUTS = {'tuning.json', 'conftest.py', 'pytest.ini', 'pyproject.toml', '
 GLOBAL_DIRS = ('core/sandbox/', 'bin/', 'libexec/', 'test/', '.github/actions/setup-venv/', '.github/actions/enable-userns/')
 PLATFORMS = {'linux': 'ubuntu-24.04', 'darwin': 'macos-latest'}
 REGISTRY_INPUT = '.github/sandbox-wrapper-tests.json'
+_MAX_REGISTRY_BYTES = 2 * 1024 * 1024
+
+
+def _registry_json(raw: bytes) -> dict | None:
+    """Use the census's UTF-8 text contract, rejecting ambiguous object keys."""
+    def unique_object(pairs):
+        value = {}
+        for name, entry in pairs:
+            if name in value:
+                raise ValueError('duplicate registry key')
+            value[name] = entry
+        return value
+    registry = json.loads(raw.decode('utf-8'), object_pairs_hook=unique_object)
+    return registry if isinstance(registry, dict) else None
+
+
+def current_registry(repo: Path) -> dict | None:
+    """Check raw ambiguity before admitting a current-to-base comparison."""
+    try:
+        with (repo / REGISTRY_INPUT).open('rb') as stream:
+            raw = stream.read(_MAX_REGISTRY_BYTES + 1)
+        return _registry_json(raw) if len(raw) <= _MAX_REGISTRY_BYTES else None
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return None
 
 
 def base_registry(repo: Path, base: str) -> dict | None:
@@ -38,14 +64,41 @@ def base_registry(repo: Path, base: str) -> dict | None:
     if not re.fullmatch(r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', base or '') or set(base) == {'0'}:
         return None
     try:
-        result = subprocess.run(['git', 'show', base + ':' + REGISTRY_INPUT], cwd=repo,
-                                check=True, capture_output=True, timeout=10)
-        if len(result.stdout) > 2 * 1024 * 1024:
+        deadline = time.monotonic() + 10
+        # One fixed metadata query returns the resolved blob ID, type and size;
+        # it does not stream the historical file. Read only an admitted blob ID.
+        metadata = subprocess.run(
+            ['git', 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)'],
+            input=(base + ':' + REGISTRY_INPUT + '\n').encode('ascii'), cwd=repo,
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        match = re.fullmatch(rb'([0-9a-f]{40}|[0-9a-f]{64}) blob ([0-9]{1,20})\n', metadata.stdout)
+        if match is None:
             return None
-        registry = json.loads(result.stdout)
-        return registry if isinstance(registry, dict) else None
+        size = int(match[2])
+        remaining = deadline - time.monotonic()
+        if size > _MAX_REGISTRY_BYTES or remaining <= 0:
+            return None
+        result = subprocess.run(['git', 'cat-file', 'blob', match[1].decode('ascii')], cwd=repo,
+                                check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=remaining)
+        if len(result.stdout) != size:
+            return None
+        return _registry_json(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError, UnicodeError, RecursionError):
         return None
+
+
+def _python_selector(selector: str) -> bool:
+    """Validate a repository-relative Python node ID without reading old files."""
+    if not isinstance(selector, str) or any(ord(c) < 32 or ord(c) == 127 for c in selector):
+        return False
+    path, separator, nodes = selector.partition('::')
+    if (not separator or not path.endswith('.py') or '\\' in path
+            or re.match(r'^[A-Za-z]:', path) or any(part in {'', '.', '..'} for part in path.split('/'))):
+        return False
+    names, parameter, _ = nodes.partition('[')
+    if parameter and not nodes.endswith(']'):
+        return False
+    return all(name.isidentifier() and not keyword.iskeyword(name) for name in names.split('::'))
 
 
 def native_cell_changes(previous: dict | None, current: dict) -> set[tuple[str, str]] | None:
@@ -80,7 +133,7 @@ def native_cell_changes(previous: dict | None, current: dict) -> set[tuple[str, 
                     return None
                 tests = cell.get('tests')
                 if tests:
-                    if (not isinstance(tests, list) or any(not isinstance(s, str) or not s for s in tests)
+                    if (not isinstance(tests, list) or any(not _python_selector(s) for s in tests)
                             or len(set(tests)) != len(tests)
                             or type(cell.get('expected')) is not int or cell['expected'] < 1):
                         return None
@@ -508,7 +561,9 @@ def main() -> None:
     event = os.environ.get('EVENT', '')
     base = os.environ.get('BASE_SHA', '')
     changes = None if event in {'schedule', 'workflow_dispatch'} else changed_paths(repo, base)
-    previous = base_registry(repo, base) if changes is not None and REGISTRY_INPUT in changes else None
+    previous = None
+    if changes is not None and REGISTRY_INPUT in changes and current_registry(repo) == registry:
+        previous = base_registry(repo, base)
     explanations = []
     matrix = select(repo, registry, changes, explanations=explanations, previous_registry=previous)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
