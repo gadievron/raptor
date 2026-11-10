@@ -238,7 +238,7 @@ def extract_files_from_zip(
                 # ``open`` returns a ZipExtFile that respects the
                 # member's compressed-data bounds — we don't have
                 # to defend against over-read separately.
-                with zf.open(info) as f:
+                with preserving_stream_error(zf.open(info)) as f:
                     data = f.read()
             except RuntimeError as e:
                 # Password-protected entry (no ``pwd`` supplied).
