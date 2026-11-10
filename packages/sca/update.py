@@ -36,7 +36,6 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -699,8 +698,8 @@ def _resolve_out_dir(args: argparse.Namespace, *, suffix: str = "") -> Path:
     if args.out:
         base = Path(args.out).resolve()
         return base / suffix.lstrip("-") if suffix else base
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path("out") / f"sca-update-{ts}{suffix}"
+    from core.run.output import unique_run_suffix
+    return Path("out") / f"sca-update-{unique_run_suffix('-')}{suffix}"
 
 
 def _parse_advisory_filter(value: str | None) -> set | None:
