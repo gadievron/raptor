@@ -24,61 +24,64 @@ rules:
     languages: [python]
     severity: HIGH
     patterns:
-      - pattern-either:
-          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESGCM($K).encrypt($NONCE, ...)
-          - patterns:
-              - pattern: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
-                  ...
-                  $A.encrypt($NONCE, ...)
-              - pattern-not: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
-                  ...
-                  $A = ...
-                  ...
-                  $A.encrypt($NONCE, ...)
-          - pattern: cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K).encrypt($NONCE, ...)
-          - patterns:
-              - pattern: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
-                  ...
-                  $A.encrypt($NONCE, ...)
-              - pattern-not: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
-                  ...
-                  $A = ...
-                  ...
-                  $A.encrypt($NONCE, ...)
-          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESCCM($K).encrypt($NONCE, ...)
-          - patterns:
-              - pattern: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
-                  ...
-                  $A.encrypt($NONCE, ...)
-              - pattern-not: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESCCM($K)
-                  ...
-                  $A = ...
-                  ...
-                  $A.encrypt($NONCE, ...)
-          - pattern: cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K).encrypt($NONCE, ...)
-          - patterns:
-              - pattern: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
-                  ...
-                  $A.encrypt($NONCE, ...)
-              - pattern-not: |
-                  $A = cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
-                  ...
-                  $A = ...
-                  ...
-                  $A.encrypt($NONCE, ...)
-      - metavariable-pattern:
-          metavariable: $NONCE
-          patterns:
-            - pattern-either:
-                - pattern: b"..."
-                - pattern: b"..." * $N
+    - pattern-either:
+      - pattern: $CTOR.encrypt($NONCE, ...)
+      - patterns:
+        - pattern: '$A = $CTOR
+
+            ...
+
+            $A.encrypt($NONCE, ...)
+
+            '
+        - pattern-not: '$A = $CTOR
+
+            ...
+
+            $A = ...
+
+            ...
+
+            $A.encrypt($NONCE, ...)
+
+            '
+      - pattern: $CTOR.encrypt(..., nonce=$NONCE, ...)
+      - patterns:
+        - pattern: '$A = $CTOR
+
+            ...
+
+            $A.encrypt(..., nonce=$NONCE, ...)
+
+            '
+        - pattern-not: '$A = $CTOR
+
+            ...
+
+            $A = ...
+
+            ...
+
+            $A.encrypt(..., nonce=$NONCE, ...)
+
+            '
+    - metavariable-pattern:
+        metavariable: $CTOR
+        pattern-either:
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESGCM($K)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESGCM(key=$K)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305($K)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305(key=$K)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESCCM($K, ...)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESCCM(key=$K, ...)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESOCB3($K)
+        - pattern: cryptography.hazmat.primitives.ciphers.aead.AESOCB3(key=$K)
+    - metavariable-pattern:
+        metavariable: $NONCE
+        patterns:
+        - pattern-either:
+          - pattern: b"..."
+          - pattern: b"..." * $N
     metadata:
       cwe: ["CWE-330"]
       asvs: ["V7.3"]

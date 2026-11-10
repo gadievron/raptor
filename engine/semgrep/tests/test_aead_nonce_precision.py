@@ -84,3 +84,45 @@ def test_aead_direct_reassignment_ends_constructor_origin(tmp_path):
     actual = {(Path(row["path"]).name, row["end"]["line"]) for row in data["results"]}
     assert actual == expected
     assert len(data["results"]) == len(expected)
+
+
+def test_aead_keyword_arguments_and_ccm_tag_length(tmp_path):
+    report = tmp_path
+    target = report / "owned"
+    target.mkdir(exist_ok=True)
+    prefix = "from cryptography.hazmat.primitives.ciphers.aead import AESGCM, AESCCM\n"
+    cases = {
+        "positional": ('AESGCM(key).encrypt(b"0" * 12, data, None)\n', True),
+        "key_keyword": ('AESGCM(key=key).encrypt(b"0" * 12, data, None)\n', True),
+        "nonce_keyword": ('AESGCM(key).encrypt(nonce=b"0" * 12, data=data, associated_data=None)\n', True),
+        "all_keywords": ('AESGCM(key=key).encrypt(nonce=b"0" * 12, data=data, associated_data=None)\n', True),
+        "stored_keywords": ('a = AESGCM(key=key)\na.encrypt(nonce=b"0" * 12, data=data, associated_data=None)\n', True),
+        "ccm_tag_positional": ('AESCCM(key, 8).encrypt(b"0" * 12, data, None)\n', True),
+        "ccm_tag_keyword": ('AESCCM(key, tag_length=8).encrypt(b"0" * 12, data, None)\n', True),
+        "ccm_all_keywords": ('AESCCM(key=key, tag_length=8).encrypt(nonce=b"0" * 12, data=data, associated_data=None)\n', True),
+        "dynamic": ('AESGCM(key=key).encrypt(nonce=nonce, data=data, associated_data=None)\n', False),
+        "no_key": ('AESGCM().encrypt(b"0" * 12, data, None)\n', False),
+        "ccm_no_key": ('AESCCM(tag_length=8).encrypt(b"0" * 12, data, None)\n', False),
+        "literal_data": ('AESGCM(key).encrypt(nonce, b"literal data", None)\n', False),
+    }
+    expected = set()
+    for name, (source, reports) in cases.items():
+        filename=name+".py"
+        (target/filename).write_text(prefix + source)
+        if reports:
+            expected.add(filename)
+    result = run_pinned_subprocess(
+        ["semgrep","scan","--config",str(Path(__file__).resolve().parents[1]/"rules/crypto/insecure-iv-or-nonce.yaml"),"--metrics","off","--disable-version-check","--jobs","1","--json",*map(str,sorted(target.iterdir()))],
+        timeout=60,context="Owned inert AEAD argument shapes baseline",
+        env=RaptorConfig.get_safe_env(),skip_signals=(9,),
+    )
+    (report/"stdout.json").write_text(result.stdout)
+    (report/"stderr.log").write_text(result.stderr)
+    assert result.returncode==0,result.stderr
+    data=json.loads(result.stdout)
+    assert not data.get("errors"),data.get("errors")
+    assert {Path(p).name for p in data["paths"]["scanned"]}=={p.name for p in target.iterdir()}
+    actual={Path(row["path"]).name for row in data["results"] if row["check_id"].endswith("raptor.crypto.nonce.literal.python")}
+    (report/"summary.json").write_text(json.dumps({"expected":sorted(expected),"actual":sorted(actual),"missing":sorted(expected-actual),"unexpected":sorted(actual-expected),"version":data.get("version"),"scope":"Advertised API argument-shape detection only; no constructors or encryption executed"},indent=2))
+    assert actual==expected
+    assert len(data["results"])==len(expected)

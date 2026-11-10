@@ -1597,6 +1597,7 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_aead_nonce_constructor_identity",
             "test_aead_direct_reassignment_ends_constructor_origin",
+            "test_aead_keyword_arguments_and_ccm_tag_length",
         }
 
     def test_hazmat_iv_fixture_is_guarded(self):
