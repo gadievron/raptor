@@ -113,6 +113,18 @@ for _container in ('flask.request.args', 'flask.request.form'):
     _MATRICES["python"][2].append((
         f'cursor.execute("SELECT " + str({_container}.getlist("ids", type=int)))', False,
     ))
+    for _accessor in (
+        f'{_container}.get(key="sql")',
+        f'{_container}.get(key="sql", default="SELECT 1")',
+        f'{_container}.get(default="SELECT 1", key="sql")',
+    ):
+        _MATRICES["python"][2].extend([
+            (f'cursor.execute({_accessor})', True),
+            (f'cursor.execute("SELECT ?", ({_accessor},))', False),
+        ])
+    _MATRICES["python"][2].append((
+        f'cursor.execute("SELECT " + str({_container}.get(key="id", type=int)))', False,
+    ))
 
 
 _MATRICES["java-wrapper"] = (
