@@ -5,7 +5,7 @@ import re
 SOURCE_ANCHOR_PREFIX = "src:"
 _SOURCE_ANCHOR = re.compile(r"src:([0-9a-f]{64}):([0-9a-f]{12})")
 _CONTEXT_SOURCE_ANCHOR = re.compile(
-    r"src:ctx1:([0-9a-f]{64}):([0-9a-f]{12}):([0-9a-f]{64}|unknown)"
+    r"src:ctx([12]):([0-9a-f]{64}):([0-9a-f]{12}):([0-9a-f]{64}|unknown)"
 )
 
 
@@ -16,7 +16,15 @@ def parse_context_source_anchor(value: object) -> tuple[str, str, str | None] | 
     match = _CONTEXT_SOURCE_ANCHOR.fullmatch(value)
     if match is None:
         return None
-    return match[1], match[2], None if match[3] == "unknown" else match[3]
+    return match[2], match[3], None if match[4] == "unknown" else match[4]
+
+
+def context_source_anchor_version(value: object) -> int | None:
+    """Read the exact context contract version, not a primary-only fallback."""
+    if not isinstance(value, str):
+        return None
+    match = _CONTEXT_SOURCE_ANCHOR.fullmatch(value)
+    return int(match[1]) if match else None
 
 
 def parse_source_anchor(value: object) -> tuple[str, str] | None:
@@ -40,10 +48,13 @@ def make_source_anchor(sha256: str, span_hash: str) -> str:
 
 def make_context_source_anchor(
     sha256: str, span_hash: str, dependency_sha256: str | None,
+    *, context_version: int = 1,
 ) -> str:
     """Bind known inputs; unknown dependencies explicitly prevent normal reuse."""
+    if type(context_version) is not int or context_version not in (1, 2):
+        raise ValueError("invalid context anchor version")
     dependency = "unknown" if dependency_sha256 is None else dependency_sha256
-    value = f"{SOURCE_ANCHOR_PREFIX}ctx1:{sha256}:{span_hash}:{dependency}"
+    value = f"{SOURCE_ANCHOR_PREFIX}ctx{context_version}:{sha256}:{span_hash}:{dependency}"
     if parse_context_source_anchor(value) is None:
         raise ValueError("invalid source content, span or context digest")
     return value

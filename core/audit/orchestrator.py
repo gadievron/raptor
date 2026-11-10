@@ -298,6 +298,7 @@ if TYPE_CHECKING:
     from core.audit.environment import EnvironmentGuard
     from .knowledge_requests import KnowledgeRequest
     from .knowledge_runtime import AuditKnowledgeRuntime, KnowledgeReservation
+    from .review_input_scope import ReviewInputScope
 
 from .integer_abi import IntegerABIInput, integer_abi_record as _integer_abi_record, integer_abi_key as _integer_abi_key
 
@@ -1381,6 +1382,10 @@ class ReviewOutcome:
     # (duplicate non-memoized tool dispatch) or skips fresh ones.
     _incr_ticked: bool = field(default=False, repr=False, compare=False)
     weaknesses: list[dict[str, Any]] | None = None
+    # In-memory source stamps only. Explicit journal/export projections omit
+    # this field; generic whole-outcome asdict serialisation is unsupported.
+    # None on cold imports: JSON must never reconstruct live admission.
+    review_input_scope: ReviewInputScope | None = field(default=None, repr=False, compare=False)
 
     _CONFIRMED_EVIDENCE = frozenset({
         "dark_verify:sanitizer-violation", "dynamic:crash", "frida:runtime",
@@ -6141,6 +6146,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         checklist,
         [] if config.force else coverage_records,
         context_map=context_map,
+        source_roots=_review_source_roots(config),
         strategy_filter=config.strategy_filter,
         scope=config.scope,
         fuzz_coverage=fuzz_coverage,
@@ -9288,6 +9294,7 @@ def _run_audit_body(
         collector = Collector(
             out_dir=config.out_dir,
             target_path=config.target_path,
+            source_roots=_review_source_roots(config),
             run_id=_resolved_run_id(config.out_dir),
         )
         # Buffered audit-log rows must survive a FORCED SIGTERM exit
@@ -11060,6 +11067,7 @@ def _run_audit_body(
                 append_journal_for_outcome(
                     out_dir=config.out_dir,
                     target_path=config.target_path,
+                    source_roots=_review_source_roots(config),
                     run_id=_resolved_run_id(config.out_dir),
                     outcome=_o,
                     gap={
@@ -11548,6 +11556,7 @@ def _run_audit_body(
                 append_journal_for_outcome(
                     out_dir=config.out_dir,
                     target_path=config.target_path,
+                    source_roots=_review_source_roots(config),
                     run_id=_resolved_run_id(config.out_dir),
                     outcome=co,
                     gap={
@@ -14357,6 +14366,17 @@ def _build_context(
     return ctx
 
 
+def _review_source_roots(config: OrchestratorConfig) -> dict[str, Path]:
+    """Resolve only current explicit source configuration, never journal paths."""
+    roots: dict[str, Path] = {}
+    if config.target_path is not None:
+        roots["target"] = Path(config.target_path).resolve()
+    study_root = getattr(config, "study_root", None)
+    if study_root is not None:
+        roots["study"] = Path(study_root).resolve()
+    return roots
+
+
 def _commit_outcome(
     config: OrchestratorConfig,
     outcome: ReviewOutcome,
@@ -14398,6 +14418,7 @@ def _commit_outcome(
     append_journal_for_outcome(
         out_dir=config.out_dir,
         target_path=config.target_path,
+        source_roots=_review_source_roots(config),
         run_id=run_id,
         outcome=outcome,
         gap=gap,
@@ -14958,7 +14979,7 @@ def _multi_pass_review(
                 ),
                 default=0,
             )
-            return ReviewOutcome(
+            panel_outcome = ReviewOutcome(
                 file=primary.get("file", file_path),
                 function=primary.get("function", function_name),
                 status=(consensus_status(mr_result) or primary.get("status", "error")),
@@ -14971,6 +14992,9 @@ def _multi_pass_review(
                 duration_s=total_duration,
                 review_result=primary,
             )
+            if knowledge_runtime is not None:
+                knowledge_runtime.bind_review_input_scope(panel_outcome)
+            return panel_outcome
 
         except ImportError:
             logger.debug(
@@ -15087,7 +15111,7 @@ def _multi_pass_review(
                     (r.get("duration_s", 0) or 0 for r in all_raw),
                     default=0,
                 )
-                return ReviewOutcome(
+                consistency_outcome = ReviewOutcome(
                     file=primary.get("file", file_path),
                     function=primary.get("function", function_name),
                     status=(consensus_status(mr_result)
@@ -15102,6 +15126,9 @@ def _multi_pass_review(
                     duration_s=total_duration,
                     review_result=primary,
                 )
+                if knowledge_runtime is not None:
+                    knowledge_runtime.bind_review_input_scope(consistency_outcome)
+                return consistency_outcome
             logger.warning(
                 "self-consistency produced no items for %s:%s — "
                 "falling back to a single pass",
@@ -15154,6 +15181,7 @@ def _multi_pass_review(
         model=outcome.model,
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
+        review_input_scope=outcome.review_input_scope,
     )
 
 
@@ -20098,6 +20126,7 @@ def _apply_reachability_gate(
                 model=outcome.model,
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
+                review_input_scope=outcome.review_input_scope,
                 line=outcome.line,
             )
 
@@ -20123,6 +20152,7 @@ def _apply_reachability_gate(
             model=outcome.model,
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
+            review_input_scope=outcome.review_input_scope,
             line=outcome.line,
         )
 
@@ -26060,6 +26090,7 @@ def _sweep_validate(
                     model=outcome.model,
                     duration_s=outcome.duration_s,
                     review_result=outcome.review_result,
+                    review_input_scope=outcome.review_input_scope,
                     line=outcome.line,
                 )
                 if outcome.review_result:
@@ -26812,6 +26843,7 @@ def _journal_provisional_promotion(
         append_journal_for_outcome(
             out_dir=config.out_dir,
             target_path=config.target_path,
+            source_roots=_review_source_roots(config),
             run_id=_resolved_run_id(config.out_dir),
             outcome=outcome,
             gap=jgap,
@@ -30327,6 +30359,7 @@ def _promote_suspicious_preconditions(
             model=outcome.model,
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
+            review_input_scope=outcome.review_input_scope,
             line=outcome.line,
         )
         promoted.tools_dispatched = (
@@ -30992,6 +31025,7 @@ def _hold_smt_promotion(
         model=outcome.model,
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
+        review_input_scope=outcome.review_input_scope,
         line=outcome.line,
     )
     held.claim_refutations = outcome.claim_refutations
@@ -31419,6 +31453,7 @@ def _promote_clean_refuted(
                 model=outcome.model,
                 duration_s=outcome.duration_s,
                 review_result=deepcopy(_l2_selected.review_result),
+                review_input_scope=_l2_selected.review_input_scope,
                 line=outcome.line,
             )
             rescued.tools_dispatched = _l2_selected.tools_dispatched
@@ -31744,6 +31779,7 @@ def _dispatch_secondary_hypotheses(
                 model=outcome.model,
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
+                review_input_scope=outcome.review_input_scope,
                 line=outcome.line,
             )
             rescued.tools_dispatched = outcome.tools_dispatched
@@ -32679,6 +32715,7 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
             model=outcome.model,
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
+            review_input_scope=outcome.review_input_scope,
             line=outcome.line,
         )
         with result._lock:
@@ -32851,6 +32888,7 @@ def _demote_absent_promotions(
             model=outcome.model,
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
+            review_input_scope=outcome.review_input_scope,
             line=outcome.line,
         )
         demoted.tools_dispatched = outcome.tools_dispatched
@@ -32936,6 +32974,7 @@ def _promote_outcome(
         model=outcome.model,
         duration_s=outcome.duration_s,
         review_result=review,
+        review_input_scope=outcome.review_input_scope,
         line=outcome.line,
     )
     promoted.tools_dispatched = outcome.tools_dispatched
@@ -33208,6 +33247,7 @@ def _rejournal_final_statuses(
             append_journal_for_outcome(
                 out_dir=config.out_dir,
                 target_path=config.target_path,
+                source_roots=_review_source_roots(config),
                 run_id=_resolved_run_id(config.out_dir),
                 outcome=outcome,
                 gap=gap,
@@ -33504,6 +33544,7 @@ def _resolve_gate_demoted(
                 model=outcome.model,
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
+                review_input_scope=outcome.review_input_scope,
                 line=outcome.line,
             )
             resolved.claim_refutations = outcome.claim_refutations
@@ -33539,6 +33580,7 @@ def _resolve_gate_demoted(
                 model=outcome.model,
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
+                review_input_scope=outcome.review_input_scope,
                 line=outcome.line,
             )
             resolved.claim_refutations = outcome.claim_refutations
@@ -34563,6 +34605,7 @@ def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
         model=outcome.model,
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
+        review_input_scope=outcome.review_input_scope,
         line=outcome.line,
     )
     demoted.tools_dispatched = outcome.tools_dispatched
@@ -35284,7 +35327,8 @@ def _publish_study_candidates(
 ) -> str:
     """Keep canonical ownership through the existing journal writer's acknowledgement."""
     from .collector import append_journal_for_outcome
-    from .verification_results import VerificationScope
+    from .review_claims import read_history
+    from .verification_results import ReviewPublicationScope, VerificationScope
 
     with result._lock:
         if config._verdicts_finalized:
@@ -35292,7 +35336,7 @@ def _publish_study_candidates(
         index = next((i for i, current in enumerate(result.outcomes) if current is prior), None)
         if index is None:
             return "canonical_outcome_changed"
-        if not runtime.can_publish(reservation):
+        if not runtime.can_publish(reservation) or reservation.origin.source_identity is None:
             return "source_changed"
         # Snapshot construction belongs to the same ownership boundary as
         # the append: even an in-place update must not be overwritten.
@@ -35301,14 +35345,30 @@ def _publish_study_candidates(
             candidate = _retain_delivered_context_history(prior, fresh)
         if candidate is None:
             return "unchanged"
+        candidate_history = read_history((candidate.review_result or {}).get("review_claims"))
+        raw_history = (candidate.review_result or {}).get("review_claims")
+        known_bound = (candidate.review_input_scope is not None
+                       or isinstance(raw_history, dict) and "source_inputs" in raw_history)
+        input_scope = runtime.publication_input_scope(reservation, candidate)
+        if known_bound and (candidate_history is None or "source_inputs" not in candidate_history
+                            or input_scope is None):
+            return "study_context_input_scope_unavailable"
+        candidate.review_input_scope = input_scope
         acknowledgement = append_journal_for_outcome(
             out_dir=config.out_dir, target_path=config.target_path,
+            source_roots=runtime.source_roots(),
+            review_input_scope=input_scope,
             run_id=_resolved_run_id(config.out_dir), outcome=candidate, gap=gap,
-            verification_scope=VerificationScope(candidate.file, candidate.function, candidate.line,
-                                                 candidate.hypothesis, reservation.origin.source_identity),
+            verification_scope=(VerificationScope(candidate.file, candidate.function, candidate.line,
+                                                  candidate.hypothesis, reservation.origin.source_identity)
+                                if candidate.hypothesis else None),
+            publication_scope=ReviewPublicationScope(reservation.origin.file, reservation.origin.function,
+                reservation.origin.line_start, reservation.origin.line_end, reservation.origin.source_identity),
         )
         if acknowledgement is None:
             return "candidate_journal_write_failed"
+        if known_bound and getattr(acknowledgement, "review_claims", None) != candidate_history:
+            return "candidate_history_ack_mismatch"
         if (acknowledgement.file, acknowledgement.function, acknowledgement.line_start) != (
                 candidate.file, candidate.function, candidate.line):
             return "candidate_journal_ack_mismatch"
@@ -35324,6 +35384,7 @@ def _publish_study_outcome(
 ) -> str:
     """Publish a changed assessment after the owned journal append succeeds."""
     from .collector import append_journal_for_outcome
+    from .review_claims import read_history
     from .journal import ReviewJournalEntry
     from .source_anchor import parse_source_anchor
     from .verification_results import ReviewPublicationScope
@@ -35340,8 +35401,19 @@ def _publish_study_outcome(
         if not runtime.can_publish(reservation) or origin.source_identity is None:
             return "source_changed"
         candidate.verification_tier = candidate.compute_tier(target_path=config.target_path)
+        candidate_history = read_history((candidate.review_result or {}).get("review_claims"))
+        raw_history = (candidate.review_result or {}).get("review_claims")
+        known_bound = (candidate.review_input_scope is not None
+                       or isinstance(raw_history, dict) and "source_inputs" in raw_history)
+        input_scope = runtime.publication_input_scope(reservation, candidate)
+        if known_bound and (candidate_history is None or "source_inputs" not in candidate_history
+                            or input_scope is None):
+            return "study_context_input_scope_unavailable"
+        candidate.review_input_scope = input_scope
         acknowledgement = append_journal_for_outcome(
             out_dir=config.out_dir, target_path=config.target_path, run_id=_resolved_run_id(config.out_dir),
+            source_roots=runtime.source_roots(),
+            review_input_scope=input_scope,
             outcome=candidate, gap=gap,
             publication_scope=ReviewPublicationScope(origin.file, origin.function, origin.line_start,
                                                       origin.line_end, origin.source_identity),
@@ -35356,8 +35428,6 @@ def _publish_study_outcome(
                 candidate.file, candidate.function, candidate.line, origin.line_end, candidate.status)
                 or source_anchor is None or source_anchor[0] != origin.source_identity.sha256):
             return "study_journal_ack_mismatch"
-        from .review_claims import read_history
-
         expected_history = read_history((candidate.review_result or {}).get("review_claims"))
         if expected_history is not None and acknowledgement.review_claims != expected_history:
             return "study_history_ack_mismatch"
@@ -37001,6 +37071,7 @@ def _run_differential_verification(
             append_journal_for_outcome(
                 out_dir=config.out_dir,
                 target_path=config.target_path,
+                source_roots=_review_source_roots(config),
                 run_id=_resolved_run_id(config.out_dir),
                 outcome=co,
                 gap={

@@ -29,6 +29,7 @@ from .journal import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from .review_input_scope import ReviewInputScope
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +286,8 @@ def append_journal_for_outcome(
     producer: str | None = None,
     verification_scope: VerificationScope | None = None,
     publication_scope: ReviewPublicationScope | None = None,
+    review_input_scope: ReviewInputScope | None = None,
+    source_roots: dict[str, Path] | None = None,
 ) -> ReviewJournalEntry | None:
     """Append one ``ReviewJournalEntry`` for a completed review outcome.
 
@@ -340,11 +343,12 @@ def append_journal_for_outcome(
     source_hash = ""
     from .refutation_source import capture_source_identity
     from .source_anchor import (
-        make_context_source_anchor, make_source_anchor,
+        context_source_anchor_version, make_context_source_anchor, make_source_anchor,
         parse_context_source_anchor, parse_source_anchor,
     )
     from .review_claims import read_history
-    from .review_context_inputs import context_inputs_current, context_inputs_digest
+    from .review_context_inputs import context_inputs_current, context_inputs_digest, context_inputs_record_digest
+    from .review_input_scope import ReviewInputScope
 
     initial_review = getattr(outcome, "review_result", None) or {}
     raw_history = initial_review.get("review_claims")
@@ -352,21 +356,60 @@ def append_journal_for_outcome(
     has_context_inputs = isinstance(raw_history, dict) and "source_inputs" in raw_history
     context_inputs = history.get("source_inputs") if history is not None else None
     context_digest = context_inputs_digest(context_inputs) if has_context_inputs else None
+    attached_scope = getattr(outcome, "review_input_scope", None)
+    if ((attached_scope is not None and not isinstance(attached_scope, ReviewInputScope))
+            or (review_input_scope is not None and not isinstance(review_input_scope, ReviewInputScope))
+            or (attached_scope is not None and review_input_scope is not None and attached_scope != review_input_scope)):
+        logger.warning("journal review input scopes are invalid or disagree")
+        return None
+    input_scope = review_input_scope if review_input_scope is not None else attached_scope
+    if input_scope is not None and not has_context_inputs:
+        logger.warning("journal review input scope lost its dependency record")
+        return None
+    context_version = context_inputs.get("version") if isinstance(context_inputs, dict) else None
     context_primary: str | None = None
+    effective_roots = dict(source_roots) if isinstance(source_roots, dict) else {}
+    if source_roots is not None and not isinstance(source_roots, dict):
+        return None
+    if input_scope is not None:
+        captured_roots = input_scope.roots()
+        if captured_roots is None:
+            return None
+        from pathlib import Path
+        try:
+            if any(label in effective_roots and Path(effective_roots[label]).resolve() != root
+                   for label, root in captured_roots.items()):
+                logger.warning("journal review input root configuration changed")
+                return None
+        except (OSError, ValueError, TypeError):
+            return None
+        effective_roots.update(captured_roots)
     if has_context_inputs:
-        # A lost or incomplete dependency envelope must not become a legacy
-        # primary-only row. These inputs narrow reuse, never certify evidence.
-        if history is None or not isinstance(context_inputs, dict) or context_digest is None:
+        # Portable incompleteness can retain a fresh concern only when its
+        # original live stamps are supplied separately. It never grants reuse.
+        if (history is None or not isinstance(context_inputs, dict)
+                or context_inputs_record_digest(context_inputs) is None
+                or (context_digest is None and input_scope is None)):
             logger.warning("journal review context input binding is incomplete")
             return None
-        primary_inputs = [row["sha256"] for row in context_inputs["sources"]
-                          if row["file"] == outcome.file]
-        if len(primary_inputs) != 1:
-            logger.warning("journal review context has no unique primary source")
-            return None
-        context_primary = primary_inputs[0]
+        if input_scope is not None:
+            if not input_scope.matches(file=outcome.file, function=outcome.function,
+                                       line_start=gap.get("line_start", 0), source_inputs=context_inputs):
+                return None
+            if input_scope.origin.source_identity is None:
+                return None
+            context_primary = input_scope.origin.source_identity.sha256
+        else:
+            primary_inputs = [row["sha256"] for row in context_inputs["sources"]
+                              if row.get("root", "target") == "target" and row["file"] == outcome.file]
+            if len(primary_inputs) != 1:
+                logger.warning("journal review context has no unique primary source")
+                return None
+            context_primary = primary_inputs[0]
 
     def context_current():
+        if getattr(outcome, "review_input_scope", None) != attached_scope:
+            return False
         current_review = getattr(outcome, "review_result", None) or {}
         current_history = current_review.get("review_claims")
         current_has_inputs = isinstance(current_history, dict) and "source_inputs" in current_history
@@ -376,7 +419,11 @@ def append_journal_for_outcome(
             return True
         if not isinstance(current_history, dict) or current_history.get("source_inputs") != context_inputs:
             return False
-        admitted, _ = context_inputs_current(context_inputs, target_path)
+        if input_scope is not None:
+            return (input_scope.matches(file=outcome.file, function=outcome.function,
+                                        line_start=gap.get("line_start", 0), source_inputs=context_inputs)
+                    and input_scope.current(target_path))
+        admitted, _ = context_inputs_current(context_inputs, target_path, source_roots=effective_roots)
         return admitted
 
     inherited_anchor = getattr(outcome, "reused_source_anchor", None) if getattr(outcome, "reused", False) else None
@@ -388,7 +435,9 @@ def append_journal_for_outcome(
             logger.warning("journal reused source anchor is invalid")
             return None
         if inherited_context is not None and (
-                not has_context_inputs or inherited_context[2] != context_digest):
+                not has_context_inputs or (input_scope is None and (
+                    inherited_context[2] != context_digest
+                    or context_source_anchor_version(inherited_anchor) != context_version))):
             logger.warning("journal reused context anchor does not match its inputs")
             return None
         inherited_before = capture_source_identity(target_path, outcome.file)
@@ -543,7 +592,10 @@ def append_journal_for_outcome(
             return None
         span_hash = bound_primary[1] if bound_primary is not None else source_hash
         try:
-            source_hash = make_context_source_anchor(context_primary, span_hash, context_digest)
+            reusable = (context_digest is not None
+                        and context_inputs_current(context_inputs, target_path, source_roots=effective_roots)[0])
+            source_hash = make_context_source_anchor(context_primary, span_hash,
+                context_digest if reusable else None, context_version=cast(int, context_version))
         except ValueError:
             logger.warning("journal review context source cannot be represented by an anchor")
             return None
@@ -878,6 +930,7 @@ class Collector:
 
     _log_entries: list[dict[str, Any]] = field(default_factory=list)
     _domain_model_hash: str | None = field(default=None, repr=False)
+    source_roots: dict[str, Path] | None = field(default=None, repr=False)
 
     def submit(
         self,
@@ -978,6 +1031,7 @@ class Collector:
             outcome=outcome,
             gap=gap,
             domain_model_hash=self._get_domain_model_hash(),
+            source_roots=self.source_roots,
         )
 
     def _get_domain_model_hash(self) -> str | None:

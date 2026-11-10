@@ -5,6 +5,7 @@ import re
 import pytest
 
 from core.audit.source_anchor import (
+    context_source_anchor_version,
     make_context_source_anchor,
     make_source_anchor,
     parse_context_source_anchor,
@@ -45,7 +46,7 @@ def test_unknown_dependency_is_distinct_from_legacy_anchor():
 
 
 @pytest.mark.parametrize("value", [
-    None, 1, {}, "", f"src:ctx2:{PRIMARY}:{SPAN}:{DEPENDENCY}",
+    None, 1, {}, "", f"src:ctx3:{PRIMARY}:{SPAN}:{DEPENDENCY}",
     f"src:ctx1:{PRIMARY.upper()}:{SPAN}:{DEPENDENCY}",
     f"src:ctx1:{PRIMARY}:{SPAN.upper()}:{DEPENDENCY}",
     f"src:ctx1:{PRIMARY}:{SPAN}:{DEPENDENCY.upper()}",
@@ -58,6 +59,7 @@ def test_unknown_dependency_is_distinct_from_legacy_anchor():
 ])
 def test_malformed_context_anchor_has_no_primary_fallback(value):
     assert parse_context_source_anchor(value) is None
+    assert context_source_anchor_version(value) is None
     assert parse_source_anchor(value) is None
 
 
@@ -83,3 +85,50 @@ def test_legacy_roundtrip_stays_exact():
     assert value == f"src:{PRIMARY}:{SPAN}"
     assert parse_source_anchor(value) == (PRIMARY, SPAN)
     assert parse_context_source_anchor(value) is None
+
+
+@pytest.mark.parametrize("dependency", [DEPENDENCY, None], ids=["known", "unknown"])
+def test_rooted_context_anchor_preserves_primary_and_dependency_tuple(dependency):
+    value = make_context_source_anchor(PRIMARY, SPAN, dependency, context_version=2)
+
+    assert value == f"src:ctx2:{PRIMARY}:{SPAN}:{dependency or 'unknown'}"
+    assert parse_context_source_anchor(value) == (PRIMARY, SPAN, dependency)
+    assert parse_source_anchor(value) == (PRIMARY, SPAN)
+    assert context_source_anchor_version(value) == 2
+
+
+def test_ctx1_predecessor_refuses_rooted_context_contract():
+    predecessor = re.compile(r"src:ctx1:([0-9a-f]{64}):([0-9a-f]{12}):([0-9a-f]{64}|unknown)")
+
+    assert predecessor.fullmatch(make_context_source_anchor(PRIMARY, SPAN, DEPENDENCY))
+    assert predecessor.fullmatch(make_context_source_anchor(PRIMARY, SPAN, DEPENDENCY, context_version=2)) is None
+    assert predecessor.fullmatch(make_context_source_anchor(PRIMARY, SPAN, None, context_version=2)) is None
+
+
+def test_context_version_is_explicit_and_legacy_has_none():
+    assert context_source_anchor_version(make_source_anchor(PRIMARY, SPAN)) is None
+    assert context_source_anchor_version(make_context_source_anchor(PRIMARY, SPAN, DEPENDENCY)) == 1
+    assert context_source_anchor_version(make_context_source_anchor(PRIMARY, SPAN, None)) == 1
+
+
+@pytest.mark.parametrize("version", [None, True, False, 0, 3, "2", 2.0])
+def test_context_anchor_maker_refuses_unknown_or_coerced_versions(version):
+    with pytest.raises(ValueError):
+        make_context_source_anchor(PRIMARY, SPAN, DEPENDENCY, context_version=version)
+
+
+@pytest.mark.parametrize("value", [
+    f"src:ctx2:{PRIMARY.upper()}:{SPAN}:{DEPENDENCY}",
+    f"src:ctx2:{PRIMARY}:{SPAN.upper()}:{DEPENDENCY}",
+    f"src:ctx2:{PRIMARY}:{SPAN}:{DEPENDENCY.upper()}",
+    f"src:ctx2:{PRIMARY[:-1]}:{SPAN}:{DEPENDENCY}",
+    f"src:ctx2:{PRIMARY}:{SPAN[:-1]}:{DEPENDENCY}",
+    f"src:ctx2:{PRIMARY}:{SPAN}:{DEPENDENCY[:-1]}",
+    f"src:ctx2:{PRIMARY}:{SPAN}:UNKNOWN",
+    f"src:ctx2:{PRIMARY}:{SPAN}:{DEPENDENCY}\n",
+    f"src:ctx2:{PRIMARY}:{SPAN}:{DEPENDENCY}:extra",
+])
+def test_malformed_rooted_anchor_has_no_primary_or_version_fallback(value):
+    assert parse_context_source_anchor(value) is None
+    assert context_source_anchor_version(value) is None
+    assert parse_source_anchor(value) is None

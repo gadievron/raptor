@@ -17,6 +17,7 @@ from core.source import read_contained
 from core.source.lines import join_lf_slice
 
 from .refutation_source import MAX_SOURCE_BYTES, SourceIdentity, capture_source_identity
+from .review_input_scope import CapturedReviewInput
 
 
 class StudyInputBindings:
@@ -121,6 +122,37 @@ class StudyInputBindings:
             if capture_source_identity(root, file) != identity:
                 return False, "study_material_changed"
         return True, "source_fragments_unchanged; explanation_remains_untrusted"
+
+    def snapshot_inputs(self, materials: tuple[SubjectMaterial, ...]) -> tuple[CapturedReviewInput, ...] | None:
+        """Export original pipeline bindings, never current replacement stamps.
+
+        The caller still checks that these exact materials belong to the
+        invocation's admitted explanations, rather than resolving arbitrary IDs.
+        """
+        from .review_input_scope import CapturedReviewInput, MAX_LIVE_INPUTS
+
+        if not isinstance(materials, tuple) or len(materials) > MAX_LIVE_INPUTS:
+            return None
+        result: dict[tuple[str, str], CapturedReviewInput] = {}
+        with self._lock:
+            for material in materials:
+                if not isinstance(material, SubjectMaterial):
+                    return None
+                captured = self._bindings.get(material.binding_id)
+                if captured is None or captured[0] != material:
+                    return None
+                source = CapturedReviewInput(material.source_root, captured[2], material.file, captured[1])
+                key = (source.root_label, source.file)
+                previous = result.get(key)
+                if previous is not None and previous != source:
+                    return None
+                result[key] = source
+        return tuple(result[key] for key in sorted(result))
+
+    def registered_roots(self) -> dict[str, Path]:
+        """Copy only explicitly registered pipeline roots, not journal paths."""
+        with self._lock:
+            return dict(self._roots)
 
     def records(self) -> list[dict]:
         """Export captured inputs, without asserting their current freshness."""
