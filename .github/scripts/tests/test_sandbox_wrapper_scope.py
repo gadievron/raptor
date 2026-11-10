@@ -559,10 +559,11 @@ def registry_git(tree):
     return root, registry, git_run(root, 'rev-parse', 'HEAD')
 
 
-def _registry_step(root, registry, base, monkeypatch):
+def _registry_step(root, registry, base, monkeypatch, *, payload=None):
     from core.testing.gitrepo import git_run
 
-    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(registry, indent=2))
+    (root / '.github/sandbox-wrapper-tests.json').write_text(
+        json.dumps(registry, indent=2) if payload is None else payload)
     git_run(root, 'add', '-A')
     git_run(root, 'commit', '-qm', 'current registry selection')
     monkeypatch.chdir(root)
@@ -748,7 +749,9 @@ def test_registry_history_read_failures_are_unavailable(tmp_path, monkeypatch, f
              'status': subprocess.CalledProcessError(128, ['git'])}[failure]
     def fail(*args, **kwargs):
         raise error
-    monkeypatch.setattr(scope, 'subprocess', SimpleNamespace(run=fail, SubprocessError=subprocess.SubprocessError))
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = fail
+    monkeypatch.setattr(scope, 'subprocess', private)
     assert scope.base_registry(tmp_path, 'a' * 40) is None
 
 
@@ -759,10 +762,20 @@ def test_unreadable_registry_payload_is_unavailable(tmp_path, monkeypatch, paylo
     from types import SimpleNamespace
 
     def read(command, **options):
-        assert command == ['git', 'show', 'a' * 40 + ':.github/sandbox-wrapper-tests.json']
-        assert options == {'cwd': tmp_path, 'check': True, 'capture_output': True, 'timeout': 10}
+        assert options['cwd'] == tmp_path and options['check'] is True
+        assert options['stdout'] is subprocess.PIPE and options['stderr'] is subprocess.DEVNULL
+        assert 0 < options['timeout'] <= 10
+        if len(command) == 3:
+            assert command == ['git', 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)']
+            assert options['input'] == b'a' * 40 + b':.github/sandbox-wrapper-tests.json\n'
+            return SimpleNamespace(stdout=b'b' * 40 + b' blob ' + str(len(payload)).encode('ascii') + b'\n')
+        assert command == ['git', 'cat-file', 'blob', 'b' * 40]
+        assert len(payload) <= 2 * 1024 * 1024, 'oversized blob reached content read'
+        assert 'input' not in options
         return SimpleNamespace(stdout=payload)
-    monkeypatch.setattr(scope, 'subprocess', SimpleNamespace(run=read, SubprocessError=subprocess.SubprocessError))
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = read
+    monkeypatch.setattr(scope, 'subprocess', private)
     assert scope.base_registry(tmp_path, 'a' * 40) is None
 
 
@@ -784,3 +797,173 @@ def test_registry_retirement_with_deleted_external_test_keeps_full(registry_git,
     matrix = _registry_step(root, registry, base, monkeypatch)
     assert set(matrix) == {'linux', 'darwin'}
     assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
+
+
+@pytest.mark.parametrize('selector', [
+    'not-a-selector', 'core/one/tests/test_wrapper.py',
+    '/absolute.py::test_native', '../outside.py::test_native',
+    'core/../outside.py::test_native', 'core//test.py::test_native',
+    r'C:\outside.py::test_native', 'core/file.txt::test_native',
+    'core/file.py::', 'core/file.py::not-a-name', 'core/file.py::class',
+    'core/file.py::test_native[unfinished', 'core/file.py::test_native\n',
+], ids=['no-file', 'no-node', 'absolute', 'parent', 'nested-parent', 'empty-part',
+        'windows', 'not-python', 'empty-node', 'bad-name', 'keyword', 'parameter', 'newline'])
+def test_malformed_historical_selector_requires_full(registry_git, monkeypatch, selector):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    previous = deepcopy(registry)
+    previous['native'][0]['platforms']['linux']['tests'] = [selector]
+    (root / '.github/sandbox-wrapper-tests.json').write_text(json.dumps(previous))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'historical selector shape')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'}
+    assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
+
+
+@pytest.mark.parametrize('key', ['expected', 'tests', 'platforms', 'native'])
+@pytest.mark.parametrize('where', ['old', 'current'])
+def test_duplicate_registry_keys_require_full(registry_git, monkeypatch, where, key):
+    from core.testing.gitrepo import git_run
+
+    root, registry, base = registry_git
+    current = deepcopy(registry)
+    current['native'][0]['platforms']['linux']['expected'] = 2
+    value = registry if where == 'old' else current
+    raw = json.dumps(value)
+    duplicate = {'expected': '999', 'tests': '[]', 'platforms': '{}', 'native': '[]'}[key]
+    raw = raw.replace('"' + key + '":', '"' + key + '": ' + duplicate + ', "' + key + '":', 1)
+    if where == 'old':
+        (root / '.github/sandbox-wrapper-tests.json').write_text(raw)
+        git_run(root, 'add', '-A')
+        git_run(root, 'commit', '-qm', 'ambiguous historical registry')
+        base = git_run(root, 'rev-parse', 'HEAD')
+    matrix = _registry_step(root, current, base, monkeypatch, payload=raw if where == 'current' else None)
+    assert set(matrix) == {'linux', 'darwin'}
+    assert all(cell['full'] and cell['families'] == ['one', 'two'] for cell in matrix.values())
+
+
+@pytest.mark.parametrize('encoding', ['utf-16', 'utf-8-sig'])
+def test_historical_registry_uses_current_utf8_text_contract(registry_git, monkeypatch, encoding):
+    from core.testing.gitrepo import git_run
+
+    root, registry, _ = registry_git
+    (root / '.github/sandbox-wrapper-tests.json').write_bytes(json.dumps(registry).encode(encoding))
+    git_run(root, 'add', '-A')
+    git_run(root, 'commit', '-qm', 'historical encoding differs from census')
+    base = git_run(root, 'rev-parse', 'HEAD')
+    registry['native'][0]['platforms']['linux']['expected'] = 2
+    matrix = _registry_step(root, registry, base, monkeypatch)
+    assert set(matrix) == {'linux', 'darwin'}
+    assert all(cell['full'] for cell in matrix.values())
+
+
+def test_oversized_registry_blob_is_rejected_before_content_capture(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    metadata = ['git', 'cat-file', '--batch-check=%(objectname) %(objecttype) %(objectsize)']
+    calls = []
+    def read(command, **options):
+        calls.append(command)
+        if command[1] == 'show':  # Original reader captures the blob first.
+            return SimpleNamespace(stdout=b' ' * (2 * 1024 * 1024 + 1))
+        assert command == metadata
+        return SimpleNamespace(stdout=b'b' * 40 + b' blob 2097153\n')
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = read
+    monkeypatch.setattr(scope, 'subprocess', private)
+    assert scope.base_registry(tmp_path, 'a' * 40) is None
+    assert calls == [metadata], 'oversized blob contents were requested before size admission'
+
+
+@pytest.mark.parametrize('selector', [
+    '.github/retired.py::TestOld::test_native[one]',
+    'core/old_name.py::test_λ[one::two]',
+    'tests with spaces/old.py::test_native[a b]',
+])
+def test_historical_selector_syntax_does_not_require_current_files(tree, selector):
+    _, registry = tree
+    previous = deepcopy(registry)
+    previous['native'][0]['platforms']['linux']['tests'] = [selector]
+    assert scope.native_cell_changes(previous, registry) == {('linux', 'one')}
+
+
+@pytest.mark.parametrize('payload', [
+    b'{"native": [], "native": []}',
+    b'{"na\\u0074ive": [], "native": []}',
+    b'{"platforms": {"linux": {}, "linux": {}}}',
+    b'{"tests": [], "tests": []}',
+    b'{"expected": 1, "expected": 2}',
+])
+def test_current_raw_duplicate_keys_are_not_admitted(tmp_path, payload):
+    path = tmp_path / '.github/sandbox-wrapper-tests.json'
+    path.parent.mkdir()
+    path.write_bytes(payload)
+    assert scope.current_registry(tmp_path) is None
+
+
+@pytest.mark.parametrize('header', [
+    b'not metadata\n', b'b' * 40 + b' tree 2\n', b'b' * 40 + b' blob -1\n',
+    b'b' * 39 + b' blob 2\n', b'b' * 40 + b' blob 2\nextra\n',
+])
+def test_unverified_blob_metadata_never_reads_contents(tmp_path, monkeypatch, header):
+    import subprocess
+    from types import SimpleNamespace
+
+    calls = []
+    def read(command, **options):
+        calls.append(command)
+        assert len(command) == 3, 'unverified blob reached content capture'
+        assert options['stderr'] is subprocess.DEVNULL
+        return SimpleNamespace(stdout=header)
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = read
+    monkeypatch.setattr(scope, 'subprocess', private)
+    assert scope.base_registry(tmp_path, 'a' * 40) is None
+    assert len(calls) == 1
+
+
+def test_metadata_and_blob_reads_share_one_deadline(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    clock = iter([100.0, 111.0])
+    monkeypatch.setattr(scope, 'time', SimpleNamespace(monotonic=lambda: next(clock)))
+    calls = []
+    def read(command, **options):
+        calls.append(command)
+        assert len(command) == 3, 'blob read began after the shared deadline'
+        return SimpleNamespace(stdout=b'b' * 40 + b' blob 2\n')
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = read
+    monkeypatch.setattr(scope, 'subprocess', private)
+    assert scope.base_registry(tmp_path, 'a' * 40) is None
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('declared,body,expected', [
+    (2, b'{}', {}), (1, b'{}', None),
+    (2 * 1024 * 1024, b'{}' + b' ' * (2 * 1024 * 1024 - 2), {}),
+], ids=['owned-blob', 'size-mismatch', 'at-size-cap'])
+def test_registry_blob_read_uses_admitted_object_id(tmp_path, monkeypatch, declared, body, expected):
+    import subprocess
+    from types import SimpleNamespace
+
+    calls = []
+    def read(command, **options):
+        calls.append(command)
+        assert options['stdout'] is subprocess.PIPE and options['stderr'] is subprocess.DEVNULL
+        assert 0 < options['timeout'] <= 10
+        if len(command) == 3:
+            return SimpleNamespace(stdout=b'b' * 40 + b' blob ' + str(declared).encode('ascii') + b'\n')
+        assert command == ['git', 'cat-file', 'blob', 'b' * 40]
+        return SimpleNamespace(stdout=body)
+    private = SimpleNamespace(**vars(subprocess))
+    private.run = read
+    monkeypatch.setattr(scope, 'subprocess', private)
+    assert scope.base_registry(tmp_path, 'a' * 40) == expected
+    assert len(calls) == 2
