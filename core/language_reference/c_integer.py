@@ -156,6 +156,27 @@ ENTRIES = (
         ("c.integer-usual-conversions", "c.integer-conversion"),
     ),
     ReferenceEntry(
+        "c.integer-conditional", 1, "c", ("c11",),
+        "Conditional result types and selected values",
+        ("conditional", "ternary", "selection", "arms", "condition"),
+        "Both arm types determine the result type while only the selected arm is evaluated.",
+        "For a scalar condition and two integer arms, evaluate the condition "
+        "first; a sequence point precedes evaluation of the selected arm. A "
+        "condition comparing unequal to zero selects the second operand; "
+        "otherwise it selects the third. Only the selected arm is evaluated. "
+        "Determine the result type by the usual arithmetic conversions as if "
+        "applied to both arms, then convert the selected value to that type. "
+        "The conditional expression does not yield an lvalue. A later assignment "
+        "or cast has its own destination conversion.",
+        ("Both arms must satisfy the operand type constraints even when one is not evaluated.",
+         "Pointer, floating, complex, structure, union and void result rules are outside this integer core.",
+         "Source syntax does not establish integer arm types, the selected branch, target edition or whole-expression safety."),
+        ("configured language edition", "condition scalar type and value", "both arm types and ranks",
+         "arm representable ranges", "selected arm value", "access and sequencing constraints"),
+        (_N1570 + " sections 6.5.15 paragraphs 2-5 and footnote 110, and 6.3.1.8",),
+        ("c.integer-usual-conversions", "c.integer-conversion"),
+    ),
+    ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
         "Integer arithmetic definedness",
         ("overflow", "wrap", "wrapping", "definedness", "undefined", "arithmetic"),

@@ -25,6 +25,7 @@ _BITWISE = "unsigned f(unsigned a, unsigned b) { return a & b; }"
 _UPDATE = "int f(int a) { return a++; }"
 _UNARY = "int f(short a) { return -a; }"
 _DIVISION = "int f(int a, int b) { return a % b; }"
+_CONDITIONAL = "int f(int condition, int a, int b) { return condition ? a : b; }"
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ def _ids(answers):
 
 @requires_ts("c")
 @pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY,
-                                   _DIVISION], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division"])
+                                   _DIVISION, _CONDITIONAL], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division", "conditional"])
 def test_initial_arithmetic_review_receives_conditional_rules_without_request(tmp_path, source):
     (tmp_path / "unit.c").write_text(source + "\n")
     runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
@@ -58,6 +59,10 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
     if source == _SHIFT:
         assert "c.integer-shift v1:" in prompts[0]
         assert "c.integer-usual-conversions v1:" not in prompts[0]
+        assert "c.integer-definedness v1:" not in prompts[0]
+    elif source == _CONDITIONAL:
+        assert "c.integer-conditional v1:" in prompts[0]
+        assert "c.integer-usual-conversions v1:" in prompts[0]
         assert "c.integer-definedness v1:" not in prompts[0]
     elif source == _UNARY:
         assert "c.integer-unary-sign v1:" in prompts[0]
@@ -81,7 +86,7 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
 @pytest.mark.parametrize("source,extra", [
     (_ARITHMETIC, {"c.integer-usual-conversions", "c.integer-definedness"}),
     ("int f(int a, int b) { return a < b; }", {"c.integer-usual-conversions"}),
-    ('int f(void) { /* a + b; a += b; a << n; a & b; a++; +a; a / b */ const char *s = "a * b; a *= b; a >>= n; a |= b; --a; -a; a %= b"; return 0; }', set()),
+    ('int f(void) { /* a + b; a += b; a << n; a & b; a++; +a; a / b; a ? b : c */ const char *s = "a * b; a *= b; a >>= n; a |= b; --a; -a; a %= b; a ? b : c"; return 0; }', set()),
     ("int f(void) { return 0; }", set()),
 ])
 @requires_ts("c")
@@ -184,7 +189,9 @@ def test_shift_syntax_selects_its_own_conditional_rule(expression):
     (_UNARY, {"c.integer-promotion", "c.integer-conversion", "c.integer-unary-sign"}),
     (_DIVISION, {"c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions",
                  "c.integer-definedness", "c.integer-division"}),
-], ids=["shift", "update", "unary-sign", "division"])
+    (_CONDITIONAL, {"c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions",
+                    "c.integer-conditional"}),
+], ids=["shift", "update", "unary-sign", "division", "conditional"])
 @requires_ts("c")
 def test_operator_core_and_prerequisites_fit_as_one_bundle(budget, source, entry_ids):
     answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
@@ -226,7 +233,7 @@ def test_parse_errors_keep_foundation():
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY,
-                                   _DIVISION], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division"])
+                                   _DIVISION, _CONDITIONAL], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division", "conditional"])
 @requires_ts("c")
 def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_path, reuse, source):
     root = _target(tmp_path)
@@ -237,7 +244,7 @@ def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_p
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY,
-                                   _DIVISION], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division"])
+                                   _DIVISION, _CONDITIONAL], ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign", "division", "conditional"])
 @requires_ts("c")
 def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
     root = _target(tmp_path)
@@ -255,7 +262,9 @@ def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
 
 @pytest.mark.parametrize("reuse", [False, True])
 @pytest.mark.parametrize("source,missing_core", [(_UNARY, "c.integer-unary-sign"),
-                                               (_DIVISION, "c.integer-division")], ids=["unary-sign", "division"])
+                                               (_DIVISION, "c.integer-division"),
+                                               (_CONDITIONAL, "c.integer-conditional")],
+                         ids=["unary-sign", "division", "conditional"])
 @requires_ts("c")
 def test_generic_arithmetic_reading_cannot_replace_operator_delivery(tmp_path, reuse, source, missing_core):
     root = _target(tmp_path)
@@ -282,3 +291,21 @@ def test_oversized_source_keeps_bounded_foundation():
     source = " " * (256 * 1024 + 1)
     assert _ids(foundation_answers("c", request_id="owned", source=source, file="unit.c")) == {
         "c.integer-promotion", "c.integer-conversion"}
+
+
+@requires_ts("c")
+def test_conditional_syntax_selects_type_and_selected_value_reading():
+    source = _CONDITIONAL
+    assert _ids(foundation_answers("c", request_id="owned", source=source, file="unit.c")) == {
+        "c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions", "c.integer-conditional"}
+
+
+@requires_ts("c")
+def test_conditional_syntax_with_unknown_arm_types_keeps_integer_conditions():
+    source = "int *f(int condition, int *a, int *b) { return condition ? a : b; }"
+    answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
+    assert answers[0].status == "needs_target_facts"
+    core = next(entry for entry in answers[0].entries if entry.entry_id == "c.integer-conditional")
+    assert "two integer arms" in core.rule
+    assert "Pointer" in core.conditions[1]
+    assert "both arm types and ranks" in core.required_target_facts
