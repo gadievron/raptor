@@ -38,7 +38,7 @@ _NOSEMGREP_RE = re.compile(
     r"""(?://|[#]|/\*)       # comment opener
         \s*(?ai:nosem(?:grep)?)  # ASCII keyword aliases, case-insensitive
         (?::[ \t]*           # optional colon + rule list
-          ([\w.:/-]+(?:[ \t]*,[ \t]*[\w.:/-]+)*)  # group 1: rule IDs
+          ([\w.:/-]+(?:[ \t]*,[ \t]*[\w.:/-]+)*[ \t]*,?)  # group 1: rule IDs
         )?
         (?:[ \t]+(.+?))?     # group 2: justification text
         (?:\s*\*/)?          # optional block-comment closer
