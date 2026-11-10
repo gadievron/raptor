@@ -97,9 +97,9 @@ class Scope:
         parent = parent if parent is not None else current_group()
         parent_fd = _open_directory(parent)
         node = None
-        name = 'raptor-' + secrets.token_hex(16)
         created = False
         try:
+            name = 'raptor-' + secrets.token_hex(16)
             os.mkdir(name, dir_fd=parent_fd)
             created = True
             node = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
