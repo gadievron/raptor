@@ -7,7 +7,6 @@ never encoded the premise, so the confirm re-proves the lexical shape
 the reviewer already saw and refuted.
 """
 
-import json
 from pathlib import Path
 
 import pytest
@@ -152,10 +151,9 @@ class TestCleanRefutedLaneIntegration:
         assert getattr(
             result.tier_counters["refuted_sweep"], "premise_blocked", 0,
         ) >= 1
-        # The premise was parked on the reading list for the study loop.
-        rl = json.loads((config.out_dir / "reading-list.json").read_text())
-        questions = [it["question"] for it in rl["items"]]
-        assert any("access_remote_vm" in q for q in questions)
+        assert not (config.out_dir / "reading-list.json").exists()
+        assert "[needs review]" in result.outcomes[0].body
+        assert "access_remote_vm" in result.outcomes[0].body
 
     def test_local_premise_still_promotes(self, tmp_path, monkeypatch):
         config, result, checklist = self._run(tmp_path, "local")
@@ -296,12 +294,9 @@ class TestSweepValidatePremiseGate:
         assert getattr(
             tiers["sweep_validate"], "premise_blocked", 0,
         ) >= 1
-        rl = json.loads(
-            (config.out_dir / "reading-list.json").read_text(),
-        )
-        assert any(
-            "access_remote_vm" in it["question"] for it in rl["items"]
-        )
+        assert not (config.out_dir / "reading-list.json").exists()
+        assert "[needs review]" in validated.body
+        assert "access_remote_vm" in validated.body
 
     def test_local_counter_still_grounds(self, tmp_path, monkeypatch):
         validated, _config, _tiers = self._run(
@@ -500,12 +495,9 @@ class TestPromoteSuspiciousPremiseGate:
         assert getattr(
             result.tier_counters["primary_sweep"], "premise_blocked", 0,
         ) >= 1
-        rl = json.loads(
-            (config.out_dir / "reading-list.json").read_text(),
-        )
-        assert any(
-            "callers validate" in it["question"] for it in rl["items"]
-        )
+        assert not (config.out_dir / "reading-list.json").exists()
+        assert "[needs review]" in result.outcomes[0].body
+        assert "callers validate" in result.outcomes[0].body
 
     def test_local_counter_still_promotes(self, tmp_path, monkeypatch):
         result, _config = self._run(
@@ -514,20 +506,19 @@ class TestPromoteSuspiciousPremiseGate:
         assert result.outcomes[0].status == "finding"
 
 
-class TestPremiseQuestionWriterLock:
-    def test_premise_question_writes_under_the_shared_lock(
-        self, tmp_path, monkeypatch,
-    ):
-        """The premise-question writer is one of several in-process
-        reading-list writers (audit_bridge queueing, the study
-        consumer); its load-modify-save must hold the SHARED lock
-        owned by core.concepts.reading_list — a writer-local lock
-        cannot serialize against the other writers' cycles."""
+class TestLegacyPremiseRetirementLock:
+    def test_retirement_writes_under_the_shared_lock(self, tmp_path, monkeypatch):
+        """Retirement retains the shared reading-list writer contract."""
         from types import SimpleNamespace
 
         from core.concepts import reading_list as rl_mod
 
-        held: list[bool] = []
+        path = tmp_path / "reading-list.json"
+        rl_mod.ReadingList(items=[rl_mod.ReadingListItem(
+            id="premise-owned", source_command="/audit", source_function="f",
+            question="Does this hold: caller bounds the value (refutation premise for f)?",
+        )]).save(path)
+        held = []
         real_save = rl_mod.ReadingList.save
 
         def checking_save(self, path=None):
@@ -535,12 +526,7 @@ class TestPremiseQuestionWriterLock:
             return real_save(self, path)
 
         monkeypatch.setattr(rl_mod.ReadingList, "save", checking_save)
-        config = SimpleNamespace(out_dir=Path(tmp_path))
-        outcome = SimpleNamespace(file="a.c", function="f")
-        orch._queue_premise_study_question(
-            config, outcome,
-            {"counter": "the caller validates the level", "mechanism": "m"},
-        )
+        assert orch._requeue_pending_study(SimpleNamespace(out_dir=tmp_path), orch.StudyQueue()) == 0
         assert held == [True]
-        rl = json.loads((tmp_path / "reading-list.json").read_text())
-        assert len(rl["items"]) == 1
+        saved = rl_mod.ReadingList.load(path)
+        assert saved.items[0].unresolvable and not saved.items[0].resolved
