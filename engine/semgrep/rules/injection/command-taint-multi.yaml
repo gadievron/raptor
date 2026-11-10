@@ -177,6 +177,8 @@ rules:
                   - pattern: $CTX.params.$PROP
                   - pattern: $CTX.request.body[...]
                   - pattern: $CTX.request.body.$PROP
+                  - pattern: $CTX.get($FIELD)
+                  - pattern: $CTX.request.get($FIELD)
               - metavariable-regex:
                   metavariable: $CTX
                   regex: '(?i)^(c|ctx|context)$'
