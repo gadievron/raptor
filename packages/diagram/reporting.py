@@ -97,7 +97,7 @@ def directory_blocks_from_rendered(content: str, *, include_findings_summary: bo
     typed summary pies and omit those duplicates through the default mode.
     """
     blocks = []
-    fence = re.compile(r"(?ms)^```mermaid\n(.*?)^```[ \t]*$")
+    fence = re.compile(r"(?ms)^```mermaid\n(.*?)^```[ \t]*$")  # line-model: render_directory emits literal-LF structural fences in memory; this is not raw Markdown input.
     for match in re.finditer(r"(?ms)^## ([^\n]+)\n(.*?)(?=^## |\Z)", content):
         title, body = match.groups()
         # Summary pies already have a typed equivalent for this population.
