@@ -32,7 +32,9 @@ rules:
     severity: HIGH
     pattern-either:
       - pattern: Crypto.Cipher.AES.new($K, Crypto.Cipher.AES.MODE_ECB, ...)
-      - pattern: modes.ECB()
+      - pattern: Crypto.Cipher.AES.new($K, mode=Crypto.Cipher.AES.MODE_ECB, ...)
+      - pattern: Crypto.Cipher.AES.new(key=$K, mode=Crypto.Cipher.AES.MODE_ECB, ...)
+      - pattern: cryptography.hazmat.primitives.ciphers.modes.ECB()
     metadata:
       cwe: ["CWE-327"]
       asvs: ["V3.11"]
