@@ -329,8 +329,13 @@ def _load_dominates_get(load_node, get_node) -> bool:
 
 
 
-def _properties_type_names(root) -> frozenset[str]:
+def _properties_type_names(root, source_text: str) -> frozenset[str]:
     """Source-visible platform type spellings, with local shadows refused."""
+    # Java translates Unicode escapes before tokenisation. Raw syntax names
+    # cannot establish type identity in that case; keep original coordinates
+    # and conservatively decline proof, including harmless escape occurrences.
+    if "\\u" in source_text:
+        return frozenset()
     allowed = {"java.util.Properties"}
     declared: set[str] = set()
     platform_import = False
@@ -468,7 +473,7 @@ class ConfigResolver:
         except Exception:  # noqa: BLE001
             self.stats["parser_unavailable"] += 1
             return
-        self._properties_types = _properties_type_names(self._tree.root_node)
+        self._properties_types = _properties_type_names(self._tree.root_node, source_text)
         self._ok = True
 
     def _refuse(self, reason: str) -> ConfigResolution:
