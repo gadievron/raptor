@@ -319,10 +319,8 @@ def _load_or_create_run_nonce(run_dir: Path | str) -> str | None:
         return _read_run_nonce(run_dir)  # lost the creation race
     except OSError:
         return None
-    try:
+    with owned_fd(fd, close_fd=os.close):
         os.write(fd, new.encode("utf-8"))
-    finally:
-        os.close(fd)
     return new
 
 
