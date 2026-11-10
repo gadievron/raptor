@@ -42,6 +42,7 @@ from core.source.lines import iter_source_lines, split_lines
 from typing import Any
 
 from .run_memo import BoundedMemo
+from ._function_preparation import FunctionPreparation
 
 logger = logging.getLogger(__name__)
 
@@ -170,10 +171,16 @@ _RETURN_LITERAL_RE = re.compile(
 )
 
 
-def _extract_functions(source: str) -> list[tuple[str, int, str]]:
+def _extract_functions(
+    source: str, *, _preparation: FunctionPreparation | None = None,
+) -> list:
     """Extract (name, start_line, body) for each top-level/method def."""
     from ._util import extract_functions_from_source
-    return extract_functions_from_source(source)
+    if _preparation is None:
+        return extract_functions_from_source(source)
+    return _preparation.get(
+        source, extract_functions_from_source, _preparation_consumers_native,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +190,13 @@ def _extract_functions(source: str) -> list[tuple[str, int, str]]:
 def _detect_optional_not_checked(
     file_path: str,
     source: str,
+    *,
+    _preparation: FunctionPreparation | None = None,
 ) -> list[FailOpenPattern]:
     """Find ``if X is False:`` without a corresponding ``is None`` guard."""
     results: list[FailOpenPattern] = []
 
-    for name, start_line, body in _extract_functions(source):
+    for name, start_line, body in _function_rows(source, _preparation):
         is_false_matches = list(_IS_FALSE_RE.finditer(body))
         if not is_false_matches:
             continue
@@ -359,6 +368,8 @@ def _detect_truncation_via_ts(
 def _detect_truncation_not_signaled(
     file_path: str,
     source: str,
+    *,
+    _preparation: FunctionPreparation | None = None,
 ) -> list[FailOpenPattern]:
     """Find functions with a loop-cap break that don't signal truncation."""
     # Non-Python: try tree-sitter first (better structural detection)
@@ -369,7 +380,7 @@ def _detect_truncation_not_signaled(
 
     results: list[FailOpenPattern] = []
 
-    funcs = _extract_functions(source)
+    funcs = _function_rows(source, _preparation)
     if not funcs and any(file_path.endswith(ext) for ext in _C_EXTS):
         funcs = _extract_c_functions(source, file_path)
 
@@ -431,11 +442,13 @@ _LITERAL_SUB_IMPL = re.sub
 def _detect_error_conflated_with_empty(
     file_path: str,
     source: str,
+    *,
+    _preparation: FunctionPreparation | None = None,
 ) -> list[FailOpenPattern]:
     """Find except blocks that return the same literal as a success path."""
     results: list[FailOpenPattern] = []
 
-    for name, start_line, body in _extract_functions(source):
+    for name, start_line, body in _function_rows(source, _preparation):
         lines = body.split("\n")  # line-model: callers deliver \n-model text (universal-newline reads / split_lines span joins)
 
         native_body = type(body) is str
@@ -738,6 +751,89 @@ def _extract_function_body_regex(source: str, func_name: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+_PREP_TYPE = 0 .__class__.__class__
+_PREP_STR = ''.__class__
+_PREP_BASE_EXCEPTION = BaseException
+_PREP_EXCEPTION = Exception
+_PREP_ISINSTANCE = isinstance
+
+def _PREP_LEN(value: Any) -> int:
+    return value.__len__()
+_PREP_FUNCTION_TYPE = type(_extract_functions)
+_PREP_MODULE_TYPE = type(re)
+_PREP_PATTERN_TYPE = re.Pattern
+_PREP_ZERO_FLAG = re.__dict__.get('_zero_sentinel')
+_PREP_ZERO_CLASS = _PREP_TYPE(_PREP_ZERO_FLAG)
+_PREP_ZERO_STATE = tuple(_PREP_ZERO_CLASS.__dict__.items())
+_PREP_GLOBALS = globals()
+_PREP_BUILTINS: dict[str, Any] = _PREP_GLOBALS['_extract_functions'].__builtins__
+_PREP_BUILTIN_STATE = tuple(((name, _PREP_GLOBALS.get(name, _PREP_BUILTINS.get(name))) for name in ('type', 'str', 'len', 'list', 'tuple', 'dict', 'set', 'enumerate', 'range', 'any')))
+_PREP_FUNCTION_STATE: dict[str, tuple[Any, Any]] = {name: (_PREP_GLOBALS[name], _PREP_GLOBALS[name].__code__) for name in ('_extract_functions', '_normalise_literal', '_detect_optional_not_checked', '_detect_truncation_not_signaled', '_detect_error_conflated_with_empty')}
+_PREP_BINDING_STATE = tuple(((name, _PREP_GLOBALS[name]) for name in ('_IS_FALSE_RE', '_IS_NONE_RE', '_IS_NOT_NONE_RE', '_CAP_BREAK_RE', '_TRUNCATION_SIGNAL_RE', '_RETURN_LITERAL_RE', '_EXCEPT_HEADER_RE', '_LITERAL_NORMALIZE_IMPL', '_LITERAL_RETURN_IMPL', '_LITERAL_EXCEPT_IMPL', '_LITERAL_SUB_IMPL', 'PATTERN_TYPES')))
+_PREP_CLASS = FailOpenPattern
+_PREP_CLASS_STATE = tuple(((name, value, value.__code__ if _PREP_TYPE(value) is _PREP_FUNCTION_TYPE else None) for name, value in FailOpenPattern.__dict__.items()))
+_PREP_RE_MODULE = re
+_PREP_RE_STATE: tuple[tuple[str, Any, Any], ...] = tuple(((name, re.__dict__[name], re.__dict__[name].__code__) for name in ('search', 'sub', '_compile')))
+
+def _preparation_consumers_native() -> bool:
+    for name, (function, code) in _PREP_FUNCTION_STATE.items():
+        if function is None:
+            return False
+        if function.__code__ is not code or _PREP_GLOBALS.get(name) is not function:
+            return False
+    for name, value in _PREP_BINDING_STATE:
+        if _PREP_GLOBALS.get(name) is not value:
+            return False
+    for name, value in _PREP_BUILTIN_STATE:
+        if _PREP_GLOBALS.get(name, _PREP_BUILTINS.get(name)) is not value:
+            return False
+    if FailOpenPattern is not _PREP_CLASS:
+        return False
+    attrs = _PREP_CLASS.__dict__
+    if _PREP_LEN(attrs) != _PREP_LEN(_PREP_CLASS_STATE):
+        return False
+    for name, value, code in _PREP_CLASS_STATE:
+        if attrs.get(name) is not value:
+            return False
+        if code is not None and (value is None or value.__code__ is not code):
+            return False
+    if re is not _PREP_RE_MODULE or _PREP_TYPE(re) is not _PREP_MODULE_TYPE:
+        return False
+    for name, value, code in _PREP_RE_STATE:
+        if value is None:
+            return False
+        if value.__code__ is not code or re.__dict__.get(name) is not value:
+            return False
+    if re.__dict__.get('_zero_sentinel') is not _PREP_ZERO_FLAG:
+        return False
+    zero_attrs = _PREP_ZERO_CLASS.__dict__
+    if _PREP_LEN(zero_attrs) != _PREP_LEN(_PREP_ZERO_STATE):
+        return False
+    for name, value in _PREP_ZERO_STATE:
+        if zero_attrs.get(name) is not value:
+            return False
+    for name, maximum in (('_cache', 512), ('_cache2', 256)):
+        cache: Any = re.__dict__.get(name)
+        if _PREP_TYPE(cache) is not dict or _PREP_LEN(cache) > maximum:
+            return False
+        for key, value in cache.items():
+            if _PREP_TYPE(key) is not tuple or _PREP_LEN(key) != 3 or (not (key[0] is str or key[0] is bytes)) or (_PREP_TYPE(key[1]) is not key[0]) or (_PREP_TYPE(key[2]) is not int and (_PREP_ZERO_FLAG is None or key[2] is not _PREP_ZERO_FLAG)) or (_PREP_TYPE(value) is not _PREP_PATTERN_TYPE):
+                return False
+    return True
+
+def _function_rows(source: str, preparation: FunctionPreparation | None) -> list:
+    function, code = _PREP_FUNCTION_STATE['_extract_functions']
+    if preparation is None or _extract_functions is not function or function.__code__ is not code:
+        return _extract_functions(source)
+    return _extract_functions(source, _preparation=preparation)
+
+def _call_with_preparation(name: str, current: Any, path: str, source: str, preparation: FunctionPreparation | None) -> list[FailOpenPattern]:
+    original, code = _PREP_FUNCTION_STATE[name]
+    if preparation is not None and current is original and (current.__code__ is code):
+        return current(path, source, _preparation=preparation)
+    return current(path, source)
+
+
 def detect_fail_open_patterns(
     source_text: dict[str, str],
     call_graphs: dict | None = None,
@@ -762,9 +858,27 @@ def detect_fail_open_patterns(
 
     for file_path, source in source_text.items():
         if file_path.endswith(".py"):
-            results.extend(_detect_optional_not_checked(file_path, source))
-            results.extend(_detect_truncation_not_signaled(file_path, source))
-            results.extend(_detect_error_conflated_with_empty(file_path, source))
+            _preparation = None
+            if _PREP_TYPE(file_path) is _PREP_STR and _PREP_TYPE(source) is _PREP_STR and (_PREP_LEN(source) >= 4096):
+                try:
+                    _preparation = FunctionPreparation()
+                except _PREP_EXCEPTION:
+                    pass
+            _preparation_failed = False
+            try:
+                results.extend(_call_with_preparation('_detect_optional_not_checked', _detect_optional_not_checked, file_path, source, _preparation))
+                results.extend(_call_with_preparation('_detect_truncation_not_signaled', _detect_truncation_not_signaled, file_path, source, _preparation))
+                results.extend(_call_with_preparation('_detect_error_conflated_with_empty', _detect_error_conflated_with_empty, file_path, source, _preparation))
+            except _PREP_BASE_EXCEPTION:
+                _preparation_failed = True
+                raise
+            finally:
+                if _preparation is not None:
+                    try:
+                        _preparation.release()
+                    except _PREP_BASE_EXCEPTION as cleanup:
+                        if not _preparation_failed and (not _PREP_ISINSTANCE(cleanup, _PREP_EXCEPTION)):
+                            raise
         elif any(file_path.endswith(e) for e in _C_EXTS):
             results.extend(_detect_truncation_not_signaled(file_path, source))
 
