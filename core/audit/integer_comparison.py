@@ -7,6 +7,7 @@ from core.smt_solver.witness import format_vars
 from .arithmetic_claim import parse_comparison_claim
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_operation import _select_comparison_site
+from .integer_goal import COMPARISON_GOALS, parse_integer_goal
 from .integer_abi import integer_abi_record
 from .integer_comparison_model import COMPARISONS, ComparisonModel, UnsupportedComparison
 from .integer_witness import source_model_scope, validate_integer_witness
@@ -19,15 +20,11 @@ def check_integer_comparison(source, hypothesis, *, language, integer_abi=None):
     abi = integer_abi_record(integer_abi)
     if claim is None or abi is None or not z3_available():
         return details
-    prose = " ".join(hypothesis.split("`")[::2]).lower()
-    words = [word.strip(".,:;()!?") for word in prose.split()]
-    subjects = {tuple(words[i:i + 4]) for i in range(len(words) - 3)}
-    true_claim = ("comparison", "is", "always", "true") in subjects
-    false_claim = ("comparison", "is", "always", "false") in subjects
-    if (true_claim == false_claim or {"true", "false"}.issubset(words)
-            or {"not", "never"}.intersection(words)):
-        details["reason"] = "one explicit always true or always false subject required"
+    requested = parse_integer_goal(hypothesis, COMPARISON_GOALS)
+    if requested is None:
+        details["reason"] = "closed positive integer goal required"
         return details
+    true_claim = requested == "true"
     status, data, body, target = _select_comparison_site(source, claim.operands, claim.operator, language=language)
     if status != "bound":
         details["reason"] = "source comparison unavailable or ambiguous"

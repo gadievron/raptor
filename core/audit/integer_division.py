@@ -14,6 +14,7 @@ from core.smt_solver.session import query_budget
 from .arithmetic_claim import parse_division_claim
 from .arithmetic_operation import bind_arithmetic_operation
 from .arithmetic_types import common_integer_type
+from .integer_goal import DIVISION_GOALS, parse_integer_goal
 from .integer_abi import integer_abi_record
 from .integer_literals import integer_literal_value
 from .integer_witness import source_model_scope, validate_integer_witness
@@ -25,19 +26,10 @@ def check_integer_division(source, hypothesis, *, language, integer_abi=None):
     claim = parse_division_claim(hypothesis)
     if claim is None or integer_abi_record(integer_abi) is None or not z3_available():
         return details
-    prose = ' '.join(hypothesis.split('`')[::2]).lower().replace('-', ' ')
-    words = [word.strip('.,:;()!?') for word in prose.split()]
-    pairs = {tuple(words[i:i + 2]) for i in range(len(words) - 1)}
-    triples = {tuple(words[i:i + 3]) for i in range(len(words) - 2)}
-    zero_claim = ('zero', 'divisor') in pairs or any(
-        (operation, 'by', zero) in triples
-        for operation in ('division', 'divide', 'remainder', 'modulo') for zero in ('zero', '0'))
-    overflow_claim = bool(pairs & {('division', 'overflow'), ('remainder', 'overflow')})
-    generic_claim = bool(triples & {('undefined', 'integer', 'division'), ('undefined', 'integer', 'remainder')})
-    if (zero_claim and overflow_claim) or not (zero_claim or overflow_claim or generic_claim):
-        details['reason'] = 'division fault subject is unsupported or ambiguous'
+    requested = parse_integer_goal(hypothesis, DIVISION_GOALS)
+    if requested is None:
+        details["reason"] = "closed positive integer goal required"
         return details
-    requested = 'zero-divisor' if zero_claim else 'signed-division-overflow' if overflow_claim else 'any'
     operation = bind_arithmetic_operation(source, claim.operands, claim.operator,
                                           language=language, integer_abi=integer_abi)
     if operation.status != 'bound' or operation.guard_status == 'unavailable' or operation.type_status != 'bound':

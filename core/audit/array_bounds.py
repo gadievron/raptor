@@ -21,6 +21,7 @@ from .arithmetic_guards import guards_for_operation
 from .arithmetic_types import has_builtin_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .function_execution_frame import ordinary_function_frame
+from .integer_goal import ARRAY_READ_GOALS, parse_integer_goal
 from .integer_abi import integer_abi_record, resolve_integer_abi
 from .integer_witness import source_model_scope, validate_integer_witness
 from .narrowing_bindings import callable_declarator, visible_declarations
@@ -297,6 +298,16 @@ def _valid_witness(access, model, abi):
 
 def check_array_bounds(source, hypothesis, *, language, integer_abi=None):
     """A source-linked function-entry counterexample; safe sites never refute a function."""
+    goal = hypothesis
+    if isinstance(goal, str) and "`" not in goal and len(goal) <= 8192:
+        accesses = list(_ACCESS.finditer(goal))
+        if len(accesses) == 1:
+            access_match = accesses[0]
+            goal = (goal[:access_match.start()] + "`" + access_match.group() + "`"
+                    + goal[access_match.end():])
+    if parse_integer_goal(goal, ARRAY_READ_GOALS) is None:
+        return {"array_bounds_status": "unavailable", "violation": None,
+                "reason": "closed positive array read goal required"}
     access = bind_array_access(source, hypothesis, language=language, integer_abi=integer_abi)
     details = {"array_bounds_status": "unavailable", "reason": access.reason, "violation": None}
     if access.status != "bound" or not _z3_available():
