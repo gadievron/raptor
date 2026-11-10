@@ -259,13 +259,12 @@ def test_concurrent_writers_wal_mode(tmp_path):
     db_path = tmp_path / "graph" / "raptor.graph.sqlite"
     db_path.parent.mkdir(parents=True)
 
-    conn_setup = open_graph(db_path)
-    conn_setup.execute(
-        "INSERT INTO snapshots (id, target_path) VALUES (?, ?)",
-        ("snap-concurrent", "/fake/target"),
-    )
-    conn_setup.commit()
-    conn_setup.close()
+    with closing(open_graph(db_path)) as conn_setup:
+        conn_setup.execute(
+            "INSERT INTO snapshots (id, target_path) VALUES (?, ?)",
+            ("snap-concurrent", "/fake/target"),
+        )
+        conn_setup.commit()
 
     nodes_per_writer = 50
 
@@ -307,17 +306,16 @@ def test_concurrent_writers_wal_mode(tmp_path):
 
     assert len(all_written) == nodes_per_writer * 2
 
-    conn = open_graph(db_path)
-    node_count = conn.execute(
-        "SELECT COUNT(*) FROM nodes WHERE snapshot_id = ?",
-        ("snap-concurrent",),
-    ).fetchone()[0]
-    edge_count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE snapshot_id = ?",
-        ("snap-concurrent",),
-    ).fetchone()[0]
-    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-    conn.close()
+    with closing(open_graph(db_path)) as conn:
+        node_count = conn.execute(
+            "SELECT COUNT(*) FROM nodes WHERE snapshot_id = ?",
+            ("snap-concurrent",),
+        ).fetchone()[0]
+        edge_count = conn.execute(
+            "SELECT COUNT(*) FROM edges WHERE snapshot_id = ?",
+            ("snap-concurrent",),
+        ).fetchone()[0]
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
 
     assert node_count == nodes_per_writer * 2
     assert edge_count == (nodes_per_writer - 1) * 2
