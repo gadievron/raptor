@@ -12,6 +12,7 @@ but keeps the file (it is from the future, not corrupt).
 import ast
 import sqlite3
 import textwrap
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -82,10 +83,10 @@ def test_schema_newer_degrades_and_keeps_the_store(tmp_path):
     db = tmp_path / "g" / "raptor.graph.sqlite"
     conn = open_graph(db)
     conn.close()
-    raw = sqlite3.connect(db)
-    raw.execute("PRAGMA user_version=99")
-    raw.commit()
-    raw.close()
+    with closing(sqlite3.connect(db)) as raw:
+        raw.execute("PRAGMA user_version=99")
+        raw.commit()
+
 
     for fn, expected in _read_lanes(db, target):
         got = fn()
@@ -175,22 +176,21 @@ def test_lock_contention_never_quarantines(tmp_path):
     from core.understand_graph import store as store_mod
 
     db = tmp_path / "g" / "raptor.graph.sqlite"
-    conn = open_graph(db)
-    conn.isolation_level = None
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        orig_timeout = store_mod._BUSY_TIMEOUT_MS
-        orig_delay = store_mod._LOCK_RETRY_DELAY_S
-        store_mod._BUSY_TIMEOUT_MS = 1
-        store_mod._LOCK_RETRY_DELAY_S = 0.0
+    with closing(open_graph(db)) as conn:
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
         try:
-            summary = queries_mod.dashboard_summary(db)
+            orig_timeout = store_mod._BUSY_TIMEOUT_MS
+            orig_delay = store_mod._LOCK_RETRY_DELAY_S
+            store_mod._BUSY_TIMEOUT_MS = 1
+            store_mod._LOCK_RETRY_DELAY_S = 0.0
+            try:
+                summary = queries_mod.dashboard_summary(db)
+            finally:
+                store_mod._BUSY_TIMEOUT_MS = orig_timeout
+                store_mod._LOCK_RETRY_DELAY_S = orig_delay
         finally:
-            store_mod._BUSY_TIMEOUT_MS = orig_timeout
-            store_mod._LOCK_RETRY_DELAY_S = orig_delay
-    finally:
-        conn.execute("ROLLBACK")
-        conn.close()
+            conn.execute("ROLLBACK")
     assert summary["snapshot_count"] == 0
     assert db.exists()
 
