@@ -58,10 +58,13 @@ class TestConcurrentAppend:
             threading.Thread(target=worker, args=(t,))
             for t in range(n_threads)
         ]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=60):
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
 
         raw_lines = (
             (tmp_path / "review-journal.jsonl")
