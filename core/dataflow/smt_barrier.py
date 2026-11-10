@@ -3260,18 +3260,9 @@ def try_tier0(
         # authority is established; never turn this branch into SOUND.
         diagnostic = None
         if language == "python" and spec.kind == "charset":
-            from core.dataflow.string_slice_diagnostic import slice_model_diagnostic
+            from core.dataflow.string_slice_diagnostic import diagnose_validator_slice
 
-            intervals = tuple(
-                (ord(atom[1]), ord(atom[2] if atom[0] == "range" else atom[1]))
-                for atom in _iter_charclass_atoms(spec.charset)
-            )
-            diagnostic = slice_model_diagnostic(
-                source_text, line, sink_line, spec.var_name, intervals,
-                allows_empty=spec.allows_empty,
-                optional_final_lf=spec.accepts_trailing_newline,
-                forbidden=tuple(ord(char) for char in (danger_chars_for(sink_class) or ())),
-            )
+            diagnostic = diagnose_validator_slice(source_text, line, sink_line, spec, sink_class)
         detail = (f"; conditional slice model: {diagnostic['status']} "
                   "(not source-bound)" if diagnostic else "")
         return Tier0Result(
