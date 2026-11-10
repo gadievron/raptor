@@ -25737,6 +25737,9 @@ def _sweep_validate(
     # premise awaits a study receipt. Cross-function-capable channels
     # (Joern, CodeQL dataflow) still ground it.
     premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+    if premise_h is None:
+        _note_ambiguous_claim_material(outcome, hypothesis, config, phase="sweep_validate")
+        return _demote_outcome(outcome, "[sweep validation: ungrounded finding — ambiguous claim material]")
 
     is_binary = is_binary or outcome.file.startswith(BINARY_PATH_PREFIX)
     if source_override is not None:
@@ -29007,6 +29010,9 @@ def _promote_suspicious_one(
     # and weighed. Blocked promotions stay suspicious and park the
     # premise on the reading list.
     premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+    if premise_h is None:
+        _note_ambiguous_claim_material(outcome, hypothesis, config, phase="primary_sweep")
+        return None
 
     gap = _find_gap_in_checklist(checklist or {}, outcome.file, outcome.function)
     line_end = gap.get("line_end") if gap else None
@@ -29479,6 +29485,10 @@ def _resweep_zero_dispatch_suspicious(
                 # them — receipt supply here would be pure burn.
                 record["skip_reason"] = "counter-fenced"
                 return
+            premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+            if premise_h is None:
+                record["skip_reason"] = "ambiguous-claim-material"
+                return
             cwe = _effective_cwe(outcome, result.tier_counters)
             chain = _hypothesis_to_tool_chain(
                 hypothesis, outcome.file, cwe=cwe,
@@ -29498,7 +29508,6 @@ def _resweep_zero_dispatch_suspicious(
             errored: set = set()
             skipped: set = set()
             inconclusive: set = set()
-            premise_h = _primary_hypothesis_entry(outcome, hypothesis)
             confirmed = _run_tool_chain(
                 chain,
                 config=config,
@@ -29835,8 +29844,17 @@ def _synthesize_unmapped_suspicious(
     """
     if not getattr(config, "on_demand_synthesis", True):
         return
+    _premise_h = _primary_hypothesis_entry(outcome, hypothesis)
+    if _premise_h is None:
+        _note_ambiguous_claim_material(outcome, hypothesis, config, phase="on_demand_synthesis")
+        return
     from copy import deepcopy
+    from .claims import hypothesis_material_key
 
+    admitted_material = hypothesis_material_key({"mechanism": hypothesis, **_premise_h}, default_cwe=cwe)
+    if admitted_material is None:
+        _note_ambiguous_claim_material(outcome, hypothesis, config, phase="on_demand_synthesis")
+        return
     review = deepcopy(outcome.review_result or {})
     review["hypothesis"] = hypothesis
     review["cwe"] = review["cwe_class"] = cwe
@@ -29915,6 +29933,16 @@ def _synthesize_unmapped_suspicious(
             result.tier_counters, "synthesis_on_demand", "inconclusive",
         )
         return
+    current_premise = _primary_hypothesis_entry(outcome, hypothesis)
+    candidate_premise = _primary_hypothesis_entry(candidate, hypothesis)
+    if (current_premise is None or candidate_premise is None
+            or hypothesis_material_key({"mechanism": hypothesis, **current_premise}, default_cwe=cwe) != admitted_material
+            or hypothesis_material_key({"mechanism": hypothesis, **candidate_premise}, default_cwe=cwe) != admitted_material):
+        _increment_tier_dict(result.tier_counters, "synthesis_on_demand", "inconclusive")
+        _note_ambiguous_claim_material(outcome, hypothesis, config, phase="on_demand_synthesis_result",
+                                       reason="claim-material-revised")
+        return
+    _premise_h = current_premise
     _block = _synth_receipt_promotion_block_reason(
         synth.stamp, outcome, cwe, config,
     )
@@ -29946,7 +29974,6 @@ def _synthesize_unmapped_suspicious(
             outcome.file, outcome.function, synth.stamp, _gblk,
         )
         return
-    _premise_h = _primary_hypothesis_entry(outcome, hypothesis)
     if _premise_blocks_confirm(_premise_h, [synth.stamp]):
         _increment_tier_dict(
             result.tier_counters, "synthesis_on_demand", "inconclusive",
@@ -30608,16 +30635,42 @@ def _queue_premise_study_question(
 def _primary_hypothesis_entry(
     outcome: ReviewOutcome,
     hypothesis: str,
-) -> dict[str, Any]:
-    """Structured premise for this exact mechanism, or no matching claim.
+) -> dict[str, Any] | None:
+    """Resolve exact material; None denotes ambiguity, {} no declaration.
 
-    Confidence and shared prefixes cannot bind another claim's counter to
-    the primary. Preserve both hypothesis stores used by review lanes.
+    Confidence cannot choose between conflicting structured assumptions.
+    Keep absence distinct so legacy text-only claims retain their policy.
     """
+    from .claims import hypothesis_material_key
+
     entries = matching_claims(hypothesis, (
         outcome.hypotheses, (outcome.review_result or {}).get("hypotheses"),
     ))
-    return entries[0] if entries else {}
+    if not entries:
+        return {}
+    review = outcome.review_result or {}
+    default_cwe = review.get("cwe_class") or review.get("cwe") or ""
+    keys = {hypothesis_material_key(entry, default_cwe=default_cwe) for entry in entries}
+    if None in keys or len(keys) != 1:
+        return None
+    return entries[0]
+
+
+def _note_ambiguous_claim_material(outcome, hypothesis, config, *, phase, reason="ambiguous-claim-material"):
+    """Retain a deferral reason without claiming refutation or dispatch."""
+    if outcome.review_result is None:
+        outcome.review_result = {}
+    outcome.review_result["claim_material_deferred"] = {
+        "hypothesis": hypothesis, "phase": phase, "reason": reason,
+    }
+    try:
+        append_audit_log(config.out_dir, {
+            "action": "claim_material_deferred", "file": outcome.file, "function": outcome.function,
+            "line_start": outcome.line, "hypothesis": hypothesis, "phase": phase,
+            "reason": reason, "adjudication": "unverified",
+        })
+    except Exception:
+        logger.warning("could not record claim material deferral", exc_info=True)
 
 
 def _note_premise_blocked_validation(
