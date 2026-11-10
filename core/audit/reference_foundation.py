@@ -7,6 +7,8 @@ policy. Returning a bundle does not schedule a model call or grant evidence.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from core.language_reference import ReferenceAnswer, ReferenceContext, ReferenceEntry, lookup
 
 _FOUNDATION_IDS = ("c.integer-promotion", "c.integer-conversion")
@@ -15,7 +17,14 @@ _MAX_PACK_ENTRIES = 256
 _UNAVAILABLE = "initial_reference_foundation_unavailable"
 
 
-def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], str]:
+@dataclass(frozen=True)
+class _Selection:
+    entry_ids: tuple[str, ...]
+    reason: str
+    complete: bool
+
+
+def _initial_selection(source: object, file: object) -> _Selection:
     """Select conditional integer reading from syntax, never inferred types.
 
     Parsing unavailable, erroneous or oversized input preserves the foundation.
@@ -24,17 +33,17 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
     """
     if (not isinstance(source, str) or not source or not isinstance(file, str)
             or not foundation_required_for_file(file)):
-        return _FOUNDATION_IDS, "Initial construct selection unavailable: no supported source supplied; fixed foundation only."
+        return _Selection(_FOUNDATION_IDS, "Initial construct selection unavailable: no supported source supplied; fixed foundation only.", False)
     if len(source) > 256 * 1024:
-        return _FOUNDATION_IDS, "Initial construct selection unavailable: source limit reached; fixed foundation only."
+        return _Selection(_FOUNDATION_IDS, "Initial construct selection unavailable: source limit reached; fixed foundation only.", False)
     from .ts_extract import _parse_file
 
     parsed = _parse_file(file, source)
     if parsed is None:
-        return _FOUNDATION_IDS, "Initial construct selection unavailable: parser unavailable; fixed foundation only."
+        return _Selection(_FOUNDATION_IDS, "Initial construct selection unavailable: parser unavailable; fixed foundation only.", False)
     tree, language, raw = parsed
     if language != "c" or tree.root_node.has_error:
-        return _FOUNDATION_IDS, "Initial construct selection unavailable: source has parse errors; fixed foundation only."
+        return _Selection(_FOUNDATION_IDS, "Initial construct selection unavailable: source has parse errors; fixed foundation only.", False)
     arithmetic = False
     comparison = False
     shift = False
@@ -50,7 +59,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         node = stack.pop()
         visited += 1
         if visited > 4096:
-            return _FOUNDATION_IDS, "Initial construct selection incomplete: traversal limit reached; fixed foundation only."
+            return _Selection(_FOUNDATION_IDS, "Initial construct selection incomplete: traversal limit reached; fixed foundation only.", False)
         if node.type == "binary_expression":
             operator = node.child_by_field_name("operator")
             if operator is not None:
@@ -98,7 +107,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         selected += ("c.integer-conditional",)
     if logical:
         selected += ("c.scalar-logical",)
-    return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
+    return _Selection(selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved.", True)
 
 
 def _closed_pack(entry_ids: tuple[str, ...]) -> bool:
@@ -156,11 +165,15 @@ def foundation_answers(
         raise ValueError("invalid foundation request identity")
     if type(language) is not str or language != "c" or binary is not False:
         return ()
+    return _selection_answers(request_id, _initial_selection(source, file))
 
+
+def _selection_answers(request_id: str, selection: _Selection) -> tuple[ReferenceAnswer, ...]:
+    """Resolve one captured selection without reparsing or weakening its rules."""
     def unavailable() -> tuple[ReferenceAnswer, ...]:
         return (ReferenceAnswer(request_id, "unsupported", reason=_UNAVAILABLE),)
 
-    entry_ids, selection_reason = _initial_selection(source, file)
+    entry_ids, selection_reason = selection.entry_ids, selection.reason
     if not _closed_pack(entry_ids):
         return unavailable()
     combined: dict[str, ReferenceEntry] = {}
@@ -220,11 +233,19 @@ def foundation_required_for_file(file: object) -> bool:
 def review_has_current_foundation(
     history: object, *, source: object = None, file: object = None,
 ) -> bool:
-    """Require actual current core identities, never a defaulted policy label."""
+    """Require actual current cores and complete source selection for reuse.
+
+    Missing extraction can still supply fallback reading to a fresh review,
+    but cannot shrink the required reading set for source-aware cache credit.
+    Omitting both source arguments retains the base-only delivery query.
+    """
     from .reference_inputs import reference_answer_already_delivered
 
     if not isinstance(history, dict) or "reference_inputs" not in history:
         return False
-    required = foundation_answers("c", request_id="current-foundation-policy", source=source, file=file)
+    selection = _initial_selection(source, file)
+    if (source is not None or file is not None) and not selection.complete:
+        return False
+    required = _selection_answers("current-foundation-policy", selection)
     return bool(required) and all(reference_answer_already_delivered(answer, history["reference_inputs"])
                                   for answer in required)

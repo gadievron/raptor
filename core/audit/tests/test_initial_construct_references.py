@@ -342,3 +342,81 @@ def test_pointer_logical_syntax_keeps_scalar_and_access_conditions():
 def test_unrelated_operators_do_not_imply_logical_reading(source):
     assert "c.scalar-logical" not in _ids(foundation_answers(
         "c", request_id="owned", source=source, file="unit.c"))
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("complete_history", [False, True], ids=["base-only", "source-selected"])
+@requires_ts("c")
+def test_parser_loss_does_not_retire_source_from_foundation_only_history(tmp_path, monkeypatch, reuse, complete_history):
+    root = _target(tmp_path)
+    (root / "unit.c").write_text(_ARITHMETIC + "\n")
+    row = _entry(root, current=True)
+    if complete_history:
+        answers = foundation_answers("c", request_id="prior", source=_ARITHMETIC, file="unit.c")
+        references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+        history = {**row.review_claims, "reference_inputs": references}
+        primary, span = parse_source_anchor(row.source_hash)
+        row = replace(row, review_claims=history, source_hash=make_context_source_anchor(
+            primary, span, review_context_digest(history["source_inputs"], references), context_version=3))
+    signed = _signed(tmp_path / "prior", row)
+    assert _fold(root, [signed], reuse=reuse, require=False)[0] == {"unit.c:f"}
+    assert bool(_fold(root, [signed], reuse=reuse)[0]) is complete_history
+    monkeypatch.setattr("core.audit.ts_extract._parse_file", lambda *args: None)
+    answers = foundation_answers("c", request_id="owned", source=_ARITHMETIC, file="unit.c")
+    assert _ids(answers) == {"c.integer-promotion", "c.integer-conversion"}
+    assert "parser unavailable" in answers[0].reason
+    assert not _fold(root, [signed], reuse=reuse)[0]
+
+
+@pytest.mark.parametrize("source,reason", [
+    pytest.param("int f( { a +", "parse errors", id="parse-error"),
+    pytest.param(" " * (256 * 1024 + 1), "source limit", id="source-limit"),
+    pytest.param("int f(int a) { a + 1;" + "a;" * 3000 + "}", "traversal limit", id="node-limit"),
+])
+@requires_ts("c")
+def test_incomplete_selection_keeps_reading_without_source_aware_cache_credit(source, reason):
+    answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
+    references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    history = {"reference_inputs": references}
+    assert _ids(answers) == {"c.integer-promotion", "c.integer-conversion"}
+    assert reason in answers[0].reason
+    assert review_has_current_foundation(history)
+    assert not review_has_current_foundation(history, source=source, file="unit.c")
+
+
+@pytest.mark.parametrize("source,file", [("", "unit.c"), (None, "unit.c"),
+                                         (_ARITHMETIC, None), (_ARITHMETIC, "unit.cpp")])
+def test_missing_source_selection_cannot_become_base_only_cache_query(source, file):
+    answers = foundation_answers("c", request_id="owned")
+    references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    history = {"reference_inputs": references}
+    assert review_has_current_foundation(history)
+    assert not review_has_current_foundation(history, source=source, file=file)
+
+
+@requires_ts("c")
+def test_wrong_parser_language_preserves_reading_but_not_cache_credit(monkeypatch):
+    from core.audit import ts_extract
+    parsed = ts_extract._parse_file("unit.c", _ARITHMETIC)
+    assert parsed is not None
+    tree, _language, raw = parsed
+    monkeypatch.setattr(ts_extract, "_parse_file", lambda *args: (tree, "cpp", raw))
+    answers = foundation_answers("c", request_id="owned", source=_ARITHMETIC, file="unit.c")
+    references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    assert _ids(answers) == {"c.integer-promotion", "c.integer-conversion"}
+    assert not review_has_current_foundation({"reference_inputs": references}, source=_ARITHMETIC, file="unit.c")
+
+
+@requires_ts("c")
+def test_source_aware_cache_resolves_one_captured_selection(monkeypatch):
+    from core.audit import ts_extract
+    answers = foundation_answers("c", request_id="owned", source=_ARITHMETIC, file="unit.c")
+    references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    original = ts_extract._parse_file
+    calls = []
+    def counted(file, source):
+        calls.append((file, source))
+        return original(file, source)
+    monkeypatch.setattr(ts_extract, "_parse_file", counted)
+    assert review_has_current_foundation({"reference_inputs": references}, source=_ARITHMETIC, file="unit.c")
+    assert calls == [("unit.c", _ARITHMETIC)]
