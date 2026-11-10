@@ -1291,17 +1291,17 @@ def test_lexical_transform_semicolon_joined_correct_target_sound(
     certifying when the sink consumes it."""
     (tmp_path / "app.js").write_text(
         "function f(req, res) {\n"
-        "  var raw = x; var y = DOMPurify.sanitize(x);\n"   # line 2
+        "  var raw = x; var y = validator.escape(x);\n"   # line 2
         "  res.send(y);\n"                                   # line 3
         "}\n"
     )
-    diff = "+  var raw = x; var y = DOMPurify.sanitize(x);\n"
+    diff = "+  var raw = x; var y = validator.escape(x);\n"
     reply = json.dumps({
         "kind": "known_safe_call",
         "validator_source_line":
-            "var raw = x; var y = DOMPurify.sanitize(x);",
+            "var raw = x; var y = validator.escape(x);",
         "variable_name": "x", "charset": "", "forbidden": "",
-        "library_call": "DOMPurify.sanitize",
+        "library_call": "validator.escape",
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
@@ -1561,17 +1561,17 @@ def test_lexical_multi_declarator_correct_target_sound(tmp_path: Path):
     certifying when the sink consumes it."""
     (tmp_path / "app.js").write_text(
         "function f(req, res) {\n"
-        "  var safe = x, y = DOMPurify.sanitize(x);\n"       # line 2
+        "  var safe = x, y = validator.escape(x);\n"       # line 2
         "  res.send(y);\n"                                    # line 3
         "}\n"
     )
-    diff = "+  var safe = x, y = DOMPurify.sanitize(x);\n"
+    diff = "+  var safe = x, y = validator.escape(x);\n"
     reply = json.dumps({
         "kind": "known_safe_call",
         "validator_source_line":
-            "var safe = x, y = DOMPurify.sanitize(x);",
+            "var safe = x, y = validator.escape(x);",
         "variable_name": "x", "charset": "", "forbidden": "",
-        "library_call": "DOMPurify.sanitize",
+        "library_call": "validator.escape",
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
