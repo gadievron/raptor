@@ -112,9 +112,11 @@ def test_if_else_branches_then_joins():
     then_node = nodes[3]
     else_node = nodes[5]
     return_node = nodes[6]
-    # If branches to both bodies
-    assert then_node in cfg.successors(if_node)
-    assert else_node in cfg.successors(if_node)
+    # Each selected arm has its own producer-owned, payload-free entry.
+    facts = {fact.polarity: fact for fact in cfg.branch_guards}
+    assert set(cfg.successors(if_node)) == {facts[True].branch, facts[False].branch}
+    assert then_node in cfg.successors(facts[True].branch)
+    assert else_node in cfg.successors(facts[False].branch)
     # Both bodies join at return
     assert return_node in cfg.successors(then_node)
     assert return_node in cfg.successors(else_node)
@@ -132,11 +134,12 @@ def test_if_without_else_passes_through_to_join():
     if_node = nodes[2]
     then_node = nodes[3]
     return_node = nodes[4]
-    # If true: through then_node to return
-    assert then_node in cfg.successors(if_node)
+    facts = {fact.polarity: fact for fact in cfg.branch_guards}
+    assert set(cfg.successors(if_node)) == {facts[True].branch, facts[False].branch}
+    assert then_node in cfg.successors(facts[True].branch)
     assert return_node in cfg.successors(then_node)
-    # If false: directly to return
-    assert return_node in cfg.successors(if_node)
+    # The false entry falls through without executing the true arm.
+    assert return_node in cfg.successors(facts[False].branch)
 
 
 # ---------------------------------------------------------------------------

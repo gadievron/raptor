@@ -36,6 +36,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .branch_guards import BranchGuard
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -236,6 +238,9 @@ class PythonCFG:
     # legitimate code always imports its sanitizer. ``None`` =
     # not computed (hand-built CFGs): consumers skip the check.
     trusted_import_roots: frozenset[str] | None = None
+
+    # None denotes a legacy/manual graph without producer branch facts.
+    branch_guards: tuple[BranchGuard[PyCFGNode], ...] | None = None
 
     @property
     def entry(self) -> PyCFGNode:
@@ -694,7 +699,8 @@ class _PythonCFGBuilder:
     """
 
     def __init__(self, function_name: str, file_path: str,
-                 escape_names: frozenset[str] = frozenset()) -> None:
+                 escape_names: frozenset[str] = frozenset(),
+                 *, source_text: str = "") -> None:
         self.function_name = function_name
         self.file_path = file_path
         # Names this function declared ``global`` / ``nonlocal``.
@@ -717,6 +723,10 @@ class _PythonCFGBuilder:
         # condition). Both are pre-allocated as the loop is set up so
         # any inner ``break`` / ``continue`` has somewhere to attach.
         self._loop_stack: list[tuple[PyCFGNode, PyCFGNode]] = []
+        self._branch_guards: list[BranchGuard[PyCFGNode]] = []
+        # AST columns count UTF-8 bytes. Cache lines once, rather than
+        # repeatedly splitting the whole file for each condition.
+        self._source_lines = tuple(line.encode("utf-8") for line in source_text.splitlines(keepends=True))
 
     # ----- edge plumbing -----
 
@@ -856,6 +866,35 @@ class _PythonCFGBuilder:
         self._link_many(incoming, node)
         return [node]
 
+    def _condition_text(self, condition: ast.expr) -> str:
+        start = condition.lineno - 1
+        end = (condition.end_lineno or condition.lineno) - 1
+        if 0 <= start <= end < len(self._source_lines) and condition.end_col_offset is not None:
+            if start == end:
+                raw = self._source_lines[start][condition.col_offset:condition.end_col_offset]
+            else:
+                raw = (self._source_lines[start][condition.col_offset:]
+                       + b"".join(self._source_lines[start + 1:end])
+                       + self._source_lines[end][:condition.end_col_offset])
+            return raw.decode("utf-8")
+        # Direct AST builders (including summaries) do not always own
+        # source text. Keep the complete expression, without label folding.
+        return ast.unparse(condition)
+
+    def _branch(self, header: PyCFGNode, condition: ast.expr | None, polarity: bool) -> PyCFGNode:
+        branch = PyCFGNode(
+            kind="branch", lineno=-1,
+            label=f"branch:{len(self._all_nodes)}:{polarity}",
+        )
+        self._all_nodes.append(branch)
+        self._link(header, branch)
+        if condition is not None:
+            self._branch_guards.append(BranchGuard(
+                branch=branch, condition=self._condition_text(condition),
+                line=condition.lineno, polarity=polarity,
+            ))
+        return branch
+
     # ----- compound constructs -----
 
     def _build_if(
@@ -863,10 +902,12 @@ class _PythonCFGBuilder:
     ) -> list[PyCFGNode]:
         cond = self._new_node("stmt", stmt)
         self._link_many(incoming, cond)
-        then_out = self._build_stmts(stmt.body, [cond])
+        true_branch = self._branch(cond, stmt.test, True)
+        false_branch = self._branch(cond, stmt.test, False)
+        then_out = self._build_stmts(stmt.body, [true_branch])
         else_out = (
-            self._build_stmts(stmt.orelse, [cond])
-            if stmt.orelse else [cond]
+            self._build_stmts(stmt.orelse, [false_branch])
+            if stmt.orelse else [false_branch]
         )
         return then_out + else_out
 
@@ -876,17 +917,19 @@ class _PythonCFGBuilder:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
         exit_node = self._join_node(stmt, f"while-exit (line {stmt.lineno})")
+        true_branch = self._branch(header, stmt.test, True)
+        false_branch = self._branch(header, stmt.test, False)
         self._loop_stack.append((exit_node, header))
-        body_out = self._build_stmts(stmt.body, [header])
+        body_out = self._build_stmts(stmt.body, [true_branch])
         for tail in body_out:
             self._link(tail, header)
         self._loop_stack.pop()
         if stmt.orelse:
-            orelse_out = self._build_stmts(stmt.orelse, [header])
+            orelse_out = self._build_stmts(stmt.orelse, [false_branch])
             for tail in orelse_out:
                 self._link(tail, exit_node)
         else:
-            self._link(header, exit_node)
+            self._link(false_branch, exit_node)
         return [exit_node]
 
     def _build_for(
@@ -895,17 +938,21 @@ class _PythonCFGBuilder:
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
         exit_node = self._join_node(stmt, f"for-exit (line {stmt.lineno})")
+        # Iterator yield/exhaustion is not the source expression
+        # `target in iterable`; it supplies no boolean guard fact.
+        yielded = self._branch(header, None, True)
+        exhausted = self._branch(header, None, False)
         self._loop_stack.append((exit_node, header))
-        body_out = self._build_stmts(stmt.body, [header])
+        body_out = self._build_stmts(stmt.body, [yielded])
         for tail in body_out:
             self._link(tail, header)
         self._loop_stack.pop()
         if stmt.orelse:
-            orelse_out = self._build_stmts(stmt.orelse, [header])
+            orelse_out = self._build_stmts(stmt.orelse, [exhausted])
             for tail in orelse_out:
                 self._link(tail, exit_node)
         else:
-            self._link(header, exit_node)
+            self._link(exhausted, exit_node)
         return [exit_node]
 
     def _build_match(
@@ -1071,6 +1118,7 @@ class _PythonCFGBuilder:
             _nodes=tuple(ordered_nodes),
             _adjacency=adjacency,
             params=_function_params(func),
+            branch_guards=tuple(self._branch_guards),
         )
 
 
@@ -1184,6 +1232,7 @@ def build_python_cfg(
     builder = _PythonCFGBuilder(
         function_name, file_path,
         escape_names=_scope_escape_names(func),  # type: ignore[arg-type]
+        source_text=source_text,
     )
     cfg = builder.build(func)  # type: ignore[arg-type]
     if cfg is None:
