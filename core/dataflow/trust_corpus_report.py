@@ -328,9 +328,22 @@ def main(argv=None) -> None:
         "--synth-db", type=Path, required=True,
         help="trust-witness bridge's synth_results SQLite",
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(ap)
+    ap.epilog = "Portable exports require --report-output; analysis is a single read-only snapshot and does not wait for corpus completion."
     args = ap.parse_args(argv)
+    report_options = options_from_args(args, ap) if args.report_format or args.report_output or args.no_report else None
+    if report_options is not None:
+        from .corpus_report_completion import prepare
+        try:
+            prepare(report_options, args.synth_db)
+        except ValueError as exc:
+            ap.error(str(exc))
     rep = analyze(args.synth_db)
     print(render_text(rep), flush=True)
+    if report_options is not None:
+        from .corpus_report_completion import emit
+        emit(rep, args.synth_db, report_options)
 
 
 if __name__ == "__main__":
