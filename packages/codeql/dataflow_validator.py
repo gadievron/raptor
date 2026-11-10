@@ -9,6 +9,7 @@ import os
 import re
 import sys
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
@@ -758,6 +759,8 @@ class DataflowValidator:
         self,
         dataflow: DataflowPath,
         repo_path: Path,
+        *,
+        diagnostics: list[dict] | None = None,
     ) -> DataflowValidation | None:
         """Run the string-theory prescreen over ALL of the result's
         paths; materialise the source-bound prescreen verdict on
@@ -773,10 +776,14 @@ class DataflowValidator:
                 repo_root=repo_path,
                 rule_id=dataflow.rule_id,
             )
+            if verdict is None:
+                return None
+            if not verdict.refuted:
+                if diagnostics is not None:
+                    diagnostics.extend(deepcopy(verdict.diagnostics))
+                return None
         except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             self.logger.warning("Injection prescreen failed: %s", e)
-            return None
-        if verdict is None or not verdict.refuted:
             return None
         self.logger.info(
             "Injection prescreen refuted %s in %.1f ms (%d path(s); "
@@ -841,7 +848,10 @@ class DataflowValidator:
         # retain its source-bound prescreen contract: confidence-capped
         # non-exploitable with the barrier evidence attached, before
         # any LLM call. No signal → normal flow, nothing dropped.
-        prescreen = self._injection_prescreen(dataflow, repo_path)
+        slice_diagnostics: list[dict] = []
+        prescreen = self._injection_prescreen(
+            dataflow, repo_path, diagnostics=slice_diagnostics,
+        )
         if prescreen is not None:
             return prescreen
 
@@ -875,7 +885,7 @@ class DataflowValidator:
                 smt_available=False,
                 reasoning=f"SMT diagnostic unavailable ({type(exc).__name__}); source analysis required",
             )
-        smt_diagnostics = {
+        smt_diagnostics: dict[str, object] = {
             "oracle_scope": "llm-extracted-predicates",
             "modeled_feasible": smt_result.feasible,
             "reasoning": smt_result.reasoning,
@@ -885,6 +895,8 @@ class DataflowValidator:
             "assumed_width": profile.width if profile is not None else None,
             "assumed_signed": profile.signed if profile is not None else None,
         }
+        if slice_diagnostics:
+            smt_diagnostics["string_slice_models"] = slice_diagnostics
 
         # The existing fast-tier review policy runs independently of the
         # mathematical diagnostics, before gathering full source context.

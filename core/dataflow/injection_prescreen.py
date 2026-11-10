@@ -209,13 +209,16 @@ class PrescreenVerdict:
     lifted charset barrier. ``evidence`` then holds one entry per
     path: {path_index, validator_file, validator_line, kind, pattern,
     sink_class, reasoning}. ``solver_ms`` is the summed wall time of
-    the Z3/inclusion proofs.
+    the Z3/inclusion proofs. Non-refuting observations may carry separate
+    conditional ``diagnostics``; these do not constitute barrier evidence.
     """
     refuted: bool
     paths_checked: int
     evidence: list[dict] = field(default_factory=list)
     reason: str = ""
     solver_ms: float = 0.0
+    # Conditional models never enter authoritative barrier evidence.
+    diagnostics: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -385,6 +388,31 @@ def _step_refutes_path(
     return _spec_neutralizes_all(spec, sink_classes)
 
 
+
+def _conditional_slice_diagnostics(
+    candidates: list[tuple[ValidatorSpec, int, str]], *,
+    sink_line: int, sink_file: str, sink_classes: frozenset,
+    path_index: int,
+) -> list[dict]:
+    """Retain one observed transfer per failed path, under one soft budget."""
+    from core.dataflow.string_slice_diagnostic import diagnose_validator_slice
+    from core.smt_solver.session import query_budget
+
+    diagnostics: list[dict] = []
+    with query_budget(SOLVER_TIMEOUT_MS):
+        for spec, line, source in reversed(candidates):
+            for sink_class in sorted(sink_classes):
+                model = diagnose_validator_slice(source, line, sink_line, spec, sink_class)
+                if model is not None:
+                    diagnostics.append({
+                        **model, "path_index": path_index,
+                        "validator_file": sink_file, "sink_class": sink_class,
+                    })
+            if diagnostics:
+                break
+    return diagnostics
+
+
 def prescreen_finding(
     *,
     paths: list,
@@ -402,8 +430,9 @@ def prescreen_finding(
 
     Returns None when the prescreen does not apply (no danger model
     for the rule, unsupported language, too many paths) or found no
-    signal; a :class:`PrescreenVerdict` with ``refuted=True`` only
-    when EVERY path is provably neutralised by a lifted validator.
+    signal. Conditional slice observations return a non-refuting result
+    with separate diagnostics. ``refuted=True`` is reserved for EVERY path
+    being provably neutralised by a lifted validator.
     """
     sink_classes = sink_classes_for_rule(rule_id, cwe)
     if not sink_classes or not paths:
@@ -463,6 +492,7 @@ def prescreen_finding(
         if language is None:                     # pragma: no cover — pre-vetted above
             return None
         path_refuted = False
+        conditional_candidates: list[tuple[ValidatorSpec, int, str]] = []
         for step in path.intermediate_steps:
             loaded = _load(step.file_path, language)
             if loaded is None:
@@ -483,6 +513,14 @@ def prescreen_finding(
             )
             if spec is None:
                 continue
+            # A diagnostic can model the admitted final-LF language even
+            # when that LF prevents source refutation for this sink class.
+            # Keep strict call-shape/flag admission; only the property
+            # exclusion requirement is absent for conditional modelling.
+            if (language == "python" and spec.kind == "charset"
+                    and step.file_path == sink.file_path
+                    and _strict_lift(line_text, spec, language, frozenset())):
+                conditional_candidates.append((spec, step.line, source_text))
             if not _strict_lift(line_text, spec, language, sink_classes):
                 continue
             any_lifted = True
@@ -518,6 +556,18 @@ def prescreen_finding(
                 if any_lifted:
                     _STATS.lifted += 1
                 _STATS.no_signal += 1
+            started = time.perf_counter()
+            diagnostics = _conditional_slice_diagnostics(
+                conditional_candidates, sink_line=sink.line, sink_file=sink.file_path,
+                sink_classes=sink_classes, path_index=path_index,
+            ) if conditional_candidates else []
+            if diagnostics:
+                return PrescreenVerdict(
+                    refuted=False, paths_checked=path_index + 1,
+                    reason="conditional slice models only; source path not refuted",
+                    solver_ms=total_ms + (time.perf_counter() - started) * 1000,
+                    diagnostics=diagnostics,
+                )
             return None
 
     with _STATS_LOCK:
