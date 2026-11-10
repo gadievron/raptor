@@ -546,6 +546,15 @@ class TestProjectFindingsCitizenship(unittest.TestCase):
 class TestRankingIntegration(unittest.TestCase):
     """--rank reorders within budgets; never gates, never fatal."""
 
+    @staticmethod
+    def _scanner(*args, **kwargs):
+        scanner = WebScanner(*args, **kwargs)
+        # Ranking owns its inputs; SAGE recall and persistence have separate
+        # wiring tests and must not depend on a running sidecar here.
+        scanner._sage_attach_priors = MagicMock()
+        scanner._sage_store_observations = MagicMock()
+        return scanner
+
     @patch("packages.web.scanner.WebCrawler")
     @patch("packages.web.scanner.WebClient")
     def test_rank_reorders_fuzz_urls_within_budget(
@@ -568,7 +577,7 @@ class TestRankingIntegration(unittest.TestCase):
             )
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            scanner = WebScanner(
+            scanner = self._scanner(
                 "http://example.com", MagicMock(), Path(tmpdir),
                 max_fuzz_urls=1, rank=True,
             )
@@ -605,23 +614,36 @@ class TestRankingIntegration(unittest.TestCase):
         self, mock_client_cls, mock_crawler_cls,
     ):
         with tempfile.TemporaryDirectory() as tmpdir:
-            scanner = WebScanner(
+            scanner = self._scanner(
                 "http://example.com", MagicMock(), Path(tmpdir), rank=True,
             )
             scanner.fuzzer = MagicMock()
             scanner.fuzzer.fuzz_parameter.return_value = []
+            discovered_urls = [
+                f"http://example.com/{path}?q=1" for path in ("a", "b", "c")
+            ]
             scanner.crawler.crawl.return_value = {
                 "stats": {"total_pages": 1, "total_parameters": 1},
                 "discovered_parameters": ["q"],
-                "discovered_urls": ["http://example.com/a?q=1"] * 4,
+                "discovered_urls": discovered_urls,
                 "pages": [],
             }
 
             with patch(
                 "core.llm.ranking.rank_items",
                 side_effect=RuntimeError("model down"),
-            ):
+            ) as mock_rank:
                 result = scanner.scan()
+
+            mock_rank.assert_called()
+            expected_urls = discovered_urls + ["http://example.com"]
+            self.assertEqual(mock_rank.call_args.args[0], expected_urls)
+            self.assertEqual(
+                list(dict.fromkeys(
+                    call.args[0] for call in scanner.fuzzer.fuzz_parameter.call_args_list
+                )),
+                expected_urls,
+            )
 
         self.assertIn("injection", result["phases_completed"])
 
@@ -631,7 +653,7 @@ class TestRankingIntegration(unittest.TestCase):
         self, mock_client_cls, mock_crawler_cls,
     ):
         with tempfile.TemporaryDirectory() as tmpdir:
-            scanner = WebScanner("http://example.com", MagicMock(), Path(tmpdir))
+            scanner = self._scanner("http://example.com", MagicMock(), Path(tmpdir))
             scanner.fuzzer = MagicMock()
             scanner.fuzzer.fuzz_parameter.return_value = []
             scanner.crawler.crawl.return_value = {
