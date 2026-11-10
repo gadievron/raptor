@@ -3799,6 +3799,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _job_controller = kwargs.pop('_job_controller', None)
         _input_spool_files = kwargs.pop('_input_spool_files')
 
+        if (kwargs.get("capture_output")
+                and (kwargs.get("stdout") is not None or kwargs.get("stderr") is not None)):
+            raise ValueError("stdout and stderr may not be used with capture_output")
+
         # Resolve the documented subprocess alias before selecting a native
         # backend. Passing both forms with different truth values is ambiguous.
         if kwargs.get("universal_newlines") is not None:
