@@ -569,15 +569,23 @@ class TestLayer4TokenLifecycle:
             )
             token = self._mint_worker_token(d)
             issued_at = d._tokens[token].issued_at
+            original_expiry = d._tokens[token].expires_at
+            requests_after_original_expiry = 0
             deadline = issued_at + 3.0   # 1.5x the 2s TTL
             with _make_httpx_client(str(d.socket_path), token) as c:
                 while time.time() < deadline:
+                    request_started = time.time()
                     r = c.post(
                         "http://_/anthropic/v1/messages", content=b"{}",
                     )
                     assert r.status_code == 200, r.text
                     assert "expired" not in r.text
+                    if request_started > original_expiry:
+                        requests_after_original_expiry += 1
                     time.sleep(0.25)
+                assert requests_after_original_expiry > 0, (
+                    "no successful request started after the original token expiry"
+                )
 
 
 # ---------------------------------------------------------------------------
