@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import os
 import stat as _stat_mod
+from collections.abc import Callable
 from io import BufferedReader
 from pathlib import Path
 from typing import cast
@@ -65,6 +66,7 @@ def _open_gated(
     p: str | Path,
     *,
     follow_symlinks: bool,
+    stat_validator: Callable[[os.stat_result], None] | None = None,
 ) -> tuple[BufferedReader, os.stat_result]:
     """One open, ONE fstat: the shared body behind
     :func:`open_regular_gated` and :func:`read_bytes_gated`.
@@ -88,6 +90,8 @@ def _open_gated(
         if not _stat_mod.S_ISREG(st.st_mode):
             msg = f"not a regular file: {p}"
             raise ValueError(msg)
+        if stat_validator is not None:
+            stat_validator(st)
         transferred_fd, fd = fd, -1
         fh = cast(BufferedReader, adopt_fd(transferred_fd, "rb", lambda value: os.close(value)))
         return fh, st
@@ -103,6 +107,7 @@ def open_regular_gated(
     p: str | Path,
     *,
     follow_symlinks: bool = True,
+    stat_validator: Callable[[os.stat_result], None] | None = None,
 ) -> BufferedReader:
     """Raising fd-gated open of a regular file for reading.
 
@@ -121,12 +126,19 @@ def open_regular_gated(
       final-component symlink refuses with ``ELOOP`` — the posture
       for trust-bearing reads whose path must denote the file itself.
 
+    ``stat_validator``, when supplied, receives the same fstat snapshot
+    after regularity validation and before wrapping or reading the fd. Its
+    exception propagates unchanged after closing the owned descriptor.
+    No extra metadata policy applies by default.
+
     Returns the open binary stream (its ``fileno()`` carries the
     verified inode for identity pinning). Raises ``ValueError`` for a
     non-regular file and ``OSError`` for open failures (``ELOOP``
     when ``follow_symlinks=False`` meets a link).
     """
-    fh, _st = _open_gated(p, follow_symlinks=follow_symlinks)
+    fh, _st = _open_gated(
+        p, follow_symlinks=follow_symlinks, stat_validator=stat_validator,
+    )
     return fh
 
 
@@ -136,6 +148,7 @@ def read_bytes_gated(
     *,
     follow_symlinks: bool = True,
     budget_error: type[ValueError] = ReadBudgetExceededError,
+    stat_validator: Callable[[os.stat_result], None] | None = None,
 ) -> bytes:
     """Open-then-fstat gated read of a required file, returning raw
     bytes.
@@ -144,6 +157,9 @@ def read_bytes_gated(
     gates, no decode — for callers that hash, archive, or re-serve
     the exact consumed bytes and therefore must not read twice (a
     second read could describe different bytes than the first).
+
+    An optional ``stat_validator`` applies caller metadata policy to the
+    same fstat snapshot before any bytes are read.
 
     Both gates check the OPEN fd's inode, not a name that can be
     swapped between calls:
@@ -168,7 +184,9 @@ def read_bytes_gated(
     distinctly — and ``OSError`` for open/read failures (``ELOOP``
     when ``follow_symlinks=False`` meets a link).
     """
-    fh, st = _open_gated(p, follow_symlinks=follow_symlinks)
+    fh, st = _open_gated(
+        p, follow_symlinks=follow_symlinks, stat_validator=stat_validator,
+    )
     with preserving_stream_error(fh):
         if max_bytes is not None and st.st_size > max_bytes:
             msg = (
@@ -210,6 +228,7 @@ def read_text_gated(
     follow_symlinks: bool = True,
     encoding: str = "utf-8-sig",
     budget_error: type[ValueError] = ReadBudgetExceededError,
+    stat_validator: Callable[[os.stat_result], None] | None = None,
 ) -> str:
     """Open-then-fstat gated read of a required text file.
 
@@ -227,4 +246,5 @@ def read_text_gated(
         max_bytes,
         follow_symlinks=follow_symlinks,
         budget_error=budget_error,
+        stat_validator=stat_validator,
     ).decode(encoding)
