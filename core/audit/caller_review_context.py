@@ -63,7 +63,7 @@ class CallerContextAnswer:
     reason: str
 
 
-def _text(row: dict, field: str, limit: int) -> str | None:
+def _bounded_request_text(row: dict, field: str, limit: int) -> str | None:
     value = row.get(field)
     if not isinstance(value, str) or len(value) > limit or not value.strip():
         return None
@@ -86,9 +86,9 @@ def register_caller_context_requests(review: object, origin: KnowledgeOrigin) ->
         if not isinstance(row, dict):
             rejected.append(CallerContextRejection(index, 'expected_object'))
             continue
-        file = _text(row, 'file', 512)
-        function = _text(row, 'function', 256)
-        reason = _text(row, 'reason', 1000)
+        file = _bounded_request_text(row, 'file', 512)
+        function = _bounded_request_text(row, 'function', 256)
+        reason = _bounded_request_text(row, 'reason', 1000)
         line = row.get('line_start')
         if (file is None or function is None or reason is None
                 or any(c in file or c in function for c in ('\0', '\n', '\r'))

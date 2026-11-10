@@ -13,6 +13,7 @@ from pathlib import Path
 
 from core.audit.knowledge_requests import KnowledgeOrigin
 from core.audit.refutation_source import capture_source_identity
+from core.json import dumps_canonical
 
 MAX_SOURCES = 32
 MAX_SNAPSHOT_BYTES = 16 * 1024
@@ -161,5 +162,4 @@ def context_inputs_digest(snapshot: object) -> str | None:
     if not complete or not sources:
         return None
     canonical = _snapshot(sources, True)
-    return hashlib.sha256(json.dumps(canonical, ensure_ascii=True,
-                                    separators=(",", ":"), sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(dumps_canonical(canonical).encode()).hexdigest()
