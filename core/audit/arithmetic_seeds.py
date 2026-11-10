@@ -26,7 +26,7 @@ _COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": ope
                 "==": operator.eq, "!=": operator.ne}
 
 
-def _range_constant(atoms, op, types, abi, frame):
+def _range_constant(atoms, op, types, abi, frame, *, bounds=None):
     """A cheap candidate filter, never an oracle receipt or intent claim."""
     if atoms[0] == atoms[1]:
         return _COMPARISONS[op](0, 0)
@@ -42,6 +42,8 @@ def _range_constant(atoms, op, types, abi, frame):
             return None
         ranges.append((-(1 << (kind.width - 1)) if kind.signed else 0,
                        (1 << (kind.width - (1 if kind.signed else 0))) - 1))
+    if bounds is not None:
+        ranges = [bounds.get(atom, interval) for atom, interval in zip(atoms, ranges)]
     ranges = [converted_interval(low, high, frame) for low, high in ranges]
     if any(bounds is None for bounds in ranges):
         return None
@@ -58,6 +60,97 @@ def _range_constant(atoms, op, types, abi, frame):
     if al == ah == bl == bh:
         return op == "=="
     return None
+
+
+def _guard_range_constant(target, data, atoms, op, types, abi, frame):
+    """A syntactic candidate range, never a reaching-path or SSA proof.
+
+    Consume only value-preserving parameter/literal comparisons controlling
+    a branch, or a preceding direct early return. The native oracle must
+    independently admit every prefix, input identity and reaching predicate.
+    """
+    declared = dict(types)
+    bounds = {}
+    for atom in atoms:
+        kind = integer_type(declared.get(atom), abi)
+        if kind is not None:
+            bounds[atom] = (-(1 << (kind.width - 1)) if kind.signed else 0,
+                            (1 << (kind.width - (1 if kind.signed else 0))) - 1)
+    if not bounds:
+        return None
+
+    def contains(node):
+        return node is not None and node.start_byte <= target.start_byte < node.end_byte
+
+    def text(node):
+        return data[node.start_byte:node.end_byte].decode() if node is not None else ''
+
+    facts, current, work = [], target.parent, 0
+    while current is not None and current.type != 'function_definition':
+        work += 1
+        if work > 64:
+            return None
+        if current.type == 'if_statement':
+            yes, no = (current.child_by_field_name(field) for field in ('consequence', 'alternative'))
+            if contains(yes) or contains(no):
+                facts.append((current.child_by_field_name('condition'), contains(yes)))
+        if current.type == 'compound_statement':
+            for child in current.named_children:
+                if child.end_byte > target.start_byte:
+                    break
+                if (child.type == 'if_statement' and child.child_by_field_name('alternative') is None
+                        and child.child_by_field_name('consequence') is not None
+                        and child.child_by_field_name('consequence').type == 'return_statement'):
+                    facts.append((child.child_by_field_name('condition'), False))
+        if len(facts) > 8:
+            return None
+        current = current.parent
+    used = False
+    inverse = {'<': '>=', '<=': '>', '>': '<=', '>=': '<', '==': '!=', '!=': '=='}
+    reverse = {'<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==', '!=': '!='}
+    for node, truth in facts:
+        node = _unwrap(node)
+        if node is not None and node.type == 'condition_clause':
+            node = _unwrap(node.child_by_field_name('value'))
+        for _ in range(8):
+            if node is None or node.type != 'unary_expression' or text(node.child_by_field_name('operator')) != '!':
+                break
+            truth, node = not truth, _unwrap(node.child_by_field_name('argument'))
+        if node is None or node.type != 'binary_expression':
+            continue
+        guard_op = text(node.child_by_field_name('operator'))
+        if guard_op not in inverse:
+            continue
+        left, right = (_unwrap(node.child_by_field_name(field)) for field in ('left', 'right'))
+        if left is None or right is None:
+            continue
+        if left.type == 'identifier' and text(left) in bounds:
+            variable, literal = text(left), source_integer_atom(right, data)
+        elif right.type == 'identifier' and text(right) in bounds:
+            variable, literal, guard_op = text(right), source_integer_atom(left, data), reverse[guard_op]
+        else:
+            continue
+        value = integer_literal_value(literal)
+        if value is None or common_integer_type([variable, literal], types, abi) is None:
+            continue  # no guessed literal width or modular sign-change refinement
+        guard_op = guard_op if truth else inverse[guard_op]
+        low, high = bounds[variable]
+        if guard_op == '<':
+            high = min(high, value - 1)
+        elif guard_op == '<=':
+            high = min(high, value)
+        elif guard_op == '>':
+            low = max(low, value + 1)
+        elif guard_op == '>=':
+            low = max(low, value)
+        elif guard_op == '==':
+            low, high = max(low, value), min(high, value)
+        else:
+            continue
+        if low > high:
+            return None  # no vacuous constant lead from an empty candidate range
+        bounds[variable], used = (low, high), True
+    return _range_constant(atoms, op, types, abi, frame, bounds=bounds) if used else None
 
 
 def _range_can_wrap(atoms, op, types, abi, frame):
@@ -137,7 +230,7 @@ def _operations(source, language, abi):
                         if len(candidates) > _MAX_CANDIDATES:
                             return []
         pending.extend(reversed(node.named_children))
-    result, deferred_wraps = [], []
+    result, deferred_wraps, deferred_guards = [], [], []
     # Preserve the arithmetic intake and prompt budget even when a function
     # has many ordinary comparisons. New hints cannot evict old candidates.
     for op, atoms in dict.fromkeys(candidates + comparisons + wraps):
@@ -160,6 +253,7 @@ def _operations(source, language, abi):
             operand_kinds.append(kind)
         if len(operand_kinds) != 2:
             continue
+        guard_implied = False
         kinds = [("invalid-shift-count", "Potential invalid shift count")]
         if op in _COMPARISONS:
             if not operand_types:
@@ -167,7 +261,10 @@ def _operations(source, language, abi):
             frame = comparison_frame(*operand_kinds)
             truth = _range_constant(atoms, op, operand_types, abi, frame)
             if truth is None:
-                continue
+                truth = _guard_range_constant(target, selected_data, atoms, op, operand_types, abi, frame)
+                if truth is None:
+                    continue
+                guard_implied = True
             truth_text = "true" if truth else "false"
             kinds = [(f"constant-comparison-{truth_text}", f"Comparison is always {truth_text}")]
         elif op in {"+", "-", "*"}:
@@ -202,8 +299,9 @@ def _operations(source, language, abi):
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:
-                destination = deferred_wraps if op in {"+", "-", "*"} else result
-                destination.append((target, op, atoms, claim_kind, mechanism, {}))
+                destination = deferred_guards if guard_implied else deferred_wraps if op in {"+", "-", "*"} else result
+                extra = {"binding_status": "candidate", "candidate_basis": "controlling-comparison-range"} if guard_implied else {}
+                destination.append((target, op, atoms, claim_kind, mechanism, extra))
     for target, array, index in accesses:
         from .array_bounds import array_access_candidate
         mechanism = f"Potential out-of-bounds read at `{array}[{index}]`."
@@ -223,7 +321,7 @@ def _operations(source, language, abi):
             result.append((conversion["target"], "=", (destination, incoming), "unsigned-conversion-loss", mechanism,
                            {"binding_status": "candidate", "source_type": conversion["source_type"],
                             "destination_type": conversion["destination_type"]}))
-    return result
+    return result + deferred_guards
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

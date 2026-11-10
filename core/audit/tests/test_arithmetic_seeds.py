@@ -179,8 +179,12 @@ def test_many_ordinary_comparisons_do_not_evict_arithmetic_discovery():
 
     source = "int Read(int Value,int Count){" + "".join(f"if(Value>{i})return 0;" for i in range(25)) + "return Value/Count;}"
     gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
-    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 2
-    assert all(s["arithmetic_site"]["operator"] == "/" for s in gap["injected_hypotheses"])
+    assert seed_arithmetic_hypotheses([gap], {"math.c": source}, mode="quality", integer_abi="lp64") == 4
+    rows = gap["injected_hypotheses"]
+    assert [s["arithmetic_site"]["claim_kind"] for s in rows] == [
+        "zero-divisor", "signed-division-overflow", "constant-comparison-false", "constant-comparison-false"]
+    assert all(s["arithmetic_site"]["operator"] == "/" for s in rows[:2])
+    assert all(s["arithmetic_site"]["binding_status"] == "candidate" for s in rows[2:])
 
 
 @pytest.mark.parametrize("expression,verb", [("Value / 0", "division"), ("Value << 32", "shift")])
