@@ -221,6 +221,7 @@ def allocate(base: Path, pid: int, *, protected: bool = False) -> Path:
     family = None
     family_name = f'raptor-{os.geteuid()}'
     name = 'session-' + secrets.token_hex(16)
+    failed = False
     try:
         try:
             os.mkdir(family_name, 0o700, dir_fd=node)
@@ -229,10 +230,20 @@ def allocate(base: Path, pid: int, *, protected: bool = False) -> Path:
         family = os.open(family_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=node)
         _private(os.fstat(family), True)
         os.mkdir(name, 0o700, dir_fd=family)
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if family is not None:
-            os.close(family)
-        os.close(node)
+        cleanup_error: BaseException | None = None
+        for descriptor in (family, node):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
     return create(base / family_name / name, protected=protected)
 
 
@@ -299,6 +310,7 @@ def _restore_authorized(raw: str, *, require_sealed: bool = True) -> tuple[Path,
         raise ValueError('invalid scratch issuer entry')
     directory = _open_directory(entry.parent)
     target = None
+    failed = False
     try:
         _private(os.fstat(directory), True)
         target = os.open(entry.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
@@ -309,10 +321,20 @@ def _restore_authorized(raw: str, *, require_sealed: bool = True) -> tuple[Path,
         data = os.read(target, 65537)
         if len(data) > 65536:
             raise ValueError('oversized scratch issuer entry')
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if target is not None:
-            os.close(target)
-        os.close(directory)
+        cleanup_error: BaseException | None = None
+        for descriptor in (target, directory):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
     if value['kind'] == 'launch':
         fields = json.loads(data)
         if (not isinstance(fields, dict) or set(fields) != {'v', 'identity', 'metadata', 'token'}
@@ -442,6 +464,7 @@ def issue(base: Path, metadata: Path, pid: int) -> str:
     issuer_fd = None
     name = 'auth-' + secrets.token_hex(16)
     token = secrets.token_hex(32)
+    failed = False
     try:
         _private(os.fstat(directory_fd), True)
         os.mkdir(name, 0o700, dir_fd=directory_fd)
@@ -450,10 +473,20 @@ def issue(base: Path, metadata: Path, pid: int) -> str:
                      0o600, dir_fd=issuer_fd)
         with _owned_writer(fd) as stream:
             json.dump({'v': 1, 'identity': identity, 'metadata': str(metadata), 'token': token}, stream)
+    except BaseException:
+        failed = True
+        raise
     finally:
-        if issuer_fd is not None:
-            os.close(issuer_fd)
-        os.close(directory_fd)
+        cleanup_error: BaseException | None = None
+        for descriptor in (issuer_fd, directory_fd):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
     return _packet(base / name / str(pid), pid, token)
 
 
