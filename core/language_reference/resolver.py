@@ -55,6 +55,8 @@ class ReferenceAnswer:
     reason: str = ""
     missing_facts: tuple[str, ...] = ()
     pack_version: str = "c-integers-1"
+    # Presentation provenance only, never applicability or delivery authority.
+    selection_origin: Literal["requested", "initial"] = "requested"
 
 
 _TOKEN = re.compile(r"[a-z0-9_]+")

@@ -32,10 +32,17 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
 
     A prerequisite must not be shed independently of its dependent rule.
     Request IDs remain in the delivery record rather than model prose.
+    Requested material precedes automatic reading; unavailable notes follow
+    both. Shared complete answers inherit their strongest requested priority.
     """
+    labels = _labels(answers)
+    priorities: dict[str, int] = {}
+    for label, answer in zip(labels, answers, strict=True):
+        priority = 3 if not answer.entries else 2 if answer.selection_origin == "initial" else 1
+        priorities[label] = min(priorities.get(label, priority), priority)
     sections = []
     emitted = set()
-    for label, answer in zip(_labels(answers), answers, strict=True):
+    for label, answer in zip(labels, answers, strict=True):
         if label in emitted:
             continue
         emitted.add(label)
@@ -48,7 +55,7 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
                 + wrap_untrusted(dumps_display({"answer_status": answer.status,
                                                "resolution_reason": answer.reason}),
                                  kind="reference_resolution", origin="language-reference"),
-                2,
+                priorities[label],
             ))
             continue
         sections.append(PromptSection(
@@ -65,7 +72,7 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
                               kind="reference_resolution", origin="language-reference") + "\n"
                if answer.reason else "")
             + "\n\n".join(entry.render_core() for entry in answer.entries),
-            1,
+            priorities[label],
         ))
     return sections
 

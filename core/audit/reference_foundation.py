@@ -171,7 +171,7 @@ def foundation_answers(
 def _selection_answers(request_id: str, selection: _Selection) -> tuple[ReferenceAnswer, ...]:
     """Resolve one captured selection without reparsing or weakening its rules."""
     def unavailable() -> tuple[ReferenceAnswer, ...]:
-        return (ReferenceAnswer(request_id, "unsupported", reason=_UNAVAILABLE),)
+        return (ReferenceAnswer(request_id, "unsupported", reason=_UNAVAILABLE, selection_origin="initial"),)
 
     entry_ids, selection_reason = selection.entry_ids, selection.reason
     if not _closed_pack(entry_ids):
@@ -219,7 +219,7 @@ def _selection_answers(request_id: str, selection: _Selection) -> tuple[Referenc
         return unavailable()
     return (ReferenceAnswer(request_id, "needs_target_facts", tuple(combined.values()),
                             "conditional initial C11 foundation; target applicability remains unestablished. " + selection_reason,
-                            ("language edition",), pack),)
+                            ("language edition",), pack, selection_origin="initial"),)
 
 
 def foundation_required_for_file(file: object) -> bool:
