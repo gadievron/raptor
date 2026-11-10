@@ -50,10 +50,14 @@ def test_rebound_regex_root_cannot_certify_source(tmp_path: Path):
     ("import re\ndef poison():\n    eval('setattr(re, \"fullmatch\", replacement)')\npoison()\n", "name"),
     ("import re\ndef poison():\n    run = exec\n    run('re.fullmatch = replacement')\npoison()\n", "name"),
     ("import re\ndef poison():\n    from builtins import exec as run\n    run('re.fullmatch = replacement')\npoison()\n", "name"),
+    ("import re\ndef poison():\n    loaded = __import__('re')\n    loaded.fullmatch = replacement\npoison()\n", "name"),
+    ("import re\nimport importlib as loader\ndef poison():\n    loaded = loader.import_module('re')\n    loaded.fullmatch = replacement\npoison()\n", "name"),
+    ("import re\ndef poison():\n    from importlib import import_module as load\n    loaded = load('re')\n    loaded.fullmatch = replacement\npoison()\n", "name"),
 ], ids=["root-rebind", "wrong-import", "parameter", "member-write", "alias-write",
         "namespace-dict", "setattr", "dynamic-namespace", "helper-alias", "helper-vars",
         "helper-import-alias", "helper-global", "helper-exec", "helper-eval",
-        "helper-exec-alias", "helper-imported-exec"])
+        "helper-exec-alias", "helper-imported-exec", "dynamic-import",
+        "importlib-namespace", "local-importlib-alias"])
 def test_regex_namespace_conflicts_reach_all_consumers(tmp_path: Path, prefix, parameters):
     import json
     from core.dataflow import injection_prescreen as ip
@@ -154,11 +158,14 @@ def test_curated_library_identity_conflict_retains_finding(tmp_path: Path, prefi
     )
     assert result.status is sb.Tier0Status.NOT_APPLICABLE
     assert "source" in result.reasoning
-    control_source = "import html\ndef handle(raw):\n" + line + "\n    return render(safe)\n"
+    control_source = (
+        "import html\ndef handle(raw):\n    if type(raw) is not str: return\n"
+        + line + "\n    return render(safe)\n"
+    )
     (tmp_path / "app.py").write_text(control_source)
     control = t1.try_tier1b(
         fix_diff="+" + line + "\n", repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=lambda _system, _user: reply,
     )
     assert control.status is sb.Tier0Status.SOUND

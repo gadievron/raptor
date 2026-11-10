@@ -967,8 +967,9 @@ def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
-        "    safe = html.escape(name)\n"      # line 3
-        "    return render(safe)\n"           # line 4 — sink uses safe
+        "    if type(name) is not str: return\n"
+        "    safe = html.escape(name)\n"      # line 4
+        "    return render(safe)\n"           # line 5 — sink uses safe
     )
     diff = "+    safe = html.escape(name)\n"
     reply = json.dumps({
@@ -979,7 +980,7 @@ def test_transform_bound_output_reaching_sink_is_sound(tmp_path: Path):
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
@@ -1026,8 +1027,9 @@ def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
-        "    log(safe := html.escape(name))\n"   # line 3
-        "    return render(safe)\n"              # line 4
+        "    if type(name) is not str: return\n"
+        "    log(safe := html.escape(name))\n"   # line 4
+        "    return render(safe)\n"              # line 5
     )
     diff = "+    log(safe := html.escape(name))\n"
     reply = json.dumps({
@@ -1038,7 +1040,7 @@ def test_transform_walrus_unconditional_value_still_sound(tmp_path: Path):
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
@@ -1081,8 +1083,9 @@ def test_transform_tuple_coassignment_escaped_element_still_sound(
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
-        "    escaped, raw_copy = html.escape(name), name\n"   # line 3
-        "    return render(escaped)\n"                        # line 4
+        "    if type(name) is not str: return\n"
+        "    escaped, raw_copy = html.escape(name), name\n"   # line 4
+        "    return render(escaped)\n"                        # line 5
     )
     diff = "+    escaped, raw_copy = html.escape(name), name\n"
     reply = json.dumps({
@@ -1094,7 +1097,7 @@ def test_transform_tuple_coassignment_escaped_element_still_sound(
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
@@ -1155,8 +1158,9 @@ def test_transform_chained_assign_both_targets_join(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "import html\n"
         "def f(name):\n"
-        "    a = b = html.escape(name)\n"     # line 3
-        "    return render(b)\n"              # line 4
+        "    if type(name) is not str: return\n"
+        "    a = b = html.escape(name)\n"     # line 4
+        "    return render(b)\n"              # line 5
     )
     diff = "+    a = b = html.escape(name)\n"
     reply = json.dumps({
@@ -1167,7 +1171,7 @@ def test_transform_chained_assign_both_targets_join(tmp_path: Path):
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
@@ -1394,9 +1398,10 @@ def test_tuple_co_assignment_growth_safe_target_sound(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "import html\n"                                       # line 1
         "def f(x):\n"                                         # line 2
-        "    safe = html.escape(x)\n"                         # line 3
-        "    a, b = safe, x\n"                                # line 4
-        "    return render(a)\n"                              # line 5
+        "    if type(x) is not str: return\n"
+        "    safe = html.escape(x)\n"                         # line 4
+        "    a, b = safe, x\n"                                # line 5
+        "    return render(a)\n"                              # line 6
     )
     diff = "+    safe = html.escape(x)\n"
     reply = json.dumps({
@@ -1407,7 +1412,7 @@ def test_tuple_co_assignment_growth_safe_target_sound(tmp_path: Path):
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=5, sink_class="xss",
+        sink_uri="app.py", sink_line=6, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
@@ -1470,8 +1475,9 @@ def test_chained_targets_tuple_value_name_target_declines(tmp_path: Path):
     src = (
         "import html\n"                                       # line 1
         "def f(x):\n"                                         # line 2
-        "    p = q, r2 = html.escape(x), x\n"                 # line 3
-        "    return render(p)\n"                              # line 4
+        "    if type(x) is not str: return\n"
+        "    p = q, r2 = html.escape(x), x\n"                 # line 4
+        "    return render(p)\n"                              # line 5
     )
     (tmp_path / "app.py").write_text(src)
     diff = "+    p = q, r2 = html.escape(x), x\n"
@@ -1483,7 +1489,7 @@ def test_chained_targets_tuple_value_name_target_declines(tmp_path: Path):
     })
     r = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
@@ -1492,7 +1498,7 @@ def test_chained_targets_tuple_value_name_target_declines(tmp_path: Path):
         "return render(p)", "return render(q)"))
     r2 = t1.try_tier1b(
         fix_diff=diff, repo_root=tmp_path,
-        sink_uri="app.py", sink_line=4, sink_class="xss",
+        sink_uri="app.py", sink_line=5, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert r2.status is t1.Tier0Status.SOUND
@@ -1812,10 +1818,13 @@ def test_curated_call_error_cannot_preserve_raw_binding(tmp_path: Path, exit_sta
     )
     assert result.status is t1.Tier0Status.NOT_APPLICABLE
     assert "caught" in result.reasoning
-    (tmp_path / "app.py").write_text(source.replace("        pass", "        " + exit_statement))
+    control_source = source.replace("        pass", "        " + exit_statement).replace(
+        "    try:\n", "    if type(raw) is not str: return\n    try:\n",
+    )
+    (tmp_path / "app.py").write_text(control_source)
     control = t1.try_tier1b(
         fix_diff="+" + line + "\n", repo_root=tmp_path,
-        sink_uri="app.py", sink_line=8, sink_class="xss",
+        sink_uri="app.py", sink_line=9, sink_class="xss",
         language="python", complete=_fake_complete(reply),
     )
     assert control.status is t1.Tier0Status.SOUND

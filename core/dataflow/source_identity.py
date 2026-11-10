@@ -115,9 +115,12 @@ def known_python_identity_conflict(
         return None
     # Canonical imports inside helpers still refer to the same module
     # singleton. A local binding alone must not hide their mutations.
-    dynamic_code_names = {"exec", "eval"} | {
-        alias for alias, target in imports.items()
-        if target in {"builtins.exec", "builtins.eval"}
+    def dynamic_target(target: str) -> bool:
+        return (target in {"builtins.exec", "builtins.eval", "builtins.__import__"}
+                or target == "importlib" or target.startswith("importlib."))
+
+    dynamic_code_names = {"exec", "eval", "__import__"} | {
+        alias for alias, target in imports.items() if dynamic_target(target)
     }
     dynamic_imports: dict[ast.AST, set[str]] = {}
     local_imports: dict[ast.AST, set[str]] = {}
@@ -128,7 +131,7 @@ def known_python_identity_conflict(
                 continue
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
             dynamic_aliases = {alias for alias, target in bindings.items()
-                               if target in {"builtins.exec", "builtins.eval"}}
+                               if dynamic_target(target)}
             dynamic_code_names.update(dynamic_aliases)
             dynamic_imports.setdefault(owner, set()).update(dynamic_aliases)
             aliases = {alias for alias, target in bindings.items()
@@ -152,8 +155,8 @@ def known_python_identity_conflict(
         return False
 
     for node in ast.walk(tree):
-        # Function-local dynamic code can mutate a global module member
-        # even when it cannot rebind the module's bare names. References
+        # Dynamic code/import namespaces can mutate canonical module members
+        # without rebinding their bare source names. References
         # also cover aliasing the builtin before invoking it elsewhere.
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
                 and node.id in dynamic_code_names and node.id not in distrusted):

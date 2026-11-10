@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+import pytest
+
 from core.dataflow import known_safe_calls as ksc
 
 
@@ -112,3 +116,18 @@ def test_validate_kind_entries_document_raising_semantics():
             f"the call RAISES on bad input (sentinel-returning "
             f"validators belong in transform)"
         )
+
+
+def test_html_escape_declares_exact_string_input_contract():
+    entry = ksc.find("html.escape", "xss", "python")
+    assert entry is not None and entry.requires_exact_str is True
+    shell_entry = ksc.find("shlex.quote", "cmdi", "python")
+    assert shell_entry is not None and shell_entry.requires_exact_str is False
+
+
+@pytest.mark.parametrize("flag", ["false", 0, 1, None])
+def test_exact_string_input_contract_flag_is_strict(flag):
+    entry = ksc.find("html.escape", "xss", "python")
+    assert entry is not None
+    with pytest.raises(ValueError, match="requires_exact_str"):
+        replace(entry, requires_exact_str=flag)

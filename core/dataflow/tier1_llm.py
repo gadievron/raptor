@@ -43,7 +43,7 @@ from __future__ import annotations
 import json
 import re as _re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from core.dataflow import known_safe_calls
@@ -658,6 +658,21 @@ def _try_known_safe_call(
             f"unconditionally before the sink (branch-wrapped or "
             f"tracker-inconclusive)",
         )
+    input_type_evidence = None
+    if type(entry.requires_exact_str) is not bool:
+        return Tier0Result(Tier0Status.NOT_APPLICABLE, "invalid curated primitive input contract")
+    if entry.requires_exact_str:
+        if language == "python":
+            from core.dataflow.string_type_evidence import exact_str_default_call_evidence
+
+            input_type_evidence = exact_str_default_call_evidence(
+                source_text, validator_line, spec.variable_name, entry.library_call,
+            )
+        if input_type_evidence is None:
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "curated call requires an exact builtin str argument in the supported default call form",
+            )
     artifact = f"library:{entry.library_call}@{sink_uri}:{validator_line}"
     return Tier0Result(
         Tier0Status.SOUND,
@@ -665,7 +680,8 @@ def _try_known_safe_call(
         f"(sink_class={sink_class}): {entry.soundness_note}",
         artifact=artifact,
         extras={"validator_line": validator_line, "var_name": spec.variable_name,
-                "library_call": entry.library_call},
+                "library_call": entry.library_call,
+                **({"input_type_evidence": asdict(input_type_evidence)} if input_type_evidence else {})},
     )
 
 

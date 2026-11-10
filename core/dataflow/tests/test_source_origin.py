@@ -68,7 +68,10 @@ def test_curated_import_origin_cannot_certify_source(tmp_path: Path, shadow):
     line = "    safe = html.escape(raw)"
     subject = tmp_path / "app/handler.py"
     subject.parent.mkdir()
-    subject.write_text("import html\ndef handle(raw):\n" + line + "\n    return render(safe)\n")
+    subject.write_text(
+        "import html\ndef handle(raw):\n    if type(raw) is not str: return\n"
+        + line + "\n    return render(safe)\n"
+    )
     shadow_path = tmp_path / shadow
     shadow_path.parent.mkdir(parents=True, exist_ok=True)
     shadow_path.write_text("def escape(value): return value\n")
@@ -78,7 +81,7 @@ def test_curated_import_origin_cannot_certify_source(tmp_path: Path, shadow):
     def adjudicate():
         return t1.try_tier1b(
             fix_diff="+" + line + "\n", repo_root=tmp_path,
-            sink_uri="app/handler.py", sink_line=4, sink_class="xss",
+            sink_uri="app/handler.py", sink_line=5, sink_class="xss",
             language="python", complete=lambda _system, _user: reply,
         )
     result = adjudicate()
