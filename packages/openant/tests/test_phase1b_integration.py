@@ -447,14 +447,17 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
     @pytest.mark.slow  # Full agentic CLI pipeline, including scanner startup.
     def test_openant_only_invocation_reaches_openant_phase(self):
         """Real invocation shape: --repo <dir> --openant-only must get
-        past the guard and print the OpenAnt phase banner (the fake
-        core then fails the subprocess, which is fine — the guard bug
-        exited 2 before the phase banner)."""
+        past the guard, print the OpenAnt phase banner and report the
+        fake scanner's hard failure rather than an unavailable scanner."""
         with tempfile.TemporaryDirectory() as td:
             proc = self._run_agentic(td, ["--openant-only"])
             combined = proc.stdout + proc.stderr
             self.assertNotIn("nothing to scan", combined)
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("OpenAnt scan failed", combined)
+            self.assertNotIn("OpenAnt unavailable", combined)
+            self.assertIn("no other scan results", combined)
 
     @pytest.mark.slow
     def test_sarif_also_scan_openant_only(self):
@@ -474,7 +477,8 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
     @pytest.mark.slow
     def test_sarif_openant_only(self):
         """--sarif + --openant-only (no --also-scan): the import
-        replaces the pattern-scan step and OpenAnt still runs."""
+        replaces the pattern-scan step and OpenAnt still runs. Its hard
+        failure is reported while the SARIF import remains available."""
         with tempfile.TemporaryDirectory() as td:
             sarif = Path(td) / "imported.sarif"
             sarif.write_text(self._EMPTY_SARIF)
@@ -484,6 +488,9 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
             self.assertNotIn("nothing to scan", combined)
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
             self.assertIn("SARIF IMPORT", combined)
+            self.assertIn("OpenAnt scan failed", combined)
+            self.assertNotIn("OpenAnt unavailable", combined)
+            self.assertNotIn("no other scan results", combined)
 
     def test_openant_only_with_codeql_only_refused(self):
         """--openant-only + --codeql-only is contradictory (two
@@ -1052,40 +1059,6 @@ class TestAgenticOpenantFailureRecordPersisted(unittest.TestCase):
         self.assertIn('openant_metrics["hard_error"] = True', blanket)
 
 
-class TestAgenticOpenantHardFailure(unittest.TestCase):
-    """Phase 1b distinguishes an attempted-and-failed OpenAnt scan
-    (hard_error) from a not-configured skip, and a hard failure of the
-    run's only possible finding source fails the run with the real
-    reason instead of ending as if the target scanned clean."""
-
-    _run_agentic = TestOpenantOnlyReachesPhase1b._run_agentic
-    _EMPTY_SARIF = TestOpenantOnlyReachesPhase1b._EMPTY_SARIF
-
-    @pytest.mark.slow
-    def test_sole_scanner_hard_failure_fails_run_with_reason(self):
-        with tempfile.TemporaryDirectory() as td:
-            proc = self._run_agentic(td, ["--openant-only"])
-            combined = proc.stdout + proc.stderr
-            self.assertNotEqual(proc.returncode, 0)
-            self.assertIn("OpenAnt scan failed", combined)
-            self.assertNotIn("OpenAnt unavailable", combined)
-            self.assertIn("no other scan results", combined)
-
-    @pytest.mark.slow
-    def test_hard_failure_beside_imported_sarif_continues(self):
-        """Another finding source exists (--sarif import): the run
-        continues past Phase 1b with the failed wording — the eventual
-        no-findings exit is the import gate, not the OpenAnt one."""
-        with tempfile.TemporaryDirectory() as td:
-            sarif = Path(td) / "imported.sarif"
-            sarif.write_text(self._EMPTY_SARIF)
-            proc = self._run_agentic(
-                td, ["--sarif", str(sarif), "--openant-only"])
-            combined = proc.stdout + proc.stderr
-            self.assertIn("OpenAnt scan failed", combined)
-            self.assertNotIn("OpenAnt unavailable", combined)
-            self.assertIn("SARIF IMPORT", combined)
-            self.assertNotIn("no other scan results", combined)
 
 
 if __name__ == "__main__":
