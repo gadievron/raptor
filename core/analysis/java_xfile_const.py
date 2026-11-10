@@ -108,6 +108,18 @@ class _Refused(Exception):
     pass
 
 
+def _declared_members(root):
+    body = root.child_by_field_name("body")
+    if body is None:
+        return
+    for node in body.named_children:
+        # Enum constants and nested types do not declare members on the owner.
+        if node.type == "enum_body_declarations":
+            yield from node.named_children
+        else:
+            yield node
+
+
 class XFileConst:
     """Per-finding cross-file resolver; every lookup memoized, every
     failure a refusal (``None``)."""
@@ -150,7 +162,7 @@ class XFileConst:
 
     def _locate_class(self, chain: str):
         """Locate the single declaring file for ``chain`` (simple name
-        or dotted FQN). Returns (root_node, path) or None."""
+        or dotted FQN). Returns (declaring_class, path) or None."""
         if chain in self._class_cache:
             return self._class_cache[chain]
         if len(self._class_cache) >= _MAX_CLASS_CACHE:
@@ -197,7 +209,16 @@ class XFileConst:
                 if declaring is not None:
                     msg = "ambiguous declaring file"
                     raise _Refused(msg)
-                declaring, declaring_root = f, tree.root_node
+                classes = [
+                    node for node in tree.root_node.named_children
+                    if node.type in ("class_declaration", "enum_declaration",
+                                     "record_declaration", "interface_declaration")
+                    and node.child_by_field_name("name") is not None
+                    and _text(node.child_by_field_name("name")) == simple
+                ]
+                if len(classes) != 1:
+                    raise _Refused("declaring class not found or ambiguous")
+                declaring, declaring_root = f, classes[0]
             if declaring_root is not None and declaring is not None:
                 result = (declaring_root, declaring)
         except _Refused:
@@ -212,9 +233,7 @@ class XFileConst:
     def _class_static_final_rhs(self, root, field: str):
         """The initializer node of ``static final <T> field = ...;`` in
         the class body, or None. Both modifiers must be present."""
-        stack = [root]
-        while stack:
-            n = stack.pop()
+        for n in _declared_members(root):
             if n.type == "field_declaration":
                 # Token-exact modifier children (the collection-guard
                 # twin's discipline): the modifiers run includes
@@ -236,7 +255,6 @@ class XFileConst:
                             and "static" in mod_tokens
                             and "final" in mod_tokens):
                         return value
-            stack.extend(n.children)
         return None
 
     def _fold_restricted(self, node, root, _depth: int,
@@ -446,14 +464,11 @@ class XFileConst:
             if located is not None:
                 root, _path = located
                 decls = []
-                stack = [root]
-                while stack:
-                    n = stack.pop()
+                for n in _declared_members(root):
                     if n.type == "method_declaration":
                         nm = n.child_by_field_name("name")
                         if nm is not None and _text(nm) == method:
                             decls.append(n)
-                    stack.extend(n.children)
                 if len(decls) == 1:
                     body = decls[0].child_by_field_name("body")
                     stmts = [c for c in (body.children if body else ())

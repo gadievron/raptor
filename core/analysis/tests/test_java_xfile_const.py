@@ -602,3 +602,68 @@ class TestSourceReadBoundary:
         _, resolver = _xfold((repo, repo / "T.java"), 'System.getProperty("untouched")')
         assert resolver.tf_property_key_ok("untouched") is (not outside)
         assert not resolver.tf_property_key_ok("other")
+
+
+class TestDeclaringClassOwnership:
+    def _tree(self, xroot, nested):
+        root, _ = xroot
+        (root / "app" / "Base.java").write_text(
+            'package app; class Base { static String INHERITED = System.getenv("OWNED"); '
+            'static String grab() { return System.getenv("OWNED"); } }'
+        )
+        other = (
+            "static class Other {" if nested else "class Other {"
+        ) + (
+            ' static final String MUTABLE = "other"; '
+            'static final String INHERITED = "other"; '
+            'static final String SAFE = "other"; '
+            'static String grab() { return "other"; } '
+            'static String ownLiteral() { return "other"; } }'
+        )
+        body = (
+            'static String MUTABLE = System.getenv("OWNED"); '
+            'static final String DERIVED = INHERITED; '
+            'static final String SAFE = "own-constant"; '
+            'static String ownLiteral() { return SAFE; } '
+        )
+        (root / "app" / "Cfg.java").write_text(
+            "package app; class Cfg extends Base { " + body
+            + (other if nested else "") + " } " + ("" if nested else other)
+        )
+
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize("field", ["MUTABLE", "DERIVED", "SAFE"])
+    def test_fields_and_recursive_initializers_stay_on_owner(self, xroot, nested, field):
+        self._tree(xroot, nested)
+        value, _ = _xfold(xroot, f"Cfg.{field}")
+        assert (value == "own-constant") if field == "SAFE" else (value is REFUSE)
+
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize("method", ["grab", "ownLiteral"])
+    def test_methods_stay_on_owner(self, xroot, nested, method):
+        self._tree(xroot, nested)
+        value, _ = _xfold(xroot, f"new Cfg().{method}()")
+        assert (value == "own-constant") if method == "ownLiteral" else (value is REFUSE)
+
+    def test_filename_without_declaring_class_is_not_identity(self, xroot):
+        root, _ = xroot
+        (root / "app" / "Cfg.java").write_text(
+            'package app; class Other { static final String SAFE = "other"; }'
+        )
+        value, _ = _xfold(xroot, "Cfg.SAFE")
+        assert value is REFUSE
+
+
+    @pytest.mark.parametrize("declaration", ["enum Cfg { ONE;", "record Cfg(int value) {"])
+    def test_enum_and_record_direct_members_remain_foldable(self, xroot, declaration):
+        root, _ = xroot
+        (root / "app" / "Cfg.java").write_text(
+            "package app; " + declaration
+            + ' static final String SAFE = "own-constant"; '
+            + 'static String ownLiteral() { return SAFE; } '
+            + 'static class Other { static final String SAFE = "other"; '
+            + 'static String ownLiteral() { return "other"; } } }'
+        )
+        value, resolver = _xfold(xroot, "Cfg.SAFE")
+        assert value == "own-constant"
+        assert resolver.resolve_method("Cfg", "ownLiteral", 0, False) == "own-constant"
