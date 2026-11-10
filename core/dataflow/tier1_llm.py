@@ -672,7 +672,7 @@ def _try_known_safe_call(
     if unverified_contracts:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
-            "curated call has unverified source contracts; exact builtin str/default call evidence required",
+            "curated call has unverified source contracts: " + ", ".join(sorted(unverified_contracts)),
             extras={"unverified_source_contracts": sorted(unverified_contracts)},
         )
     artifact = f"library:{entry.library_call}@{sink_uri}:{validator_line}"
