@@ -110,17 +110,23 @@ class TestConcurrentAppend:
         )
         env = dict(os.environ)
         env["PYTHONPATH"] = str(_REPO_ROOT)
-        procs = [
-            subprocess.Popen(
-                [sys.executable, "-c", script, str(tmp_path), str(t)],
-                env=env, cwd=str(_REPO_ROOT),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            )
-            for t in range(n_procs)
-        ]
-        for p in procs:
-            _out, err = p.communicate(timeout=120)
-            assert p.returncode == 0, err.decode(errors="replace")
+        from contextlib import ExitStack
+
+        from core.testing.processes import reap_on_exit
+
+        with ExitStack() as children:
+            procs = []
+            for t in range(n_procs):
+                child = subprocess.Popen(
+                    [sys.executable, "-c", script, str(tmp_path), str(t)],
+                    env=env, cwd=str(_REPO_ROOT),
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                )
+                children.enter_context(reap_on_exit(child))
+                procs.append(child)
+            for p in procs:
+                _out, err = p.communicate(timeout=120)
+                assert p.returncode == 0, err.decode(errors="replace")
 
         raw_lines = (
             (tmp_path / "review-journal.jsonl")
