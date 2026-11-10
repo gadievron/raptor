@@ -24,6 +24,7 @@ CAPABILITIES = (
     CommandCapability("validate", "validation", "automatic", "terminal, summary.md and legacy summary.txt"),
     CommandCapability("agentic", "agentic", "automatic", "summary.md and existing terminal summary"),
     CommandCapability("project report", "project", "automatic", "terminal and summary.md", "native finding/annotation exports retained"),
+    CommandCapability("project threat-model report", "threat-model", "explicit companion export; native atomic report retained", "native counts or JSON stdout; portable summary on stderr", "recorded statuses/provenance stay model claims; no oracle or lifecycle adoption"),
     CommandCapability("sca scan", "sca", "automatic", "terminal and summary.md", "--html adds HTML"),
     CommandCapability("sca render", "sca", "existing output policy", "terminal and summary.md", "offline; legacy Markdown/SARIF switches retained"),
     CommandCapability("sca diff", "sca-diff", "explicit destination required", "existing stdout; report summary on stderr", "native --json/--out and gate status retained"),

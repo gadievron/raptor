@@ -510,7 +510,7 @@ def main() -> None:
                "[init|show|export|sync|lint|diff|report|add|remove] "
                "[<name>] [--field <field>] [--value <text>] "
                "[--from-context-map <path>] [--context-map <path>] "
-               "[--json]"),
+               "[--json] [--report-format FORMAT] [--report-output PATH] [--no-report]"),
         **_F,
     )
     p_tm.add_argument(
@@ -530,6 +530,8 @@ def main() -> None:
         "--context-map", default=None, metavar="<path>",
         help="Fresh /understand context-map.json for diff/report")
     p_tm.add_argument("--json", dest="json_out", action="store_true", help="Print JSON")
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(p_tm)
 
     # use
     p_use = sub.add_parser("use", help="Set the active project (no arg = show current)",
@@ -784,6 +786,14 @@ def main() -> None:
     if args.subcommand == "report":
         from core.reporting.options import options_from_args
         options_from_args(args, parser)
+    if args.subcommand == "threat-model":
+        from core.reporting.options import options_from_args
+        if args.report_format or args.report_output or args.no_report:
+            if args.action != "report":
+                parser.error("Report controls apply to project threat-model report only")
+        if args.report_output is not None:
+            args.report_output = Path(_caller_relative(str(args.report_output)) or args.report_output).expanduser()
+        args._report_options = options_from_args(args, parser)
 
     if not args.subcommand:
         parser.print_help()
@@ -2592,6 +2602,9 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
         return
 
     if args.action == "report":
+        from core.reporting.options import options_from_args
+        options = getattr(args, "_report_options", None) or options_from_args(args)
+        args._report_options = options
         context_map = None
         if args.context_map:
             context_map = load_json(Path(args.context_map))
@@ -2600,21 +2613,36 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
                 return
         lint = lint_model(model)
         drift = diff_context_map(model, context_map) if context_map else None  # type: ignore[assignment]
+        protected = {json_path.resolve(), markdown_path.resolve()}
+        if args.context_map:
+            protected.add(Path(args.context_map).resolve())
+        if ((not args.json_out and options.enabled and report_path.resolve() in protected)
+                or (options.output is not None and options.output.resolve() in protected)):
+            print(_red("Threat-model report destination would overwrite an input artifact"))
+            return
+        from core.threat_model.reporting import complete_project_threat_model_report
         if args.json_out:
             _emit_json_payload({
                 "report": str(report_path),
                 "lint": lint,
                 "drift": drift,
             })
+            complete_project_threat_model_report(args, model, lint=lint, drift=drift, json_path=json_path,
+                                                markdown_path=markdown_path, report_path=report_path)
             return
-        save_report(model, report_path, lint=lint, drift=drift)
-        print(_green(f"Threat model report written: {report_path}"))
+        if options.enabled:
+            save_report(model, report_path, lint=lint, drift=drift)
+            print(_green(f"Threat model report written: {report_path}"))
+        else:
+            print("Threat model assessment (full report files disabled)")
         print(f"  threats: {len(model.threats)}")
         print(f"  controls: {len(model.controls)}")
         print(f"  evidence: {len(model.evidence)}")
         print(f"  lint issues: {len(lint)}")
         if drift:
             print(f"  drift: {'yes' if drift.get('is_drifted') else 'no'}")
+        complete_project_threat_model_report(args, model, lint=lint, drift=drift, json_path=json_path,
+                                            markdown_path=markdown_path, report_path=report_path)
         return
 
     if args.json_out:

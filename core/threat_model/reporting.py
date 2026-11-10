@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import heapq
+from dataclasses import asdict
+from pathlib import Path
+import sys
 
-from core.reporting.document import Block, ReportDocument, digest
+from core.reporting.document import Block, ReportContext, ReportDocument, digest
+from core.reporting.options import options_from_args
+from core.reporting.service import complete_reporting, unrefreshed_report_notice
 from core.security.redaction import redact_secrets
 
 from . import ThreatModel, _mermaid_id, _mermaid_label, _read_raptor_logo, _safe_for_render, lint_model
@@ -91,3 +96,41 @@ def build_threat_model_document(model: ThreatModel, *, lint: list[dict] | None =
     }, blocks=blocks, diagnostics=notes)
     document.snapshot_id = digest(document.to_dict())
     return document
+
+
+def complete_project_threat_model_report(args, model: ThreatModel, *, lint, drift, json_path: Path,
+                                        markdown_path: Path, report_path: Path):
+    """Export the selected project assessment without adopting run lineage."""
+    options = getattr(args, "_report_options", None) or options_from_args(args)
+    root = json_path.parent / "threat-model-reports"
+    if not options.enabled:
+        notice = unrefreshed_report_notice(root)
+        if report_path.exists():
+            notice = "Full report files disabled; prior threat-model report was not refreshed"
+        if notice:
+            print("Warning: " + notice, file=sys.stderr)
+        return None
+    if not (getattr(args, "report_format", None) or getattr(args, "report_output", None)):
+        return None
+    try:
+        document = build_threat_model_document(model, lint=lint, drift=drift)
+        artifacts = [{"path": str(path.resolve())} for path in (json_path, markdown_path, report_path)]
+        if args.context_map:
+            artifacts.append({"path": str(Path(args.context_map).resolve())})
+        context = ReportContext(
+            "threat-model", "unknown", target=_cell(model.target), state="completed", artifacts=artifacts,
+            diagnostics=[*document.diagnostics, "This project assessment is a captured view; historical run metadata and lifecycle identity are not adopted."],
+            extensions={"raptor.findings_available": False,
+                        "raptor.metrics": {"Recorded threats": len(model.threats), "Recorded controls": len(model.controls),
+                                           "Recorded evidence": len(model.evidence), "Quality issues": len(lint)},
+                        "raptor.result_sections": [asdict(block) for block in document.blocks],
+                        "raptor.threat_model_metadata": document.metadata},
+        )
+        document.diagnostics = context.diagnostics.copy()
+        document.snapshot_id = context.snapshot_id
+        if options.output is not None:
+            root = options.output if options.output.is_dir() or not options.output.suffix else options.output.parent / ("." + options.output.stem + "-report")
+        return complete_reporting(context, root, document=document, stem="threat-model-report", options=options, stream=sys.stderr)
+    except (OSError, ValueError, TypeError) as exc:
+        print("Optional threat-model export unavailable (" + type(exc).__name__ + "); native assessment retained", file=sys.stderr)
+        return None
