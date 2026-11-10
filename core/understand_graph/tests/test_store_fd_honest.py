@@ -18,6 +18,7 @@ the pre-fix posture).
 import os
 import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -41,10 +42,9 @@ def _make_store(path: Path) -> None:
 def _make_foreign(path: Path) -> bytes:
     """A foreign sqlite DB the plant redirects to; returns its bytes."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.execute("CREATE TABLE marker (x INTEGER)")
-    conn.commit()
-    conn.close()
+    with closing(sqlite3.connect(path)) as conn:
+        conn.execute("CREATE TABLE marker (x INTEGER)")
+        conn.commit()
     return path.read_bytes()
 
 
