@@ -28,3 +28,33 @@ def test_trace_retains_omission_and_failure_without_claiming_model_use(tmp_path)
     runtime.write_artifacts(out)
     if before is not None:
         assert (out / "audit-log.jsonl").read_bytes() == before
+
+
+def test_report_material_fallback_uses_canonical_bytes_and_preserves_binding_ids(tmp_path):
+    import hashlib
+    from dataclasses import asdict
+
+    from core.concepts.subject_study import SubjectExplanation, SubjectMaterial
+    from core.json import dumps_canonical
+
+    runtime, ctx = _runtime(tmp_path)
+    runtime._register(runtime._origin(ctx), ctx, {"reading_list": [{"subject": "f"}]})
+    request = next(row for row in runtime.requests() if row.kind == "target_study")
+    unbound = SubjectMaterial("unbound", "unit.c", 1, "f", "/* café */", False)
+    bound = SubjectMaterial("bound", "unit.c", 1, "f", ctx["source"], False,
+                            binding_id="existing-binding-id")
+    answer = SubjectExplanation(request.request_id, "unavailable", "", "No admitted explanation",
+                                (), inputs=(unbound, bound), excluded_inputs=(unbound,))
+    runtime.record_source_answers((answer,))
+    out = tmp_path / "out"
+    runtime.write_artifacts(out)
+    payload = json.loads((out / "knowledge-results.json").read_text())
+    expected = hashlib.sha256(dumps_canonical(asdict(unbound)).encode("utf-8")).hexdigest()
+    event = next(row["answer"] for row in payload["events"] if row["event"] == "source_answer")
+    assert event["inputs"] == [expected, bound.binding_id]
+    assert event["excluded_inputs"] == [expected]
+    assert payload["materials"][expected] == asdict(unbound)
+    assert payload["materials"][bound.binding_id] == asdict(bound)
+    assert payload["role"] == "context_provenance_not_verification_evidence"
+    runtime.write_artifacts(out)
+    assert json.loads((out / "knowledge-results.json").read_text()) == payload
