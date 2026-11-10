@@ -66,8 +66,8 @@ def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edi
 
 @pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
                          ids=["other-c-edition", "cpp"])
-@pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update", "c.integer-unary-sign"],
-                         ids=["shift", "update", "unary-sign"])
+@pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update", "c.integer-unary-sign",
+                                     "c.integer-division"], ids=["shift", "update", "unary-sign", "division"])
 def test_operator_entries_do_not_guess_language_mode(context, entry_id):
     answer = lookup("owned", "", context, entry_id=entry_id)
     assert answer.status == "unsupported" and answer.entries == ()
@@ -98,6 +98,21 @@ def test_unary_sign_core_uses_promoted_type_without_common_type_conversions(edit
     for condition in ("promoted operand type", "plus keeps", "mathematical negative",
                       "modulo one plus", "unrepresentable negation result",
                       "promote to signed int", "actual promoted range", "bitwise complement"):
+        assert condition in core
+    assert answer.missing_facts == (("language edition",) if edition is None else ())
+
+
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_division_core_keeps_quotient_representability_for_both_operators(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.integer-division")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == [
+        "c.integer-promotion", "c.integer-usual-conversions", "c.integer-conversion", "c.integer-division"]
+    core = answer.entries[-1].render_core()
+    for condition in ("converted divisor", "zero makes division and remainder undefined",
+                      "truncates toward zero", "quotient is representable", "both operations are undefined",
+                      "mathematical remainder would be zero", "lvalue once", "before destination conversion",
+                      "actual converted range", "6.5.5"):
         assert condition in core
     assert answer.missing_facts == (("language edition",) if edition is None else ())
 
