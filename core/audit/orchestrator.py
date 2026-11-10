@@ -13108,7 +13108,8 @@ def _run_mechanical_detectors(
     )
     from .prep_cache import source_fingerprint_from_hashes
 
-    det_cache = MechanicalDetectorCache.open(  # raw-open: not a filesystem open — detector cache constructor
+    det_cache = _profile_call(
+        config, "mechanical.cache_open", MechanicalDetectorCache.open,
         getattr(config, "out_dir", None),
     )
     content_shas = {
