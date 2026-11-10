@@ -1591,6 +1591,11 @@ def _stmt_order(
 
 
 class TestSemgrepSurfaceFences:
+    def test_password_hash_hashlib_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/semgrep/tests/test_password_hash_python_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_password_hash_hashlib_import_identity"}
+
     def test_password_hash_node_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_password_hash_js_precision.py")
         assert _callers_of(calls, "run") == set()
