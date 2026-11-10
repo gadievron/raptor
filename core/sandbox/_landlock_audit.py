@@ -56,6 +56,7 @@ import time
 import warnings
 from collections.abc import Callable, Iterable
 
+from ._exec_signals import restore_exec_signals
 from ._retirement import retire_parent_resources as _retire_parent_resources
 
 from . import evidence as _evidence_mod
@@ -490,6 +491,7 @@ def run_landlock_audit(
     stdout=None,
     stderr=None,
     start_new_session: bool = True,
+    restore_signals: bool = True,
     execution_committed_callback: Callable[[], None] | None = None,
 ) -> subprocess.CompletedProcess:
     """Spawn ``cmd`` under Landlock + seccomp + ptrace tracer, no
@@ -755,6 +757,9 @@ def run_landlock_audit(
                     landlock_preexec()
                 if seccomp_preexec is not None:
                     seccomp_preexec()
+
+                if restore_signals:
+                    restore_exec_signals()
 
                 # Exec target. env was resolved parent-side: the
                 # caller's dict verbatim (including {} = empty env),

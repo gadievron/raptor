@@ -6325,6 +6325,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 # docstring) pass start_new_session=False
                                 # explicitly and that is honoured.
                                 start_new_session=_start_new_session,
+                                restore_signals=kwargs.get("restore_signals", True),
                                 inherit_netns=_inherit_netns,
                                 skip_pid_ns=_skip_pid_ns,
                                 skip_mount_ns=skip_mount,
@@ -7988,6 +7989,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     stdout=kwargs.get("stdout"),
                                     stderr=kwargs.get("stderr"),
                                     start_new_session=_start_new_session,
+                                    restore_signals=kwargs.get("restore_signals", True),
                                     execution_committed_callback=_mark_audit_execution_committed,
                                 ))
                                 _audit_landlock_engaged = True
