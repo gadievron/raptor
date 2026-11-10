@@ -414,10 +414,8 @@ def _tighten_config_perms(path: Path) -> str | None:
     # the kernel when the path is now a symlink → falls through to
     # the OSError handler with a meaningful message.
     try:
-        fd = os.open(
-            str(path),
-            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-        )
+        from core.atomic_fs import open_hardened_read
+        fd = open_hardened_read(path)
     except OSError as e:
         return (f"⚠ {path} could not be opened for chmod: {e}. "
                 f"Run: chmod 600 {path}")

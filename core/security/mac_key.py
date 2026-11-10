@@ -153,7 +153,8 @@ def read_existing_key(
     guard covers only the read-existing branch.
     """
     try:
-        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+        from core.atomic_fs import open_hardened_read
+        fd = open_hardened_read(path)
     except FileNotFoundError:
         return None
     except OSError as exc:

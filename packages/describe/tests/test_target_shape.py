@@ -311,3 +311,15 @@ class TestProbeNoiseFilterThreadScoped:
             ts._detect_build_systems(tmp_path, {"cpp": 1})
         assert "Detecting build system for other-thread" in records
         assert "Detecting build system for this-thread" not in records
+
+
+def test_inventory_loc_keeps_oversize_prefix(tmp_path):
+    from packages.describe import target_shape
+    path = tmp_path / "source.c"
+    path.write_bytes(b"one\ntwo\n")
+    with path.open("r+b") as stream:
+        stream.seek(20 * 1024 * 1024)
+        stream.write(b"three\n")
+    files, lines, _counts, _lines = target_shape._scan_inventory(tmp_path)
+    assert files == 1
+    assert lines == 2

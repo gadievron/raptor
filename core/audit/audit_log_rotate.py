@@ -260,10 +260,8 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
             # content into the rewrite. Same read discipline as
             # core.json.load_jsonl on these exact paths.
             try:
-                src_fd = os.open(
-                    str(src),
-                    os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
-                )
+                from core.atomic_fs import open_hardened_read
+                src_fd = open_hardened_read(src)
             except OSError as exc:
                 raise RotateRefused(
                     f"rotate at {out_dir}: cannot open shard "

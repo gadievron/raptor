@@ -224,6 +224,7 @@ def read_capped_text(
     encoding: str = ...,
     errors: str = ...,
     follow_symlinks: bool = ...,
+    universal_newlines: bool = ...,
     raise_on_refusal: Literal[True],
 ) -> str: ...
 
@@ -236,6 +237,7 @@ def read_capped_text(
     encoding: str = ...,
     errors: str = ...,
     follow_symlinks: bool = ...,
+    universal_newlines: bool = ...,
     raise_on_refusal: Literal[False] = ...,
 ) -> str | None: ...
 
@@ -247,13 +249,16 @@ def read_capped_text(
     encoding: str = "utf-8",
     errors: str = "replace",
     follow_symlinks: bool = False,
+    universal_newlines: bool = False,
     raise_on_refusal: bool = False,
 ) -> str | None:
     """:func:`read_capped` plus the decode step every text consumer
     repeated. ``errors="replace"`` by default so adversarial byte
     sequences surface as U+FFFD instead of crashing the caller's
     parser (the cap is byte-level; decoding happens after the read
-    is accepted).
+    is accepted). ``universal_newlines=True`` preserves the newline
+    translation of Path.read_text() when migrating text-file callers;
+    the default retains exact decoded line endings.
 
     The error contract covers the decode too: in the default no-raise
     mode a decode failure (a caller-passed ``errors="strict"`` on
@@ -263,16 +268,19 @@ def read_capped_text(
     exactly like the open/read ``OSError``.
     """
     if raise_on_refusal:
-        return read_capped(
+        strict_raw = read_capped(
             path, max_bytes,
             follow_symlinks=follow_symlinks, raise_on_refusal=True,
-        ).decode(encoding, errors=errors)
+        )
+        text = strict_raw.decode(encoding, errors=errors)
+        return text.replace("\r\n", "\n").replace("\r", "\n") if universal_newlines else text
     raw = read_capped(
         path, max_bytes, follow_symlinks=follow_symlinks,
     )
     if raw is None:
         return None
     try:
-        return raw.decode(encoding, errors=errors)
+        text = raw.decode(encoding, errors=errors)
+        return text.replace("\r\n", "\n").replace("\r", "\n") if universal_newlines else text
     except UnicodeDecodeError:
         return None

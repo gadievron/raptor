@@ -894,8 +894,6 @@ def _load_doc_context(related_docs: list[dict], source_root: Path) -> str:
     if not related_docs:
         return ""
 
-    from core.source.streams import owned_fd
-
     parts: list[str] = []
     total_len = 0
     cap = 32768
@@ -910,18 +908,12 @@ def _load_doc_context(related_docs: list[dict], source_root: Path) -> str:
         resolved = _resolve_in_root(source_root, filepath)
         if resolved is None:
             continue
-        try:
-            fd = os.open(resolved, os.O_RDONLY | os.O_NOFOLLOW)
-        except OSError:
+        from core.source.contained import read_bytes_capped
+
+        result = read_bytes_capped(resolved, _DOC_MAX_BYTES)
+        if result is None:
             continue
-        try:
-            with owned_fd(fd, close_fd=os.close):
-                with os.fdopen(fd, "rb", closefd=False) as fh:
-                    content = fh.read(_DOC_MAX_BYTES).decode(
-                        "utf-8", errors="ignore",
-                    )
-        except OSError:
-            continue
+        content = result[0].decode("utf-8", errors="ignore")
 
         # Strip lines that look like injection attempts
         clean_lines = []

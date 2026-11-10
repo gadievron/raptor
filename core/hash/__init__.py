@@ -17,6 +17,7 @@ doesn't wrap it.
 """
 
 import hashlib
+import os as __os
 from pathlib import Path
 from typing import BinaryIO
 
@@ -207,10 +208,8 @@ def sha256_tree(
         if not p.is_file():
             continue
         try:
-            fd = __os.open(
-                str(p),
-                __os.O_RDONLY | __os.O_NOFOLLOW | getattr(__os, "O_CLOEXEC", 0),
-            )
+            from core.atomic_fs import open_hardened_read
+            fd = open_hardened_read(p)
         except OSError:
             # ELOOP on race-introduced symlink, ENOENT on
             # race-removed file, EACCES on race-changed perms

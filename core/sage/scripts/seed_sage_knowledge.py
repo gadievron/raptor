@@ -281,19 +281,21 @@ def _read_capped(path: Path, *, max_bytes: int) -> str:
     into SAGE — wallclock + memory + bandwidth penalty for what's
     almost certainly bad data.
     """
+    from core.security.capped_read import CappedReadRefused, read_capped_text
+
     try:
-        st = path.stat()
-    except OSError:
-        return ""
-    if st.st_size > max_bytes:
-        import logging
-        logging.getLogger(__name__).warning(
-            "seed_sage: skipping %s (size %s exceeds cap %s)",
-            path.name, st.st_size, max_bytes,
+        return read_capped_text(
+            path, max_bytes, errors="strict", follow_symlinks=True,
+            universal_newlines=True, raise_on_refusal=True,
         )
+    except CappedReadRefused as exc:
+        if exc.reason in ("over_cap", "grew_past_cap"):
+            import logging
+            logging.getLogger(__name__).warning(
+                "seed_sage: skipping %s (size %s exceeds cap %s)",
+                path.name, exc.st_size, max_bytes,
+            )
         return ""
-    try:
-        return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
 

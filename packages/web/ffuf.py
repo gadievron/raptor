@@ -407,10 +407,17 @@ class FfufRunner:
           must not widen scope to a different port on the same machine.
         """
         path = Path(config.request_file or "")
-        if path.stat().st_size > self._MAX_REQUEST_FILE_BYTES:
-            msg = "ffuf request file exceeds 1 MiB"
-            raise ValueError(msg)
-        text = path.read_text(encoding="utf-8", errors="replace")
+        from core.security.capped_read import CappedReadRefused, read_capped_text
+
+        try:
+            text = read_capped_text(
+                path, self._MAX_REQUEST_FILE_BYTES, follow_symlinks=True,
+                universal_newlines=True, raise_on_refusal=True,
+            )
+        except CappedReadRefused as exc:
+            if exc.reason in ("over_cap", "grew_past_cap"):
+                raise ValueError("ffuf request file exceeds 1 MiB") from None
+            raise
         # '\n' only: ffuf reads with ReadString('\n'); Python's
         # splitlines() also splits on VT/FF/NEL/U+2028/29 — another
         # divergence class.

@@ -163,7 +163,12 @@ def is_binary_file(filepath: Path, sample_size: int = 8192) -> bool:
     wallclock minimal.
     """
     try:
-        with preserving_stream_error(Path(filepath).open("rb")) as f:
+        from core.source.contained import open_regular
+
+        stream = open_regular(filepath, "rb")
+        if stream is None:
+            return True
+        with preserving_stream_error(stream) as f:
             chunk = f.read(sample_size)
             if b'\x00' in chunk:
                 return True
