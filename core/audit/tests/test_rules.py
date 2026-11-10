@@ -338,3 +338,30 @@ class TestAutoSynthesizeRules:
 
         _auto_synthesize_rules(result, config)
         assert list_rules(tmp_path) == []
+
+
+def test_saved_semgrep_sweep_preserves_coverage_receipts(tmp_path, monkeypatch):
+    from core.audit.rules import run_rule_sweep
+    from packages.semgrep import runner
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+    save_rule(out_dir=tmp_path, rule_id='coverage-rule', tool='semgrep', content='rules: []', description='test')
+    native = SemgrepResult(
+        findings=[SemgrepFinding(file='src/a.py', line=1, rule_id='compatible', message='hit')],
+        files_examined=['src/a.py'],
+        files_failed=[{'path': 'src/b.py', 'reason': 'partial parse'}],
+        skipped_rules=['IncompatibleRule: requires 999.0.0'],
+        skipped_summary={'total': 1, 'reasons': {'excluded': {'count': 1, 'sample': ['src/c.py']}}},
+        semgrep_version='1.79.0', returncode=0,
+    )
+    calls = []
+    def run_rule(target, config, **kwargs):
+        calls.append((target, config))
+        return native
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'run_rule', run_rule)
+    result = run_rule_sweep(out_dir=tmp_path, rule_id='coverage-rule', target_path=tmp_path)
+    assert len(calls) == 1
+    assert result['match_count'] == 1 and result['matches'][0]['file'] == 'src/a.py'
+    for key in ('files_examined', 'files_failed', 'skipped_rules', 'skipped_summary', 'semgrep_version', 'returncode'):
+        assert result[key] == getattr(native, key)
+    assert result['errors'] == []
