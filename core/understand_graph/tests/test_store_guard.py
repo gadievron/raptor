@@ -38,8 +38,10 @@ def test_lock_contention_never_deletes_the_graph(tmp_path, monkeypatch):
             lambda conn: conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0],
         )
     finally:
-        locker.rollback()
-        locker.close()
+        try:
+            locker.rollback()
+        finally:
+            locker.close()
 
     # The graph survives regardless of whether the read succeeded.
     assert db_path.exists()
@@ -75,8 +77,10 @@ def test_migrate_is_write_free_when_schema_current(tmp_path):
             conn.execute("PRAGMA busy_timeout=5")
             migrate(conn)  # raises "database is locked" if it writes
     finally:
-        locker.rollback()
-        locker.close()
+        try:
+            locker.rollback()
+        finally:
+            locker.close()
 
 
 def test_quarantine_moves_wal_sidecars_aside(tmp_path):
