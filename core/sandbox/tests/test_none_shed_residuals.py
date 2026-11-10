@@ -55,14 +55,23 @@ def test_discard_warning_names_tool_paths(tmp_path, caplog):
     from core.sandbox import context
 
     with caplog.at_level(logging.WARNING):
-        res = context.run(
-            ["/bin/true"],
-            profile="network-only",
-            target=str(tmp_path),
-            tool_paths=[str(tmp_path)],
-            capture_output=True, text=True, timeout=30,
-        )
-    assert res.returncode == 0
+        if context.check_net_available():
+            res = context.run(
+                ["/bin/true"],
+                profile="network-only",
+                target=str(tmp_path),
+                tool_paths=[str(tmp_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            assert res.returncode == 0
+        else:
+            from core.sandbox.errors import SandboxSetupError
+            with pytest.raises(SandboxSetupError):
+                context.run(
+                    ["/bin/true"], profile="network-only",
+                    target=str(tmp_path), tool_paths=[str(tmp_path)],
+                    capture_output=True, text=True, timeout=30,
+                )
     warn = [r.message for r in caplog.records
             if "ignores" in str(r.message)]
     assert warn and "tool_paths" in str(warn[0]), warn

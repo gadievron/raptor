@@ -8884,7 +8884,7 @@ def _cmd_resolves_nowhere(cmd: "list | None",
 
 
 # Convenience: standalone run function for one-off sandboxed commands
-def run(cmd: list[str], block_network: bool = True, target: str | None = None,
+def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
         output: str | None = None, allowed_tcp_ports: list | None = None,
         profile: str | None = None, disabled: bool = False, limits: dict | None = None,
         map_root: bool = False,
@@ -8930,7 +8930,8 @@ def run(cmd: list[str], block_network: bool = True, target: str | None = None,
     automatically.
 
     Accepts the same sandbox-configuration kwargs as sandbox() — forwards
-    them into a one-shot context.
+    them into a one-shot context. An omitted block_network follows the
+    selected profile; an explicit boolean overrides that profile default.
     """
     from contextlib import ExitStack
 
