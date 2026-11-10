@@ -237,67 +237,71 @@ def main(argv: Sequence[str]) -> int:
         report_completion("plan only", exit_code=exit_code)
         return exit_code
 
-    proposed_root = out_dir / "_apply_staging" if args.apply else out_dir / "proposed"
+    from contextlib import nullcontext
+    from core.run.scratch import scratch_dir
 
-    # ---- Phase 4: materialise all changes -----------------------------------
-    import os
-    saved_cwd = os.getcwd()
-    os.chdir(str(target))
-    all_plans = {**vuln_plans, **hygiene_plans}
-    try:
-        changes = _materialise_changes(
-            all_plans,
-            findings_rows,
-            proposed_root,
-            pin_only=False,
-        )
-    finally:
-        os.chdir(saved_cwd)
+    # Apply only files produced by this invocation; old or concurrent staging
+    # belongs to another operation. Review exports deliberately remain on disk.
+    staging = (scratch_dir(prefix="_apply_staging-", dir=out_dir) if args.apply
+               else nullcontext(out_dir / "proposed"))
+    with staging as proposed_root:
+        # ---- Phase 4: materialise all changes -----------------------------------
+        import os
+        saved_cwd = os.getcwd()
+        os.chdir(str(target))
+        all_plans = {**vuln_plans, **hygiene_plans}
+        try:
+            changes = _materialise_changes(
+                all_plans,
+                findings_rows,
+                proposed_root,
+                pin_only=False,
+            )
+        finally:
+            os.chdir(saved_cwd)
 
-    # Second pass: retry hygiene plans that _materialise_changes couldn't
-    # apply (bare names with no version operator).
-    hygiene_keys = set(hygiene_plans)
-    skipped_hygiene = [
-        c for c in changes
-        if c.skipped_reason is not None
-        and (c.ecosystem, c.name, str(c.manifest)) in hygiene_keys
-    ]
-    if skipped_hygiene:
-        retry_plans = {
-            (c.ecosystem, c.name, str(c.manifest)): hygiene_plans[
-                (c.ecosystem, c.name, str(c.manifest))
-            ]
-            for c in skipped_hygiene
-        }
-        retry_changes = _materialise_pin_changes(
-            retry_plans, proposed_root, target=target,
-        )
-        retry_succeeded = {
-            (c.ecosystem, c.name, str(c.manifest))
-            for c in retry_changes
-            if c.skipped_reason is None
-        }
-        changes = [
+        # Second pass: retry hygiene plans that _materialise_changes couldn't
+        # apply (bare names with no version operator).
+        hygiene_keys = set(hygiene_plans)
+        skipped_hygiene = [
             c for c in changes
-            if (c.ecosystem, c.name, str(c.manifest)) not in retry_succeeded
-        ] + [c for c in retry_changes if c.skipped_reason is None]
-        existing = {(c.ecosystem, c.name, str(c.manifest)) for c in changes}
-        changes += [
-            c for c in retry_changes
             if c.skipped_reason is not None
-            and (c.ecosystem, c.name, str(c.manifest)) not in existing
+            and (c.ecosystem, c.name, str(c.manifest)) in hygiene_keys
         ]
+        if skipped_hygiene:
+            retry_plans = {
+                (c.ecosystem, c.name, str(c.manifest)): hygiene_plans[
+                    (c.ecosystem, c.name, str(c.manifest))
+                ]
+                for c in skipped_hygiene
+            }
+            retry_changes = _materialise_pin_changes(
+                retry_plans, proposed_root, target=target,
+            )
+            retry_succeeded = {
+                (c.ecosystem, c.name, str(c.manifest))
+                for c in retry_changes
+                if c.skipped_reason is None
+            }
+            changes = [
+                c for c in changes
+                if (c.ecosystem, c.name, str(c.manifest)) not in retry_succeeded
+            ] + [c for c in retry_changes if c.skipped_reason is None]
+            existing = {(c.ecosystem, c.name, str(c.manifest)) for c in changes}
+            changes += [
+                c for c in retry_changes
+                if c.skipped_reason is not None
+                and (c.ecosystem, c.name, str(c.manifest)) not in existing
+            ]
 
-    applied = [c for c in changes if c.skipped_reason is None]
-    skipped = [c for c in changes if c.skipped_reason is not None]
-    vuln_applied = [c for c in applied if c.advisory_ids]
-    pin_applied = [c for c in applied if not c.advisory_ids]
+        applied = [c for c in changes if c.skipped_reason is None]
+        skipped = [c for c in changes if c.skipped_reason is not None]
+        vuln_applied = [c for c in applied if c.advisory_ids]
+        pin_applied = [c for c in applied if not c.advisory_ids]
 
-    # --apply: copy staged files back over the originals.
-    if args.apply and applied:
-        _apply_in_place(proposed_root, target)
-        import shutil
-        shutil.rmtree(proposed_root, ignore_errors=True)
+        # --apply: copy staged files back over the originals.
+        if args.apply and applied:
+            _apply_in_place(proposed_root, target)
 
     save_json(out_dir / "changes.json", [_change_to_dict(c) for c in changes])
     (out_dir / "changes.md").write_text(
