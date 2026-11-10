@@ -281,3 +281,24 @@ class TestRegistryEnumeration:
             t for t in self._UNMIGRATED if registered_scope(t) is not None
         )
         assert not stale
+
+
+@pytest.mark.parametrize('matched,skipped,expected', [(False, True, 'inconclusive'), (True, True, 'confirmed'), (False, False, 'refuted')])
+def test_semgrep_rule_coverage_limits_only_silence(tmp_path, monkeypatch, matched, skipped, expected):
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+    monkeypatch.setattr(semgrep_runner, 'is_available', lambda: True)
+    def run_rule(target, rule, **kwargs):
+        return SemgrepResult(
+            findings=[SemgrepFinding(file=str(target), line=1, rule_id='compatible', message='hit')] if matched else [],
+            files_examined=[str(target)],
+            skipped_rules=['IncompatibleRule: requires 999.0.0'] if skipped else [],
+        )
+    monkeypatch.setattr(semgrep_runner, 'run_rule', run_rule)
+    result = _semgrep(tmp_path)
+    assert result.outcome == expected
+    if expected == 'inconclusive':
+        assert result.details['substrate']['tier'] == 'rule-coverage'
+        assert result.details['substrate']['covered'] == 'unknown'
+        assert 'skipped' in result.details['reason']
+    if expected == 'confirmed':
+        assert len(result.matches) == 1

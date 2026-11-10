@@ -370,3 +370,30 @@ class TestBatchedUnbatchedParity:
         assert (batched.details or {}).get("reason") == (
             (unbatched.details or {}).get("reason")
         )
+
+
+@pytest.mark.parametrize('control_fires', [False, True])
+def test_skipped_rules_do_not_bank_negative_control_silence(tmp_path, monkeypatch, control_fires):
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+    (tmp_path / 'a.c').write_text(SOURCE)
+    calls = []
+    def run_rule(target, config, **kwargs):
+        extra = list(kwargs.get('extra_targets') or [])
+        calls.append(extra)
+        findings = []
+        if extra:
+            findings.append(SemgrepFinding(file=str(target), line=1, rule_id='compatible', message='hit'))
+            if control_fires:
+                findings.append(SemgrepFinding(file=str(extra[0]), line=3, rule_id='compatible', message='hit'))
+        return SemgrepResult(findings=findings, files_examined=[str(target), *map(str, extra)], skipped_rules=['IncompatibleRule: requires 999.0.0'])
+    _install_fake_semgrep(monkeypatch, run_rule)
+    result = _sweep(tmp_path)
+    if control_fires:
+        assert result.outcome == 'inconclusive'
+        assert list(_negative_control_cache.values()) == [True]
+        assert len(calls) == 1
+    else:
+        assert result.outcome == 'confirmed'
+        assert result.details['negative_control_error'] is True
+        assert _negative_control_cache == {}
+        assert len(calls) == 2
