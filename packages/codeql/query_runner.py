@@ -833,14 +833,20 @@ class QueryRunner:
                 sarif_data.get("runs")
                 if isinstance(sarif_data, dict) else None
             )
-            if not isinstance(runs, list):
+            if not isinstance(runs, list) or any(
+                not isinstance(run, dict)
+                or not isinstance(run.get("results", []), list)
+                for run in runs
+            ):
                 # rc==0 but no readable SARIF: a missing / oversized /
                 # unparseable output is an analysis failure, never a
                 # successful zero-finding run — success=True here reads
                 # downstream as a clean scan. Schema leg: a 0-byte
                 # file parses to {} and any valid-JSON dict passes
                 # load_sarif — without a `runs` list it is not a
-                # SARIF document, same failure.
+                # SARIF document, same failure. Malformed run/result
+                # containers are equally uncountable, including empty
+                # mappings or strings whose length would otherwise be zero.
                 reason = self._unreadable_sarif_reason(sarif_path)
                 errors.append(reason)
                 logger.error("✗ %s", reason)

@@ -102,6 +102,40 @@ class TestRunSuiteSarifFailure:
         assert result.findings_count == 0
 
 
+    @pytest.mark.parametrize("results", [{}, "", "bad", None, 0],
+                             ids=["empty-mapping", "empty-string", "string", "null", "number"])
+    def test_non_list_results_after_rc0_is_failure(self, runner, tmp_path, monkeypatch, results):
+        from pathlib import Path
+        monkeypatch.setattr(runner, "_codeql_version", lambda: "2.26.1")
+        def write_report(command):
+            Path(_sarif_out_path(command)).write_text(json.dumps({
+                "version": "2.1.0", "runs": [{
+                    "tool": {"driver": {"name": "codeql", "rules": []}},
+                    "results": results,
+                }],
+            }))
+        monkeypatch.setattr("core.sandbox.run", _fake_sandbox(write_report))
+        result = runner.run_suite(tmp_path / "db", "python", tmp_path / "out")
+        assert not result.success
+        assert result.findings_count == 0
+        assert result.sarif_path is None
+        assert any("unreadable" in error for error in result.errors)
+
+    @pytest.mark.parametrize("runs", [[], [{"tool": {"driver": {"name": "codeql", "rules": []}}}]],
+                             ids=["empty-runs", "omitted-results"])
+    def test_countable_empty_containers_after_rc0_still_succeed(self, runner, tmp_path, monkeypatch, runs):
+        from pathlib import Path
+        monkeypatch.setattr(runner, "_codeql_version", lambda: "2.26.1")
+        def write_report(command):
+            Path(_sarif_out_path(command)).write_text(json.dumps({"version": "2.1.0", "runs": runs}))
+        monkeypatch.setattr("core.sandbox.run", _fake_sandbox(write_report))
+        result = runner.run_suite(tmp_path / "db", "python", tmp_path / "out")
+        assert result.success
+        assert result.findings_count == 0
+        assert result.queries_executed == 0
+        assert result.errors == []
+
+
 class TestRunCustomQueriesSarifFailure:
     """Same guard, sibling entry point: run_custom_queries used to map
     an rc==0 analyze whose SARIF the bounded loader refuses to
