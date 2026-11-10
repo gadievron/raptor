@@ -65,8 +65,8 @@ def _range_constant(atoms, op, types, abi, frame, *, bounds=None):
 def _guard_range_constant(target, data, atoms, op, types, abi, frame):
     """A syntactic candidate range, never a reaching-path or SSA proof.
 
-    Consume only value-preserving parameter/literal comparisons controlling
-    a branch, or a preceding direct early return. The native oracle must
+    Consume only simple parameter comparisons controlling a branch, or a
+    preceding direct early return. The native oracle must
     independently admit every prefix, input identity and reaching predicate.
     """
     declared = dict(types)
@@ -106,6 +106,13 @@ def _guard_range_constant(target, data, atoms, op, types, abi, frame):
             return None
         current = current.parent
     used = False
+    # A directly repeated operand pair shares the target's comparison
+    # conversions. Track possible orderings without evaluating target code
+    # or granting reaching-path credit to the syntactic guard.
+    orderings = {-1, 0, 1}
+    relation_used = False
+    relation_truth = {'<': {-1}, '<=': {-1, 0}, '>': {1}, '>=': {0, 1},
+                      '==': {0}, '!=': {-1, 1}}
     inverse = {'<': '>=', '<=': '>', '>': '<=', '>=': '<', '==': '!=', '!=': '=='}
     reverse = {'<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==', '!=': '!='}
     for node, truth in facts:
@@ -124,6 +131,17 @@ def _guard_range_constant(target, data, atoms, op, types, abi, frame):
         left, right = (_unwrap(node.child_by_field_name(field)) for field in ('left', 'right'))
         if left is None or right is None:
             continue
+        if (left.type == right.type == 'identifier'
+                and atoms[0] != atoms[1] and all(atom in bounds for atom in atoms)):
+            pair = (text(left), text(right))
+            if pair == atoms or pair == atoms[::-1]:
+                normalized = guard_op if pair == atoms else reverse[guard_op]
+                normalized = normalized if truth else inverse[normalized]
+                orderings &= relation_truth[normalized]
+                if not orderings:
+                    return None  # contradictory controlling relations give no lead
+                relation_used = True
+                continue
         if left.type == 'identifier' and text(left) in bounds:
             variable, literal = text(left), source_integer_atom(right, data)
         elif right.type == 'identifier' and text(right) in bounds:
@@ -150,7 +168,14 @@ def _guard_range_constant(target, data, atoms, op, types, abi, frame):
         if low > high:
             return None  # no vacuous constant lead from an empty candidate range
         bounds[variable], used = (low, high), True
-    return _range_constant(atoms, op, types, abi, frame, bounds=bounds) if used else None
+    ranged = _range_constant(atoms, op, types, abi, frame, bounds=bounds) if used else None
+    if ranged is not None:
+        return ranged
+    if relation_used:
+        outcomes = {ordering in relation_truth[op] for ordering in orderings}
+        if len(outcomes) == 1:
+            return outcomes.pop()
+    return None
 
 
 def _range_can_wrap(atoms, op, types, abi, frame):
