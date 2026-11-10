@@ -81,7 +81,10 @@ def open_graph(path: Path) -> sqlite3.Connection:
         conn.execute("PRAGMA synchronous=NORMAL")
         _migrate(conn)
     except BaseException:
-        conn.close()
+        try:
+            conn.close()
+        except BaseException:
+            pass  # Retain the setup refusal after attempting connection cleanup.
         raise
     return conn
 
