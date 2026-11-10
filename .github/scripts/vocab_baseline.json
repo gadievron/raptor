@@ -1126,6 +1126,11 @@
     "kind": "literal",
     "note": "Bounded review-cycle state snapshot fields for origin, deadlines, continuation/model-call allowances, pending/delta IDs, retirement, active pass and recorded events. Persistence/control-state schema rather than learned function/API names."
   },
+  "core/audit/rules.py::_run_semgrep_rule": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed JSON receipt schema for saved Semgrep rule execution, not target function/API names or detection vocabulary. These ten keys serialize tool identity, findings/count, errors, scanned/failed files, skipped rules/path summary, engine version and return code from SemgrepResult. libexec/raptor-audit::cmd_rules emits this receipt directly, and test_saved_semgrep_sweep_preserves_coverage_receipts pins the coverage fields. Retaining failed/skipped/unscanned metadata prevents silent loss of scan limitations; this list does not select sources, sinks, APIs or verdicts. Schema changes require producer/consumer review."
+  },
   "core/audit/sandbox_policy.py::_LLM_PHASES": {
     "count": 67,
     "kind": "literal",
