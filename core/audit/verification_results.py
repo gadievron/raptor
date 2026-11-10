@@ -2,7 +2,7 @@
 
 from dataclasses import asdict, dataclass, field, replace
 
-from .claims import ClaimRevision
+from .claims import ClaimRevision, hypothesis_material_key
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_non_refuting_smt_rule
 
@@ -113,8 +113,48 @@ class ClaimRefutation:
         return record
 
 
-def claims_refuted(outcome, hypotheses: list[str], *, source_identity) -> bool:
-    """Every active claim needs its own pipeline-created scoped receipt."""
+def _unambiguous_refutation_material(outcome, hypotheses: list[str], claim_outcome=None) -> bool:
+    """A text-scoped receipt cannot distinguish conflicting structured premises.
+
+    Inspect original declarations, before intake can deduplicate by mechanism.
+    Compare current and prior declarations together when transferring negative
+    evidence. This only narrows authority; lineage IDs do not expand scope.
+    """
+    requested = {h.strip().casefold() for h in hypotheses if isinstance(h, str)}
+    material: dict[str, tuple[str, ...]] = {}
+    for declarations in (outcome, claim_outcome):
+        if declarations is None:
+            continue
+        review = getattr(declarations, "review_result", None) or {}
+        if not isinstance(review, dict):
+            return False
+        default_cwe = review.get("cwe_class") or review.get("cwe") or ""
+        for rows in (getattr(declarations, "hypotheses", None), review.get("hypotheses")):
+            if rows is None:
+                continue
+            if not isinstance(rows, (list, tuple)):
+                return False
+            for row in rows:
+                if not isinstance(row, dict) or not isinstance(row.get("mechanism"), str):
+                    return False
+                mechanism = row["mechanism"].strip().casefold()
+                if mechanism not in requested:
+                    continue
+                key = hypothesis_material_key(row, default_cwe=default_cwe)
+                if key is None or (mechanism in material and material[mechanism] != key):
+                    return False
+                material[mechanism] = key
+    return True
+
+
+def claims_refuted(outcome, hypotheses: list[str], *, source_identity, claim_outcome=None) -> bool:
+    """Every active claim needs an unambiguous pipeline-created scoped receipt.
+
+    claim_outcome supplies prior declarations when receipts are carried by a
+    newer assessment. It supplies no evidence or source authority itself.
+    """
+    if not _unambiguous_refutation_material(outcome, hypotheses, claim_outcome):
+        return False
     receipts = getattr(outcome, "claim_refutations", ()) or ()
     if not isinstance(receipts, (tuple, list)):
         return False
