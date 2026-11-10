@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_chroot_candidate_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_chroot_no_chdir_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_prior_directory_change_remains_a_review_candidate"}
+
     def test_lock_order_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_lock_order_violation_rule.py")
         assert _callers_of(calls, "run") == set()

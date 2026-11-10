@@ -362,3 +362,17 @@ def test_lock_orders_require_object_and_concurrency_evidence(monkeypatch, tmp_pa
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_chroot_calls_require_working_directory_context(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/chroot_no_chdir.cocci'
+    receipt = 'coccinelle:chroot_no_chdir'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
