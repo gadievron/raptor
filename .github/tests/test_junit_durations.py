@@ -299,3 +299,58 @@ def test_resolution_cache_does_not_survive_report_collection(mini_repo, tmp_path
         {'core/pkga/tests/test_new.py': 1.0}, {'core/pkga/tests/test_new.py::test_new': 1.0}, 0)
     path.unlink()
     assert collect_run(xml, mini_repo) == ({}, {}, 1)
+
+
+@pytest.mark.parametrize("nodeids", [False, True], ids=["files", "nodeids"])
+@pytest.mark.parametrize("across_runs", [False, True], ids=["within-report", "across-reports"])
+@pytest.mark.parametrize("existing", [False, True], ids=["absent-output", "existing-output"])
+def test_aggregate_overflow_refuses_output(
+    mini_repo, tmp_path, capsys, nodeids, across_runs, existing,
+):
+    row = ("core.pkga.tests.test_mod", "test_a", "1e308")
+    if across_runs:
+        reports = [_write_junit(tmp_path / f"run-{i}.xml", [row]) for i in range(2)]
+    else:
+        reports = [_write_junit(tmp_path / "run.xml", [row, row])]
+    output = tmp_path / "durations.json"
+    previous = b'{"preserved": 2.5}\n'
+    if existing:
+        output.write_bytes(previous)
+    args = [str(output), *(str(report) for report in reports), "--repo", str(mini_repo)]
+    if nodeids:
+        args.append("--nodeids")
+    assert main(args) == 1
+    assert capsys.readouterr().err == (
+        "junit_durations: non-finite aggregated duration; refusing to write map\n"
+    )
+    if existing:
+        assert output.read_bytes() == previous
+    else:
+        assert not output.exists()
+
+
+def test_finite_nodeids_survive_unused_file_overflow(mini_repo, tmp_path):
+    report = _write_junit(tmp_path / "run.xml", [
+        ("core.pkga.tests.test_mod", "test_a", "1e308"),
+        ("core.pkga.tests.test_mod", "test_b", "1e308"),
+    ])
+    output = tmp_path / "durations.json"
+    assert main([str(output), str(report), "--repo", str(mini_repo), "--nodeids"]) == 0
+    assert json.loads(output.read_text()) == {
+        "core/pkga/tests/test_mod.py::test_a": 1e308,
+        "core/pkga/tests/test_mod.py::test_b": 1e308,
+    }
+
+
+def test_prefix_excludes_overflow_before_output_validation(mini_repo, tmp_path):
+    report = _write_junit(tmp_path / "run.xml", [
+        ("core.pkga.tests.test_mod", "test_a", "1e308"),
+        ("core.pkga.tests.test_mod", "test_a", "1e308"),
+        ("core.pkga.tests.test_other", "test_valid", "2.5"),
+    ])
+    output = tmp_path / "durations.json"
+    assert main([
+        str(output), str(report), "--repo", str(mini_repo),
+        "--prefix", "core/pkga/tests/test_other.py",
+    ]) == 0
+    assert output.read_text() == '{\n    "core/pkga/tests/test_other.py": 2.5\n}\n'
