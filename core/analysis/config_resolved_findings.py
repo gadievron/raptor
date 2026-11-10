@@ -122,8 +122,10 @@ def _single_method_def(method_node, name: str):
 
 
 def _weak_class(family: str, value: str) -> bool:
-    head = value.split("/", 1)[0].strip().upper()
-    return head in _WEAK[family]
+    # Cipher transformations trim their algorithm segment. Hash and PRNG
+    # factories use the complete algorithm name, including any suffix.
+    name = value.split("/", 1)[0].strip() if family == "cipher" else value
+    return name.upper() in _WEAK[family]
 
 
 def scan_java_source(source_text: str, file_path: str,
