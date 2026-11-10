@@ -164,3 +164,12 @@ def test_dompurify_requires_an_immutable_instance_profile(language):
     assert entry is not None
     assert entry.source_contracts == frozenset({ksc.DOMPURIFY_PROFILE})
     assert ksc.DEFAULT_POSITIONAL_CALL not in entry.source_contracts
+
+
+@pytest.mark.parametrize("library", ["connection.escape", "conn.escape"])
+@pytest.mark.parametrize("language", ["javascript", "typescript"])
+def test_sql_escape_calls_require_driver_and_literal_profiles(library, language):
+    entry = ksc.find(library, "sqli", language)
+    assert entry is not None
+    assert entry.source_contracts == frozenset({ksc.SQL_ESCAPE_PROFILE})
+    assert not entry.requires_exact_str
