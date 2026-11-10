@@ -33,8 +33,11 @@ from __future__ import annotations
 
 import sqlite3
 from collections import Counter
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source.streams import preserving_stream_error
 
 
 # Status / backend constants — mirror cvefix_bridge.
@@ -155,18 +158,17 @@ def analyze(synth_db: Path) -> CorpusReport:
         rep.read_state = "failed"
         rep.read_reason = "source database could not be opened read-only"
         return rep
-    try:
-        rows = list(con.execute(
-            "SELECT cve_id, cwe, repo_language, status, backend, detail "
-            "FROM synth_results"
-        ))
-    except sqlite3.OperationalError:
-        # Table doesn't exist yet (bridge hasn't written its first row).
-        rep.read_state = "failed"
-        rep.read_reason = "synth_results query unavailable"
-        return rep
-    finally:
-        con.close()
+    with preserving_stream_error(closing(con)):
+        try:
+            rows = list(con.execute(
+                "SELECT cve_id, cwe, repo_language, status, backend, detail "
+                "FROM synth_results"
+            ))
+        except sqlite3.OperationalError:
+            # Table doesn't exist yet (bridge hasn't written its first row).
+            rep.read_state = "failed"
+            rep.read_reason = "synth_results query unavailable"
+            return rep
 
     rep.read_state = "completed"
     rep.read_reason = "one read-only query snapshot captured"
