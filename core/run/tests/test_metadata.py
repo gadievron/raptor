@@ -636,8 +636,12 @@ class _ProjectRunCase(unittest.TestCase):
                              self._registry)
         patcher.start()
         self.addCleanup(patcher.stop)
-        from core.run.pin import set_process_project
-        self.addCleanup(set_process_project, None)
+        from core.run import pin
+        from core.testing.module_state import isolated_module_state
+        self.enterContext(isolated_module_state(pin, {
+            "_process_project": None, "_process_project_set": False,
+            "_process_project_threaded": False,
+        }))
 
     def _as_project(self, project_dir):
         import contextlib
