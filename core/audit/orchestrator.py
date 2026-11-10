@@ -34940,28 +34940,29 @@ def _merge_unverified_study_candidates(
             or _is_verification_evidence_for_gate(fresh)):
         return None
     from copy import deepcopy
+    from .claims import hypothesis_material_key
 
+    prior_cwe = (prior.review_result or {}).get("cwe_class") or (prior.review_result or {}).get("cwe", "")
     hypotheses = deepcopy(_prior_hypotheses_for(prior))
     if prior.hypothesis and not any(h.get("mechanism") == prior.hypothesis for h in hypotheses):
         hypotheses.insert(0, {"mechanism": prior.hypothesis, "confidence": "high",
-                              "cwe": (prior.review_result or {}).get("cwe", "")})
+                              "cwe": prior_cwe})
 
-    def identity(hypothesis):
-        return (str(hypothesis.get("mechanism", "")).strip().casefold(),
-                str(hypothesis.get("cwe", "")).strip().upper())
+    def identity(hypothesis, default_cwe=""):
+        return hypothesis_material_key(hypothesis, default_cwe=default_cwe)
 
-    seen = {identity(h) for h in hypotheses}
+    seen = {identity(h, prior_cwe) for h in hypotheses}
     primary_cwe = (fresh.review_result or {}).get("cwe_class") or (fresh.review_result or {}).get("cwe", "")
     stated_confidence = {
-        identity({**h, "cwe": h.get("cwe") or primary_cwe}): h.get("confidence")
+        identity(h, primary_cwe): h.get("confidence")
         for h in _prior_hypotheses_for(fresh)
     }
     added = False
     # Import only model-authored candidate text, never receipt or tool fields.
     fields = ("mechanism", "cwe", "confidence", "counter", "counter_scope", "guard_type", "assumed_property")
     for hypothesis in _extract_all_hypotheses(fresh):
-        key = identity(hypothesis)
-        if not key[0] or key in seen:
+        key = identity(hypothesis, primary_cwe)
+        if key is None or key in seen:
             continue
         entry = {field: hypothesis[field] for field in fields
                  if isinstance(hypothesis.get(field), str)}

@@ -652,3 +652,28 @@ def test_label_only_negative_cannot_withdraw_distinct_prior_assumptions(study_ca
     _reassess(case, candidate)
     _retained(case)
     _diagnostic(case)
+
+
+def test_same_label_distinct_material_survives_candidate_journal(study_case):
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    case['config'].immediate_verify = False  # exercise owned publication only
+    prior = case['prior']
+    prior.review_result = {'hypothesis': prior.hypothesis, 'cwe': 'CWE-20'}
+    prior.hypotheses[0].update(counter_scope='local', assumed_property='local declaration')
+    changed = {**prior.hypotheses[0], 'counter_scope': 'cross_function',
+               'assumed_property': 'caller declaration', 'confidence': 'medium'}
+    fresh = orch.ReviewOutcome('owned.c', 'f', 'suspicious', 'New assumption',
+        line=1, hypothesis=prior.hypothesis, hypotheses=[changed], cost_usd=0.2,
+        review_result={'hypothesis': prior.hypothesis, 'cwe': 'CWE-20'})
+    _knowledge_reassess(case, fresh)
+    canonical = case['result'].outcomes[0]
+    matching = [h for h in canonical.hypotheses if h['mechanism'] == prior.hypothesis]
+    assert [h['assumed_property'] for h in matching] == ['local declaration', 'caller declaration']
+    assert [h['confidence'] for h in matching] == ['high', 'medium']
+    assert load_entries(case['config'].out_dir, fresh=True)[-1].hypotheses == canonical.hypotheses
+    assert canonical.hypothesis == prior.hypothesis and canonical.body == prior.body
+    assert not canonical.evidence_tool and not canonical.claim_refutations
+    assert case['result'].suspicious == 1 and case['result'].clean == 0
+    assert case['result'].total_cost_usd == pytest.approx(0.7)
