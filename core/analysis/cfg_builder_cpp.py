@@ -55,7 +55,7 @@ Public surface:
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import (
     Any,
@@ -167,6 +167,8 @@ class CPPCFG:
     _nodes: tuple[CPPCFGNode, ...]
     _adjacency: dict[CPPCFGNode, tuple[CPPCFGNode, ...]]
     params: tuple[str, ...] = ()
+    # Negative source facts only; absence does not prove library origin.
+    untrusted_call_sites: frozenset[tuple[str, int]] | None = None
 
     @property
     def entry(self) -> CPPCFGNode:
@@ -327,10 +329,11 @@ def _resolve_callable_name(callee: Node) -> str | None:
     ``function`` field. ``foo`` → ``"foo"``; ``obj.method`` →
     ``"obj.method"``; ``obj->method`` → ``"obj.method"`` (arrow
     collapsed to dot — same convention as the call-graph extractor
-    so the sanitizer catalogue keys match)."""
+    so the sanitizer catalogue keys match). C++ qualified identifiers
+    retain their namespace rather than collapsing to a library-name leaf."""
     if callee is None:
         return None
-    if callee.type == _IDENT:
+    if callee.type in {_IDENT, "qualified_identifier"}:
         return _node_text(callee)
     if callee.type == _FIELD_EXPR:
         arg = callee.child_by_field_name("argument")
@@ -604,6 +607,8 @@ def _payload_from_declaration(decl) -> tuple[frozenset[str], frozenset[str],
             _IDENT, _POINTER_DECLARATOR,
             "array_declarator", "function_declarator",
         ):
+            if _declarator_is_function(child):
+                continue
             name = _innermost_ident(child)
             if name is not None:
                 defs.add(name)
@@ -883,7 +888,26 @@ def _declaration_storage_nonlocal(decl: Node) -> bool:
     )
 
 
-def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
+def _declarator_is_function(decl) -> bool:
+    """Distinguish a function prototype from a function-pointer object.
+
+    The binding operator nearest the identifier decides: pointer wrappers
+    outside a function declarator describe its return, not a pointer object.
+    """
+    operator = None
+    while decl is not None:
+        if decl.type in _DECLARATOR_TYPES - {_IDENT, _PARENTHESIZED_DECLARATOR}:
+            operator = decl.type
+        child = decl.child_by_field_name("declarator")
+        if child is None and decl.type == _PARENTHESIZED_DECLARATOR:
+            child = next((node for node in decl.named_children if node.type in _DECLARATOR_TYPES), None)
+        decl = child
+    return operator == _FN_DECLARATOR
+
+
+def _declared_local_scopes(
+    fn_def: Node, *, identity_bindings: bool = False,
+) -> _LocalNameScopes:
     """Positional oracle for every name ``fn_def`` binds as a local or
     parameter: formal parameters, block-scope declarations (including
     ``for`` inits and C++ condition declarations), range-``for``
@@ -896,6 +920,8 @@ def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
     between the store and a later read — so it must not earn
     local-grade rebinding semantics.
     """
+    # Identity mode includes static/extern objects, but excludes function
+    # prototypes. The ordinary mode retains its unaliasable-store contract.
     windows: dict[str, list[tuple[int, int]]] = {}
 
     def add(name: str, decl_byte: int, bound_end: int) -> None:
@@ -911,12 +937,14 @@ def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
     while stack:
         cur, bound = stack.pop()
         t = cur.type
-        if t in _LOCAL_SCOPE_BARRIERS:
+        if t in _LOCAL_SCOPE_BARRIERS or t == _FN_DECLARATOR:
+            # Target parameters are populated separately. Prototype and
+            # function-pointer type parameters do not bind in this frame.
             continue
         if t in _LOCAL_SCOPE_BOUNDS:
             bound = min(bound, cur.end_byte)
         if t == _DECLARATION:
-            if _declaration_storage_nonlocal(cur):
+            if not identity_bindings and _declaration_storage_nonlocal(cur):
                 # ``extern char *g;`` in a function body declares the
                 # GLOBAL g — registering it as a local handed every
                 # subsequent bare store to g local-grade semantics.
@@ -929,6 +957,8 @@ def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
                     continue
                 if child.type == _INIT_DECLARATOR:
                     tgt = child.child_by_field_name("declarator")
+                    if _declarator_is_function(tgt):
+                        continue
                     if tgt is not None and tgt.type == \
                             "structured_binding_declarator":
                         for c in tgt.children:
@@ -939,6 +969,8 @@ def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
                     if name is not None:
                         add(name, cur.start_byte, bound)
                 elif child.type in _DECLARATOR_TYPES:
+                    if _declarator_is_function(child):
+                        continue
                     name = _innermost_ident(child)
                     if name is not None:
                         add(name, cur.start_byte, bound)
@@ -957,6 +989,57 @@ def _declared_local_scopes(fn_def: Node) -> _LocalNameScopes:
         stack.extend(
             (c, bound) for c in cur.children if c.is_named)
     return _LocalNameScopes({k: tuple(v) for k, v in windows.items()})
+
+
+def _untrusted_source_call_sites(root, fn_def) -> frozenset[tuple[str, int]]:
+    """Refuse source-defined, macro-expanded or locally shadowed identities.
+
+    Preprocessor activity is flow-insensitive: definitions in conditional or
+    later regions remain ambiguous. Qualified C++ scope resolution is kept
+    separate from bare global library spelling.
+    """
+    bindings: set[str] = set()
+    target_scoped = False
+    scoped_types = (_LOCAL_SCOPE_BARRIERS - {_FN_DEFINITION, _LAMBDA_EXPR}) | {"namespace_definition"}
+    stack = [(root, False, False)]
+    while stack:
+        cur, scoped, in_function = stack.pop()
+        if cur.type in {"preproc_def", "preproc_function_def"}:
+            name = cur.child_by_field_name("name")
+            if name is not None:
+                bindings.add(_node_text(name))
+        if cur.type == _FN_DEFINITION:
+            decl = cur.child_by_field_name("declarator")
+            while decl is not None and decl.type != _FN_DECLARATOR:
+                decl = decl.child_by_field_name("declarator")
+            inner = decl.child_by_field_name("declarator") if decl is not None else None
+            name = _resolve_callable_name(inner)
+            if not scoped and not in_function and name:
+                bindings.add(name)
+            if cur == fn_def:
+                target_scoped = scoped or bool(name and "::" in name)
+        if cur.type == _DECLARATION and not scoped and not in_function:
+            for child in cur.named_children:
+                decl = child.child_by_field_name("declarator") if child.type == _INIT_DECLARATOR else child
+                if (decl is not None and decl.type in _DECLARATOR_TYPES
+                        and not _declarator_is_function(decl)):
+                    name = _innermost_ident(decl)
+                    if name:
+                        bindings.add(name)
+        stack.extend((child, scoped or cur.type in scoped_types, in_function or cur.type == _FN_DEFINITION)
+                     for child in cur.named_children)
+    local = _declared_local_scopes(fn_def, identity_bindings=True)
+    conflicts: set[tuple[str, int]] = set()
+    pending = [fn_def]
+    while pending:
+        cur = pending.pop()
+        if cur.type == _CALL_EXPR:
+            name = _resolve_callable_name(cur.child_by_field_name("function"))
+            if name and (name in bindings or local.vouches(name, cur.start_byte)
+                         or (target_scoped and "::" not in name)):
+                conflicts.add((name, cur.start_point[0] + 1))
+        pending.extend(cur.named_children)
+    return frozenset(conflicts)
 
 
 # ---------------------------------------------------------------------------
@@ -1570,4 +1653,7 @@ def build_cpp_intraproc_cfg(
     if fn_def is None:
         return None
     builder = _CPPCFGBuilder(function_name, file_path, language)
-    return builder.build(fn_def)
+    return replace(
+        builder.build(fn_def),
+        untrusted_call_sites=_untrusted_source_call_sites(tree.root_node, fn_def),
+    )
