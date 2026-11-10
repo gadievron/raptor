@@ -35,6 +35,7 @@ therefore run hermetically on runners lacking the capability).
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import json
 import resource
 import socket
@@ -58,6 +59,7 @@ from core.llm.dispatcher._usage_scan_child import (
 from core.security.log_sanitisation import sanitise_for_terminal
 
 from core.testing.sockets import socket_worker_setup
+from core.testing.processes import reap_on_exit
 
 # ---------------------------------------------------------------------------
 # corpus: (head, tail, truncated, content_type) — normal + hostile
@@ -729,52 +731,56 @@ class TestStartupAttribution:
             child_argv.append("-P")
         child_argv += ["-m", "core.llm.dispatcher._usage_scan_child"]
 
-        parent_sock, child_sock = socket.socketpair()
-        try:
-            proc = subprocess.Popen(
-                child_argv + [str(child_sock.fileno())],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                close_fds=True,
-                pass_fds=(child_sock.fileno(),),
-                cwd=usage_scan_jail._raptor_dir(),
-                env=env,
-            )
-        finally:
-            child_sock.close()
-        frame_id = payload = None
-        try:
-            parent_sock.settimeout(usage_scan_jail._READY_TIMEOUT_S)
+        with ExitStack() as resources:
+            parent_sock, child_sock = socket.socketpair()
+            resources.callback(parent_sock.close)
+            resources.callback(child_sock.close)
             try:
-                header = _recv_exact(parent_sock, FRAME_HEADER.size)
-                length, frame_id = FRAME_HEADER.unpack(header)
-                payload = json.loads(_recv_exact(parent_sock, length))
-            except (OSError, ValueError) as exc:
+                proc = subprocess.Popen(
+                    child_argv + [str(child_sock.fileno())],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    close_fds=True,
+                    pass_fds=(child_sock.fileno(),),
+                    cwd=usage_scan_jail._raptor_dir(),
+                    env=env,
+                )
+                resources.enter_context(reap_on_exit(proc))
+            finally:
+                child_sock.close()
+            frame_id = payload = None
+            try:
+                parent_sock.settimeout(usage_scan_jail._READY_TIMEOUT_S)
                 try:
-                    _, stderr = proc.communicate(timeout=10)
+                    header = _recv_exact(parent_sock, FRAME_HEADER.size)
+                    length, frame_id = FRAME_HEADER.unpack(header)
+                    payload = json.loads(_recv_exact(parent_sock, length))
+                except (OSError, ValueError) as exc:
+                    try:
+                        _, stderr = proc.communicate(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        _, stderr = proc.communicate()
+                    pytest.fail(
+                        "worker died before the ready frame: read failed "
+                        f"with {exc!r}; exit status {proc.returncode}; "
+                        "child stderr:\n"
+                        + stderr.decode("utf-8", "backslashreplace"))
+                assert frame_id == READY_FRAME_ID
+                # ready:false here is a real confinement failure — surface
+                # the attributed error (this is exactly the signal the
+                # attribution frame exists to carry).
+                assert payload.get("ready") is True, (
+                    f"worker refused to confine: {payload}")
+                assert isinstance(payload.get("landlock"), bool)
+            finally:
+                parent_sock.close()  # EOF -> clean child exit
+                try:
+                    proc.wait(timeout=10)
                 except subprocess.TimeoutExpired:
                     proc.kill()
-                    _, stderr = proc.communicate()
-                pytest.fail(
-                    "worker died before the ready frame: read failed "
-                    f"with {exc!r}; exit status {proc.returncode}; "
-                    "child stderr:\n"
-                    + stderr.decode("utf-8", "backslashreplace"))
-            assert frame_id == READY_FRAME_ID
-            # ready:false here is a real confinement failure — surface
-            # the attributed error (this is exactly the signal the
-            # attribution frame exists to carry).
-            assert payload.get("ready") is True, (
-                f"worker refused to confine: {payload}")
-            assert isinstance(payload.get("landlock"), bool)
-        finally:
-            parent_sock.close()  # EOF -> clean child exit
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=10)
+                    proc.wait(timeout=10)
 
     def test_startup_exception_reports_stage_in_ready_frame(
         self, monkeypatch,
