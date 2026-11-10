@@ -25,7 +25,9 @@ def test_array_prep_never_enters_prefix_evaluation():
 
     producer = module_function_view(arithmetic_seeds, import_hook=local_import)
     gap = {"file": "math.c", "name": "Read", "line_start": 1, "line_end": 1}
-    assert producer.seed_arithmetic_hypotheses([gap], {"math.c": SOURCE}, mode="quality", integer_abi="lp64") == 1
+    assert producer.seed_arithmetic_hypotheses([gap], {"math.c": SOURCE}, mode="quality", integer_abi="lp64") == 2
+    assert [row["arithmetic_site"]["claim_kind"] for row in gap["injected_hypotheses"]] == [
+        "fixed-array-read", "integer-wrap"]
     seed = gap["injected_hypotheses"][0]
     assert seed["arithmetic_site"]["binding_status"] == "candidate"
     assert seed["arithmetic_site"]["object_extent"] == 4

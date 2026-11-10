@@ -60,6 +60,35 @@ def _range_constant(atoms, op, types, abi, frame):
     return None
 
 
+def _range_can_wrap(atoms, op, types, abi, frame):
+    """A pure storage-range candidate filter for value-preserving frames."""
+    if op == "-" and atoms[0] == atoms[1]:
+        return False
+    ranges = []
+    declared = dict(types)
+    for atom in atoms:
+        value = integer_literal_value(atom)
+        if value is not None:
+            ranges.append((value, value))
+            continue
+        kind = integer_type(declared.get(atom), abi)
+        if kind is None:
+            return False
+        ranges.append((-(1 << (kind.width - 1)) if kind.signed else 0,
+                       (1 << (kind.width - (1 if kind.signed else 0))) - 1))
+    (al, ah), (bl, bh) = ranges
+    if op == "+":
+        low, high = al + bl, ah + bh
+    elif op == "-":
+        low, high = al - bh, ah - bl
+    else:
+        corners = [a * b for a in (al, ah) for b in (bl, bh)]
+        low, high = min(corners), max(corners)
+    minimum = -(1 << (frame.width - 1)) if frame.signed else 0
+    maximum = (1 << (frame.width - (1 if frame.signed else 0))) - 1
+    return low < minimum or high > maximum
+
+
 def _operations(source, language, abi):
     parser = _get_parser(language)
     if parser is None:
@@ -75,7 +104,7 @@ def _operations(source, language, abi):
             return data[node.start_byte:node.end_byte].decode("utf-8")
         return source_integer_atom(node, data)
 
-    pending, candidates, comparisons, accesses, visited = [root], [], [], [], 0
+    pending, candidates, comparisons, accesses, wraps, visited = [root], [], [], [], [], 0
     while pending:
         node = pending.pop()
         visited += 1
@@ -93,22 +122,25 @@ def _operations(source, language, abi):
         if node.type == "binary_expression":
             op_node = node.child_by_field_name("operator")
             op = data[op_node.start_byte:op_node.end_byte].decode() if op_node else ""
-            if op in {"/", "%", "<<", ">>"} or op in _COMPARISONS:
+            if op in {"/", "%", "<<", ">>", "+", "-", "*"} or op in _COMPARISONS:
                 atoms = tuple(atom(node.child_by_field_name(side))
                               for side in ("left", "right"))
                 if None not in atoms:
                     if op in _COMPARISONS:
                         if len(comparisons) < _MAX_CANDIDATES:
                             comparisons.append((op, atoms))
+                    elif op in {"+", "-", "*"}:
+                        if len(wraps) < _MAX_CANDIDATES:
+                            wraps.append((op, atoms))
                     else:
                         candidates.append((op, atoms))
                         if len(candidates) > _MAX_CANDIDATES:
                             return []
         pending.extend(reversed(node.named_children))
-    result = []
+    result, deferred_wraps = [], []
     # Preserve the arithmetic intake and prompt budget even when a function
     # has many ordinary comparisons. New hints cannot evict old candidates.
-    for op, atoms in dict.fromkeys(candidates + comparisons):
+    for op, atoms in dict.fromkeys(candidates + comparisons + wraps):
         select = _select_comparison_site if op in _COMPARISONS else _select_arithmetic_site
         status, selected_data, _, target = select(source, atoms, op, language=language)
         if status != "bound":
@@ -138,6 +170,13 @@ def _operations(source, language, abi):
                 continue
             truth_text = "true" if truth else "false"
             kinds = [(f"constant-comparison-{truth_text}", f"Comparison is always {truth_text}")]
+        elif op in {"+", "-", "*"}:
+            model = model_for_integer_terms(target, selected_data, atoms, (), abi, language=language)
+            frame = common_integer_type(atoms, model.types, abi)
+            if (model.status != "bound" or frame is None
+                    or not _range_can_wrap(atoms, op, model.types, abi, frame)):
+                continue
+            kinds = [("integer-wrap", "Potential integer overflow")]
         elif op in {"/", "%"}:
             model = model_for_integer_terms(target, selected_data, atoms, (), abi, language=language)
             frame = common_integer_type(atoms, model.types, abi)
@@ -163,7 +202,8 @@ def _operations(source, language, abi):
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:
-                result.append((target, op, atoms, claim_kind, mechanism, {}))
+                destination = deferred_wraps if op in {"+", "-", "*"} else result
+                destination.append((target, op, atoms, claim_kind, mechanism, {}))
     for target, array, index in accesses:
         from .array_bounds import array_access_candidate
         mechanism = f"Potential out-of-bounds read at `{array}[{index}]`."
@@ -173,7 +213,8 @@ def _operations(source, language, abi):
         if access.status == "candidate":
             result.append((target, "[]", (array, index), "fixed-array-read", mechanism,
                            {"object_extent": access.extent, "access_kind": "read", "binding_status": "candidate"}))
-    return result
+    # Existing source leads retain their ordering and finite prompt budget.
+    return result + deferred_wraps
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
