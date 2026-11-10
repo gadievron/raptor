@@ -89,6 +89,30 @@ ENTRIES = (
         ("c.integer-promotion", "c.integer-conversion"),
     ),
     ReferenceEntry(
+        "c.integer-update", 1, "c", ("c11",),
+        "Increment and decrement values",
+        ("increment", "decrement", "update", "prefix", "postfix", "store"),
+        "Separate expression values, intermediate calculation and subsequent storage conversion.",
+        "For a non-atomic integer object designated by a modifiable lvalue, "
+        "increment adds one and decrement subtracts one. Prefix yields the "
+        "updated stored value; postfix yields the prior value, whose computation "
+        "precedes the object update. Evaluate the operand's lvalue once. "
+        "Determine arithmetic evaluation types using required promotions and "
+        "conversions, perform the operation, then convert for storage. Signed "
+        "arithmetic outside the evaluated result type's range is undefined; a "
+        "representable promoted computation followed by out-of-range signed "
+        "storage conversion instead follows the implementation-defined result "
+        "or signal rule. Unsigned storage alone does not establish unsigned "
+        "intermediate arithmetic.",
+        ("Pointer, floating and atomic updates need their own rules and facts.",
+         "Keep the old or new expression value, evaluated result type and stored type distinct.",
+         "Check sequencing relative to other accesses separately; this core does not establish whole-expression safety."),
+        ("configured language edition", "operand type and atomicity", "arithmetic types and ranges",
+         "stored type and range", "operand values", "sequencing with other accesses"),
+        (_N1570 + " sections 6.5.2.4, 6.5.3.1 and 6.5.16.1-2",),
+        ("c.integer-definedness", "c.integer-conversion"),
+    ),
+    ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
         "Integer arithmetic definedness",
         ("overflow", "wrap", "wrapping", "definedness", "undefined", "arithmetic"),
