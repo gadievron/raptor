@@ -200,7 +200,6 @@ class BoundedParser:
                 )
             return 0.0
         if budget != self._budget_s:
-            self._budget_s = budget
             with warnings.catch_warnings():
                 # The deprecation points at progress_callback,
                 # which is a no-op for bytestring parses — see
@@ -213,6 +212,7 @@ class BoundedParser:
                 )
                 # A positive budget must not become the native opt-out.
                 self._parser.timeout_micros = max(1, micros) if budget > 0 else 0
+            self._budget_s = budget
         return budget
 
     def __getattr__(self, name: str) -> Any:
