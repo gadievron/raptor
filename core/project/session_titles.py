@@ -47,11 +47,13 @@ def state_directory() -> Path:
 
 
 def _legacy_state(directory: Path, name: str) -> dict | None:
+    from core.source.streams import owned_fd
+
     try:
         parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None
-    try:
+    with owned_fd(parent, close_fd=os.close):
         info = os.fstat(parent)
         if (info.st_uid != os.geteuid() or info.st_mode & 0o077):
             raise PermissionError('legacy title state directory must be private')
@@ -61,8 +63,6 @@ def _legacy_state(directory: Path, name: str) -> dict | None:
             raw, info = _read_capped_or_raise(Path(name), 4096, follow_symlinks=False, dir_fd=parent)
         except FileNotFoundError:
             return None
-    finally:
-        os.close(parent)
     if info.st_uid != os.geteuid() or info.st_mode & 0o077:
         raise PermissionError('legacy title state file must be private')
     value = loads(raw, max_bytes=4096)
