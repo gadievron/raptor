@@ -106,3 +106,35 @@ def test_tier1_cannot_normalise_a_finding_to_another_sink_line(tmp_path):
                              sink_uri="App.java", sink_line=5, sink_class="xss", language="java",
                              complete=lambda *_args: reply)
     assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
+
+
+
+def _run_charset_consumer(consumer, tmp_path):
+    arguments = dict(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
+                     sink_uri="app.py", sink_line=4, sink_class="xss", language="python")
+    if consumer == "tier0":
+        return sb.try_tier0(**arguments)
+    import json
+    from core.dataflow import tier1_llm as tier1
+
+    reply = json.dumps({"kind": "charset", "validator_source_line": GUARD.strip(),
+                        "variable_name": "value", "charset": "a-z", "forbidden": "", "library_call": ""})
+    return tier1.try_tier1b(**arguments, complete=lambda *_args: reply)
+
+
+@pytest.mark.skipif(not z3_available(), reason="requires native Z3")
+@pytest.mark.parametrize("consumer", ["tier0", "tier1"])
+def test_invalid_source_encoding_cannot_be_replaced_into_a_proof(tmp_path, consumer):
+    (tmp_path / "app.py").write_bytes(PREFIX.encode() + b"# invalid UTF-8: \xff\n")
+    result = _run_charset_consumer(consumer, tmp_path)
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
+    assert result.extras["unverified_source_profile"] == "invalid_utf8_source"
+    assert result.artifact is None
+
+
+@pytest.mark.skipif(not z3_available(), reason="requires native Z3")
+@pytest.mark.parametrize("consumer", ["tier0", "tier1"])
+def test_valid_unicode_is_not_mistaken_for_lossy_decoding(tmp_path, consumer):
+    (tmp_path / "app.py").write_bytes((PREFIX + "# valid Unicode: π \ufffd\n").encode())
+    result = _run_charset_consumer(consumer, tmp_path)
+    assert result.status is sb.Tier0Status.SOUND, result.reasoning

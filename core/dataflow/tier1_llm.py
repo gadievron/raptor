@@ -765,7 +765,14 @@ def try_tier1b(
         )
     # Source-wide binding checks need the complete file, including
     # declarations after the sink. A visible sink does not prove completeness.
-    got = read_text_capped(src_path, errors="replace", newline="")
+    try:
+        got = read_text_capped(src_path, errors="strict", newline="")
+    except UnicodeDecodeError:
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            "source is not valid UTF-8; exact source proof unavailable",
+            spec=spec, extras={"unverified_source_profile": "invalid_utf8_source"},
+        )
     if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
