@@ -161,8 +161,9 @@ def _snapshot(scope) -> dict:
 
 
 def _finish_scope(scope) -> dict:
-    report: dict[str, object] = {'usage': _snapshot(scope), 'cleanup': 'failed'}
+    report: dict[str, object] = {'usage': {}, 'cleanup': 'failed'}
     try:
+        report['usage'] = _snapshot(scope)
         scope.close_admission()
         report['killed_remaining_processes'] = scope.stop(timeout=5)
         # Includes final CPU and OOM accounting; the pre-kill snapshot remains
