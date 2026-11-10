@@ -1128,6 +1128,7 @@ jobs:
         # miswiring-scan.yml sweep.
         run: |
           python -m pytest .github/tests .github/scripts/tests \
+            --durations=20 \
             --ignore=.github/tests/test_redos_idiom_census.py \
             --junitxml="$RUNNER_TEMP/ci-lint.xml"
 
