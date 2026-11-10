@@ -1674,15 +1674,43 @@ def _python_unpack_load(node: ast.AST) -> bool:
     )
 
 
+def _python_collection_key_dispatch(node: ast.AST) -> bool:
+    """Unknown collection keys may invoke hash or equality callbacks.
+
+    Source-literal scalar/tuple keys only avoid this negative boundary;
+    effects in dictionary values remain subject to descendant checks.
+    """
+    pending: list[ast.AST | None]
+    if isinstance(node, ast.Dict):
+        pending = list(node.keys)
+    elif isinstance(node, ast.Set):
+        pending = list(node.elts)
+    else:
+        return False
+    literal_types = (str, bytes, int, float, complex, bool, type(None), type(Ellipsis))
+    while pending:
+        key = pending.pop()
+        if isinstance(key, ast.Constant) and any(
+            type(key.value) is primitive for primitive in literal_types
+        ):
+            continue
+        if isinstance(key, ast.Tuple) and isinstance(key.ctx, ast.Load):
+            pending.extend(key.elts)
+            continue
+        return True  # Includes an expansion's bare None sentinel.
+    return False
+
+
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
-            or _python_unpack_assignment(node) or _python_unpack_load(node)) or isinstance(
+            or _python_unpack_assignment(node) or _python_unpack_load(node)
+            or _python_collection_key_dispatch(node)) or isinstance(
         node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While, ast.With, ast.FormattedValue)
     ) or bool(
         getattr(node, "decorator_list", [])
     ) or any(_python_operator_dispatch(part) or _python_iteration_dispatch(part)
-             or _python_unpack_load(part)
+             or _python_unpack_load(part) or _python_collection_key_dispatch(part)
              or isinstance(part, (ast.Call, ast.Attribute, ast.Subscript, ast.FormattedValue))
              for value in _python_definition_headers(node) for part in ast.walk(value))
 
@@ -1691,7 +1719,7 @@ def _python_evaluation_dispatch(node: ast.AST) -> bool:
     """Protocol dispatch may precede a same-row consumed name read."""
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or isinstance(node, (ast.With, ast.FormattedValue)) or _python_unpack_assignment(node)
-            or _python_unpack_load(node)) or (
+            or _python_unpack_load(node) or _python_collection_key_dispatch(node)) or (
         isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     )
 
