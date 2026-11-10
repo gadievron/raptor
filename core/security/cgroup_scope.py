@@ -116,13 +116,19 @@ class Scope:
             return cls(parent / name, node, parent_fd)
         except BaseException:
             if node is not None:
-                os.close(node)
+                try:
+                    os.close(node)
+                except BaseException:
+                    pass
             if created:
                 try:
                     os.rmdir(name, dir_fd=parent_fd)
-                except OSError:
+                except BaseException:
                     pass
-            os.close(parent_fd)
+            try:
+                os.close(parent_fd)
+            except BaseException:
+                pass
             raise
 
     @classmethod
