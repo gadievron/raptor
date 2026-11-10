@@ -560,7 +560,7 @@ class AuditKnowledgeRuntime:
         self.notify()
 
     def write_artifacts(self, out_dir: Path) -> None:
-        from core.json import save_json
+        from core.json import dumps_canonical, save_json
         from .record import append_audit_log
 
         out_dir = Path(out_dir)
@@ -581,9 +581,8 @@ class AuditKnowledgeRuntime:
                     refs = []
                     for material in answer.get(field, ()):
                         import hashlib
-                        import json
                         material_id = material.get("binding_id") or hashlib.sha256(
-                            json.dumps(material, sort_keys=True).encode()).hexdigest()
+                            dumps_canonical(material).encode("utf-8")).hexdigest()
                         materials[material_id] = material
                         refs.append(material_id)
                     answer[field] = refs

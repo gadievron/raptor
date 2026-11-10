@@ -59,7 +59,7 @@ _PRIORITIES = frozenset(("critical", "high", "normal", "low"))
 _MAX_PER_FIELD = 16
 
 
-def _text(item: dict, name: str, limit: int, *, required: bool = True) -> str | None:
+def _bounded_field_text(item: dict, name: str, limit: int, *, required: bool = True) -> str | None:
     value = item.get(name, "" if not required else None)
     if not isinstance(value, str) or len(value) > limit:
         return None
@@ -96,8 +96,8 @@ def register_requests(review: object, origin: KnowledgeOrigin) -> KnowledgeBatch
             if not isinstance(item, dict):
                 refuse("expected_object")
                 continue
-            subject = _text(item, "subject" if kind == "target_study" else "topic", 96 if kind == "target_study" else 512)
-            context = _text(item, "context" if kind == "target_study" else "needed_for", 1000, required=False)
+            subject = _bounded_field_text(item, "subject" if kind == "target_study" else "topic", 96 if kind == "target_study" else 512)
+            context = _bounded_field_text(item, "context" if kind == "target_study" else "needed_for", 1000, required=False)
             priority = item.get("priority", "normal")
             if subject is None or context is None or not isinstance(priority, str) or priority not in _PRIORITIES:
                 refuse("invalid_request_fields")
@@ -117,7 +117,7 @@ def register_requests(review: object, origin: KnowledgeOrigin) -> KnowledgeBatch
                     refuse("invalid_identifier_subject")
                     continue
             else:
-                entry_id = _text(item, "entry_id", 96, required=False)
+                entry_id = _bounded_field_text(item, "entry_id", 96, required=False)
                 if entry_id is None:
                     refuse("invalid_reference_id")
                     continue
