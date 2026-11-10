@@ -54,15 +54,16 @@ def test_wedged_holder_degrades_after_bounded_wait(
                         raising=False)
     project_file = tmp_path / "project.json"
     lock = tmp_path / "project.json.lock"
+    thread = None
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    entered = threading.Event()
-
-    def mutator() -> None:
-        with project_file_lock(project_file):
-            entered.set()
-
-    thread = threading.Thread(target=mutator, daemon=True)
     try:
+        entered = threading.Event()
+
+        def mutator() -> None:
+            with project_file_lock(project_file):
+                entered.set()
+
+        thread = threading.Thread(target=mutator, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         with caplog.at_level("WARNING"):
             thread.start()
@@ -74,7 +75,7 @@ def test_wedged_holder_degrades_after_bounded_wait(
         assert any("WITHOUT" in r.message for r in caplog.records)
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
