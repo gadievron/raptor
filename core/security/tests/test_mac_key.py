@@ -9,6 +9,7 @@ no suspect-key warning on the benign race.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import itertools
 import multiprocessing
 import os
@@ -17,6 +18,7 @@ from core.testing.module_bindings import patch_module_attribute
 import stat
 import time
 from pathlib import Path
+from threading import BrokenBarrierError
 
 import pytest
 
@@ -353,11 +355,25 @@ def _parallel_creator(path_str: str, barrier, queue) -> None:
     """Cross-process worker: create/load the shared key, report
     (key hex or None, suspect-key warn reasons)."""
     warns: list[str] = []
-    barrier.wait()  # line all creators up on the O_EXCL race
+    try:
+        barrier.wait()  # line all creators up on the O_EXCL race
+    except BrokenBarrierError:
+        return
     key = mac_key.load_or_create_key(
         Path(path_str), key_len=_KEY_LEN,
         warn=lambda path, reason, remedy: warns.append(reason))
     queue.put((None if key is None else key.hex(), warns))
+
+
+def _retire_creator(process):
+    if process.pid is not None:
+        try:
+            if process.is_alive():
+                process.kill()
+        finally:
+            process.join(timeout=5)
+        assert not process.is_alive(), "test-owned key creator survived cleanup"
+    process.close()
 
 
 class TestParallelCreators:
@@ -372,18 +388,27 @@ class TestParallelCreators:
         ctx = multiprocessing.get_context(
             "fork" if "fork" in methods else "spawn")
         barrier = ctx.Barrier(n)
-        queue = ctx.Queue()
-        procs = [
-            ctx.Process(
-                target=_parallel_creator,
-                args=(str(key_path), barrier, queue))
-            for _ in range(n)
-        ]
-        for p in procs:
-            p.start()
-        results = [queue.get(timeout=30) for _ in range(n)]
-        for p in procs:
-            p.join(timeout=30)
+        with ExitStack() as cleanup:
+            queue = ctx.Queue()
+            # This parent only reads: it may have no feeder finalizer to
+            # close the pipe endpoints when a retained traceback owns it.
+            cleanup.callback(queue._writer.close)
+            cleanup.callback(queue._reader.close)
+            cleanup.callback(queue.join_thread)
+            cleanup.callback(queue.close)
+            procs = []
+            for _ in range(n):
+                p = ctx.Process(target=_parallel_creator,
+                                args=(str(key_path), barrier, queue))
+                cleanup.callback(_retire_creator, p)
+                procs.append(p)
+            cleanup.callback(barrier.abort)
+            for p in procs:
+                p.start()
+            results = [queue.get(timeout=30) for _ in range(n)]
+            for p in procs:
+                p.join(timeout=30)
+            assert all(p.exitcode == 0 for p in procs)
 
         keys = {key_hex for key_hex, _ in results}
         assert None not in keys, results
