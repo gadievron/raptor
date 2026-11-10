@@ -34,6 +34,7 @@ permissions:
 
 jobs:
   release:
+    if: github.repository == 'gadievron/raptor'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
