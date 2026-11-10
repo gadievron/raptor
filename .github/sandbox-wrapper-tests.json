@@ -742,25 +742,6 @@
       ]
     },
     {
-      "source": "packages/zkpox/envelope.py",
-      "entrypoints": [
-        "_run",
-        "gen_age_keypair"
-      ],
-      "contracts": [
-        "packages/zkpox/tests/test_envelope.py::test_age_round_trip_via_keypair"
-      ]
-    },
-    {
-      "source": "packages/zkpox/prove.py",
-      "entrypoints": [
-        "run"
-      ],
-      "contracts": [
-        "packages/zkpox/tests/test_prove.py::test_run_raises_if_binary_missing"
-      ]
-    },
-    {
       "source": "packages/zkpox/reproduce.py",
       "entrypoints": [
         "_reproduce_replay"
