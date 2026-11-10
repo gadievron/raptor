@@ -7950,6 +7950,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                     capture_output=kwargs.get(
                                         "capture_output", False),
                                     text=kwargs.get("text", False),
+                                    encoding=kwargs.get("encoding"),
+                                    errors=kwargs.get("errors"),
                                     stdin=kwargs.get("stdin"),
                                     # Forwarded like the Linux spawn
                                     # dispatch — dropping them here
