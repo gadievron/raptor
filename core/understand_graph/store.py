@@ -271,25 +271,30 @@ def open_graph(path: Path) -> sqlite3.Connection:
             raise _unsafe(
                 path, "not a regular file (symlink or special file "
                       "planted at the DB slot)")
+    conn: sqlite3.Connection | None = None
     try:
-        if fh is not None:
-            pinned = os.fstat(fh.fileno())
-        conn = sqlite3.connect(path)
         try:
+            if fh is not None:
+                pinned = os.fstat(fh.fileno())
+            conn = sqlite3.connect(path)
             _verify_connected_identity(conn, path, pinned)
-        except BaseException:
-            conn.close()
-            raise
-    finally:
-        if fh is not None:
-            fh.close()
-    conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)}")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    migrate(conn)
-    return conn
+        finally:
+            if fh is not None:
+                fh.close()
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)}")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        migrate(conn)
+        return conn
+    except BaseException:
+        if conn is not None:
+            try:
+                conn.close()
+            except BaseException:
+                pass  # Preserve the setup failure after retiring the connection.
+        raise
 
 
 @contextmanager
