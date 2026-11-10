@@ -736,7 +736,8 @@ class TestWatchdogTrips:
             assert _SSE_CHUNK_ONE in received
             assert _SSE_CHUNK_TWO in received
             assert b"stream stall" not in received
-            time.sleep(1.0)  # outlast audit write + watcher poll
+            # Clean dispatch is audited after the watcher has been stopped.
+            assert _wait_audit(d, "request.dispatch"), "missing clean dispatch audit"
             assert not _audit_events(d, "request.error")
             assert upstream.connections == 1
 
@@ -771,7 +772,8 @@ class TestWatchdogTrips:
             assert _SSE_CHUNK_ONE in received
             assert _SSE_CHUNK_TWO in received
             assert b"stream stall" not in received
-            time.sleep(1.0)  # outlast audit write + watcher poll
+            # Clean dispatch is audited after the watcher has been stopped.
+            assert _wait_audit(d, "request.dispatch"), "missing clean dispatch audit"
             assert not _audit_events(d, "request.error")
             assert upstream.connections == 1
 
