@@ -94,7 +94,11 @@ class TestComputeGaps:
         assert len(gaps) == 4
 
     def test_covered_functions_excluded(self):
-        gaps = compute_gaps(_sample_checklist(), _sample_coverage_records())
+        # Legacy projection credit is an explicit compatibility policy.
+        gaps = compute_gaps(
+            _sample_checklist(), _sample_coverage_records(),
+            require_c_foundation=False,
+        )
         names = {g["name"] for g in gaps}
         assert "parse_request" not in names
         assert "handle_error" in names
@@ -199,7 +203,9 @@ class TestComputeGaps:
                               tool="audit"),
             ],
         }]
-        gaps = compute_gaps(_sample_checklist(), records)
+        gaps = compute_gaps(
+            _sample_checklist(), records, require_c_foundation=False,
+        )
         assert len(gaps) == 0
 
     def test_checked_by_no_longer_excludes(self):
@@ -863,10 +869,31 @@ class TestModernRecordCoveredSet:
                 _reviewed_row("src/handler.c", "parse_request"),
             ],
         }]
-        gaps = compute_gaps(_sample_checklist(), records)
+        gaps = compute_gaps(
+            _sample_checklist(), records, require_c_foundation=False,
+        )
         names = {g["name"] for g in gaps}
         assert "parse_request" not in names
         assert "handle_error" in names
+
+    @pytest.mark.parametrize("tool", ["llm", "audit"])
+    def test_default_c_policy_resurfaces_projection_without_changing_history(self, tool):
+        records = [{
+            "tool": tool,
+            "functions_analysed": [
+                _reviewed_row("src/handler.c", "parse_request", tool=tool),
+            ],
+        }]
+        original = json.loads(json.dumps(records))
+
+        current = compute_gaps(_sample_checklist(), records)
+        legacy = compute_gaps(
+            _sample_checklist(), records, require_c_foundation=False,
+        )
+
+        assert "parse_request" in {gap["name"] for gap in current}
+        assert "parse_request" not in {gap["name"] for gap in legacy}
+        assert records == original
 
     def test_scanned_depth_labels_never_suppress(self):
         # read / understand are llm-extent but scanned depth — review
