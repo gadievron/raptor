@@ -228,6 +228,7 @@ def _build_parser() -> argparse.ArgumentParser:
               f"majority exists)"),
     )
     siblings_p.add_argument("--json", action="store_true", help="Emit compact JSON")
+    add_report_arguments(siblings_p)
 
     fuzz_p = sub.add_parser("fuzz", help="Hand off to RAPTOR's existing fuzz workflow")
     fuzz_p.add_argument("target", help="Binary to fuzz")
@@ -1170,8 +1171,10 @@ def _run_siblings(args: argparse.Namespace) -> int:
         # hand-edited artifact must not reach the terminal raw.
         print(json.dumps(payload, sort_keys=True, ensure_ascii=True,
                          default=str))
-        return 0
-    _print_siblings_summary(payload)
+    else:
+        _print_siblings_summary(payload)
+    from .sibling_reporting import complete_sibling_report
+    complete_sibling_report(args, payload, run_dir)
     return 0
 
 
@@ -1363,7 +1366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "help":
         parser.print_help()
         return 0
-    if args.command in {"runtime", "trace-parser", "corpus"}:
+    if args.command in {"runtime", "trace-parser", "corpus", "siblings"}:
         from core.reporting.options import options_from_args
         args._report_options = options_from_args(args, parser)
     if args.command in {"investigate", "map"}:
