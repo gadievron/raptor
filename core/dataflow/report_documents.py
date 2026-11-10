@@ -52,10 +52,12 @@ def build_corpus_document(report: CorpusReport) -> ReportDocument:
 
     metadata = {"Source read state": text(report.read_state), "Source read reason": text(report.read_reason),
                 "Captured source rows": report.read_rows}
+    native_samples_omitted = report.not_sound - len(report.not_sound_samples) if report.not_sound >= len(report.not_sound_samples) else None
     summary = {"Processed outcomes": report.processed, "sound": report.sound, "not_sound": report.not_sound,
                "no_barrier": report.no_barrier, "Pipeline-error rows (separate)": sum(report.pipeline_errors.values()),
                "Suppression rate": report.suppression_rate, "Tier 0 share of sound": report.tier0_share_of_sound,
-               "Estimated Tier 0 attempts saved": report.tier0_attempts_saved(), "Retained not_sound samples": len(report.not_sound_samples)}
+               "Estimated Tier 0 attempts saved": report.tier0_attempts_saved(), "Retained not_sound samples": len(report.not_sound_samples),
+               "Diagnostic rows not retained (returned not_sound cohort)": native_samples_omitted}
     blocks = [Block("table", title=title, columns=["Row", label, "Count"], rows=counter_rows(counter, title))
               for title, label, counter in (("Pipeline errors", "Status", report.pipeline_errors),
                                            ("Backend split among SOUND verdicts", "Backend", report.sound_by_backend),
@@ -75,14 +77,16 @@ def build_corpus_document(report: CorpusReport) -> ReportDocument:
              "No database query, synthesis, model or CodeQL adjudication is repeated for rendering. The source may still be changing; rejected-row accounting and whole-run completion were not supplied. Read state and source-row counts describe only the captured query snapshot.",
              "Missing denominators remain unavailable. A zero-count aggregate does not distinguish an empty or in-flight table from an unavailable database/query.",
              "Tier 0 savings use the native rough default attempt assumption: avoided proposer attempts plus matched adjudications, not measured tokens, currency or completed work. Library backend rows are not counted as free SMT short-circuits.",
-             "Sample rows are only the retained diagnostic subset; row numbers are local to this snapshot. All observed backend/status labels in captured rows are retained, including unknown labels."]
+             "Sample rows are only the retained diagnostic subset, including the producer's existing detail truncation; full diagnostic bodies were not supplied. Row numbers are local to this snapshot. All observed backend/status labels in captured rows are retained, including unknown labels."]
     if not report.sound and not report.not_sound:
         blocks.append(Block("paragraph", text="No verdicts yet in returned aggregates; no rows yet is not proof of source completeness."))
-    limited |= any(omissions.values())
+    limited |= any(omissions.values()) or native_samples_omitted is None
     if limited:
         notes.append("Portable capture limited: 1000 rows per counter/breakdown, 100 retained samples, 2000 characters per string and 200000 text characters. Omission counts are structured; omitted text is not retained here.")
     document = ReportDocument("Trust-witness corpus report", "trust-corpus", "", summary=summary, blocks=blocks, diagnostics=notes,
                               metadata=metadata,
-                              extensions={"raptor.capture_limited": limited, "raptor.rows_omitted": omissions})
+                              extensions={"raptor.capture_limited": limited, "raptor.rows_omitted": omissions,
+                                          "raptor.native_sample_rows_not_retained": native_samples_omitted,
+                                          "raptor.native_sample_detail_completeness": "not supplied"})
     document.snapshot_id = digest(document.to_dict())
     return document
