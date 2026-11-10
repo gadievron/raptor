@@ -176,23 +176,23 @@ def test_success_keeps_private_native_records_and_reservation_contract(writer, o
 
 
 def test_record_writer_helper_failure_allocates_no_file(tmp_path, monkeypatch):
-    node = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     real_open, real_close = os.open, os.close
     owners = {}
-    primary = RuntimeError('adjacent helper unavailable')
-
-    def unavailable():
-        raise primary
-
-    def opened(*args, **kwargs):
-        fd = real_open(*args, **kwargs)
-        info = os.fstat(fd)
-        owners[fd] = (info.st_dev, info.st_ino)
-        return fd
-
-    monkeypatch.setattr(scratch_lifecycle, 'scratch', unavailable)
-    patch_module_attribute(monkeypatch, scratch_lifecycle, 'os', 'open', opened)
+    node = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     try:
+        primary = RuntimeError('adjacent helper unavailable')
+
+        def unavailable():
+            raise primary
+
+        def opened(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            info = os.fstat(fd)
+            owners[fd] = (info.st_dev, info.st_ino)
+            return fd
+
+        monkeypatch.setattr(scratch_lifecycle, 'scratch', unavailable)
+        patch_module_attribute(monkeypatch, scratch_lifecycle, 'os', 'open', opened)
         with pytest.raises(RuntimeError) as caught:
             scratch_lifecycle._write(node, 'record.json', {'owned': True})
         assert caught.value is primary
