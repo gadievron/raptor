@@ -122,10 +122,8 @@ def test_resource_dispatch_preserves_results_and_bounded_parses(tmp_path, monkey
     result = scope.compute_tier_dispatch(changed, tmp_path)
     assert not result.get("_scope", {}).get("full", False)
     assert set(result["python"]["files"]) == {first, second}
-    # The scripted mixed lane retains its separate reference/census path.
+    # Fixture and script references share the graph's single parse.
     expected = {str(value): 1, str(first): 1, str(second): 1, str(broken): 1}
-    if extra and extra.startswith("libexec/"):
-        expected.update({str(first): 2, str(second): 2, str(broken): 2})
     assert counts == expected
     assert not any(row["run"] for name, row in result.items()
                    if not name.startswith("_") and name not in {"python", "redos_census", "ci_lint"})
