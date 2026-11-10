@@ -483,6 +483,8 @@ def run_landlock_audit(
     timeout: float | None = None,
     capture_output: bool = True,
     text: bool = True,
+    encoding: str | None = None,
+    errors: str | None = None,
     stdin=None,
     stdout=None,
     stderr=None,
@@ -997,7 +999,17 @@ def run_landlock_audit(
             tracer_pid = -1
 
         # Marshal output to the requested type.
-        if text:
+        if encoding is not None or errors is not None:
+            # Explicit codecs imply text mode, just as in subprocess.run.
+            # Decode only after retirement, preserving raw bytes until the
+            # selected error handler sees them. Keep legacy defaults below.
+            import locale
+            codec = encoding or locale.getpreferredencoding(False)
+            stdout_out = stdout_bytes.decode(codec, errors or "strict")
+            stderr_out = stderr_bytes.decode(codec, errors or "strict")
+            stdout_out = stdout_out.replace("\r\n", "\n").replace("\r", "\n")
+            stderr_out = stderr_out.replace("\r\n", "\n").replace("\r", "\n")
+        elif text:
             stdout_out = stdout_bytes.decode(errors="replace")
             stderr_out = stderr_bytes.decode(errors="replace")
         else:
