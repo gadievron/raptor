@@ -187,6 +187,7 @@ def _xml(document: ReportDocument) -> RenderedReport:
 
 
 _RENDERERS: dict[str, Renderer] = {}
+_FORMAT_ALIASES = {"md": "markdown"}
 
 
 def _link_allowed(value: str) -> bool:
@@ -199,6 +200,8 @@ def _link_allowed(value: str) -> bool:
 def register_renderer(renderer: Renderer) -> None:
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", renderer.name) or not re.fullmatch(r"\.[a-z0-9]{1,10}", renderer.extension):
         raise ValueError("Unsafe renderer name or extension")
+    if renderer.name in _FORMAT_ALIASES:
+        raise ValueError(f"Renderer name is a reserved alias: {renderer.name}")
     if renderer.name in _RENDERERS:
         raise ValueError(f"Renderer already registered: {renderer.name}")
     _RENDERERS[renderer.name] = renderer
@@ -209,7 +212,7 @@ def available_formats() -> tuple[str, ...]:
 
 
 def get_renderer(name: str) -> Renderer:
-    name = "markdown" if name == "md" else name
+    name = _FORMAT_ALIASES.get(name, name)
     if name not in _RENDERERS:
         raise ValueError(f"Unsupported report format {name!r}; available: {', '.join(available_formats())}")
     return _RENDERERS[name]
