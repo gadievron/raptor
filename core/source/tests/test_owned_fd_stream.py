@@ -1,5 +1,6 @@
 """Descriptor ownership remains explicit while an IO wrapper borrows it."""
 
+from contextlib import ExitStack
 import errno
 import os
 
@@ -19,18 +20,21 @@ def assert_closed(fd):
 def owned_fd(tmp_path):
     path = tmp_path / "owned"
     path.write_bytes(b"owned bytes")
-    fd = os.open(path, os.O_RDWR)
-    info = os.fstat(fd)
-    try:
-        yield fd, path
-    finally:
+    with ExitStack() as setup:
+        fd = os.open(path, os.O_RDWR)
+        setup.callback(os.close, fd)
+        info = os.fstat(fd)
         try:
-            current = os.fstat(fd)
-        except OSError:
-            pass
-        else:
-            if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
-                os.close(fd)
+            setup.pop_all()
+            yield fd, path
+        finally:
+            try:
+                current = os.fstat(fd)
+            except OSError:
+                pass
+            else:
+                if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
+                    os.close(fd)
 
 
 @pytest.mark.parametrize("primary_type", [None, RuntimeError, KeyboardInterrupt, SystemExit])
