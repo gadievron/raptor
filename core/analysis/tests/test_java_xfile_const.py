@@ -1372,3 +1372,52 @@ class TestStringValueOfIdentity:
         for number in range(40):
             assert resolver.resolve_method(f"Missing{number}", "literal", 0, False) is REFUSE
         assert _fold('String.valueOf("fixed")', xfile=resolver) is REFUSE
+
+
+class TestFileSourceFallback:
+    @pytest.mark.parametrize("case,expected", [
+        ("mutable", False), ("literal", True), ("unavailable", False),
+        ("wildcard-jdk", True), ("unrelated-package", True),
+        ("single-import-jdk", True), ("qualified-jdk", True),
+    ])
+    def test_actual_consumer_checks_other_compilation_unit(self, tmp_path, case, expected):
+        from core.analysis.cfg_builder_java import build_java_intraproc_cfg
+        from core.analysis.dataflow import reaching_defs
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        declaration = ('class File { static String separator=System.getenv("OWNED"); }')
+        imports, receiver = "", "File"
+        if case == "literal":
+            declaration = 'class File { static final String separator="owned-literal"; }'
+        if case == "unavailable":
+            outside = tmp_path / "File.java"
+            outside.write_text(declaration)
+            (repo / "File.java").symlink_to(outside)
+        elif case == "unrelated-package":
+            (repo / "owned").mkdir()
+            (repo / "owned/File.java").write_text('package owned; ' + declaration)
+            imports = "import java.io.*;\n"
+        elif case != "wildcard-jdk":
+            (repo / "File.java").write_text(declaration)
+        if case == "wildcard-jdk":
+            imports = "import java.io.*;\n"
+        elif case == "single-import-jdk":
+            imports = "import java.io.File;\n"
+        elif case == "qualified-jdk":
+            receiver = "java.io.File"
+        source = (imports + 'class T {\nvoid m(java.io.PrintWriter out) {\n'
+                  + f'String value={receiver}.separator;\n'
+                  + 'out.println(value);\n}\n}\n')
+        caller = repo / "T.java"
+        caller.write_text(source)
+        graph = build_java_intraproc_cfg(source, "m")
+        assert graph is not None
+        index = JavaConstIndex(source, (1, len(source.splitlines())), str(caller), str(repo))
+        sink_line = source.splitlines().index("out.println(value);") + 1
+        sink = next(n for n in graph.nodes() if getattr(n, "lineno", 0) == sink_line)
+        assert definers_all_fold(reaching_defs(graph), sink, "value", index) is expected
+        if case == "literal":
+            rhs = index.rhs_at(sink_line - 1, "value")
+            assert rhs is not None
+            assert fold_expr_at(reaching_defs(graph), sink, rhs, index) == "owned-literal"

@@ -603,12 +603,14 @@ def _fold_field_access(node: Node, ext) -> Any:
         if imported == "java.io.File":
             return TAINT_FREE
         declared = "File" in _type_shadow_names_at(obj, include_top_level=True)
-        if imported is not None or declared:
+        source_may_exist = (ext.xfile is not None
+                            and ext.xfile.source_class_may_exist("File"))
+        if imported is not None or declared or source_may_exist:
             if ext.xfile is not None:
                 return ext.xfile.resolve_field(imported or chain, field, True)
             return _REFUSE
-        # Preserve the existing unresolved/wildcard shortcut. This guard
-        # addresses positive source/import evidence, not classpath binding.
+        # Preserve the unresolved/wildcard shortcut only after available
+        # source lookup has established a miss, rather than a refusal.
         return TAINT_FREE
     if ext.xfile is not None:
         return ext.xfile.resolve_field(chain, field,
