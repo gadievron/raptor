@@ -67,7 +67,8 @@ def test_shift_lookup_retains_complete_conditions_and_independent_promotions(edi
 @pytest.mark.parametrize("context", [ReferenceContext("c", "c23"), ReferenceContext("cpp", "c++11")],
                          ids=["other-c-edition", "cpp"])
 @pytest.mark.parametrize("entry_id", ["c.integer-shift", "c.integer-update", "c.integer-unary-sign",
-                                     "c.integer-division"], ids=["shift", "update", "unary-sign", "division"])
+                                     "c.integer-division", "c.integer-conditional"],
+                         ids=["shift", "update", "unary-sign", "division", "conditional"])
 def test_operator_entries_do_not_guess_language_mode(context, entry_id):
     answer = lookup("owned", "", context, entry_id=entry_id)
     assert answer.status == "unsupported" and answer.entries == ()
@@ -129,3 +130,18 @@ def test_ambiguous_topic_retains_conditions_and_candidate_status():
     assert answer.status == "ambiguous"
     assert len(answer.entries) > 1
     assert all(entry.conditions and entry.citations for entry in answer.entries)
+
+
+@pytest.mark.parametrize("edition", [None, "c11"], ids=["unknown-edition", "c11"])
+def test_conditional_core_separates_both_arm_typing_from_selected_evaluation(edition):
+    answer = lookup("owned", "", ReferenceContext("c", edition), entry_id="c.integer-conditional")
+    assert answer.status == ("needs_target_facts" if edition is None else "answered")
+    assert [entry.entry_id for entry in answer.entries] == [
+        "c.integer-promotion", "c.integer-usual-conversions", "c.integer-conversion", "c.integer-conditional"]
+    core = answer.entries[-1].render_core()
+    for condition in ("scalar condition and two integer arms", "sequence point",
+                      "unequal to zero", "Only the selected arm is evaluated",
+                      "as if applied to both arms", "selected value", "does not yield an lvalue",
+                      "Both arms must satisfy", "outside this integer core", "6.5.15"):
+        assert condition in core
+    assert answer.missing_facts == (("language edition",) if edition is None else ())

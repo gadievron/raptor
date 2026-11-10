@@ -42,6 +42,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
     update = False
     unary_sign = False
     division = False
+    conditional = False
     stack = [tree.root_node]
     visited = 0
     while stack:
@@ -74,6 +75,8 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
             operator = node.child_by_field_name("operator")
             if operator is not None:
                 unary_sign = unary_sign or raw[operator.start_byte:operator.end_byte] in (b"+", b"-")
+        elif node.type == "conditional_expression":
+            conditional = True
         stack.extend(node.children)
     selected: tuple[str, ...] = _FOUNDATION_IDS
     if arithmetic or comparison or bitwise:
@@ -88,6 +91,8 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         selected += ("c.integer-unary-sign",)
     if division:
         selected += ("c.integer-division",)
+    if conditional:
+        selected += ("c.integer-conditional",)
     return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
 
 
