@@ -839,6 +839,10 @@ def run_sandboxed(cmd: list[str], *,
             msg,
             "run image-rootfs sandboxes on a Linux host.",
         )
+    if input is not None and stdin is not None:
+        msg = "stdin and input arguments may not both be used."
+        raise ValueError(msg)
+
     # 0. Validate audit-mode + audit_run_dir invariant. Mirrors
     # core/sandbox/_spawn.py for parity — caller asking for audit
     # without giving the tracer a place to write JSONL is almost
@@ -1477,9 +1481,6 @@ def run_sandboxed(cmd: list[str], *,
         _status_state["data"] = data
         return data
 
-    if input is not None and stdin is not None:
-        msg = "stdin and input arguments may not both be used."
-        raise ValueError(msg)
     _popen_stdin = subprocess.PIPE if input is not None else stdin
     # Loader-variable quarantine: the seatbelt shim is an UNSANDBOXED
     # trusted dispatcher carrying _RAPTOR_TRUSTED — DYLD_*/LD_* from a
