@@ -158,6 +158,8 @@ def _is_database(path: Path) -> bool:
     actual database with a JSON suffix remains protected. An unreadable or
     replaced entry stays protected; never follow a link or wait on a FIFO.
     """
+    from core.source.streams import owned_fd
+
     name = path.name.lower()
     if not any(part in name for part in ('.sqlite', '.db')):
         return False
@@ -166,20 +168,21 @@ def _is_database(path: Path) -> bool:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
                      | getattr(os, 'O_NOATIME', 0))
-        try:
-            info = os.fstat(fd)
-            # A newly opened SQLite database may still be an empty file.
-            if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+        with owned_fd(fd, close_fd=os.close):
+            try:
+                info = os.fstat(fd)
+                # A newly opened SQLite database may still be an empty file.
+                if not stat.S_ISREG(info.st_mode) or info.st_size == 0:
+                    return True
+                header = bytearray()
+                while len(header) < 16:
+                    chunk = os.read(fd, 16 - len(header))
+                    if not chunk:
+                        break
+                    header.extend(chunk)
+                return header == b'SQLite format 3\x00'
+            except OSError:
                 return True
-            header = bytearray()
-            while len(header) < 16:
-                chunk = os.read(fd, 16 - len(header))
-                if not chunk:
-                    break
-                header.extend(chunk)
-            return header == b'SQLite format 3\x00'
-        finally:
-            os.close(fd)
     except OSError:
         return True
 
