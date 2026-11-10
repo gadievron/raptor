@@ -116,13 +116,16 @@ def test_racing_writers_publish_exactly_one_complete_record(tmp_path):
             errors.append(exc)
 
     workers = [threading.Thread(target=write, args=(index,)) for index in range(4)]
-    try:
-        for worker in workers:
-            worker.start()
-    finally:
-        for worker in workers:
-            if worker.ident is not None:
-                worker.join(timeout=5)
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads(workers, release=barrier.abort, timeout=5):
+        try:
+            for worker in workers:
+                worker.start()
+        finally:
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(timeout=5)
     assert not any(worker.is_alive() for worker in workers)
     assert not errors
     assert len(winners) == 1 and len(collisions) == 3
