@@ -19,6 +19,7 @@ class CommandCapability:
 
 
 CAPABILITIES = (
+    CommandCapability("scorecard-audit", "scorecard-audit", "explicit destination required", "native Markdown/JSON; requested quick summary on stderr", "calibration readiness and integrity flags; native green/amber/red/no-data gate retained"),
     CommandCapability("llm-scorecard list/recommend/chain-closure", "scorecard-list/scorecard-recommend/scorecard-chain-closure", "explicit destination required", "native stdout; export quick view on stderr", "native filtering, selected event, freshness drift and rank order retained; no routing change"),
     CommandCapability("llm-scorecard summary/compare", "scorecard-summary/scorecard-compare", "explicit destination required", "native stdout; export quick view on stderr", "single captured read and native dashboard/comparison payload; policy and spend calculations retained"),
     CommandCapability("llm-scorecard samples", "scorecard-samples", "explicit destination required", "native typed sample view; export quick summary on stderr", "retained samples and read integrity only; no policy update or model call"),
