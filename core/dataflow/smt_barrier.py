@@ -1706,7 +1706,8 @@ def _python_possible_call(node: ast.AST) -> bool:
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
             or _python_unpack_assignment(node) or _python_unpack_load(node)
             or _python_collection_key_dispatch(node)) or isinstance(
-        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While, ast.With, ast.FormattedValue)
+        node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript, ast.If, ast.While,
+               ast.With, ast.FormattedValue, ast.Import, ast.ImportFrom)
     ) or bool(
         getattr(node, "decorator_list", [])
     ) or any(_python_operator_dispatch(part) or _python_iteration_dispatch(part)
@@ -1716,9 +1717,10 @@ def _python_possible_call(node: ast.AST) -> bool:
 
 
 def _python_evaluation_dispatch(node: ast.AST) -> bool:
-    """Protocol dispatch may precede a same-row consumed name read."""
+    """Opaque evaluation may precede a same-row consumed name read."""
     return (_python_operator_dispatch(node) or _python_iteration_dispatch(node)
-            or isinstance(node, (ast.With, ast.FormattedValue)) or _python_unpack_assignment(node)
+            or isinstance(node, (ast.With, ast.FormattedValue, ast.Import, ast.ImportFrom))
+            or _python_unpack_assignment(node)
             or _python_unpack_load(node) or _python_collection_key_dispatch(node)) or (
         isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     )
