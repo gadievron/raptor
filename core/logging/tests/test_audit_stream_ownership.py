@@ -24,7 +24,8 @@ def test_native_codec_failure_preserves_primary_and_existing_log(tmp_path):
     handler = audit._OwnerOnlyFileHandler(path, encoding="raptor-no-such-audit-codec", delay=True)
     try:
         with pytest.raises(LookupError, match="unknown encoding"):
-            handler.emit(_record())
+            # Setup ownership is independent of FileHandler.emit error reporting.
+            handler._open()
         assert handler.stream is None
         assert path.read_text() == "prior record\n"
     finally:
@@ -71,7 +72,8 @@ def test_stream_setup_retires_only_its_owned_descriptor(tmp_path, monkeypatch, e
     handler = audit._OwnerOnlyFileHandler(path, encoding="utf-8", delay=True)
     try:
         with pytest.raises(error_type) as caught:
-            handler.emit(_record())
+            # Setup ownership is independent of FileHandler.emit error reporting.
+            handler._open()
         assert caught.value is primary
         assert len(allocated) == 1 and handler.stream is None
         if transferred:
