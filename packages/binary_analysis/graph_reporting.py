@@ -43,10 +43,14 @@ def complete_graph_report(args, payload: dict | None, db_path: Path, status: int
         root = default_root
         if options.output is not None:
             root = options.output if options.output.is_dir() or not options.output.suffix else options.output.parent / ("." + options.output.stem + "-report")
+        retention = ("No native graph-query payload was captured." if payload is None else
+                     "Summary view contains counts and snapshot metadata, not evidence properties or free-form summaries."
+                     if mode == "summary" else
+                     "Evidence properties and free-form summaries are omitted; native JSON retains them.")
         result = NativeResult("binary-graph-query", str(db_path), "unknown", _safe(data), artifacts=artifacts,
                               state="failed" if status else "completed", metrics=metrics,
                               diagnostics=["This is a captured query view, not a new analysis or validation. Counts describe returned records under the selected filter, not whole-program coverage.",
-                                           "Evidence properties and free-form summaries are omitted; native JSON retains them. Recorded confidence and tier labels do not establish a finding verdict.",
+                                           retention + " Recorded confidence and tier labels do not establish a finding verdict.",
                                            "Report records are capped at 100, maps at 100 fields and strings at 2000 characters; omitted record counts are explicit. Existing graph snapshot IDs are recorded claims, not adopted run identities."])
         return complete_native_result(result, root, stem="graph-query-report", options=options, stream=sys.stderr)
     except (OSError, ValueError, TypeError, KeyError) as exc:
