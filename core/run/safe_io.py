@@ -79,12 +79,12 @@ def safe_run_mkdir(path: Path | str) -> None:
         # the directory we just created, so a hostile umask cannot
         # strip our own write bit and an attacker who can rewrite the
         # parent cannot redirect a path-based chmod.
+        from core.source.streams import owned_fd
+
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY
                      | getattr(os, "O_NOFOLLOW", 0))
-        try:
+        with owned_fd(fd, close_fd=os.close):
             os.fchmod(fd, 0o700)
-        finally:
-            os.close(fd)
         return
 
     st = os.lstat(path)
