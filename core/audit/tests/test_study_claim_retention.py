@@ -361,3 +361,186 @@ def test_study_preserves_requested_review_mode(study_case, monkeypatch, multi_mo
     _knowledge_reassess(case, _new_suspicion())
     assert len(dispatched) == expected
     assert not dispatched or dispatched == [passes]
+
+
+def test_status_change_requires_journal_acknowledgement(study_case, monkeypatch):
+    from core.audit import collector
+
+    case = study_case
+    case["config"].immediate_verify = False
+    case["prior"].status = "clean"
+    case["result"].clean, case["result"].suspicious = 1, 0
+    monkeypatch.setattr(collector, "append_journal_for_outcome", lambda **kwargs: None)
+    runtime = _knowledge_reassess(case, _new_suspicion())
+    assert case["result"].outcomes == [case["prior"]]
+    assert case["result"].outcomes[0] is case["prior"]
+    assert case["result"].clean == 1 and case["result"].suspicious == 0
+    assert case["result"].total_cost_usd == 0.7
+    assert not orch.get_reviewed_set(case["config"].out_dir)
+    assert any(e.get("reason") == "study_journal_write_failed" for e in runtime.events())
+
+
+def _clean_prior(case):
+    case["config"].immediate_verify = False
+    case["prior"].status = "clean"
+    case["result"].clean, case["result"].suspicious = 1, 0
+
+
+def test_status_change_publication_keeps_journal_and_counters_together(study_case):
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    _clean_prior(case)
+    fresh = _new_suspicion()
+    runtime = _knowledge_reassess(case, fresh)
+    assert case["result"].outcomes == [fresh]
+    assert case["result"].clean == 0 and case["result"].suspicious == 1
+    assert case["result"].reviewed == 1 and case["result"].total_cost_usd == 0.7
+    entry, = load_entries(case["config"].out_dir, fresh=True)
+    assert entry.verdict == "suspicious" and entry.hypotheses[0]["mechanism"] == fresh.hypothesis
+    assert any(e.get("published_status") == "suspicious" for e in runtime.events())
+
+
+@pytest.mark.parametrize("fault", ["canonical_replaced", "finalized", "source_during_hash", "wrong_ack", "exception"])
+def test_status_change_publication_refuses_unowned_or_unacknowledged_updates(study_case, monkeypatch, fault):
+    from core.audit import collector, record
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    _clean_prior(case)
+    fresh = _new_suspicion()
+    callback = None
+    replacement = _new_suspicion()
+    if fault == "canonical_replaced":
+        callback = lambda: case["result"].outcomes.__setitem__(0, replacement)
+    elif fault == "finalized":
+        callback = lambda: setattr(case["config"], "_verdicts_finalized", True)
+    elif fault == "source_during_hash":
+        original = record._compute_hash
+        def changed(*args, **kwargs):
+            path = case["config"].target_path / "owned.c"
+            path.write_text(path.read_text() + "/* changed */\n")
+            return original(*args, **kwargs)
+        monkeypatch.setattr(record, "_compute_hash", changed)
+    elif fault == "wrong_ack":
+        from types import SimpleNamespace
+        monkeypatch.setattr(collector, "append_journal_for_outcome", lambda **kwargs: SimpleNamespace(
+            file="owned.c", function="f", line_start=1, verdict="suspicious"))
+    else:
+        def fail(**kwargs):
+            raise OSError("owned append failure")
+        monkeypatch.setattr(collector, "append_journal_for_outcome", fail)
+    runtime = _knowledge_reassess(case, fresh, during_review=callback)
+    expected = replacement if fault == "canonical_replaced" else case["prior"]
+    assert case["result"].outcomes[0] is expected
+    assert case["result"].clean == 1 and case["result"].suspicious == 0
+    assert case["result"].total_cost_usd == 0.7
+    assert not load_entries(case["config"].out_dir, fresh=True)
+    assert not any(e.get("published_status") == "suspicious" for e in runtime.events())
+
+
+def test_status_change_publication_holds_canonical_lock_until_ack(study_case, monkeypatch):
+    from threading import Thread
+    from core.audit import collector
+
+    case = study_case
+    _clean_prior(case)
+    original = collector.append_journal_for_outcome
+    ownership = []
+    def append(**kwargs):
+        def probe():
+            acquired = case["result"]._lock.acquire(blocking=False)
+            ownership.append(acquired)
+            if acquired:
+                case["result"]._lock.release()
+        thread = Thread(target=probe)
+        thread.start()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        return original(**kwargs)
+    monkeypatch.setattr(collector, "append_journal_for_outcome", append)
+    _knowledge_reassess(case, _new_suspicion())
+    assert ownership == [False]
+
+
+def test_status_change_cancellation_retains_prior_and_books_completed_call(study_case, monkeypatch):
+    from core.audit import collector
+
+    case = study_case
+    _clean_prior(case)
+    def cancel(**kwargs):
+        raise KeyboardInterrupt("owned cancellation")
+    monkeypatch.setattr(collector, "append_journal_for_outcome", cancel)
+    with pytest.raises(KeyboardInterrupt, match="owned cancellation"):
+        _knowledge_reassess(case, _new_suspicion())
+    assert case["result"].outcomes[0] is case["prior"]
+    assert case["result"].clean == 1 and case["result"].suspicious == 0
+    assert case["result"].total_cost_usd == 0.7
+
+
+def test_status_change_source_drift_after_append_cannot_replace_canonical(study_case, monkeypatch):
+    from core.audit import collector
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    _clean_prior(case)
+    original = collector.append_journal_for_outcome
+    def append_then_change(**kwargs):
+        acknowledgement = original(**kwargs)
+        assert acknowledgement is not None
+        path = case["config"].target_path / "owned.c"
+        path.write_text(path.read_text() + "/* changed after append */\n")
+        return acknowledgement
+    monkeypatch.setattr(collector, "append_journal_for_outcome", append_then_change)
+    runtime = _knowledge_reassess(case, _new_suspicion())
+    assert case["result"].outcomes[0] is case["prior"]
+    assert case["result"].clean == 1 and case["result"].suspicious == 0
+    assert case["result"].total_cost_usd == 0.7
+    # The acknowledged row remains historical and source-bound, not rolled back.
+    assert len(load_entries(case["config"].out_dir, fresh=True)) == 1
+    assert any(e.get("reason") == "source_changed" for e in runtime.events())
+
+
+@pytest.mark.parametrize("stage", ["untally", "tally"])
+@pytest.mark.parametrize("prior_state", ["clean", "error", "reused"])
+def test_status_change_retally_cancellation_rolls_back_without_double_spend(study_case, monkeypatch, stage, prior_state):
+    case = study_case
+    _clean_prior(case)
+    if prior_state == "error":
+        case["prior"].status, case["prior"].error_class = "error", "api_error"
+        case["result"].clean, case["result"].errors = 0, 1
+        case["result"].error_counts = {"api_error": 1}
+    elif prior_state == "reused":
+        case["prior"].reused = True
+        case["result"].reviewed, case["result"].reused_from_prior = 0, 1
+    expected = (case["result"].clean, case["result"].errors, dict(case["result"].error_counts),
+                case["result"].reviewed, case["result"].reused_from_prior)
+    name = "_untally_outcome_unlocked" if stage == "untally" else "_tally_outcome_unlocked"
+    original = getattr(orch, name)
+    def interrupt(*args, **kwargs):
+        original(*args, **kwargs)
+        raise KeyboardInterrupt("owned retally cancellation")
+    monkeypatch.setattr(orch, name, interrupt)
+    with pytest.raises(KeyboardInterrupt, match="owned retally cancellation"):
+        _knowledge_reassess(case, _new_suspicion())
+    assert case["result"].outcomes[0] is case["prior"]
+    assert case["result"].suspicious == 0
+    assert (case["result"].clean, case["result"].errors, case["result"].error_counts,
+            case["result"].reviewed, case["result"].reused_from_prior) == expected
+    assert case["result"].total_cost_usd == 0.7
+
+
+def test_status_change_cancel_after_commit_keeps_one_spend_and_committed_state(study_case, monkeypatch):
+    case = study_case
+    _clean_prior(case)
+    candidate = _new_suspicion()
+    original = orch._publish_study_outcome
+    def commit_then_cancel(*args, **kwargs):
+        assert original(*args, **kwargs) == "published"
+        raise KeyboardInterrupt("owned post-commit cancellation")
+    monkeypatch.setattr(orch, "_publish_study_outcome", commit_then_cancel)
+    with pytest.raises(KeyboardInterrupt, match="owned post-commit cancellation"):
+        _knowledge_reassess(case, candidate)
+    assert case["result"].outcomes[0] is candidate
+    assert case["result"].clean == 0 and case["result"].suspicious == 1
+    assert case["result"].reviewed == 1 and case["result"].total_cost_usd == 0.7

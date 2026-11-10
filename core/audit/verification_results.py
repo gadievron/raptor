@@ -47,6 +47,34 @@ class VerificationScope:
 
 
 @dataclass(frozen=True)
+class ReviewPublicationScope:
+    """Source-unit publication binding; neither claim evidence nor safety proof.
+
+    The caller owns capture before review. A stable source stamp does not
+    establish complete source reading, an immutable build or binary identity.
+    """
+
+    file: str
+    function: str
+    line_start: int
+    line_end: int
+    source_identity: SourceIdentity
+
+    def __post_init__(self):
+        if not isinstance(self.source_identity, SourceIdentity):
+            raise TypeError("publication requires a known SourceIdentity")
+        if (not isinstance(self.file, str) or not self.file or not isinstance(self.function, str) or not self.function
+                or type(self.line_start) is not int or self.line_start < 1
+                or type(self.line_end) is not int or self.line_end < self.line_start):
+            raise ValueError("publication requires an exact source occurrence")
+
+    def matches(self, *, file, function, line_start, line_end, source_identity) -> bool:
+        return type(line_start) is int and type(line_end) is int and self.source_identity == source_identity and (
+            self.file, self.function, self.line_start, self.line_end) == (
+            file, function, line_start, line_end)
+
+
+@dataclass(frozen=True)
 class ClaimRefutation:
     file: str
     function: str

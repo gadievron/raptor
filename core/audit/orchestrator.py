@@ -19351,29 +19351,37 @@ def _tally_outcome(
     reused: bool = False,
 ) -> None:
     with result._lock:
-        if append:
-            result.outcomes.append(outcome)
-        if reused:
-            # Imported prior verdict — counted distinctly, not as a
-            # review this run performed.
-            result.reused_from_prior += 1
-        else:
-            result.reviewed += 1
+        _tally_outcome_unlocked(result, outcome, append=append, reused=reused)
+
+
+def _tally_outcome_unlocked(
+    result: OrchestratorResult, outcome: ReviewOutcome, *, append: bool = True, reused: bool = False, book_cost: bool = True,
+) -> None:
+    """Apply counters while the caller owns result._lock."""
+    if append:
+        result.outcomes.append(outcome)
+    if reused:
+        # Imported prior verdict — counted distinctly, not as a
+        # review this run performed.
+        result.reused_from_prior += 1
+    else:
+        result.reviewed += 1
+    if book_cost:
         result.total_cost_usd += outcome.cost_usd
-        if outcome.status == "finding":
-            result.findings += 1
-        elif outcome.status == "suspicious":
-            result.suspicious += 1
-        elif outcome.status == "clean":
-            result.clean += 1
-        elif outcome.status in {"dormant", "dark"}:
-            result.dormant += 1
-        elif outcome.status == "error":
-            result.errors += 1
-            if outcome.error_class:
-                result.error_counts[outcome.error_class] = (
-                    result.error_counts.get(outcome.error_class, 0) + 1
-                )
+    if outcome.status == "finding":
+        result.findings += 1
+    elif outcome.status == "suspicious":
+        result.suspicious += 1
+    elif outcome.status == "clean":
+        result.clean += 1
+    elif outcome.status in {"dormant", "dark"}:
+        result.dormant += 1
+    elif outcome.status == "error":
+        result.errors += 1
+        if outcome.error_class:
+            result.error_counts[outcome.error_class] = (
+                result.error_counts.get(outcome.error_class, 0) + 1
+            )
 
 
 def _sage_store_observation(text: str, kind: str, source: str) -> None:
@@ -28635,27 +28643,32 @@ def _untally_outcome(result: OrchestratorResult, outcome: ReviewOutcome) -> None
     for the same money) and under-enforced the --max-cost gate.
     """
     with result._lock:
-        if outcome.status == "finding":
-            result.findings -= 1
-        elif outcome.status == "suspicious":
-            result.suspicious -= 1
-        elif outcome.status == "clean":
-            result.clean -= 1
-        elif outcome.status in {"dormant", "dark"}:
-            result.dormant -= 1
-        elif outcome.status == "error":
-            result.errors -= 1
-            if outcome.error_class and outcome.error_class in result.error_counts:
-                result.error_counts[outcome.error_class] -= 1
-        if outcome.reused:
-            # Imported prior verdict — tallied into reused_from_prior,
-            # never reviewed (mirror of _tally_outcome's reused
-            # branch): decrementing reviewed here drifted it below
-            # truth (negative on reuse-heavy resume segments) every
-            # time a re-review pass superseded a reused outcome.
-            result.reused_from_prior -= 1
-        else:
-            result.reviewed -= 1
+        _untally_outcome_unlocked(result, outcome)
+
+
+def _untally_outcome_unlocked(result: OrchestratorResult, outcome: ReviewOutcome) -> None:
+    """Reverse verdict counters while the caller owns result._lock."""
+    if outcome.status == "finding":
+        result.findings -= 1
+    elif outcome.status == "suspicious":
+        result.suspicious -= 1
+    elif outcome.status == "clean":
+        result.clean -= 1
+    elif outcome.status in {"dormant", "dark"}:
+        result.dormant -= 1
+    elif outcome.status == "error":
+        result.errors -= 1
+        if outcome.error_class and outcome.error_class in result.error_counts:
+            result.error_counts[outcome.error_class] -= 1
+    if outcome.reused:
+        # Imported prior verdict — tallied into reused_from_prior,
+        # never reviewed (mirror of _tally_outcome's reused
+        # branch): decrementing reviewed here drifted it below
+        # truth (negative on reuse-heavy resume segments) every
+        # time a re-review pass superseded a reused outcome.
+        result.reused_from_prior -= 1
+    else:
+        result.reviewed -= 1
 
 
 def _has_refuting_counter(
@@ -34880,6 +34893,68 @@ def _publish_study_candidates(
     return "published"
 
 
+
+def _publish_study_outcome(
+    config: OrchestratorConfig, result: OrchestratorResult,
+    runtime: "AuditKnowledgeRuntime", reservation: "KnowledgeReservation",
+    prior: ReviewOutcome, candidate: ReviewOutcome, gap: dict[str, Any],
+) -> str:
+    """Publish a changed assessment after the owned journal append succeeds."""
+    from .collector import append_journal_for_outcome
+    from .journal import ReviewJournalEntry
+    from .source_anchor import parse_source_anchor
+    from .verification_results import ReviewPublicationScope
+
+    with result._lock:
+        if config._verdicts_finalized:
+            return "verdicts_finalized"
+        index = next((i for i, current in enumerate(result.outcomes) if current is prior), None)
+        if index is None:
+            return "canonical_outcome_changed"
+        origin = reservation.origin
+        if (origin.file, origin.function, origin.line_start) != (candidate.file, candidate.function, candidate.line):
+            return "study_publication_scope_mismatch"
+        if not runtime.can_publish(reservation) or origin.source_identity is None:
+            return "source_changed"
+        candidate.verification_tier = candidate.compute_tier(target_path=config.target_path)
+        acknowledgement = append_journal_for_outcome(
+            out_dir=config.out_dir, target_path=config.target_path, run_id=_resolved_run_id(config.out_dir),
+            outcome=candidate, gap=gap,
+            publication_scope=ReviewPublicationScope(origin.file, origin.function, origin.line_start,
+                                                      origin.line_end, origin.source_identity),
+        )
+        if acknowledgement is None:
+            return "study_journal_write_failed"
+        if not isinstance(acknowledgement, ReviewJournalEntry):
+            return "study_journal_ack_mismatch"
+        source_anchor = parse_source_anchor(acknowledgement.source_hash)
+        if ((acknowledgement.file, acknowledgement.function, acknowledgement.line_start,
+             acknowledgement.line_end, acknowledgement.verdict) != (
+                candidate.file, candidate.function, candidate.line, origin.line_end, candidate.status)
+                or source_anchor is None or source_anchor[0] != origin.source_identity.sha256):
+            return "study_journal_ack_mismatch"
+        if config._verdicts_finalized:
+            return "verdicts_finalized"
+        if result.outcomes[index] is not prior:
+            return "canonical_outcome_changed"
+        if not runtime.can_publish(reservation):
+            return "source_changed"
+        fields = ("reviewed", "reused_from_prior", "findings", "suspicious", "clean", "dormant", "errors",
+                  "error_counts", "total_cost_usd")
+        saved = {name: getattr(result, name) for name in fields}
+        saved["error_counts"] = dict(result.error_counts)
+        try:
+            _untally_outcome_unlocked(result, prior)
+            _tally_outcome_unlocked(result, candidate, append=False, book_cost=False)
+            result.outcomes[index] = candidate
+        except BaseException:
+            result.outcomes[index] = prior
+            for name, value in saved.items():
+                setattr(result, name, value)
+            raise
+    return "published"
+
+
 def _re_review_study_enriched(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -35209,27 +35284,42 @@ def _re_review_study_enriched(
                 continue
 
         if outcome.status != prior_outcome.status:
-            # Guarded like the sibling passes (_re_review_joern_enriched,
-            # _callee_contract_requeue): the prior outcome may no longer
-            # be in the list by replace time.
-            if prior_outcome in result.outcomes:
-                _untally_outcome(result, prior_outcome)
-                oi = result.outcomes.index(prior_outcome)
-                result.outcomes[oi] = outcome
-                _tally_outcome(result, outcome, append=False)
+            if knowledge_runtime is not None:
+                # Spend belongs to the completed call, independently of publication.
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                try:
+                    disposition = _publish_study_outcome(config, result, knowledge_runtime, knowledge_reservation,
+                                                         prior_outcome, outcome, gap)
+                except Exception:
+                    logger.warning("study outcome journal write failed", exc_info=True)
+                    disposition = "study_journal_write_failed"
+                except BaseException:
+                    with result._lock:
+                        committed = any(current is outcome for current in result.outcomes)
+                    if committed:
+                        knowledge_runtime.complete(knowledge_reservation, ctx, published_status=outcome.status,
+                                                   reason="published_before_cancellation")
+                    else:
+                        knowledge_runtime.fail(knowledge_reservation, "study_publication_cancelled", ctx=ctx)
+                    raise
+                if disposition != "published":
+                    knowledge_runtime.fail(knowledge_reservation, disposition, ctx=ctx)
+                    continue
             else:
-                result.outcomes.append(outcome)
-                _tally_outcome(result, outcome, append=False)
-
-            try:
-                _commit_outcome(config, outcome, gap)
-            except Exception:
-                logger.warning(
-                    "commit failed for %s:%s",
-                    gap["file"],
-                    gap["name"],
-                    exc_info=True,
-                )
+                # Legacy callers have no owned source reservation.
+                if prior_outcome in result.outcomes:
+                    _untally_outcome(result, prior_outcome)
+                    oi = result.outcomes.index(prior_outcome)
+                    result.outcomes[oi] = outcome
+                    _tally_outcome(result, outcome, append=False)
+                else:
+                    result.outcomes.append(outcome)
+                    _tally_outcome(result, outcome, append=False)
+                try:
+                    _commit_outcome(config, outcome, gap)
+                except Exception:
+                    logger.warning("commit failed for %s:%s", gap["file"], gap["name"], exc_info=True)
 
             if (
                 config.enable_session_context
