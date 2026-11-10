@@ -1,5 +1,6 @@
 """Fault observers dispose SELECT cursors before propagating owned errors."""
 
+import errno
 import os
 import sqlite3
 import threading
@@ -15,14 +16,29 @@ from core.understand_graph.tests import test_wal_fixture_connection_ownership as
 
 
 def _fd_count(path):
-    owned = str(Path(path).resolve())
-    count = 0
-    for name in os.listdir("/proc/self/fd"):
+    try:
+        target = Path(path).stat()
+    except FileNotFoundError:
+        return 0
+    for directory in ("/proc/self/fd", "/dev/fd"):
         try:
-            target = os.readlink("/proc/self/fd/" + name)
+            names = os.listdir(directory)
+            break
         except FileNotFoundError:
             continue
-        count += target == owned
+    else:
+        raise RuntimeError("native descriptor observation is unavailable")
+    count = 0
+    for name in names:
+        if not name.isdecimal():
+            continue
+        try:
+            status = os.fstat(int(name))
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+            continue
+        count += (status.st_dev, status.st_ino) == (target.st_dev, target.st_ino)
     return count
 
 

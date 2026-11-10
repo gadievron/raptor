@@ -1,5 +1,6 @@
 """Edge-trust fixture editors retain SQLite ownership on SQL failures."""
 
+import errno
 import os
 import sqlite3
 from contextlib import closing
@@ -20,13 +21,29 @@ EDITORS = [
 
 
 def _owned_fds(path):
-    count = 0
-    for name in os.listdir("/proc/self/fd"):
+    try:
+        target = Path(path).stat()
+    except FileNotFoundError:
+        return 0
+    for directory in ("/proc/self/fd", "/dev/fd"):
         try:
-            target = os.readlink("/proc/self/fd/" + name)
+            names = os.listdir(directory)
+            break
         except FileNotFoundError:
             continue
-        count += target == str(Path(path).resolve())
+    else:
+        raise RuntimeError("native descriptor observation is unavailable")
+    count = 0
+    for name in names:
+        if not name.isdecimal():
+            continue
+        try:
+            status = os.fstat(int(name))
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+            continue
+        count += (status.st_dev, status.st_ino) == (target.st_dev, target.st_ino)
     return count
 
 
