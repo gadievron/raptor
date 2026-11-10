@@ -894,6 +894,8 @@ def _load_doc_context(related_docs: list[dict], source_root: Path) -> str:
     if not related_docs:
         return ""
 
+    from core.source.streams import owned_fd
+
     parts: list[str] = []
     total_len = 0
     cap = 32768
@@ -913,10 +915,11 @@ def _load_doc_context(related_docs: list[dict], source_root: Path) -> str:
         except OSError:
             continue
         try:
-            with os.fdopen(fd, "rb") as fh:
-                content = fh.read(_DOC_MAX_BYTES).decode(
-                    "utf-8", errors="ignore",
-                )
+            with owned_fd(fd, close_fd=os.close):
+                with os.fdopen(fd, "rb", closefd=False) as fh:
+                    content = fh.read(_DOC_MAX_BYTES).decode(
+                        "utf-8", errors="ignore",
+                    )
         except OSError:
             continue
 
