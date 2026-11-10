@@ -77,3 +77,42 @@ def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
         return len(writes) > 1
     except Exception:  # noqa: BLE001 -- failed syntax binding cannot preserve an epoch
         return True
+
+
+def implicit_value_epoch_unverified(source: str, name: str, after_line: int,
+                                    through_line: int, *, language: str) -> bool:
+    """Refuse iteration and update writes missing from plain-assignment scans.
+
+    This supplies a negative write fact, not declaration identity or a
+    complete effect proof. An unavailable native profile remains unverified.
+    """
+    if after_line <= 0 or through_line < after_line:
+        return True
+    try:
+        tree = _syntax._native_source_tree(source, language)
+        if tree is None:
+            return True
+        encoded_name = name.encode("utf-8")
+        pending = [tree.root_node]
+        visited = 0
+        while pending:
+            node = pending.pop()
+            visited += 1
+            if visited > _syntax._MAX_NODES:
+                return True
+            pending.extend(node.named_children)
+            if not after_line < node.start_point[0] + 1 <= through_line:
+                continue
+            if node.type == "for_in_statement":
+                target = node.child_by_field_name("left")
+            elif node.type == "enhanced_for_statement":
+                target = node.child_by_field_name("name")
+            elif node.type == "update_expression":
+                target = _write_target(node)
+            else:
+                continue
+            if target is None or _target_mentions(target, encoded_name):
+                return True
+        return False
+    except Exception:  # noqa: BLE001 -- unverified syntax cannot preserve an epoch
+        return True
