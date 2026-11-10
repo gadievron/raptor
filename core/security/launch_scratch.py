@@ -124,6 +124,7 @@ def read(metadata: Path, *, require_sealed: bool = True, require_protected: bool
     root = metadata.parent.parent
     node = _open_directory(root)
     meta = target = scratch = None
+    failed = False
     try:
         _private(os.fstat(node), True)
         meta = os.open('metadata', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=node)
@@ -149,10 +150,20 @@ def read(metadata: Path, *, require_sealed: bool = True, require_protected: bool
         scratch = os.open('tmp', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=node)
         _private(os.fstat(scratch), True)
         return value['tmpdir']
+    except BaseException:
+        failed = True
+        raise
     finally:
+        cleanup_error: BaseException | None = None
         for descriptor in (scratch, target, meta, node):
             if descriptor is not None:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    if cleanup_error is None:
+                        cleanup_error = error
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
 
 
 def prepare_protection(metadata: Path) -> None:
