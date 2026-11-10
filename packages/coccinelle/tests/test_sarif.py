@@ -254,3 +254,81 @@ def test_uri_looking_source_path_does_not_rebind_to_a_local_basename(tmp_path):
     result = SpatchResult(rule='r', matches=[SpatchMatch(file='file://literal.c', line=8)])
     rows = _run0(results_to_sarif([result], tmp_path))['results']
     assert rows[0]['locations'][0]['physicalLocation']['artifactLocation']['uri'] == 'file://literal.c'
+
+
+@pytest.mark.parametrize('profile', ['repeated', 'unique'])
+def test_report_normalizes_each_plain_path_once_across_rules(tmp_path, monkeypatch, profile):
+    import json
+
+    from packages.coccinelle import sarif
+    from packages.coccinelle.runner import _parse_results
+
+    root = tmp_path.resolve()
+    spellings = [str(root / 'src/a.c'), 'src/../b.c',
+                 str(root.parent / 'external.h'), 'file://literal.c']
+    expected_paths = ['src/a.c', 'b.c', spellings[2], spellings[3]]
+    if profile == 'unique':
+        spellings = [f'src/file-{index}.c' for index in range(512)]
+        expected_paths = list(spellings)
+    results = []
+    for rule_index, rule in enumerate(['first', 'second']):
+        output = '\n'.join('COCCIRESULT-owned:' + json.dumps({
+            'file': spellings[(index + rule_index * 256) % len(spellings)], 'line': index + 1,
+            'col': 3, 'rule': rule, 'message': f'match-{index}',
+        }) for index in range(256))
+        diagnostics = []
+        matches = _parse_results(output, rule, nonce='owned', diagnostics=diagnostics)
+        assert len(matches) == 256 and not diagnostics
+        results.append(SpatchResult(rule=rule, matches=matches))
+    original = sarif._rel_to_repo
+    calls = []
+
+    def observed(path, resolved_root):
+        calls.append((path, resolved_root))
+        return original(path, resolved_root)
+
+    monkeypatch.setattr(sarif, '_rel_to_repo', observed)
+    report = sarif.results_to_sarif(iter(results), root)
+    used = spellings
+    assert [path for path, _ in calls] == used
+    rows = _run0(report)['results']
+    assert len(rows) == 512
+    expected = expected_paths if profile == 'unique' else expected_paths * 128
+    assert [row['locations'][0]['physicalLocation']['artifactLocation']['uri']
+            for row in rows] == expected
+    assert [row['ruleId'] for row in rows] == ['first'] * 256 + ['second'] * 256
+    assert [row['message']['text'] for row in rows] == [f'match-{i}' for i in range(256)] * 2
+    assert [row['locations'][0]['physicalLocation']['region'] for row in rows] == [
+        {'startLine': i + 1, 'startColumn': 3} for i in range(256)
+    ] * 2
+    # Reusing the URI must not alias the surrounding result/location objects.
+    rows[0]['locations'][0]['physicalLocation']['artifactLocation']['uri'] = 'changed'
+    assert rows[256]['locations'][0]['physicalLocation']['artifactLocation']['uri'] == expected[256]
+    other = root.parent / 'different-root'
+    second = sarif.results_to_sarif(results, other)
+    assert len(calls) == len(used) * 2
+    expected_first = spellings[0] if profile == 'repeated' else expected_paths[0]
+    assert _run0(second)['results'][0]['locations'][0]['physicalLocation']['artifactLocation']['uri'] == expected_first
+
+
+def test_path_string_adapter_is_not_hashed_or_memoized(tmp_path, monkeypatch):
+    from packages.coccinelle import sarif
+
+    class PathAdapter(str):
+        def __hash__(self) -> int:
+            pytest.fail('path adapters must retain the uncached path')
+
+    spelling = PathAdapter('src/a.c')
+    original = sarif._rel_to_repo
+    calls = []
+
+    def observed(path, root):
+        calls.append(path)
+        return original(path, root)
+
+    monkeypatch.setattr(sarif, '_rel_to_repo', observed)
+    result = SpatchResult(rule='r', matches=[SpatchMatch(file=spelling, line=1)] * 2)
+    rows = _run0(sarif.results_to_sarif([result], tmp_path))['results']
+    assert calls == [spelling, spelling]
+    assert [row['locations'][0]['physicalLocation']['artifactLocation']['uri']
+            for row in rows] == ['src/a.c', 'src/a.c']
