@@ -33,6 +33,8 @@ constant.
 from __future__ import annotations
 
 import fcntl as _fcntl_mod
+
+import core.atomic_fs.fs_lock as fs_lock
 import json
 import os
 import re
@@ -591,7 +593,7 @@ class TestGuard:
                 events.append("LOCK_EX")
             return real_flock(fd, op)
 
-        monkeypatch.setattr(_fcntl_mod, "flock", _recording_flock)
+        patch_module_attribute(monkeypatch, fs_lock, "fcntl", "flock", _recording_flock)
         outcome = checkpoint_journal(
             tmp_path, boundary="test", collector=_Collector())
         assert outcome.fired
@@ -677,7 +679,7 @@ class TestForeignAppenderAcrossCheckpoint:
                 assert release.wait(timeout=30.0)
             return real_flock(fd, op)
 
-        monkeypatch.setattr(_fcntl_mod, "flock", _gating_flock)
+        patch_module_attribute(monkeypatch, fs_lock, "fcntl", "flock", _gating_flock)
         errors: list[BaseException] = []
 
         def _append() -> None:
