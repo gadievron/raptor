@@ -9,6 +9,7 @@ target. Nothing in the pipeline creates the DB as a symlink.
 import os
 import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -28,10 +29,9 @@ class TestSymlinkedDbRefused(unittest.TestCase):
             # A real foreign store the plant redirects to.
             foreign = tmp / "foreign" / GRAPH_FILENAME
             foreign.parent.mkdir()
-            conn = sqlite3.connect(foreign)
-            conn.execute("CREATE TABLE marker (x INTEGER)")
-            conn.commit()
-            conn.close()
+            with closing(sqlite3.connect(foreign)) as conn:
+                conn.execute("CREATE TABLE marker (x INTEGER)")
+                conn.commit()
             before = foreign.read_bytes()
 
             run_graph = tmp / "run" / "graph" / GRAPH_FILENAME
