@@ -163,6 +163,8 @@ def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
     ``path`` if a retry happened — caller cares about success, not
     the original name).
     """
+    from core.source.streams import owned_fd
+
     # O_NOFOLLOW: if the target path is a symlink we refuse to follow
     # it — defends against a planted symlink at the filename pointing
     # somewhere outside the pool (e.g. /etc/passwd). With O_NOFOLLOW
@@ -183,9 +185,10 @@ def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
     tmp = path.with_name(
         f".{path.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
     )
+    # Cleanup ownership starts only after exclusive creation succeeds.
+    fd = os.open(tmp, flags, 0o600)
     try:
-        fd = os.open(tmp, flags, 0o600)
-        try:
+        with owned_fd(fd, close_fd=os.close):
             view = memoryview(data)
             while view:
                 n = os.write(fd, view)
@@ -193,8 +196,6 @@ def _write_atomic(path: Path, payload: str, *, max_retries: int = 5) -> Path:
                     msg = f"short write to {tmp} (os.write returned {n})"
                     raise OSError(msg)
                 view = view[n:]
-        finally:
-            os.close(fd)
         for _attempt_n in range(max_retries):
             try:
                 os.link(tmp, path)
