@@ -301,7 +301,9 @@ raise SystemExit('no linux-24.04 x64 artifact for ' + want)
     CTX="$RUN/build-ctx"
     mkdir -p "$CTX"
     cp "$HERE/images/rustup-proxy.c" "$CTX/"
-    cp "$HERE/images/Dockerfile" "$HERE/images/Dockerfile.26" "$CTX/"
+    for img in "${IMAGES[@]}"; do
+        cp "$HERE/images/${DOCKERFILE[$img]}" "$CTX/"
+    done
     cp "$RUN/repo/pyproject.toml" "$RUN/repo/uv.lock" "$CTX/"
     for img in "${IMAGES[@]}"; do
         echo "== building raptor-sandbox-matrix:$img (${DOCKERFILE[$img]})"
