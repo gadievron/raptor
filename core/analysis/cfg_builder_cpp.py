@@ -66,6 +66,7 @@ from typing import (
 from collections.abc import Iterable
 
 from core.analysis.cfg_node_tables import CPP_TABLES as _NODE_TABLES
+from core.analysis.branch_guards import BranchGuard
 from core.analysis.cfg_builder import (
     ENTRY_LINENO,
     EXIT_LINENO,
@@ -147,13 +148,8 @@ class CPPCFGNode:
 
 
 @dataclass(frozen=True)
-class CPPBranchGuard:
-    """Producer-owned truth premise attached to a synthetic branch entry."""
-
-    branch: CPPCFGNode
-    condition: str
-    line: int
-    polarity: bool
+class CPPBranchGuard(BranchGuard[CPPCFGNode]):
+    """C/C++ compatibility name for the shared branch-fact schema."""
 
 
 @dataclass(frozen=True)
