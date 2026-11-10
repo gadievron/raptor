@@ -8126,15 +8126,38 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # need to outlive the LAST possible re-check above, and a
             # raise-path leak would accumulate one fd per pinned grant
             # per refused call.
-            for _pin_fd in _grant_pin_fds:
+            from ._retirement import retire_parent_resources
+
+            def _retire_grant_pins() -> None:
+                pins = iter(_grant_pin_fds)
+
+                def _close_next_pin() -> None:
+                    # Advance ownership before close; never retry a number
+                    # whose close may have completed before interruption.
+                    pin_fd = next(pins)
+                    try:
+                        os.close(pin_fd)
+                    except OSError:
+                        pass
+
                 try:
-                    os.close(_pin_fd)
-                except OSError:
-                    pass
-            _grant_pin_fds.clear()
-            events = (
-                proxy_instance.unregister_sandbox(proxy_token)  # type: ignore[union-attr]
-                if proxy_token is not None else []
+                    retire_parent_resources(*(
+                        _close_next_pin for _ in _grant_pin_fds
+                    ))
+                finally:
+                    _grant_pin_fds.clear()
+
+            events: list = []
+
+            def _retire_proxy_registration() -> None:
+                nonlocal events
+                events = (
+                    proxy_instance.unregister_sandbox(proxy_token)  # type: ignore[union-attr]
+                    if proxy_token is not None else []
+                )
+
+            retire_parent_resources(
+                _retire_grant_pins, _retire_proxy_registration,
             )
         # Accumulate into the sandbox()-scoped cumulative view so callers
         # can inspect `run.events` for a unified stream across multiple
