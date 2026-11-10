@@ -2689,7 +2689,9 @@ def _lexical_var_reaches_sink(
     transfer proof, including literal-only RHSs.
 
     This is a local write filter, not callee-effect or alias analysis.
-    Endpoint-row ordering and exact sink argument binding need separate
+    The sink row is included conservatively: without a call-column
+    binding, a write sharing that row cannot reuse the earlier value.
+    Validator-row ordering and exact sink argument binding need separate
     source checks; a passing lexical filter is not sufficient by itself.
     """
     if java_unicode_unverified(source_text, language=language):
@@ -2705,7 +2707,7 @@ def _lexical_var_reaches_sink(
         rf"\b{_re.escape(var)}\b\s*"
         r"(?:[-+*/%&|^]|<<|>>|\*\*|\|\||&&|\?\?)=(?!=)"
     )
-    for lineno in range(validator_line + 1, sink_line):
+    for lineno in range(validator_line + 1, sink_line + 1):
         if 1 <= lineno <= len(lines):
             view = views[lineno - 1]
             if compound_re.search(view):
