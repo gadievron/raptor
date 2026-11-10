@@ -134,6 +134,28 @@ ENTRIES = (
         ("c.integer-promotion",),
     ),
     ReferenceEntry(
+        "c.integer-division", 1, "c", ("c11",),
+        "Quotients and remainders",
+        ("division", "divide", "quotient", "remainder", "divisor", "zero", "modulo"),
+        "Check the converted divisor and quotient range before using either result.",
+        "With integer operands, apply the usual arithmetic conversions before "
+        "interpreting values or computing either result. A converted divisor "
+        "of zero makes division and remainder undefined. Division truncates "
+        "toward zero. If the quotient is representable in the converted result "
+        "type, dividend = quotient * divisor + remainder holds for the converted "
+        "values. Otherwise both operations are undefined, even if a mathematical "
+        "remainder would be zero. Compound forms evaluate the lvalue once, "
+        "perform the underlying operation before destination conversion, and "
+        "yield the stored value. Storage conversion cannot repair an invalid operation.",
+        ("Use the actual converted range; do not assume an ABI, two's complement or a universal minimum-value overflow case.",
+         "Floating or complex division, atomic accesses and compound-assignment synchronisation need other rules.",
+         "This core does not establish operand values or whole-expression sequencing safety."),
+        ("configured language edition", "converted operand types and ranges", "converted operand values",
+         "divisor value", "compound destination type and atomicity", "sequencing constraints"),
+        (_N1570 + " sections 6.5.5 and 6.5.16.1-2",),
+        ("c.integer-usual-conversions", "c.integer-conversion"),
+    ),
+    ReferenceEntry(
         "c.integer-definedness", 1, "c", ("c11",),
         "Integer arithmetic definedness",
         ("overflow", "wrap", "wrapping", "definedness", "undefined", "arithmetic"),

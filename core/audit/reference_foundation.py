@@ -41,6 +41,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
     bitwise = False
     update = False
     unary_sign = False
+    division = False
     stack = [tree.root_node]
     visited = 0
     while stack:
@@ -53,6 +54,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
             if operator is not None:
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+", b"-", b"*", b"/", b"%")
+                division = division or token in (b"/", b"%")
                 comparison = comparison or token in (b"<", b">", b"<=", b">=", b"==", b"!=")
                 shift = shift or token in (b"<<", b">>")
                 bitwise = bitwise or token in (b"&", b"^", b"|")
@@ -61,6 +63,7 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
             if operator is not None:
                 token = raw[operator.start_byte:operator.end_byte]
                 arithmetic = arithmetic or token in (b"+=", b"-=", b"*=", b"/=", b"%=")
+                division = division or token in (b"/=", b"%=")
                 shift = shift or token in (b"<<=", b">>=")
                 bitwise = bitwise or token in (b"&=", b"^=", b"|=")
         elif node.type == "update_expression":
@@ -83,6 +86,8 @@ def _initial_selection(source: object, file: object) -> tuple[tuple[str, ...], s
         selected += ("c.integer-update",)
     if unary_sign:
         selected += ("c.integer-unary-sign",)
+    if division:
+        selected += ("c.integer-division",)
     return selected, "Initial construct selection inspected bounded C syntax; expression types and target applicability remain unresolved."
 
 
