@@ -102,24 +102,24 @@ def test_cleanup_handles_each_owned_node_without_following_links(tmp_path, kind)
     payload.write_text("keep")
     owned = tmp_path / "owned"
     sock = None
-    if kind == "file":
-        owned.write_text("script")
-    elif kind == "directory":
-        owned.mkdir()
-        (owned / "object").write_text("output")
-        (owned / "external").symlink_to(outside, target_is_directory=True)
-    elif kind in ("symlink", "dangling"):
-        owned.symlink_to(
-            outside if kind == "symlink" else tmp_path / "absent",
-            target_is_directory=True,
-        )
-    elif kind == "fifo":
-        os.mkfifo(owned)
-    elif kind == "socket":
-        sock = socket.socket(socket.AF_UNIX)
-        sock.bind(str(owned))
-    paths = [owned]
     try:
+        if kind == "file":
+            owned.write_text("script")
+        elif kind == "directory":
+            owned.mkdir()
+            (owned / "object").write_text("output")
+            (owned / "external").symlink_to(outside, target_is_directory=True)
+        elif kind in ("symlink", "dangling"):
+            owned.symlink_to(
+                outside if kind == "symlink" else tmp_path / "absent",
+                target_is_directory=True,
+            )
+        elif kind == "fifo":
+            os.mkfifo(owned)
+        elif kind == "socket":
+            sock = socket.socket(socket.AF_UNIX)
+            sock.bind(str(owned))
+        paths = [owned]
         cleanup_build_paths(paths)
         assert paths == []
         assert not os.path.lexists(owned)
