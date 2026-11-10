@@ -324,8 +324,7 @@ jobs:
   deps:
     needs: [changes]
     if: |
-      (needs.changes.outputs.python == 'true' ||
-       needs.changes.outputs.sandbox == 'true' ||
+      (needs.changes.outputs.sandbox == 'true' ||
        needs.changes.outputs.sca == 'true' ||
        needs.changes.outputs.exploit_feasibility == 'true')
     runs-on: ubuntu-latest
@@ -392,7 +391,7 @@ jobs:
   # gets one runner and a broad refactor fans out.
   python-unit-tests-fast:
     name: python-unit-tests-fast (${{ matrix.batch }})
-    needs: [changes, deps]
+    needs: [changes]
     if: |
       needs.changes.outputs.python == 'true'
     # Repo variable RAPTOR_FAST_RUNNER (Settings → Variables) upsizes
