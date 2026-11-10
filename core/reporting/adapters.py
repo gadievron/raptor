@@ -205,25 +205,10 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
                         continue
                     remaining -= 1
                     item = deepcopy(result)
-                    rule = get_result_rule(run, result)
-                    item.setdefault("ruleId", rule.get("id", "unknown"))
                     msg = item.get("message")
                     if isinstance(msg, dict) and not isinstance(msg.get("text"), str) and isinstance(msg.get("markdown"), str):
                         item["message"] = {"text": msg["markdown"]}
-                    # Resolve artifact indices without opening referenced files.
-                    locations = item.get("locations")
-                    for loc in locations if isinstance(locations, list) else []:
-                        if not isinstance(loc, dict):
-                            continue
-                        physical = loc.get("physicalLocation")
-                        artifact = physical.get("artifactLocation") if isinstance(physical, dict) else None
-                        artifacts = run.get("artifacts", [])
-                        if isinstance(artifact, dict) and "uri" not in artifact and isinstance(artifact.get("index"), int):
-                            index = artifact["index"]
-                            if isinstance(artifacts, list) and 0 <= index < len(artifacts) and isinstance(artifacts[index], dict):
-                                location = artifacts[index].get("location")
-                                if isinstance(location, dict):
-                                    artifact.update(location)
+                    # The shared parser owns rule/artifact reference resolution.
                     clean.append(item)
                 prepared.append({**run, "results": clean})
                 invocations = run.get("invocations", [])
