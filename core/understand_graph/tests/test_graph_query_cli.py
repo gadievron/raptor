@@ -22,6 +22,7 @@ import json
 import os
 import sys
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -257,23 +258,23 @@ def _seed_hostile_kind_graph(tmp: Path) -> Path:
     from core.understand_graph.store import open_graph
 
     db = tmp / "hostile.graph.sqlite"
-    conn = open_graph(db)
-    conn.execute(
-        "INSERT INTO snapshots (id, target_path) VALUES ('s1', '/tgt')")
-    conn.execute(
-        "INSERT INTO nodes (id, kind, stable_key, name, file,"
-        " snapshot_id, stale) VALUES ('n1', ?, 'k1', 'n', 'f.c',"
-        " 's1', 0)", (_HOSTILE_KIND,))
-    conn.execute(
-        "INSERT INTO nodes (id, kind, stable_key, name, file,"
-        " snapshot_id, stale) VALUES ('n2', 'sink', 'k2', 'm',"
-        " 'g.c', 's1', 0)")
-    conn.execute(
-        "INSERT INTO edges (id, src_id, dst_id, kind, snapshot_id,"
-        " stale) VALUES ('e1', 'n1', 'n2', ?, 's1', 0)",
-        (_HOSTILE_KIND,))
-    conn.commit()
-    conn.close()
+    with closing(open_graph(db)) as conn:
+        conn.execute(
+            "INSERT INTO snapshots (id, target_path) VALUES ('s1', '/tgt')")
+        conn.execute(
+            "INSERT INTO nodes (id, kind, stable_key, name, file,"
+            " snapshot_id, stale) VALUES ('n1', ?, 'k1', 'n', 'f.c',"
+            " 's1', 0)", (_HOSTILE_KIND,))
+        conn.execute(
+            "INSERT INTO nodes (id, kind, stable_key, name, file,"
+            " snapshot_id, stale) VALUES ('n2', 'sink', 'k2', 'm',"
+            " 'g.c', 's1', 0)")
+        conn.execute(
+            "INSERT INTO edges (id, src_id, dst_id, kind, snapshot_id,"
+            " stale) VALUES ('e1', 'n1', 'n2', ?, 's1', 0)",
+            (_HOSTILE_KIND,))
+        conn.commit()
+
     return db
 
 
