@@ -908,12 +908,13 @@ def _declared_local_scopes(decl: Node) -> _LocalNameScopes:
     return _LocalNameScopes({k: tuple(v) for k, v in windows.items()})
 
 
-def _type_shadow_names_at(node: Node) -> frozenset[str]:
+def _type_shadow_names_at(node: Node, *, include_top_level: bool = False) -> frozenset[str]:
     """Member/local types and type parameters visible at this use site.
 
     Unlike the catalog's conservative file-wide veto, this excludes
     unrelated sibling scopes and local declarations after the use.
-    Top-level types remain available to the cross-file resolver.
+    Top-level types remain available to the cross-file resolver unless
+    explicitly requested for a context-free JVM shortcut check.
     """
     out: set[str] = set()
     use_start = node.start_byte
@@ -922,7 +923,8 @@ def _type_shadow_names_at(node: Node) -> frozenset[str]:
         parameters = parent.child_by_field_name("type_parameters")
         if parameters is not None:
             out.update(_file_type_shadow_names(parameters))
-        member_scope = parent.type in _NODE_TABLES.scope_barriers
+        member_scope = (parent.type in _NODE_TABLES.scope_barriers
+                        or (include_top_level and parent.type == "program"))
         local_scope = parent.type in _NODE_TABLES.scope_bounds
         if member_scope or local_scope:
             children = list(parent.named_children)

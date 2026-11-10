@@ -558,6 +558,28 @@ def _fold_field_access(node: Node, ext) -> Any:
         return _REFUSE
     if ext.allow_taint_free and chain in ("File", "java.io.File") \
             and field in _TF_FILE_FIELDS:
+        if chain == "java.io.File":
+            return TAINT_FREE
+        # Use this expression's compilation unit, including when folding
+        # a cross-file initializer whose imports differ from the caller's.
+        from core.analysis.cfg_builder_java import (
+            _type_shadow_names_at, build_import_map,
+        )
+
+        root = obj
+        while root.parent is not None:
+            root = root.parent
+        imports, _statics = build_import_map(root)
+        imported = imports.get("File")
+        if imported == "java.io.File":
+            return TAINT_FREE
+        declared = "File" in _type_shadow_names_at(obj, include_top_level=True)
+        if imported is not None or declared:
+            if ext.xfile is not None:
+                return ext.xfile.resolve_field(imported or chain, field, True)
+            return _REFUSE
+        # Preserve the existing unresolved/wildcard shortcut. This guard
+        # addresses positive source/import evidence, not classpath binding.
         return TAINT_FREE
     if ext.xfile is not None:
         return ext.xfile.resolve_field(chain, field,
