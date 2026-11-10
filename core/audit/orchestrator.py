@@ -25117,10 +25117,16 @@ def _verify_hypotheses_immediate(
     cwe = hypotheses[0].get("cwe", "")
     language = _inventory_language_hint(config, file_path)
 
+    from uuid import uuid4
+    from .claims import ClaimRevision
+
+    pass_id = uuid4().hex
     verifications: list[ClaimVerification] = []
 
     for hyp in hypotheses:
-        verifications.append(ClaimVerification(hyp))
+        claim_revision = ClaimRevision(hyp, pass_id=pass_id, file=file_path,
+                                       function=function_name, line_start=outcome.line or 0)
+        verifications.append(ClaimVerification(hyp, claim_revision=claim_revision))
         mechanism = hyp["mechanism"]
         hyp_cwe = hyp.get("cwe", cwe) or cwe
 
@@ -25129,7 +25135,7 @@ def _verify_hypotheses_immediate(
             outcome, mechanism, hyp_cwe, mechanical_findings,
         )
         if mech_tool:
-            verifications[-1] = ClaimVerification(hyp, (mech_tool,))
+            verifications[-1] = verifications[-1].with_observation((mech_tool,))
             logger.info(
                 "ihv: %s:%s — prep-phase correlation %s for '%s'",
                 file_path, function_name, mech_tool, mechanism[:60],
@@ -25157,6 +25163,7 @@ def _verify_hypotheses_immediate(
             # Cap exhaustion = untested (not refuted) — don't increment.
             verification = _try_bound_ihv_synthesis(
                 outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
+                claim_revision=claim_revision,
             )
             if verification is not None:
                 verifications[-1] = verification
@@ -25172,6 +25179,7 @@ def _verify_hypotheses_immediate(
             # Cap exhaustion = untested (not refuted) — don't increment.
             verification = _try_bound_ihv_synthesis(
                 outcome, config, result, hyp, hyp_cwe, source, synthesis_counter,
+                claim_revision=claim_revision,
             )
             if verification is not None:
                 verifications[-1] = verification
@@ -25233,7 +25241,7 @@ def _verify_hypotheses_immediate(
             if (binding is not None and binding.scope == ("", "", 0, "")
                     and binding.source_identity is None):
                 binding = None
-            verifications[-1] = ClaimVerification(hyp, tuple(tools_confirmed), binding=binding)
+            verifications[-1] = verifications[-1].with_observation(tuple(tools_confirmed), binding=binding)
             logger.info(
                 "ihv: %s:%s — tool confirmed '%s' via %s",
                 file_path, function_name,
@@ -25242,7 +25250,7 @@ def _verify_hypotheses_immediate(
         elif _retain_claim_refutation(
             outcome, tools_confirmed, config, hypothesis=mechanism, phase="ihv",
         ):
-            verifications[-1] = ClaimVerification(hyp, refuted=True)
+            verifications[-1] = verifications[-1].with_observation(refuted=True)
 
     # Step 4: aggregate (context gates run inside)
     return _aggregate_ihv_verdicts(
@@ -25274,7 +25282,7 @@ def _get_llm_client(config: OrchestratorConfig):
     return observed_client(getattr(config, "llm_client", None), purpose="verification")
 
 
-def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter):
+def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesis_counter, *, claim_revision=None):
     """Bind the immediate synthesis request before spending an attempt.
 
     The existing aggregator rechecks this binding after synthesis and
@@ -25288,10 +25296,10 @@ def _try_bound_ihv_synthesis(outcome, config, result, hyp, cwe, source, synthesi
     request, snippet = bound
     if not synthesis_counter.try_reserve():
         return None
-    snapshot = ClaimVerification(hyp, binding=request.binding)
+    snapshot = ClaimVerification(hyp, binding=request.binding, claim_revision=claim_revision)
     stamp = _try_ihv_synthesis(outcome, config, result, snapshot.hypothesis, cwe, snippet)
     if stamp:
-        return ClaimVerification(snapshot.hypothesis, (stamp,), binding=request.binding)
+        return snapshot.with_observation((stamp,), binding=request.binding)
     return None
 
 
