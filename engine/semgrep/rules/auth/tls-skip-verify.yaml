@@ -24,9 +24,19 @@ rules:
       # requests.Session — per-call verify=False and the session-wide
       # attribute, anchored to a Session constructed in scope
       - patterns:
-          - pattern-inside: |
-              $S = requests.Session()
-              ...
+          - pattern-either:
+              - pattern-inside: |
+                  $S = requests.Session()
+                  ...
+              - pattern-inside: |
+                  $S = requests.session()
+                  ...
+              - pattern-inside: |
+                  with requests.Session() as $S:
+                      ...
+              - pattern-inside: |
+                  with requests.session() as $S:
+                      ...
           - pattern-either:
               - pattern: $S.get(..., verify=False, ...)
               - pattern: $S.post(..., verify=False, ...)
