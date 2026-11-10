@@ -212,3 +212,13 @@ checker. Unproved signed arithmetic remains unsupported even when a more
 precise path model might establish it. Both direct witnesses and literal-caller
 tuples independently replay the computed index; the parameter value alone is
 not a bounds witness. Discovery remains a solver-free candidate stage.
+
+Division and remainder faults may also use one affine denominator, for example
+`Value / (Count-1)`. The source oracle retains the denominator expression's
+promotions before applying the division's usual arithmetic conversions. This
+distinguishes a signed `-1` divisor from an unsigned wrapped value. The complete
+closed objective, unique actual source operation, prefix definedness, feasible
+entry and independent replay remain mandatory. Unproved signed denominator
+arithmetic is unsupported; a safe or unknown result never clears a function.
+QUALITY preparation proposes bounded storage/type candidates after prior leads,
+without performing native queries or granting source-path credit.
