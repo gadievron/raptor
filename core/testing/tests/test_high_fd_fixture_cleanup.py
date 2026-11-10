@@ -1,6 +1,7 @@
 """High-FD fixtures cannot overwrite pre-existing slots or strand replacements."""
 
 import ast
+from contextlib import ExitStack
 import os
 import resource
 import subprocess
@@ -9,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 class DescriptorTable:
@@ -149,7 +153,7 @@ def _exercise_modeled_fixture(kind, fault, error, tmp_path, monkeypatch):
         output.mkdir()
         return str(output)
 
-    with monkeypatch.context() as patcher:
+    with ExitStack() as imports_scope, monkeypatch.context() as patcher:
         patcher.setattr(module, "os", table.os_proxy())
         patcher.setattr(
             module,
@@ -157,24 +161,31 @@ def _exercise_modeled_fixture(kind, fault, error, tmp_path, monkeypatch):
             SimpleNamespace(F_DUPFD=0, fcntl=table.duplicate),
             raising=False,
         )
-        patcher.setattr(resource, "getrlimit", lambda _: table.limit)
-        patcher.setattr(resource, "setrlimit", table.setrlimit)
         if kind == "spawn":
             patcher.setattr(module, "tempfile", SimpleNamespace(mkdtemp=directory))
             patcher.setattr(_spawn, "run_sandboxed", table.backend)
             case = module.TestHighFdSweep(
                 "test_inheritable_fd_above_lowered_limit_is_closed"
             )
-            invoke = case.test_inheritable_fd_above_lowered_limit_is_closed
+            view = module_function_view(module, bindings={
+                "_owned_high_fd": type(case).test_inheritable_fd_above_lowered_limit_is_closed,
+            })
+            resource_consumer = imports_scope.enter_context(scoped_function_imports(
+                view, ("_owned_high_fd",), {"resource": resource}
+            ))
+            invoke = lambda: view._owned_high_fd(case)
         else:
             patcher.setattr(module, "_ptrace_ready", lambda: True)
             patcher.setattr(module.mod, "run_landlock_audit", table.backend)
             case = None
+            resource_consumer = module
             invoke = lambda: (
                 module.test_high_noncloexec_fd_does_not_survive_into_the_target(
                     tmp_path
                 )
             )
+        patch_module_attribute(patcher, resource_consumer, "resource", "getrlimit", lambda _: table.limit)
+        patch_module_attribute(patcher, resource_consumer, "resource", "setrlimit", table.setrlimit)
         try:
             if fault == "none":
                 invoke()
