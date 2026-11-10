@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view, scoped_function_imports
+
 pytestmark = pytest.mark.usefixtures("handler_removal_mode")
 
 CLASS_SCOPES = [
@@ -95,7 +98,7 @@ def test_inline_capture_cleanup(module_name, class_name, stage):
     module = import_module(module_name)
     logger, borrowed = private_logger()
     owned = logging.Handler()
-    capture = getattr(module, class_name)()
+    capture_type = getattr(module, class_name)
     get_logger = logging.getLogger
     add = logger.addHandler
 
@@ -115,13 +118,22 @@ def test_inline_capture_cleanup(module_name, class_name, stage):
                 raise RuntimeError("body failed")
 
     try:
-        with pytest.MonkeyPatch.context() as scope:
-            scope.setattr(logging, "Handler", lambda: owned)
-            scope.setattr(
-                logging,
-                "getLogger",
+        view = module_function_view(module, bindings={"_owned_enter": capture_type.__enter__})
+
+        class Capture(capture_type):
+            def __enter__(self):
+                return view._owned_enter(self)
+
+        with scoped_function_imports(
+            view, ("_owned_enter",), {"logging": logging}
+        ) as imports, pytest.MonkeyPatch.context() as scope:
+            patch_module_attribute(scope, imports, "logging", "Handler", lambda: owned)
+            patch_module_attribute(
+                scope, imports, "logging", "getLogger",
                 lambda name=None: logger if name == "raptor" else get_logger(name),
             )
+            scope.setitem(vars(view), "logging", imports.logging)
+            capture = Capture()
             error = {
                 "body-error": RuntimeError,
                 "attach-error": OSError,
