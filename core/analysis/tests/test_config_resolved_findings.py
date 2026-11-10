@@ -329,3 +329,14 @@ def test_selector_normalisation_matches_api_family(tmp_path, selector, algorithm
     findings, stats = _scan(tmp_path, source)
     assert stats['resolver:resolved'] == 1
     assert bool(findings) is reports, (selector, algorithm, findings)
+
+
+def test_reader_literal_cannot_bind_a_bundled_algorithm_file(tmp_path):
+    (tmp_path / 'app.properties').write_text('hashAlg=MD5\n')
+    src = _src('app.properties', '"hashAlg"')
+    start = src.index('props.load(')
+    end = src.index(';', start)
+    src = src[:start] + 'props.load(new java.io.StringReader("app.properties"))' + src[end:]
+    findings, stats = _scan(tmp_path, src)
+    assert findings == []
+    assert stats['resolver:dynamic_resource'] == 1

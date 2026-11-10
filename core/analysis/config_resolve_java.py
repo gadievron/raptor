@@ -21,8 +21,9 @@ Resolver contract (every refusal is named and counted):
 
 * the receiver must be a method-local ``new java.util.Properties()``
   whose only appearances in the enclosing method are its declaration,
-  exactly one ``recv.load(...)`` naming exactly one string-literal
-  resource, and ``recv.getProperty(...)`` reads; anything else —
+  exactly one ``recv.load(...)`` of a literal resource stream obtained
+  through a class literal or ``getClass()`` (with an optional
+  ``getClassLoader()``), and ``recv.getProperty(...)`` reads; anything else —
   aliasing, call arguments, returns, field stores — refuses
   (``receiver_escapes``);
 * the load must precede the read on a STRICTLY earlier row
@@ -224,17 +225,36 @@ def _enclosing_method(node):
     return None
 
 
-def _string_literals_within(node) -> list[str]:
-    out: list[str] = []
-    stack = [node]
-    while stack:
-        n = stack.pop()
-        if n.type == "string_literal":
-            val = _string_literal_value(n)
-            if val is not None:
-                out.append(val)
-        stack.extend(n.children)
-    return out
+def _literal_load_resource(load_node) -> str | None:
+    """Literal resource from a direct Class/ClassLoader stream load only."""
+    def unwrapped(node):
+        while node is not None and node.type == "parenthesized_expression":
+            children = node.named_children
+            node = children[0] if len(children) == 1 else None
+        return node
+
+    arguments = _call_arguments(load_node)
+    stream = unwrapped(arguments[0]) if len(arguments) == 1 else None
+    if stream is None or stream.type != "method_invocation":
+        return None
+    name = stream.child_by_field_name("name")
+    if name is None or _text(name) != "getResourceAsStream":
+        return None
+    owner = unwrapped(stream.child_by_field_name("object"))
+    if owner is not None and owner.type == "method_invocation":
+        method = owner.child_by_field_name("name")
+        if method is not None and _text(method) == "getClassLoader" and not _call_arguments(owner):
+            owner = unwrapped(owner.child_by_field_name("object"))
+    if owner is None:
+        return None
+    if owner.type != "class_literal":
+        if owner.type != "method_invocation":
+            return None
+        method = owner.child_by_field_name("name")
+        if method is None or _text(method) != "getClass" or _call_arguments(owner):
+            return None
+    resource_args = _call_arguments(stream)
+    return _string_literal_value(resource_args[0]) if len(resource_args) == 1 else None
 
 
 # Ancestor node types that are execution-TRANSPARENT: when every
@@ -347,10 +367,8 @@ def _receiver_discipline(method_node, receiver: str,
                 if mname == "load":
                     load_rows.append(n.start_point[0] + 1)
                     load_node = n
-                    literals = _string_literals_within(n)
-                    if len(literals) == 1:
-                        resource = literals[0]
-                    else:
+                    resource = _literal_load_resource(n)
+                    if resource is None:
                         dynamic_resource = True
                     claimed.add((obj.start_point[0], obj.start_point[1]))
                 elif mname == "getProperty":

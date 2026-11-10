@@ -589,3 +589,38 @@ def test_property_whitespace_uses_java_line_and_prefix_rules():
     parsed = parse_properties_strict(' \talg \f= \tSHA-256\f\rsecond=x\r\nthird=y\n')
     assert not parsed.unsupported
     assert parsed.entries == {'alg': ['SHA-256\f'], 'second': ['x'], 'third': ['y']}
+
+
+@pytest.mark.parametrize('argument', [
+    'new java.io.StringReader("app.properties")',
+    'new java.io.ByteArrayInputStream("app.properties".getBytes())',
+    'unknownReader("app.properties")',
+    'unknown.getResourceAsStream("app.properties")',
+    'unknown.getClassLoader().getResourceAsStream("app.properties")',
+])
+def test_load_literal_is_not_resource_provenance(tmp_path, argument):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    start = src.index('props.load(')
+    end = src.index(';', start)
+    src = src[:start] + f'props.load({argument})' + src[end:]
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) is REFUSE
+    assert resolver.stats['dynamic_resource'] == 1
+
+
+@pytest.mark.parametrize('stream', [
+    'getClass().getClassLoader().getResourceAsStream("app.properties")',
+    'getClass().getResourceAsStream("app.properties")',
+    'T.class.getResourceAsStream("app.properties")',
+    'T.class.getClassLoader().getResourceAsStream("app.properties")',
+    '((T.class.getResourceAsStream("app.properties")))',
+])
+def test_literal_class_resource_streams_still_fold(tmp_path, stream):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    start = src.index('props.load(')
+    end = src.index(';', start)
+    src = src[:start] + f'props.load({stream})' + src[end:]
+    resolver = _resolver(tmp_path, src)
+    assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256'
