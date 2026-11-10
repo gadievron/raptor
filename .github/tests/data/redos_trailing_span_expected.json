@@ -21,6 +21,26 @@
    ],
    "verdict": "linear"
   },
+  "core/analysis/cfg_builder_cpp.py\u001f(?m)^[ \\t]*#\\s*define\\s+([^\\s(]+)": {
+   "digests": [
+    "f62d7b02d137"
+   ],
+   "exp": 1.01,
+   "rules": [
+    "R"
+   ],
+   "verdict": "linear"
+  },
+  "core/analysis/cfg_builder_cpp.py\u001fdirectives": {
+   "digests": [
+    "c6a0c32e63ba"
+   ],
+   "exp": 0.9,
+   "rules": [
+    "R"
+   ],
+   "verdict": "linear"
+  },
   "core/analysis/cfg_conditions.py\u001f_IDENT_RE": {
    "digests": [
     "26fadee140f3"
