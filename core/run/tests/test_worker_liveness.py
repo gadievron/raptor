@@ -264,8 +264,11 @@ class TestToolPidAlive(unittest.TestCase):
 
     def test_dead_pid_is_dead_regardless_of_stamp(self):
         import subprocess
+        from core.testing.processes import reap_on_exit
+
         proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
+        with reap_on_exit(proc):
+            proc.wait()
         self.assertFalse(_tool_pid_alive(proc.pid, "777"))
 
     def test_legacy_bare_pid_keeps_old_probe(self):
@@ -368,8 +371,11 @@ class TestCleanLivenessGrace(unittest.TestCase):
         import subprocess
 
         from core.project.clean import run_is_live
+        from core.testing.processes import reap_on_exit
+
         proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
+        with reap_on_exit(proc):
+            proc.wait()
         with TemporaryDirectory() as td:
             d = self._make_run(Path(td), meta={
                 "status": "running",
@@ -383,8 +389,11 @@ class TestCleanLivenessGrace(unittest.TestCase):
         import time
 
         from core.project.clean import run_is_live
+        from core.testing.processes import reap_on_exit
+
         proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
+        with reap_on_exit(proc):
+            proc.wait()
         with TemporaryDirectory() as td:
             d = self._make_run(Path(td), meta={
                 "status": "running",
