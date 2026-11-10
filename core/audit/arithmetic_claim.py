@@ -96,7 +96,7 @@ def _binary(tokens, *, operators=None, negative_literals=False):
     after_operator = index + 1
     operator = (_operator(token) if operators is None else
                 token.value if token.kind == "symbol" and token.value in operators else None)
-    if operator is None and operators is not None and index + 1 < len(tokens):
+    if operators is not None and index + 1 < len(tokens):
         following = tokens[index + 1]
         combined = token.value + following.value
         if token.kind == following.kind == "symbol" and token.end == following.start and combined in operators:
@@ -241,3 +241,8 @@ def parse_division_claim(hypothesis: str) -> ArithmeticClaim | None:
 def parse_shift_claim(hypothesis: str) -> ArithmeticClaim | None:
     """One quoted atomic shift with an independently typed count operand."""
     return _quoted_arithmetic_claim(hypothesis, {"<<", ">>"}, negative_literals=True)
+
+
+def parse_comparison_claim(hypothesis: str) -> ArithmeticClaim | None:
+    """One quoted atomic comparison, preserving adjacent two-token operators."""
+    return _quoted_arithmetic_claim(hypothesis, {"<", "<=", ">", ">=", "==", "!="}, negative_literals=True)

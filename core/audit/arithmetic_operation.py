@@ -44,6 +44,17 @@ def _unwrap(node):
 
 
 def _select_arithmetic_site(source, operands, operator, *, language):
+    return _select_atomic_site(source, operands, operator, language=language,
+                               operators={"+", "-", "*", "/", "%", "<<", ">>"},
+                               negative_literals=operator in {"<<", ">>"})
+
+
+def _select_comparison_site(source, operands, operator, *, language):
+    return _select_atomic_site(source, operands, operator, language=language,
+                               operators={"<", "<=", ">", ">=", "==", "!="}, negative_literals=True)
+
+
+def _select_atomic_site(source, operands, operator, *, language, operators, negative_literals):
     """Select a unique atomic binary operation or decline the query.
 
     C/C++ parenthesized identifiers preserve operand identity. Casts,
@@ -55,7 +66,7 @@ def _select_arithmetic_site(source, operands, operator, *, language):
         return "unavailable", b"", None, None
     if len(source) > _MAX_SOURCE_CHARS:
         return "unavailable", b"", None, None
-    if len(operands) != 2 or operator not in {"+", "-", "*", "/", "%", "<<", ">>"}:
+    if len(operands) != 2 or operator not in operators:
         return "unbound", b"", None, None
     try:
         parser = _get_parser(language)
@@ -125,7 +136,7 @@ def _select_arithmetic_site(source, operands, operator, *, language):
                     return None
                 if item.type == "identifier":
                     return text(item)
-                if operator in {"<<", ">>"}:
+                if negative_literals:
                     from .integer_literals import source_integer_atom
                     return source_integer_atom(item, data)
                 return text(item) if item.type == "number_literal" and _INTEGER_LITERAL_RE.fullmatch(text(item)) else None

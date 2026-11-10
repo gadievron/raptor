@@ -220,6 +220,13 @@ def guards_for_operation(body, target, data, operands, *, language=None, integer
             test = node.child_by_field_name("condition")
             if effects(test, watched(facts)):
                 return None
+            selected_test = _unwrap(test)
+            if selected_test is not None and selected_test.type == "condition_clause":
+                selected_test = _unwrap(selected_test.child_by_field_name("value"))
+            if selected_test == target and text(target.child_by_field_name("operator")) in {
+                "<", "<=", ">", ">=", "==", "!=",
+            }:
+                return facts  # classify the test, never assume its own truth
             for field, truth in (("consequence", True), ("alternative", False)):
                 branch = node.child_by_field_name(field)
                 if contains(branch):

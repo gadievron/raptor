@@ -267,6 +267,8 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("comparison is always false", "check-integer-comparison"),
+    ("comparison is always true", "check-integer-comparison"),
     ("invalid shift count", "check-shift-count"),
     ("negative shift count", "check-shift-count"),
     ("oversized shift count", "check-shift-count"),
