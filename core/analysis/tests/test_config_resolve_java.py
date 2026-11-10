@@ -531,3 +531,38 @@ class TestLoadDominance:
         res = _resolver(tmp_path, src).resolve_call(_get_call(src))
         assert not res.resolved
         assert res.refusal == "conditional_load"
+
+
+@pytest.mark.parametrize('mode', ['outside', 'inside', 'oversized'])
+def test_fold_hook_requires_contained_complete_properties(tmp_path, monkeypatch, mode):
+    from core.analysis import config_resolve_java as config
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    contents = 'alg=SHA-256\n'
+    if mode in ('outside', 'inside'):
+        backing = (tmp_path if mode == 'outside' else repo) / 'owned-config.txt'
+        backing.write_text(contents)
+        (repo / 'app.properties').symlink_to(backing)
+    else:
+        (repo / 'app.properties').write_text(contents)
+        monkeypatch.setattr(config, '_MAX_PROPERTIES_BYTES', len(contents.encode()) - 1)
+    src = _src('app.properties', '"alg"')
+    resolver = _resolver(repo, src)
+    folded = resolver.fold_hook(_get_call(src), 1)
+    if mode == 'inside':
+        assert folded == 'SHA-256'
+    else:
+        assert folded is REFUSE
+        assert resolver.stats['grammar_unsupported'] == 1
+
+
+def test_fold_hook_preserves_relative_repository_inputs(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    (repo / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('app.properties', '"alg"')
+    (repo / 'T.java').write_text(src)
+    monkeypatch.chdir(tmp_path)
+    resolver = ConfigResolver(src, 'repo/T.java', 'repo')
+    assert resolver.fold_hook(_get_call(src), 1) == 'SHA-256'
