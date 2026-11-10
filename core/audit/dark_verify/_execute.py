@@ -1255,50 +1255,52 @@ def _read_capped(
     FIFO plants read as an unreadable file) and every pass — size,
     anchor scan, interval reads — runs on that one vetted fd.
     """
+    from core.source.streams import preserving_stream_error
+
     f = _open_untrusted_regular(path)
     if f is None:
         return "", False
-    try:
-        size = os.fstat(f.fileno()).st_size
-        if size <= 2 * _CAPTURE_CAP_BYTES:
-            text = f.read(2 * _CAPTURE_CAP_BYTES).decode(
-                "utf-8", errors="replace",
-            )
-            return text, False
-        intervals: list[tuple[int, int]] = [(0, _CAPTURE_CAP_BYTES)]
-        if keep_tail:
-            intervals.append((size - _CAPTURE_CAP_BYTES, size))
-        if anchors:
-            for off in _scan_anchor_offsets(f, anchors):
-                lo = max(0, off - _ANCHOR_PRE_CONTEXT)
-                hi = min(size, off + _ANCHOR_POST_CONTEXT)
-                intervals.append((lo, hi))
-        intervals.sort()
-        merged: list[list[int]] = []
-        for lo, hi in intervals:
-            if merged and lo <= merged[-1][1]:
-                merged[-1][1] = max(merged[-1][1], hi)
-            else:
-                merged.append([lo, hi])
-        pieces: list[str] = []
-        covered = 0
-        prev_end = 0
-        for lo, hi in merged:
-            if lo > prev_end:
+    with preserving_stream_error(contextlib.closing(f)):
+        try:
+            size = os.fstat(f.fileno()).st_size
+            if size <= 2 * _CAPTURE_CAP_BYTES:
+                text = f.read(2 * _CAPTURE_CAP_BYTES).decode(
+                    "utf-8", errors="replace",
+                )
+                return text, False
+            intervals: list[tuple[int, int]] = [(0, _CAPTURE_CAP_BYTES)]
+            if keep_tail:
+                intervals.append((size - _CAPTURE_CAP_BYTES, size))
+            if anchors:
+                for off in _scan_anchor_offsets(f, anchors):
+                    lo = max(0, off - _ANCHOR_PRE_CONTEXT)
+                    hi = min(size, off + _ANCHOR_POST_CONTEXT)
+                    intervals.append((lo, hi))
+            intervals.sort()
+            merged: list[list[int]] = []
+            for lo, hi in intervals:
+                if merged and lo <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], hi)
+                else:
+                    merged.append([lo, hi])
+            pieces: list[str] = []
+            covered = 0
+            prev_end = 0
+            for lo, hi in merged:
+                if lo > prev_end:
+                    pieces.append(_TRUNCATION_MARKER)
+                f.seek(lo)
+                pieces.append(
+                    f.read(hi - lo).decode("utf-8", errors="replace"),
+                )
+                covered += hi - lo
+                prev_end = hi
+            if prev_end < size:
                 pieces.append(_TRUNCATION_MARKER)
-            f.seek(lo)
-            pieces.append(
-                f.read(hi - lo).decode("utf-8", errors="replace"),
-            )
-            covered += hi - lo
-            prev_end = hi
-        if prev_end < size:
-            pieces.append(_TRUNCATION_MARKER)
-        return "".join(pieces), covered < size
-    except OSError:
-        return "", False
-    finally:
-        f.close()
+            return "".join(pieces), covered < size
+        except OSError:
+            return "", False
+
 
 
 def _merge_capped_stderr_classification(proc, label: str) -> None:
