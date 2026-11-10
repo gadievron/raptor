@@ -136,11 +136,19 @@ def dedupe_reference_sections(
     Never readmit shed sections or alter rule cores.
     """
     labels = {section.label for section in kept}
+    actual_text = {section.label: section.text for section in kept}
+    owned_text = ({section.label: section.text for section in rendered_sections}
+                  if rendered_sections is not None else None)
     supplied: dict[str, ReferenceAnswer] = {}
     aliases: dict[str, list[ReferenceAnswer]] = {}
     for label, answer in zip(_labels(answers), answers, strict=True):
         aliases.setdefault(label, []).append(answer)
         if label in labels:
+            if owned_text is not None:
+                tail = "\n\n".join(entry.render_core() for entry in answer.entries)
+                text = actual_text[label]
+                if not tail or owned_text.get(label) != text or not text.endswith(tail):
+                    continue
             supplied.setdefault(label, answer)
     redundant = {label for label, answer in supplied.items() if answer.entries and any(
         len(other.entries) > len(answer.entries) and all(
