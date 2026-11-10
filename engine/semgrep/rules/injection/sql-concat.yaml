@@ -60,6 +60,8 @@ rules:
           - pattern: flask.request.args.get($KEY)
           - pattern: flask.request.args.get($KEY, $DEFAULT)
           - pattern: flask.request.args.get($KEY, default=$DEFAULT)
+          - pattern: flask.request.args.get(key=$KEY)
+          - pattern: flask.request.args.get(key=$KEY, default=$DEFAULT)
           # Converted MultiDict lists need callback analysis; model only
           # unconverted single-key calls here.
           - pattern: flask.request.args.getlist($KEY)
@@ -67,6 +69,8 @@ rules:
           - pattern: flask.request.form.get($KEY)
           - pattern: flask.request.form.get($KEY, $DEFAULT)
           - pattern: flask.request.form.get($KEY, default=$DEFAULT)
+          - pattern: flask.request.form.get(key=$KEY)
+          - pattern: flask.request.form.get(key=$KEY, default=$DEFAULT)
           - pattern: flask.request.form.getlist($KEY)
           - pattern: input(...)
           - pattern: os.environ[$_]
