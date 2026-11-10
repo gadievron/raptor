@@ -36,7 +36,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, cast
 
 from core.json import load_json
 from core.paths import strip_file_uri
@@ -1143,7 +1143,7 @@ def run_semgrep_sweep(
                     "matches the guarded negative-control fixture"
                 )
 
-        if not in_function and getattr(result, "skipped_rules", ()):
+        if not in_function and cast(object, getattr(result, "skipped_rules", ())):
             capped_reason = "rule coverage incomplete: semgrep skipped one or more incompatible rules"
             witness_cov = Coverage(
                 covered=None, tier="rule-coverage", reason=capped_reason,
@@ -1849,7 +1849,7 @@ def _rule_matches_negative_control(
         # disarmed the presence-detector cap for this keyword.
         return None
     if not result.findings and (
-        getattr(result, "skipped_rules", ())
+        cast(object, getattr(result, "skipped_rules", ()))
         or not _fixture_in_examined_files(getattr(result, "files_examined", ()), fixture)
         or _fixture_in_failed_files(getattr(result, "files_failed", ()), fixture)
     ):
