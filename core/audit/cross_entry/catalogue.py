@@ -37,8 +37,9 @@ class Catalogue:
         self.out_dir = Path(out_dir).resolve()
         self.path = self.out_dir/("cross-entry-catalogue-"+digest(str(self.root))[:16]+".sqlite")
         self.db = sqlite3.connect(self.path)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript("""
+        try:
+            self.db.row_factory = sqlite3.Row
+            self.db.executescript("""
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT);
             CREATE TABLE IF NOT EXISTS directories(path TEXT PRIMARY KEY,status TEXT,priority INTEGER);
             CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY,seen INTEGER,signature TEXT,
@@ -51,7 +52,13 @@ class Catalogue:
                 WHERE status='pending';
             CREATE TABLE IF NOT EXISTS exclusions(path TEXT PRIMARY KEY,reason TEXT);
         """)
-        self.changed: set[str] = set()
+            self.changed: set[str] = set()
+        except BaseException:
+            try:
+                self.db.close()
+            except BaseException:
+                pass
+            raise
 
     def close(self):
         self.db.close()
