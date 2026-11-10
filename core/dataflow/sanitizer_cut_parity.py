@@ -205,11 +205,12 @@ def value_bound_verdict_for(finding: dict[str, Any]) -> str:
         return VERDICT_UNRESOLVED
     java_text = None
     if resolved.language == "java":
+        # Constant folding must share the resolver CFG's raw LF rows.
         # The constant-definers pre-check folds over the file's AST;
         # unreadable file just skips that check, never the gate.
         # Capped read: the path names scanned-repo source, and a
         # truncated read only weakens the pre-check.
-        got = read_text_capped(str(finding.get("file_path", "")))
+        got = read_text_capped(str(finding.get("file_path", "")), newline="")
         java_text = got[0] if got is not None else None
     result = evaluate_finding(
         resolved.cfg,
