@@ -276,6 +276,8 @@ def parse_literal_value(
       misleading verdict) → :data:`RejectionKind.LITERAL_OUT_OF_RANGE`.
     - Leading-zero decimals (octal in C, ambiguous if interpreted as
       base-10) → :data:`RejectionKind.LITERAL_AMBIGUOUS`.
+    - Decimal conversion refused by the runtime's digit budget
+      → :data:`RejectionKind.INPUT_TOO_LONG`; the budget is not raised.
     - Anything that isn't a clean hex or decimal literal
       → :data:`RejectionKind.UNRECOGNIZED_OPERAND`.
 
@@ -292,9 +294,8 @@ def parse_literal_value(
     into the detail message, removing the propagate dependency.
     """
     # Text anchor: prefer caller-supplied outer expression when
-    # provided, otherwise the bare token. Detail uniformly mentions
-    # the token via `{tok!r}` so the operator-facing message is the
-    # same regardless of anchoring choice.
+    # provided, otherwise the bare token. Conversion-budget refusals retain
+    # this anchor without repeating an oversized token in their detail.
     text = outer_text if outer_text is not None else tok
     is_hex = bool(_HEX_LITERAL_RE.fullmatch(tok))
     if is_hex:
@@ -310,7 +311,14 @@ def parse_literal_value(
                 f"leading-zero decimal is ambiguous with C octal (token {tok!r})",
                 hint="rewrite as hex (0x...) or strip the leading zero",
             )
-        v = int(tok)
+        try:
+            v = int(tok)
+        except ValueError:
+            return Rejection(
+                text, RejectionKind.INPUT_TOO_LONG,
+                "decimal literal exceeds the runtime integer conversion limit",
+                hint="use a shorter decimal or an equivalent hexadecimal literal within the selected profile",
+            )
     else:
         return Rejection(
             text, RejectionKind.UNRECOGNIZED_OPERAND,
