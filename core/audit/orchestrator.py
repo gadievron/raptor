@@ -30860,6 +30860,37 @@ def _smt_caller_gate_decision(
         )
 
 
+def _select_refuted_claim(
+    outcome: ReviewOutcome, hypothesis: dict[str, Any], cwe: str,
+) -> ReviewOutcome:
+    """Copy a selected claim into live and journal-facing lead fields.
+
+    Journal export reads the first hypothesis. Retain every sibling and its
+    model judgement, but put the selected declaration first. Selection does
+    not broaden the checker receipt's scope.
+    """
+    from copy import deepcopy
+
+    rows = deepcopy(
+        outcome.hypotheses
+        or (outcome.review_result or {}).get("hypotheses")
+        or []
+    )
+    for index, row in enumerate(rows):
+        if row == hypothesis:
+            rows.insert(0, rows.pop(index))
+            break
+    review = deepcopy(outcome.review_result or {})
+    review["hypothesis"] = hypothesis["mechanism"]
+    review["hypotheses"] = deepcopy(rows)
+    review["cwe"] = cwe
+    review["cwe_class"] = cwe
+    return replace(
+        outcome, hypothesis=hypothesis["mechanism"],
+        hypotheses=rows, review_result=review,
+    )
+
+
 def _hold_smt_promotion(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -30903,6 +30934,7 @@ def _hold_smt_promotion(
         review_result=outcome.review_result,
         line=outcome.line,
     )
+    held.claim_refutations = outcome.claim_refutations
     held.tools_dispatched = outcome.tools_dispatched
     held.tools_errored = outcome.tools_errored
     held.tools_inconclusive = outcome.tools_inconclusive
@@ -31013,6 +31045,8 @@ def _promote_clean_refuted(
 
     Dispatches are counted in tier telemetry under ``refuted_sweep``.
     """
+    from copy import deepcopy
+
     for i, outcome in enumerate(result.outcomes):
         if outcome.status != "clean":
             continue
@@ -31043,7 +31077,7 @@ def _promote_clean_refuted(
             line_end,
         )
 
-        cwe = _effective_cwe(outcome, result.tier_counters)
+        default_cwe = _effective_cwe(outcome, result.tier_counters)
 
         ranked = sorted(
             refuted,
@@ -31055,7 +31089,10 @@ def _promote_clean_refuted(
         for h in ranked:
             if promoted:
                 break
+            h = deepcopy(h)
             mechanism = h.get("mechanism", "")
+            cwe = h.get("cwe") or default_cwe
+            selected = _select_refuted_claim(outcome, h, cwe)
 
             # ── Lane 1: SMT verification-role verb (historical) ────
             smt_verb = None
@@ -31100,6 +31137,7 @@ def _promote_clean_refuted(
                     hypothesis=mechanism,
                     line_start=outcome.line,
                     joern_server=joern_server,
+                    cwe=cwe,
                 )
                 _increment_tier_dict(
                     result.tier_counters, "refuted_sweep",
@@ -31135,12 +31173,12 @@ def _promote_clean_refuted(
 
                     tool = "+".join(confirmed)
                     gate = _smt_caller_gate_decision(
-                        config, outcome, smt_verb, mechanism, source,
+                        config, selected, smt_verb, mechanism, source,
                         line_end=line_end,
                     )
                     if gate is not None and gate.action == "hold":
                         _hold_smt_promotion(
-                            result, config, i, outcome, tool,
+                            result, config, i, selected, tool,
                             mechanism, gate,
                         )
                         # A hold resolves only THIS receipt — the
@@ -31154,7 +31192,7 @@ def _promote_clean_refuted(
                         # that stamp with a weaker one.
                         continue
                     promoted_outcome = _promote_outcome(
-                        outcome, f"clean-refuted:{tool}",
+                        selected, f"clean-refuted:{tool}",
                     )
                     if gate is not None and gate.citation:
                         promoted_outcome.body = (
@@ -31291,24 +31329,15 @@ def _promote_clean_refuted(
             # only on a genuine clean → suspicious transition.
             _l2_base = result.outcomes[i]
             _l2_prior = _l2_base.status
-            # A standing tool receipt on the slot (e.g. the held
-            # verification-role clean-refuted stamp) must not be
-            # displaced by a cheap-channel confirm for a different
-            # hypothesis: provenance-append instead — the stronger
-            # stamp keeps grading, the new channel stays visible.
-            _l2_stamp = tool
-            if (
-                _l2_base.evidence_tool
-                and _l2_base.evidence_tool != tool
-            ):
-                from .evidence_grade import is_tool_evidence
-                if is_tool_evidence(_l2_base.evidence_tool):
-                    _l2_parts = _l2_base.evidence_tool.split("+")
-                    _l2_stamp = "+".join(
-                        _l2_parts
-                        + [p for p in tool.split("+")
-                           if p not in _l2_parts],
-                    )
+            # A later discovery must not attach an earlier claim's held
+            # verification receipt to itself. Preserve that lead and receipt;
+            # this independent observation remains in the body and audit log.
+            preserve_held = (
+                _l2_prior == "suspicious"
+                and bool(_l2_base.evidence_tool)
+            )
+            _l2_selected = _l2_base if preserve_held else selected
+            _l2_stamp = _l2_base.evidence_tool if preserve_held else tool
             rescued = ReviewOutcome(
                 file=outcome.file,
                 function=outcome.function,
@@ -31319,21 +31348,28 @@ def _promote_clean_refuted(
                     f"tool confirmed it: {mechanism[:200]}\n\n"
                     f"{_l2_base.body}"
                 ),
-                hypothesis=mechanism,
-                hypotheses=outcome.hypotheses,
+                hypothesis=_l2_selected.hypothesis,
+                hypotheses=deepcopy(_l2_selected.hypotheses),
                 evidence_tool=_l2_stamp,
                 cost_usd=outcome.cost_usd,
                 model=outcome.model,
                 duration_s=outcome.duration_s,
-                review_result=outcome.review_result,
+                review_result=deepcopy(_l2_selected.review_result),
                 line=outcome.line,
             )
+            rescued.tools_dispatched = _l2_selected.tools_dispatched
+            rescued.tools_errored = _l2_selected.tools_errored
+            rescued.tools_inconclusive = _l2_selected.tools_inconclusive
+            rescued.tools_skipped = _l2_selected.tools_skipped
+            rescued.claim_refutations = _l2_selected.claim_refutations
+            rescued.semantic_confidence = _l2_selected.semantic_confidence
             rescued.function_qualified = getattr(
                 outcome, "function_qualified", "",
             )
             if rescued.review_result is not None:
                 rescued.review_result["evidence_tool"] = _l2_stamp
-                rescued.review_result["refuted_hypothesis_confirmed"] = True
+                if not preserve_held:
+                    rescued.review_result["refuted_hypothesis_confirmed"] = True
             with result._lock:
                 result.outcomes[i] = rescued
                 if _l2_prior == "clean":
@@ -31347,8 +31383,9 @@ def _promote_clean_refuted(
                 "function": outcome.function,
                 "status": "suspicious",
                 "prior_status": _l2_prior,
-                "evidence_tool": _l2_stamp,
+                "evidence_tool": tool,
                 "hypothesis": mechanism,
+                "cwe": cwe,
             })
             logger.info(
                 "refuted-hypothesis confirmed %s:%s via %s — promoted "
