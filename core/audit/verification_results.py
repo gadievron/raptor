@@ -2,7 +2,8 @@
 
 from dataclasses import asdict, dataclass, field, replace
 
-from .claims import ClaimRevision, hypothesis_material_key
+from .claims import ClaimRevision, MaterialAdmission, hypothesis_material_key, validate_material_admission
+from .claim_counters import matching_claims
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_non_refuting_smt_rule
 
@@ -83,8 +84,10 @@ class ClaimRefutation:
     checks: tuple[ProbeOutcome, ...]
     source_identity: SourceIdentity | None = None
     claim_revision: ClaimRevision | None = field(default=None, compare=False)
+    material_admission: MaterialAdmission | None = None
 
     def __post_init__(self):
+        validate_material_admission(self.material_admission)
         object.__setattr__(self, "checks", tuple(self.checks))
         if self.claim_revision is not None:
             if not isinstance(self.claim_revision, ClaimRevision):
@@ -110,6 +113,11 @@ class ClaimRefutation:
                   "checks": [asdict(check) for check in self.checks]}
         if self.claim_revision is not None:
             record["claim_reference"] = self.claim_revision.event_reference()
+        if self.material_admission is not None:
+            record["material_admission"] = {
+                "default_cwe": self.material_admission[0], "declared_material": list(self.material_admission[1]),
+                "role": "rejection_context_not_checker_scope",
+            }
         return record
 
 
@@ -147,24 +155,50 @@ def _unambiguous_refutation_material(outcome, hypotheses: list[str], claim_outco
     return True
 
 
+def _refutation_material_matches(receipt: ClaimRefutation, declarations) -> bool:
+    """Keep a known declaration loss from becoming legacy receipt reuse."""
+    if receipt.material_admission is None:
+        return True
+    review = getattr(declarations, "review_result", None) or {}
+    if not isinstance(review, dict):
+        return False
+    entries = matching_claims(receipt.hypothesis, (
+        getattr(declarations, "hypotheses", None), review.get("hypotheses"),
+    ))
+    _, expected = receipt.material_admission
+    if not entries:
+        return expected == ()
+    default_cwe = review.get("cwe_class") or review.get("cwe") or ""
+    keys = {hypothesis_material_key(entry, default_cwe=default_cwe) for entry in entries}
+    return None not in keys and keys == {expected}
+
+
 def claims_refuted(outcome, hypotheses: list[str], *, source_identity, claim_outcome=None) -> bool:
     """Every active claim needs an unambiguous pipeline-created scoped receipt.
 
     claim_outcome supplies prior declarations when receipts are carried by a
     newer assessment. It supplies no evidence or source authority itself.
+    Known nonempty declarations require correspondence; an empty-context
+    or untracked duplicate cannot erase that requirement. Without explicit
+    active-revision linkage, receipt arrival order cannot choose scope.
+    Old scoped receipts remain recorded.
     """
     if not _unambiguous_refutation_material(outcome, hypotheses, claim_outcome):
         return False
     receipts = getattr(outcome, "claim_refutations", ()) or ()
     if not isinstance(receipts, (tuple, list)):
         return False
-    return bool(hypotheses) and all(any(
-        isinstance(receipt, ClaimRefutation) and receipt.matches(
-            file=outcome.file, function=outcome.function,
-            line_start=outcome.line, hypothesis=hypothesis,
-            source_identity=source_identity,
-        ) for receipt in receipts
-    ) for hypothesis in hypotheses)
+    declarations = claim_outcome if claim_outcome is not None else outcome
+    for hypothesis in hypotheses:
+        matching = [receipt for receipt in receipts if isinstance(receipt, ClaimRefutation) and receipt.matches(
+            file=outcome.file, function=outcome.function, line_start=outcome.line,
+            hypothesis=hypothesis, source_identity=source_identity,
+        )]
+        contextual = [receipt for receipt in matching if receipt.material_admission is not None]
+        declared = [receipt for receipt in contextual if receipt.material_admission is not None and receipt.material_admission[1]]
+        if not any(_refutation_material_matches(receipt, declarations) for receipt in (declared or contextual or matching)):
+            return False
+    return bool(hypotheses)
 
 
 class ToolChainResult(list[str]):

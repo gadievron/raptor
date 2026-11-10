@@ -5,7 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
-from .claims import ClaimRevision
+from .claims import ClaimRevision, MaterialAdmission, validate_material_admission
 from .refutation_source import SourceIdentity
 from .verification_results import VerificationScope
 
@@ -43,9 +43,13 @@ class ClaimVerification:
     refuted: bool = False
     binding: VerificationScope | None = None
     claim_revision: ClaimRevision | None = None
+    # Rejection-only admission metadata: None is untracked legacy input;
+    # (default CWE, ()) records known absence, not missing information.
+    material_admission: MaterialAdmission | None = None
 
     def __init__(self, hypothesis: dict[str, Any], receipts: tuple[str, ...] = (), refuted: bool = False,
-                 *, binding: VerificationScope | None = None, claim_revision: ClaimRevision | None = None):
+                 *, binding: VerificationScope | None = None, claim_revision: ClaimRevision | None = None,
+                 material_admission: MaterialAdmission | None = None):
         if binding is not None and not isinstance(binding, VerificationScope):
             raise TypeError("verification binding must be a VerificationScope or None")
         if claim_revision is not None:
@@ -53,6 +57,8 @@ class ClaimVerification:
                 raise TypeError("claim lineage must be a ClaimRevision or None")
             if claim_revision.hypothesis != hypothesis:
                 raise ValueError("a changed statement requires an explicit claim revision")
+        validate_material_admission(material_admission)
+        object.__setattr__(self, "material_admission", material_admission)
         object.__setattr__(self, "claim_revision", claim_revision)
         object.__setattr__(self, "_hypothesis", deepcopy(dict(hypothesis)))
         object.__setattr__(self, "receipts", tuple(receipts))
@@ -69,7 +75,7 @@ class ClaimVerification:
                          binding: VerificationScope | None = None) -> "ClaimVerification":
         """Keep the intake statement/identity while replacing checker output."""
         return ClaimVerification(self.hypothesis, receipts, refuted, binding=binding,
-                                 claim_revision=self.claim_revision)
+                                 claim_revision=self.claim_revision, material_admission=self.material_admission)
 
     def scope_rejection(self, *, file, function, line_start, hypothesis, source_identity: SourceIdentity | None) -> str | None:
         """Return a known binding contradiction, never a proof certificate.
