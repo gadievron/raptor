@@ -1782,6 +1782,14 @@ def run_sandboxed(
     and refer to the same resources until this synchronous call returns;
     callers must not close/replace them concurrently with setup or exec.
     """
+    # Non-image cwd follows subprocess semantics, relative to this caller.
+    # The later pivot changes cwd to /; retain the original base first.
+    # Empty cwd remains an error, and image cwd belongs to the image view.
+    if rootfs is None and cwd is not None:
+        _cwd_path = os.fsdecode(cwd)
+        if _cwd_path and not os.path.isabs(_cwd_path):
+            cwd = os.path.join(os.getcwd(), _cwd_path)
+
     _job_control_sealer = None
     if job_controller is not None and job_controller.scope is not None:
         from .job_budget import JobBudgetError
