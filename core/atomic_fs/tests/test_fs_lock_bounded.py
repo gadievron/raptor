@@ -16,7 +16,7 @@ shapes must never stall a writer silently:
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import os
 import selectors
 import subprocess
@@ -370,9 +370,11 @@ class TestHintContainment:
         with open(lock, "wb") as fh:
             fh.truncate(size)  # sparse
         import fcntl
-        holder_fd = os.open(str(lock), os.O_WRONLY)
-        victim_fd = os.open(str(lock), os.O_WRONLY)
-        try:
+        with ExitStack() as descriptors:
+            holder_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, holder_fd)
+            victim_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, victim_fd)
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             before = _rchar()
             got = fs_lock.acquire_flock_bounded(
@@ -383,9 +385,6 @@ class TestHintContainment:
                 f"contended acquire read {delta} bytes of a "
                 f"{size}-byte lock file — the hint read is not capped"
             )
-        finally:
-            os.close(holder_fd)
-            os.close(victim_fd)
 
     @pytest.mark.skipif(not os.path.exists("/proc/self/io"),
                         reason="procfs io counters unavailable")
@@ -403,9 +402,11 @@ class TestHintContainment:
         with open(shard, "wb") as fh:
             fh.truncate(size)  # sparse
         import fcntl
-        holder_fd = os.open(str(shard), os.O_WRONLY)
-        victim_fd = os.open(str(shard), os.O_WRONLY)
-        try:
+        with ExitStack() as descriptors:
+            holder_fd = os.open(str(shard), os.O_WRONLY)
+            descriptors.callback(os.close, holder_fd)
+            victim_fd = os.open(str(shard), os.O_WRONLY)
+            descriptors.callback(os.close, victim_fd)
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             before = _rchar()
             got = fs_lock.acquire_flock_bounded(
@@ -416,9 +417,6 @@ class TestHintContainment:
                 f"data-file contention read {delta} bytes of the "
                 f"shard — the hint must be skipped for stamp=False"
             )
-        finally:
-            os.close(holder_fd)
-            os.close(victim_fd)
 
 
 class TestExpiryWarning:
@@ -438,9 +436,11 @@ class TestExpiryWarning:
         import fcntl
         lock = tmp_path / "c.json.lock"
         lock.write_bytes(b"")
-        holder_fd = os.open(str(lock), os.O_WRONLY)
-        victim_fd = os.open(str(lock), os.O_WRONLY)
-        try:
+        with ExitStack() as descriptors:
+            holder_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, holder_fd)
+            victim_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, victim_fd)
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             with caplog.at_level("WARNING"):
                 got = fs_lock.acquire_flock_bounded(
@@ -455,9 +455,6 @@ class TestExpiryWarning:
             )
             assert "giving up (bounded wait expired)" in \
                 expiry[0].getMessage()
-        finally:
-            os.close(holder_fd)
-            os.close(victim_fd)
 
     def test_expiry_note_states_the_consequence(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -470,9 +467,11 @@ class TestExpiryWarning:
         import fcntl
         lock = tmp_path / "d.json.lock"
         lock.write_bytes(b"")
-        holder_fd = os.open(str(lock), os.O_WRONLY)
-        victim_fd = os.open(str(lock), os.O_WRONLY)
-        try:
+        with ExitStack() as descriptors:
+            holder_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, holder_fd)
+            victim_fd = os.open(str(lock), os.O_WRONLY)
+            descriptors.callback(os.close, victim_fd)
             fcntl.flock(holder_fd, fcntl.LOCK_EX)
             with caplog.at_level("WARNING"):
                 got = fs_lock.acquire_flock_bounded(
@@ -481,9 +480,6 @@ class TestExpiryWarning:
             assert got is False
             assert any("row NOT appended" in r.getMessage()
                        for r in caplog.records)
-        finally:
-            os.close(holder_fd)
-            os.close(victim_fd)
 
 
 class TestStampRewrite:
