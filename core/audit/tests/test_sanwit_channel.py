@@ -1401,14 +1401,13 @@ class TestOrphanContainment:
         import subprocess as sp
         import sys as _sys
 
+        from core.testing.processes import reap_on_exit
+
         child = sp.Popen(
             [_sys.executable, "-c", "import time; time.sleep(60)"],
         )
-        try:
+        with reap_on_exit(child):
             yield child.pid
-        finally:
-            child.kill()
-            child.wait()
 
     def test_sweep_reaps_only_positively_dead_owners(
         self, tmp_path, monkeypatch,
