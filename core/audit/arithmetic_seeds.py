@@ -6,13 +6,14 @@ Enumeration neither executes target code nor asks the solver/model provider.
 """
 
 from hashlib import sha256
+import operator
 from pathlib import PurePosixPath
 
-from .arithmetic_operation import _select_arithmetic_site, _unwrap
-from .arithmetic_types import common_integer_type, model_for_integer_terms
+from .arithmetic_operation import _select_arithmetic_site, _select_comparison_site, _unwrap
+from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record
-from .integer_literals import source_integer_atom
+from .integer_literals import integer_literal_value, source_integer_atom
 
 SEED_SOURCE = "source_arithmetic"
 MAX_SEEDS_PER_GAP = 4
@@ -20,6 +21,39 @@ MAX_SEEDS_PER_RUN = 40
 _MAX_NODES = 2048
 _MAX_SOURCE_CHARS = 65536
 _MAX_CANDIDATES = 16
+_COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge,
+                "==": operator.eq, "!=": operator.ne}
+
+
+def _range_constant(atoms, op, types, abi):
+    """A cheap candidate filter, never an oracle receipt or intent claim."""
+    if atoms[0] == atoms[1]:
+        return _COMPARISONS[op](0, 0)
+    ranges = []
+    declared = dict(types)
+    for atom in atoms:
+        value = integer_literal_value(atom)
+        if value is not None:
+            ranges.append((value, value))
+            continue
+        kind = integer_type(declared.get(atom), abi)
+        if kind is None:
+            return None
+        ranges.append((-(1 << (kind.width - 1)) if kind.signed else 0,
+                       (1 << (kind.width - (1 if kind.signed else 0))) - 1))
+    (al, ah), (bl, bh) = ranges
+    if op in {">", ">="}:
+        al, ah, bl, bh = bl, bh, al, ah
+        op = "<" if op == ">" else "<="
+    if op == "<":
+        return True if ah < bl else False if al >= bh else None
+    if op == "<=":
+        return True if ah <= bl else False if al > bh else None
+    if ah < bl or bh < al:
+        return op == "!="
+    if al == ah == bl == bh:
+        return op == "=="
+    return None
 
 
 def _operations(source, language, abi):
@@ -37,7 +71,7 @@ def _operations(source, language, abi):
             return data[node.start_byte:node.end_byte].decode("utf-8")
         return source_integer_atom(node, data)
 
-    pending, candidates, visited = [root], [], 0
+    pending, candidates, comparisons, visited = [root], [], [], 0
     while pending:
         node = pending.pop()
         visited += 1
@@ -46,33 +80,48 @@ def _operations(source, language, abi):
         if node.type == "binary_expression":
             op_node = node.child_by_field_name("operator")
             op = data[op_node.start_byte:op_node.end_byte].decode() if op_node else ""
-            if op in {"/", "%", "<<", ">>"}:
+            if op in {"/", "%", "<<", ">>"} or op in _COMPARISONS:
                 atoms = tuple(atom(node.child_by_field_name(side))
                               for side in ("left", "right"))
                 if None not in atoms:
-                    candidates.append((op, atoms))
-                    if len(candidates) > _MAX_CANDIDATES:
-                        return []
+                    if op in _COMPARISONS:
+                        if len(comparisons) < _MAX_CANDIDATES:
+                            comparisons.append((op, atoms))
+                    else:
+                        candidates.append((op, atoms))
+                        if len(candidates) > _MAX_CANDIDATES:
+                            return []
         pending.extend(reversed(node.named_children))
     result = []
-    for op, atoms in dict.fromkeys(candidates):
-        status, selected_data, _, target = _select_arithmetic_site(source, atoms, op, language=language)
+    # Preserve the arithmetic intake and prompt budget even when a function
+    # has many ordinary comparisons. New hints cannot evict old candidates.
+    for op, atoms in dict.fromkeys(candidates + comparisons):
+        select = _select_comparison_site if op in _COMPARISONS else _select_arithmetic_site
+        status, selected_data, _, target = select(source, atoms, op, language=language)
         if status != "bound":
             continue
         # Per-operand typing preserves shifts' independent promotions and
         # excludes C++ overloaded operators. This is not a reaching proof.
-        if any(model_for_integer_terms(target, selected_data, [atom], (), abi,
-                                       language=language).status != "bound" for atom in atoms):
+        if any((common_integer_type([atom], (), abi) is None if integer_literal_value(atom) is not None
+                else model_for_integer_terms(target, selected_data, [atom], (), abi,
+                                             language=language).status != "bound") for atom in atoms):
             continue
         kinds = [("invalid-shift-count", "Potential invalid shift count")]
-        if op in {"/", "%"}:
+        if op in {"/", "%"} or op in _COMPARISONS:
             model = model_for_integer_terms(target, selected_data, atoms, (), abi, language=language)
             frame = common_integer_type(atoms, model.types, abi)
             if model.status != "bound" or frame is None:
                 continue
-            kinds = [("zero-divisor", "Potential zero divisor")]
-            if frame.signed:
-                kinds.append(("signed-division-overflow", "Potential division overflow"))
+            if op in _COMPARISONS:
+                truth = _range_constant(atoms, op, model.types, abi)
+                if truth is None:
+                    continue
+                truth_text = "true" if truth else "false"
+                kinds = [(f"constant-comparison-{truth_text}", f"Comparison is always {truth_text}")]
+            else:
+                kinds = [("zero-divisor", "Potential zero divisor")]
+                if frame.signed:
+                    kinds.append(("signed-division-overflow", "Potential division overflow"))
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:
