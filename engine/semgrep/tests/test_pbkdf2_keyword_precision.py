@@ -105,3 +105,61 @@ def test_pbkdf2_jvm_constructor_forms(tmp_path):
     assert actual == {("Owned.java", 3, "java"), ("Owned.java", 4, "java"),
                       ("owned.kt", 3, "kotlin"), ("owned.kt", 4, "kotlin"),
                       ("owned.kt", 5, "kotlin")}
+
+
+
+def test_pbkdf2_keysize_argument_forms(tmp_path):
+    python_cases = [
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000,8)', True),
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000,dklen=8)', True),
+        ('hashlib.pbkdf2_hmac(hash_name="sha256",password=pw,salt=salt,iterations=100000,dklen=8)', True),
+        ('h.pbkdf2_hmac("sha256",pw,salt,100000,dklen=8)', True),
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000,16)', False),
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000,dklen=16)', False),
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000)', False),
+        ('hashlib.pbkdf2_hmac("sha256",pw,salt,100000,dklen=None)', False),
+        ('other.pbkdf2_hmac("sha256",pw,salt,100000,dklen=8)', False),
+    ]
+    lines = ['import hashlib', 'import hashlib as h', 'import other']
+    expected = set()
+    for number, (expression, reports) in enumerate(python_cases):
+        lines.append(f'def case_{number}(pw,salt): return {expression}')
+        if reports:
+            expected.add(("owned.py", len(lines), "python"))
+    java = (
+        'import javax.crypto.spec.PBEKeySpec;\nclass Owned {\n'
+        'PBEKeySpec low(char[] pw,byte[] salt) { return new PBEKeySpec(pw,salt,100000,64); }\n'
+        'PBEKeySpec qualified(char[] pw,byte[] salt) { return new javax.crypto.spec.PBEKeySpec(pw,salt,100000,64); }\n'
+        'PBEKeySpec boundary(char[] pw,byte[] salt) { return new PBEKeySpec(pw,salt,100000,128); }\n'
+        'static Object PBEKeySpec(char[] pw,byte[] salt,int iters,int bits) { return null; }\n'
+        'Object unrelated(char[] pw,byte[] salt) { return PBEKeySpec(pw,salt,100000,64); }\n}\n'
+    )
+    kotlin = (
+        'import javax.crypto.spec.PBEKeySpec\nimport javax.crypto.spec.PBEKeySpec as KeySpec\n'
+        'fun low(pw:CharArray,salt:ByteArray) = PBEKeySpec(pw,salt,100000,64)\n'
+        'fun alias(pw:CharArray,salt:ByteArray) = KeySpec(pw,salt,100000,64)\n'
+        'fun qualified(pw:CharArray,salt:ByteArray) = javax.crypto.spec.PBEKeySpec(pw,salt,100000,64)\n'
+        'fun boundary(pw:CharArray,salt:ByteArray) = PBEKeySpec(pw,salt,100000,128)\n'
+        'object Other { fun PBEKeySpec(pw:CharArray,salt:ByteArray,iters:Int,bits:Int) = "unrelated" }\n'
+        'fun unrelated(pw:CharArray,salt:ByteArray) = Other.PBEKeySpec(pw,salt,100000,64)\n'
+        'fun shadowed(pw:CharArray,salt:ByteArray,PBEKeySpec:(CharArray,ByteArray,Int,Int)->String) = PBEKeySpec(pw,salt,100000,64)\n'
+    )
+    expected.update({("Owned.java", 3, "java"), ("Owned.java", 4, "java"),
+                     ("owned.kt", 3, "kotlin"), ("owned.kt", 4, "kotlin"),
+                     ("owned.kt", 5, "kotlin")})
+    targets = [tmp_path / "owned.py", tmp_path / "Owned.java", tmp_path / "owned.kt"]
+    for target, source in zip(targets, ("\n".join(lines) + "\n", java, kotlin)):
+        target.write_text(source)
+    rule = _RULE.with_name("weak-kdf-keysize.yaml")
+    proc = run_pinned_subprocess(
+        ["semgrep", "scan", "--config", str(rule), "--metrics", "off",
+         "--disable-version-check", "--jobs", "1", "--json", *map(str, targets)],
+        timeout=60, context="PBKDF2 key-size keyword and constructor parity", skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert not data.get("errors"), data.get("errors")
+    assert {Path(path).name for path in data["paths"]["scanned"]} == {p.name for p in targets}
+    actual = {(Path(row["path"]).name, row["start"]["line"], row["check_id"].split("small-key.")[-1])
+              for row in data["results"]}
+    assert actual == expected

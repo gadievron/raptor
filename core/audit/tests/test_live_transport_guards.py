@@ -1621,6 +1621,7 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run") == set()
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_pbkdf2_iteration_argument_forms", "test_pbkdf2_jvm_constructor_forms",
+            "test_pbkdf2_keysize_argument_forms",
         }
 
     def test_engine_javascript_header_regressions(self) -> None:
