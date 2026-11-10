@@ -91,7 +91,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import math
 import os
 import stat
 import tempfile
@@ -103,13 +102,13 @@ from typing import IO, Any, TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# The loader's per-value spend clamp ceiling — imported (not
+# The loader's per-value spend clamp — imported (not
 # mirrored) so the compactor's floor accounting can never drift from
 # the loader's ``journal_spend_usd`` view. Module-level import is
 # cycle-free: ``core.audit.resume`` imports only ``core.json`` at
 # module scope.
 from core.atomic_fs.fs_lock import acquire_flock_bounded, artifact_lock
-from core.audit.resume import _MAX_SPEND_EVIDENCE_USD
+from core.audit.resume import spend_value
 from core.json import loads
 
 from . import journal as _journal
@@ -351,16 +350,8 @@ def _row_cost(raw: dict[str, Any]) -> float:
     of the pre-swap floor check degenerates it to ``inf == inf`` —
     silently accepting any forged carrier value. The clamp keeps
     every contribution finite so the check stays sensitive."""
-    cost = raw.get("cost_usd")
-    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-        try:
-            v = float(cost)
-        except (OverflowError, ValueError):
-            return 0.0
-        if not math.isfinite(v):
-            v = _MAX_SPEND_EVIDENCE_USD if v > 0 else 0.0
-        return min(max(0.0, v), _MAX_SPEND_EVIDENCE_USD)
-    return 0.0
+    cost = spend_value(raw.get("cost_usd"))
+    return 0.0 if cost is None else cost
 
 
 def _file_spend(path: Path) -> float:
