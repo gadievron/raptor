@@ -60,6 +60,7 @@ from __future__ import annotations
 import ast
 import re
 import sys
+import unicodedata
 
 import pytest
 from dataclasses import dataclass
@@ -146,6 +147,9 @@ _RE_FUNCS = frozenset({
     "findall", "finditer", "split",
 })
 _RE_MODULE_NAMES = frozenset({"re", "_re"})
+_RE_MODULE_MENTION = re.compile(
+    r"\b(?:" + "|".join(re.escape(name) for name in sorted(_RE_MODULE_NAMES)) + r")\b",
+)
 #: Sentinel standing in for a non-constant pattern fragment
 #: (f-string interpolation, concatenated name) — unknowable, so the
 #: walk-back treats it as tolerant.
@@ -399,15 +403,66 @@ def test_no_unadjudicated_crlf_line_model_sites() -> None:
             source = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        # Cheap prefilter only — ".M" also catches the bare re.M
-        # flag spelling, at worst costing a parse.
-        if "split" not in source and ".M" not in source:
+        # Names are normalised by Python; flags may be inline, escaped in
+        # literals, or separated from their dot by whitespace and comments.
+        # Screen only for names the AST detector requires, then parse the
+        # original source so literals and adjudication lines stay unchanged.
+        spelling = source if source.isascii() else unicodedata.normalize("NFKC", source)
+        if "split" not in spelling and not _RE_MODULE_MENTION.search(spelling):
             continue
         rel = path.relative_to(repo).as_posix()
         offenders.extend(census_offenders(rel, source))
     assert not offenders, (
         _GUIDANCE_SPLIT + _GUIDANCE_MULT + "\n".join(offenders)
     )
+
+
+@pytest.mark.parametrize("source", [
+    'lines = text.split("\\n")\n',
+    'lines = text.ｓｐｌｉｔ("\\n")\n',
+    'import re\npattern = re.compile(r"^value$", re . M)\n',
+    'import re\npattern = re.compile(r"^value$", re.\n# flag\nM)\n',
+    'import re\npattern = re.compile(r"(?m)^value$")\n',
+    'import re\npattern = re.compile("(?" "m)^value$")\n',
+    'import re\npattern = re.compile("(\\x3fm)^value$")\n',
+    'import re as ｒｅ\npattern = ｒｅ.compile(r"(?m)^value$")\n',
+])
+def test_whole_tree_prescreen_keeps_supported_sites(tmp_path, monkeypatch, source):
+    path = tmp_path / "runtime.py"
+    path.write_text(source, encoding="utf-8")
+    assert census_offenders("runtime.py", source), "fixture must reach the AST detector"
+    monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals(), "runtime_file_universe", lambda *args, **kwargs: [path])
+    with pytest.raises(AssertionError, match="runtime.py"):
+        test_no_unadjudicated_crlf_line_model_sites()
+
+
+@pytest.mark.parametrize("source", [
+    'lines = text.split("\\n")  # line-model: bounded protocol input\n',
+    'import re\npattern = re.compile(r"(?m)^value$")  # line-model: bounded protocol\n',
+    'import re\npattern = re.compile(r"(?m)^value\\r?$")\n',
+    'import re\npattern = re.compile("ordinary")\n',
+])
+def test_whole_tree_prescreen_keeps_adjudicated_and_tolerant_sites(tmp_path, monkeypatch, source):
+    path = tmp_path / "runtime.py"
+    path.write_text(source, encoding="utf-8")
+    assert census_offenders("runtime.py", source) == []
+    monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals(), "runtime_file_universe", lambda *args, **kwargs: [path])
+    test_no_unadjudicated_crlf_line_model_sites()
+
+
+def test_whole_tree_prescreen_skips_unrelated_source(tmp_path, monkeypatch):
+    path = tmp_path / "runtime.py"
+    path.write_text("def ordinary():\n    return None\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "repo_root", lambda: tmp_path)
+    monkeypatch.setitem(globals(), "runtime_file_universe", lambda *args, **kwargs: [path])
+
+    def unexpected_scan(*args):
+        pytest.fail("unrelated source reached AST analysis")
+
+    monkeypatch.setitem(globals(), "census_offenders", unexpected_scan)
+    test_no_unadjudicated_crlf_line_model_sites()
 
 
 class TestArmSMechanics:
