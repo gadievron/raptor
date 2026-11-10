@@ -279,6 +279,22 @@ class TestCheckBudgetConsultsClient:
         assert _check_budget(config, 0.0, result) is True
         assert result.terminated_by == "llm_budget_exceeded"
 
+    @pytest.mark.parametrize("skip_max_seconds", [False, True])
+    @pytest.mark.parametrize("has_client", [False, True])
+    def test_recorded_client_budget_stop_stays_terminal(
+        self, tmp_path: Path, skip_max_seconds: bool, has_client: bool,
+    ):
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=tmp_path,
+            llm_budget_client=_FakeBudgetClient(exhausted=False) if has_client else None,
+        )
+        result = OrchestratorResult()
+        result.terminated_by = "llm_budget_exceeded"
+        assert _check_budget(
+            config, 0.0, result, skip_max_seconds=skip_max_seconds,
+        ) is True
+        assert result.terminated_by == "llm_budget_exceeded"
+
     def test_not_exhausted_gate_stays_open(self, tmp_path: Path):
         config = OrchestratorConfig(
             target_path=tmp_path, out_dir=tmp_path,

@@ -351,20 +351,6 @@ def _no_native_review_tools(monkeypatch):
 
 
 @pytest.fixture
-def _no_layer_disagreement_review(monkeypatch):
-    """Keep first-review contracts separate from disagreement reconsideration.
-
-    Knowledge history makes a canned result non-empty, so mechanical evidence
-    can legitimately schedule another review. These callers exercise the
-    initial review and recall seams; disagreement tests retain the real path.
-    """
-    monkeypatch.setattr(
-        "core.audit.orchestrator._check_layer_disagreement",
-        lambda *a, **k: None,
-    )
-
-
-@pytest.fixture
 def _no_post_review_witness_synthesis(monkeypatch):
     """Keep canned-review transitions separate from later witness synthesis."""
     monkeypatch.setattr(
@@ -1302,6 +1288,7 @@ class TestPrefilterWiring:
         assert "get_count" not in llm_calls
         assert "copy_name" in llm_calls
 
+    @pytest.mark.usefixtures("_no_layer_disagreement_review")
     def test_prefilter_disabled(self, tmp_path: Path):
         target, out = self._setup_with_accessor(tmp_path)
 
@@ -4517,6 +4504,7 @@ class TestIterativeReReview:
 
         assert result.findings >= 2
 
+    @pytest.mark.usefixtures("_no_layer_disagreement_review")
     def test_no_re_review_when_no_findings(self, tmp_path: Path):
         """No re-review pass when the initial pass finds nothing."""
         target, out = _setup_target(tmp_path)
@@ -4563,6 +4551,7 @@ class TestIterativeReReview:
         assert sorted(calls) == ["check_pw", "validate"]
         assert result.findings == 0
 
+    @pytest.mark.usefixtures("_no_layer_disagreement_review")
     def test_convergence_no_infinite_loop(self, tmp_path: Path):
         """Re-review converges — re-reviewed callers that stay clean
         don't trigger further iterations."""
