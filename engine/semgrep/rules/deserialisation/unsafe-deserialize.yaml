@@ -194,6 +194,8 @@ rules:
               - pattern-either:
                   - pattern: $CTX.query[...]
                   - pattern: $CTX.query.$PROP
+                  - pattern: $CTX.request.query[...]
+                  - pattern: $CTX.request.query.$PROP
                   - pattern: $CTX.request.body[...]
                   - pattern: $CTX.request.body.$PROP
                   - pattern: $CTX.get($FIELD)

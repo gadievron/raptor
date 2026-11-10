@@ -75,6 +75,12 @@ def test_header_property_sources(tmp_path, config, rule_id, sink, koa_body, exte
     # The deep-set implementation rule declares Express sources only.
     if koa_body:
         sources.extend([
+            ('ctx.request.query.value', True),
+            ('ctx.request.query["value"]', True),
+            ('context.request.query.value', True),
+            ('c.request.query["value"]', True),
+            ('ctx.response.query.value', False),
+            ('local.request.query.value', False),
             ('ctx.request.body["value"]', True),
             ('ctx.request.body.value', True),
             ('context.request.body.value', True),
