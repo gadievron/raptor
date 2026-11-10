@@ -10,6 +10,7 @@ the survival of legacy rows through both windows.
 """
 
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -58,10 +59,9 @@ _COPY = """INSERT OR IGNORE INTO nodes SELECT id, kind, stable_key, name, file,
 
 def _make_v1_db(path):
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
-    conn.executescript(_V1_SCHEMA)
-    conn.commit()
-    conn.close()
+    with closing(sqlite3.connect(path)) as conn:
+        conn.executescript(_V1_SCHEMA)
+        conn.commit()
 
 
 def _node_count(path):
