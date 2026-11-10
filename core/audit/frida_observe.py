@@ -556,13 +556,18 @@ def _parse_observations(
             # (original mkstemp inode), so the read binds to the same
             # inode — never a by-path reopen of shared /tmp, which the
             # observed same-UID target can swap to forge observations.
+            from core.source.streams import adopt_fd
+
             dup_fd = os.dup(log_fd)
             try:
                 os.lseek(dup_fd, 0, os.SEEK_SET)
-                log_fh = os.fdopen(dup_fd, "rb")
-            except OSError:
-                os.close(dup_fd)
+            except BaseException:
+                try:
+                    os.close(dup_fd)
+                except BaseException:
+                    pass  # Retain the seek failure after consuming the duplicate.
                 raise
+            log_fh = adopt_fd(dup_fd, "rb", os.close)
         else:
             if not log_file.exists():
                 return observations
