@@ -15,15 +15,26 @@ def exclusive_session(path: Path):
     """Fail busy instead of dispatching duplicate paid work in another process."""
     path.parent.mkdir(parents=True,exist_ok=True)
     connection = sqlite3.connect(path,timeout=0,isolation_level=None)
+    failed = False
     try:
         try:
             connection.execute("BEGIN IMMEDIATE")
         except sqlite3.OperationalError as exc:
             raise RuntimeError("cross-entry work is already held by another worker") from exc
         yield
+    except BaseException:
+        failed = True
+        raise
     finally:
-        connection.rollback()
-        connection.close()
+        cleanup_error = None
+        for cleanup in (connection.rollback, connection.close):
+            try:
+                cleanup()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if not failed and cleanup_error is not None:
+            raise cleanup_error
 
 
 class WorkQueue:
