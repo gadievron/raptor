@@ -177,10 +177,9 @@ def test_newer_schema_raises_typed_error(tmp_path):
     db = tmp_path / "raptor.graph.sqlite"
     conn = open_graph(db)
     conn.close()
-    raw = sqlite3.connect(db)
-    raw.execute("PRAGMA user_version=99")
-    raw.commit()
-    raw.close()
+    with closing(sqlite3.connect(db)) as raw:
+        raw.execute("PRAGMA user_version=99")
+        raw.commit()
 
     with pytest.raises(GraphSchemaNewerError):
         open_graph(db)
