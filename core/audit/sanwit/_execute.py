@@ -719,77 +719,101 @@ def _run_capped_pipes(
     drain_deadline: float | None = None
     open_fds = {proc.stdout: "out", proc.stderr: "err"}
     rc: int | None = None
+    failed = False
     try:
-        while open_fds:
-            now = time.monotonic()
-            if not (overflow or timed_out) and now >= deadline:
-                timed_out = True
-            if (overflow or timed_out) and drain_deadline is None:
-                proc.terminate()
-                drain_deadline = time.monotonic() + _DRAIN_GRACE_S
-            if drain_deadline is not None:
-                if time.monotonic() >= drain_deadline:
-                    break
-                wait_s = 0.2
-            else:
-                wait_s = max(min(deadline - now, 1.0), 0.05)
-            ready, _, _ = select.select(list(open_fds), [], [], wait_s)
-            if not ready:
-                if drain_deadline is not None and proc.poll() is not None:
-                    break
-                continue
-            for fd in ready:
-                chunk = fd.read1(65536)  # type: ignore[attr-defined]
-                if not chunk:
-                    del open_fds[fd]
-                    continue
-                if overflow or timed_out:
-                    continue  # drain and discard
-                if open_fds.get(fd) == "out":
-                    out += chunk
-                    if len(out) > _STDOUT_CAP:
-                        overflow = True
+        try:
+            while open_fds:
+                now = time.monotonic()
+                if not (overflow or timed_out) and now >= deadline:
+                    timed_out = True
+                if (overflow or timed_out) and drain_deadline is None:
+                    proc.terminate()
+                    drain_deadline = time.monotonic() + _DRAIN_GRACE_S
+                if drain_deadline is not None:
+                    if time.monotonic() >= drain_deadline:
+                        break
+                    wait_s = 0.2
                 else:
-                    err_tail += chunk
-                    del err_tail[:-_DOCKER_STDERR_TAIL]
-        if overflow or timed_out:
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=10)
-            if overflow:
+                    wait_s = max(min(deadline - now, 1.0), 0.05)
+                ready, _, _ = select.select(list(open_fds), [], [], wait_s)
+                if not ready:
+                    if drain_deadline is not None and proc.poll() is not None:
+                        break
+                    continue
+                for fd in ready:
+                    chunk = fd.read1(65536)  # type: ignore[attr-defined]
+                    if not chunk:
+                        del open_fds[fd]
+                        continue
+                    if overflow or timed_out:
+                        continue  # drain and discard
+                    if open_fds.get(fd) == "out":
+                        out += chunk
+                        if len(out) > _STDOUT_CAP:
+                            overflow = True
+                    else:
+                        err_tail += chunk
+                        del err_tail[:-_DOCKER_STDERR_TAIL]
+            if overflow or timed_out:
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=10)
+                if overflow:
+                    return ExecOutcome(
+                        ok=False,
+                        reason=(
+                            f"probe stdout exceeded the {_STDOUT_CAP}-byte "
+                            "cap — terminated, indeterminate"
+                        ),
+                    )
                 return ExecOutcome(
                     ok=False,
-                    reason=(
-                        f"probe stdout exceeded the {_STDOUT_CAP}-byte "
-                        "cap — terminated, indeterminate"
-                    ),
+                    reason=f"witness timed out after {DOCKER_TIMEOUT_S}s",
                 )
+            rc = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
+        except (OSError, ValueError) as exc:
+            proc.kill()
+            return ExecOutcome(
+                ok=False, reason=f"docker execution failed: {type(exc).__name__}",
+            )
+        except subprocess.TimeoutExpired:
+            proc.kill()
             return ExecOutcome(
                 ok=False,
                 reason=f"witness timed out after {DOCKER_TIMEOUT_S}s",
             )
-        rc = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
-    except (OSError, ValueError) as exc:
-        proc.kill()
-        return ExecOutcome(
-            ok=False, reason=f"docker execution failed: {type(exc).__name__}",
-        )
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return ExecOutcome(
-            ok=False,
-            reason=f"witness timed out after {DOCKER_TIMEOUT_S}s",
-        )
+    except BaseException:
+        failed = True
+        raise
     finally:
-        proc.stdout.close()
-        proc.stderr.close()
-        if proc.poll() is None:
-            proc.kill()
-        if cleanup is not None:
-            cleanup()
+        cleanup_error: BaseException | None = None
+        for stream in (proc.stdout, proc.stderr):
+            try:
+                stream.close()
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+        try:
+            if cleanup is not None:
+                cleanup()
+        except BaseException as exc:
+            if cleanup_error is None:
+                cleanup_error = exc
+        if not failed and cleanup_error is not None:
+            try:
+                raise cleanup_error
+            finally:
+                cleanup_error = None
+        cleanup_error = None
     if rc != 0:
         tail = err_tail.decode("utf-8", errors="replace").strip()
         last = tail.splitlines()[-1][:120] if tail else ""
