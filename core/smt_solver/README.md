@@ -154,3 +154,24 @@ and `multiplication overflow`. The last two require `+` and `*` respectively
 in the bound expression; one operation cannot supply a witness for the other.
 `truncation overflow` is not an arithmetic-range objective and is not admitted
 by this checker.
+
+QUALITY also proposes direct builtin unsigned-integer initializer conversions
+whose source storage range can exceed the destination range, including
+equal-width signed-to-unsigned conversions. `check-integer-conversion` binds a
+closed objective to one initializer and an explicit target ABI, for example:
+
+```text
+Potential non-representable unsigned conversion in `Small = Value`.
+```
+
+It checks
+typed reaching guards and prefix admission, then independently replays a
+reachable value-changing conversion. A guard excluding such values produces
+no positive receipt; an unreachable or unsupported site remains inconclusive.
+
+These source observations remain diagnostic and cannot verify unintended bug
+intent, promote alone, or refute a whole function. Boolean and signed
+destinations, aliases, non-atomic initializers, mutation and ambiguous sites
+receive no source-conversion credit. The older width-only narrowing diagnostic
+keeps its existing scope. Candidate preparation does not enter the solver;
+new conversion leads follow existing leads within the same finite budgets.

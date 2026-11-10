@@ -214,7 +214,16 @@ def _operations(source, language, abi):
             result.append((target, "[]", (array, index), "fixed-array-read", mechanism,
                            {"object_extent": access.extent, "access_kind": "read", "binding_status": "candidate"}))
     # Existing source leads retain their ordering and finite prompt budget.
-    return result + deferred_wraps
+    result.extend(deferred_wraps)
+    from .integer_conversion import conversion_candidates
+    for conversion in conversion_candidates(source, language=language, integer_abi=abi):
+        incoming, destination = conversion["incoming"], conversion["destination"]
+        mechanism = f"Potential non-representable unsigned conversion in `{destination} = {incoming}`."
+        if len(mechanism) <= 300:
+            result.append((conversion["target"], "=", (destination, incoming), "unsigned-conversion-loss", mechanism,
+                           {"binding_status": "candidate", "source_type": conversion["source_type"],
+                            "destination_type": conversion["destination_type"]}))
+    return result
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
