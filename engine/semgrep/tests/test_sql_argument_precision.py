@@ -211,6 +211,10 @@ for _source in ('req.params.sql', 'req.body.sql', 'req.headers["x-query"]',
                 'ctx.request.headers["host"]',
                 'context.headers.host',
                 'c.request.headers.host',
+                'ctx.request.query.value',
+                'ctx.request.query["value"]',
+                'context.request.query.value',
+                'c.request.query["value"]',
                 'process.env.QUERY', 'process.argv[2]'):
     _MATRICES["javascript"][2].extend([
         (f'connection.query({_source});', True),
@@ -230,6 +234,8 @@ _MATRICES["javascript"][2].extend([
     ('connection.query(ctx.response.headers.host);', False),
     ('connection.query(ctx.response.header["host"]);', False),
     ('connection.query(local.request.headers.host);', False),
+    ('connection.query(ctx.response.query.value);', False),
+    ('connection.query(local.request.query.value);', False),
     ('connection.query(ctx.response.get("host"));', False),
     ('connection.query(local.request.get("host"));', False),
 ])
