@@ -318,8 +318,17 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
         h = hashlib.sha256()
         with os.fdopen(fd, "rb") as f:
             fd = -1  # fdopen owns it now
-            for chunk in iter(lambda: f.read(1 << 20), b""):
+            remaining = _MAX_BINARY_HASH_BYTES
+            while chunk := f.read(min(1 << 20, remaining + 1)):
+                if len(chunk) > remaining:
+                    logger.debug(
+                        "witness matching: finding binary %s grew beyond the "
+                        "%d-byte hash bound — treating as unhashable",
+                        binary_path, _MAX_BINARY_HASH_BYTES,
+                    )
+                    return None
                 h.update(chunk)
+                remaining -= len(chunk)
         digest = h.hexdigest()
         _binary_hash_memo[memo_key] = digest
         return digest
