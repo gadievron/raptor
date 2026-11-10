@@ -1060,6 +1060,7 @@ def _compact_one_file(
                 "form and backups"
             )
     from core.source import open_regular
+    from core.source.streams import owned_fd, preserving_stream_error
     fh = open_regular(journal_path, "rb")
     if fh is None:
         return None
@@ -1212,8 +1213,11 @@ def _compact_one_file(
                     dir=str(out_dir),
                 )
                 tmp_path = Path(tmp_name)
-                with os.fdopen(tmp_fd, "wb") as out:
-                    tmp_fd = None      # ownership moved to `out`
+                write_fd, tmp_fd = tmp_fd, None
+                with (
+                    owned_fd(write_fd, close_fd=lambda value: os.close(value)),
+                    preserving_stream_error(os.fdopen(write_fd, "wb", closefd=False)) as out,
+                ):
                     line_no = -1
                     in_overlong = False
                     polled = 0
