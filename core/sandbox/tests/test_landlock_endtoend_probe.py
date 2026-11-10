@@ -66,7 +66,8 @@ class TestMaskHelpers:
 
     @pytest.mark.parametrize(
         ("abi", "expected"),
-        [(1, 0), (3, 0), (4, 0x2), (8, 0x2)],
+        [(1, 0), (3, 0), (4, 0x2), (8, 0x2), (9, 0x2),
+         (10, 0xE), (11, 0xE)],
     )
     def test_net_mask_gated_on_abi4(self, abi: int, expected: int) -> None:
         assert landlock._net_mask_for_abi(abi) == expected
@@ -161,7 +162,7 @@ class TestProbeClosureParity:
     fails here on every Linux host.
     """
 
-    @pytest.mark.parametrize("abi", [1, 4, 8])
+    @pytest.mark.parametrize("abi", [1, 4, 8, 9, 10, 11])
     def test_closure_create_attr_equals_probe_attr(
             self, abi: int, tmp_path: Path,
             monkeypatch: pytest.MonkeyPatch) -> None:
@@ -181,7 +182,7 @@ class TestProbeClosureParity:
         assert probe_rec.seen, "recorder never saw the probe's create"
 
         # Closure side: strictest consumer posture (restricted reads +
-        # deny-all TCP — the parser-jail worker's shape), built against
+        # deny-all TCP/UDP), built against
         # the same ABI, create intercepted by the same recorder class.
         closure_recs: "list[_CreateRecorder]" = []
 
@@ -198,7 +199,7 @@ class TestProbeClosureParity:
         writable.mkdir()
         apply_landlock = landlock._make_landlock_preexec(
             [str(writable)], readable_paths=[str(grant_dir)],
-            deny_all_tcp_connect=True, fail_raise=True)
+            deny_all_tcp_connect=True, deny_all_udp=True, fail_raise=True)
         with pytest.raises(landlock.LandlockInstallError):
             apply_landlock()
 

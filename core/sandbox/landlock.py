@@ -15,6 +15,8 @@ ABI levels (kernel):
 - 8          : TSYNC (restrict all threads) — not needed (Landlock is
                always applied in a freshly forked, single-threaded
                child before exec)
+- 10         : UDP bind + connect/send restrictions, requested only as
+               an additional layer where policy already denies UDP
 
 We build the access masks at runtime based on the kernel's ABI, so
 a newer kernel gives more coverage; an older one degrades cleanly.
@@ -80,8 +82,10 @@ _LL_REFER = 1 << 13      # ABI v2+ (kernel 5.19) — rename/link across dirs
 _LL_TRUNCATE = 1 << 14   # ABI v3+ (kernel 6.2)
 _LL_IOCTL_DEV = 1 << 15  # ABI v5+ (kernel 6.10) — ioctl on device files
 
-# Network (ABI v4+, kernel 6.7) and scoping (ABI v6+, kernel 6.12).
+# Network (TCP ABI4+, UDP ABI10+) and scoping (ABI6+).
 _LL_NET_CONNECT_TCP = 1 << 1
+_LL_NET_BIND_UDP = 1 << 2
+_LL_NET_CONNECT_SEND_UDP = 1 << 3
 _LL_SCOPE_ABSTRACT_UNIX_SOCKET = 1 << 0
 _LL_SCOPE_SIGNAL = 1 << 1
 
@@ -135,7 +139,9 @@ def _read_mask() -> int:
 
 
 def _net_mask_for_abi(abi: int) -> int:
-    return _LL_NET_CONNECT_TCP if abi >= 4 else 0
+    return ((_LL_NET_CONNECT_TCP if abi >= 4 else 0)
+            | ((_LL_NET_BIND_UDP | _LL_NET_CONNECT_SEND_UDP)
+               if abi >= 10 else 0))
 
 
 def _scoped_mask_for_abi(abi: int) -> int:
@@ -444,7 +450,8 @@ def _run_selftest_in_child(libc: "ctypes.CDLL | None", abi: int,
     # the ABI-gated write mask + read mask + EXECUTE (the
     # restrict-reads posture — the strictest shape a consumer
     # requests, used verbatim by e.g. the parser-jail worker); net =
-    # CONNECT_TCP on ABI>=4 (the deny-all-TCP / port-allowlist lanes);
+    # CONNECT_TCP on ABI>=4 and UDP rights on ABI>=10 (the latter
+    # supplement seccomp only when policy already requests UDP denial);
     # scoped = signal + abstract-unix isolation on ABI>=6.
     attr = _RulesetAttr(
         handled_access_fs=(_write_mask_for_abi(abi) | _read_mask()
@@ -760,7 +767,8 @@ class LandlockInstallError(RuntimeError):
 def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None = None,
                            readable_paths: list | None = None,
                            deny_all_tcp_connect: bool = False,
-                           fail_raise: bool = False):
+                           fail_raise: bool = False,
+                           deny_all_udp: bool = False):
     """Create a preexec_fn that applies Landlock restrictions.
 
     Filesystem:
@@ -788,9 +796,12 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     to those ports only. If `deny_all_tcp_connect` is set (and no port
     allowlist is), CONNECT_TCP is handled with ZERO allow rules — every
     TCP connect (loopback included; Landlock net rules are port-scoped,
-    not address-scoped) fails with EACCES. bind/listen and UDP are
-    deliberately untouched (see the degraded-mode rationale in
-    context.py). When only the connect-deny is requested (no writable
+    not address-scoped) fails with EACCES. TCP bind/listen is untouched.
+    `deny_all_udp` additionally handles UDP bind and connect/send on
+    ABI10+, with no UDP grants. It supplements the existing seccomp
+    UDP filter; it never waives that requirement on older kernels.
+    Namespace-local UDP remains allowed when this request is false.
+    When only network denial is requested (no writable
     paths, no read restriction, no port allowlist), the ruleset handles
     ONLY the net access — filesystem semantics stay exactly as without
     Landlock, so a net-only deny never sneaks in fs restrictions.
@@ -930,8 +941,8 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     # bits only when restrict_reads is on; otherwise reads stay wide.
     # Net-only deny (no writable paths, no reads restriction, no port
     # allowlist): handle NO fs accesses at all, so the ruleset governs
-    # only TCP connect and filesystem behaviour is untouched.
-    _net_only = (deny_all_tcp_connect and not paths
+    # only requested network rights and filesystem behaviour is untouched.
+    _net_only = ((deny_all_tcp_connect or deny_all_udp) and not paths
                  and not restrict_reads and ports is None)
     _handled_fs = (0 if _net_only
                    else (_write_access | _read_access | _exec_access))
@@ -948,6 +959,9 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
         if ((ports is not None or deny_all_tcp_connect) and _abi >= 4)
         else 0
     )
+    if deny_all_udp:
+        _net_access |= (_net_mask_for_abi(_abi)
+                        & (_LL_NET_BIND_UDP | _LL_NET_CONNECT_SEND_UDP))
     _scoped = _scoped_mask_for_abi(_abi)
     if not _scoped and _abi >= 1:
         # Every other ABI-gated feature announces itself when it
