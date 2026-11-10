@@ -185,3 +185,20 @@ hints follow prior source leads within the existing budgets. The comparison
 oracle must still validate the complete prefix, typed guards, source identity
 and reachable entry; mutation or unsupported control flow cannot earn a proof
 from candidate metadata.
+
+QUALITY may also propose impossible grouped builtin mask tests, for example
+the following closed objective:
+
+```text
+Comparison is always false in `(Flags & 5) == 2`.
+```
+
+The source comparison
+oracle binds one matching `==` or `!=` test with an immutable builtin entry
+parameter and small integer literals. It preserves the actual C/C++ operator
+precedence, promotions and target ABI. Entry satisfiability, an exact bitvector
+proof that the contrary truth is impossible, and independent witness replay
+are required. This catches impossible bit combinations inside an otherwise
+plausible result interval. The observation remains diagnostic and non-refuting;
+it does not prove unintended bug intent. Mask candidate preparation is bounded
+and solver-free, and follows prior leads within the same discovery limits.

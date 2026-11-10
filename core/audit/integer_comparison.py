@@ -18,8 +18,11 @@ def check_integer_comparison(source, hypothesis, *, language, integer_abi=None):
     details = {"comparison_status": "unavailable", "matches_claim": None, "entry_witness_validated": False}
     claim = parse_comparison_claim(hypothesis)
     abi = integer_abi_record(integer_abi)
-    if claim is None or abi is None or not z3_available():
+    if abi is None or not z3_available():
         return details
+    if claim is None:
+        from .integer_mask_comparison import check_mask_comparison
+        return check_mask_comparison(source, hypothesis, language=language, integer_abi=integer_abi)
     requested = parse_integer_goal(hypothesis, COMPARISON_GOALS)
     if requested is None:
         details["reason"] = "closed positive integer goal required"
