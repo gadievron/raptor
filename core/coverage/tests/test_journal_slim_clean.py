@@ -780,40 +780,47 @@ class TestSidecarLockProbes:
         the size UNDER the lock — its records land after the
         first's, no overlap, no torn line."""
         import threading
+        from contextlib import closing
+
+        from core.testing.threads import retiring_threads
 
         from core.coverage.journal_compact import _SidecarWriter
         w1 = _SidecarWriter(tmp_path)
-        w1.open()
-        off1, len1 = w1.append({"gen": 1, "n": 0, "pad": "a" * 64})
-        off2, len2 = w1.append({"gen": 1, "n": 1, "pad": "b" * 64})
-        assert (off1, off2) == (0, len1)
+        with closing(w1):
+            w1.open()
+            off1, len1 = w1.append({"gen": 1, "n": 0, "pad": "a" * 64})
+            off2, len2 = w1.append({"gen": 1, "n": 1, "pad": "b" * 64})
+            assert (off1, off2) == (0, len1)
 
-        got: dict[str, tuple[int, int]] = {}
-        opened = threading.Event()
+            got: dict[str, tuple[int, int]] = {}
+            opened = threading.Event()
 
-        def second() -> None:
-            w2 = _SidecarWriter(tmp_path)
-            w2.open()                      # blocks on w1's flock
-            opened.set()
-            got["r"] = w2.append({"gen": 2, "n": 0, "pad": "c" * 64})
-            w2.close()
+            def second() -> None:
+                w2 = _SidecarWriter(tmp_path)
+                try:
+                    w2.open()                      # blocks on w1's flock
+                    opened.set()
+                    got["r"] = w2.append({"gen": 2, "n": 0, "pad": "c" * 64})
+                finally:
+                    w2.close()
 
-        t = threading.Thread(target=second)
-        t.start()
-        # The second writer must NOT get through while w1 holds the
-        # lock (bounded wait — a failure here means no exclusion).
-        assert not opened.wait(0.3)
-        w1.close()
-        t.join(timeout=10)
-        assert not t.is_alive()
-        # Offset re-read under the lock: w2's record starts exactly
-        # where w1's appends ended.
-        assert got["r"][0] == len1 + len2
-        raw = (tmp_path / SIDECAR_FILENAME).read_bytes()
-        assert raw.endswith(b"\n")
-        lines = raw.splitlines()
-        assert len(lines) == 3
-        assert [json.loads(ln)["gen"] for ln in lines] == [1, 1, 2]
+            t = threading.Thread(target=second)
+            with retiring_threads([t], release=w1.close, timeout=10):
+                t.start()
+                # The second writer must NOT get through while w1 holds the
+                # lock (bounded wait — a failure here means no exclusion).
+                assert not opened.wait(0.3)
+                w1.close()
+                t.join(timeout=10)
+                assert not t.is_alive()
+            # Offset re-read under the lock: w2's record starts exactly
+            # where w1's appends ended.
+            assert got["r"][0] == len1 + len2
+            raw = (tmp_path / SIDECAR_FILENAME).read_bytes()
+            assert raw.endswith(b"\n")
+            lines = raw.splitlines()
+            assert len(lines) == 3
+            assert [json.loads(ln)["gen"] for ln in lines] == [1, 1, 2]
 
     def test_concurrent_slim_walks_offsets_and_stubs_hold(
         self, tmp_path: Path,
