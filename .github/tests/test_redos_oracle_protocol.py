@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from core.testing.module_views import module_function_view
+from core.testing.standalone_cli import run_standalone_cli
 
 
 @pytest.fixture(scope="module")
@@ -125,6 +126,20 @@ def test_spawn_errors_and_interrupts_propagate(oracle, error_type):
 @pytest.mark.parametrize("kind", ["pair", "scan"])
 def test_real_literal_worker_reports_no_lane(oracle, kind):
     assert oracle._oracle_lane("literal", 0, "search", kind, 0, "x") == (None, "NOLANE")
+
+
+@pytest.mark.parametrize("pattern,expected", [("literal", "NOLANE"), ("[", "NOPARSE")])
+def test_real_worker_needs_only_the_standard_library(oracle, tmp_path, pattern, expected):
+    result = run_standalone_cli(
+        [sys.executable, "-I", "-S", oracle.__file__, "--oracle-worker"],
+        input=json.dumps({
+            "pattern": pattern, "flags": 0, "mode": "search",
+            "kind": "scan", "index": 0, "unit": "",
+        }),
+        cwd=tmp_path, capture_output=True, text=True, timeout=5,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == expected
 
 
 def test_real_unsuccessful_child_is_reaped_and_reported(oracle, tmp_path):
