@@ -67,3 +67,42 @@ def test_prescreen_requires_complete_exact_source(tmp_path, monkeypatch):
     assert prescreen._read_source(tmp_path, "app.py") == exact.decode()
     path.write_bytes(b"# invalid UTF-8: \xff\n" + PREFIX.encode())
     assert prescreen._read_source(tmp_path, "app.py") is None
+
+
+@pytest.mark.skipif(not z3_available(), reason="requires native Z3")
+def test_tier0_cannot_move_a_finding_to_another_sink_line(tmp_path):
+    guard = '    if (!value.matches("[a-z]+")) return;'
+    source = ("class App {\n void handle(String value, String other) {\n"
+              "    // note\r" + guard + "\n    consume(value);\n"
+              "    value = other; consume(value);\n }\n}\n")
+    (tmp_path / "App.java").write_bytes(source.encode())
+    result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                         sink_uri="App.java", sink_line=5, sink_class="xss", language="java")
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
+
+
+@pytest.mark.skipif(not z3_available(), reason="requires native Z3")
+def test_tier0_crlf_source_keeps_its_finding_coordinates(tmp_path):
+    guard = '    if (!value.matches("[a-z]+")) return;'
+    source = "class App {\n void handle(String value) {\n" + guard + "\n    consume(value);\n }\n}\n"
+    (tmp_path / "App.java").write_bytes(source.replace("\n", "\r\n").encode())
+    result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                         sink_uri="App.java", sink_line=4, sink_class="xss", language="java")
+    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+
+
+def test_tier1_cannot_normalise_a_finding_to_another_sink_line(tmp_path):
+    import json
+    from core.dataflow import tier1_llm as tier1
+
+    guard = '    if (!value.matches("[a-z]+")) return;'
+    source = ("class App {\n void handle(String value, String other) {\n"
+              "    // note\r" + guard + "\n    consume(value);\n"
+              "    value = other; consume(value);\n }\n}\n")
+    (tmp_path / "App.java").write_bytes(source.encode())
+    reply = json.dumps({"kind": "charset", "validator_source_line": guard.strip(),
+                        "variable_name": "value", "charset": "a-z", "forbidden": "", "library_call": ""})
+    result = tier1.try_tier1b(fix_diff="+" + guard + "\n", repo_root=tmp_path,
+                             sink_uri="App.java", sink_line=5, sink_class="xss", language="java",
+                             complete=lambda *_args: reply)
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning

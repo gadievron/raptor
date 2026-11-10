@@ -3150,7 +3150,7 @@ def try_tier0(
         )
     # Source-wide binding checks cannot establish identity from a prefix.
     # Refuse an incomplete read even when validator and sink are visible.
-    got = read_text_capped(src_path)
+    got = read_text_capped(src_path, newline="")
     if got is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
