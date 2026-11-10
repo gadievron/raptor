@@ -19,14 +19,13 @@ from __future__ import annotations
 from typing import Any
 
 from .availability import z3
-from ._validation import require_bool, require_bv_pair, require_width
+from ._validation import require_bool, require_bv_pair, require_symbol_name, require_width
 
 
 def mk_var(name: str, width: int) -> Any:
     """Create a ``BitVec`` variable at the given width."""
     require_width(width)
-    if not isinstance(name, str):
-        raise ValueError("bitvector name must be a string")
+    require_symbol_name(name, argument="bitvector name")
     return z3.BitVec(name, width)
 
 
