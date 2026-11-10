@@ -277,11 +277,11 @@ def test_identical_commits_exits_7_with_unified_class_label(tmp_path, monkeypatc
     failure_md = (out / f"{_IDENTICAL_CVE}.md").read_text(encoding="utf-8")
     flow_md = (out / f"{_IDENTICAL_CVE}.flow.md").read_text(encoding="utf-8")
 
-    # One identical string reaches both output artifacts.
-    assert "`IdenticalCommitsError`" in failure_md
-    assert "`IdenticalCommitsError`" in flow_md
-    # The split label must not reach the failure report.
-    assert "`IdenticalCommits`" not in failure_md
+    # Both artifacts retain the exact class, with their own presentation:
+    # typed failure metadata is plain text; the native flow uses a code span.
+    class_lines = [line for line in failure_md.splitlines() if line.startswith("**Class:** ")]
+    assert class_lines == ["**Class:** IdenticalCommitsError"]
+    assert "**✗ FAIL** · `IdenticalCommitsError`" in flow_md
 
 
 def test_identical_commits_outcome_is_humanized(tmp_path, monkeypatch):
