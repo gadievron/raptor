@@ -87,6 +87,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return 2
 
     out_dir = args.out or _default_out()
+    from core.recall.reporting import prepare_recall_report
+    try:
+        prepare_recall_report(args, out_dir, (Path(manifest.local_path) if Path(manifest.local_path).is_absolute()
+                                            else _repo_root() / manifest.local_path))
+    except (ValueError, OSError) as exc:
+        from core.security.log_sanitisation import sanitise_for_terminal
+        print(f"error: {sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 2
     out_dir.mkdir(parents=True, exist_ok=True)
     repo_root = _repo_root()
     pipeline_dir = (args.pipeline_dir.resolve()
@@ -139,9 +147,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     json_path = out_dir / "report.json"
     save_json(json_path, report_dict)
     md = render_markdown(report)
-    (out_dir / "report.md").write_text(md, encoding="utf-8")
+    if args._report_options.enabled:
+        (out_dir / "report.md").write_text(md, encoding="utf-8")
     print(md)
     print(f"report: {json_path}")
+    from core.recall.reporting import complete_recall_report
+    complete_recall_report(args, report, out_dir, warm_present="warm" in report_dict)
     return 0
 
 
@@ -381,6 +392,8 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument("--timeout", type=int, default=4 * 3600,
                        help="pipeline timeout in seconds")
     run_p.set_defaults(func=_cmd_run)
+    from core.reporting.options import add_report_arguments
+    add_report_arguments(run_p)
 
     cmp_p = sub.add_parser("compare",
                            help="delta two report JSONs (older first)")
@@ -522,6 +535,9 @@ def main(argv: list[str] | None = None) -> int:
         return crossfile_python_main(rest)
     if rest:
         p.error(f"unrecognized arguments: {' '.join(rest)}")
+    if args.cmd == "run":
+        from core.reporting.options import options_from_args
+        args._report_options = options_from_args(args, p)
     return args.func(args)
 
 
