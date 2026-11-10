@@ -73,7 +73,8 @@ def test_unavailable_or_conflicting_pack_has_one_explicit_empty_result(monkeypat
                         if entry.entry_id == promotion.entry_id else entry for entry in entries)
     monkeypatch.setattr(c_integer, "ENTRIES", updated)
     answer, = foundation.foundation_answers("c", request_id="owned")
-    assert answer == ReferenceAnswer("owned", "unsupported", reason="initial_reference_foundation_unavailable")
+    assert answer == ReferenceAnswer("owned", "unsupported", reason="initial_reference_foundation_unavailable",
+                                    selection_origin="initial")
 
 
 def test_conflicting_resolver_bundles_are_not_silently_deduplicated(monkeypatch):

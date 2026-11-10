@@ -1,5 +1,9 @@
 """Unavailable reference notes accompany useful work without buying a pass."""
 
+from dataclasses import replace
+
+import pytest
+
 from core.audit.context import format_context_for_prompt
 from core.audit.knowledge_requests import register_requests
 from core.audit.reference_inputs import reference_inputs_from_delivery
@@ -50,9 +54,11 @@ def test_only_unavailable_reference_never_buys_a_continuation(tmp_path):
     assert cycle.started == 0
 
 
-def test_limitation_note_is_shed_before_available_reference_material():
+@pytest.mark.parametrize("origin", ["requested", "initial"])
+def test_limitation_note_is_shed_before_available_reference_material(origin):
     from core.language_reference import ReferenceContext, lookup
     useful = lookup("useful", "", ReferenceContext("c"), entry_id="c.integer-conversion")
+    useful = replace(useful, selection_origin=origin)
     missing = ReferenceAnswer("missing", "unsupported", reason="No reviewed entry.")
     sections = reference_sections((useful, missing))
     assert len(sections) == 2

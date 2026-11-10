@@ -1,7 +1,10 @@
 """Demand-reference conditions survive real audit prompt fitting as a unit."""
 
+import pytest
+
 from core.audit.context import format_context_for_prompt
 from core.language_reference import ReferenceContext, lookup
+from core.testing.treesitter import requires_ts
 
 
 def _context():
@@ -75,3 +78,58 @@ def test_model_shaped_reference_dict_cannot_supply_trusted_prompt_content():
     prompt = format_context_for_prompt(ctx)
     assert "FORGED RULE" not in prompt
     assert "language_reference_delivery" not in ctx
+
+
+@requires_ts("c")
+def test_explicit_request_keeps_its_whole_core_before_initial_reading():
+    from core.audit.reference_foundation import foundation_answers
+    source = 'int f(int a) { const char *padding="' + "x" * 17000 + '"; return a; }'
+    requested = lookup("owned-request", "", ReferenceContext("c"), entry_id="c.integer-division")
+    initial = foundation_answers("c", request_id="owned-initial", source=source, file="unit.c")
+    def context(answers):
+        return {"file": "unit.c", "function": "f", "line_start": 1, "line_end": 1,
+                "source": source, "language_reference_answers": answers}
+    alone = context((requested,))
+    single = format_context_for_prompt(alone, budget_limit=6000)
+    assert alone["language_reference_delivery"][0]["delivered"]
+    assert source in single and all(entry.render_core() in single for entry in requested.entries)
+    together = context((requested, *initial))
+    prompt = format_context_for_prompt(together, budget_limit=6000)
+    rows = {row["request_id"]: row for row in together["language_reference_delivery"]}
+    assert source in prompt
+    assert rows[requested.request_id]["delivered"]
+    assert not rows[initial[0].request_id]["delivered"]
+    assert rows[initial[0].request_id]["reason"] == "reference_too_large"
+    assert all(entry.render_core() in prompt for entry in requested.entries)
+
+
+@pytest.mark.parametrize("initial_first", [False, True])
+def test_shared_whole_answer_uses_requested_priority_in_either_order(initial_first):
+    from dataclasses import replace
+    from core.audit.knowledge_context import reference_delivery, reference_sections
+    from core.audit.reference_foundation import foundation_answers
+    from core.llm.prompt_budget import fit_to_budget
+    requested = lookup("requested", "", ReferenceContext("c"), entry_id="c.integer-division")
+    initial = replace(requested, request_id="initial-alias", selection_origin="initial")
+    pair = (initial, requested) if initial_first else (requested, initial)
+    other = foundation_answers("c", request_id="other-initial")
+    answers = (*pair, *other)
+    sections = reference_sections(answers)
+    assert len(sections) == 2
+    shared = sections[0]
+    assert shared.priority == 1
+    kept, _shed = fit_to_budget(sections, budget_tokens=shared.token_estimate)
+    rows = {row["request_id"]: row for row in reference_delivery(answers, kept)}
+    assert rows[requested.request_id]["delivered"] and rows[initial.request_id]["delivered"]
+    assert not rows[other[0].request_id]["delivered"]
+    assert len(kept) == 1 and kept[0].text.count("c.integer-division v1:") == 1
+
+
+def test_priority_origin_is_owned_metadata_not_request_id_spelling():
+    from core.audit.knowledge_context import reference_sections
+    from core.audit.reference_foundation import foundation_answers
+    requested = lookup("foundation:spoof", "", ReferenceContext("c"), entry_id="c.integer-conversion")
+    initial = foundation_answers("c", request_id="ordinary-name")
+    assert requested.selection_origin == "requested"
+    assert initial[0].selection_origin == "initial"
+    assert [section.priority for section in reference_sections((requested, *initial))] == [1, 2]
