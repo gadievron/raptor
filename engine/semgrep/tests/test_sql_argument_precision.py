@@ -127,6 +127,36 @@ for _container in ('flask.request.args', 'flask.request.form'):
     ))
 
 
+for _accessor in (
+    'flask.request.values["sql"]',
+    'flask.request.values.get("sql")',
+    'flask.request.values.get("sql", "SELECT 1")',
+    'flask.request.values.get("sql", default="SELECT 1")',
+    'flask.request.values.get(key="sql")',
+    'flask.request.values.get(key="sql", default="SELECT 1")',
+    'flask.request.values.get(default="SELECT 1", key="sql")',
+):
+    _MATRICES["python"][2].extend([
+        (f'cursor.execute({_accessor})', True),
+        (f'cursor.execute("SELECT ?", ({_accessor},))', False),
+        (f'cursor.execute("SELECT " + str(int({_accessor})))', False),
+    ])
+for _container in ('flask.request.args', 'flask.request.form', 'flask.request.values'):
+    _MATRICES["python"][2].extend([
+        (f'cursor.execute("SELECT " + ",".join({_container}.getlist(key="ids")))', True),
+        (f'cursor.execute("SELECT ?", ({_container}.getlist(key="ids"),))', False),
+        (f'cursor.execute("SELECT " + str({_container}.getlist(key="ids", type=int)))', False),
+    ])
+_MATRICES["python"][2].extend([
+    ('cursor.execute("SELECT " + ",".join(flask.request.values.getlist("ids")))', True),
+    ('cursor.execute("SELECT ?", (flask.request.values.getlist("ids"),))', False),
+    ('cursor.execute("SELECT " + str(flask.request.values.get("id", type=int)))', False),
+    ('cursor.execute("SELECT " + str(flask.request.values.get("id", 0, int)))', False),
+    ('cursor.execute("SELECT " + str(flask.request.values.get(key="id", type=int)))', False),
+    ('cursor.execute("SELECT " + str(flask.request.values.getlist("ids", type=int)))', False),
+])
+
+
 _MATRICES["java-wrapper"] = (
     None, "raptor.generated.source-wrapper.sqli",
     [(body.replace("request.getParameter", "wrapper.grab"), finding)
