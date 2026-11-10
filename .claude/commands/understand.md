@@ -30,6 +30,22 @@ This command is mode-routed — there is no single CLI to call blindly:
 
 If no mode flag is given, default to `--map`.
 
+For the native binary `--map`, multi-model `--hunt` / `--trace`, and
+`--resume` routes, forward `--report-format markdown|json|xml` (repeatable),
+`--report-output <path>`, and `--no-report` to `libexec/raptor-understand`.
+Explicit exports summarise the captured result; they do not run analysis again.
+Without these options, native output and the on-screen summary remain unchanged.
+Display that mechanical summary to the operator, rather than only saying a file
+was written. Keep model failures, carried checkpoints and drift warnings visible.
+
+Portable files default to `<out>/portable-reports/`. For source-tree analysis,
+the report destination must be outside the analysed tree; choose an external
+`--report-output` directory if the run directory is inside it. The receipt keeps
+item totals, bounded model/error metadata and recorded costs, with detailed items
+in native JSON. Costs already include carried checkpoints; zero or missing cost
+does not prove no work was billed. Analysis agreement is not a validation verdict.
+These native options do not change the routing of in-session source-tree modes.
+
 ### Compiled / black-box targets
 
 If `<target>` is a single ELF, Mach-O, PE, Java class/JAR, APK, .NET, Go or
