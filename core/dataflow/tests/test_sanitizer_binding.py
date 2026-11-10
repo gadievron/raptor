@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from unittest import mock
 
+import pytest
+
 from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     match_sanitizers_in_cfg,
@@ -74,6 +76,7 @@ def test_bare_call_has_empty_output_symbols():
     )
     b = _single(_bindings(src))
     assert b.callable == "html.escape"
+    assert b.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
     assert b.input_symbols == frozenset({"x"})
     assert b.output_symbols == frozenset()
 
@@ -122,6 +125,7 @@ def test_dotted_callable_name_resolution():
     )
     b = _single(_bindings(src))
     assert b.callable == "django.utils.html.escape"
+    assert b.unverified_source_contracts == frozenset()
     assert b.input_symbols == frozenset({"x"})
     assert b.output_symbols == frozenset({"y"})
 
@@ -356,3 +360,12 @@ def test_binding_is_hashable_and_set_membership_works():
     # Round-trip through dict.
     d = {b: True for b in bindings}
     assert all(d[b] for b in bindings)
+
+
+@pytest.mark.parametrize("requirements", [set(), [], None, frozenset({""}), frozenset({False})])
+def test_binding_contract_metadata_requires_immutable_named_requirements(requirements):
+    from dataclasses import replace
+
+    binding = _single(_bindings("def handle(x):\n    y = html.escape(x)\n"))
+    with pytest.raises(ValueError, match="source contracts"):
+        replace(binding, unverified_source_contracts=requirements)

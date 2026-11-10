@@ -29,7 +29,6 @@ from core.analysis.cfg_builder import PyCFGNode, build_python_cfg
 from core.analysis.reach_chokepoint import record_suppression
 from core.analysis.sanitizer_cut import (
     VERDICT_SANITIZER_CANDIDATE,
-    VERDICT_SANITIZER_DOMINATED,
     evaluate_finding,
     record_sanitizer_cut_suppression,
 )
@@ -127,7 +126,7 @@ class TestBinaryOracleBackCompat:
 
 
 class TestSuppressRecord:
-    def test_suppress_writes_sanitizer_dominated_with_bindings(
+    def test_conditional_call_writes_candidate_with_value_bindings(
         self, tmp_path: Path,
     ):
         src = (
@@ -149,14 +148,15 @@ class TestSuppressRecord:
         records = _read_jsonl(tmp_path)
         assert len(records) == 1
         r = records[0]
-        assert r["verdict"] == VERDICT_SANITIZER_DOMINATED
-        assert r["dropped"] is True
-        assert r["enforced"] is True
+        assert r["verdict"] == VERDICT_SANITIZER_CANDIDATE
+        assert r["dropped"] is False
+        assert r["enforced"] is False
         assert r["sink_arg"] == "y"
-        # One value-bound binding witnessing the suppression.
+        # The original structural value witness is retained as a candidate.
         assert len(r["bindings"]) == 1
         b = r["bindings"][0]
         assert b["callable"] == "html.escape"
+        assert b["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
         assert b["input_symbols"] == ["x"]
         assert b["output_symbols"] == ["y"]
         assert b["lineno"] == 3
@@ -189,7 +189,7 @@ class TestSuppressRecord:
         record_sanitizer_cut_suppression(tmp_path, _finding(), result)
         records = _read_jsonl(tmp_path)
         r = records[0]
-        assert r["verdict"] == VERDICT_SANITIZER_DOMINATED
+        assert r["verdict"] == VERDICT_SANITIZER_CANDIDATE
         assert len(r["bindings"]) == 2
         # Bindings are stable-sorted by (lineno, callable).
         linenos = [b["lineno"] for b in r["bindings"]]
@@ -294,7 +294,7 @@ class TestCoexistence:
             verdict="binary_oracle_absent",
             reason="dead function",
         )
-        # Sanitizer-cut suppress record.
+        # Sanitizer-cut candidate record.
         src = (
             "import html\n"
             "def handle(x):\n"
@@ -318,7 +318,7 @@ class TestCoexistence:
         assert all("dropped" in r for r in records)
         verdicts = {r["verdict"] for r in records}
         assert verdicts == {
-            "binary_oracle_absent", VERDICT_SANITIZER_DOMINATED,
+            "binary_oracle_absent", VERDICT_SANITIZER_CANDIDATE,
         }
         # Binary-oracle record has no ``bindings`` key — sanitizer-cut
         # specific. Consumers tolerant of missing keys are fine.
@@ -334,13 +334,12 @@ class TestCoexistence:
 
 
 class TestLegacyPath:
-    def test_legacy_suppress_writes_record_without_bindings(
+    def test_legacy_candidate_retains_contract_without_value_bindings(
         self, tmp_path: Path,
     ):
         """Phase 7 callers that omit value context still produce a
-        valid suppression record — just without the new binding /
-        witness fields populated (empty lists / strings). Back-compat
-        for callers that haven't been taught about value binding."""
+        candidate record without value bindings. Catalogue matches still
+        disclose the unresolved primitive requirement."""
         src = (
             "import html\n"
             "def handle(x):\n"
@@ -359,14 +358,15 @@ class TestLegacyPath:
         records = _read_jsonl(tmp_path)
         assert len(records) == 1
         r = records[0]
-        assert r["verdict"] == VERDICT_SANITIZER_DOMINATED
-        assert r["dropped"] is True
-        # Legacy path didn't populate the witness fields.
+        assert r["verdict"] == VERDICT_SANITIZER_CANDIDATE
+        assert r["dropped"] is False
+        # Legacy path has no value-bound witness.
         assert r["sink_arg"] == ""
         assert r["bindings"] == []
-        # ``catalog_matches`` and ``witness_lines`` are also empty.
-        assert r["catalog_matches"] == []
-        assert r["witness_lines"] == []
+        # The unresolved contract remains visible despite absent value context.
+        assert len(r["catalog_matches"]) == 1
+        assert r["catalog_matches"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
+        assert r["witness_lines"] == [3]
 
 
 class TestJavaLegRecords:

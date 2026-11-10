@@ -8,10 +8,11 @@ parameter for the finding's CWE, we synthesise a
 call site. The synthetic binding carries real ``input_symbols`` (the
 call's args at the sanitized parameter positions) and
 ``output_symbols`` (the names the call's return flows into), so the
-existing Phase 4 four-condition gate treats it exactly like a direct
-sanitizer call — no gate changes needed.
+existing value-flow gate can inspect it like a direct catalogue candidate.
+Unverified source contracts from the underlying calls travel with the
+binding: a clean-return summary does not establish primitive input types.
 
-This is the rescue for the ``sanitizer_in_helper.py`` corpus case:
+For example:
 
     def _sanitize(s):
         return html.escape(s)
@@ -22,9 +23,10 @@ This is the rescue for the ``sanitizer_in_helper.py`` corpus case:
 Intra-procedurally, ``handle``'s CFG has no ``html.escape`` call, so
 ``match_sanitizers_in_cfg`` finds nothing and the verdict is
 ``no_suppress``. With the inter-procedural binding, the value-bound
-cut holds and the verdict flips to ``suppress``.
+structural cut can hold. The finding remains ``candidate_only`` when
+the underlying catalogue requires source evidence absent from the summary.
 
-Soundness — a synthetic binding is emitted for parameter position
+Structural admission — a synthetic binding is emitted for parameter position
 ``i`` of a helper call **only if**:
 
 * the callee resolves to an in-module function with a *known*,
@@ -72,6 +74,7 @@ from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     repo_shadows_module_root,
     sanitizer_callables_for_cwe,
+    source_contracts_for_callable,
 )
 from core.analysis.python_module_callgraph import local_binding_names
 from core.analysis.taint_summaries import TaintSummary
@@ -105,8 +108,9 @@ def _param_cleanly_sanitized(
     sanitizer_names: set[str],
 ) -> bool:
     """True iff tainting ``param_idx`` of ``summary``'s function
-    yields a return value provably sanitized for the CWE whose
-    catalog callables are ``sanitizer_names``.
+    yields a return value routed through catalogue candidates for
+    the CWE whose callable names are ``sanitizer_names``. Additional
+    source contracts remain separate from this structural check.
 
     See the module docstring for the four conditions. The check is
     deliberately conservative — any uncertainty returns False so the
@@ -230,9 +234,11 @@ def synthetic_sanitizer_bindings(
     (from :func:`core.analysis.taint_summaries.build_taint_summaries`).
 
     Returns an empty frozenset when the CWE has no catalog sanitizers,
-    when no in-module helper call cleanly sanitizes, or when
+    when no in-module helper call has a complete candidate chain, or when
     ``summaries`` is empty. The result is meant to be unioned into
-    ``evaluate_finding``'s ``extra_bindings``.
+    ``evaluate_finding``'s ``extra_bindings``. Requirements from all
+    clean return effects remain unresolved, including effects supplied
+    through constant arguments: constants alone are not type receipts.
     """
     sanitizer_names = sanitizer_callables_for_cwe(cwe, language)
     # Unbound-root refusal (mirrors the evaluate_finding catalog
@@ -391,12 +397,22 @@ def synthetic_sanitizer_bindings(
                 # only candidate symbol also flows in unsanitized —
                 # nothing for condition 2 to bind safely against.
                 continue
+            # A wrapper name hides the underlying catalogue callables.
+            # Carry their unresolved premises through every clean return
+            # position; neither a symbol nor _CONST_ARG proves its type.
+            unverified_contracts = frozenset(
+                requirement
+                for position in sanitized_positions
+                for callable_name, _arg_idx in summary.return_sanitizers_for_param(position)
+                for requirement in source_contracts_for_callable(callable_name, cwe, language)
+            )
             bindings.append(SanitizerBinding(
                 node=node,
                 callable=cs.name,
                 input_symbols=frozenset(input_symbols),
                 output_symbols=cs.assigned_names,
                 lineno=cs.lineno,
+                unverified_source_contracts=unverified_contracts,
             ))
     return frozenset(bindings)
 

@@ -32,6 +32,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
+EXACT_STR_DEFAULT_CALL = "exact_builtin_str_default_call"
+
+
 @dataclass(frozen=True)
 class KnownSafeCall:
     """One curated entry — a soundness claim for a single library call.
@@ -73,6 +76,13 @@ class KnownSafeCall:
     def __post_init__(self):
         if type(self.requires_exact_str) is not bool:
             raise ValueError("requires_exact_str must be a boolean")
+
+    @property
+    def source_contracts(self) -> frozenset[str]:
+        """Additional premises; name or value matching cannot establish them."""
+        if type(self.requires_exact_str) is not bool:
+            return frozenset({"invalid_catalog_contract"})
+        return frozenset({EXACT_STR_DEFAULT_CALL}) if self.requires_exact_str else frozenset()
 
 
 _TABLE: tuple[KnownSafeCall, ...] = (

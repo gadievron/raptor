@@ -7,13 +7,14 @@ suppressor answers one question:
     Does every dynamic path from source to sink cross at least one
     sanitizer recognized by the catalog?
 
-If yes → the taint cannot reach the sink in any execution; suppress
-the finding without an LLM call.
+A candidate cut authorises suppression only after value flow and every
+additional source contract are established. Unresolved contracts retain
+the finding and its candidate witnesses.
 
 Algorithm: a **vertex cut**.
 
     Suppress iff ``sink`` is unreachable from ``source`` in
-    ``CFG \ candidate_sanitizers``.
+    ``CFG \ eligible_value_sanitizers``.
 
 Equivalent intuition: remove every candidate sanitizer node from the
 graph. If the sink becomes unreachable, every path was sanitized; if
@@ -48,7 +49,7 @@ from __future__ import annotations
 
 import logging
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import (
     Any,
@@ -61,6 +62,7 @@ from core.dataflow.sanitizer_catalog import (
     nodes_of,
     repo_shadows_module_root,
     sanitizer_callables_for_cwe,
+    source_contracts_for_callable,
 )
 from core.analysis.dataflow import (
     ReachingDefs,
@@ -1655,6 +1657,8 @@ def evaluate_finding(
             )
 
     candidate_callables = sanitizer_callables_for_cwe(cwe, language)
+    proof_callables = {name for name in candidate_callables
+                       if not source_contracts_for_callable(name, cwe, language)}
 
     # Whole-array taint-freedom (b34): the sink consumes the array
     # ITSELF (no element read to anchor the exclusive rule on) —
@@ -1705,7 +1709,7 @@ def evaluate_finding(
         if array_index is not None and sink_arg:
             elem_reason = _element_exclusive_reason(
                 graph, sources_set, sink, sink_arg, source_symbols,
-                candidate_callables, array_index,
+                proof_callables, array_index,
                 java_source_text=java_source_text,
                 java_file_path=java_file_path,
                 repo_root=repo_root,
@@ -1732,7 +1736,7 @@ def evaluate_finding(
             if collection_index is not None:
                 coll_reason = _collection_exclusive_reason(
                     graph, sources_set, sink, sink_arg, source_symbols,
-                    candidate_callables, collection_index,
+                    proof_callables, collection_index,
                     java_source_text=java_source_text,
                     java_file_path=java_file_path,
                     repo_root=repo_root,
@@ -1829,6 +1833,16 @@ def evaluate_finding(
             candidate_callables=frozenset(candidate_callables),
         )
 
+    # Recheck canonical names, and retain requirements carried by summaries.
+    matched_bindings = frozenset(
+        replace(binding, unverified_source_contracts=(binding.unverified_source_contracts
+                | source_contracts_for_callable(binding.callable, cwe, language)))
+        for binding in matched_bindings
+    )
+    eligible_bindings = frozenset(b for b in matched_bindings if not b.unverified_source_contracts)
+    unresolved_contracts = sorted({contract for binding in matched_bindings
+                                   for contract in binding.unverified_source_contracts})
+
     # Full-set control-flow cut over every matched binding's node.
     # Computing this once lets us:
     #   * decide the legacy path (no value context) directly, and
@@ -1861,7 +1875,9 @@ def evaluate_finding(
             full_cf_cut = sanitizer_cuts_source_to_sink(
                 graph, sources_set, sink, reduced_nodes,
             )
-        if full_cf_cut:
+        proof_nodes = nodes_of(eligible_bindings) - {sink}
+        proof_cut = sanitizer_cuts_source_to_sink(graph, sources_set, sink, proof_nodes)
+        if proof_cut:
             return SanitizerCutResult(
                 suppress=True,
                 reason=(
@@ -1869,9 +1885,17 @@ def evaluate_finding(
                     f"{len(sources_set)} source(s) after removing "
                     f"{len(full_cf_nodes)} sanitizer node(s)"
                 ),
-                cut_set=frozenset(full_cf_nodes),
+                cut_set=frozenset(proof_nodes),
                 candidate_callables=frozenset(candidate_callables),
                 verdict=VERDICT_SUPPRESS,
+            )
+        if full_cf_cut:
+            return SanitizerCutResult(
+                suppress=False,
+                reason="candidate_only: control-flow cut has unverified source contracts: "
+                       + ", ".join(unresolved_contracts),
+                cut_set=frozenset(), candidate_callables=frozenset(candidate_callables),
+                verdict=VERDICT_CANDIDATE_ONLY, all_matched_bindings=matched_bindings,
             )
         return SanitizerCutResult(
             suppress=False,
@@ -1902,7 +1926,14 @@ def evaluate_finding(
             b, rd, tainted_at, sink, sink_arg, sanitizer_output_nodes,
         )
     )
-    value_bound_nodes = {b.node for b in value_bound_bindings}
+    # Role candidates are not allowed reaching definers without their
+    # additional contracts, even when another eligible node cuts the path.
+    eligible_output_nodes = {b.node for b in eligible_bindings if sink_arg in b.output_symbols}
+    proof_value_bindings = frozenset(
+        b for b in eligible_bindings
+        if _binding_satisfies_value_gate(b, rd, tainted_at, sink, sink_arg, eligible_output_nodes)
+    )
+    value_bound_nodes = {b.node for b in proof_value_bindings}
     value_bound_cut = sanitizer_cuts_source_to_sink(
         graph, sources_set, sink, value_bound_nodes,
     )
@@ -1916,10 +1947,12 @@ def evaluate_finding(
     if not value_bound_cut and language == "java" and java_source_text:
         transparent = _conduit_transparent_result(
             graph, rd, tainted_at, sources_set, sink, sink_arg,
-            matched_bindings, source_symbols, java_source_text,
-            candidate_callables, array_index,
+            eligible_bindings, source_symbols, java_source_text,
+            proof_callables, array_index,
         )
         if transparent is not None:
+            transparent = replace(transparent, candidate_callables=frozenset(candidate_callables),
+                                  all_matched_bindings=matched_bindings)
             # Sibling-argument guard on the conduit door — the same
             # fold-or-refuse polarity the flat value-bound path
             # applies below (b41): proving the picked argument
@@ -1933,7 +1966,7 @@ def evaluate_finding(
                 transparent.verdict == VERDICT_SUPPRESS
                 and not _vertex_cut_siblings_clean(
                     graph, rd, sink, sink_arg,
-                    matched_bindings, candidate_callables,
+                    eligible_bindings, proof_callables,
                     java_source_text=java_source_text,
                     java_file_path=java_file_path,
                     repo_root=repo_root,
@@ -2021,7 +2054,7 @@ def evaluate_finding(
         # the value-bound cut held, only the sibling proof is missing.
         if not _vertex_cut_siblings_clean(
                 graph, rd, sink, sink_arg,
-                matched_bindings, candidate_callables,
+                eligible_bindings, proof_callables,
                 java_source_text=java_source_text,
                 java_file_path=java_file_path,
                 repo_root=repo_root,
@@ -2056,7 +2089,7 @@ def evaluate_finding(
             cut_set=frozenset(value_bound_nodes),
             candidate_callables=frozenset(candidate_callables),
             verdict=VERDICT_SUPPRESS,
-            value_bound_bindings=value_bound_bindings,
+            value_bound_bindings=proof_value_bindings,
             all_matched_bindings=matched_bindings,
             sink_arg=sink_arg,
         )
@@ -2071,6 +2104,8 @@ def evaluate_finding(
                 f"{len(matched_bindings) - len(value_bound_bindings)} "
                 "of these candidates lacked tainted input or "
                 "sink-arg reachability"
+                + ("; unverified source contracts: " + ", ".join(unresolved_contracts)
+                   if unresolved_contracts else "")
             ),
             cut_set=frozenset(),
             candidate_callables=frozenset(candidate_callables),
@@ -2104,12 +2139,16 @@ def _binding_to_json(b: SanitizerBinding) -> dict[str, Any]:
     """Serialise one :class:`SanitizerBinding` for the JSONL audit
     record. Frozensets become sorted lists so the JSON is stable
     across runs (sets have no inherent ordering)."""
-    return {
+    result = {
         "callable": b.callable,
         "input_symbols": sorted(b.input_symbols),
         "output_symbols": sorted(b.output_symbols),
         "lineno": b.lineno,
     }
+
+    if b.unverified_source_contracts:
+        result["unverified_source_contracts"] = sorted(b.unverified_source_contracts)
+    return result
 
 
 def record_sanitizer_cut_suppression(
@@ -2226,7 +2265,7 @@ def record_sanitizer_cut_suppression(
         "bindings": [_binding_to_json(b) for b in value_bindings],
         "catalog_matches": [_binding_to_json(b) for b in catalog_matches],
         "witness_lines": sorted({b.lineno for b in catalog_matches}),
-        "enforced": bool(enforce),
+        "enforced": bool(enforce and result.verdict == VERDICT_SUPPRESS),
         # The suppressed finding's CWE — consumers matching records
         # against ground-truth entries need it to avoid cross-CWE
         # misattribution on file-level entries (observed: an XSS-rule

@@ -659,20 +659,22 @@ def _try_known_safe_call(
             f"tracker-inconclusive)",
         )
     input_type_evidence = None
-    if type(entry.requires_exact_str) is not bool:
-        return Tier0Result(Tier0Status.NOT_APPLICABLE, "invalid curated primitive input contract")
-    if entry.requires_exact_str:
+    unverified_contracts = set(entry.source_contracts)
+    if known_safe_calls.EXACT_STR_DEFAULT_CALL in unverified_contracts:
         if language == "python":
             from core.dataflow.string_type_evidence import exact_str_default_call_evidence
 
             input_type_evidence = exact_str_default_call_evidence(
                 source_text, validator_line, spec.variable_name, entry.library_call,
             )
-        if input_type_evidence is None:
-            return Tier0Result(
-                Tier0Status.NOT_APPLICABLE,
-                "curated call requires an exact builtin str argument in the supported default call form",
-            )
+        if input_type_evidence is not None:
+            unverified_contracts.remove(known_safe_calls.EXACT_STR_DEFAULT_CALL)
+    if unverified_contracts:
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            "curated call has unverified source contracts; exact builtin str/default call evidence required",
+            extras={"unverified_source_contracts": sorted(unverified_contracts)},
+        )
     artifact = f"library:{entry.library_call}@{sink_uri}:{validator_line}"
     return Tier0Result(
         Tier0Status.SOUND,

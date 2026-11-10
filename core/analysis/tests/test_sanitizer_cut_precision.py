@@ -115,12 +115,29 @@ class TestPrecisionGate:
         "java_b42_sibling_union_tf",
     })
 
+    # Source inputs in these reviewed fixtures are untyped. Their original
+    # control/value cuts remain candidates until primitive evidence is bound.
+    _MISSING_PRIMITIVE_CONTRACT = frozenset({
+        "xss_straight_line", "xss_symmetric_branches", "xss_helper_interproc",
+        "xss_from_import_decorator_still_rescues", "xss_imported_catalog_root_control",
+        "xss_repo_root_without_shadow_control", "xss_globals_read_still_rescues",
+        "xss_comprehension_target_not_shadow", "xss_class_attr_not_shadow",
+    })
+
+    def test_untyped_html_fixture_cuts_remain_visible_candidates(self, report):
+        measurements = {measurement.name: measurement for measurement in report.measurements}
+        fixtures = {fixture.name: fixture for fixture in build_corpus()}
+        for name in self._MISSING_PRIMITIVE_CONTRACT:
+            assert fixtures[name].language == "python"
+            assert "html.escape" in fixtures[name].source
+            assert measurements[name].verdict == VERDICT_CANDIDATE_ONLY, name
+
     @requires_ts("java")
     def test_all_safe_shapes_suppress(self, report):
         """Utility pin: every may-suppress fixture currently earns the
-        suppress verdict (minus the documented constant-text danger
-        trades above). Not a gate condition (soundness first), but a
-        regression here means the gate lost coverage it had.
+        suppress verdict except for the documented constant-text and
+        missing-primitive-contract profiles above. This utility pin is
+        separate from the zero-false-suppress soundness gate.
 
         Needs the Java grammar: the corpus's Java may-suppress
         fixtures degrade to ``unresolved`` without it (a refusal, so
@@ -131,7 +148,7 @@ class TestPrecisionGate:
         # distinction the accepted list must shrink rather than mask
         # the regained coverage.
         assert set(report.missed_suppressions) \
-            == self._ACCEPTED_CONSTANT_TEXT_MISSES, \
+            == self._ACCEPTED_CONSTANT_TEXT_MISSES | self._MISSING_PRIMITIVE_CONTRACT, \
             sorted(report.missed_suppressions)
 
     def test_cross_tab_covers_classes(self, report):
@@ -335,9 +352,8 @@ class TestAuditWiring:
         assert cfg.audit_dir == str(tmp_path)
 
     def test_gate_run_writes_record_only_audit(self, tmp_path):
-        """End to end: gate on + run dir configured → a suppressing
-        finding leaves a sanitizer_dominated evidence record with
-        dropped=false; the dominance verdict itself is unchanged."""
+        """The on-path call retains a candidate record and structural
+        value witness; missing primitive evidence cannot earn a drop."""
         from core.dataflow import sanitizer_cut_config as sc
         from core.dataflow.smt_barrier import _value_bound_dominates
 
@@ -357,9 +373,11 @@ class TestAuditWiring:
             file_path=str(fixture), validator_line=2, sink_line=4,
             cwe="CWE-79", language="python",
         )
-        assert verdict is True
+        assert verdict is None  # candidate-only delegates to lexical/source review
         (rec,) = _read_records(run_dir)
-        assert rec["verdict"] == "sanitizer_dominated"
+        assert rec["verdict"] == "sanitizer_candidate"
+        assert rec["bindings"]
+        assert rec["bindings"][0]["unverified_source_contracts"] == ["exact_builtin_str_default_call"]
         assert rec["dropped"] is False
         assert rec["enforced"] is False
         assert rec["file_path"] == str(fixture)
@@ -380,5 +398,5 @@ class TestAuditWiring:
             file_path=str(fixture), validator_line=2, sink_line=4,
             cwe="CWE-79", language="python",
         )
-        assert verdict is True
+        assert verdict is None
         assert not (tmp_path / "suppressions.jsonl").exists()

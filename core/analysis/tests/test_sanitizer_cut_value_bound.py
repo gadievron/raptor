@@ -24,15 +24,15 @@ Phase 4's gate evaluates four conditions per binding:
   4. Removing every binding that satisfies (2) AND (3) from the
      graph cuts every source → sink path.
 
-When all four hold → ``VERDICT_SUPPRESS``. When (1) and (4) hold
+When all four hold and source contracts are resolved → ``VERDICT_SUPPRESS``. When (1) and (4) hold
 over the full match set but the value-bound subset doesn't cut →
 ``VERDICT_CANDIDATE_ONLY``. When even the full-set control-flow
 cut fails → ``VERDICT_NO_SUPPRESS``.
 
 These tests also cover back-compat — when callers omit
 ``source_symbols`` / ``sink_arg``, the function falls back to
-control-flow-only Phase 7 behaviour and emits
-``VERDICT_SUPPRESS`` / ``VERDICT_NO_SUPPRESS`` only.
+control-flow-only reasoning. Conditional catalogue calls retain a
+``VERDICT_CANDIDATE_ONLY`` result until their source contracts are resolved.
 """
 from __future__ import annotations
 
@@ -81,6 +81,20 @@ def _stub_edge_index(binary_path, edges):
         callees={e for _, e in edges},
     )
 
+
+
+def _assert_unverified_html_candidate(result, *, value_bound=True):
+    assert result.verdict == VERDICT_CANDIDATE_ONLY
+    assert result.suppress is False
+    assert result.cut_set == frozenset()
+    assert result.all_matched_bindings
+    assert {binding.callable for binding in result.all_matched_bindings} == {"html.escape"}
+    assert all("exact_builtin_str_default_call" in binding.unverified_source_contracts
+               for binding in result.all_matched_bindings)
+    if value_bound:
+        assert result.value_bound_bindings
+    else:
+        assert not result.value_bound_bindings
 
 # ---------------------------------------------------------------------------
 # Verdict consistency on SanitizerCutResult
@@ -164,15 +178,13 @@ class TestWrongVariableCase:
         # the sink); value-bound cut FAILS (sanitizer's output
         # safe_other doesn't reach sink_arg user). → candidate_only.
         assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.value_bound_bindings
         assert result.suppress is False
         assert "candidate_only" in result.reason
 
     def test_phase_7_legacy_path_still_falsely_suppresses(self):
-        """Documents the unsoundness when value context is omitted.
-        The shipped Phase 7 behaviour — preserved for back-compat
-        so existing tests pass — would suppress this. Phase 7 of
-        the value-binding arc (smt_barrier wire-up behind flag)
-        will switch the default to the value-bound path."""
+        """The legacy cut still recognises the on-path call, but its
+        missing primitive contract cannot earn source suppression."""
         src = (
             "import html\n"
             "def handle(user, other):\n"
@@ -186,8 +198,8 @@ class TestWrongVariableCase:
             cwe="CWE-79", language="python",
             # No source_symbols / sink_arg — legacy control-flow only.
         )
-        assert result.verdict == VERDICT_SUPPRESS
-        assert result.suppress is True
+        _assert_unverified_html_candidate(result, value_bound=False)
+        assert result.suppress is False
 
 
 # ---------------------------------------------------------------------------
@@ -196,8 +208,7 @@ class TestWrongVariableCase:
 
 
 class TestTruePositives:
-    """Cases where the value-binding gate fires correctly and we
-    DO suppress."""
+    """Value-flow structure holds, but primitive source evidence is absent."""
 
     def test_same_symbol_straight_line_suppresses(self):
         """``y = html.escape(x); render(y)`` — x flows in, y flows
@@ -216,9 +227,9 @@ class TestTruePositives:
             source_symbols={"x"},
             sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
-        assert result.suppress is True
-        assert "value-bound" in result.reason
+        _assert_unverified_html_candidate(result)
+        assert result.suppress is False
+        assert result.value_bound_bindings
 
     def test_symmetric_sanitize_both_branches_suppresses(self):
         """Sanitizer in BOTH branches; the value-bound cut is the
@@ -242,10 +253,10 @@ class TestTruePositives:
             source_symbols={"user"},
             sink_arg="safe",
         )
-        assert result.verdict == VERDICT_SUPPRESS
-        assert result.suppress is True
-        # Both sanitizer nodes in the witness cut.
-        assert len(result.cut_set) == 2
+        _assert_unverified_html_candidate(result)
+        assert result.suppress is False
+        # Both original value-flow witnesses remain diagnostic candidates.
+        assert len(result.value_bound_bindings) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -312,6 +323,7 @@ class TestChainedSanitizer:
         # which we don't model; can't prove sink reads the
         # sanitised value, so candidate_only.
         assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.value_bound_bindings
         assert result.suppress is False
 
 
@@ -350,6 +362,7 @@ class TestSanitizationOverwritten:
             sink_arg="y",
         )
         assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.value_bound_bindings
         assert result.suppress is False
 
 
@@ -398,6 +411,7 @@ class TestGatePreconditions:
         # No taint → no value binding → candidate_only because
         # control-flow cut still holds.
         assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.value_bound_bindings
 
 
 # ---------------------------------------------------------------------------
@@ -439,6 +453,7 @@ class TestCallgraphAutoDowngrade:
         # Control-flow cut over html.escape node holds; value-bound
         # subset is empty → candidate_only.
         assert result.verdict == VERDICT_CANDIDATE_ONLY
+        assert not result.value_bound_bindings
 
     def test_callgraph_without_value_context_legacy_suppresses(self, tmp_path):
         """Back-compat: existing Phase 7 callers calling this on a
@@ -460,8 +475,8 @@ class TestCallgraphAutoDowngrade:
             graph, sources, sink,
             cwe="CWE-79", language="python",
         )
-        assert result.verdict == VERDICT_SUPPRESS
-        assert result.suppress is True
+        _assert_unverified_html_candidate(result, value_bound=False)
+        assert result.suppress is False
 
 
 # ---------------------------------------------------------------------------
@@ -494,7 +509,7 @@ class TestNonEntrySource:
             source_symbols={"user_input"},
             sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result)
 
 
 # ---------------------------------------------------------------------------
@@ -586,10 +601,11 @@ class TestMatchCaptureRebindNotSuppressed:
             language="python", source_symbols={"x"}, sink_arg="y",
         )
         assert r.verdict != VERDICT_SUPPRESS
+        assert not r.value_bound_bindings  # capture def still breaks exclusivity
 
     def test_unrelated_capture_still_suppresses(self):
-        # Direction check: a capture of a DIFFERENT name must not cost
-        # the legitimate suppression.
+        # A capture of another name must retain the original value witness;
+        # only the independent primitive requirement prevents suppression.
         src = (
             "import html\n"
             "def handle(x, render):\n"
@@ -606,7 +622,7 @@ class TestMatchCaptureRebindNotSuppressed:
             cfg, [cfg.entry_node], sink, cwe="CWE-79",
             language="python", source_symbols={"x"}, sink_arg="y",
         )
-        assert r.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(r)
 
 
 class TestCatalogModuleShadowDegraded:
@@ -652,9 +668,8 @@ class TestCatalogModuleShadowDegraded:
         assert result.verdict == VERDICT_NO_SUPPRESS
 
     def test_unshadowed_catalog_call_still_suppresses(self):
-        # Direction pin: the ordinary module-level-import shape keeps
-        # its suppression — the guard keys on the FUNCTION's own
-        # bindings only.
+        # The module identity still matches; the independent primitive
+        # requirement prevents this candidate from earning suppression.
         src = (
             "import html\n"
             "def handle(x):\n"
@@ -669,7 +684,7 @@ class TestCatalogModuleShadowDegraded:
             source_symbols={"x"},
             sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result)
 
 
 class TestModuleLevelCatalogRootDistrust:
@@ -736,7 +751,7 @@ class TestModuleLevelCatalogRootDistrust:
             "    y = html.escape(x)\n"
             "    render(y)\n"
         )
-        assert self._evaluate(src).verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(self._evaluate(src))
 
 
 class TestNestedNonlocalWriteBackGate:
@@ -760,6 +775,7 @@ class TestNestedNonlocalWriteBackGate:
             source_symbols={"x"}, sink_arg="y",
         )
         assert result.verdict != VERDICT_SUPPRESS
+        assert not result.value_bound_bindings  # escaping write still kills output binding
 
     def test_nested_def_without_nonlocal_unaffected(self):
         src = (
@@ -779,7 +795,7 @@ class TestNestedNonlocalWriteBackGate:
             cwe="CWE-79", language="python",
             source_symbols={"x"}, sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result)
 
 
 class TestDynamicNamespaceCatalogRefusal:
@@ -832,7 +848,7 @@ class TestDynamicNamespaceCatalogRefusal:
             "    y = html.escape(x)\n"
             "    render(y)\n"
         )
-        assert self._evaluate2(src).verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(self._evaluate2(src))
 
 
 class TestUnboundCatalogRootRefused:
@@ -876,7 +892,7 @@ class TestUnboundCatalogRootRefused:
             cwe="CWE-79", language="python",
             source_symbols={"x"}, sink_arg="y",
         )
-        assert result.verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(result)
 
 
 class TestRepoShadowedModuleOrigin:
@@ -916,10 +932,10 @@ class TestRepoShadowedModuleOrigin:
 
     def test_clean_repo_root_keeps_suppression(self, tmp_path):
         # Recall pin: repo_root given, no shadow shipped.
-        assert self._evaluate3(tmp_path).verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(self._evaluate3(tmp_path))
 
     def test_no_repo_root_keeps_legacy(self):
-        assert self._evaluate3(None).verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(self._evaluate3(None))
 
     def test_helper_chain_shadow_no_binding(self, tmp_path):
         from core.analysis.finding_resolver import (
@@ -948,6 +964,8 @@ class TestRepoShadowedModuleOrigin:
         clean = resolve_finding(finding, target_root=tmp_path)
         assert isinstance(clean, ResolvedFinding)
         assert len(clean.inter_proc_bindings) == 1
+        binding, = clean.inter_proc_bindings
+        assert binding.unverified_source_contracts == frozenset({"exact_builtin_str_default_call"})
 
 
 class TestDefinitionHeaderCatalogRebinding:
@@ -1022,4 +1040,4 @@ class TestClosureCatalogIdentity:
             '        y = html.escape(x)\n'
             '        render(y)\n'
         )
-        assert TestModuleLevelCatalogRootDistrust()._evaluate(source).verdict == VERDICT_SUPPRESS
+        _assert_unverified_html_candidate(TestModuleLevelCatalogRootDistrust()._evaluate(source))
