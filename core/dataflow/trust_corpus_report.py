@@ -201,9 +201,13 @@ def _fmt_rate(n: int, d: int) -> str:
     return f"{n}/{d} ({100.0 * n / d:.1f}%)"
 
 
-def render_text(rep: CorpusReport) -> str:
+def render_text(rep: CorpusReport, *, format: str = "text") -> str:
     """Plain-text report suitable for terminal display while the bridge
     is still running."""
+    if format != "text":
+        from core.reporting.renderers import render_document
+        from .report_documents import build_corpus_document
+        return render_document(build_corpus_document(rep), format).content.decode("utf-8")
     out: list[str] = []
 
     out.append("== Trust-witness corpus report ==")
@@ -295,7 +299,8 @@ def render_text(rep: CorpusReport) -> str:
         )
         for cve_id, cwe, lang, detail in rep.not_sound_samples:
             out.append(f"  {cve_id:24s} {cwe:8s} {lang:12s} {detail}")
-    return "\n".join(out)
+    from core.security.log_sanitisation import escape_nonprintable
+    return escape_nonprintable("\n".join(out), preserve_newlines=True)
 
 
 def main(argv=None) -> None:
