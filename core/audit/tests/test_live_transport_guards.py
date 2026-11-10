@@ -1624,6 +1624,11 @@ class TestSemgrepSurfaceFences:
             "test_pbkdf2_keysize_argument_forms",
         }
 
+    def test_engine_prng_jvm_regressions(self) -> None:
+        calls = _function_call_map("../../../engine/semgrep/tests/test_prng_jvm_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_prng_jvm_constructor_identity"}
+
     def test_engine_javascript_header_regressions(self) -> None:
         calls = _function_call_map("../../../engine/semgrep/tests/test_javascript_header_sources.py")
         assert _callers_of(calls, "run") == set()
