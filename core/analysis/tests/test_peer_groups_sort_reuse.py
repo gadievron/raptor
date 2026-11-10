@@ -202,3 +202,49 @@ def test_temporary_sorter_released_before_first_match():
     groups = view._paired_operation_groups(_functions())
     assert events[:3] == ['sort', 'release', 'match']
     assert [group.group_id for group in groups] == ['pair:encode_beta:decode_beta']
+
+
+@pytest.mark.parametrize('kind', ['object', 'str-subclass'])
+def test_builtin_metadata_adapters_are_not_compared_during_import(kind, tmp_path):
+    # Builtin metadata is mutated only in a child, with its original identity
+    # restored even if the import or assertion fails. Worker state is untouched.
+    import os
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import run_standalone_cli
+
+    root = Path(__file__).resolve().parents[3]
+    code = """
+import builtins
+from pathlib import Path
+from core.analysis import peer_groups
+calls = []
+class Metadata:
+    def __eq__(self, other):
+        calls.append('eq')
+        raise RuntimeError('metadata callback')
+class TextMetadata(str):
+    def __eq__(self, other):
+        calls.append('eq')
+        raise RuntimeError('metadata callback')
+previous = builtins.sorted.__module__
+try:
+    builtins.sorted.__module__ = Metadata() if sys.argv[1] == 'object' else TextMetadata('builtins')
+    namespace = {'__name__': peer_groups.__name__, '__package__': peer_groups.__package__}
+    exec(compile(Path(peer_groups.__file__).read_text(), peer_groups.__file__, 'exec'), namespace)
+    assert namespace['_NATIVE_NAME_SORT'] is None
+    functions = [{'name': name, 'file': 'owned.c'} for name in ('open_alpha', 'close_alpha')]
+    assert [g.group_id for g in namespace['_paired_operation_groups'](functions)] == ['pair:open_alpha:close_alpha']
+    assert calls == []
+finally:
+    builtins.sorted.__module__ = previous
+"""
+    env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path / 'config'),
+               XDG_CACHE_HOME=str(tmp_path / 'cache'), XDG_DATA_HOME=str(tmp_path / 'data'))
+    result = run_standalone_cli(
+        [sys.executable, '-I', '-c', f'import sys; sys.path.insert(0, {str(root)!r})\n' + code, kind],
+        cwd=tmp_path, env=env, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

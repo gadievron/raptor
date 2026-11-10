@@ -89,6 +89,7 @@ _NAME_SET_TYPE = type({None})
 _NATIVE_NAME_SORT: Callable[[Iterable[str]], list[str]] | None = None
 _sort_candidate = sorted
 if (type(_sort_candidate) is BuiltinFunctionType
+        and type(_sort_candidate.__module__) is _NAME_TEXT_TYPE
         and _sort_candidate.__module__ == "builtins"
         and _sort_candidate.__name__ == "sorted"):
     _NATIVE_NAME_SORT = _sort_candidate
