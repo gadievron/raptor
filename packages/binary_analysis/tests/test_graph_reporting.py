@@ -69,6 +69,7 @@ def test_graph_missing_database_keeps_native_failure_and_no_fake_zero_population
     context = json.loads((tmp_path / "report-context.json").read_text())
     assert context["state"] == "failed" and context["extensions"]["raptor.result"]["result"] is None
     assert "Records returned by native query" not in context["extensions"]["raptor.metrics"]
+    assert not any("native JSON retains" in note for note in context["diagnostics"])
 
 
 @pytest.mark.parametrize("flags", [[], ["--report-format", "json", "--report-output", "relative.json"], ["--no-report"]])
@@ -117,3 +118,26 @@ def test_graph_edge_export_preserves_endpoints_and_omits_properties(tmp_path):
     assert data["records"][0]["source"]["name"] == "source"
     assert data["records"][0]["target"]["name"] == "target"
     assert "PRIVATE-" not in text
+
+
+@pytest.mark.parametrize("mode,payload,expected", [
+    ("summary", None, "No native graph-query payload was captured."),
+    ("summary", {"exists": True, "nodes": {}, "edges": {}, "evidence": {}}, "Summary view contains counts"),
+    ("edges", {"edges": [{"id": 1, "kind": "CALLS", "source": {}, "target": {}, "props": {"private": "captured"}}]}, "native JSON retains them"),
+    ("evidence", {"evidence": [{"id": "captured", "summary": "captured detail"}]}, "native JSON retains them"),
+])
+def test_captured_graph_retention_notice_matches_view_without_query(tmp_path, mode, payload, expected):
+    from core.reporting.options import ReportOptions
+    from core.reporting.writer import load_committed_report
+    from packages.binary_analysis.graph_reporting import complete_graph_report
+    args = SimpleNamespace(run_dir=str(tmp_path), edges=mode == "edges", evidence=mode == "evidence",
+                           kind=None, tier=None, report_format=["json"], report_output=None,
+                           _report_options=ReportOptions(formats=("json",)))
+    result = complete_graph_report(args, payload, tmp_path / "absent.sqlite", 1 if payload is None else 0)
+    assert not result.errors and result.publication.committed
+    context, _, _ = load_committed_report(tmp_path)
+    assert any(expected in note for note in context.diagnostics)
+    assert any("do not establish a finding verdict" in note for note in context.diagnostics)
+    if payload is None or mode == "summary":
+        assert not any("native JSON retains" in note for note in context.diagnostics)
+    assert not (tmp_path / "absent.sqlite").exists()
