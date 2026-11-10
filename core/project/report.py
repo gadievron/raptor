@@ -757,10 +757,13 @@ def _generate_project_report(project, *, report_options=None, baseline=None, str
         captured = frozen_contexts.get(str(directory))
         from core.run.report_identity import valid_identity
         owner = metadata.get("reporting_identity")
+        producer = (captured.extensions.get("raptor.lifecycle.producer_command", captured.kind)
+                    if captured is not None else None)
         if (captured is not None and valid_identity(owner)
                 and (captured.pass_id or captured.kind in {"scan", "codeql", "validate", "agentic"})
                 and ((captured.run_id, captured.pass_id, captured.attempt_id) != tuple(owner[k] for k in ("run_id", "pass_id", "attempt_id"))
-                     or metadata.get("command") != captured.kind)):
+                     or not isinstance(producer, str) or not producer
+                     or metadata.get("command") != producer)):
             frozen_contexts.pop(str(directory))
             captured = None
             selection_diagnostics.append(f"{directory.name}: committed report belongs to an earlier execution; current domain findings used with unknown reporting lineage")
