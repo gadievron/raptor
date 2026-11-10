@@ -69,7 +69,7 @@ def test_literal_caller_replays_computed_remainder(argument,verdict):
         assert call['witness_index']==-1
         assert literal_call_witness_valid(reply,call,'check-array-bounds',CLAIM,'lp64')
         assert not literal_call_witness_valid(reply,{**call,'witness_index':3},'check-array-bounds',CLAIM,'lp64')
-    assert reply['binding']['query_contract']=='common-width-literal-frame-v16'
+    assert reply['binding']['query_contract']=='common-width-literal-frame-v17'
 
 
 def test_pure_candidates_require_possible_negative_or_large_remainder():
@@ -94,5 +94,5 @@ def test_real_confined_remainder_index_receipt():
                                     source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
     assert result.details['witness_index']<0
-    assert result.details['source_scope']['query_contract']=='common-width-array-guards-v15'
+    assert result.details['source_scope']['query_contract']=='common-width-array-guards-v16'
     assert '(Index%4)' in result.details['obligation']

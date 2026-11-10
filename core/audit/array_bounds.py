@@ -300,6 +300,8 @@ def _solve_access(access):
         offset = z3.BitVecVal(access.index_offset, access.width)
         if access.index_operator == '%':
             index = z3.SRem(index, offset) if access.signed else z3.URem(index, offset)
+        elif access.index_operator == '&':
+            index = index & offset
         else:
             index = index + offset if access.index_operator == '+' else index - offset
     outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
