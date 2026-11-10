@@ -631,6 +631,7 @@ _REPORT_WRITER_FILES = (
     "core/recall/reporting.py",
     "core/threat_model/reporting.py",
     "packages/cve_diff/cve_diff/report/failure_document.py",
+    "packages/cve_diff/cve_diff/report/completion.py",
     # tp-harvest operator CLI: harvest summaries and label-flip
     # errors interpolate target-derived text (statuses, skip reasons,
     # label paths embedding function names, gate messages). Terminal
