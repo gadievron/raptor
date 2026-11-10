@@ -330,6 +330,13 @@ def extract_functions_from_source(source: str) -> list:
     return funcs
 
 
+# Native dependencies captured where the extraction implementation is defined.
+_FUNCTION_EXTRACTION_NATIVE_STATE = (
+    extract_functions_from_source, extract_functions_from_source.__code__,
+    _FUNC_DEF_RE, _FUNC_DEF_IMPL, type, str, len,
+)
+
+
 # ── Progress-line rendering (operator-facing) ────────────────────────
 
 # Verdict glyphs for per-function progress lines. OUTPUT STYLE: ✓/✗
