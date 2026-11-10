@@ -409,12 +409,13 @@ class XFileConst:
         return val
 
     def covered_identifiers(self, source_text: str,
-                            lineno: int):
+                            lineno: int, *, receiver_is_value=None):
         """Identifier texts on ``lineno``'s enclosing STATEMENT that
         occur only inside chains this resolver accepts under the
         taint-free tier (b36 port). A sink call routinely spans lines
         (three-argument prepareCall), so the scope is the smallest
-        statement intersecting the line — uncovered occurrences win."""
+        statement intersecting the line — uncovered occurrences win.
+        A supplied source-scope oracle rejects value-bound receiver heads."""
         covered: set[str]
         uncovered: set[str]
         covered, uncovered = set(), set()
@@ -454,6 +455,9 @@ class XFileConst:
                 return False
             chain = _chain_text(obj)
             if chain is None:
+                return False
+            if receiver_is_value is not None \
+                    and receiver_is_value(obj, chain.split(".", 1)[0]):
                 return False
             val = self.resolve_field(chain, _text(fld), True)
             return val is not REFUSE
