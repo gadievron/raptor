@@ -10,6 +10,21 @@ from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 GUARD = " if (!/^[a-z]+$/.test(value)) return;"
 
 
+@pytest.mark.parametrize("change", [
+    r"val\u0075e = ' ';",
+    r"val\u{75}e = ' ';",
+    r"[val\u0075e] = values;",
+    r"var val\u0075e = ' ';",
+], ids=["escaped-name", "codepoint-name", "escaped-pattern", "escaped-declaration"])
+def test_escaped_write_targets_cannot_preserve_an_epoch(native, tmp_path, change):
+    text = source(change)
+    (tmp_path / "app.js").write_text(text)
+    result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
+                         sink_uri="app.js", sink_line=8, sink_class="xss", language="javascript")
+    assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
+    assert result.artifact is None
+
+
 @pytest.fixture
 def native():
     pytest.importorskip("z3")
