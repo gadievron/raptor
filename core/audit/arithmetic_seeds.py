@@ -346,6 +346,14 @@ def _operations(source, language, abi):
             result.append((conversion["target"], "=", (destination, incoming), "unsigned-conversion-loss", mechanism,
                            {"binding_status": "candidate", "source_type": conversion["source_type"],
                             "destination_type": conversion["destination_type"]}))
+    from .integer_mask_comparison import mask_comparison_candidates
+    for target, name, mask, value, op in mask_comparison_candidates(source, language=language, integer_abi=abi):
+        truth = op == '!='
+        mechanism = f"Comparison is always {'true' if truth else 'false'} in `({name} & {mask}) {op} {value}`."
+        if len(mechanism) <= 300:
+            deferred_guards.append((target, op, (name, str(value)),
+                                    f"constant-comparison-{'true' if truth else 'false'}", mechanism,
+                                    {"binding_status": "candidate", "candidate_basis": "masked-out-bits"}))
     return result + deferred_guards
 
 
