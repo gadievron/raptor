@@ -82,6 +82,10 @@ def test_conditional_models_do_not_replace_review_or_select_alternatives(
     assert model["scope"] == "conditional-untyped-string-model"
     assert model["source_digest"]
     assert model["unverified_source_premises"]
+    assert result.smt_diagnostics["injection_prescreen_collection"] == {
+        "scope": "injection-prescreen-diagnostic-collection", "complete": True,
+        "reported_models": 1, "retained_models": 1, "discarded_models": 0,
+    }
     assert any(call.args and call.args[0].endswith("app.py")
                for call in validator.read_source_context.call_args_list)
     assert not any(call.args and call.args[0].endswith("alternative.py")
@@ -124,6 +128,7 @@ def test_no_observed_bound_omits_slice_models_without_blocking_review(validator,
     assert result.is_exploitable is True
     assert validator.llm.generate_structured.call_count == 1
     assert "string_slice_models" not in result.smt_diagnostics
+    assert "injection_prescreen_collection" not in result.smt_diagnostics
 
 
 def test_diagnostic_copy_failure_does_not_block_source_review(validator, monkeypatch, tmp_path):
@@ -137,3 +142,27 @@ def test_diagnostic_copy_failure_does_not_block_source_review(validator, monkeyp
     assert result.is_exploitable is True and result.error is None
     assert validator.llm.generate_structured.call_count == 1
     assert "string_slice_models" not in result.smt_diagnostics
+
+    assert result.smt_diagnostics["injection_prescreen_collection"] == {
+        "scope": "injection-prescreen-diagnostic-collection", "complete": False,
+        "error_type": "RuntimeError", "reported_models": 1,
+        "retained_models": 0, "discarded_models": 1,
+    }
+
+
+def test_prescreen_failure_discloses_unknown_collection_size(validator, monkeypatch, tmp_path):
+    calls = []
+    def unavailable(**kwargs):
+        calls.append(kwargs)
+        raise RuntimeError("owned prescreen failure before model collection")
+    monkeypatch.setattr(ip, "prescreen_finding", unavailable)
+    path = _source_path(tmp_path)
+    result = validator.validate_dataflow_path(path, tmp_path)
+    assert len(calls) == 1 and calls[0]["paths"][0] is path
+    assert result.is_exploitable is True and result.error is None
+    assert validator.llm.generate_structured.call_count == 1
+    assert result.smt_diagnostics["injection_prescreen_collection"] == {
+        "scope": "injection-prescreen-diagnostic-collection", "complete": False,
+        "error_type": "RuntimeError", "reported_models": None,
+        "retained_models": 0, "discarded_models": None,
+    }

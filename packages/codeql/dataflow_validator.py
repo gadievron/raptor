@@ -761,11 +761,16 @@ class DataflowValidator:
         repo_path: Path,
         *,
         diagnostics: list[dict] | None = None,
+        diagnostic_quality: dict | None = None,
     ) -> DataflowValidation | None:
         """Run the string-theory prescreen over ALL of the result's
         paths; materialise the source-bound prescreen verdict on
         refutation, None otherwise. Failures degrade to None — the
-        prescreen must never block the normal validation flow."""
+        prescreen must never block the normal validation flow. Optional
+        diagnostic_quality describes collection, never proof completeness.
+        """
+        reported_models: int | None = None
+        initial_count = len(diagnostics) if diagnostics is not None else 0
         try:
             from core.dataflow.injection_prescreen import (
                 prescreen_finding,
@@ -780,9 +785,26 @@ class DataflowValidator:
                 return None
             if not verdict.refuted:
                 if diagnostics is not None:
+                    reported_models = len(verdict.diagnostics)
                     diagnostics.extend(deepcopy(verdict.diagnostics))
+                    if diagnostic_quality is not None:
+                        diagnostic_quality.update({
+                            "scope": "injection-prescreen-diagnostic-collection",
+                            "complete": True, "reported_models": reported_models,
+                            "retained_models": len(diagnostics) - initial_count,
+                            "discarded_models": 0,
+                        })
                 return None
         except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
+            if diagnostic_quality is not None:
+                retained = len(diagnostics) - initial_count if diagnostics is not None else 0
+                diagnostic_quality.update({
+                    "scope": "injection-prescreen-diagnostic-collection",
+                    "complete": False, "error_type": type(e).__name__,
+                    "reported_models": reported_models, "retained_models": retained,
+                    "discarded_models": (reported_models - retained
+                                         if reported_models is not None else None),
+                })
             self.logger.warning("Injection prescreen failed: %s", e)
             return None
         self.logger.info(
@@ -849,8 +871,10 @@ class DataflowValidator:
         # non-exploitable with the barrier evidence attached, before
         # any LLM call. No signal → normal flow, nothing dropped.
         slice_diagnostics: list[dict] = []
+        slice_diagnostic_quality: dict = {}
         prescreen = self._injection_prescreen(
             dataflow, repo_path, diagnostics=slice_diagnostics,
+            diagnostic_quality=slice_diagnostic_quality,
         )
         if prescreen is not None:
             return prescreen
@@ -897,6 +921,8 @@ class DataflowValidator:
         }
         if slice_diagnostics:
             smt_diagnostics["string_slice_models"] = slice_diagnostics
+        if slice_diagnostic_quality:
+            smt_diagnostics["injection_prescreen_collection"] = slice_diagnostic_quality
 
         # The existing fast-tier review policy runs independently of the
         # mathematical diagnostics, before gathering full source context.
