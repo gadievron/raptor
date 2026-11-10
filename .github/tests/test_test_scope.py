@@ -1524,6 +1524,37 @@ def test_lane_closure_includes_literal_special_paths(tmp_path):
 
 
 class TestOwnedResourceDispatchWork:
+    def test_script_and_resource_share_parsed_fixture_inventory(self, mini_repo, monkeypatch):
+        import test_scope as scoper
+
+        script = "libexec/fixture-reader"
+        entry = mini_repo / script
+        entry.parent.mkdir()
+        entry.write_text("#!/bin/sh\nexit 0\n")
+        test = mini_repo / "core/pkga/tests/test_mod.py"
+        test.write_text(test.read_text() + f"\nENTRY = {script!r}\n")
+        changed = [script, "core/pkga/tests/fixtures/sample.json"]
+        expected = compute_tier_dispatch(changed, mini_repo)
+        original = scoper._extract_fixture_dirs
+        parsed = []
+
+        def require_shared_tree(path, repo, *, source=None, source_tree=None):
+            assert source is not None and source_tree is not None, "fixture source reparsed after graph"
+            before = ast.dump(source_tree, include_attributes=True)
+            result = original(path, repo, source=source, source_tree=source_tree)
+            assert ast.dump(source_tree, include_attributes=True) == before
+            parsed.append(path)
+            return result
+
+        monkeypatch.setattr(scoper, "_extract_fixture_dirs", require_shared_tree)
+        actual = compute_tier_dispatch(changed, mini_repo)
+        assert actual == expected
+        assert not _is_full_dispatch(actual)
+        assert Path("core/pkga/tests/test_mod.py") in actual["python"]["files"]
+        assert len(parsed) == len(set(parsed))
+        assert set(parsed) == {path.relative_to(mini_repo) for path in mini_repo.rglob("*.py")
+                               if is_test_file(path.relative_to(mini_repo))}
+
     @pytest.mark.parametrize("changed,expected", [
         (["packages/sca/data/new.json"], ["sca"]),
         (["engine/rules/deleted.cocci"], ["engine"]),
