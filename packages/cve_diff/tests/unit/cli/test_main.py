@@ -108,8 +108,14 @@ def test_run_pass_emits_all_six_artifacts(tmp_path, monkeypatch):
        <cve>.osv.json, <cve>.md, <cve>.flow.jsonl, <cve>.flow.md,
        <cve>.clone.patch, and (when API extraction ran) the API patch.
     """
+    from core.testing.state_isolation import pin_user_state_dirs
+    pin_user_state_dirs(monkeypatch, tmp_path / "user-state")
     origin, fix_sha = _make_origin(tmp_path)
     out = tmp_path / "out"
+    out.mkdir()
+    protected = tmp_path / "retained.txt"
+    protected.write_text("retained input")
+    (out / "CVE-2024-99001.md").symlink_to(protected)
 
     _patch_agent_loop(monkeypatch, AgentOutput(
         value=PatchTuple(
@@ -132,6 +138,8 @@ def test_run_pass_emits_all_six_artifacts(tmp_path, monkeypatch):
     # Core artifacts always emitted.
     assert (out / "CVE-2024-99001.osv.json").exists()
     assert (out / "CVE-2024-99001.md").exists()
+    assert not (out / "CVE-2024-99001.md").is_symlink()
+    assert protected.read_text() == "retained input"
     # Flow artifacts (shipped 2026-04-30).
     assert (out / "CVE-2024-99001.flow.jsonl").exists()
     assert (out / "CVE-2024-99001.flow.md").exists()
@@ -139,6 +147,18 @@ def test_run_pass_emits_all_six_artifacts(tmp_path, monkeypatch):
     assert (out / "CVE-2024-99001.clone.patch").exists()
     # API extraction skipped for file:// (non-GitHub) — no .github_api.patch.
     assert not list(out.glob("CVE-2024-99001.*api*.patch"))
+
+
+def test_failure_report_replaces_symlink_without_touching_input(tmp_path):
+    from cve_diff.cli.main import _write_failure_md
+    protected = tmp_path / "retained.txt"
+    protected.write_text("retained input")
+    report = tmp_path / "CVE-2024-99001.md"
+    report.symlink_to(protected)
+    _write_failure_md(tmp_path, "CVE-2024-99001", "no_evidence", "no public reference")
+    assert protected.read_text() == "retained input"
+    assert not report.is_symlink()
+    assert "no public reference" in report.read_text()
 
 
 @pytest.mark.parametrize(("limit_args", "expected_exit_code"), [

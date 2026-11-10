@@ -25,6 +25,7 @@ from typing import Annotated
 
 import typer
 
+from core.atomic_fs import write_text_atomically
 from core.json import save_json
 from core.security.log_sanitisation import sanitise_for_terminal
 from cve_diff import __version__
@@ -302,7 +303,7 @@ def _write_failure_md(output_dir: Path, cve_id: str, error_class: str,
     failures here are not allowed to break the CLI's exit-code path."""
     try:
         text = markdown.render_failure(cve_id, error_class, error_text)
-        (output_dir / f"{cve_id}.md").write_text(text, encoding="utf-8")
+        write_text_atomically(output_dir / f"{cve_id}.md", text)
         typer.echo(f"wrote {output_dir / f'{cve_id}.md'}")
     except Exception as exc:  # noqa: BLE001 — never block the CLI on report-write
         import logging as _logging
@@ -625,7 +626,7 @@ def run(
         osv_path = output_dir / f"{cve_id}.osv.json"
         md_path = output_dir / f"{cve_id}.md"
         save_json(osv_path, osv_schema.render(result.bundle, root_cause=rc))
-        md_path.write_text(markdown.render(result.bundle, root_cause=rc), encoding="utf-8")
+        write_text_atomically(md_path, markdown.render(result.bundle, root_cause=rc))
         if pipeline_slot[0] is not None:
             _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
                                 ok=True, error_class="PASS",
