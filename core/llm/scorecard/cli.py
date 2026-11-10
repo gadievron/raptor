@@ -969,7 +969,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 
 def cmd_samples(args: argparse.Namespace) -> int:
-    from .sample_completion import emit
+    from .sample_completion import emit as emit_samples
     sc = ModelScorecard(args.path)
     all_stats = sc.get_stats()
     matching = [
@@ -984,12 +984,12 @@ def cmd_samples(args: argparse.Namespace) -> int:
             + ")_",
             file=sys.stderr,
         )
-        emit(args, matching, 1)
+        emit_samples(args, matching, 1)
         return 1
     for stat in matching:
         print(_render_samples(stat))
         print()
-    emit(args, matching, 0)
+    emit_samples(args, matching, 0)
     return 0
 
 
