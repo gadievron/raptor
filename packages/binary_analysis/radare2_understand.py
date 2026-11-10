@@ -78,6 +78,7 @@ from core.function_taxonomy import (
 )
 from core.analysis.cfg_metrics import cyclomatic_number
 from core.json import save_json
+from core.source.streams import preserving_stream_error
 from core.security.log_sanitisation import escape_nonprintable
 
 from .function_cfg import (
@@ -951,36 +952,31 @@ class BinaryUnderstand:
         # nothing past the age floor).
         stack = contextlib.ExitStack()
         session: _R2Session | None = None
-        try:
-            scratch = str(stack.enter_context(scratch_dir("r2-sandbox-")))
-            # Control files must not live under the parser's writable output:
-            # a compromised r2 could replace its launcher before a restart.
-            launcher = stack.enter_context(scratch_dir("r2-sandbox-"))
-            (Path(launcher) / "radare2").symlink_to(wrapper)
-            # The session wrapper owns the r2pipe handle so a
-            # per-command timeout (which kills r2 to unblock the
-            # pipe) can respawn the sandboxed session and the
-            # analysis continues with recorded degradation instead
-            # of silently hollowing out (see _cmd_deg).
-            session = _R2Session(
-                lambda: self._spawn_r2(wrapper, scratch, str(launcher)),
-                reanalyse_timeout_s=self._T_AAA,
-            )
-            session.open()
-            yield session
-        finally:
-            if session is not None:
-                try:
-                    session.quit()
-                except Exception:  # noqa: BLE001, S110 — broad by design: r2pipe.quit()'s failure surface is uncontracted third-party code (dead-pipe OSError, closed-file ValueError, post-kill internal state); last-resort session close
-                    pass
-            # Best-effort scratch cleanup (scratch_dir's exit). The
-            # wrapper bind-mounted this dir into the sandbox so r2
-            # could write any incidental output; on exit the binds
-            # tear down with the namespace and the dir's contents
-            # (if any) are ours to remove. The stack is empty when
-            # the early-raise path never entered the scratch.
-            stack.close()
+        # Scratch retirement must still run when session cleanup interrupts.
+        with preserving_stream_error(stack):
+            try:
+                scratch = str(stack.enter_context(scratch_dir("r2-sandbox-")))
+                # Control files must not live under the parser's writable output:
+                # a compromised r2 could replace its launcher before a restart.
+                launcher = stack.enter_context(scratch_dir("r2-sandbox-"))
+                (Path(launcher) / "radare2").symlink_to(wrapper)
+                # The session wrapper owns the r2pipe handle so a
+                # per-command timeout (which kills r2 to unblock the
+                # pipe) can respawn the sandboxed session and the
+                # analysis continues with recorded degradation instead
+                # of silently hollowing out (see _cmd_deg).
+                session = _R2Session(
+                    lambda: self._spawn_r2(wrapper, scratch, str(launcher)),
+                    reanalyse_timeout_s=self._T_AAA,
+                )
+                session.open()
+                yield session
+            finally:
+                if session is not None:
+                    try:
+                        session.quit()
+                    except Exception:  # noqa: BLE001, S110 — broad by design: r2pipe.quit()'s failure surface is uncontracted third-party code (dead-pipe OSError, closed-file ValueError, post-kill internal state); last-resort session close
+                        pass
 
     def _spawn_r2(self, wrapper: Path, scratch: str, launcher: str):
         """Spawn one sandboxed r2pipe handle.
