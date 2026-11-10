@@ -11,7 +11,8 @@ from core.analysis import validator_control_scope as _syntax
 def _write_target(node):
     if node.type in {"assignment_expression", "augmented_assignment_expression"}:
         return node.child_by_field_name("left")
-    if node.type == "variable_declarator":
+    if node.type in {"variable_declarator", "function_declaration",
+                     "generator_function_declaration", "class_declaration", "enum_declaration"}:
         return node.child_by_field_name("name")
     if node.type == "update_expression":
         target = node.child_by_field_name("argument")
@@ -81,7 +82,7 @@ def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
 
 def native_value_epoch_unverified(source: str, name: str, after_line: int,
                                     through_line: int, *, language: str) -> bool:
-    """Refuse pattern, iteration and update writes absent from assignment scans.
+    """Refuse new bindings and implicit writes absent from assignment scans.
 
     This supplies a negative write fact, not declaration identity or a
     complete effect proof. An unavailable native profile remains unverified.
@@ -111,8 +112,21 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = _write_target(node)
             elif node.type in {"assignment_expression", "variable_declarator"}:
                 target = _write_target(node)
-                if target is None or target.type not in {"array_pattern", "object_pattern"}:
-                    continue
+                if target is None:
+                    return True
+                if target.type not in {"array_pattern", "object_pattern"}:
+                    if node.type != "variable_declarator" or node.child_by_field_name("value") is not None:
+                        continue
+                    # A JS var redeclaration without an initialiser does not
+                    # reset its existing function-scoped value.
+                    parent = node.parent
+                    if (language in {"javascript", "typescript", "tsx"}
+                            and parent is not None and parent.type == "variable_declaration"
+                            and any(child.type == "var" for child in parent.children)):
+                        continue
+            elif node.type in {"function_declaration", "generator_function_declaration",
+                               "class_declaration", "enum_declaration"}:
+                target = _write_target(node)
             else:
                 continue
             if target is None or _target_mentions(target, encoded_name):
