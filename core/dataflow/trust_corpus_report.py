@@ -87,6 +87,10 @@ class CorpusReport:
     not_sound_samples: list[tuple[str, str, str, str]] = field(
         default_factory=list,
     )                                                # (cve_id, cwe, lang, detail)
+    # Snapshot quality is independent of corpus outcome counts and completion.
+    read_state: str = "unknown"
+    read_reason: str = "not supplied by aggregate producer"
+    read_rows: int | None = None
 
     @property
     def suppression_rate(self) -> float | None:
@@ -146,8 +150,10 @@ def analyze(synth_db: Path) -> CorpusReport:
     table -> zero-counts report (no error)."""
     rep = CorpusReport()
     try:
-        con = sqlite3.connect(f"file:{synth_db}?mode=ro", uri=True)
-    except sqlite3.OperationalError:
+        con = sqlite3.connect(Path(synth_db).resolve().as_uri() + "?mode=ro", uri=True)
+    except (sqlite3.OperationalError, OSError, ValueError):
+        rep.read_state = "failed"
+        rep.read_reason = "source database could not be opened read-only"
         return rep
     try:
         rows = list(con.execute(
@@ -156,9 +162,15 @@ def analyze(synth_db: Path) -> CorpusReport:
         ))
     except sqlite3.OperationalError:
         # Table doesn't exist yet (bridge hasn't written its first row).
+        rep.read_state = "failed"
+        rep.read_reason = "synth_results query unavailable"
         return rep
     finally:
         con.close()
+
+    rep.read_state = "completed"
+    rep.read_reason = "one read-only query snapshot captured"
+    rep.read_rows = len(rows)
 
     for cve_id, cwe, lang, status, backend, detail in rows:
         if status in _PIPELINE_ERRORS:
@@ -213,6 +225,8 @@ def render_text(rep: CorpusReport, *, format: str = "text") -> str:
     out.append("== Trust-witness corpus report ==")
     out.append("")
     out.append("Headline:")
+    if rep.read_state != "unknown":
+        out.append(f"  source snapshot      : {rep.read_state} ({rep.read_reason}); rows={rep.read_rows if rep.read_rows is not None else 'unavailable'}")
     out.append(f"  processed (sound + not_sound + no_barrier): {rep.processed}")
     out.append(f"  sound                : {rep.sound}")
     out.append(f"  not_sound            : {rep.not_sound}")
