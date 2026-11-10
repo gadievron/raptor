@@ -109,7 +109,9 @@ def native_findings(findings: list[dict], *, run_id: str, producer: str, triage:
         if not isinstance(raw, dict):
             raise ValueError(f"findings[{i}]: expected an object")
         f = json_value(raw, f"$.findings[{i}]")
-        local_id = f.get("finding_id") or f.get("id")
+        primary_id = f.get("finding_id")
+        # Zero is a valid producer identifier, not an absent value.
+        local_id = primary_id if type(primary_id) is int else primary_id or f.get("id")
         ref = f"native:{producer}:{run_id}:{pass_id}:{attempt_id}:{source_digest}:{i}"
         notes = []
         if local_id is not None and (isinstance(local_id, bool) or not isinstance(local_id, (str, int))):
