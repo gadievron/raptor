@@ -29,6 +29,7 @@ from core.atomic_fs.fs_lock import artifact_lock
 from core.json import loads, save_json
 from core.run.scratch import scratch_dir
 from core.source import open_regular_gated, read_bytes_gated
+from core.source.streams import preserving_stream_error
 from core.tar.extract import _TAR_CORRUPTION_ERRORS
 
 _glob_escape = _glob_mod.escape
@@ -459,9 +460,9 @@ def _extract_tarball(tarball: Path, cache_dir: Path) -> Path | None:
     """
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
-        with open_regular_gated(tarball) as stream:
+        with preserving_stream_error(open_regular_gated(tarball)) as stream:
             identity = _archive_identity(os.fstat(stream.fileno()))
-            with tarfile.open(fileobj=stream, mode="r:*") as tf:
+            with preserving_stream_error(tarfile.open(fileobj=stream, mode="r:*")) as tf:
                 iterator = iter(tf)
                 first = next(iterator, None)
                 if first is None:
