@@ -63,17 +63,34 @@ def _owned_dir(path: Path, root: Path) -> Path:
 @contextmanager
 def _lock(directory: Path) -> Iterator[None]:
     parent_fd = open_dir_beneath(directory.parent, Path(directory.name))
+    fd = None
+    failed = False
     try:
-        fd = os.open(".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent_fd)
-    finally:
-        os.close(parent_fd)
-    try:
+        try:
+            fd = os.open(".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600, dir_fd=parent_fd)
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                os.close(parent_fd)
+            except BaseException:
+                if not failed:
+                    raise
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise ValueError("Report lock is not a regular file")
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
+    except BaseException:
+        failed = True
+        raise
     finally:
-        os.close(fd)
+        if fd is not None:
+            try:
+                os.close(fd)
+            except BaseException:
+                if not failed:
+                    raise
 
 
 def _current_manifest(output_dir: Path, *, root: Path | None = None) -> dict:
