@@ -131,14 +131,27 @@ class RunLockHandle:
     def release(self) -> None:
         if self.fd < 0:
             return
-        if _HAS_FCNTL:
-            with contextlib.suppress(OSError):
-                fcntl.flock(self.fd, fcntl.LOCK_UN)
-        with contextlib.suppress(OSError):
-            os.close(self.fd)
+        fd = self.fd
         self.fd = -1
-        with contextlib.suppress(ValueError):
-            _HELD.remove(self)
+        failed = False
+        try:
+            try:
+                if _HAS_FCNTL:
+                    with contextlib.suppress(OSError):
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException:
+                failed = True
+                raise
+            finally:
+                try:
+                    with contextlib.suppress(OSError):
+                        os.close(fd)
+                except BaseException:
+                    if not failed:
+                        raise
+        finally:
+            with contextlib.suppress(ValueError):
+                _HELD.remove(self)
 
 
 #: Handles acquired by this process — referenced here so the fd (and
