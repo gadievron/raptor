@@ -953,14 +953,10 @@ def run_landlock_audit(
                     if tracer_pid > 0:
                         _reaping_pid, tracer_pid = tracer_pid, -1
                         _kill_and_reap(_reaping_pid)
-                    timeout_stdout = (stdout_bytes if text is False else
-                                      stdout_bytes.decode(errors="replace"))
-                    timeout_stderr = (stderr_bytes if text is False else
-                                      stderr_bytes.decode(errors="replace"))
                     raise subprocess.TimeoutExpired(
                         cmd=list(cmd), timeout=timeout,  # type: ignore[arg-type]
-                        output=(timeout_stdout if not _capture_any or _capture_stdout else None),
-                        stderr=(timeout_stderr if not _capture_any or _capture_stderr else None),
+                        output=stdout_bytes if _capture_stdout else None,
+                        stderr=stderr_bytes if _capture_stderr else None,
                     )
                 time.sleep(0.02)
         else:

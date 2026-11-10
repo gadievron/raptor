@@ -4628,14 +4628,10 @@ def run_sandboxed(
                         # reach it by pid.
                         _teardown_target(child_pid, death_w, _parent_fds)
                         _materialize()
-                        out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
-                        err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
-                        if not _capture_stdout:
-                            out_str = None
-                        if not _capture_stderr:
-                            err_str = None
                         raise subprocess.TimeoutExpired(
-                            list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
+                            list(cmd), timeout,  # type: ignore[arg-type]
+                            output=stdout_buf if _capture_stdout else None,
+                            stderr=stderr_buf if _capture_stderr else None,
                         )
                     waits = []
                     if remaining is not None:
@@ -4706,15 +4702,10 @@ def run_sandboxed(
                         # Death-pipe EOF first — same setsid-escape
                         # rationale as the capture_output branch above.
                         _teardown_target(child_pid, death_w, _parent_fds)
-                        out_str = (stdout_buf or b"").decode("utf-8", errors="replace") if text else stdout_buf
-                        err_str = (stderr_buf or b"").decode("utf-8", errors="replace") if text else stderr_buf
-                        if _capture_any:
-                            if not _capture_stdout:
-                                out_str = None
-                            if not _capture_stderr:
-                                err_str = None
                         raise subprocess.TimeoutExpired(
-                            list(cmd), timeout, output=out_str, stderr=err_str  # type: ignore[arg-type]
+                            list(cmd), timeout,  # type: ignore[arg-type]
+                            output=stdout_buf if _capture_stdout else None,
+                            stderr=stderr_buf if _capture_stderr else None,
                         )
                     time.sleep(0.01)
             else:
