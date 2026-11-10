@@ -8093,21 +8093,33 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     finally:
                         if _reaper_cell is not None:
                             _reaper_cell["death_local"].fd = None
-                        if _death_w_holder[0] is not None:
-                            # Registry-routed (idempotent with the
-                            # teardown-first timeout close, either
-                            # order — see close_death_w).
-                            from ._spawn import (
-                                close_death_w as _close_death_w,
-                            )
-                            _close_death_w(_death_w_holder[0])
-                        if _death_r is not None:
-                            try:
-                                os.close(_death_r)
-                            except OSError:
-                                pass
-                        if _reap_token is not None:
-                            _sweep_marked_processes(_reap_token)
+                        from ._retirement import retire_parent_resources
+
+                        def _retire_plain_writer() -> None:
+                            death_w = _death_w_holder[0]
+                            # Consume before close: an interrupted release
+                            # must not leave a reusable numeric descriptor.
+                            _death_w_holder[0] = None
+                            if death_w is not None:
+                                from ._spawn import close_death_w
+                                close_death_w(death_w)
+
+                        def _retire_plain_reader() -> None:
+                            if _death_r is not None:
+                                try:
+                                    os.close(_death_r)
+                                except OSError:
+                                    pass
+
+                        def _retire_plain_marked() -> None:
+                            if _reap_token is not None:
+                                _sweep_marked_processes(_reap_token)
+
+                        retire_parent_resources(
+                            _retire_plain_writer,
+                            _retire_plain_reader,
+                            _retire_plain_marked,
+                        )
         finally:
             # Release the grant-identity pin fds on every exit path
             # (success, refusal raise, ladder demotion): the pins only
