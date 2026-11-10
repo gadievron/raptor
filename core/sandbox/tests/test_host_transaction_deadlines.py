@@ -475,3 +475,56 @@ def test_close_shares_one_budget_between_rpc_and_worker_join(peers, monkeypatch)
         peer.host.close()
     assert joins == [1.0]
     assert not peer.thread.is_alive()
+
+
+def test_simultaneous_first_close_never_reopens_consumed_endpoints(peers):
+    """Schedule both public closers after their first-close snapshot.
+
+    Thread-local tracing controls this interleaving without changing the
+    host's fields, lock, transport or OS calls. It is a controlled scheduling
+    proof, not a claim about frequency under a particular interpreter's GIL.
+    """
+    import inspect
+    import sys
+
+    peer = peers.create()
+    rendezvous = threading.Barrier(2, timeout=5)
+    lines, first_line = inspect.getsourcelines(mod.SandboxHost.close)
+    publish_line = first_line + next(
+        index for index, line in enumerate(lines) if 'self._closed = True' in line)
+    errors = []
+    traces_restored = []
+
+    def close_once():
+        previous = sys.gettrace()
+
+        def schedule(frame, event, arg):
+            if (event == 'line' and frame.f_code is mod.SandboxHost.close.__code__
+                    and frame.f_lineno == publish_line):
+                rendezvous.wait()
+            return schedule
+
+        try:
+            sys.settrace(schedule)
+            peer.host.close()
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            sys.settrace(previous)
+            traces_restored.append(sys.gettrace() is previous)
+
+    closers = [threading.Thread(target=close_once, name=f'owned-first-close-{i}')
+               for i in range(2)]
+    peers.workers.extend(closers)
+    for closer in closers:
+        closer.start()
+    for closer in closers:
+        closer.join(5)
+    assert not any(closer.is_alive() for closer in closers)
+    assert traces_restored == [True, True]
+    assert not errors, errors
+    assert not peer.errors
+    assert not peer.thread.is_alive()
+    assert [request['cmd'] for request in peer.requests] == ['close']
+    assert peer.host._write_fd is None and peer.host._read_fd is None
+    peer.host.close()

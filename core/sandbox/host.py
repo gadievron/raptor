@@ -629,6 +629,8 @@ class SandboxHost:
         try:
             if self._broken:
                 raise HostRPCError("RPC channel is retired after a failed transaction")
+            if self._write_fd is None or self._read_fd is None:
+                raise HostRPCError("RPC channel endpoints are retired")
             if self._closed and not closing:
                 raise HostRPCError("sandbox host is closed")
             rid = os.urandom(16).hex()
