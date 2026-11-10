@@ -66,6 +66,13 @@ class KnownSafeCall:
     languages: tuple[str, ...]
     input_arg_kind: str            # "transform" | "validate"
     soundness_note: str
+    # Supported primitive contract: one exact-str positional argument,
+    # using library defaults. Source annotations/isinstance do not suffice.
+    requires_exact_str: bool = False
+
+    def __post_init__(self):
+        if type(self.requires_exact_str) is not bool:
+            raise ValueError("requires_exact_str must be a boolean")
 
 
 _TABLE: tuple[KnownSafeCall, ...] = (
@@ -110,7 +117,9 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("python",),
         input_arg_kind="transform",
+        requires_exact_str=True,
         soundness_note=(
+            "For an exact builtin str input using library defaults, "
             "stdlib html.escape converts &, <, >, and (with default "
             "quote=True) \", ' to HTML entities.  Output cannot break "
             "out of an HTML attribute or tag context."
