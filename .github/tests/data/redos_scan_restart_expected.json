@@ -22,22 +22,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/analysis/lifecycle_checker.py\u001f(?<!\\s)\\s*==\\s*0\\b": {
-   "digests": [
-    "9a5583a5d2c9"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/analysis/lifecycle_checker.py\u001fs": {
-   "digests": [
-    "69dd5eb6013c",
-    "b7aa2cc00f8a",
-    "e0befcac5abc"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/analysis/peer_groups.py\u001f_SIG_TYPE_RE": {
    "digests": [
     "288de503bef9"
@@ -1351,13 +1335,6 @@
   "core/audit/resource_bounds.py\u001f_CLAMP_RE": {
    "digests": [
     "ba9531b394a5"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/resource_bounds.py\u001f_CMP_RE": {
-   "digests": [
-    "8df9d89afba0"
    ],
    "exp": 1.0,
    "verdict": "linear"
