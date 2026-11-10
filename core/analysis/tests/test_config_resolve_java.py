@@ -716,3 +716,16 @@ def test_unicode_escape_refusal_preserves_foreign_call_fallback(tmp_path):
         stack.extend(node.children)
     assert len(calls) == 1
     assert resolver.fold_hook(calls[0], 1) is None
+
+
+@pytest.mark.parametrize('resource', ['*.properties', 'a?p.properties', '[a]pp.properties'])
+def test_resource_names_are_not_glob_patterns(tmp_path, resource):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src(resource, '"alg"')
+    assert _resolver(tmp_path, src).fold_hook(_get_call(src), 1) is REFUSE
+
+
+def test_literal_resource_name_with_glob_character_still_resolves(tmp_path):
+    (tmp_path / '[a]pp.properties').write_text('alg=SHA-256\n')
+    src = _src('[a]pp.properties', '"alg"')
+    assert _resolver(tmp_path, src).fold_hook(_get_call(src), 1) == 'SHA-256'

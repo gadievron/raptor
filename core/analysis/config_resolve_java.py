@@ -60,6 +60,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from glob import escape as escape_glob
 from pathlib import Path
 from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
 from typing import TYPE_CHECKING
@@ -156,7 +157,7 @@ class _FileIndex:
         matches: list[Path] = []
         capped = False
         try:
-            for p in self._root.rglob(basename):
+            for p in self._root.rglob(escape_glob(basename)):
                 # Relative to the search root: the root's own parent
                 # dirs (a checkout under out/, build/, ...) must not
                 # hide every candidate file.
