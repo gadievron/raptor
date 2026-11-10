@@ -12,8 +12,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from .cfg_conditions import ConditionEdge, ControlCondition, extract_conditions_from_cfg, extract_references
+
+if TYPE_CHECKING:
+    from collections.abc import Hashable
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +196,7 @@ def _query_native(cfg, source_node, sink_node, source_var, classifier) -> GuardB
         reachable = walk(source_node, successors)
         if sink_node not in reachable:
             return GuardBypassResult()
-        reverse = {}
+        reverse: dict[Hashable, list[Hashable]] = {}
         for node, children in adjacency.items():
             for child in children:
                 reverse.setdefault(child, []).append(node)

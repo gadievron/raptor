@@ -1838,7 +1838,7 @@ def evaluate_finding(
         matched_bindings = matched_bindings | frozenset(extra_bindings)
     # C/C++ source definitions, macros and positional object shadows cannot
     # acquire library authority through either direct or supplied bindings.
-    untrusted_sites = getattr(graph, "untrusted_call_sites", frozenset())
+    untrusted_sites: frozenset[tuple[str, int]] | None = getattr(graph, "untrusted_call_sites", frozenset())
     if untrusted_sites:
         matched_bindings = frozenset(
             binding for binding in matched_bindings

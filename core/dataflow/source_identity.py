@@ -30,7 +30,7 @@ def python_call_span(node: ast.AST | None) -> PythonCallSpan | None:
 
 
 def canonical_python_call_spans(
-    tree: ast.AST, call_line: int, library_calls: frozenset[str],
+    tree: ast.Module, call_line: int, library_calls: frozenset[str],
 ) -> frozenset[PythonCallSpan]:
     """Locate one qualified call using the existing source import map.
 

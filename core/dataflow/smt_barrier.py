@@ -74,6 +74,10 @@ import re as _re
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core.dataflow.tier1_llm import _LLMSpec
 
 from core.dataflow import sanitizer_cut_config as _sc_config
 from core.dataflow.source_identity import (
@@ -256,7 +260,9 @@ class Tier0Status(str, Enum):
 class Tier0Result:
     status: Tier0Status
     reasoning: str
-    spec: ValidatorSpec | None = None
+    # Refusal diagnostics can retain an unverified Tier 1 extraction claim.
+    # Its presence never supplies validator authority or a SOUND verdict.
+    spec: ValidatorSpec | _LLMSpec | None = None
     counterexample: str | None = None
     # Pre-formatted spec string suitable to persist in the synth_results
     # ``barrier_query`` column.  Populated only on SOUND; lets the bridge
@@ -2426,7 +2432,7 @@ def _sanitizer_tails_for_spec_kind(kind: str) -> frozenset | None:
     return frozenset({"sub"}) if kind == "charset_sub" else frozenset()
 
 
-def _sanitizer_spans_for_spec_kind(tree: ast.AST, line: int, kind: str) -> frozenset:
+def _sanitizer_spans_for_spec_kind(tree: ast.Module, line: int, kind: str) -> frozenset:
     return (canonical_python_call_spans(tree, line, frozenset({"re.sub"}))
             if kind == "charset_sub" else frozenset())
 
