@@ -208,9 +208,11 @@ class BoundedParser:
                 warnings.simplefilter("ignore", DeprecationWarning)
                 # 0 clears a previously stamped timeout (the
                 # binding's "no timeout" spelling).
-                self._parser.timeout_micros = int(
+                micros = int(
                     max(budget, 0.0) * 1_000_000,
                 )
+                # A positive budget must not become the native opt-out.
+                self._parser.timeout_micros = max(1, micros) if budget > 0 else 0
         return budget
 
     def __getattr__(self, name: str) -> Any:
