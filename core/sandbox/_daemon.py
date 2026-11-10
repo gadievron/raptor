@@ -1150,6 +1150,26 @@ def _kill_request_group(proc: subprocess.Popen) -> None:
     except ProcessLookupError:
         pass
     except OSError as error:
+        # Darwin can reject signaling a group containing only its zombie
+        # leader. Retained terminal ownership permits reaping that leader,
+        # then confirming absence without destructively signaling a reused ID.
+        if (sys.platform == "darwin" and error.errno == errno.EPERM
+                and _RETAIN_REQUEST_GROUP
+                and getattr(proc, "_retain_request_group", False)
+                and type(getattr(proc, "_request_exit_status", None)) is int):
+            try:
+                proc.wait(timeout=max(0, deadline - time.monotonic()))
+                try:
+                    os.killpg(proc.pid, 0)
+                except ProcessLookupError as absent:
+                    if absent.errno == errno.ESRCH:
+                        setattr(proc, "_request_group_retired", True)
+                        return
+            except (OSError, subprocess.TimeoutExpired):
+                pass  # Presence or uncertainty retains the original failure.
+            except BaseException:
+                _REQUEST_CLEANUP_FAILED = True
+                raise
         _REQUEST_CLEANUP_FAILED = True
         raise _RequestCleanupError("request group signal failed") from error
     except BaseException:
