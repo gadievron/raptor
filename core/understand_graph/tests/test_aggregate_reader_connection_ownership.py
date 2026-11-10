@@ -1,5 +1,6 @@
 """Aggregate fixture readers retire independently of native transaction exits."""
 
+import errno
 import os
 import sqlite3
 from contextlib import closing
@@ -12,13 +13,30 @@ from core.understand_graph.tests import test_aggregate_hygiene as native
 
 
 def _owned_fds(path):
-    count = 0
-    for name in os.listdir("/proc/self/fd"):
+    try:
+        status = Path(path).stat()
+    except FileNotFoundError:
+        return 0
+    identity = status.st_dev, status.st_ino
+    for directory in ("/proc/self/fd", "/dev/fd"):
         try:
-            target = os.readlink("/proc/self/fd/" + name)
+            names = os.listdir(directory)
+            break
         except FileNotFoundError:
             continue
-        count += target == str(Path(path).resolve())
+    else:
+        raise RuntimeError("native descriptor observation is unavailable")
+    count = 0
+    for name in names:
+        if not name.isdecimal():
+            continue
+        try:
+            status = os.fstat(int(name))
+        except OSError as exc:
+            if exc.errno != errno.EBADF:
+                raise
+            continue
+        count += (status.st_dev, status.st_ino) == identity
     return count
 
 
