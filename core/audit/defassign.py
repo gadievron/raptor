@@ -1190,19 +1190,24 @@ class _VarDecl:
     is_parameter: bool
 
 
+def _function_parameters(fn_node: Any) -> tuple[Any, ...]:
+    """Direct formal parameters, excluding nested prototype scopes."""
+    from .narrowing_bindings import callable_declarator
+
+    declarator = callable_declarator(fn_node)
+    parameters = declarator.child_by_field_name("parameters") if declarator is not None else None
+    return tuple(n for n in parameters.named_children
+                 if n.type == "parameter_declaration") if parameters is not None else ()
+
+
 def _find_variable_decls(fn_node: Any, variable: str) -> list[_VarDecl]:
     decls: list[_VarDecl] = []
-    declarator = fn_node.child_by_field_name("declarator")
-    if declarator is not None:
-        for n in _walk_nodes(declarator):
-            if n.type == "parameter_declaration":
-                name = _declarator_name(
-                    n.child_by_field_name("declarator") or n,
-                )
-                if name is not None and _node_text(name) == variable:
-                    decls.append(_VarDecl(
-                        node=n, is_static=False, is_parameter=True,
-                    ))
+    for n in _function_parameters(fn_node):
+        name = _declarator_name(n.child_by_field_name("declarator") or n)
+        if name is not None and _node_text(name) == variable:
+            decls.append(_VarDecl(
+                node=n, is_static=False, is_parameter=True,
+            ))
     body = fn_node.child_by_field_name("body")
     if body is None:
         raise ProofRefusal("function has no body")
@@ -1787,17 +1792,12 @@ def _parameter_int_types(fn_node: Any, integer_abi: IntegerABIInput = None) -> d
     """
     from core.smt_solver.integer_types import integer_type
     from core.smt_solver.integer_abi import resolve_integer_abi
-    from .narrowing_bindings import callable_declarator
 
     abi = resolve_integer_abi(integer_abi)
-    declarator = callable_declarator(fn_node)
-    parameters = declarator.child_by_field_name("parameters") if declarator is not None else None
-    if abi is None or parameters is None:
+    if abi is None:
         return {}
     out: dict[str, tuple[bool, int]] = {}
-    for n in parameters.named_children:
-        if n.type != "parameter_declaration":
-            continue
+    for n in _function_parameters(fn_node):
         declarator = n.child_by_field_name("declarator")
         if declarator is None or declarator.type != "identifier":
             continue  # pointer/array declarators are out of scope
@@ -1813,8 +1813,13 @@ def _parameter_int_types(fn_node: Any, integer_abi: IntegerABIInput = None) -> d
             continue
         kind = integer_type(spelling, abi)
         if kind is not None:
-            out[_node_text(declarator)] = kind.promoted_signed, kind.promoted_width
+            name = _node_text(declarator)
+            # Spelling equality across block scopes is not value identity.
+            # A redeclaration cannot borrow the outer parameter's profile.
+            if len(_find_variable_decls(fn_node, name)) == 1:
+                out[name] = kind.promoted_signed, kind.promoted_width
     return out
+
 
 
 def _assigned_names(fn_node: Any) -> set[str]:
@@ -1852,6 +1857,7 @@ def _assigned_names(fn_node: Any) -> set[str]:
         elif n.type == "enumerator":
             record(n.child_by_field_name("name"))
     return names
+
 
 
 def _vet_condition_text(
@@ -1991,7 +1997,14 @@ def _function_name_sets(
         return frozenset(), frozenset()
     locals_: set[str] = set()
     parameters: set[str] = set()
+    formal_parameters = {
+        parameter for fn in tree.root_node.named_children
+        if fn.type == "function_definition"
+        for parameter in _function_parameters(fn)
+    }
     for n in _walk_nodes(tree.root_node):
+        if n.type == "parameter_declaration" and n not in formal_parameters:
+            continue
         if include_locals and n.type in ("declaration", "parameter_declaration"):
             for c in n.named_children:
                 nm = _declarator_name(c)
