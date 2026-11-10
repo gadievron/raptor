@@ -37,6 +37,8 @@ import struct
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source.streams import preserving_stream_error
 from typing import Literal, NamedTuple
 
 logger = logging.getLogger(__name__)
@@ -241,12 +243,15 @@ def _looks_like_fat_macho(path: Path, magic: bytes) -> bool:
 
 def _detect_zip_artifact(path: Path) -> TargetInfo | None:
     try:
-        with zipfile.ZipFile(path) as zf:
+        with preserving_stream_error(zipfile.ZipFile(path)) as zf:
             # Slice the (already-parsed) infolist rather than calling
             # namelist(), which materialises a name list for EVERY
             # entry before the slice — a zip with millions of entries
             # is attacker-supplied input here.
-            members = {zi.filename for zi in zf.infolist()[:10000]}
+            try:
+                members = {zi.filename for zi in zf.infolist()[:10000]}
+            except (OSError, zipfile.BadZipFile, RuntimeError):
+                return None
     except (OSError, zipfile.BadZipFile, RuntimeError):
         return None
     if "AndroidManifest.xml" in members and any(name.endswith(".dex") for name in members):
