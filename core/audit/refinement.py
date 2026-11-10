@@ -574,6 +574,7 @@ def _dispatch_smt(
             file_path=file_path,
             function_name=ctx.get("function", ""),
             target_path=str(target) if target else None,
+            integer_abi=getattr(config, "integer_abi", None),
         )
         if result:
             status = result.outcome
