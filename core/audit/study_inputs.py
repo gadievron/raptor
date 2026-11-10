@@ -114,6 +114,12 @@ class StudyInputBindings:
                 current[key] = capture_source_identity(captured[2], material.file)
             if current[key] is None or current[key] != captured[1]:
                 return False, "study_material_changed"
+        # A later file read can overlap an edit to an earlier input. Recheck
+        # the entire captured set after all first-pass reads; individual
+        # matching observations do not establish a stable input interval.
+        for (root, file), identity in current.items():
+            if capture_source_identity(root, file) != identity:
+                return False, "study_material_changed"
         return True, "source_fragments_unchanged; explanation_remains_untrusted"
 
     def records(self) -> list[dict]:
