@@ -439,6 +439,7 @@ def _lexical_binding_segments(line: str) -> list[str]:
 
 def _transform_binding_targets(
     tree, source_text: str, validator_line: int, library_call: str,
+    *, language: str | None = None,
 ) -> set[str]:
     """Plain-Name targets the transform call's result is bound to on
     the claimed line — empty when the result is discarded or bound to
@@ -465,6 +466,12 @@ def _transform_binding_targets(
             for t in node_targets:
                 targets |= _paired_transform_targets(t, value, tail)
         return targets
+    if language in {"java", "javascript", "typescript", "tsx"}:
+        from core.analysis.validator_call_binding import native_transform_binding_targets
+
+        return native_transform_binding_targets(
+            source_text, validator_line, library_call, language=language,
+        )
     # Lexical languages: accept ``x = ...call(...)`` (with optional
     # const/let/var/final or a type before the name).  Statement
     # segments are split on ``;`` AND on top-level ``,`` and the
@@ -600,7 +607,7 @@ def _try_known_safe_call(
     )
     if entry.input_arg_kind == "transform":
         chain_vars = _transform_binding_targets(
-            tree, source_text, validator_line, spec.library_call,
+            tree, source_text, validator_line, spec.library_call, language=language,
         )
         if not chain_vars:
             return Tier0Result(
