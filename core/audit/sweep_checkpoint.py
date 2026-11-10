@@ -401,6 +401,8 @@ class SweepCheckpoint:
             )
 
     def _load(self) -> None:
+        from core.source.streams import owned_fd, preserving_stream_error
+
         try:
             # O_NONBLOCK: the trail path lives in a run dir a sandboxed
             # child holds (or held) write on, and an O_RDONLY open of a
@@ -423,21 +425,30 @@ class SweepCheckpoint:
         except OSError as exc:
             self._invalidate(f"unreadable: {exc.__class__.__name__}")
             return
+        close_pending = True
+
+        def close_record(value):
+            if close_pending:
+                os.close(value)
+
         try:
-            st = os.fstat(fd)
-            if not _stat.S_ISREG(st.st_mode):
-                os.close(fd)
-                self._invalidate("not a regular file")
-                return
-            if st.st_size > self._max_total_bytes:
-                os.close(fd)
-                self._invalidate(
-                    f"{st.st_size} bytes exceeds the "
-                    f"{self._max_total_bytes}-byte load bound",
-                )
-                return
-            with os.fdopen(fd, "rb") as fh:
-                data = fh.read()
+            with owned_fd(fd, close_fd=close_record):
+                st = os.fstat(fd)
+                if not _stat.S_ISREG(st.st_mode):
+                    close_pending = False
+                    os.close(fd)
+                    self._invalidate("not a regular file")
+                    return
+                if st.st_size > self._max_total_bytes:
+                    close_pending = False
+                    os.close(fd)
+                    self._invalidate(
+                        f"{st.st_size} bytes exceeds the "
+                        f"{self._max_total_bytes}-byte load bound",
+                    )
+                    return
+                with preserving_stream_error(os.fdopen(fd, "rb", closefd=False)) as fh:
+                    data = fh.read()
         except OSError as exc:
             self._invalidate(f"read failed: {exc.__class__.__name__}")
             return
