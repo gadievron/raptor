@@ -45,8 +45,12 @@ class _PinCase(unittest.TestCase):
         ):
             p.start()
             self.addCleanup(p.stop)
-        set_process_project(None)
-        self.addCleanup(set_process_project, None)
+        from core.run import pin
+        from core.testing.module_state import isolated_module_state
+        self.enterContext(isolated_module_state(pin, {
+            "_process_project": None, "_process_project_set": False,
+            "_process_project_threaded": False,
+        }))
 
 
 class ResolveForStartTest(_PinCase):
