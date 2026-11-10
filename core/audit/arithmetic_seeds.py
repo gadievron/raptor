@@ -359,7 +359,7 @@ def _operations(source, language, abi):
     # binder still owns prefix definedness, source identity and typed replay.
     from .array_index import source_index
     from .array_bounds import array_access_candidate
-    affine_candidates = []
+    affine_candidates, remainder_candidates = [], []
     for target in list(_walk_subscripts(root))[:16]:
         array = _unwrap(target.child_by_field_name('argument'))
         index = target.child_by_field_name('index')
@@ -376,9 +376,14 @@ def _operations(source, language, abi):
             continue
         access = array_access_candidate(source, mechanism, language=language, integer_abi=abi)
         if access.status == 'candidate':
-            affine_candidates.append((target, '[]', (name, parameter), 'fixed-array-read', mechanism,
-                                    {'binding_status': 'candidate', 'object_extent': access.extent,
-                                     'access_kind': 'read', 'index_operator': operation, 'index_offset': offset}))
+            if operation == '%':
+                storage = integer_type(dict(access.types).get(parameter), abi)
+                if storage is None or not ((storage.signed and offset > 1) or offset > access.extent):
+                    continue  # modulo need not admit a negative or oversized index
+            selected = remainder_candidates if operation == '%' else affine_candidates
+            selected.append((target, '[]', (name, parameter), 'fixed-array-read', mechanism,
+                             {'binding_status': 'candidate', 'object_extent': access.extent,
+                              'access_kind': 'read', 'index_operator': operation, 'index_offset': offset}))
     from .integer_mask_comparison import mask_comparison_candidates
     for target, name, mask, value, op in mask_comparison_candidates(source, language=language, integer_abi=abi):
         truth = op == '!='
@@ -404,7 +409,7 @@ def _operations(source, language, abi):
                 f"Potential signed {'increment' if op == '++' else 'decrement'} overflow in `{op + name if prefix else name + op}`.",
                 {'binding_status': 'candidate'})
                for target, name, op, prefix in update_candidates(source, language=language, integer_abi=abi)]
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

@@ -190,7 +190,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-array-bounds":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "common-width-array-guards-v14"
+        binding["query_contract"] = "common-width-array-guards-v15"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-oob":
         binding["query_contract"] = "explicit-bounds-roles-v1"

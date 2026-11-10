@@ -298,7 +298,10 @@ def _solve_access(access):
     index = make_var(access.index, variables, profile=profile)
     if access.index_operator:
         offset = z3.BitVecVal(access.index_offset, access.width)
-        index = index + offset if access.index_operator == '+' else index - offset
+        if access.index_operator == '%':
+            index = z3.SRem(index, offset) if access.signed else z3.URem(index, offset)
+        else:
+            index = index + offset if access.index_operator == '+' else index - offset
     outside = z3.Or(lt(index, z3.BitVecVal(0, access.width), access.signed),
                     ge(index, z3.BitVecVal(access.extent, access.width), access.signed))
     result = check_verb_feasibility([(f"{index_expression(access)} < 0 OR {index_expression(access)} >= {access.extent}", outside)],
