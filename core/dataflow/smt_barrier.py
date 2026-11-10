@@ -2697,6 +2697,28 @@ def _python_chain_reaches_sink(
     return _sink_reads_chain_directly(scope_root, chain, sink_line)
 
 
+def _lexical_epoch_preserved(var: str, views: list[str], after_line: int, through_line: int) -> bool:
+    """Direct-write fact only; source views and row scope are supplied by the caller."""
+    assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
+    compound_re = _re.compile(
+        rf"\b{_re.escape(var)}\b\s*"
+        r"(?:[-+*/%&|^]|<<|>>|\*\*|\|\||&&|\?\?)=(?!=)"
+    )
+    for lineno in range(after_line + 1, through_line + 1):
+        if 1 <= lineno <= len(views):
+            view = views[lineno - 1]
+            if compound_re.search(view):
+                return False
+            m = assign_re.search(view)
+            if m:
+                rhs = view[m.end():].strip().removesuffix(";").strip()
+                while rhs.startswith("(") and rhs.endswith(")"):
+                    rhs = rhs[1:-1].strip()
+                if rhs != var:
+                    return False
+    return True
+
+
 def _lexical_var_reaches_sink(
     var: str, source_text: str, validator_line: int,
     sink_line: int, sink_line_text: str, *, language: str = "javascript",
@@ -2729,25 +2751,12 @@ def _lexical_var_reaches_sink(
         return False
     if not _re.search(rf"\b{_re.escape(var)}\b", views[sink_line - 1]):
         return False
-    lines = split_source_lines(source_text)
-    assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
-    compound_re = _re.compile(
-        rf"\b{_re.escape(var)}\b\s*"
-        r"(?:[-+*/%&|^]|<<|>>|\*\*|\|\||&&|\?\?)=(?!=)"
-    )
-    for lineno in range(validator_line + 1, sink_line + 1):
-        if 1 <= lineno <= len(lines):
-            view = views[lineno - 1]
-            if compound_re.search(view):
-                return False
-            m = assign_re.search(view)
-            if m:
-                rhs = view[m.end():].strip().removesuffix(";").strip()
-                while rhs.startswith("(") and rhs.endswith(")"):
-                    rhs = rhs[1:-1].strip()
-                if rhs != var:
-                    return False
-    return True
+    if language in {"java", "javascript", "typescript", "tsx"}:
+        from core.analysis.validator_call_binding import native_sink_reads_name
+
+        if not native_sink_reads_name(source_text, sink_line, var, language=language):
+            return False
+    return _lexical_epoch_preserved(var, views, validator_line, sink_line)
 
 
 def substitution_dominates_sink(

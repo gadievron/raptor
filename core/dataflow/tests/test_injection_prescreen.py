@@ -459,7 +459,7 @@ class TestNonPythonRebindKill:
             "function h(req){\n"
             "  let p = req.query.name;\n"
             "  if (!/^[A-Za-z0-9]+$/.test(p)) return;\n"   # 3 validator
-            "  fs.readFile('/data/'+p);\n"              # 4 sink
+            "  fs.readFile(p);\n"              # 4 sink
             "}\n"
         )
         refuted, _reason, _conf = self._refute(src, 3, 4)
@@ -473,7 +473,7 @@ class TestNonPythonRebindKill:
             "  let p = req.query.name;\n"
             "  if (!/^[A-Za-z0-9]+$/.test(p)) return;\n"   # 3 validator
             "  p = req.query.evil;\n"                   # 4 rebind
-            "  fs.readFile('/data/'+p);\n"              # 5 sink
+            "  fs.readFile(p);\n"              # 5 sink
             "}\n"
         )
         refuted, reason, _conf = self._refute(src, 3, 5)
@@ -885,7 +885,7 @@ class TestArgvContextDangerModel:
         )
 
     def test_space_dash_quote_charset_yields_no_signal(self, tmp_path):
-        (tmp_path / "R.java").write_text(self.ARGV_JAVA)
+        (tmp_path / "R.java").write_text(self.ARGV_JAVA.replace('new ProcessBuilder("tool", x).start()', "consume(x)"))
         verdict = prescreen_finding(
             paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
             rule_id="java/command-line-injection", cwe="CWE-88",
@@ -895,12 +895,22 @@ class TestArgvContextDangerModel:
     def test_argv_clean_charset_still_refutes(self, tmp_path):
         """Two-direction control: a charset clean of BOTH the shell
         and the argv danger sets keeps refuting."""
-        (tmp_path / "R.java").write_text(self.CLEAN_JAVA)
+        (tmp_path / "R.java").write_text(self.CLEAN_JAVA.replace('new ProcessBuilder("tool", x).start()', "consume(x)"))
         verdict = prescreen_finding(
             paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
             rule_id="java/command-line-injection", cwe="CWE-88",
         )
         assert verdict is not None and verdict.refuted is True
+
+
+    @pytest.mark.parametrize("source", [ARGV_JAVA, CLEAN_JAVA], ids=["argv-dangerous", "argv-clean"])
+    def test_constructor_arguments_require_a_sink_slot_contract(self, tmp_path, source):
+        (tmp_path / "R.java").write_text(source)
+        verdict = prescreen_finding(
+            paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
+            rule_id="java/command-line-injection", cwe="CWE-88",
+        )
+        assert verdict is None
 
 
 class TestExoticLineTerminators:

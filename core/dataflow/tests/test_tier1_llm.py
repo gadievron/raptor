@@ -510,7 +510,7 @@ def test_charset_declines_across_function_boundary_js(tmp_path: Path):
         "    if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"  # 2
         "}\n"                                                    # 3
         "function serve(name) {\n"                               # 4
-        "    return fs.readFile(\"/data/\" + name);\n"           # 5
+        "    return fs.readFile(name);\n"           # 5
         "}\n"
     )
     diff = "+    if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"
@@ -542,7 +542,7 @@ def test_known_safe_call_branch_wrapped_declines_js(tmp_path: Path):
         "    if (opts.clean) {\n"                                # 3
         "        name = validator.escape(name);\n"               # 4 — wrapped
         "    }\n"                                                # 5
-        "    res.send('<b>' + name + '</b>');\n"                 # 6 — sink
+        "    res.send(name);\n"                 # 6 — sink
         "}\n"
     )
     diff = "+        name = validator.escape(name);\n"
@@ -568,7 +568,7 @@ def test_known_safe_call_unconditional_still_sound_js(tmp_path: Path):
         "function serve(req, res) {\n"                           # 1
         "    let name = req.query.name;\n"                        # 2
         "    name = validator.escape(name);\n"                    # 3 — safe call
-        "    res.send('<b>' + name + '</b>');\n"                  # 4 — sink
+        "    res.send(name);\n"                  # 4 — sink
         "}\n"
     )
     diff = "+    name = validator.escape(name);\n"
@@ -596,7 +596,7 @@ def test_known_safe_call_braceless_multiline_if_declines_js(tmp_path: Path):
         "    let y = req.query.name;\n"                           # 2
         "    if (opts.clean)\n"                                   # 3 — dangling guard
         "        y = validator.escape(y);\n"                      # 4 — guarded stmt
-        "    res.send('<b>' + y + '</b>');\n"                     # 5 — sink
+        "    res.send(y);\n"                     # 5 — sink
         "}\n"
     )
     diff = "+        y = validator.escape(y);\n"
@@ -624,7 +624,7 @@ def test_known_safe_call_blank_line_before_sanitizer_still_sound_js(tmp_path: Pa
         "    let name = req.query.name;\n"                        # 2
         "\n"                                                      # 3 — blank
         "    name = validator.escape(name);\n"                    # 4 — safe call
-        "    res.send('<b>' + name + '</b>');\n"                  # 5 — sink
+        "    res.send(name);\n"                  # 5 — sink
         "}\n"
     )
     diff = "+    name = validator.escape(name);\n"
@@ -828,7 +828,7 @@ def test_charset_branch_wrapped_declines_js(tmp_path: Path):
         "    if (opts.strict) {\n"                                     # 3
         "        if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"     # 4 — wrapped guard
         "    }\n"                                                      # 5
-        "    return fs.readFile('/data/' + name);\n"                   # 6 — sink
+        "    return fs.readFile(name);\n"                   # 6 — sink
         "}\n"
     )
     diff = "+        if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"
@@ -857,7 +857,7 @@ def test_charset_unconditional_guard_still_sound_js(tmp_path: Path):
         "function serve(req, res) {\n"                                 # 1
         "    let name = req.query.name;\n"                              # 2
         "    if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"          # 3 — guard
-        "    return fs.readFile('/data/' + name);\n"                    # 4 — sink
+        "    return fs.readFile(name);\n"                    # 4 — sink
         "}\n"
     )
     diff = "+    if (!/^[A-Za-z0-9_]+$/.test(name)) { return; }\n"
@@ -1599,7 +1599,7 @@ def test_known_safe_call_comment_decoy_declines_js(tmp_path: Path):
         "    /*\n"                                                # 3
         "    name = validator.escape(name);\n"                    # 4 — decoy
         "    */\n"                                                # 5
-        "    res.send('<b>' + name + '</b>');\n"                  # 6 — sink
+        "    res.send(name);\n"                  # 6 — sink
         "}\n"
     )
     diff = "+    name = validator.escape(name);\n"
@@ -1631,7 +1631,7 @@ def test_charset_comment_decoy_declines_js(tmp_path: Path):
         "    /*\n"                                                     # 3
         "    if (!/^[a-z]+$/.test(name)) { return; }\n"                # 4 — decoy
         "    */\n"                                                     # 5
-        "    return fs.readFile('/data/' + name);\n"                   # 6 — sink
+        "    return fs.readFile(name);\n"                   # 6 — sink
         "}\n"
     )
     diff = "+    if (!/^[a-z]+$/.test(name)) { return; }\n"
