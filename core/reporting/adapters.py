@@ -52,7 +52,7 @@ def apply_scan_metrics(context: ReportContext, metrics: dict) -> None:
         "semgrep_failed_packs", "dropped_registry_packs", "sarif_merge_failed",
         "analysis_gaps", "semgrep_dropped_files", "codeql_no_output",
         "tool_execution_failures", "tool_coverage_limitations", "sarif_input_errors",
-        "semgrep_metadata_errors", "semgrep_partial_files",
+        "semgrep_metadata_errors", "semgrep_partial_files", "semgrep_skipped_rules",
     )
     recorded = captured.get("execution_status")
     limited = any(captured.get(key) for key in failures)
