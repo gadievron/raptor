@@ -262,6 +262,14 @@ def find_delegation(controls) -> Path:
                 return path
         except OSError:
             pass
+        except BaseException:
+            if node is not None:
+                owned, node = node, None
+                try:
+                    os.close(owned)
+                except BaseException:
+                    pass
+            raise
         finally:
             if node is not None:
                 os.close(node)
