@@ -46,11 +46,12 @@ def _dead_pid() -> int:
         return proc.pid
 
 
-def _owned_dir(prefix: str, pid: int) -> Path:
+def _owned_dir(prefix: str, pid: int, request: pytest.FixtureRequest) -> Path:
     d = Path(tempfile.gettempdir()) / (
         f"{prefix}{uuid.uuid4().hex[:8]}-fixture"
     )
     d.mkdir()
+    request.addfinalizer(lambda: shutil.rmtree(d, ignore_errors=True))
     (d / OWNER_MARKER_NAME).write_text(
         json.dumps({"pid": pid, "created": time.time()}),
         encoding="utf-8",
@@ -58,8 +59,8 @@ def _owned_dir(prefix: str, pid: int) -> Path:
     return d
 
 
-def _inproc_dir(pid: int) -> Path:
-    return _owned_dir("raptor-llm-inproc-", pid)
+def _inproc_dir(pid: int, request: pytest.FixtureRequest) -> Path:
+    return _owned_dir("raptor-llm-inproc-", pid, request)
 
 
 def test_sock_dir_carries_owner_marker(fake_creds):
@@ -92,15 +93,15 @@ def test_init_failure_removes_sock_dir_and_marker(
     assert after == before
 
 
-def test_construction_sweeps_dead_owner_run_scoped_dirs(fake_creds):
+def test_construction_sweeps_dead_owner_run_scoped_dirs(fake_creds, request):
     """Run-scoped dirs (``raptor-llm-<run_id>-``, dispatcher_for_run's
     prefix) are reclaimed at the next dispatcher construction — not
     only the in-process ``raptor-llm-inproc-`` family. Pre-fix the
     sweep matched the inproc prefix alone, so a hard-killed launcher's
     run-scoped dir waited on the 24 h age-based reaper despite its
     owner marker."""
-    dead = _owned_dir("raptor-llm-agentic_20260914-", _dead_pid())
-    live = _owned_dir("raptor-llm-agentic_20260915-", os.getpid())
+    dead = _owned_dir("raptor-llm-agentic_20260914-", _dead_pid(), request)
+    live = _owned_dir("raptor-llm-agentic_20260915-", os.getpid(), request)
     d = LLMDispatcher(run_id="inproc-unittest", creds=fake_creds)
     try:
         assert not dead.exists()
@@ -113,15 +114,15 @@ def test_construction_sweeps_dead_owner_run_scoped_dirs(fake_creds):
 
 
 def test_ensure_inprocess_sweeps_dead_owner_dirs(
-        monkeypatch: pytest.MonkeyPatch):
+        monkeypatch: pytest.MonkeyPatch, request):
     from core.llm.dispatcher.lifecycle import (
         ensure_inprocess_dispatcher_env,
     )
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
 
-    dead = _inproc_dir(_dead_pid())
-    live = _inproc_dir(os.getpid())
+    dead = _inproc_dir(_dead_pid(), request)
+    live = _inproc_dir(os.getpid(), request)
 
     d = ensure_inprocess_dispatcher_env(label="scratch-test")
     try:
