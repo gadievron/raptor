@@ -643,6 +643,8 @@ def run_sandboxed(cmd: list[str], *,
                   # invisible — but the signature now lies less.)
                   capture_output: bool = True,
                   text: bool = True,
+                  encoding: str | None = None,
+                  errors: str | None = None,
                   # max_capture_bytes: accepted for signature parity
                   # with Linux _spawn, which clamps its pipe drain to
                   # it. This backend wraps subprocess.run (full
@@ -1544,6 +1546,8 @@ def run_sandboxed(cmd: list[str], *,
             stderr=subprocess.PIPE if capture_output else stderr,
             stdin=_popen_stdin,
             text=text,
+            encoding=encoding,
+            errors=errors,
             preexec_fn=preexec,
             start_new_session=start_new_session,
             pass_fds=(status_w, death_r, *tuple(pass_fds or ())),
