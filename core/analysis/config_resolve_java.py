@@ -540,11 +540,12 @@ class ConfigResolver:
                 holders.append((path, values))
         if len(holders) > 1:
             return self._refuse("file_ambiguous")
+        if unsupported:
+            # Any unparsed candidate could hold the key, even when another
+            # file supplies it. Neither absence nor uniqueness is proven.
+            return self._refuse("grammar_unsupported")
         if not holders:
-            # A grammar-unsupported candidate could hold the key — the
-            # honest verdict is unsupported, not missing.
-            return self._refuse(
-                "grammar_unsupported" if unsupported else "key_missing")
+            return self._refuse("key_missing")
         path, values = holders[0]
         if len(values) > 1:
             return self._refuse("key_duplicated")
