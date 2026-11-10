@@ -677,3 +677,83 @@ def test_same_label_distinct_material_survives_candidate_journal(study_case):
     assert not canonical.evidence_tool and not canonical.claim_refutations
     assert case['result'].suspicious == 1 and case['result'].clean == 0
     assert case['result'].total_cost_usd == pytest.approx(0.7)
+
+
+@pytest.mark.parametrize("drift", ["none", "before_review", "during_review"])
+def test_source_dependency_drift_refuses_continuation_publication(study_case, drift):
+    from core.audit.llm_review import make_review_fn
+    from core.llm.providers import StructuredResponse
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.concepts.subject_study import SubjectExplanation, SubjectMaterial, SubjectPacket
+    from core.coverage.journal import load_entries
+
+    case = study_case
+    config = case["config"]
+    config.immediate_verify = False
+    config.sage_recall = False
+    header = config.target_path / "types.h"
+    header.write_text("typedef unsigned count_t;\n")
+    source = (config.target_path / "owned.c").read_text().rstrip("\n")
+    ctx = {"file": "owned.c", "function": "f", "line_start": 1,
+           "source": source, "language": "c"}
+    runtime = AuditKnowledgeRuntime(config.target_path, orch.StudyQueue(),
+                                    deadline=float("inf"), window=0)
+    try:
+        runtime._register(runtime._origin(ctx), ctx, {"reading_list": [
+            {"subject": "count_t", "context": "target count representation"}]})
+        request, = runtime.requests()
+        bound = runtime.bindings.bind(SubjectPacket((), (
+            SubjectMaterial("count", "types.h", 1, "count_t", "typedef unsigned count_t;", False),
+        ))).materials
+        assert len(bound) == 1
+        runtime.record_source_answers((SubjectExplanation(
+            request.request_id, "partial", "The supplied count uses unsigned representation.",
+            "Its callers are not established.", bound, inputs=bound),))
+        reservation, = runtime.ready_continuations(admission=lambda: True)
+        assert runtime.can_publish(reservation)
+        calls = []
+
+        def change_header():
+            header.write_text("typedef unsigned long count_t;\n")
+
+        class Client:
+            def generate_structured(self, prompt, schema, **kwargs):
+                calls.append(prompt)
+                assert kwargs["task_type"] == "audit"
+                assert "typedef unsigned count_t;" in prompt
+                assert "Its callers are not established." in prompt
+                if drift == "during_review":
+                    change_header()
+                return StructuredResponse(result={
+                    "status": "suspicious", "body": "New assessment",
+                    "hypothesis": "new independent candidate",
+                    "hypotheses": [{"mechanism": "new independent candidate", "confidence": "medium"}],
+                }, raw="", cost=0.2, model="scripted")
+
+        review = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))
+
+        if drift == "before_review":
+            change_header()
+        with isolated_audit_shutdown(orch):
+            orch._re_review_study_enriched(case["result"], config, review,
+                case["checklist"], None, {}, None, set(), {("owned.c", "f", 1)}, monotonic(), None,
+                max_workers=1, knowledge_runtime=runtime, knowledge_reservation=reservation)
+        events = runtime.events()
+        completed = [e for e in events if e["event"] == "continuation_completed"]
+        entries = load_entries(config.out_dir, fresh=True)
+        assert len(calls) == (0 if drift == "before_review" else 1)
+        assert case["result"].total_cost_usd == pytest.approx(0.5 if drift == "before_review" else 0.7)
+        assert case["result"].reviewed == case["result"].suspicious == 1
+        phase = case["result"].cost_tracker.phases.get("re_review")
+        assert (phase.cost_usd if phase else 0) == pytest.approx(0 if drift == "before_review" else 0.2)
+        if drift == "none":
+            assert len(completed) == len(entries) == 1
+            assert "new independent candidate" in {
+                h["mechanism"] for h in case["result"].outcomes[0].hypotheses}
+        else:
+            assert not completed and not entries
+            assert case["result"].outcomes[0] is case["prior"]
+            assert any(e["event"] == "continuation_publication_refused"
+                       and e["reason"] == "study_material_changed" for e in events)
+    finally:
+        runtime.close()
