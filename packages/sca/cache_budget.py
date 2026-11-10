@@ -434,7 +434,10 @@ def cache_session(root: Path, *, maintain: bool = True) -> Iterator[None]:
             except BaseException:
                 if not failed:
                     raise
-                logger.warning('SCA cache maintenance failed during scan teardown', exc_info=True)
+                try:
+                    logger.warning('SCA cache maintenance failed during scan teardown', exc_info=True)
+                except BaseException:
+                    pass  # Keep a secondary diagnostic from replacing the scan error.
 
 
 def maintain_cache(root: Path) -> None:
