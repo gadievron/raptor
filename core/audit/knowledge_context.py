@@ -84,9 +84,20 @@ def reference_delivery(
 ) -> list[dict]:
     """Describe actual fitting, without claiming the model used the material."""
     labels = {section.label for section in kept}
+    answer_labels = _labels(answers)
+    # reference_sections renders the first answer for each shared label.
+    supplied: dict[str, ReferenceAnswer] = {}
+    for label, answer in zip(answer_labels, answers, strict=True):
+        if label in labels:
+            supplied.setdefault(label, answer)
     records = []
-    for label, answer in zip(_labels(answers), answers, strict=True):
-        delivered = bool(answer.entries) and label in labels
+    for label, answer in zip(answer_labels, answers, strict=True):
+        delivered = bool(answer.entries) and (label in labels or any(
+            answer.pack_version == other.pack_version
+            and answer.status == other.status and answer.reason == other.reason
+            and answer.missing_facts == other.missing_facts
+            and all(entry in other.entries for entry in answer.entries)
+            for other in supplied.values()))
         records.append({
             "request_id": answer.request_id,
             "answer_status": answer.status,
