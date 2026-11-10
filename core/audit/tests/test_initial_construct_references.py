@@ -14,6 +14,7 @@ from core.audit.source_anchor import make_context_source_anchor, parse_source_an
 from core.audit.tests.test_foundation_rollout import _entry, _fold, _signed, _target
 from core.llm.providers import StructuredResponse
 from core.llm.prompt_budget import fit_to_budget
+from core.language_reference import ReferenceContext, lookup
 from core.testing.treesitter import requires_ts
 
 
@@ -22,6 +23,7 @@ _COMPOUND_ARITHMETIC = "unsigned f(unsigned a, unsigned b) { a += b; return a; }
 _SHIFT = "unsigned f(unsigned a, unsigned n) { return a << n; }"
 _BITWISE = "unsigned f(unsigned a, unsigned b) { return a & b; }"
 _UPDATE = "int f(int a) { return a++; }"
+_UNARY = "int f(short a) { return -a; }"
 
 
 @pytest.fixture(autouse=True)
@@ -34,8 +36,8 @@ def _ids(answers):
 
 
 @requires_ts("c")
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
-                         ids=["binary", "compound", "shift", "bitwise", "update"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY],
+                         ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign"])
 def test_initial_arithmetic_review_receives_conditional_rules_without_request(tmp_path, source):
     (tmp_path / "unit.c").write_text(source + "\n")
     runtime = AuditKnowledgeRuntime(tmp_path, orch.StudyQueue(), deadline=float("inf"), window=0)
@@ -56,6 +58,11 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
         assert "c.integer-shift v1:" in prompts[0]
         assert "c.integer-usual-conversions v1:" not in prompts[0]
         assert "c.integer-definedness v1:" not in prompts[0]
+    elif source == _UNARY:
+        assert "c.integer-unary-sign v1:" in prompts[0]
+        assert "c.integer-usual-conversions v1:" not in prompts[0]
+        assert "c.integer-definedness v1:" not in prompts[0]
+        assert "c.integer-update v1:" not in prompts[0]
     else:
         assert "c.integer-usual-conversions v1:" in prompts[0]
         if source == _BITWISE:
@@ -71,7 +78,7 @@ def test_initial_arithmetic_review_receives_conditional_rules_without_request(tm
 @pytest.mark.parametrize("source,extra", [
     (_ARITHMETIC, {"c.integer-usual-conversions", "c.integer-definedness"}),
     ("int f(int a, int b) { return a < b; }", {"c.integer-usual-conversions"}),
-    ('int f(void) { /* a + b; a += b; a << n; a & b; a++ */ const char *s = "a * b; a *= b; a >>= n; a |= b; --a"; return 0; }', set()),
+    ('int f(void) { /* a + b; a += b; a << n; a & b; a++; +a */ const char *s = "a * b; a *= b; a >>= n; a |= b; --a; -a"; return 0; }', set()),
     ("int f(void) { return 0; }", set()),
 ])
 @requires_ts("c")
@@ -110,6 +117,25 @@ def test_update_syntax_selects_value_and_store_composition(expression):
         "c.integer-definedness", "c.integer-update"}
 
 
+@pytest.mark.parametrize("expression", ["+a", "-a"], ids=["plus", "minus"])
+@requires_ts("c")
+def test_unary_sign_selects_promoted_result_reading(expression):
+    source = f"int f(short a) {{ return {expression}; }}"
+    assert _ids(foundation_answers("c", request_id="owned", source=source, file="unit.c")) == {
+        "c.integer-promotion", "c.integer-conversion", "c.integer-unary-sign"}
+
+
+@pytest.mark.parametrize("source", [
+    "int f(int a) { return ~a; }", "int f(int a) { return !a; }",
+    "int *f(int *a) { return &*a; }", "int f(int *a) { return *a; }",
+    "int f(int a) { return --a; }",
+], ids=["complement", "logical-not", "address", "indirection", "decrement"])
+@requires_ts("c")
+def test_other_unary_syntax_does_not_select_sign_reading(source):
+    assert "c.integer-unary-sign" not in _ids(foundation_answers(
+        "c", request_id="owned", source=source, file="unit.c"))
+
+
 @pytest.mark.parametrize("expression", ["+a", "-a", "~a", "!a"],
                          ids=["plus", "minus", "complement", "logical-not"])
 @requires_ts("c")
@@ -141,7 +167,8 @@ def test_shift_syntax_selects_its_own_conditional_rule(expression):
     (_SHIFT, {"c.integer-promotion", "c.integer-conversion", "c.integer-shift"}),
     (_UPDATE, {"c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions",
                "c.integer-definedness", "c.integer-update"}),
-], ids=["shift", "update"])
+    (_UNARY, {"c.integer-promotion", "c.integer-conversion", "c.integer-unary-sign"}),
+], ids=["shift", "update", "unary-sign"])
 @requires_ts("c")
 def test_operator_core_and_prerequisites_fit_as_one_bundle(budget, source, entry_ids):
     answers = foundation_answers("c", request_id="owned", source=source, file="unit.c")
@@ -182,8 +209,8 @@ def test_parse_errors_keep_foundation():
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
-                         ids=["binary", "compound", "shift", "bitwise", "update"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY],
+                         ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign"])
 @requires_ts("c")
 def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_path, reuse, source):
     root = _target(tmp_path)
@@ -193,8 +220,8 @@ def test_prior_foundation_only_review_resurfaces_for_new_construct_reading(tmp_p
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE],
-                         ids=["binary", "compound", "shift", "bitwise", "update"])
+@pytest.mark.parametrize("source", [_ARITHMETIC, _COMPOUND_ARITHMETIC, _SHIFT, _BITWISE, _UPDATE, _UNARY],
+                         ids=["binary", "compound", "shift", "bitwise", "update", "unary-sign"])
 @requires_ts("c")
 def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
     root = _target(tmp_path)
@@ -208,6 +235,28 @@ def test_actual_selected_rules_allow_same_source_reuse(tmp_path, reuse, source):
         primary, span, review_context_digest(history["source_inputs"], references), context_version=3))
     signed = _signed(tmp_path / "current", row)
     assert _fold(root, [signed], reuse=reuse)[0] == {"unit.c:f"}
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@requires_ts("c")
+def test_generic_arithmetic_reading_cannot_replace_unary_sign_delivery(tmp_path, reuse):
+    root = _target(tmp_path)
+    (root / "unit.c").write_text(_UNARY + "\n")
+    row = _entry(root, current=True)
+    answers = (
+        lookup("prior-arithmetic", "", ReferenceContext("c"), entry_id="c.integer-definedness"),
+        lookup("prior-conversion", "", ReferenceContext("c"), entry_id="c.integer-conversion"),
+    )
+    references = reference_inputs_from_delivery(reference_delivery(answers, reference_sections(answers)), answers)
+    assert {entry["id"] for entry in references["entries"]} == {
+        "c.integer-promotion", "c.integer-conversion", "c.integer-usual-conversions", "c.integer-definedness"}
+    history = {**row.review_claims, "reference_inputs": references}
+    primary, span = parse_source_anchor(row.source_hash)
+    row = replace(row, review_claims=history, source_hash=make_context_source_anchor(
+        primary, span, review_context_digest(history["source_inputs"], references), context_version=3))
+    signed = _signed(tmp_path / "prior", row)
+    assert _fold(root, [signed], reuse=reuse, require=False)[0] == {"unit.c:f"}
+    assert not _fold(root, [signed], reuse=reuse)[0]
 
 
 def test_oversized_source_keeps_bounded_foundation():
