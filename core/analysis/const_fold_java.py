@@ -46,7 +46,7 @@ wrong in exactly the false-suppression direction).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from core.analysis.threat_model_java import (
     NON_SOURCE_JVM_CONSTANT_FIELDS,
@@ -798,8 +798,11 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     args_node = node.child_by_field_name("arguments")
     args = [c for c in (args_node.children if args_node else ())
             if c.is_named]
+    # Folding consumers use unedited source-backed trees, whose text is bytes.
+    # Textless/edited trees are already unsupported at the name read above;
+    # this identity cast adds no fallback or change to that input contract.
     if method == "valueOf" and obj.type == "identifier" \
-            and obj.text.decode() == "String" and len(args) == 1 \
+            and cast(bytes, obj.text).decode() == "String" and len(args) == 1 \
             and not _receiver_is_shadowed(obj, ext):  # type: ignore[union-attr]
         v = _fold(args[0], resolve_name, depth + 1, array_resolver,
                   config_resolver, conduit_resolver, ext)
