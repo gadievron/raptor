@@ -123,7 +123,7 @@ def parse_properties_strict(text: str) -> _FileEntry:
     if "\\" in text or not text.isascii():
         entry.unsupported = True
         return entry
-    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):  # line-model: Java properties CRLF and bare CR are normalised to LF before splitting.
         line = raw.lstrip(" \t\f")
         if not line or line.startswith("#") or line.startswith("!"):
             continue
