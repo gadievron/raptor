@@ -751,3 +751,16 @@ def test_other_candidate_must_be_understood_before_unique_resolution(tmp_path, u
         assert result.refusal == 'grammar_unsupported'
     else:
         assert result.resolved and result.value == 'SHA-256'
+
+
+@pytest.mark.parametrize('loader', [True, False])
+def test_resource_leading_slash_respects_class_api(tmp_path, loader):
+    (tmp_path / 'app.properties').write_text('alg=SHA-256\n')
+    src = _src('/app.properties', '"alg"')
+    if not loader:
+        src = src.replace('getClass().getClassLoader()', 'T.class')
+    result = _resolver(tmp_path, src).resolve_call(_get_call(src))
+    if loader:
+        assert result.refusal == 'dynamic_resource'
+    else:
+        assert result.resolved and result.value == 'SHA-256'
