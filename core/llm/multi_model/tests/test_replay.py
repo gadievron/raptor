@@ -283,9 +283,8 @@ def test_markdown_renderer_handles_empty_report(tmp_path):
     md = render_markdown(report)
     assert "# Panel-log replay" in md
     assert "Flip rate" in md
-    # No "_No classes_" if there are zero summaries — that branch
-    # is taken.
-    assert "_No classes_" in md
+    # The typed paragraph uses the shared renderer's emphasis syntax.
+    assert "*No classes*" in md
 
 
 def test_json_renderer_round_trips(tmp_path):

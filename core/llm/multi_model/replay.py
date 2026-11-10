@@ -45,15 +45,14 @@ in ways D–S can recover.
 from __future__ import annotations
 
 import argparse
-import statistics
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from collections.abc import Sequence
+from typing import TypedDict
 
 from core.json import dumps_artifact, load_json
-from core.llm.scorecard._render import scrub_cell
 from core.llm.multi_model.dawid_skene import (
     DawidSkeneResult,
     estimate_partitioned,
@@ -99,6 +98,12 @@ class FindingComparison:
     flip: str  # FLIP_TO_EXPLOITABLE | FLIP_TO_NOT_EXPLOITABLE | NO_FLIP
 
 
+class ModelReliabilityRow(TypedDict):
+    model: str
+    alpha: float
+    beta: float
+
+
 @dataclass(frozen=True)
 class ClassSummary:
     """Per-decision-class roll-up."""
@@ -108,7 +113,7 @@ class ClassSummary:
     n_flips_to_not_exploitable: int
     converged: bool
     iterations: int
-    model_reliabilities: list[dict[str, float]] = field(default_factory=list)
+    model_reliabilities: list[ModelReliabilityRow] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -298,7 +303,7 @@ def replay(
             converged=ds_result.converged,
             iterations=ds_result.iterations,
             model_reliabilities=[
-                {"model": r.model, "alpha": r.alpha, "beta": r.beta}  # type: ignore[dict-item]
+                ModelReliabilityRow(model=r.model, alpha=r.alpha, beta=r.beta)
                 for r in ds_result.model_reliabilities
             ],
         ))
@@ -337,90 +342,10 @@ def replay(
 # ---------------------------------------------------------------------------
 
 
-def _scrub_cell(value: object) -> str:
-    """Escape + bound an orchestrated_report-derived cell value
-    (decision_class, model) before terminal/markdown rendering — the
-    reports are foreign input to this renderer. Routes through the
-    shared ``scrub_cell`` (md_inline projection): control bytes
-    escaped AND in-slot markdown structure (pipes, backticks)
-    entity-escaped, so a forged cell cannot mint table columns in the
-    pasted report."""
-    return scrub_cell(value)
-
-
 def render_markdown(report: ReplayReport) -> str:
-    lines: list[str] = []
-    lines.append("# Panel-log replay")
-    lines.append("")
-    lines.append(
-        f"Sources: {len(report.sources)} report(s). "
-        f"Panel records: **{report.total_panels}**. "
-        f"Findings with usable panel: **{report.total_findings_with_panel}**."
-    )
-    lines.append(
-        f"Distinct models: **{len(report.distinct_models)}** "
-        f"(`{', '.join(_scrub_cell(m) for m in report.distinct_models)}`)."
-    )
-    lines.append(
-        f"Distinct decision classes: **{len(report.distinct_decision_classes)}**."
-    )
-    lines.append("")
-    lines.append("## Headline metrics")
-    lines.append("")
-    lines.append(f"- **Flip rate:** {report.flip_rate:.1%} "
-                 f"(D–S posterior > 0.5 disagrees with recorded `is_exploitable`)")
-    lines.append(f"- **Flips to exploitable:** {report.flip_to_exploitable_rate:.1%}")
-    lines.append(f"- **Flips to NOT exploitable:** {report.flip_to_not_exploitable_rate:.1%}")
-    if report.n_no_recorded_verdict:
-        lines.append(
-            f"- **Findings with no recorded verdict (excluded from "
-            f"flip rates):** {report.n_no_recorded_verdict}"
-        )
-    lines.append("")
-    if report.total_findings_with_panel:
-        lines.append("## Posterior distribution")
-        lines.append("")
-        lines.append("| bin | count | bar |")
-        lines.append("|---|---:|---|")
-        max_count = max(report.posterior_distribution.values(), default=1.0) or 1.0
-        for label, count in report.posterior_distribution.items():
-            bar = "█" * int(round(40 * count / max_count))
-            lines.append(f"| `{label}` | {int(count)} | {bar} |")
-        lines.append("")
-    lines.append("## Per-decision-class summary")
-    lines.append("")
-    if not report.class_summaries:
-        lines.append("_No classes_")
-    else:
-        lines.append(
-            "| decision_class | n | →exploitable | →not-exploitable | "
-            "converged | iters |"
-        )
-        lines.append("|---|---:|---:|---:|:---:|---:|")
-        lines.extend(f"| `{_scrub_cell(s.decision_class)}` | {s.n_findings} | "
-                f"{s.n_flips_to_exploitable} | {s.n_flips_to_not_exploitable} | "
-                f"{'✓' if s.converged else '×'} | {s.iterations} |" for s in sorted(report.class_summaries, key=lambda x: x.decision_class))
-    lines.append("")
-    if report.class_summaries:
-        lines.append("## Inferred per-model reliability (averaged across classes)")
-        lines.append("")
-        per_model_alpha: dict[str, list[float]] = {}
-        per_model_beta: dict[str, list[float]] = {}
-        for s in report.class_summaries:
-            for r in s.model_reliabilities:
-                per_model_alpha.setdefault(r["model"], []).append(r["alpha"])  # type: ignore[arg-type]
-                per_model_beta.setdefault(r["model"], []).append(r["beta"])  # type: ignore[arg-type]
-        lines.append("| model | mean α | mean β | n classes |")
-        lines.append("|---|---:|---:|---:|")
-        for model in sorted(per_model_alpha):
-            alphas = per_model_alpha[model]
-            betas = per_model_beta[model]
-            lines.append(
-                f"| `{_scrub_cell(model)}` | {statistics.mean(alphas):.3f} | "
-                f"{statistics.mean(betas):.3f} | {len(alphas)} |"
-            )
-    lines.append("")
-    return "\n".join(lines)
+    from core.reporting.renderers import render_document
+    from .replay_document import build_document
+    return render_document(build_document(report), "markdown").content.decode("utf-8")
 
 
 def render_json(report: ReplayReport) -> str:
