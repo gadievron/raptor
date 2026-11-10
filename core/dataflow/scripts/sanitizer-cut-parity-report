@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """CLI shim for the sanitizer-cut parity baseline report generator.
 
-Prints the markdown report to stdout.
+Prints the Markdown report to stdout. Optional --report-format exports
+require an explicit --report-output destination.
 
 Set ``RAPTOR_SANITIZER_CUT=1`` so the value-bound gate is consulted
 (the baseline's sanitizer-cut fixtures need the flag on to suppress).
@@ -16,17 +17,13 @@ scripts: this class is openly invocable by developers, and the guard
 was defensible only under the "internal dispatch script" framing
 libexec implies.
 """
-import os
+from pathlib import Path
 import sys
 
-# Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
-# path ever added to sys.path (hard lookup; KeyError if the
-# script is run outside the launcher, by design).
-sys.path.insert(0, os.environ["RAPTOR_DIR"])
+# Derive import authority from this developer entry point, not ambient input.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from core.dataflow.sanitizer_cut_parity_report import (  # noqa: E402
-    render_baseline_report,
-)
+from core.dataflow.parity_report_completion import main  # noqa: E402
 
-sys.stdout.write(render_baseline_report() + "\n")
-sys.exit(0)
+if __name__ == "__main__":
+    sys.exit(main())
