@@ -441,9 +441,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Emit JSON instead of markdown. Phase 1b reads this shape.",
     )
+    from core.reporting.options import add_report_arguments, options_from_args
+    add_report_arguments(parser)
+    parser.epilog = "Portable exports require --report-output; native readiness exit codes and --json remain unchanged."
     args = parser.parse_args(argv)
+    report_options = options_from_args(args, parser) if args.report_format or args.report_output or args.no_report else None
+    source = args.path if args.path is not None else default_scorecard_path()
+    if report_options is not None:
+        from .audit_completion import prepare
+        try:
+            prepare(report_options, source)
+        except ValueError as exc:
+            parser.error(str(exc))
 
-    report = audit(args.path)
+    report = audit(source)
     if args.json:
         sys.stdout.write(render_json(report))
         sys.stdout.write("\n")
@@ -452,7 +463,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # Exit code mirrors the verdict so the audit is usable in CI gates:
     #   0 = green, 1 = amber, 2 = red, 3 = no-data.
-    return {"green": 0, "amber": 1, "red": 2, "no-data": 3}[report.verdict]
+    status = {"green": 0, "amber": 1, "red": 2, "no-data": 3}[report.verdict]
+    if report_options is not None:
+        from .audit_completion import emit
+        emit(report, report_options, status)
+    return status
 
 
 if __name__ == "__main__":  # pragma: no cover
