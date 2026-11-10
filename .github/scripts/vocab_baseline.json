@@ -358,6 +358,11 @@
     "count": 44,
     "kind": "alternation"
   },
+  "core/audit/check_trace.py::record_claim_observations": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Fixed schema of signed ihv_claim_observations event emitted during IHV aggregation. Keys carry identity/role/count, separately bounded consumer occurrence, producer bindings and claim-revision references, payload snapshot and omission/completeness metadata. _claim_event_shape validates envelope; write_check_results exports authenticated history; index_claim_observations uses exact references for correspondence only. Receipt labels/proposed refutations and completeness flags confer no verdict, freshness or resume authority. Persistence/report schema, not function-name taxonomy."
+  },
   "core/audit/check_trace.py::write_check_results": {
     "count": 10,
     "kind": "literal",

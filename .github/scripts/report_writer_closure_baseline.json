@@ -711,6 +711,12 @@
     },
     "raptor_codeql.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
+    },
+    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::answer": {
+      "note": "PromptSection label only: _label SHA256-hashes repr of typed request/answer/missing tuple; only owned prefix/index and hex digest leave this argument. Prompt-source content is emitted separately through canonical wrap_untrusted; no report/TTY surface."
+    },
+    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::data": {
+      "note": "LLM input packet, not operator report: whole metadata/source dictionary passes dumps_display directly into canonical nonce-tagged wrap_untrusted(kind=caller_context) before atomic PromptSection fitting. All foreign metadata stays inside untrusted envelope; no raw operator output."
     }
   },
   "bash_manual_audit": {
