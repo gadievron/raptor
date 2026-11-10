@@ -53,35 +53,47 @@ class TestLowPriorityAcquire:
             with throttle.acquire_sync(low_priority=True):
                 order.append("low")
 
-        t_holder = threading.Thread(target=holder)
-        t_holder.start()
-        # Let the holder take the slot first.
-        for _ in range(100):
-            if throttle.in_flight == 1:
-                break
-            time.sleep(0.01)
+        from core.testing.threads import retiring_threads
 
-        t_normal = threading.Thread(target=normal)
-        t_low = threading.Thread(target=low)
-        t_low.start()
-        t_normal.start()
-        # Positive checkpoint instead of a fixed sleep: the strict
-        # order assert below is only valid once the NORMAL contender
-        # has registered itself (low-priority defers only while
-        # ``_sync_waiters > 0``); on a loaded box a fixed 0.3s window
-        # let low legitimately win the freed slot. Registration is
-        # held for the waiter's whole wait (no per-cycle transient
-        # drop), so one observed ``>= 1`` read is stable.
-        deadline = time.monotonic() + 5.0
-        observed = throttle._sync_waiters
-        while observed == 0 and time.monotonic() < deadline:
-            time.sleep(0.005)
+        def release_workers():
+            normal_waiting.set()
+            low_started.set()
+            release_first.set()
+
+        workers = []
+        with retiring_threads(workers, release=release_workers, timeout=10):
+            t_holder = threading.Thread(target=holder)
+            workers.append(t_holder)
+            t_holder.start()
+            # Let the holder take the slot first.
+            for _ in range(100):
+                if throttle.in_flight == 1:
+                    break
+                time.sleep(0.01)
+
+            t_normal = threading.Thread(target=normal)
+            workers.append(t_normal)
+            t_low = threading.Thread(target=low)
+            workers.append(t_low)
+            t_low.start()
+            t_normal.start()
+            # Positive checkpoint instead of a fixed sleep: the strict
+            # order assert below is only valid once the NORMAL contender
+            # has registered itself (low-priority defers only while
+            # ``_sync_waiters > 0``); on a loaded box a fixed 0.3s window
+            # let low legitimately win the freed slot. Registration is
+            # held for the waiter's whole wait (no per-cycle transient
+            # drop), so one observed ``>= 1`` read is stable.
+            deadline = time.monotonic() + 5.0
             observed = throttle._sync_waiters
-        assert observed >= 1
-        release_first.set()
+            while observed == 0 and time.monotonic() < deadline:
+                time.sleep(0.005)
+                observed = throttle._sync_waiters
+            assert observed >= 1
+            release_first.set()
 
-        for t in (t_holder, t_normal, t_low):
-            t.join(timeout=10)
+            for t in (t_holder, t_normal, t_low):
+                t.join(timeout=10)
 
         assert order[0] == "holder"
         assert order[1] == "normal", (
