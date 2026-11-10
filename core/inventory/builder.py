@@ -1848,14 +1848,17 @@ def _process_single_file(
         # there as a fast path; this is the authoritative guard
         # at the read site itself. ELOOP from a symlink → caught
         # under OSError below and the file is recorded excluded.
+        from core.source.streams import owned_fd
+
         try:
             fd = os.open(str(filepath), os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
             return {"path": rel_path, "_excluded": True,
                     "_reason": "open_failed_or_symlink",
                     "_pattern": None}
-        with os.fdopen(fd, "rb") as fh:
-            raw_bytes = fh.read(MAX_FILE_BYTES + 1)
+        with owned_fd(fd, close_fd=os.close):
+            with os.fdopen(fd, "rb", closefd=False) as fh:
+                raw_bytes = fh.read(MAX_FILE_BYTES + 1)
         if len(raw_bytes) > MAX_FILE_BYTES:
             # File grew between stat and read — still reject.
             return {"path": rel_path, "_excluded": True,
