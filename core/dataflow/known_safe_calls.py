@@ -1,8 +1,8 @@
 """Curated table of known-safe library calls per sink class + language.
 
-The Tier 1B trust surface.  Every entry is a human-verified soundness
-claim: "calling this function with user-controlled input produces a
-value that is safe for the named sink class."
+The Tier 1B contract catalogue. Each entry describes a reviewed library
+profile for a named sink class. Consumers must establish its source
+requirements before granting authority; name recognition alone is insufficient.
 
 Adding entries is a soundness-critical operation — each ``soundness_note``
 documents WHY the call is safe (per library docs / known semantics) so
@@ -34,6 +34,7 @@ from dataclasses import dataclass
 
 EXACT_STR_DEFAULT_CALL = "exact_builtin_str_default_call"
 DOMPURIFY_PROFILE = "dompurify_instance_config_and_immutable_output"
+SQL_ESCAPE_PROFILE = "sql_escape_driver_input_mode_and_literal_context"
 DEFAULT_POSITIONAL_CALL = "single_positional_default_call"
 PATH_JOIN_CONTAINMENT = "trusted_path_base_components_and_containment"
 
@@ -238,23 +239,21 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         ),
     ),
     # ------------------------------------------------------------------
-    # JS / TS — SQL escaping (mysql / mysql2 / mariadb packages)
+    # JS / TS — SQL escaping (reviewed mysql / mysql2 profiles)
     # ------------------------------------------------------------------
     KnownSafeCall(
         library_call="connection.escape",
         sink_class="sqli",
         languages=("javascript", "typescript"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({SQL_ESCAPE_PROFILE}),
         soundness_note=(
-            "Node mysql / mysql2 connection.escape() escapes characters "
-            "with special SQL-string meaning: single/double quotes "
-            "(escaped as \\' / \\\"), backslashes, NUL, newlines, CR, "
-            "Ctrl-Z, and zero-byte.  Output is wrapped in single quotes "
-            "and safe to concatenate into a SQL string literal context.  "
-            "Verified against mysql 2.x / mysql2 3.x sqlstring.escape "
-            "implementation.  NB: only sound in SQL STRING-LITERAL "
-            "context — not safe for identifier interpolation; that "
-            "requires connection.escapeId."
+            "Under a reviewed mysql/mysql2 driver profile, primitive strings "
+            "are quoted for SQL literal placement when the connection SQL mode "
+            "supports backslash escaping. Other input domains can produce "
+            "different shapes; raw-SQL conversion hooks are not escaped string "
+            "inputs. Driver identity, input domain, SQL mode and literal context "
+            "require independent evidence. Identifier placement is unsupported."
         ),
     ),
     KnownSafeCall(
@@ -262,10 +261,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="sqli",
         languages=("javascript", "typescript"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({SQL_ESCAPE_PROFILE}),
         soundness_note=(
-            "Alias for connection.escape — same library, same "
-            "semantics, common idiomatic variable name.  See "
-            "connection.escape entry."
+            "Candidate spelling for the connection.escape profile. A variable "
+            "name does not establish driver identity or its escaping semantics; "
+            "the same driver, input, SQL-mode and literal-context requirements apply."
         ),
     ),
     # ------------------------------------------------------------------
