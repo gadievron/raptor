@@ -96,3 +96,22 @@ def test_real_confined_write_receipt():
     assert result.outcome == "confirmed", result.errors
     assert result.details["access_kind"] == "write" and result.details["witness_index"] == 4
     assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v17"
+
+
+@pytest.mark.parametrize("safe", [False, True])
+def test_explicit_oob_entry_prefers_the_bound_write_obligation(safe):
+    source = SOURCE.replace("Index <= 4", "Index < 4") if safe else SOURCE
+    calls = []
+
+    def worker(**request):
+        calls.append(request["verb"])
+        return sweep._run_smt_verb_inner(**request)
+
+    view = module_function_view(sweep, bindings={"_smt_verb_in_subprocess": worker})
+    result = view.run_smt_verb_direct(file_path="unit.c", function_name="Write", verb="check-oob",
+                                      source=source, hypothesis=CLAIM, integer_abi="lp64")
+    assert calls == [VERB]
+    assert result.rule_id == "smt:" + VERB
+    assert result.outcome == ("inconclusive" if safe else "confirmed")
+    assert result.details["violation"] is (not safe)
+    assert result.details["access_kind"] == "write"
