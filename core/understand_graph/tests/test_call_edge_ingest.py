@@ -10,6 +10,7 @@ exists (rows persist, verdict-feeding view refuses the lane).
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from core.understand_graph import ingest as ingest_mod
@@ -148,9 +149,8 @@ def test_unstamped_when_no_key(tmp_path, monkeypatch):
 def test_junk_store_costs_the_ingest_not_the_caller(tmp_path):
     graph = tmp_path / "graph" / "raptor.graph.sqlite"
     graph.parent.mkdir(parents=True)
-    conn = sqlite3.connect(graph)
-    conn.execute("CREATE TABLE snapshots (id TEXT)")  # wrong shape
-    conn.execute("PRAGMA user_version=4")
-    conn.commit()
-    conn.close()
+    with closing(sqlite3.connect(graph)) as conn:
+        conn.execute("CREATE TABLE snapshots (id TEXT)")  # wrong shape
+        conn.execute("PRAGMA user_version=4")
+        conn.commit()
     assert _ingest(tmp_path) is None
