@@ -9601,6 +9601,7 @@ def _run_audit_body(
         deadline=(config.run_deadline_monotonic if config.run_deadline_monotonic is not None
                   else start_time + config.max_seconds if config.max_seconds else float("inf")),
         max_model_calls=6 * knowledge_panel_width,
+        caller_inventory=(config.inventory if isinstance(config.inventory, dict) else checklist),
     )
     knowledge_gaps: dict[int, tuple[dict, Any]] = {}
     knowledge_source_closed = False
@@ -14938,6 +14939,12 @@ def _multi_pass_review(
                 )
 
             primary = mr_result.items[0]
+            from .review_claims import panel_context_history
+
+            panel_history = panel_context_history(primary.get("review_claims"),
+                [row for rows in mr_result.per_model_raw.values() for row in rows])
+            if panel_history is not None:
+                primary["review_claims"] = panel_history
             total_cost = sum(
                 r.get("cost_usd", 0)
                 for raw_list in mr_result.per_model_raw.values()
@@ -15041,6 +15048,11 @@ def _multi_pass_review(
                 ]
                 from copy import deepcopy
                 from .claims import hypothesis_material_key
+                from .review_claims import panel_context_history as self_consistency_context_history
+
+                merged_context_history = self_consistency_context_history(primary.get("review_claims"), all_raw)
+                if merged_context_history is not None:
+                    primary["review_claims"] = merged_context_history
 
                 seen_material: dict[tuple[str, ...], int] = {}
                 merged_hypotheses: list[dict[str, Any]] = []
@@ -35102,7 +35114,8 @@ def _model_withdrawal_assessment(config, prior, fresh, current_source):
     if _is_verification_evidence_for_gate(prior):
         return {**report, "reason": "prior_mechanical_support"}
     if (fresh.status != "clean" or _extract_all_hypotheses(fresh)
-            or review.get("reading_list") or review.get("language_reference_requests")):
+            or review.get("reading_list") or review.get("language_reference_requests")
+            or review.get("caller_context_requests")):
         return {**report, "reason": "remaining_concerns_or_knowledge_gaps"}
     history = read_history((prior.review_result or {}).get("review_claims"))
     if history is None or history["complete"] is not True:
@@ -35236,6 +35249,31 @@ def _merge_unverified_study_candidates(
                    cache_write_tokens=(prior.cache_write_tokens or 0) + (fresh.cache_write_tokens or 0))
 
 
+
+def _retain_delivered_context_history(prior: ReviewOutcome, fresh: ReviewOutcome) -> ReviewOutcome | None:
+    """Record contributing source dependencies without changing any verdict or claim."""
+    from copy import deepcopy
+    from .review_claims import merge_history, read_history
+
+    if (prior.file, prior.function, prior.line) != (fresh.file, fresh.function, fresh.line):
+        return None
+    fresh_history = read_history((fresh.review_result or {}).get("review_claims"))
+    if fresh_history is None or "source_inputs" not in fresh_history:
+        return None
+    review = deepcopy(prior.review_result or {})
+    history = merge_history(review.get("review_claims"), fresh_history)
+    if history is None:
+        return None
+    review["review_claims"] = history
+    return replace(prior, review_result=review,
+                   cost_usd=(prior.cost_usd or 0) + (fresh.cost_usd or 0),
+                   duration_s=(prior.duration_s or 0) + (fresh.duration_s or 0),
+                   tokens_in=(prior.tokens_in or 0) + (fresh.tokens_in or 0),
+                   tokens_out=(prior.tokens_out or 0) + (fresh.tokens_out or 0),
+                   cache_read_tokens=(prior.cache_read_tokens or 0) + (fresh.cache_read_tokens or 0),
+                   cache_write_tokens=(prior.cache_write_tokens or 0) + (fresh.cache_write_tokens or 0))
+
+
 def _publish_study_candidates(
     config: OrchestratorConfig, result: OrchestratorResult,
     runtime: "AuditKnowledgeRuntime", reservation: "KnowledgeReservation",
@@ -35256,6 +35294,8 @@ def _publish_study_candidates(
         # Snapshot construction belongs to the same ownership boundary as
         # the append: even an in-place update must not be overwritten.
         candidate = _merge_unverified_study_candidates(prior, fresh)
+        if candidate is None:
+            candidate = _retain_delivered_context_history(prior, fresh)
         if candidate is None:
             return "unchanged"
         acknowledgement = append_journal_for_outcome(
@@ -35683,6 +35723,15 @@ def _re_review_study_enriched(
                 with result._lock:
                     result.total_cost_usd += outcome.cost_usd
                 if knowledge_runtime is not None:
+                    try:
+                        disposition = _publish_study_candidates(config, result, knowledge_runtime,
+                                                               knowledge_reservation, prior_outcome, outcome, gap)
+                    except Exception:
+                        logger.warning("retained review context journal write failed", exc_info=True)
+                        disposition = "candidate_journal_write_failed"
+                    if disposition not in ("published", "unchanged"):
+                        knowledge_runtime.fail(knowledge_reservation, disposition, ctx=ctx)
+                        continue
                     knowledge_runtime.complete(knowledge_reservation, ctx, published_status=prior_outcome.status,
                                                reason="prior_retained")
                 continue

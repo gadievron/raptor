@@ -107,7 +107,7 @@ def test_shared_context_panel_does_not_credit_another_members_larger_prompt(tmp_
     assert second.review_result["claim_review_delivery"]["claims"]
 
 
-@pytest.mark.parametrize("fault", ["none", "mechanical_support", "source_drift", "missing_secondary", "remaining_unknowns", "unmapped_raw_variant", "duplicate_raw"])
+@pytest.mark.parametrize("fault", ["none", "mechanical_support", "source_drift", "missing_secondary", "remaining_unknowns", "unmapped_raw_variant", "duplicate_raw", "caller_context_pending"])
 def test_model_judgment_admission_never_reconstructs_a_refutation(tmp_path, monkeypatch, fault):
     import re
 
@@ -124,8 +124,12 @@ def test_model_judgment_admission_never_reconstructs_a_refutation(tmp_path, monk
                 "reason": "The stated negative-n theory used a signed parameter premise.",
                 "source_anchors": [{"fragment_id": fragment_id, "line_start": 1, "line_end": 1}],
                 "remaining_unknowns": ["caller behaviour"] if fault == "remaining_unknowns" else []}
-            return StructuredResponse(result={"status": "clean", "body": "Model corrected its premise.",
-                "hypothesis": "", "claim_withdrawals": [proposal]}, raw="", cost=0, model="scripted")
+            payload = {"status": "clean", "body": "Model corrected its premise.",
+                       "hypothesis": "", "claim_withdrawals": [proposal]}
+            if fault == "caller_context_pending":
+                payload["caller_context_requests"] = [{"file": "caller.c", "function": "caller",
+                    "line_start": 1, "reason": "Caller behaviour is still unknown"}]
+            return StructuredResponse(result=payload, raw="", cost=0, model="scripted")
     fresh = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(ctx, config)
     fresh.line = 1
     if fault == "mechanical_support":
@@ -248,10 +252,13 @@ def test_panel_merge_keeps_only_selected_responses_delivery_packet(tmp_path):
     full = received[0]
     absent = {"version": 1, "role": "review-delivery-only", "claims": [], "source_fragment": None}
     first = {"file": "owned.c", "function": "f", "status": "clean", "body": "first",
-             "claim_review_delivery": absent}
+             "claim_review_delivery": absent,
+             "caller_context_delivery": [{"request_id": "owned", "delivered": False}]}
     second = {"file": "owned.c", "function": "f", "status": "clean", "body": "second",
-              "claim_review_delivery": full}
+              "claim_review_delivery": full,
+              "caller_context_delivery": [{"request_id": "owned", "delivered": True}]}
     merged, = AuditVerdictAdapter().merge({"first": [first], "second": [second]})
     assert merged["body"] == "first"
     assert merged["claim_review_delivery"] == absent
     assert merged["claim_review_delivery"] != full
+    assert merged["caller_context_delivery"] == first["caller_context_delivery"]
