@@ -207,6 +207,15 @@ def _range_can_wrap(atoms, op, types, abi, frame):
     return low < minimum or high > maximum
 
 
+def _walk_subscripts(root):
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type == 'subscript_expression':
+            yield node
+        pending.extend(reversed(node.named_children))
+
+
 def _operations(source, language, abi):
     parser = _get_parser(language)
     if parser is None:
@@ -346,6 +355,30 @@ def _operations(source, language, abi):
             result.append((conversion["target"], "=", (destination, incoming), "unsigned-conversion-loss", mechanism,
                            {"binding_status": "candidate", "source_type": conversion["source_type"],
                             "destination_type": conversion["destination_type"]}))
+    # Affine array leads follow all previous candidate classes. The full
+    # binder still owns prefix definedness, source identity and typed replay.
+    from .array_index import source_index
+    from .array_bounds import array_access_candidate
+    affine_candidates = []
+    for target in list(_walk_subscripts(root))[:16]:
+        array = _unwrap(target.child_by_field_name('argument'))
+        index = target.child_by_field_name('index')
+        if language == 'cpp':
+            indices = target.child_by_field_name('indices')
+            index = indices.named_children[0] if indices is not None and len(indices.named_children) == 1 else None
+        shape = source_index(index, data)
+        if array is None or array.type != 'identifier' or shape is None or not shape[1]:
+            continue
+        name = data[array.start_byte:array.end_byte].decode()
+        parameter, operation, offset = shape
+        mechanism = f"Potential out-of-bounds read at `{name}[{parameter}{operation}{offset}]`."
+        if len(mechanism) > 300:
+            continue
+        access = array_access_candidate(source, mechanism, language=language, integer_abi=abi)
+        if access.status == 'candidate':
+            affine_candidates.append((target, '[]', (name, parameter), 'fixed-array-read', mechanism,
+                                    {'binding_status': 'candidate', 'object_extent': access.extent,
+                                     'access_kind': 'read', 'index_operator': operation, 'index_offset': offset}))
     from .integer_mask_comparison import mask_comparison_candidates
     for target, name, mask, value, op in mask_comparison_candidates(source, language=language, integer_abi=abi):
         truth = op == '!='
@@ -354,7 +387,7 @@ def _operations(source, language, abi):
             deferred_guards.append((target, op, (name, str(value)),
                                     f"constant-comparison-{'true' if truth else 'false'}", mechanism,
                                     {"binding_status": "candidate", "candidate_basis": "masked-out-bits"}))
-    return result + deferred_guards
+    return result + deferred_guards + affine_candidates
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
