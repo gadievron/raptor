@@ -40,6 +40,7 @@ import math
 import sys
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from contextlib import nullcontext
 from pathlib import Path
 
 
@@ -64,6 +65,31 @@ def resolve_classname(dotted: str, repo: Path) -> tuple[str, list[str]] | None:
     return None
 
 
+def _compact_testcase_rows(xml_path):
+    """Validate XML before returning testcase attributes in document order."""
+    rows = []
+    manager = (
+        nullcontext(xml_path) if hasattr(xml_path, "read")
+        else open(xml_path, "rb")
+    )
+    with manager as source:
+        parents = []
+        for event, element in ET.iterparse(source, events=("start", "end")):
+            if event == "start":
+                parents.append(element)
+                if element.tag == "testcase":
+                    rows.append((
+                        element.get("classname"), element.get("name"),
+                        element.get("time"),
+                    ))
+            else:
+                parents.pop()
+                if parents:
+                    parents[-1].remove(element)
+                element.clear()
+    return rows
+
+
 def collect_run(
     xml_path: Path, repo: Path, *, include_nodeids: bool = True,
 ) -> tuple[dict[str, float], dict[str, float], int]:
@@ -76,12 +102,12 @@ def collect_run(
     per_nodeid: dict[str, float] = defaultdict(float)
     dropped = 0
     resolutions = {}  # One immutable report/tree snapshot; include misses.
-    root = ET.parse(xml_path).getroot()
-    for tc in root.iter("testcase"):
-        classname = tc.get("classname") or ""
-        name = tc.get("name") or ""
+    rows = _compact_testcase_rows(xml_path)
+    for raw_classname, raw_name, raw_time in rows:
+        classname = raw_classname or ""
+        name = raw_name or ""
         try:
-            seconds = float(tc.get("time") or 0.0)
+            seconds = float(raw_time or 0.0)
         except ValueError:
             dropped += 1
             continue
