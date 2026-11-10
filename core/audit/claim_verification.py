@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
+from .claims import ClaimRevision
 from .refutation_source import SourceIdentity
 from .verification_results import VerificationScope
 
@@ -41,11 +42,18 @@ class ClaimVerification:
     receipts: tuple[str, ...] = ()
     refuted: bool = False
     binding: VerificationScope | None = None
+    claim_revision: ClaimRevision | None = None
 
     def __init__(self, hypothesis: dict[str, Any], receipts: tuple[str, ...] = (), refuted: bool = False,
-                 *, binding: VerificationScope | None = None):
+                 *, binding: VerificationScope | None = None, claim_revision: ClaimRevision | None = None):
         if binding is not None and not isinstance(binding, VerificationScope):
             raise TypeError("verification binding must be a VerificationScope or None")
+        if claim_revision is not None:
+            if not isinstance(claim_revision, ClaimRevision):
+                raise TypeError("claim lineage must be a ClaimRevision or None")
+            if claim_revision.hypothesis != hypothesis:
+                raise ValueError("a changed statement requires an explicit claim revision")
+        object.__setattr__(self, "claim_revision", claim_revision)
         object.__setattr__(self, "_hypothesis", deepcopy(dict(hypothesis)))
         object.__setattr__(self, "receipts", tuple(receipts))
         object.__setattr__(self, "refuted", refuted)
@@ -56,6 +64,12 @@ class ClaimVerification:
     @property
     def hypothesis(self) -> dict[str, Any]:
         return deepcopy(self._hypothesis)
+
+    def with_observation(self, receipts: tuple[str, ...] = (), *, refuted: bool = False,
+                         binding: VerificationScope | None = None) -> "ClaimVerification":
+        """Keep the intake statement/identity while replacing checker output."""
+        return ClaimVerification(self.hypothesis, receipts, refuted, binding=binding,
+                                 claim_revision=self.claim_revision)
 
     def scope_rejection(self, *, file, function, line_start, hypothesis, source_identity: SourceIdentity | None) -> str | None:
         """Return a known binding contradiction, never a proof certificate.

@@ -81,6 +81,8 @@ def record_claim_observations(
             return None
 
         producer_bindings = metadata(bindings, 128 * 1024, "producer_bindings")
+        claim_revisions = metadata([record.claim_revision.reference() if record.claim_revision is not None else None
+                                    for record in records], 128 * 1024, "claim_revisions")
         consumer = metadata({"file": file, "function": function, "line_start": line_start},
                             16 * 1024, "consumer_scope")
         append_audit_log(Path(out_dir), {
@@ -89,6 +91,8 @@ def record_claim_observations(
             "consumer_scope": consumer, "consumer_scope_complete": consumer is not None,
             "producer_bindings": producer_bindings,
             "producer_bindings_complete": producer_bindings is not None,
+            "claim_revisions": claim_revisions,
+            "claim_revisions_complete": claim_revisions is not None,
             "observations": _snapshot(SimpleNamespace(details=observations)),
             "metadata_omissions": omissions,
         })
