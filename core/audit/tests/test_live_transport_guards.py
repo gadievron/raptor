@@ -1619,6 +1619,7 @@ class TestSemgrepSurfaceFences:
         assert _callers_of(calls, "run") == set()
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_native_rule_scoped_suppression_annotation",
+            "test_native_capped_source_cannot_create_unscoped_suppression",
         }
 
     def test_encoding_rules_c(self) -> None:
