@@ -10,7 +10,8 @@ from core.smt_solver import ge, gt, le, lt, mk_val, mk_var
 from core.smt_solver.csem import cast
 
 from .arithmetic_expression_types import promoted
-from .arithmetic_types import IntegerType, common_integer_type, integer_type, model_for_integer_terms
+from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
+from .integer_comparison_types import comparison_frame
 from .integer_literals import integer_literal_value
 
 COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": operator.ge,
@@ -45,17 +46,7 @@ class ComparisonModel:
         return promoted(self.kinds[atom])
 
     def frame(self, a, b):
-        left, right = self.kind(a), self.kind(b)
-        width = max(left.width, right.width)
-        if left.signed == right.signed:
-            signed = left.signed
-        else:
-            signed_kind, unsigned_kind = (left, right) if left.signed else (right, left)
-            # Approved padding-free ABIs have monotone builtin ranks/widths.
-            # A strictly wider signed type represents the unsigned range;
-            # equal width or wider unsigned type gives an unsigned result.
-            signed = signed_kind.width > unsigned_kind.width
-        return IntegerType(width, signed, width, signed)
+        return comparison_frame(self.kind(a), self.kind(b))
 
     def predicate(self, a, op, b):
         frame = self.frame(a, b)

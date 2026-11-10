@@ -13,6 +13,7 @@ from .arithmetic_operation import _select_arithmetic_site, _select_comparison_si
 from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
 from .condition_extraction import _get_parser
 from .integer_abi import integer_abi_record
+from .integer_comparison_types import comparison_frame, converted_interval
 from .integer_literals import integer_literal_value, source_integer_atom
 
 SEED_SOURCE = "source_arithmetic"
@@ -25,7 +26,7 @@ _COMPARISONS = {"<": operator.lt, "<=": operator.le, ">": operator.gt, ">=": ope
                 "==": operator.eq, "!=": operator.ne}
 
 
-def _range_constant(atoms, op, types, abi):
+def _range_constant(atoms, op, types, abi, frame):
     """A cheap candidate filter, never an oracle receipt or intent claim."""
     if atoms[0] == atoms[1]:
         return _COMPARISONS[op](0, 0)
@@ -41,6 +42,9 @@ def _range_constant(atoms, op, types, abi):
             return None
         ranges.append((-(1 << (kind.width - 1)) if kind.signed else 0,
                        (1 << (kind.width - (1 if kind.signed else 0))) - 1))
+    ranges = [converted_interval(low, high, frame) for low, high in ranges]
+    if any(bounds is None for bounds in ranges):
+        return None
     (al, ah), (bl, bh) = ranges
     if op in {">", ">="}:
         al, ah, bl, bh = bl, bh, al, ah
@@ -111,26 +115,37 @@ def _operations(source, language, abi):
             continue
         # Per-operand typing preserves shifts' independent promotions and
         # excludes C++ overloaded operators. This is not a reaching proof.
-        if any((common_integer_type([atom], (), abi) is None if integer_literal_value(atom) is not None
-                else model_for_integer_terms(target, selected_data, [atom], (), abi,
-                                             language=language).status != "bound") for atom in atoms):
+        operand_types, operand_kinds = {}, []
+        for atom in atoms:
+            if integer_literal_value(atom) is not None:
+                kind = common_integer_type([atom], (), abi)
+            else:
+                model = model_for_integer_terms(target, selected_data, [atom], (), abi, language=language)
+                operand_types.update(model.types)
+                kind = integer_type(operand_types.get(atom), abi) if model.status == "bound" else None
+            if kind is None:
+                break
+            operand_kinds.append(kind)
+        if len(operand_kinds) != 2:
             continue
         kinds = [("invalid-shift-count", "Potential invalid shift count")]
-        if op in {"/", "%"} or op in _COMPARISONS:
+        if op in _COMPARISONS:
+            if not operand_types:
+                continue  # retain the oracle's entry-parameter fragment
+            frame = comparison_frame(*operand_kinds)
+            truth = _range_constant(atoms, op, operand_types, abi, frame)
+            if truth is None:
+                continue
+            truth_text = "true" if truth else "false"
+            kinds = [(f"constant-comparison-{truth_text}", f"Comparison is always {truth_text}")]
+        elif op in {"/", "%"}:
             model = model_for_integer_terms(target, selected_data, atoms, (), abi, language=language)
             frame = common_integer_type(atoms, model.types, abi)
             if model.status != "bound" or frame is None:
                 continue
-            if op in _COMPARISONS:
-                truth = _range_constant(atoms, op, model.types, abi)
-                if truth is None:
-                    continue
-                truth_text = "true" if truth else "false"
-                kinds = [(f"constant-comparison-{truth_text}", f"Comparison is always {truth_text}")]
-            else:
-                kinds = [("zero-divisor", "Potential zero divisor")]
-                if frame.signed:
-                    kinds.append(("signed-division-overflow", "Potential division overflow"))
+            kinds = [("zero-divisor", "Potential zero divisor")]
+            if frame.signed:
+                kinds.append(("signed-division-overflow", "Potential division overflow"))
         for claim_kind, subject in kinds:
             mechanism = f"{subject} in `{atoms[0]} {op} {atoms[1]}`."
             if len(mechanism) <= 300:
