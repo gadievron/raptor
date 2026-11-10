@@ -486,6 +486,7 @@ def run_landlock_audit(
     encoding: str | None = None,
     errors: str | None = None,
     stdin=None,
+    pass_fds: Iterable[int] = (),
     stdout=None,
     stderr=None,
     start_new_session: bool = True,
@@ -518,6 +519,13 @@ def run_landlock_audit(
             "tracer has a place to write the JSONL"
         )
         raise ValueError(msg)
+    # Match the namespace backend: reject invalid caller numbers before
+    # allocating internal descriptors that might otherwise reuse them.
+    pass_fds = tuple(sorted(set(pass_fds)))
+    for descriptor in pass_fds:
+        if not isinstance(descriptor, int) or descriptor < 0:
+            raise ValueError("pass_fds must contain nonnegative descriptors")
+        os.fstat(descriptor)
     # F11: create the evidence JSONL up-front in <run_dir>/.audit/
     # (O_EXCL, held fd, inode recorded — see core/sandbox/evidence.py).
     # The tracer inherits the fd and appends through it.
@@ -707,7 +715,7 @@ def run_landlock_audit(
                         stdin_fd = (stdin if isinstance(stdin, int)
                                     else stdin.fileno())
                         os.dup2(stdin_fd, 0)
-                        if stdin_fd != 0:
+                        if stdin_fd != 0 and stdin_fd not in pass_fds:
                             _close_safely(stdin_fd)
                     except (AttributeError, OSError):
                         try:
@@ -747,8 +755,11 @@ def run_landlock_audit(
                 # extensions or opened with closefd tricks are not
                 # guaranteed; relying on CLOEXEC alone leaves the
                 # target a window onto whatever the parent had open.
-                # Nothing needs to survive this exec except stdio.
-                _close_fds_except(())
+                # Only stdio and explicitly admitted caller capabilities
+                # survive. Child CLOEXEC changes leave parent flags intact.
+                _close_fds_except(pass_fds)
+                for descriptor in pass_fds:
+                    os.set_inheritable(descriptor, True)
 
                 # Apply Landlock then seccomp(audit). Ordering:
                 # Landlock first (filesystem isolation in place),
