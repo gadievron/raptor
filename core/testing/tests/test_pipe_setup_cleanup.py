@@ -11,6 +11,9 @@ import sys
 
 import pytest
 
+from core.testing import pipes as pipe_support
+from core.testing.module_bindings import patch_module_attribute
+
 _DRAINS = [
     "test_drain_survives_idle_gap_while_child_alive",
     "test_drain_does_not_reap_target",
@@ -34,9 +37,9 @@ def _owned(fd, identity):
 
 
 @contextmanager
-def _pipes(monkeypatch, error, second_fails=False, *, fail_at=None):
+def _pipes(monkeypatch, error, second_fails=False, *, fail_at=None, consumer):
     descriptors, pairs = [], []
-    real_pipe = os.pipe
+    real_pipe = consumer.os.pipe
 
     def pipe():
         if (second_fails and pairs) or len(pairs) + 1 == fail_at:
@@ -50,7 +53,7 @@ def _pipes(monkeypatch, error, second_fails=False, *, fail_at=None):
 
     try:
         with monkeypatch.context() as patcher:
-            patcher.setattr(os, "pipe", pipe)
+            patch_module_attribute(patcher, consumer, "os", "pipe", pipe)
             yield pairs
         assert descriptors
         assert not any(_owned(fd, identity) for fd, identity in descriptors), (
@@ -76,7 +79,7 @@ def test_drain_startup_failure_releases_pipes(name, fault, error, monkeypatch):
     def fail(*args, **kwargs):
         raise error("injected pipe setup failure")
 
-    with _pipes(monkeypatch, error,
+    with _pipes(monkeypatch, error, consumer=pipe_support,
                 fail_at=int(fault[5:]) if fault.startswith("pipe-") else None):
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "_spawn_child", fail)
@@ -121,7 +124,7 @@ def test_failed_supervisor_start_releases_both_pipe_ends(error, tmp_path, monkey
     def fail(*args, **kwargs):
         raise error("injected pipe setup failure")
 
-    with _pipes(monkeypatch, error):
+    with _pipes(monkeypatch, error, consumer=pipe_support):
         with monkeypatch.context() as patcher:
             patcher.setattr(module, "_spawn_supervisor", fail)
             with pytest.raises(error, match="injected pipe setup failure"):
@@ -140,10 +143,10 @@ def test_tier_reader_closes_owned_pipe_ends(close, fault, error, monkeypatch):
     def fail(*args, **kwargs):
         raise error("injected pipe setup failure")
 
-    with _pipes(monkeypatch, error):
+    with _pipes(monkeypatch, error, consumer=module):
         with monkeypatch.context() as patcher:
             if fault == "write":
-                patcher.setattr(os, "write", fail)
+                patch_module_attribute(patcher, module, "os", "write", fail)
             elif fault == "read":
                 patcher.setattr(module.server_mod, "_read_achieved_tier", fail)
             invoke = lambda: module.TestReadAchievedTier()._read(
@@ -162,7 +165,7 @@ def test_tier_reader_preserves_reused_writer_descriptor(tmp_path, monkeypatch):
 
     borrowed = []
     try:
-        with _pipes(monkeypatch, OSError) as pairs:
+        with _pipes(monkeypatch, OSError, consumer=module) as pairs:
 
             def read(*args, **kwargs):
                 old_writer = pairs[0][1]
@@ -208,7 +211,7 @@ def test_ready_pipe_success_transfers_child_ownership(tmp_path, monkeypatch, blo
         return process, str(tmp_path / "absent.sock")
 
     try:
-        with _pipes(monkeypatch, OSError):
+        with _pipes(monkeypatch, OSError, consumer=pipe_support):
             with monkeypatch.context() as patcher:
                 patcher.setattr(module, "_spawn_supervisor", spawn)
                 # The controlled child creates no descendants or native socket.
