@@ -238,6 +238,7 @@ def test_independent_proof_keeps_authority_in_either_receipt_order(monkeypatch, 
 
 @pytest.mark.parametrize("owner,reported", [
     ("uid_truncation", "uid_truncation"),
+    ("inet_ntoa_double_call", "inet_ntoa_double_call"),
     ("shift_overflow", "shift_overflow"),
     ("shift_overflow", "shift_overflow_int"),
     ("shift_overflow", "shift_overflow_long"),
