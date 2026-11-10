@@ -47,6 +47,8 @@ the result into ``suppressions.jsonl`` for the audit trail.
 """
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import logging
 from collections import deque
 from dataclasses import dataclass, replace
@@ -1571,6 +1573,12 @@ def evaluate_finding(
     ``no_suppress``. Without value context they reach the legacy
     control-flow path and either suppress or no_suppress as before.
     """
+    if java_source_text is not None and java_unicode_unverified(java_source_text, language=language):
+        return SanitizerCutResult(
+            suppress=False, verdict=VERDICT_NO_SUPPRESS,
+            reason=JAVA_UNICODE_UNVERIFIED + ": raw Java source has no verified translation mapping",
+            cut_set=frozenset(), candidate_callables=frozenset(),
+        )
     sources_set = set(sources)
     if not sources_set:
         return SanitizerCutResult(

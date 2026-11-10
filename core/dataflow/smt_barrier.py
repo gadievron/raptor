@@ -65,6 +65,8 @@ pin) and 4.16.0; all PoC cases finish in 7-9 ms.
 
 from __future__ import annotations
 
+from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
+
 import ast
 import builtins
 import logging
@@ -1360,6 +1362,8 @@ def _lexical_validator_in_branch(
     lands on the guard line: the branch-wrap snapshot is taken at the
     START of the validator line so a same-line close cannot hide them.
     """
+    if java_unicode_unverified(source_text, language=language):
+        return True  # Unknown control structure cannot establish dominance.
     lines = split_source_lines(source_text)
     if not (0 < validator_line <= len(lines) and 0 < sink_line <= len(lines)):
         return True
@@ -1489,6 +1493,8 @@ def find_validator_line(
     to :func:`try_tier0` so the source text can be reused by the
     dominance check without a second read.
     """
+    if java_unicode_unverified(source_text, language=language):
+        return None
     needle = spec.source_line
     lines = split_source_lines(source_text)
     view = code_view_lines(source_text, language)
@@ -1989,6 +1995,8 @@ def validator_dominates_sink(
     fallback for ``candidate_only`` results, resolver failures, missing
     kwargs, and the gate-off path.
     """
+    if java_unicode_unverified(source_text, language=language, file_path=file_path or ""):
+        return False
     if language in (None, "python") and known_python_identity_conflict(
         source_text, validator_line, ("re.match", "re.fullmatch"),
     ):
@@ -2697,6 +2705,8 @@ def _lexical_var_reaches_sink(
     modelling it lexically without breaking ``x = validate(x)`` needs
     a parser.
     """
+    if java_unicode_unverified(source_text, language=language):
+        return False
     views = code_view_lines(source_text, language)
     if not 0 < sink_line <= len(views):
         return False
@@ -2755,6 +2765,8 @@ def substitution_dominates_sink(
     supplied, the value-bound gate is consulted first; the lexical
     no-reassignment check is the fallback.
     """
+    if java_unicode_unverified(source_text, language=language, file_path=file_path or ""):
+        return False
     if language in (None, "python") and known_python_identity_conflict(
         source_text, validator_line, ("re.sub",),
     ):
@@ -3147,6 +3159,12 @@ def try_tier0(
             spec=spec,
         )
     source_text = got[0]
+    if java_unicode_unverified(source_text, language=language):
+        return Tier0Result(
+            Tier0Status.NOT_APPLICABLE,
+            JAVA_UNICODE_UNVERIFIED + ": raw Java source has no verified translation mapping",
+            spec=spec, extras={"unverified_source_profile": JAVA_UNICODE_UNVERIFIED},
+        )
     line = find_validator_line(
         source_text, spec, language=language, sink_line=sink_line,
     )
