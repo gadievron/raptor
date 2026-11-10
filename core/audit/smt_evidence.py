@@ -27,6 +27,7 @@ def scope_smt_feasibility(verb: str, outcome: str, data: dict) -> tuple[str, dic
 
 
 _DIAGNOSTIC_ORACLE_SCOPES = {
+    "check-integer-conversion": "source-unsigned-conversion",
     # Predicate truth alone does not establish an unintended coding defect.
     "check-integer-comparison": "source-integer-comparison",
     # These adapters infer numeric operands from text but do not bind an

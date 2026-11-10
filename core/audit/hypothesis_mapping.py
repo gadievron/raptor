@@ -267,6 +267,8 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("non-representable unsigned conversion", "check-integer-conversion"),
+    ("non representable unsigned conversion", "check-integer-conversion"),
     ("comparison is always false", "check-integer-comparison"),
     ("comparison is always true", "check-integer-comparison"),
     ("invalid shift count", "check-shift-count"),
