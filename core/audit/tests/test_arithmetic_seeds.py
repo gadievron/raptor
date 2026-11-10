@@ -243,3 +243,28 @@ def test_cpp_array_lead_still_requires_the_native_oracle_for_a_safe_read():
     assert "verdict" not in seed
     checked = check_array_bounds(source, seed["mechanism"], language="cpp", integer_abi="lp64")
     assert checked["violation"] is False
+
+
+def test_unchanged_full_gap_does_not_spend_discovery_work_needed_by_other_gaps():
+    from core.audit import arithmetic_seeds as seeds
+    from core.testing.module_views import module_function_view
+
+    full_source = "int Read(int Value,int Count){return Value/Count + Value%Count;}"
+    next_source = "int Read(int Value,int Count){return Value<<Count;}"
+    full = {"file": "full.c", "name": "Read", "line_start": 1, "line_end": 1}
+    later = {"file": "later.c", "name": "Read", "line_start": 1, "line_end": 1}
+    sources = {"full.c": full_source, "later.c": next_source}
+    assert seeds.seed_arithmetic_hypotheses([full], sources, mode="quality", integer_abi="lp64") == seeds.MAX_SEEDS_PER_GAP
+    original = list(full["injected_hypotheses"])
+    calls = []
+
+    def discover(source, language, abi):
+        assert source != full_source, "unchanged full gap must not parse or bind candidates again"
+        calls.append(source)
+        return seeds._operations(source, language, abi)
+
+    view = module_function_view(seeds, bindings={"_operations": discover})
+    assert view.seed_arithmetic_hypotheses([full, later], sources, mode="quality", integer_abi="lp64") == 1
+    assert full["injected_hypotheses"] == original
+    assert calls == [next_source]
+    assert len(later["injected_hypotheses"]) == 1

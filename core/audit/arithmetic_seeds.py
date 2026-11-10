@@ -200,7 +200,7 @@ def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):
             existing[:] = [h for h in existing if not any(h is old for old in stale)]
             total -= len(stale)
         own = [h for h in existing if isinstance(h, dict) and h.get("source") == SEED_SOURCE]
-        if total >= MAX_SEEDS_PER_RUN:
+        if total >= MAX_SEEDS_PER_RUN or len(own) >= MAX_SEEDS_PER_GAP:
             continue
         for target, op, atoms, claim_kind, mechanism, extra in _operations(source, language, integer_abi):
             site = {
