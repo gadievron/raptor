@@ -303,3 +303,20 @@ def test_partial_buffer_patterns_need_independent_verification(monkeypatch, tmp_
     assert get_rule_role(str(rule)) == "detection"
     assert _is_detection_only(f"coccinelle:{rule_name}")
     assert not is_verification_evidence(f"coccinelle:{rule_name}")
+
+
+@pytest.mark.parametrize('rule_id', [
+    'sign_extension_widen', 'sign_extension_char', 'sign_extension_short',
+])
+def test_signed_widening_requires_negative_value_and_use_evidence(monkeypatch, tmp_path, rule_id):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/sign_extension_widen.cocci'
+    receipt = f'coccinelle:{rule_id}'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)

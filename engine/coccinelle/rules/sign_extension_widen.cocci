@@ -4,12 +4,13 @@
 // When a signed char (-128..127) or signed short (-32768..32767) is
 // assigned to an unsigned long/size_t, the sign bit extends to fill
 // the upper bits: (signed char)0xFF → (size_t)0xFFFFFFFFFFFFFFFF.
-// This is almost never intentional and can produce enormous sizes
-// when used in allocations or length calculations.
+// Negative values can produce enormous unsigned values when used in
+// allocations or length calculations. Type conversion alone does not prove
+// a negative input, unintended behavior or a dangerous downstream use.
 //
 // CWE-194: Unexpected Sign Extension
 // Guards: explicit mask (& 0xFF / & 0xFFFF) is intentional.
-// @role: verification
+// @role: detection
 
 @sign_ext_char_to_unsigned@
 typedef uint64_t, uint32_t;
@@ -60,7 +61,7 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Signed char widened to unsigned type — sign bit extends to fill upper bits (CWE-194). Mask with & 0xFF if byte value intended."
+  "message":   "Candidate: signed char converted to unsigned type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFF only if byte value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -73,7 +74,7 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Signed char cast to unsigned wide type — sign bit extends to fill upper bits (CWE-194). Mask with & 0xFF if byte value intended."
+  "message":   "Candidate: signed char cast to unsigned wide type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFF only if byte value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -120,7 +121,7 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Signed short widened to unsigned type — sign bit extends to fill upper bits (CWE-194). Mask with & 0xFFFF if value intended."
+  "message":   "Candidate: signed short converted to unsigned type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFFFF only if a 16-bit value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -133,6 +134,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Signed short cast to unsigned wide type — sign bit extends to fill upper bits (CWE-194). Mask with & 0xFFFF if value intended."
+  "message":   "Candidate: signed short cast to unsigned wide type (CWE-194). Review whether negative values can reach this conversion and how the result is used. Mask with & 0xFFFF only if a 16-bit value is intended."
 }
 print("COCCIRESULT:" + json.dumps(msg))

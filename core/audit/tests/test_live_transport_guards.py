@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_signed_widening_candidate_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_sign_extension_widen_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_guarded_widening_requires_value_range_review"}
+
     def test_inet_ntoa_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_inet_ntoa_double_call_rule.py")
         assert _callers_of(calls, "run") == set()
