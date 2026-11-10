@@ -16,10 +16,12 @@ where `--sandbox none` is the bisect tool operators reach for.
 from __future__ import annotations
 
 import sys
+from contextlib import nullcontext
 
 import pytest
 
 from core.sandbox import context as _ctx
+from core.sandbox.errors import SandboxSetupError
 from core.sandbox.tests.capability import (
     requires_landlock,
     requires_network_block_backend,
@@ -107,9 +109,14 @@ def test_network_only_warns_fake_home_discard(tmp_path, caplog):
     out = tmp_path / "out"
     out.mkdir()
     with caplog.at_level("WARNING"):
-        with _ctx.sandbox(profile="network-only", fake_home=True,
-                          output=str(out)):
-            pass
+        # This profile has no seccomp UDP filter: without namespaces,
+        # setup must refuse after reporting the discarded policy.
+        expected = (nullcontext() if _ctx.check_net_available()
+                    else pytest.raises(SandboxSetupError))
+        with expected:
+            with _ctx.sandbox(profile="network-only", fake_home=True,
+                              output=str(out)):
+                pass
     assert not (out / ".home").exists()
     assert "fake_home" in caplog.text
 
@@ -121,10 +128,13 @@ def test_network_only_profile_warns_about_discards(
     discarded kwarg, now including the ones the shed gained."""
     _spy_preexec_kwargs(monkeypatch)
     with caplog.at_level("WARNING"):
-        with _ctx.sandbox(profile="network-only",
-                          writable_paths=[str(tmp_path)],
-                          restrict_reads=True):
-            pass
+        expected = (nullcontext() if _ctx.check_net_available()
+                    else pytest.raises(SandboxSetupError))
+        with expected:
+            with _ctx.sandbox(profile="network-only",
+                              writable_paths=[str(tmp_path)],
+                              restrict_reads=True):
+                pass
     text = caplog.text
     assert "writable_paths" in text
     assert "restrict_reads" in text

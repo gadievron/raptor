@@ -830,6 +830,16 @@ class TestSeccompBlocklist(unittest.TestCase):
 
     def test_af_unix_allowed_in_network_only(self):
         """network-only disables seccomp — callers that need UDS drop to this."""
+        if sys.platform == "linux":
+            from core.sandbox import check_net_available
+            from core.sandbox.errors import SandboxSetupError
+            if not check_net_available():
+                # No seccomp under this actual profile: namespace loss
+                # must refuse rather than silently permit UDP/DNS.
+                with self.assertRaises(SandboxSetupError):
+                    self._run_probe("network-only",
+                        "import socket; s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); print('ok')")
+                return
         r = self._run_probe("network-only",
             "import socket; s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); print('ok')")
         self.assertEqual(r.returncode, 0)
