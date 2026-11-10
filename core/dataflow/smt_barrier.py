@@ -1630,18 +1630,24 @@ def _python_definition_headers(node: ast.AST) -> list[ast.AST]:
 
 def _python_possible_call(node: ast.AST) -> bool:
     """Negative effect boundary; this never certifies purity or a callee."""
-    return isinstance(node, (ast.Call, ast.ClassDef)) or bool(
+    return isinstance(node, (ast.Call, ast.ClassDef, ast.Attribute, ast.Subscript)) or bool(
         getattr(node, "decorator_list", [])
-    ) or any(isinstance(part, ast.Call)
+    ) or any(isinstance(part, (ast.Call, ast.Attribute, ast.Subscript))
              for value in _python_definition_headers(node) for part in ast.walk(value))
+
+
+def _python_lookup_load(node: ast.AST) -> bool:
+    """Descriptor/index dispatch may precede a same-row consumed read."""
+    return isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
 
 
 def _python_name_has_local_slot(scope_root: ast.AST, name: str) -> bool:
     """A function-owned slot, excluding global/nonlocal declarations.
 
     Only the function's body supplies local bindings: its own defaults and
-    decorators execute in the enclosing scope. Missing ownership declines;
-    this does not establish object immutability or closure effect freedom.
+    decorators execute in the enclosing scope. Known nested rebinders also
+    make a slot shared. Missing ownership declines; this is not a complete
+    object-mutation or closure-effect model.
     """
     if not isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return False
@@ -1650,6 +1656,8 @@ def _python_name_has_local_slot(scope_root: ast.AST, name: str) -> bool:
     if any(isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names
            for node in nodes):
         return False
+    if name in _nested_scope_escaping_rebinds(scope_root):
+        return False  # A known nested writer shares this otherwise local slot.
     args = scope_root.args
     parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
     if args.vararg is not None:
@@ -1691,8 +1699,9 @@ def _variable_reassigned_between(
         ``from m import *``, which can rebind ANY name — flagged for
         every variable, the conservative direction)
 
-    Pure-mutation forms (``x[0] = …``, ``x.attr = …``) don't rebind
-    ``x`` itself and are NOT flagged. Deletion must kill the old epoch:
+    Pure-mutation forms (``x[0] = …``, ``x.attr = …``) don't directly
+    rebind ``x``. Their dispatch can still expire an externally owned
+    epoch through the effect checks above. Deletion kills the old epoch:
     a global lookup can expose a different builtin after removal of
     the module binding. Also NOT flagged: comprehension targets and
     ``lambda``/``def`` parameters (they bind
@@ -1709,6 +1718,8 @@ def _variable_reassigned_between(
          and after_line <= (getattr(node, "lineno", None) or -1) <= before_line)
         or (_python_possible_call(node)
             and after_line < (getattr(node, "lineno", None) or -1) < before_line)
+        or (_python_lookup_load(node)
+            and after_line < (getattr(node, "lineno", None) or -1) <= before_line)
         for node in _walk_same_scope(scope_root)
     ):
         return True
@@ -2765,6 +2776,7 @@ def _python_chain_reaches_sink(
         if class_decls is None and (
             _python_suspension(node)
             or (_python_possible_call(node) and validator_line < node.lineno < sink_line)
+            or (_python_lookup_load(node) and validator_line < node.lineno <= sink_line)
         ):
             # A call or suspension can preserve a captured local value,
             # but cannot freeze externally owned name slots. Kill here,
