@@ -3796,6 +3796,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _job_controller = kwargs.pop('_job_controller', None)
         _input_spool_files = kwargs.pop('_input_spool_files')
 
+        # Resolve the documented subprocess alias before selecting a native
+        # backend. Passing both forms with different truth values is ambiguous.
+        if kwargs.get("universal_newlines") is not None:
+            if (kwargs.get("text") is not None
+                    and bool(kwargs["text"]) != bool(kwargs["universal_newlines"])):
+                raise subprocess.SubprocessError(
+                    "Cannot disambiguate when both text and universal_newlines "
+                    "are supplied but different. Pass one or the other.")
+            kwargs["text"] = bool(kwargs["universal_newlines"])
+
         # Reject sandbox kwargs — they'd be silently ignored otherwise and
         # callers would wrongly assume per-call overrides took effect.
         misused = _SANDBOX_KWARGS & kwargs.keys()
