@@ -82,7 +82,18 @@ def non_code_spans(text: str, start: int = 0):
 def _requires_translation_normalisation(text):
     # Translation settings are not part of this opaque-argument model.
     # Include whitespace before a newline, as accepted by GCC extensions.
-    return _LINE_SPLICE.search(text) is not None or _TRIGRAPH.search(text) is not None
+    if _LINE_SPLICE.search(text) is not None or _TRIGRAPH.search(text) is not None:
+        return True
+    # Digraph punctuation can conceal grouping, preprocessing and address
+    # exposure. Literal/comment contents are data, not alternative tokens.
+    # Refuse code spellings until a source translation profile is supplied.
+    digraphs = ("<%", "%>", "<:", ":>", "%:")
+    start = 0
+    for span in non_code_spans(text):
+        if any(token in text[start:span.start] for token in digraphs):
+            return True
+        start = span.end
+    return any(token in text[start:] for token in digraphs)
 
 
 def mask_non_code(text: str) -> tuple[str, bool]:
