@@ -162,6 +162,8 @@ def test_02_fresh():
         directory.mkdir()
         env[key] = str(directory)
     env["PYTHONPATH"] = str(job) + os.pathsep + str(ROOT)
+    # Archive owners use the plugins named below, not installed entry points.
+    env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
     args = [sys.executable, "-m", "pytest", "--noconftest", "-c", str(ROOT / "pytest.ini"),
             "-p", "core.testing.llm_tripwire", "-p", "fixture_owner", "-p", "caller",
             str(job / "test_archive.py"), "-q", "-m", "", "--tb=short"]
