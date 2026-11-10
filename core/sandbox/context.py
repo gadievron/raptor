@@ -5590,7 +5590,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             _in_payload = kwargs.pop("input")
             if isinstance(_in_payload, str):
                 _enc = kwargs.get("encoding") or "utf-8"
-                if kwargs.get("encoding") is None and kwargs.get("errors") is not None:
+                if (kwargs.get("encoding") is None
+                        and (kwargs.get("text") or kwargs.get("errors") is not None)):
                     import locale
                     _enc = locale.getpreferredencoding(False)
                 _in_payload = _in_payload.encode(_enc, kwargs.get("errors") or "strict")
