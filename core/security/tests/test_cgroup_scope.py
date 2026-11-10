@@ -90,16 +90,19 @@ def test_closing_admission_waits_for_an_inflight_attach(scope, monkeypatch):
         scope.close_admission()
         closed.set()
     closing = threading.Thread(target=close)
-    attaching.start()
-    try:
-        assert entered.wait(2)
-        closing.start()
-        assert not closed.wait(.05)
-    finally:
-        proceed.set()
-        attaching.join(2)
-        if closing.ident is not None:
-            closing.join(2)
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads([attaching, closing], release=proceed.set, timeout=2):
+        attaching.start()
+        try:
+            assert entered.wait(2)
+            closing.start()
+            assert not closed.wait(.05)
+        finally:
+            proceed.set()
+            attaching.join(2)
+            if closing.ident is not None:
+                closing.join(2)
     assert closed.is_set()
     assert (scope.path / 'cgroup.procs').read_text() == '123'
     with pytest.raises(ValueError):
