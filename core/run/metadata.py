@@ -779,23 +779,39 @@ def _metadata_lock(meta_path: Path):
             except BaseException:
                 pass  # Preserve the unexpected setup error after consuming the descriptor.
         raise
+    operation_failed = False
     try:
-        if not acquire_flock_bounded(
-                fd, lock_path, subject="metadata", stamp=True,
-                expiry_note=("proceeding UNSERIALISED; concurrent "
-                             "status updates may be lost")):
-            # A holder that outlives the generous bounded wait is
-            # wedged or hostile — same loud unserialised disposition
-            # as an unopenable lock, never an unbounded silent stall
-            # (the helper emits the warning at expiry).
-            yield
-            return
+        try:
+            if not acquire_flock_bounded(
+                    fd, lock_path, subject="metadata", stamp=True,
+                    expiry_note=("proceeding UNSERIALISED; concurrent "
+                                 "status updates may be lost")):
+                # A holder that outlives the generous bounded wait is
+                # wedged or hostile — same loud unserialised disposition
+                # as an unopenable lock, never an unbounded silent stall
+                # (the helper emits the warning at expiry).
+                yield
+                return
+        except BaseException:
+            operation_failed = True
+            raise
         try:
             yield
+        except BaseException:
+            operation_failed = True
+            raise
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except BaseException:
+                if not operation_failed:
+                    raise
     finally:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException:
+            if not operation_failed:
+                raise
 
 
 def _contention_project_dir(output_dir: Path) -> Path | None:
