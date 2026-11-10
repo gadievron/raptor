@@ -2644,10 +2644,6 @@
     "count": 17,
     "kind": "literal"
   },
-  "packages/cve_diff/cve_diff/report/markdown.py::_humanize_class": {
-    "count": 15,
-    "kind": "literal"
-  },
   "packages/cve_env/cve_env/agent/audit.py::AuditStatus": {
     "count": 10,
     "kind": "literal",
