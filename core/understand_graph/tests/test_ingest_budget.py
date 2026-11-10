@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import closing
 
 from core.json import save_json
 
@@ -28,12 +29,11 @@ def test_ingest_records_artifact_digests(tmp_path):
     _write_min_run(run_dir, target)
     graph = ingest.ingest_run(run_dir, str(target))
     assert graph is not None
-    conn = sqlite3.connect(graph)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
-        "SELECT kind, sha256 FROM artifacts WHERE kind='context_map'"
-    ).fetchall()
-    conn.close()
+    with closing(sqlite3.connect(graph)) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT kind, sha256 FROM artifacts WHERE kind='context_map'"
+        ).fetchall()
     assert rows and all(len(r["sha256"]) == 64 for r in rows)
 
 
@@ -51,11 +51,10 @@ def test_oversized_artifact_degrades_to_skip(tmp_path, monkeypatch):
                         (run_dir / "context-map.json").stat().st_size + 1)
     graph = ingest.ingest_run(run_dir, str(target))
     assert graph is not None
-    conn = sqlite3.connect(graph)
-    conn.row_factory = sqlite3.Row
-    kinds = {r["kind"] for r in conn.execute("SELECT kind FROM artifacts")}
-    nodes = {r["kind"] for r in conn.execute("SELECT kind FROM nodes")}
-    conn.close()
+    with closing(sqlite3.connect(graph)) as conn:
+        conn.row_factory = sqlite3.Row
+        kinds = {r["kind"] for r in conn.execute("SELECT kind FROM artifacts")}
+        nodes = {r["kind"] for r in conn.execute("SELECT kind FROM nodes")}
     assert "variants" not in kinds
     assert "variant" not in nodes      # oversized file never parsed
     assert "entry_point" in nodes      # context map still ingested
