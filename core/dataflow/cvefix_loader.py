@@ -22,9 +22,12 @@ import ast
 import logging
 import sqlite3
 from collections import Counter
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from core.source.streams import preserving_stream_error
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -93,10 +96,8 @@ def load_pairs(
         ORDER BY f.cve_id
     """
     con = sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)
-    try:
+    with preserving_stream_error(closing(con)):
         rows = con.execute(sql, (*cwes, *languages)).fetchall()
-    finally:
-        con.close()
 
     pairs: list[CveFixPair] = []
     for cve_id, cwe, repo_url, lang, fix_hash, parents in rows:
