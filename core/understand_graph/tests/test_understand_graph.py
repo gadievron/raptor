@@ -1,6 +1,7 @@
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from core.json import save_json
@@ -105,7 +106,7 @@ def test_context_map_backfills_name_from_graph_row(tmp_path):
     _write_fixture_run(run_dir, target)
 
     graph_path = ingest_run(run_dir, str(target))
-    with sqlite3.connect(graph_path) as conn:
+    with closing(sqlite3.connect(graph_path)) as conn, conn:
         row = conn.execute(
             "SELECT id, props_json FROM nodes WHERE kind='entry_point' LIMIT 1"
         ).fetchone()
