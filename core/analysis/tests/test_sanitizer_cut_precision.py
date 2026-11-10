@@ -122,14 +122,16 @@ class TestPrecisionGate:
         "xss_from_import_decorator_still_rescues", "xss_imported_catalog_root_control",
         "xss_repo_root_without_shadow_control", "xss_globals_read_still_rescues",
         "xss_comprehension_target_not_shadow", "xss_class_attr_not_shadow",
+        "cmdi_straight_line", "cmdi_symmetric_branches",
     })
 
-    def test_untyped_html_fixture_cuts_remain_visible_candidates(self, report):
+    def test_untyped_escape_fixture_cuts_remain_visible_candidates(self, report):
         measurements = {measurement.name: measurement for measurement in report.measurements}
         fixtures = {fixture.name: fixture for fixture in build_corpus()}
         for name in self._MISSING_PRIMITIVE_CONTRACT:
             assert fixtures[name].language == "python"
-            assert "html.escape" in fixtures[name].source
+            assert any(call in fixtures[name].source
+                       for call in ("html.escape", "shlex.quote"))
             assert measurements[name].verdict == VERDICT_CANDIDATE_ONLY, name
 
     @requires_ts("java")
