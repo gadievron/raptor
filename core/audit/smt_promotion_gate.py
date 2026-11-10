@@ -86,6 +86,25 @@ class CallerGateDecision:
 
 
 def _appears_bare(operand: str, text: str) -> bool:
+    """Require bare roles in raw and normalised receipt text.
+
+    Normalisation is an additional refusal check, never new binding
+    authority. Reuse the source view's comment and ambiguity handling.
+    """
+    if not _bare_occurrence_in_text(operand, text):
+        return False
+    logical = text.replace("\\\r\n", "").replace("\\\n", "")
+    if logical == text and "/*" not in text and "//" not in text:
+        return True
+    from .source_view import sanitized_view_with_status
+
+    view = sanitized_view_with_status(logical, language="cpp", keep_strings=True)
+    if view.ambiguous:
+        return False
+    return _bare_occurrence_in_text(operand, view.text)
+
+
+def _bare_occurrence_in_text(operand: str, text: str) -> bool:
     """True when *operand* occurs outside a member or qualified name.
 
     An operand seen only as ``x->operand`` / ``x.operand`` names a

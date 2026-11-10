@@ -896,3 +896,53 @@ def test_member_only_receipt_is_held_without_borrowing_callback_argument(tmp_pat
     assert decision.channel_outcome == "unbindable"
     assert decision.site_count == 0
     assert "binds no caller-checkable precondition" in decision.reason
+
+
+@pytest.mark.parametrize("access", [
+    "c->/*field*/cb", "c.//field\ncb", "callbacks::/*field*/cb",
+    "c->\\\ncb", "c-\\\n>cb", "callbacks:\\\n:cb", "c->\\\r\ncb",
+    "c->/* cb */cb", "c->// cb\\\n still comment\ncb",
+], ids=["block-comment", "line-comment", "qualified-comment", "lf-splice",
+        "split-arrow", "split-scope", "crlf-splice", "comment-decoy", "spliced-line-comment"])
+def test_preprocessing_trivia_does_not_make_members_into_parameters(access):
+    assert receipt_preconditions("check-null-deref", access + " is NULL", ["cb"], _FIELD_CALLEE) == []
+
+
+@pytest.mark.parametrize("access", ["c->/*field*/cb", "c->\\\ncb"], ids=["comment", "splice"])
+def test_bare_contract_remains_available_next_to_preprocessed_members(access):
+    contracts = receipt_preconditions(
+        "check-null-deref", '`cb` is NULL; separately ' + access,
+        ["cb"], _FIELD_CALLEE,
+    )
+    assert len(contracts) == 1
+    assert contracts[0].param == "cb"
+
+
+def test_normalisation_does_not_create_new_bare_operand_authority():
+    # The candidate appears raw only as a field. Joining another split
+    # token into a bare name must not expand the raw adapter's authority.
+    mechanism = "c->cb is NULL; c\\\nb"
+    assert receipt_preconditions("check-null-deref", mechanism, ["cb"], _FIELD_CALLEE) == []
+
+
+def test_unterminated_comment_cannot_supply_a_pointer_contract():
+    assert receipt_preconditions("check-null-deref", "c->/* cb is NULL", ["cb"], _FIELD_CALLEE) == []
+
+
+def test_quoted_comment_markers_preserve_an_independent_bare_contract():
+    contracts = receipt_preconditions(
+        "check-null-deref", '`cb` is NULL; literal "/* explanation */"',
+        ["cb"], _FIELD_CALLEE,
+    )
+    assert len(contracts) == 1
+    assert contracts[0].param == "cb"
+
+
+def test_ambiguous_comment_refuses_even_when_a_bare_operand_survives():
+    from core.audit.source_view import sanitized_view_with_status
+
+    mechanism = '`cb` is NULL; /* unclosed'
+    view = sanitized_view_with_status(mechanism, language="cpp", keep_strings=True)
+    assert "`cb` is NULL" in view.text
+    assert view.ambiguous
+    assert receipt_preconditions("check-null-deref", mechanism, ["cb"], _FIELD_CALLEE) == []
