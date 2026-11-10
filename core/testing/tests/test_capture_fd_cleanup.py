@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.testing.pipes import pipes_for_setup
+
 
 def _owned(fd, identity):
     try:
@@ -65,11 +67,11 @@ def test_capture_dup_failure_rolls_back_only_current_call(
     with _descriptors() as (record, entries):
 
         def create():
-            pairs = [os.pipe(), os.pipe()]
-            for pair in pairs:
-                for fd in pair:
-                    record(fd)
-            return (*pairs[0], *pairs[1])
+            with pipes_for_setup(2) as pairs:
+                for pair in pairs:
+                    for fd in pair:
+                        record(fd)
+                return (*pairs[0], *pairs[1])
 
         calls = []
         failing_call = position + (2 if prior_call else 0)
@@ -118,11 +120,11 @@ def test_capture_fixture_closes_retained_fds_on_every_exit(finish, monkeypatch):
     with _descriptors() as (record, entries):
 
         def create():
-            pairs = [os.pipe(), os.pipe()]
-            for pair in pairs:
-                for fd in pair:
-                    record(fd)
-            return (*pairs[0], *pairs[1])
+            with pipes_for_setup(2) as pairs:
+                for pair in pairs:
+                    for fd in pair:
+                        record(fd)
+                return (*pairs[0], *pairs[1])
 
         def dup(fd):
             return record(os.dup(fd))
