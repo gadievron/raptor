@@ -12,6 +12,8 @@ import logging
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source.streams import preserving_stream_error
 from typing import Any, TYPE_CHECKING
 
 from core.binary.addrmap import image_base as _addrmap_image_base
@@ -324,8 +326,11 @@ def _zip_members(path: Path) -> set[str]:
     if total > _MAX_ZIP_MEMBERS or cd_size > _MAX_ZIP_CDIR_BYTES:
         return set()
     try:
-        with zipfile.ZipFile(path) as zf:
-            return set(zf.namelist()[:_MAX_ZIP_MEMBERS])
+        with preserving_stream_error(zipfile.ZipFile(path)) as zf:
+            try:
+                return set(zf.namelist()[:_MAX_ZIP_MEMBERS])
+            except (OSError, zipfile.BadZipFile, RuntimeError):
+                return set()
     except (OSError, zipfile.BadZipFile, RuntimeError):
         return set()
 
