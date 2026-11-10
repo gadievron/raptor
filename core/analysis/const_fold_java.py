@@ -414,14 +414,7 @@ class JavaConstIndex:
         """Track exact-creation-typed locals: usable as a method-call
         receiver class only when EVERY definition creates the same
         class. Any other definition shape poisons the name."""
-        if value.type == "object_creation_expression":
-            ty = value.child_by_field_name("type")
-            cls = (ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
-                   if ty is not None else None)
-            if cls and _type_receiver_is_shadowed(ty, cls):
-                cls = None
-        else:
-            cls = None
+        cls = _exact_creation_class(value)
         if name in self._creation_types:
             if self._creation_types[name] != cls:
                 self._creation_types[name] = None
@@ -521,6 +514,18 @@ def _tf_string_members_clear(ext, members) -> bool:
         return False
     chk = ext.union_member_check
     return chk is not None and bool(chk(strs))
+
+
+def _exact_creation_class(node: Node) -> str | None:
+    """Named construction identity; an anonymous body creates a subtype."""
+    if node.type != "object_creation_expression" or any(
+            child.type == "class_body" for child in node.named_children):
+        return None
+    ty = node.child_by_field_name("type")
+    if ty is None:
+        return None
+    cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]
+    return None if _type_receiver_is_shadowed(ty, cls) else cls
 
 
 def _type_receiver_is_shadowed(node, chain: str) -> bool:
@@ -836,11 +841,7 @@ def _fold_xfile_call(node: Node, ext) -> Any:
     method = name_node.text.decode("utf-8", "replace")  # type: ignore[union-attr]
     cls: str | None = None
     if obj.type == "object_creation_expression":
-        ty = obj.child_by_field_name("type")
-        if ty is not None:
-            cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]  # type: ignore[union-attr]
-            if _type_receiver_is_shadowed(ty, cls):
-                return _REFUSE
+        cls = _exact_creation_class(obj)
     elif obj.type == "identifier":
         recv = obj.text.decode("utf-8", "replace")  # type: ignore[union-attr]
         typed = ext.receiver_type(recv, obj) if ext.receiver_type else None
