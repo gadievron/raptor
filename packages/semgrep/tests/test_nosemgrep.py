@@ -1,11 +1,17 @@
 """Tests for nosemgrep inline-suppression extraction and SARIF annotation."""
 
+import json
+import os
+import shutil
 import sys
+
+import pytest
 from pathlib import Path
 
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+from core.audit.tests._live_transport import run_pinned_subprocess
 from packages.semgrep.nosemgrep import annotate_sarif, extract_nosemgrep
 
 
@@ -481,3 +487,84 @@ class TestNosemgrepFindingSurvivesAnnotation:
         props = results[0].get("properties", {})
         assert props["nosemgrep"]["suppressed"] is True
         assert "python.eval" in props["nosemgrep"]["rule_ids"]
+
+
+@pytest.mark.parametrize("selected,rule_id,applies", [
+    ("alpha", "pack.alpha", True),
+    ("group.alpha", "pack.group.alpha", True),
+    ("alpha", "pack.notalpha", False),
+    ("pha", "pack.alpha", False),
+    ("alpha", "pack.beta", False),
+    ("alpha", "", False),
+    ("alpha, beta", "pack.beta", True),
+])
+def test_annotation_respects_selected_rule(tmp_path, selected, rule_id, applies):
+    (tmp_path / "a.py").write_text(f"subject(value) # nosemgrep: {selected}\n")
+    result = _make_result("a.py", 1)
+    result["ruleId"] = rule_id
+    sarif = _make_sarif_data([result])
+    assert annotate_sarif(sarif, str(tmp_path)) == int(applies)
+    assert bool(result.get("properties", {}).get("nosemgrep")) is applies
+    assert sarif["runs"][0]["results"] == [result]
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(shutil.which("semgrep") is None, reason="semgrep not installed")
+def test_native_rule_scoped_suppression_annotation(tmp_path):
+    config = tmp_path / "rules.json"
+    config.write_text(json.dumps({"rules": [{
+        "id": name, "languages": ["python"], "message": "owned suppression scope",
+        "severity": "WARNING", "pattern": "subject(...)",
+    } for name in ("group.alpha", "group.beta", "notalpha")]}))
+    source = tmp_path / "case.py"
+    source.write_text(
+        "subject(value) # nosemgrep: alpha\n"
+        "subject(value) # nosemgrep: group.alpha\n"
+        "subject(value) # nosemgrep: pha\n"
+        "subject(value) # nosemgrep: notalpha\n"
+        "subject(value) # nosemgrep: group\n"
+        "subject(value) # nosemgrep: group.alpha,group.beta\n"
+        "subject(value) # nosemgrep: group.alpha, group.beta\n"
+        "subject(value) # nosemgrep\n"
+        "# nosemgrep: group.alpha\n"
+        "subject(value) # nosemgrep: group.beta\n"
+    )
+    command = ["semgrep", "scan", "--config", str(config), "--metrics", "off",
+               "--disable-version-check", "--jobs", "1"]
+    env = {**os.environ, "SEMGREP_SETTINGS_FILE": str(tmp_path / "settings.yml"),
+           "SEMGREP_LOG_FILE": str(tmp_path / "semgrep.log")}
+    native = run_pinned_subprocess(
+        [*command, "--json", str(source)], timeout=180,
+        context="native rule suppression", skip_signals=(9,), env=env,
+    )
+    assert native.returncode == 0, native.stderr
+    native_data = json.loads(native.stdout)
+    assert not native_data.get("errors"), native_data.get("errors")
+    assert {Path(path).name for path in native_data["paths"]["scanned"]} == {source.name}
+    raw = run_pinned_subprocess(
+        [*command, "--disable-nosem", "--sarif", str(source)], timeout=180,
+        context="suppression annotation comparison", skip_signals=(9,), env=env,
+    )
+    assert raw.returncode == 0, raw.stderr
+    sarif = json.loads(raw.stdout)
+    rows = [result for run in sarif["runs"] for result in run.get("results", [])]
+    all_findings = {(result["ruleId"], result["locations"][0]["physicalLocation"]["region"]["startLine"])
+                    for result in rows}
+    active = {(result["check_id"], result["start"]["line"])
+              for result in native_data["results"]}
+    assert len(rows) == len(all_findings) == 27
+    expected_suppressed = all_findings - active
+    assert expected_suppressed and active
+    assert annotate_sarif(sarif, str(tmp_path)) == len(expected_suppressed)
+    annotated = {(result["ruleId"], result["locations"][0]["physicalLocation"]["region"]["startLine"])
+                 for result in rows if result.get("properties", {}).get("nosemgrep", {}).get("suppressed") is True}
+    assert annotated == expected_suppressed
+    assert [result for run in sarif["runs"] for result in run["results"]] == rows
+    from core.sarif.parser import generate_scan_metrics
+
+    report = tmp_path / "annotated.sarif"
+    report.write_text(json.dumps(sarif))
+    metrics = generate_scan_metrics([str(report)])
+    assert metrics["total_findings"] == 27
+    assert metrics["nosemgrep_suppressed_count"] == len(expected_suppressed)
+    assert metrics["total_findings"] - metrics["nosemgrep_suppressed_count"] == len(active)
