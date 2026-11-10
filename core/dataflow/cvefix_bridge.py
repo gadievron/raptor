@@ -628,7 +628,7 @@ def synthesize_from_results(
     tier1b_completer = model_completer(tier1b_model) if tier1b_model else None
     if search_path is None:
         search_path = _default_search_path()
-    con = sqlite3.connect(f"file:{results_db}?mode=ro", uri=True)
+    con = sqlite3.connect(Path(results_db).resolve().as_uri() + "?mode=ro", uri=True)
     try:
         sql = ("SELECT fix_hash, cve_id, cwe, repo_language, repo_url, parent_hash, status "
                "FROM walk_results WHERE status IN ('ok','ok_built') AND after_count>0")
