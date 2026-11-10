@@ -1001,8 +1001,11 @@ def _adjudicate_invariant(
                 REASON_CENSUS_DEGRADED,
                 multi["reason"] + " — not refuting on an empty census",
             )
+        # A complete transition census still proves only the inductive
+        # step. Neither the census nor a study statement establishes the
+        # initial state, so this cannot clear the original source claim.
         return StateEvidence(
-            outcome="refuted",
+            outcome="inconclusive",
             reason=multi["reason"],
             invariant=inv_receipt,
         )

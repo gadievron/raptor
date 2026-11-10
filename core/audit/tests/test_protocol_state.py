@@ -486,12 +486,13 @@ class TestInvariantHarness:
         assert res.peer_write is not None
         assert "decode_ack_largest" in res.peer_write["source_chain"]
 
-    def test_preserved_twin_refuted_per_site(self):
+    def test_preserved_twin_retains_conditional_per_site_evidence(self):
         res = run_protocol_state_check(
             ".", "src/ackm.c", "ackm_on_ack", HYP_INVARIANT,
             domain_model=RECEIPTED_DM, source_texts=TWIN_TEXTS,
         )
-        assert res.outcome == "refuted"
+        assert res.outcome == "inconclusive"
+        assert "base case not checked" in res.reason
         sites = res.invariant["per_site"]
         assert sites
         assert all(

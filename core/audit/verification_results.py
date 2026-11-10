@@ -25,7 +25,10 @@ def _non_refuting_probe(check: ProbeOutcome) -> bool:
     # Older invariant records use their dispatch type rather than "smt".
     # The rule namespace also keeps diagnostic receipts scoped when a
     # caller records an alias for the originating channel.
-    return check.tool == "smt_invariant" or (
+    return check.rule_id in {
+        "protocol_state:invariant-violated",
+        "protocol_state:invariant-violated-unreceipted",
+    } or check.tool == "smt_invariant" or (
         (check.tool == "smt" or isinstance(check.rule_id, str) and check.rule_id.startswith("smt:"))
         and is_non_refuting_smt_rule(check.rule_id)
     )
