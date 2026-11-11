@@ -18,6 +18,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from core.json import load_json
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,7 @@ def _tally_strategy_log(
     *stats* (missing / unreadable shards contribute nothing)."""
     if log_path.exists():
         try:
-            with open(log_path, encoding="utf-8") as f:  # raw-open: RAPTOR-written strategy log in the run dir
+            with preserving_stream_error(open(log_path, encoding="utf-8")) as f:  # raw-open: RAPTOR-written strategy log in the run dir
                 for line in f:
                     line = line.strip()
                     if not line:
