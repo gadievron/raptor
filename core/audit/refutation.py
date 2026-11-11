@@ -30,6 +30,7 @@ outcomes never change a verdict.
 from __future__ import annotations
 
 import logging
+from core.source.streams import preserving_stream_error
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -1648,7 +1649,7 @@ def _record_witness_discharge(
                 fpath, func, trail,
             )
             return False
-        with fh:
+        with preserving_stream_error(fh):
             fh.seek(offset)
             appended = fh.read()
         for raw in appended.splitlines():
