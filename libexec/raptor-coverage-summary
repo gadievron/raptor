@@ -355,17 +355,18 @@ def _journal_marks(run_dir, marked, verdict_by_key):
     """Journal marks as review assertions so they are durable and
     hash-aware.
 
-    The run-local coverage-llm.json record suppresses gaps only for
-    audits of the SAME run dir; a mark journaled into the project index
-    survives run deletion, suppresses cross-run via the hash-verified
-    fold, and resurfaces automatically when the function's source
-    drifts. Best-effort: no project context (standalone run dir, no
-    checklist) keeps the record-only behaviour.
+    The run-local journal retains operator provenance for gap computation;
+    the coverage-llm.json projection alone cannot establish it. A project
+    index additionally retains marks across runs. Standalone runs use their
+    own checklist and journal without creating a project index. Without
+    either checklist, keep the record-only behaviour.
 
     Returns the number of entries journaled.
     """
     project_dir = run_dir.parent
-    if not (project_dir / "checklist.json").exists():
+    project_backed = (project_dir / "checklist.json").exists()
+    checklist_dir = project_dir if project_backed else run_dir
+    if not (checklist_dir / "checklist.json").exists():
         return 0
     try:
         from core.audit.record import _compute_hash  # collector's exact algorithm
@@ -378,7 +379,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
         )
         from core.inventory import read_checklist
 
-        checklist = read_checklist(project_dir)
+        checklist = read_checklist(checklist_dir)
         target = checklist.get("target_path") or ""
         ranges = {}
         for f in checklist.get("files", []):
@@ -392,7 +393,10 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                         it.get("line_start") or 0, it.get("line_end"),
                     )
         context_note = _mark_context_note()
+        journaled = 0
         for file_path, func_name in marked:
+            if not project_backed and (file_path, func_name) not in ranges:
+                continue
             lo, hi = ranges.get((file_path, func_name), (0, None))
             source_hash = ""
             if target and lo:
@@ -412,7 +416,8 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                 body=context_note,
                 model=_mark_model(), producer="mark",
             ))
-        return merge_into_index(project_dir, run_dir)
+            journaled += 1
+        return merge_into_index(project_dir, run_dir) if project_backed else journaled
     except Exception as exc:  # noqa: BLE001 — journaling is additive
         print(f"WARNING: mark journaling skipped: {_sft(str(exc), max_len=300)}", file=sys.stderr)
         return 0
@@ -650,7 +655,8 @@ def _cmd_mark(mark_targets: list, run_dir: Path | None,
     # journaled default-clean row would suppress gaps cross-run, the
     # exact exclusion this grade exists to prevent.
     journaled = 0 if map_grade else _journal_marks(run_dir, marked, statuses or {})
-    durable = " (journaled to project index)" if journaled else ""
+    journal_home = "project index" if (run_dir.parent / "checklist.json").exists() else "run journal"
+    durable = f" (journaled to {journal_home})" if journaled else ""
     skipped = f" ({len(unmatched)} unmatched)" if unmatched else ""
     verb = "examined (map-grade)" if map_grade else "reviewed"
     print(f"Marked {added} item{'s' if added != 1 else ''} "
@@ -730,25 +736,31 @@ def _cmd_unmark(unmark_targets, run_dir, map_grade: bool = False):
 
 def _neutralise_journaled_marks(run_dir, keys):
     project_dir = run_dir.parent
-    if not (project_dir / "checklist.json").exists():
+    project_backed = (project_dir / "checklist.json").exists()
+    if not project_backed and not (run_dir / "checklist.json").exists():
         return
     try:
         from core.coverage.journal import (
             INDEX_FILENAME,
             ReviewJournalEntry,
             append_entry,
+            load_entries,
             merge_into_index,
             now_iso,
             resolved_run_id,
         )
         from core.json import load_json
-        index = load_json(project_dir / INDEX_FILENAME,
-                          max_bytes=_MAX_ARTIFACT_BYTES) or {}
+        if project_backed:
+            index = load_json(project_dir / INDEX_FILENAME,
+                              max_bytes=_MAX_ARTIFACT_BYTES) or {}
+            rows = (row for row in (index.get("entries") or {}).values())
+        else:
+            rows = (vars(entry) for entry in load_entries(run_dir))
         # Per-SITE: the index keys marks by (…, line_start), so a
         # withdrawal must land on the SAME span to evict the mark row
         # — one neutralising entry per journaled mark site.
         journaled: dict = {}
-        for row in (index.get("entries") or {}).values():
+        for row in rows:
             if isinstance(row, dict) and row.get("producer") == "mark":
                 journaled.setdefault(
                     (row.get("file"), row.get("function")), set(),
@@ -770,7 +782,7 @@ def _neutralise_journaled_marks(run_dir, keys):
                     model=_mark_model(), producer="mark",
                 ))
                 touched = True
-        if touched:
+        if touched and project_backed:
             merge_into_index(project_dir, run_dir)
     except Exception as exc:  # noqa: BLE001 — neutralisation is additive
         print(f"WARNING: unmark journaling skipped: {_sft(str(exc), max_len=300)}", file=sys.stderr)
