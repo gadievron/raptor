@@ -1818,7 +1818,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     messages=messages,
                     **_openai_sampling_kwargs(
                         self.config.model_name,
-                        self.config.max_tokens,
+                        kwargs.get("max_tokens", self.config.max_tokens),
                         temperature,
                     ),
                 )
