@@ -7,6 +7,7 @@ from typing import cast
 # Each adapted producer names its actual existing prompt input and section.
 _CONTEXT_INPUTS = {
     "late_joern": ("mechanical_evidence", "evidence"),
+    "live_sinks": ("live_sinks", "live_sinks"),
     "disagreement": ("disagreement_override", "disagreement_override"),
     "deepen_quality": ("deepen_quality_selection", "deepen_quality"),
     "callee_contract": ("callee_contract_violation", "callee_contract"),
@@ -33,6 +34,11 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         from .context import _defend_identifier
 
         value = render_disagreement_context(value, defend_identifier=_defend_identifier)
+    if kind == "live_sinks":
+        from .live_sink_continuation import render_live_sink_context
+        from .context import _defend_identifier
+
+        value = render_live_sink_context(value, defend_identifier=_defend_identifier)
     if kind == "deepen_quality":
         from .deepen_continuation import render_deepen_selection
 
