@@ -6,6 +6,8 @@ narrowing stores are not interchangeable with promoted arithmetic overflow,
 and no safe result refutes the original source claim.
 """
 
+from collections import Counter
+
 import operator
 import re
 
@@ -67,10 +69,12 @@ def update_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _body, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _shape(node, data, language)) is not None]
+    occurrences = Counter(shape[1:] for shape in shapes)
     result = []
-    for node in nodes:
-        shape = _shape(node, data, language)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[shape[1:]] != 1:
             continue
         target, name, _op, _prefix = shape
         model = model_for_integer_terms(target, data, [name], (), integer_abi, language=language)
@@ -193,10 +197,12 @@ def compound_update_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _body, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _compound_shape(node, data, language)) is not None]
+    occurrences = Counter(shape[1:] for shape in shapes)
     candidates = []
-    for node in nodes:
-        shape = _compound_shape(node, data, language)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[shape[1:]] != 1:
             continue
         target, lhs, op, rhs = shape
         if not _compound_writable(target, lhs, data, language):

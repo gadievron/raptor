@@ -1,5 +1,7 @@
 """Diagnostic unsigned stored-value wrap at standalone builtin ++/-- sites."""
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, mk_val, z3, z3_available
 from core.smt_solver.csem import cast, uadd_overflows, usub_underflows
 from core.smt_solver.session import check_solver, new_solver, query_budget
@@ -42,10 +44,12 @@ def unsigned_update_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _standalone_shape(node, data, language)) is not None]
+    occurrences = Counter(shape[1:] for shape in shapes)
     candidates = []
-    for node in nodes:
-        shape = _standalone_shape(node, data, language)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[shape[1:]] != 1:
             continue
         target, name, op, _prefix = shape
         model = model_for_integer_terms(target, data, [name], (), integer_abi, language=language)

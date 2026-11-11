@@ -97,3 +97,10 @@ def test_empty_budget_and_forged_model_cannot_grant_credit(monkeypatch):
     with query_budget(0):assert check(source)['violation'] is None
     monkeypatch.setattr(subject,'format_vars',lambda *a,**kw:{'Value':0})
     assert check(source)['violation'] is None
+
+
+@pytest.mark.parametrize("body,expected", [('Value+=1;Value+=1;', []), ('Value+=1;Value+=1;Other+=1;', [('Other', '+=', '1')]), ('Value+=1;Value+=2;', [('Value', '+=', '1'), ('Value', '+=', '2')]), ('Value+=1;Value-=1;', [('Value', '+=', '1'), ('Value', '-=', '1')])], ids=['duplicate', 'other-operand', 'rhs', 'operator'])
+def test_discovery_preserves_only_unambiguous_update_objectives(body, expected):
+    source = "int Read(int Value,int Other){" + body + "return 0;}"
+    rows = subject.compound_update_candidates(source, language="c", integer_abi="lp64")
+    assert [row[1:4] for row in rows] == expected

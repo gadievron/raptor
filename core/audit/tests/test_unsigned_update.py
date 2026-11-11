@@ -100,3 +100,10 @@ def test_zero_budget_and_forged_nonboundary_value_do_not_get_wrap_credit(monkeyp
         assert check(source)['violation'] is None
     monkeypatch.setattr(subject,'format_vars',lambda *args,**kwargs:{'Value':0})
     assert check(source)['violation'] is None
+
+
+@pytest.mark.parametrize("body,expected", [('Value++;Value++;', []), ('Value++;Value++;Other++;', [('Other', '++', False)]), ('Value++;++Value;', [('Value', '++', False), ('Value', '++', True)]), ('Value++;Value--;', [('Value', '++', False), ('Value', '--', False)])], ids=['duplicate', 'other-operand', 'fixity', 'operator'])
+def test_discovery_preserves_only_unambiguous_update_objectives(body, expected):
+    source = "int Read(unsigned Value,unsigned Other){" + body + "return 0;}"
+    rows = subject.unsigned_update_candidates(source, language="c", integer_abi="lp64")
+    assert [row[1:4] for row in rows] == expected
