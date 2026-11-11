@@ -325,6 +325,8 @@ def _sweep(tmp_path: Path, rule: str, snippet: str, *, fname: str,
     )
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @needs_semgrep
 class TestCrlfRuleLive:
     """The real semgrep binary adjudicates every named mode through
@@ -364,6 +366,8 @@ class TestCrlfRuleLive:
         )
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @needs_semgrep
 class TestQuoteRuleLive:
     @pytest.mark.parametrize(
@@ -504,6 +508,8 @@ class TestConfirmOnlyMarkerScope:
                 "does not parse — fix the header marker line"
             )
 
+    # Real Semgrep execution belongs to the slow tool lane.
+    @pytest.mark.slow
     @needs_semgrep
     def test_tempfile_marker_rule_still_refutes(self, tmp_path: Path):
         # End-to-end: an inline rule carrying the marker keeps the
@@ -536,6 +542,8 @@ class TestConfirmOnlyMarkerScope:
         )
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @needs_semgrep
 class TestExpandedViewHonesty:
     """Fidelity-3 preprocessing rewrites the libc guard idioms the

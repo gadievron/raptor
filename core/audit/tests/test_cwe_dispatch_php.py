@@ -284,6 +284,8 @@ needs_semgrep = pytest.mark.skipif(
 )
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @needs_semgrep
 class TestLiveAdjudication:
     """Native confirms and class-appropriate silence through the dispatched sweep."""

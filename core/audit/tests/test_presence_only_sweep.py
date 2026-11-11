@@ -71,6 +71,8 @@ def test_presence_role_reaches_runner_and_cannot_reuse_a_confirming_memo(tmp_pat
     assert seen == [False, True]  # role participates in the memo key
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 def test_live_go_assignment_query_is_only_a_lead(tmp_path):
     from packages.semgrep.runner import is_available
 
@@ -106,6 +108,8 @@ def test_live_go_assignment_query_is_only_a_lead(tmp_path):
         Path(rule).unlink(missing_ok=True)
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @pytest.mark.parametrize("guarded", [False, True])
 def test_live_specific_error_discard_rule_retains_its_authority(tmp_path, guarded):
     from packages.semgrep.runner import is_available

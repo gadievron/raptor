@@ -200,6 +200,8 @@ needs_semgrep = pytest.mark.skipif(
 )
 
 
+# Real Semgrep execution belongs to the slow tool lane.
+@pytest.mark.slow
 @needs_semgrep
 class TestLiveAdjudication:
     """The real semgrep binary adjudicates both directions through

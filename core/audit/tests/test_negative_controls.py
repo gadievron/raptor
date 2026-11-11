@@ -481,6 +481,8 @@ class TestCppControlRelanguage:
         assert matched is False
         assert seen["config"] == str(rule)
 
+    # Real Semgrep execution belongs to the slow tool lane.
+    @pytest.mark.slow
     @pytest.mark.skipif(
         shutil.which("semgrep") is None, reason="semgrep not installed",
     )
