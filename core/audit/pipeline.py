@@ -360,6 +360,18 @@ def _make_llm_client(opts: AuditPipelineOpts):
         client.config.max_calls_per_scan = opts.max_calls
     if opts.max_tokens is not None:
         client.config.max_tokens_per_scan = opts.max_tokens
+    from core.llm.client import LLMClient
+    if isinstance(client, LLMClient) and opts.out_dir:
+        from core.run.metadata import RUN_METADATA_FILE
+        metadata = Path(opts.out_dir) / RUN_METADATA_FILE
+        resumed = opts.same_run_reuse or opts.resume_segment > 1
+        # Corpus/library callers without lifecycle metadata retain their
+        # existing process-local accounting; durable recovery is unavailable.
+        if metadata.exists() or metadata.is_symlink() or resumed:
+            from .attempt_reservations import AttemptReservations
+            store = AttemptReservations(opts.out_dir, resume=resumed,
+                prior_known_usd=opts.prior_booked_spend_usd)
+            client.bind_attempt_reservations(store, prior_known_usd=opts.prior_booked_spend_usd)
     _ensure_dispatcher_route(client, models, run_dir=opts.out_dir)
     return client, models, primary_model
 

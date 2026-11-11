@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 from collections import OrderedDict
+from copy import deepcopy
 from typing import Any
 from uuid import uuid4
 
@@ -2737,6 +2738,9 @@ class LLMClient:
         may all pass this check and then collectively overshoot the cap as their
         actual costs land. Use ``_acquire_budget`` for the atomic
         check-and-reserve required by parallel dispatch."""
+        if getattr(self, "_attempt_recovery_gap", None):
+            raise LLMBudgetExceededError("attempt accounting recovery incomplete: "
+                                        + str(self._attempt_recovery_gap))
         if not self.config.enable_cost_tracking:
             return True
 
@@ -2756,6 +2760,8 @@ class LLMClient:
         it never logs, so loop drivers can poll it cheaply before doing
         expensive per-item prep work. Always False when cost tracking
         is disabled."""
+        if getattr(self, "_attempt_recovery_gap", None):
+            return True
         if not self.config.enable_cost_tracking:
             return False
         with self._stats_lock:
@@ -2842,6 +2848,8 @@ class LLMClient:
         (``_release_budget(reservation)``) so the held amount doesn't
         strand on the running total.
         """
+        if getattr(self, "_attempt_recovery_gap", None):
+            return False
         if not self.config.enable_cost_tracking:
             return True
 
@@ -2869,8 +2877,64 @@ class LLMClient:
     def pending_usage_reservations(self) -> list[dict[str, Any]]:
         """Unknown completed attempts, separate from reported billed spend."""
         with self._stats_lock:
-            return [dict(row) for row in
+            return [deepcopy(row) for row in
                     getattr(self, "_pending_usage_reservations", {}).values()]
+
+    def bind_attempt_reservations(self, store, *, prior_known_usd: float = 0.0) -> None:
+        """Recover a pipeline-owned store without converting holds to spend."""
+        with self._stats_lock:
+            if getattr(self, "_attempt_reservation_store", None) is not None:
+                raise ValueError("attempt reservation store already bound")
+            self._attempt_reservation_store = store
+            self._attempt_recovery_gap = store.gap
+            if self._attempt_recovery_gap:
+                return
+            pending, reported = store.pending(), store.reported()
+            self._pending_usage_reservations = {r["attempt_id"]: r for r in pending}
+            # The resume CLI already deducted its known-spend floor. Only
+            # recover a newer authenticated amount missing from that floor.
+            self.total_cost += max(0.0, store.known_spend_usd - prior_known_usd)
+            self._governed_calls += len(pending) + len(reported)
+            self._governed_tokens += sum(r["tokens_total"] for r in reported)
+            self._settled_pending_usage = {
+                r["attempt_id"]: ((r["cost_usd"], r["tokens_in"], r["tokens_out"]), r)
+                for r in reported
+            }
+
+    def _persist_attempt_admission(self, reservation: float, **identity) -> None:
+        store = getattr(self, "_attempt_reservation_store", None)
+        if store is None:
+            return
+        try:
+            if not store.admit({**identity, "reservation_usd": reservation,
+                                "billing_state": "unknown"}):
+                raise ValueError("attempt admission already exists")
+        except Exception as error:
+            self._release_budget(reservation)
+            self._attempt_recovery_gap = "attempt_admission_not_committed"
+            raise LLMBudgetExceededError("attempt accounting admission unavailable") from error
+
+    def _persist_attempt_usage(self, attempt_id: str, *, cost_usd: float | None,
+                               tokens_in: int = 0, tokens_out: int = 0,
+                               tokens_total: int | None = None) -> None:
+        store = getattr(self, "_attempt_reservation_store", None)
+        if store is None:
+            return
+        try:
+            store.finish(attempt_id, cost_usd=cost_usd,
+                         tokens_in=tokens_in, tokens_out=tokens_out, tokens_total=tokens_total)
+            if cost_usd is None:
+                row = next(r for r in store.pending() if r["attempt_id"] == attempt_id)
+                with self._stats_lock:
+                    pending = getattr(self, "_pending_usage_reservations", None)
+                    if pending is None:
+                        pending = self._pending_usage_reservations = {}
+                    pending[attempt_id] = row
+        except Exception:
+            # A completed producer keeps its outcome and booked usage, but
+            # another dispatch cannot spend through incomplete durable state.
+            self._attempt_recovery_gap = "attempt_usage_not_committed"
+            logger.warning("attempt accounting usage could not be committed", exc_info=True)
 
     def _fail_budget_attempt(
         self, reservation: float, error: Exception, *, call_id: str,
@@ -2889,7 +2953,8 @@ class LLMClient:
         except Exception:  # the optional signal must not replace the failure
             started = False
         billed = _reported_failure_cost(error) is not None
-        unknown = started and _is_transport_failure(error) and not billed
+        unknown = not billed and (getattr(self, "_attempt_reservation_store", None) is not None
+                                 or started and _is_transport_failure(error))
         with self._stats_lock:
             if self.config.enable_cost_tracking:
                 self.total_cost -= reservation
@@ -2904,6 +2969,13 @@ class LLMClient:
                     "model": model, "billing_state": "unknown",
                     "reservation_usd": reservation if self.config.enable_cost_tracking else 0.0,
                 }
+        try:
+            _, paid_in, paid_out = _billed_failure_usage(error)
+            self._persist_attempt_usage(attempt_id, cost_usd=_reported_failure_cost(error),
+                                        tokens_in=paid_in, tokens_out=paid_out)
+        except BaseException:
+            # Secondary recorder cancellation cannot replace a producer error.
+            self._attempt_recovery_gap = "attempt_failure_not_committed"
         return started
 
     def reconcile_pending_usage(self, attempt_id: str, *, cost_usd: float,
@@ -2927,6 +2999,15 @@ class LLMClient:
             else:
                 pending = getattr(self, "_pending_usage_reservations", {})
                 row = dict(pending[attempt_id])
+                store = getattr(self, "_attempt_reservation_store", None)
+                if store is not None:
+                    try:
+                        store.finish(attempt_id, cost_usd=cost,
+                                     tokens_in=tokens_in, tokens_out=tokens_out)
+                    except Exception:
+                        if store.gap:
+                            self._attempt_recovery_gap = store.gap
+                        raise
                 self.total_cost += cost
                 self._record_governed_tokens(tokens_in + tokens_out)
                 settled[attempt_id] = (receipt, row)
@@ -2971,6 +3052,9 @@ class LLMClient:
         first line of defence against runaway retries on a flaky model;
         the call cap catches the rest.
         """
+        if getattr(self, "_attempt_recovery_gap", None):
+            raise LLMBudgetExceededError("attempt accounting recovery incomplete: "
+                                        + str(self._attempt_recovery_gap))
         cfg = self.config
         max_seconds = getattr(cfg, "max_seconds_per_scan", None)
         max_calls = getattr(cfg, "max_calls_per_scan", None)
@@ -3286,6 +3370,10 @@ class LLMClient:
                         # monotonic() — wall clock can jump under NTP/DST,
                         # producing negative durations or fake-fast calls.
                         t_start = time.monotonic()
+                        self._persist_attempt_admission(reservation,
+                            call_id=accounting_call_id, attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
+                            call_class=call_class, provider=model.provider, model=model.model_name)
                         try:
                             response = provider.generate(prompt, system_prompt, **kwargs)
                         except Exception as error:
@@ -3321,6 +3409,10 @@ class LLMClient:
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_actual
                         self._note_call_cost(call_class, cost_actual)
+                        self._persist_attempt_usage(accounting_attempt_id, cost_usd=cost_actual,
+                            tokens_in=getattr(response, "input_tokens", 0),
+                            tokens_out=getattr(response, "output_tokens", 0),
+                            tokens_total=response.tokens_used)
 
                         # Cache response
                         self._save_to_cache(cache_key, response)
@@ -3932,6 +4024,10 @@ class LLMClient:
 
                         # monotonic() — wall clock can jump under NTP/DST.
                         t_start = time.monotonic()
+                        self._persist_attempt_admission(reservation,
+                            call_id=accounting_call_id, attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
+                            call_class=call_class, provider=model.provider, model=model.model_name)
                         try:
                             provider_kwargs = dict(kwargs)
                             if isinstance(provider, LLMProvider):
@@ -4017,6 +4113,9 @@ class LLMClient:
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
                         self._note_call_cost(call_class, cost_delta)
+                        self._persist_attempt_usage(accounting_attempt_id,
+                            cost_usd=cost_delta if _pc_cost > 0 or _pc_tokens > 0 else None,
+                            tokens_in=in_delta, tokens_out=out_delta, tokens_total=tokens_delta)
 
                         logger.debug("Structured generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, tokens_delta, cost_delta, duration)
 
@@ -4391,6 +4490,14 @@ class LLMClient:
                 ),
                 "providers": provider_stats,
                 "task_type_costs": dict(self.task_type_costs),
+                "attempt_accounting_recovery": {
+                    "status": ("incomplete" if getattr(self, "_attempt_recovery_gap", None)
+                               else "ready" if getattr(self, "_attempt_reservation_store", None) is not None
+                               else "unavailable"),
+                    "reason": (getattr(self, "_attempt_recovery_gap", None)
+                               or (None if getattr(self, "_attempt_reservation_store", None) is not None
+                                   else "lifecycle_not_bound")),
+                },
             }
             if self.cache_hits:
                 stats["cache_hits"] = self.cache_hits

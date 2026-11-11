@@ -366,6 +366,9 @@ _SCAN_SCRIPTS = ("libexec/raptor-audit",)
 
 #: (file, enclosing function) → why the row read carries authority.
 _AUTHORITY_READERS = {
+    ("core/audit/attempt_reservations.py", "_load"):
+        "restores admission holds and authenticated usage before budget gates;"
+        " incomplete or unverified recovery refuses further model dispatch",
     ("core/audit/orchestrator.py", "get_reviewed_set"):
         "resume review-suppression (drops functions from the workqueue)",
     ("core/audit/orchestrator.py", "_fail_open_adjudicated_sites"):
