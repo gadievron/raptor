@@ -294,6 +294,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
 
     from .claims import ClaimRevision
+    from .journal import ReviewJournalEntry
     from .run_memo import BoundedMemo
     from core.audit.environment import EnvironmentGuard
     from .knowledge_requests import KnowledgeRequest
@@ -1701,6 +1702,7 @@ class OrchestratorResult:
     prefilter_kills: list = field(default_factory=list)
     dormant: int = 0
     error_counts: dict[str, int] = field(default_factory=dict)
+    publication_failures: list[dict[str, Any]] = field(default_factory=list)
     error_retries: int = 0
     error_retry_recovered: int = 0
     # Phases that ABORTED on persistent auth-layer refusal (see
@@ -4637,6 +4639,28 @@ def review_one_function(
                     exc_info=True,
                 )
 
+    # Mandatory journal acknowledgement precedes shared publication and
+    # chain/constraint propagation. Optional telemetry is not this ACK.
+    acknowledgement = None
+    try:
+        if collector is not None:
+            acknowledgement = collector.submit(outcome, gap)
+        else:
+            acknowledgement = _commit_outcome(config, outcome, gap)
+    except Exception:
+        logger.warning("initial publication failed for %s:%s", gap["file"], gap["name"], exc_info=True)
+    if not _initial_publication_acknowledged(acknowledgement, outcome, gap):
+        rejected = _retain_initial_publication_failure(result, config, outcome, gap)
+        if _prior_outcome is not None:
+            with result._lock:
+                _tally_outcome_unlocked(result, _prior_outcome, reused=_prior_outcome.reused, book_cost=False)
+                result.total_cost_usd += outcome.cost_usd
+            if reviewed_outcomes is not None:
+                reviewed_outcomes[gap_key] = _prior_outcome
+        else:
+            _tally_outcome(result, rejected)
+        return rejected
+
     # ── Publish outcome before chain injection ─────────────────────────
     # The outcome, taint summaries, and constraints must be visible
     # before chain injection pushes neighbours onto the ready queue —
@@ -4708,20 +4732,6 @@ def review_one_function(
                 gap.get("name"),
                 exc_info=True,
             )
-
-    # ── Commit ────────────────────────────────────────────────────────
-    try:
-        if collector is not None:
-            collector.submit(outcome, gap)
-        else:
-            _commit_outcome(config, outcome, gap)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "commit failed for %s:%s: %s",
-            gap["file"],
-            gap["name"],
-            exc,
-        )
 
     _tally_outcome(result, outcome)
 
@@ -14370,13 +14380,45 @@ def _review_source_roots(config: OrchestratorConfig) -> dict[str, Path]:
     return roots
 
 
+def _initial_publication_acknowledged(acknowledgement, outcome, gap) -> bool:
+    """Only the mandatory journal writer can acknowledge this assessment."""
+    from .collector import journal_acknowledges_outcome
+
+    return journal_acknowledges_outcome(acknowledgement, outcome, gap)
+
+
+
+def _retain_initial_publication_failure(result, config, outcome, gap) -> ReviewOutcome:
+    """Keep an unacknowledged proposal observable without publishing its verdict."""
+    failure = {
+        "file": outcome.file, "function": outcome.function, "line_start": outcome.line,
+        "reason": "initial_journal_acknowledgement_unavailable", "adjudication": "unverified",
+        "unpublished_assessment": {
+            "status": outcome.status, "body": outcome.body,
+            "hypothesis": outcome.hypothesis, "hypotheses": outcome.hypotheses,
+        },
+    }
+    with result._lock:
+        result.publication_failures.append(failure)
+    try:
+        append_audit_log(config.out_dir, {"action": "review_publication_deferred", **failure})
+    except Exception:
+        logger.warning("could not persist initial publication deferral", exc_info=True)
+    return ReviewOutcome(
+        file=outcome.file, function=outcome.function, line=outcome.line,
+        status="error", error_class="publication", body="Review journal acknowledgement unavailable",
+        model=outcome.model, cost_usd=outcome.cost_usd, duration_s=outcome.duration_s,
+        review_result={"publication_failure": failure},
+    )
+
+
 def _commit_outcome(
     config: OrchestratorConfig,
     outcome: ReviewOutcome,
     gap: dict[str, Any],
     *,
     batch: bool = False,
-) -> None:
+) -> "ReviewJournalEntry | None":
     """Write the review result to review-journal.jsonl.
 
     Journal is the sole LLM review store. ``record_review`` (which
@@ -14408,7 +14450,7 @@ def _commit_outcome(
     # ``run_id``, breaking cross-run queries and the project index's
     # provenance.
     run_id = _resolved_run_id(config.out_dir)
-    append_journal_for_outcome(
+    acknowledgement = append_journal_for_outcome(
         out_dir=config.out_dir,
         target_path=config.target_path,
         source_roots=_review_source_roots(config),
@@ -14417,8 +14459,13 @@ def _commit_outcome(
         gap=gap,
         checked_by=checked_by,
     )
+    if acknowledgement is None:
+        return None
 
-    outcome.verification_tier = outcome.compute_tier(target_path=config.target_path)
+    try:
+        outcome.verification_tier = outcome.compute_tier(target_path=config.target_path)
+    except Exception:
+        logger.warning("optional acknowledged review grading failed", exc_info=True)
 
     if gap.get("from_composition"):
         if outcome.review_result is None:
@@ -14508,7 +14555,10 @@ def _commit_outcome(
         except Exception:
             logger.debug("git corroboration failed", exc_info=True)
 
-    append_audit_log(config.out_dir, entry)
+    try:
+        append_audit_log(config.out_dir, entry)
+    except Exception:
+        logger.warning("optional review telemetry append failed", exc_info=True)
 
     # ── SAGE: store hypothesis verdict ───────────────────────────────
     src_hash = gap.get("_sage_source_hash", "")
@@ -14535,6 +14585,8 @@ def _commit_outcome(
                 outcome.function,
                 exc_info=True,
             )
+    return acknowledgement
+
 
 
 def _match_domain_model_invariants(

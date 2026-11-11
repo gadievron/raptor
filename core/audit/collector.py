@@ -939,6 +939,15 @@ def append_journal_for_outcome(
         return None
 
 
+def journal_acknowledges_outcome(acknowledgement, outcome, gap) -> bool:
+    """Require the exact occurrence and verdict acknowledged by the writer."""
+    return (isinstance(acknowledgement, ReviewJournalEntry)
+            and (acknowledgement.file, acknowledgement.function, acknowledgement.line_start,
+                 acknowledgement.line_end, acknowledgement.verdict) == (
+                outcome.file, outcome.function, gap.get("line_start", 0),
+                gap.get("line_end"), outcome.status))
+
+
 @dataclass
 class Collector:
     """Buffers review outcomes and batches disk writes."""
@@ -957,7 +966,7 @@ class Collector:
         gap: dict[str, Any],
         *,
         batch: bool = False,
-    ) -> None:
+    ) -> ReviewJournalEntry | None:
         # Journal is the sole LLM review store (see amendment §2).
         # ``record_review``'s coverage-audit.json write and
         # ``mark_checked``'s checklist stamp were removed at Phase-3
@@ -965,8 +974,23 @@ class Collector:
         # the coverage store imports it at run completion. Model
         # attribution travels via ``entry.model`` — there is no
         # separate checked_by record.
-        self._append_journal_entry(outcome, gap)
+        acknowledgement = self._append_journal_entry(outcome, gap)
+        if not journal_acknowledges_outcome(acknowledgement, outcome, gap):
+            return None
+        try:
+            self._record_acknowledged_outcome(outcome, gap, batch=batch)
+        except Exception:
+            # Optional grading and telemetry cannot revoke a journal write
+            # that has already succeeded, or make its caller retry it.
+            logger.warning(
+                "post-journal collection failed for %s:%s",
+                outcome.file, outcome.function, exc_info=True,
+            )
+        return acknowledgement
 
+    def _record_acknowledged_outcome(
+        self, outcome: Any, gap: dict[str, Any], *, batch: bool,
+    ) -> None:
         # Mirror _commit_outcome after the journal settles the status.
         # Clean grading needs the target root to revalidate scoped negative
         # evidence against current source; dispatch metadata is insufficient.
@@ -1041,9 +1065,9 @@ class Collector:
         self,
         outcome: Any,
         gap: dict[str, Any],
-    ) -> None:
+    ) -> ReviewJournalEntry | None:
         """Append the review outcome to the journal (batch-cached hash)."""
-        append_journal_for_outcome(
+        return append_journal_for_outcome(
             out_dir=self.out_dir,
             target_path=self.target_path,
             run_id=self.run_id,
