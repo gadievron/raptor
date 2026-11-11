@@ -24,6 +24,7 @@
 
 // ---------------------------------------------------------------
 // Group 1: race-prone temp-name generation APIs
+// Position-only context matches: the scripts emit rows without rewriting C.
 // ---------------------------------------------------------------
 
 @name_gen@
@@ -31,13 +32,13 @@ position p;
 @@
 
 (
-* mktemp@p(...)
+mktemp@p(...)
 |
-* tmpnam@p(...)
+tmpnam@p(...)
 |
-* tmpnam_r@p(...)
+tmpnam_r@p(...)
 |
-* tempnam@p(...)
+tempnam@p(...)
 )
 
 @script:python@
@@ -74,9 +75,9 @@ position p1, p2;
 )
   ... when != T = T2
 (
-* open(T, ...)@p2
+open(T, ...)@p2
 |
-* fopen(T, ...)@p2
+fopen(T, ...)@p2
 )
 
 @script:python@
