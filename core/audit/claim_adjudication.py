@@ -205,7 +205,7 @@ def reduce_claims(contexts, events, *, contracts, changes=(), unadmitted_claims=
             "quarantined_event_ids": quarantine}
 
 
-def publication_shadow(claim_index, findings):
+def publication_shadow(claim_index, findings, *, prepared_inputs=None):
     """Observe the real publisher without upgrading legacy observations.
 
     Existing traces lack a registered whole-claim request/result contract and
@@ -213,7 +213,8 @@ def publication_shadow(claim_index, findings):
     of translating a strong receipt or model boolean into mechanical support.
     """
     indexed = claim_index.get("claims", [])
-    reduced = reduce_claims([], [], contracts={}, unadmitted_claims=[
+    contexts, events, contracts, availability = prepared_inputs or ([], [], {}, [])
+    reduced = reduce_claims(contexts, events, contracts=contracts, unadmitted_claims=[
         (claim["claim_reference"]["claim_id"], claim["claim_reference"]["revision_id"])
         for claim in indexed])
     states = {(row["claim_id"], row["revision_id"]): row for row in reduced["claims"]}
@@ -230,6 +231,7 @@ def publication_shadow(claim_index, findings):
                                               for f in legacy]})
     return {"schema_version": 1, "policy_version": POLICY_VERSION, "mode": "shadow",
             "authoritative": False, "history_complete": False, "claims": claims,
+            "preparation_availability": availability,
             "unmatched_legacy_findings": len(findings) if not claims else None,
             "limitations": ["Legacy public statuses and confidence are unchanged.",
                             "Legacy receipt labels and model proposals have no adjudication authority.",

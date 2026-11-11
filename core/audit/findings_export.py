@@ -620,11 +620,12 @@ def export_findings(
 def write_graded_findings(
     export: dict[str, Any],
     out_dir: Path,
+    *, prepared_claim_pipeline=None,
 ) -> Path:
     """Write findings-graded.json to the run directory."""
     from .check_trace import write_check_results
 
-    write_check_results(export, out_dir)
+    write_check_results(export, out_dir, prepared_claim_pipeline=prepared_claim_pipeline)
     path = out_dir / "findings-graded.json"
     save_json(path, export)
     return path
