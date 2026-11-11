@@ -1090,6 +1090,11 @@ async def _run_async_body(
                 inflight.difference_update(done)
                 for t in done:
                     if not t.cancelled() and t.exception() is not None:
+                        task_error = t.exception()
+                        if isinstance(task_error, BaseException) and not isinstance(
+                            task_error, Exception,
+                        ):
+                            raise task_error
                         logger.warning(
                             "unhandled task exception: %s",
                             t.exception(), exc_info=t.exception(),
@@ -1199,6 +1204,11 @@ async def _run_async_body(
         inflight -= done
         for t in done:
             if not t.cancelled() and t.exception() is not None:
+                task_error = t.exception()
+                if isinstance(task_error, BaseException) and not isinstance(
+                    task_error, Exception,
+                ):
+                    raise task_error
                 # Backstop only: _run_task/_run_batch record per-task
                 # failures internally, so anything landing here is a
                 # bug in the executor scaffolding itself.
@@ -1281,6 +1291,11 @@ async def _run_async_body(
             repass_inflight -= done
             for t in done:
                 if not t.cancelled() and t.exception() is not None:
+                    task_error = t.exception()
+                    if isinstance(task_error, BaseException) and not isinstance(
+                        task_error, Exception,
+                    ):
+                        raise task_error
                     logger.warning(
                         "unhandled repass exception: %s",
                         t.exception(), exc_info=t.exception(),
