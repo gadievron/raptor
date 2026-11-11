@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_strtol_parsing_contract_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_unchecked_strtol_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_conversion_candidates_require_parsing_contract"}
+
     def test_socket_inheritance_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_socket_no_cloexec_rule.py")
         assert _callers_of(calls, "run") == set()

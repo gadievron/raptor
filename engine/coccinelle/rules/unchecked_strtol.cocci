@@ -8,7 +8,12 @@
 //
 // CWE-20: Improper Input Validation
 // CWE-190: Integer Overflow (strtol overflow not detected)
-// @role: verification
+// Trusted literals, intentional prefix parsing and external validation can
+// justify these call shapes. The rule does not establish those contracts.
+// Existing exclusions inspect only selected checks; quiet results cannot
+// refute a broader input-validation hypothesis.
+// @role: detection
+// raptor: confirm-only
 
 // Match strtol family in both assignment (V = strtol(...)) and
 // declaration-initialiser (T V = strtol(...)) contexts.
@@ -39,14 +44,14 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "strtol/strtoul result used without checking endptr or errno — partial conversion or overflow undetected (CWE-20)"
+  "message":   "strtol-family result without recognised endptr/errno checks — review input provenance, accepted prefixes and required range validation (CWE-20)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
 // The canonical errno-checked overflow idiom (`errno = 0;
 // v = strtol(s, NULL, 10); if (errno == ERANGE) ...`) deliberately
-// passes a NULL endptr ("whole-string or bust") and catches overflow
-// through errno — the same suppression the &endptr arm above grants
+// passes a NULL endptr and catches overflow through errno, but does not
+// establish whole-string validity — the same suppression the &endptr arm grants
 // via its `when != errno`. Bind those positions and exclude them.
 @strtol_null_errno_checked exists@
 expression S, BASE;
@@ -80,6 +85,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "strtol/strtoul with NULL endptr — cannot detect partial conversion (CWE-20)"
+  "message":   "strtol-family call with NULL endptr — review whether trusted input or intentional prefix parsing justifies discarding the stopping position (CWE-20)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
