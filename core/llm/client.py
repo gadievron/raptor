@@ -23,6 +23,7 @@ import threading
 import time
 from collections import OrderedDict
 from typing import Any
+from uuid import uuid4
 
 from core.hash import sha256_string
 from core.logging import get_logger
@@ -1193,6 +1194,7 @@ def _clear_attempt_spend_signal() -> None:
 
 def _consumed_attempt_veto(
     error: Exception, provider: str, model_name: str,
+    *, response_started: bool | None = None,
 ) -> MidResponseDeathError | None:
     """Spend-aware retry gate: the replacement terminal error when the
     failed attempt must NOT be re-sent because its generation is
@@ -1217,14 +1219,15 @@ def _consumed_attempt_veto(
     the operator sees why a call failed (or what a retry costs)
     instead of silently re-buying.
     """
-    try:
-        from core.llm.dispatcher.client import (
-            take_upstream_response_started,
-        )
-        started = take_upstream_response_started()
-    except Exception:  # noqa: BLE001 — the gate must never break retry
-        return None
-    if not started or not _is_transport_failure(error):
+    if response_started is None:
+        try:
+            from core.llm.dispatcher.client import (
+                take_upstream_response_started,
+            )
+            response_started = take_upstream_response_started()
+        except Exception:  # noqa: BLE001 — the gate must never break retry
+            return None
+    if not response_started or not _is_transport_failure(error):
         return None
     from core.security.log_sanitisation import escape_nonprintable as _esc
     from core.security.redaction import redact_secrets as _redact
@@ -2609,7 +2612,11 @@ class LLMClient:
                     "further paid dispatch", total, provider,
                 )
             return float("inf")
-        return max(total, provider)
+        pending = sum(
+            row["reservation_usd"]
+            for row in getattr(self, "_pending_usage_reservations", {}).values()
+        )
+        return max(total, provider) + pending
 
     def hold_budget_reserve(self, amount: float) -> float:
         """Hold back ``amount`` of the per-scan cap from ordinary
@@ -2841,6 +2848,56 @@ class LLMClient:
         with self._stats_lock:
             self.total_cost -= reservation
 
+    @property
+    def pending_usage_reservations(self) -> list[dict[str, Any]]:
+        """Unknown completed attempts, separate from reported billed spend."""
+        with self._stats_lock:
+            return [dict(row) for row in
+                    getattr(self, "_pending_usage_reservations", {}).values()]
+
+    def _fail_budget_attempt(
+        self, reservation: float, error: Exception, *, call_id: str,
+        attempt_id: str, call_class: str, provider: str, model: str,
+    ) -> bool:
+        """Release unused budget or retain response-started unknown usage.
+
+        Transfer under the admission lock so another dispatcher never sees
+        the reservation disappear between failure and pending accounting.
+        Provider-wide counters cannot identify this attempt's usage.
+        """
+        try:
+            from core.llm.dispatcher.client import take_upstream_response_started
+            started = take_upstream_response_started()
+        except Exception:  # the optional signal must not replace the failure
+            started = False
+        billed = False
+        for exc in _exception_chain(error):
+            raw = getattr(exc, "billed_cost_usd", None)
+            if raw is None or isinstance(raw, bool):
+                continue
+            try:
+                amount = float(raw)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if math.isfinite(amount) and amount >= 0:
+                billed = True
+                break
+        unknown = started and _is_transport_failure(error) and not billed
+        with self._stats_lock:
+            if self.config.enable_cost_tracking:
+                self.total_cost -= reservation
+            if unknown:
+                pending = getattr(self, "_pending_usage_reservations", None)
+                if pending is None:
+                    pending = self._pending_usage_reservations = {}
+                pending[attempt_id] = {
+                    "call_id": call_id, "attempt_id": attempt_id,
+                    "call_class": call_class, "provider": provider,
+                    "model": model, "billing_state": "unknown",
+                    "reservation_usd": reservation if self.config.enable_cost_tracking else 0.0,
+                }
+        return started
+
     def _check_governor(self) -> None:
         """Enforce the non-dollar resource caps (wall-clock deadline,
         total call count, aggregate tokens) just before a provider call.
@@ -2985,6 +3042,7 @@ class LLMClient:
         call_class = str(
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
+        accounting_call_id = uuid4().hex
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -3125,6 +3183,8 @@ class LLMClient:
                 # UnboundLocalError at the give-up log below.
                 for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
+                    accounting_attempt_id = uuid4().hex
+                    attempt_response_started = None
                     # Attempt-local spend signal: a stale stamp from an
                     # earlier dispatcher-routed success must not veto
                     # THIS attempt's failure (hookless transports have
@@ -3172,8 +3232,12 @@ class LLMClient:
                         t_start = time.monotonic()
                         try:
                             response = provider.generate(prompt, system_prompt, **kwargs)
-                        except Exception:
-                            self._release_budget(reservation)
+                        except Exception as error:
+                            attempt_response_started = self._fail_budget_attempt(
+                                reservation, error, call_id=accounting_call_id,
+                                attempt_id=accounting_attempt_id, call_class=call_class,
+                                provider=model.provider, model=model.model_name,
+                            )
                             raise
                         duration = time.monotonic() - t_start
                         self._record_governed_tokens(response.tokens_used)
@@ -3368,6 +3432,7 @@ class LLMClient:
                         # weigh RAPTOR_LLM_RETRY_CONSUMED=1.
                         _veto = _consumed_attempt_veto(
                             e, model.provider, model.model_name,
+                            response_started=attempt_response_started,
                         )
                         _disposition = (
                             "consumed" if _veto is not None
@@ -3579,6 +3644,7 @@ class LLMClient:
         call_class = str(
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
+        accounting_call_id = uuid4().hex
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -3736,6 +3802,8 @@ class LLMClient:
                 # this closes.
                 for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
+                    accounting_attempt_id = uuid4().hex
+                    attempt_response_started = None
                     # Attempt-local spend signal: a stale stamp from an
                     # earlier dispatcher-routed success must not veto
                     # THIS attempt's failure (hookless transports have
@@ -3788,27 +3856,12 @@ class LLMClient:
                             result_tuple = provider.generate_structured(
                                 prompt, schema, system_prompt, **kwargs,
                             )
-                        except Exception:
-                            # Release the reservation and book NOTHING.
-                            # The old path recorded the provider-counter
-                            # delta (total_cost - cost_before) as this
-                            # call's failed spend — but the counters are
-                            # SHARED across parallel workers, so a call
-                            # failing after a 6-minute timeout booked
-                            # every concurrent worker's spend from that
-                            # window into the enforced ledger a second
-                            # time (observed live: 11 timeouts each
-                            # booked most of the run's real total
-                            # spend again, tripping the cap at 25/40
-                            # reviews). Money genuinely spent by a
-                            # failed attempt (e.g. the JSON fallback
-                            # completed an API call before the parse
-                            # failed) is already on the provider's own
-                            # ledger — budget enforcement reads
-                            # ``max(total_cost, provider_spend_usd)``
-                            # (see ``_effective_spent_locked``) so it
-                            # still counts, exactly once.
-                            self._release_budget(reservation)
+                        except Exception as error:
+                            attempt_response_started = self._fail_budget_attempt(
+                                reservation, error, call_id=accounting_call_id,
+                                attempt_id=accounting_attempt_id, call_class=call_class,
+                                provider=model.provider, model=model.model_name,
+                            )
                             raise
                         duration = time.monotonic() - t_start
 
@@ -4067,6 +4120,7 @@ class LLMClient:
                         # as ``generate`` above.
                         _veto = _consumed_attempt_veto(
                             e, model.provider, model.model_name,
+                            response_started=attempt_response_started,
                         )
                         _disposition = (
                             "consumed" if _veto is not None
