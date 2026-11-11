@@ -2785,10 +2785,17 @@ def _run_smt_verb_inner_json(request: dict) -> dict:
     The JSON protocol (see :mod:`core.audit.subproc_json`) carries
     only plain data across the process boundary — the parent rebuilds
     the SweepResult from the dict, so child stdout is never unpickled.
+    A supplied parent invocation token is echoed only after the checker returns;
+    this transport identity does not certify the model or its conclusion.
     """
     from dataclasses import asdict, fields
     from core.audit.condition_smt import DomainVocabulary
     request = dict(request)
+    invocation_id = request.pop("_smt_request_id", None)
+    if invocation_id is not None:
+        if (not isinstance(invocation_id, str) or len(invocation_id) != 32
+                or any(char not in "0123456789abcdef" for char in invocation_id)):
+            raise ValueError("invalid SMT invocation identity")
     raw = request.pop("vocabulary", None)
     if raw is not None:
         if not isinstance(raw, dict) or set(raw) != {f.name for f in fields(DomainVocabulary)}:
@@ -2809,7 +2816,10 @@ def _run_smt_verb_inner_json(request: dict) -> dict:
         request["vocab"] = DomainVocabulary(**converted)
     # A request path never becomes filesystem authority inside the worker.
     request["target_path"] = None
-    return asdict(_run_smt_verb_inner(**request))
+    result = asdict(_run_smt_verb_inner(**request))
+    if invocation_id is not None:
+        result["_smt_executed_request_id"] = invocation_id
+    return result
 
 
 def _smt_verb_in_subprocess(
@@ -2831,6 +2841,7 @@ def _smt_verb_in_subprocess(
     """
     from .subproc_json import run_json_child
     from dataclasses import fields
+    from uuid import uuid4
     from .integer_abi import integer_abi_record
     abi_record = integer_abi_record(integer_abi)
     if verb in {"check-overflow", "check-array-bounds", "check-integer-division", "check-shift-count", "check-integer-comparison", "check-integer-conversion", "check-unary-negation", "check-integer-update"} and abi_record is None:
@@ -2853,9 +2864,22 @@ def _smt_verb_in_subprocess(
     vocab = _verb_vocab(target_path)
     vocabulary = {f.name: sorted(getattr(vocab, f.name)) for f in fields(vocab)}
 
+    request_id = uuid4().hex
+
+    def execution_identity(value=None):
+        executed = None
+        status = "missing" if value is None else "invalid"
+        if (isinstance(value, str) and len(value) == 32
+                and all(char in "0123456789abcdef" for char in value)):
+            executed = value
+            status = "matched" if value == request_id else "mismatched"
+        return {"request_id": request_id, "executed_request_id": executed,
+                "identity_status": status, "scope": "worker-invocation-only"}
+
     out = run_json_child(
         "core.audit.sweep:_run_smt_verb_inner_json",
         {
+            "_smt_request_id": request_id,
             "file_path": file_path,
             "function_name": function_name,
             "verb": verb,
@@ -2870,6 +2894,8 @@ def _smt_verb_in_subprocess(
         label=f"smt:{verb}",
     )
     if isinstance(out, dict):
+        out = dict(out)
+        executed_request_id = out.pop("_smt_executed_request_id", None)
         # Tolerate a child from a slightly different tree revision:
         # unexpected fields degrade to the crash sentinel below.
         with contextlib.suppress(TypeError):
@@ -2890,6 +2916,10 @@ def _smt_verb_in_subprocess(
                 result.rule_id = f"smt:{verb}"
                 if result.outcome != "confirmed":
                     result.matches = []
+            # Parent-owned identity metadata never certifies model semantics.
+            # Replace any worker-supplied lookalike rather than trusting it.
+            details = result.details if isinstance(result.details, dict) else {}
+            result.details = {**details, "smt_execution": execution_identity(executed_request_id)}
             return result
     logger.warning(
         "SMT subprocess failed for %s:%s verb=%s",
@@ -2899,6 +2929,7 @@ def _smt_verb_in_subprocess(
         tool="smt", file_path=file_path,
         function_name=function_name, outcome="inconclusive",
         errors=["Z3 subprocess crashed or timed out"],
+        details={"smt_execution": execution_identity()},
         rule_id=f"smt:{verb}",
     )
 

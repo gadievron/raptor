@@ -91,18 +91,37 @@ def test_bound_current_worker_results_survive_parent_admission(monkeypatch, verb
         tool="smt", file_path="record.c", function_name="Read", rule_id=f"smt:{verb}",
         outcome=outcome, details={"source_scope": source_binding(selected, "Read", verb=verb, integer_abi="ilp32", hypothesis="claim")},
     )
-    monkeypatch.setattr("core.audit.subproc_json.run_json_child", lambda *a, **kw: asdict(result))
-    observed = sweep._smt_verb_in_subprocess(
+    import builtins
+    from types import SimpleNamespace
+    from core.testing.module_views import module_function_view
+
+    sent = []
+
+    def current_worker(entry, request, **kwargs):
+        sent.append(request)
+        return {**asdict(result), "_smt_executed_request_id": request["_smt_request_id"]}
+
+    def importer(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "subproc_json" and level == 1:
+            return SimpleNamespace(run_json_child=current_worker)
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    view = module_function_view(sweep, import_hook=importer)
+    observed = view._smt_verb_in_subprocess(
         file_path="record.c", function_name="Read", verb=verb, source=SOURCE, hypothesis="claim",
         integer_abi="ilp32",
     )
+    assert len(sent) == 1
+    execution = {"request_id": sent[0]["_smt_request_id"],
+                 "executed_request_id": sent[0]["_smt_request_id"],
+                 "identity_status": "matched", "scope": "worker-invocation-only"}
     if verb == "check-overflow" or outcome == "error":
         assert observed.outcome == outcome
-        assert observed.details == result.details
+        assert observed.details == {**result.details, "smt_execution": execution}
     else:
         assert observed.outcome == ("confirmed" if outcome == "confirmed" else "inconclusive")
-        assert observed.details["source_scope"] == result.details["source_scope"]
-        assert observed.details["oracle_scope"] == "inferred-arithmetic-model"
+        assert observed.details == {**result.details, "oracle_scope": "inferred-arithmetic-model",
+                                    "smt_execution": execution}
 
 
 @pytest.mark.parametrize("requested,expected", [("Read", "inconclusive"), ("Neighbor", "refuted")])

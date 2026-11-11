@@ -1,8 +1,7 @@
-"""Binding prerequisites for whole-claim SMT contract validation.
+"""Typed SMT facts require current bindings and registered conclusion coverage.
 
-A None return means only that local binding checks passed. The caller must
-still validate an executed result under the registered conclusion contract.
-This helper neither runs a checker nor grants proof authority.
+Worker invocation identity is provenance, not semantic proof. Binding-only
+prerequisite checks remain distinct from executed-result interpretation.
 """
 
 from __future__ import annotations
@@ -88,7 +87,8 @@ def adapt_smt_claim_fact(
     The caller supplies current admission context and an invocation-owned event
     from the parent-validated SMT execution. This function does not authenticate
     arbitrary deserialised producer dictionaries or build current dependencies.
-    No registered validator means unknown, even for legacy positive receipts.
+    The parent result must bind the same invocation as the event. No registered
+    validator means unknown, even for legacy positive receipts.
     """
     from .sweep import SweepResult
 
@@ -129,6 +129,13 @@ def adapt_smt_claim_fact(
             or result.outcome not in {"confirmed", "refuted"}
             or not isinstance(result.rule_id, str) or not result.rule_id.startswith("smt:")
             or is_diagnostic_smt_rule(result.rule_id)):
+        return fact
+    details = result.details if isinstance(result.details, dict) else {}
+    execution = details.get("smt_execution")
+    if (not isinstance(execution, dict) or execution.get("identity_status") != "matched"
+            or execution.get("scope") != "worker-invocation-only"
+            or execution.get("request_id") != event.request_id
+            or execution.get("executed_request_id") != event.executed_request_id):
         return fact
     if not isinstance(record, (ClaimVerification, ClaimRefutation)):
         return fact
