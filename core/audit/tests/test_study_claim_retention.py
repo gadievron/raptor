@@ -86,6 +86,46 @@ def _retained(case):
     assert result.total_cost_usd == 0.7
 
 
+def _selected_assessment_snapshot(outcome):
+    from copy import deepcopy
+
+    fields = ("file", "function", "line", "status", "body", "hypothesis", "hypotheses",
+              "evidence_tool", "claim_refutations", "tools_dispatched", "tools_inconclusive",
+              "verification_tier")
+    return deepcopy(({name: getattr(outcome, name) for name in fields},
+                     {key: value for key, value in (outcome.review_result or {}).items()
+                      if key != "review_claims"}))
+
+
+def _assert_prior_assessment_history_snapshot(case, selected):
+    from core.audit.review_claims import read_history
+    from core.coverage.journal import load_entries
+
+    result, prior = case["result"], case["prior"]
+    assert len(result.outcomes) == 1
+    canonical = result.outcomes[0]
+    assert canonical is not prior
+    assert _selected_assessment_snapshot(canonical) == selected
+    assert _selected_assessment_snapshot(prior) == selected
+    assert result.clean == 0 and result.reviewed == result.suspicious == 1
+    assert result.total_cost_usd == canonical.cost_usd == 0.7
+    history = read_history(canonical.review_result["review_claims"])
+    assert history is not None and history["role"] == "review-history-only"
+    assert history["complete"] is False and "source_inputs" in history
+    assert "merged-candidate-projection-unmapped" in history["omissions"]
+    assert history.get("assessment_basis") != "model_judgment_withdrawal"
+    assert any(isinstance(intake.get("review"), dict) and intake["review"].get("attempt_id")
+               for intake in history["intakes"])
+    entry, = load_entries(case["config"].out_dir, fresh=True)
+    assert entry.verdict == canonical.status and entry.body == canonical.body
+    assert entry.review_claims == history and entry.cost_usd == canonical.cost_usd
+    assert [item["mechanism"] for item in entry.hypotheses] == [
+        item["mechanism"] for item in orch._extract_all_hypotheses(canonical)]
+    if not prior.evidence_tool:
+        assert entry.evidence_tools == []
+    return canonical, entry
+
+
 def test_model_clean_after_study_cannot_erase_prior_claims(study_case):
     case = study_case
     case["prior"].status = "finding"
@@ -220,11 +260,26 @@ def test_same_status_candidates_survive_journal_and_next_context(study_case):
     assert canonical.review_result["hypotheses"] == canonical.hypotheses
     assert fresh.hypothesis in {h["mechanism"] for h in orch._prior_hypotheses_for(canonical)}
     assert canonical.hypotheses[-1]["confidence"] == "medium"
+    first_attempts = {intake["review"]["attempt_id"]
+                      for intake in entries[-1].review_claims["intakes"] if intake.get("review")}
     _knowledge_reassess(case, _new_suspicion())
-    assert len(load_entries(case["config"].out_dir, fresh=True)) == len(entries)
-    assert len(case["result"].outcomes[0].hypotheses) == 3
+    later = case["result"].outcomes[0]
+    later_entries = load_entries(case["config"].out_dir, fresh=True)
+    assert len(later_entries) == len(entries) + 1
+    assert later.hypotheses == canonical.hypotheses and len(later.hypotheses) == 3
+    assert [row["mechanism"] for row in later.hypotheses].count(fresh.hypothesis) == 1
+    assert (later.status, later.body, later.hypothesis, later.evidence_tool) == (
+        canonical.status, canonical.body, canonical.hypothesis, canonical.evidence_tool)
+    assert not later.claim_refutations
+    assert later_entries[-1].verdict == "suspicious"
+    assert later_entries[-1].hypotheses == later.hypotheses
+    assert later_entries[-1].review_claims == later.review_result["review_claims"]
+    assert later.review_result["review_claims"]["complete"] is False
+    later_attempts = {intake["review"]["attempt_id"]
+                      for intake in later_entries[-1].review_claims["intakes"] if intake.get("review")}
+    assert first_attempts < later_attempts
     assert case["result"].reviewed == case["result"].suspicious == 1
-    assert case["result"].total_cost_usd == pytest.approx(0.9)
+    assert case["result"].total_cost_usd == later.cost_usd == pytest.approx(0.9)
 
 
 def test_same_status_copy_preserves_prior_and_excludes_fresh_proof_fields(study_case):
@@ -277,9 +332,14 @@ def test_same_status_unsafe_candidate_merge_is_refused(study_case, monkeypatch, 
     else:
         path = case["config"].target_path / "owned.c"
         callback = lambda: path.write_text(path.read_text() + "/* changed */\n")
+    selected = _selected_assessment_snapshot(case["prior"])
     _knowledge_reassess(case, fresh, during_review=callback,
                         verify=fault in ("fresh_verified", "wrong_occurrence"))
-    _retained(case)
+    if fault in ("prior_verified", "fresh_verified"):
+        canonical, _entry = _assert_prior_assessment_history_snapshot(case, selected)
+        assert fresh.hypothesis not in {item["mechanism"] for item in canonical.hypotheses}
+    else:
+        _retained(case)
     assert case["result"].suspicious == 1
 
 
@@ -614,6 +674,7 @@ def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publicatio
         assert case["result"].outcomes[0] is prior and case["result"].suspicious == 1
         assert load_entries(config.out_dir, fresh=True) == []
         return
+    selected = _selected_assessment_snapshot(prior)
     runtime = _knowledge_reassess(case, None, review_fn=make_review_fn(Client(), escalate_clean=False))
     assert len(calls) == 1
     result = case["result"]
@@ -627,6 +688,27 @@ def test_explicit_source_grounded_model_withdrawal_uses_owned_journal_publicatio
         assert entry.review_claims["withdrawal_decisions"]["accepted"][0]["adjudication"] == "model_withdrawn"
         assert entry.evidence_tools == []
         assert any(e.get("published_status") == "clean" for e in runtime.events())
+    elif fault in ("unknown_caller", "wrong_id", "mechanical_support"):
+        canonical, entry = _assert_prior_assessment_history_snapshot(case, selected)
+        definitions = [row for intake in entry.review_claims["intakes"] for row in intake["claims"]]
+        assert any(row["reference"] == reference and row["hypothesis"] == revisions[0].hypothesis
+                   for row in definitions)
+        event, = [row for row in load_verified_audit_log(config.out_dir)
+                  if row.get("action") == "study_reassessment"]
+        assert event["adjudication"] == "unverified" and event["prior_retained"] is True
+        decision = event["model_withdrawal"]
+        assert decision["admissible"] is False
+        if fault == "mechanical_support":
+            assert decision["reason"] == "prior_mechanical_support"
+            assert canonical.evidence_tool == prior.evidence_tool == "frida:runtime"
+            assert entry.evidence_tools == ["frida:runtime"]
+        else:
+            reason = "remaining_unknowns" if fault == "unknown_caller" else "claim_definition_unavailable"
+            assert reason in {row["reason"] for row in decision["rejected"]}
+            assert not canonical.evidence_tool
+        assert not canonical.claim_refutations
+        assert not any(row.get("event") == "continuation_completed"
+                       and row.get("published_status") == "clean" for row in runtime.events())
     else:
         assert result.outcomes[0] is prior and result.clean == 0 and result.suspicious == 1
         if fault == "history_ack_stripped":
