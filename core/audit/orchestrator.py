@@ -12240,6 +12240,12 @@ def _sigterm_salvage(
     return result
 
 
+def _client_reported_spend(client) -> float:
+    """Recorded usage, with legacy client compatibility and no active holds."""
+    reported = getattr(client, "reported_spend_usd", None)
+    return float((getattr(client, "total_cost", 0.0) if reported is None else reported) or 0.0)
+
+
 def _reconcile_cost_ledgers(config, result) -> None:
     """End-of-run cost ledger reconciliation.
 
@@ -12344,7 +12350,7 @@ def _reconcile_cost_ledgers(config, result) -> None:
         # deliberately does not book per-call (unattributable under
         # parallel workers). max() never double-counts.
         spent = max(
-            float(getattr(client, "total_cost", 0.0) or 0.0),
+            _client_reported_spend(client),
             float(getattr(client, "provider_spend_usd", 0.0) or 0.0),
         )
         result.cost_tracker.set_total_spend(spent)
@@ -15973,7 +15979,7 @@ def _persist_spend_floor(
         if client is not None:
             spend = max(
                 spend,
-                float(getattr(client, "total_cost", 0.0) or 0.0),
+                _client_reported_spend(client),
                 float(getattr(client, "provider_spend_usd", 0.0) or 0.0),
             )
         # Whole-run figure: a resume segment's ledgers are segment-

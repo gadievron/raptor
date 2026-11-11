@@ -1545,6 +1545,7 @@ class LLMClient:
             self._pinned_model = pinned_model
         self.providers: dict[str, LLMProvider] = {}
         self.total_cost = 0.0
+        self._inflight_budget_reserve = 0.0
         self.request_count = 0
         self.cache_hits = 0
         # Non-dollar resource governor state (see LLMConfig
@@ -2582,6 +2583,17 @@ class LLMClient:
         )
 
     @property
+    def reported_spend_usd(self) -> float:
+        """Client-recorded usage excluding active admission pre-debits.
+
+        Legacy provider estimates retain their existing precision; neither
+        active nor unknown reservation holds become reported usage here.
+        """
+        with self._stats_lock:
+            value = self.total_cost - getattr(self, "_inflight_budget_reserve", 0.0)
+            return max(0.0, value) if math.isfinite(value) else value
+
+    @property
     def provider_spend_usd(self) -> float:
         """Spend recorded on THIS client's own provider instances.
 
@@ -2861,6 +2873,7 @@ class LLMClient:
                 self._log_budget_exceeded_locked(reservation)
                 return False
             self.total_cost += reservation
+            self._inflight_budget_reserve = getattr(self, "_inflight_budget_reserve", 0.0) + reservation
             return True
 
     def _release_budget(self, reservation: float) -> None:
@@ -2872,6 +2885,8 @@ class LLMClient:
             return
         with self._stats_lock:
             self.total_cost -= reservation
+            self._inflight_budget_reserve = max(
+                0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
 
     @property
     def pending_usage_reservations(self) -> list[dict[str, Any]]:
@@ -2958,6 +2973,8 @@ class LLMClient:
         with self._stats_lock:
             if self.config.enable_cost_tracking:
                 self.total_cost -= reservation
+                self._inflight_budget_reserve = max(
+                    0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
             if unknown:
                 pending = getattr(self, "_pending_usage_reservations", None)
                 if pending is None:
@@ -3403,6 +3420,8 @@ class LLMClient:
                         with self._stats_lock:
                             if self.config.enable_cost_tracking:
                                 self.total_cost += cost_actual - reservation
+                                self._inflight_budget_reserve = max(
+                                    0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
                             else:
                                 self.total_cost += cost_actual
                             self.request_count += 1
@@ -4107,6 +4126,8 @@ class LLMClient:
                         with self._stats_lock:
                             if self.config.enable_cost_tracking:
                                 self.total_cost += cost_delta - reservation
+                                self._inflight_budget_reserve = max(
+                                    0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
                             else:
                                 self.total_cost += cost_delta
                             self.request_count += 1

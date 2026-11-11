@@ -126,6 +126,7 @@ def test_failed_admission_write_refuses_before_provider(setup_run, monkeypatch):
     with pytest.raises(RuntimeError, match="accounting admission unavailable"):
         client.generate("captured")
     assert calls == [] and client.total_cost == 0
+    assert client.reported_spend_usd == 0
     assert client.is_budget_exhausted()
 
 
@@ -251,3 +252,60 @@ def test_reasoning_tokens_remain_governed_after_resume(setup_run, monkeypatch):
     assert resumed._governed_tokens == 10
     with pytest.raises(RuntimeError, match="token limit"):
         resumed._check_governor()
+
+
+def test_inflight_hold_is_not_a_billed_resume_floor(setup_run, monkeypatch):
+    from core.audit.orchestrator import _reconcile_cost_ledgers
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+    client = _make(setup_run)
+    result = OrchestratorResult()
+    config = OrchestratorConfig(target_path=setup_run.parent, out_dir=setup_run,
+        llm_budget_client=client)
+    observed = []
+    def interrupted(*args, **kwargs):
+        # Poll while the real client's pre-debit is still active, before
+        # any reported provider usage or terminal accounting transition.
+        _persist_spend_floor(config, result, force=True)
+        _reconcile_cost_ledgers(config, result)
+        observed.append((resolve_prior_spend(setup_run)[0], result.llm_spend_usd,
+                         client._check_budget(1.0)))
+        raise KeyboardInterrupt("captured generation interruption")
+    provider = SimpleNamespace(generate=interrupted, total_cost=0.0)
+    client.providers["scripted"] = provider
+    monkeypatch.setattr(client, "_get_provider", lambda _: provider)
+    with isolated_module_state(telemetry, {"_sink": None}, lock=telemetry._sink_lock):
+        with pytest.raises(KeyboardInterrupt):
+            client.generate("captured")
+    assert observed == [(0.0, 0.0, False)]
+
+
+def test_completed_usage_stays_separate_from_another_active_hold(setup_run, monkeypatch):
+    from core.llm import telemetry
+    from core.testing.module_state import isolated_module_state
+    client = _make(setup_run)
+    config = OrchestratorConfig(target_path=setup_run.parent, out_dir=setup_run,
+        llm_budget_client=client)
+    result = OrchestratorResult()
+    observed = []
+    provider = SimpleNamespace(total_cost=0.0, total_tokens=0)
+    def generate(prompt, *args, **kwargs):
+        if prompt == "outer":
+            client.generate("inner")
+            _persist_spend_floor(config, result, force=True)
+            observed.append((resolve_prior_spend(setup_run)[0], client.reported_spend_usd,
+                             client._check_budget(1.0)))
+        cost = 0.3 if prompt == "outer" else 0.1
+        provider.total_cost += cost
+        return LLMResponse(content="captured", model="resume-stub", provider="anthropic",
+            finish_reason="complete", cost=cost, tokens_used=0)
+    provider.generate = generate
+    client.providers["scripted"] = provider
+    monkeypatch.setattr(client, "_get_provider", lambda _: provider)
+    with isolated_module_state(telemetry, {"_sink": None}, lock=telemetry._sink_lock):
+        client.generate("outer")
+    assert observed[0][0] == pytest.approx(0.1)
+    assert observed[0][1] == pytest.approx(0.1)
+    assert observed[0][2] is False
+    assert client.reported_spend_usd == pytest.approx(0.4)
+    assert resolve_prior_spend(setup_run)[0] == pytest.approx(0.4)
