@@ -132,6 +132,14 @@ class SubjectDispatchRefused(Exception):
         self.reason = reason
 
 
+def _utf8_representable(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 class StudySubjects:
     """One invocation's bounded requests and append-only explanation results.
 
@@ -246,9 +254,10 @@ class StudySubjects:
                 row = candidates[0]
                 text, status, ids = row.get("explanation"), row.get("status"), row.get("material_ids")
                 explanation_reason = row.get("reason", "")
-                if (isinstance(text, str) and len(text) <= 1800
+                if (isinstance(text, str) and len(text) <= 1800 and _utf8_representable(text)
                         and status in ("answered", "partial", "unavailable")
                         and isinstance(explanation_reason, str) and len(explanation_reason) <= 500
+                        and _utf8_representable(explanation_reason)
                         and isinstance(ids, list) and len(ids) <= len(material_map)
                         and all(isinstance(mid, str) and mid in material_map for mid in ids)):
                     selected = tuple(material_map[mid] for mid in dict.fromkeys(ids))

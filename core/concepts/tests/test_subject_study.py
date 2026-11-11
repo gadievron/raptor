@@ -1,5 +1,7 @@
 """Explicit subjects are explained by the existing study call, without proof."""
 
+import pytest
+
 from core.concepts.model import StudyItem
 from core.concepts.study import _RESPONSE_SCHEMA, _run_one_batch
 from core.concepts.subject_study import StudySubject, StudySubjects
@@ -296,3 +298,40 @@ def test_split_batches_expose_only_actual_submitted_waiter_packet():
     assert sorted(submitted) == ["a", "b"]
     assert {a.request_id for a in subjects.snapshot()} == {"a", "b"}
     assert subjects.current_packet() is None
+
+
+@pytest.mark.parametrize("field", ["explanation", "reason"])
+@pytest.mark.parametrize("invalid", [chr(0xD800), chr(0xDFFF)], ids=["high-surrogate", "low-surrogate"])
+def test_non_utf8_answer_text_is_unavailable_without_discarding_valid_sibling(field, invalid):
+    subjects = StudySubjects(tuple(
+        StudySubject(request_id, "foo_t", "role", "identifier", "owned.c")
+        for request_id in ("invalid-request", "valid-request")))
+    packet = subjects.prepare(_items(), [])
+    valid = {"request_id": "valid-request", "status": "partial",
+             "explanation": "café 東京 😀\nThe type carries a length.",
+             "reason": "Only this definition is supplied.\nOther uses are unknown.",
+             "material_ids": ["material-0"]}
+    invalid_row = {**valid, "request_id": "invalid-request", field: valid[field] + invalid}
+    rejected, accepted = subjects.record(packet, {"subject_answers": [invalid_row, valid]})
+    assert rejected.request_id == "invalid-request"
+    assert (rejected.status, rejected.explanation, rejected.reason, rejected.materials) == (
+        "unavailable", "", "invalid_subject_answer_or_materials", ())
+    assert rejected.inputs == packet.materials
+    assert accepted.request_id == "valid-request" and accepted.status == "partial"
+    assert accepted.explanation == valid["explanation"] and accepted.reason == valid["reason"]
+    assert accepted.materials == packet.materials
+    assert subjects.snapshot() == (rejected, accepted)
+    assert not subjects.pending_ids()
+
+
+@pytest.mark.parametrize("status", ["partial", "unavailable"])
+@pytest.mark.parametrize("reason", ["", "café 東京 😀\nLimited supplied source."])
+def test_utf8_answer_text_preserves_blank_reason_and_unavailable_semantics(status, reason):
+    subjects = _subjects()
+    packet = subjects.prepare(_items(), [])
+    explanation = "café 東京 😀\nThe type carries length." if status == "partial" else ""
+    answer, = subjects.record(packet, {"subject_answers": [{
+        "request_id": "owned-request", "status": status, "explanation": explanation,
+        "reason": reason, "material_ids": ["material-0"] if status == "partial" else []}]})
+    assert (answer.status, answer.explanation, answer.reason) == (status, explanation, reason)
+    assert answer.materials == (packet.materials if status == "partial" else ())

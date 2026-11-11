@@ -101,3 +101,33 @@ def test_malformed_topic_does_not_prevent_valid_sibling_artifact(tmp_path):
         assert any(row["knowledge_event"] == event for row in verified)
     finally:
         runtime.close()
+
+
+def test_malformed_source_reply_is_unavailable_and_trace_remains_writable(tmp_path, monkeypatch):
+    from core.audit.tests.test_knowledge_runtime import _source_study_case, _consume_source_case
+    from core.audit.record import load_verified_audit_log
+
+    case = _source_study_case(tmp_path)
+    _orch, config, _queue, runtime, _review, _requests, calls, client = case
+    original = client.generate_structured
+
+    def reply(*args, **kwargs):
+        response = original(*args, **kwargs)
+        if kwargs['task_type'] == 'study':
+            response['subject_answers'][0]['explanation'] = 'length carrier' + chr(0xD800)
+        return response
+
+    monkeypatch.setattr(client, 'generate_structured', reply)
+    try:
+        _consume_source_case(case)
+        runtime.write_artifacts(config.out_dir)
+        payload = json.loads((config.out_dir / 'knowledge-results.json').read_text(encoding='utf-8'))
+        answer, = [event['answer'] for event in payload['events'] if event['event'] == 'source_answer']
+        assert answer['status'] == 'unavailable'
+        assert answer['explanation'] == ''
+        assert answer['reason'] == 'invalid_subject_answer_or_materials'
+        assert calls == ['audit', 'study']
+        assert not runtime.ready_continuations(admission=lambda: True)
+        assert [row['knowledge_event'] for row in load_verified_audit_log(config.out_dir)] == payload['events']
+    finally:
+        runtime.close()
