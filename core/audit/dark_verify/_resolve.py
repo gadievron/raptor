@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from core.source import open_regular, read_text_capped
+from core.source.streams import preserving_stream_error
 from typing import TYPE_CHECKING
 
 from ._types import _SUPPORTED_LANGS
@@ -491,7 +492,7 @@ def _java_package_decl(source_file: Path) -> str | None:
     if fh is None:
         return None
     try:
-        with fh:
+        with preserving_stream_error(fh):
             head = fh.read(_JAVA_DECL_SCAN_BYTES)
     except OSError:
         return None
