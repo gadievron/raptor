@@ -28,10 +28,19 @@ def owned_state(tmp_path, monkeypatch):
 @pytest.mark.parametrize('stage', ['remove', 'unregister'])
 @pytest.mark.parametrize('route', ['demoted', 'single', 'persona'])
 def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure, stage, route):
+    _exercise_directory_cleanup(tmp_path, body_failure, stage, route)
+
+
+@pytest.mark.skipif(sys.platform != 'linux', reason='Linux constructor routing')
+def test_builder_failure_survives_directory_cleanup_interruption(tmp_path):
+    _exercise_directory_cleanup(tmp_path, False, 'build', 'persona')
+
+
+def _exercise_directory_cleanup(tmp_path, body_failure, stage, route):
     owned, registered, retired, dispatched = [], set(), [], []
     identities = {}
     interruption = KeyboardInterrupt('owned scratch cleanup interruption')
-    original = ValueError('owned context body failure')
+    original = ValueError('owned context operation failure')
 
     def forbidden(*args, **kwargs):
         pytest.fail('unexpected native dispatch or probe')
@@ -61,8 +70,13 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         assert (info.st_dev, info.st_ino) == identities[path]
         retired.append(path)
         shutil.rmtree(path, **kwargs)
-        if len(retired) == 1 and stage == 'remove':
+        if len(retired) == 1 and stage in ('remove', 'build'):
             raise interruption
+
+    def build(*args, **kwargs):
+        if stage == 'build':
+            raise original
+        return SimpleNamespace()
 
     def dispatch(cmd, **kwargs):
         assert kwargs['skip_mount_ns'] is True
@@ -115,7 +129,7 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         }),
         'fingerprint': SimpleNamespace(
             is_supported=lambda: True,
-            build_persona=lambda *args, **kwargs: SimpleNamespace(),
+            build_persona=build,
         ),
     }
     absolute = {
@@ -147,7 +161,8 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         '_run_teardown_first_timeout': forbidden, '_sweep_marked_processes': forbidden,
     }, import_hook=imports)
     try:
-        with pytest.raises(ValueError if body_failure else KeyboardInterrupt) as caught:
+        expected = original if body_failure or stage == 'build' else interruption
+        with pytest.raises(BaseException if stage == 'build' else type(expected)) as caught:
             with contextmanager(private.sandbox)(
                     block_network=route == 'demoted',
                     target=str(tmp_path), output=str(tmp_path),
@@ -161,7 +176,7 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
                     assert registered == set(owned)
                 if body_failure:
                     raise original
-        assert caught.value is (original if body_failure else interruption)
+        assert caught.value is expected
         assert len(owned) == len(set(owned)) == (2 if route == 'demoted' else 1)
         assert dispatched == (owned if route == 'demoted' else [])
         assert retired == owned
