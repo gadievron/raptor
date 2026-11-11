@@ -4,6 +4,8 @@ A counterexample establishes an arithmetic fault in the admitted entry model,
 not application reachability. Safe or unsupported sites never clear a claim.
 """
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, mk_val, z3, z3_available
 from core.smt_solver.csem import ssub_overflows
 from core.smt_solver.session import check_solver, new_solver, query_budget
@@ -45,12 +47,14 @@ def negation_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _body, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _shape(node, data, language)) is not None]
+    occurrences = Counter(name for _, name in shapes)
     candidates = []
-    for node in nodes:
-        shape = _shape(node, data, language)
-        if shape is None:
-            continue
+    for shape in shapes:
         target, name = shape
+        if occurrences[name] != 1:
+            continue
         binding = model_for_integer_terms(target, data, [name], (), integer_abi, language=language)
         kind = integer_type(dict(binding.types).get(name), integer_abi)
         if (binding.status == 'bound' and kind is not None and kind.signed
