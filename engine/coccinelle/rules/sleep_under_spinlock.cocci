@@ -1,13 +1,12 @@
-// sleep_under_spinlock.cocci — Detect sleeping function calls while
-// holding a spinlock.
+// sleep_under_spinlock.cocci — Review calls to the listed sleep/wait APIs
+// between a literal spinlock acquisition and its matching release shape.
+// The alternation below covers named sleep, scheduling, wait, mutex and
+// semaphore calls. User-copy and allocation flags are not matched here.
 //
-// Any function that can sleep (msleep, usleep_range, schedule,
-// wait_event, mutex_lock, copy_from_user, copy_to_user, kmalloc
-// with GFP_KERNEL) is illegal under a spinlock. The scheduler
-// cannot context-switch away from a spinlock holder.
-//
+// Interpret candidates with the target lock configuration, API implementation,
+// caller context and release wrappers; a local spelling match alone does not
+// establish that a call slept or that a runtime deadlock occurred.
 // CWE-764: Multiple Locks of a Critical Resource (deadlock class)
-// Zero-FP confidence: very high — always wrong.
 // @role: verification
 
 // The release guard carries the lock_releases vocab marker so
