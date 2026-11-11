@@ -17,8 +17,9 @@ position p1;
 copy_from_user@p1(dst1, uptr, ...)
 
 @second_fetch@
+expression dst2;
+expression REBOUND : script:python(first_fetch.uptr) { REBOUND != uptr or not uptr.isidentifier() };
 expression first_fetch.uptr;
-expression dst2, REBOUND;
 expression OFFSET != 0;
 position p2;
 position first_fetch.p1;
@@ -28,8 +29,9 @@ copy_from_user@p1(...)
 // A rebound or advanced pointer between the fetches means the second
 // copy reads a DIFFERENT user region (chunked-read loops advance the
 // cursor) — that is sequential consumption, not a re-fetch of already
-// validated data. Literal zero arithmetic keeps the same region;
-// other writes still kill the match conservatively.
+// validated data. Literal zero arithmetic and self-assignment of a
+// simple pointer name keep the same region. Other writes still kill
+// the match conservatively, including writes to complex lvalues.
 ... when != uptr = REBOUND
     when != uptr += OFFSET
     when != uptr -= OFFSET
