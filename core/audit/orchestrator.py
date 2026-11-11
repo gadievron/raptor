@@ -20919,7 +20919,10 @@ def _hypothesis_to_tool_chain(
             chain.append(entry)
             seen_types.add(entry["type"])
 
-    keyed_rule = _hypothesis_to_semgrep_rule_keyed(hypothesis, file_path)
+    keyed_rule = (
+        _hypothesis_to_semgrep_rule_keyed(hypothesis, file_path)
+        if "semgrep" not in seen_types else None
+    )
     semgrep_rule, semgrep_keyword = keyed_rule or (None, "")
     if semgrep_rule and "semgrep" not in seen_types:
         # keyword travels with the rule so the sweep can run the
