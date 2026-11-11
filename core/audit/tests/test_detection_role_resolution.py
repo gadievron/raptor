@@ -470,3 +470,18 @@ def test_address_assignments_require_retained_lifetime_evidence(monkeypatch, tmp
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_rcu_publication_expressions_require_lifetime_context(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/kfree_not_rcu.cocci'
+    receipt = 'coccinelle:kfree_not_rcu'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
