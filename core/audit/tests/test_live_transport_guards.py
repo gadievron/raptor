@@ -1810,7 +1810,12 @@ class TestCoccinelleSurfaceFences:
     def test_socket_inheritance_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_socket_no_cloexec_rule.py")
         assert _callers_of(calls, "run") == set()
-        assert _callers_of(calls, "run_pinned_subprocess") == {"test_socket_inheritance_requires_context_and_coverage"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_socket_inheritance_requires_context_and_coverage",
+            "test_socket_flags_require_exact_surviving_symbol",
+            "_socket_batch_execute",
+            "test_socket_flag_filter_keeps_production_batching",
+        }
 
     def test_byteswap_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_double_byteswap_rule.py")
