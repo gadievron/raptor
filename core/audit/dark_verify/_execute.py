@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import BinaryIO
 
@@ -73,6 +74,25 @@ _MAX_OUTPUT_BYTES = 8192
 _AUDIT_RUN_DIR: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "dark_verify_audit_run_dir", default=None,
 )
+
+
+_DEADLINE: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "dark_verify_deadline", default=None,
+)
+
+
+class _DeadlineExpired(BaseException):
+    """Bypass executor error fallbacks without converting expiry to tool absence."""
+
+
+def _stage_timeout(ceiling: float) -> float:
+    deadline = _DEADLINE.get()
+    if deadline is None:
+        return ceiling
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _DeadlineExpired
+    return min(ceiling, remaining)
 
 
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*\Z")
@@ -594,6 +614,42 @@ def validate_spec(
 
 
 def execute_witness(
+    spec: DarkWitnessSpec,
+    target_root: Path,
+    *,
+    timeout_s: int = _WITNESS_TIMEOUT_S,
+    audit_run_dir: str | Path | None = None,
+    deadline_monotonic: float | None = None,
+) -> DarkVerifyResult:
+    """Verify with one optional absolute deadline shared by preparation and steps.
+
+    Each dispatched step retains its existing timeout ceiling. The deadline
+    does not interrupt Python preparation or shorten sandbox cleanup grace.
+    Nested verification cannot extend the enclosing operation's deadline.
+    """
+    inherited = _DEADLINE.get()
+    deadline = deadline_monotonic
+    if inherited is not None:
+        deadline = inherited if deadline is None else min(deadline, inherited)
+    token = _DEADLINE.set(deadline)
+    try:
+        _stage_timeout(timeout_s)
+        return _execute_witness(
+            spec, target_root, timeout_s=timeout_s, audit_run_dir=audit_run_dir,
+        )
+    except _DeadlineExpired:
+        return DarkVerifyResult(
+            finding_key=spec.finding_key,
+            verdict="inconclusive",
+            language=spec.language or language_for_file(spec.file) or "",
+            match_detail="processing timeout: verification deadline expired",
+            oracle_reliability="unavailable",
+        )
+    finally:
+        _DEADLINE.reset(token)
+
+
+def _execute_witness(
     spec: DarkWitnessSpec,
     target_root: Path,
     *,
@@ -1400,8 +1456,18 @@ def _sandbox_run_capped(
     audit_run_dir = _AUDIT_RUN_DIR.get()
     if audit_run_dir and "audit_run_dir" not in kwargs:
         kwargs["audit_run_dir"] = audit_run_dir
+    deadline_limited = False
     try:
-        proc = sandbox_run(wrapped, **kwargs)
+        if _DEADLINE.get() is not None:
+            ceiling = kwargs["timeout"]
+            kwargs["timeout"] = _stage_timeout(ceiling)
+            deadline_limited = kwargs["timeout"] < ceiling
+        try:
+            proc = sandbox_run(wrapped, **kwargs)
+        except subprocess.TimeoutExpired:
+            if deadline_limited:
+                raise _DeadlineExpired from None
+            raise
         if proc.stdout is None:
             proc.stdout, _ = _read_capped(out_path, keep_tail=False)
         if proc.stderr is None:
@@ -2456,11 +2522,17 @@ def _resolve_rustc() -> str | None:
             return rustc
         try:
             from core.config import RaptorConfig
-            proc = subprocess.run(
-                [rustc, "--print", "sysroot"],
-                capture_output=True, text=True, timeout=_COMPILE_TIMEOUT_S,
-                env=RaptorConfig.get_safe_env(),
-            )
+            env = RaptorConfig.get_safe_env()
+            timeout = _stage_timeout(_COMPILE_TIMEOUT_S)
+            try:
+                proc = subprocess.run(
+                    [rustc, "--print", "sysroot"],
+                    capture_output=True, text=True, timeout=timeout, env=env,
+                )
+            except subprocess.TimeoutExpired:
+                if timeout < _COMPILE_TIMEOUT_S:
+                    raise _DeadlineExpired from None
+                raise
         except (OSError, subprocess.SubprocessError):
             return rustc
         sysroot = (proc.stdout or "").strip()
