@@ -97,6 +97,74 @@ def validator_row_epoch_unverified(source: str, name: str, validator_line: int,
         return True
 
 
+def _suspension_slot_unverified(tree, name: bytes, after_line: int, through_line: int) -> bool:
+    """A suspended JS frame does not freeze shared name bindings.
+
+    Preserve only simple parameters and direct function-body local slots,
+    with no possible nested writer. This is negative ownership filtering,
+    not a general closure, alias or callee-effect model.
+    """
+    nodes = []
+    ownership = {}
+    deferred = {}
+    pending = [(tree.root_node, None, False)]
+    while pending:
+        node, scope, class_body = pending.pop()
+        class_body = class_body or node.type == "class_body"
+        if node.type in _syntax._JS_OWNERS:
+            scope = node
+        nodes.append(node)
+        if len(nodes) > _syntax._MAX_NODES:
+            return True
+        ownership[node.id] = scope
+        deferred[node.id] = class_body
+        pending.extend((child, scope, class_body) for child in node.named_children)
+    anchors = [node for node in nodes
+               if node.start_point[0] + 1 == after_line
+               and node.type in {"if_statement", "variable_declarator", "assignment_expression"}]
+    owners = [ownership[node.id] for node in anchors]
+    if not owners or any(owner is None or owner != owners[0] for owner in owners):
+        return True
+    owner = owners[0]
+    suspends = any(
+        (node.type in {"await_expression", "yield_expression"}
+         or (node.type == "for_in_statement" and any(child.type == "await" for child in node.children)))
+        and after_line < node.start_point[0] + 1 <= through_line
+        and ownership[node.id] == owner
+        for node in nodes
+    )
+    if not suspends:
+        return False
+    if owner.type == "program":
+        return True
+    body = owner.child_by_field_name("body")
+    parameters = owner.child_by_field_name("parameters")
+    parameter = owner.child_by_field_name("parameter")
+    candidates = list(parameters.named_children) if parameters is not None else []
+    if parameter is not None:
+        candidates.append(parameter)
+    local = False
+    for candidate in candidates:
+        if candidate.type in {"required_parameter", "optional_parameter"}:
+            candidate = candidate.child_by_field_name("pattern")
+        if candidate is not None and candidate.type == "identifier" and candidate.text == name:
+            local = True
+    for node in nodes:
+        if node.type == "variable_declarator" and ownership[node.id] == owner:
+            target = node.child_by_field_name("name")
+            declaration = node.parent
+            if (target is not None and target.type == "identifier" and target.text == name
+                    and declaration is not None and declaration.parent == body):
+                local = True
+        target = (node.child_by_field_name("left") if node.type == "for_in_statement"
+                  else _write_target(node))
+        if (target is not None and _syntax._contains(owner, node)
+                and (ownership[node.id] != owner or deferred[node.id])
+                and _target_mentions(target, name)):
+            return True
+    return not local
+
+
 def native_value_epoch_unverified(source: str, name: str, after_line: int,
                                     through_line: int, *, language: str) -> bool:
     """Refuse new bindings and implicit writes absent from assignment scans.
@@ -111,6 +179,10 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
         if tree is None:
             return True
         encoded_name = name.encode("utf-8")
+        if language in {"javascript", "typescript", "tsx"} and _suspension_slot_unverified(
+            tree, encoded_name, after_line, through_line,
+        ):
+            return True
         pending = [tree.root_node]
         visited = 0
         while pending:
