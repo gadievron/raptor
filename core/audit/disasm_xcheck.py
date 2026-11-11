@@ -903,12 +903,13 @@ def _elf_load_info(binary: Path) -> tuple[int, bool] | None:
     that is not a well-formed little-endian ELF64.
     """
     from core.source import open_regular
+    from core.source.streams import preserving_stream_error
 
     fh = open_regular(binary, "rb")
     if fh is None:
         return None
     try:
-        with fh:
+        with preserving_stream_error(fh):
             hdr = fh.read(64)
             if (len(hdr) < 64 or hdr[:4] != b"\x7fELF"
                     or hdr[4] != 2 or hdr[5] != 1):
