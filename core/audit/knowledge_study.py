@@ -315,6 +315,7 @@ def study_batch(batch, runtime: AuditKnowledgeRuntime, config: OrchestratorConfi
                     with owned_call_scope(
                         admit, work_id="study:" + sha256(packet_key.encode()).hexdigest(),
                         beneficiaries=tuple(dict.fromkeys(r.origin.pass_id for r in submitted)),
+                        validity=runtime.client_lifetime_valid,
                     ):
                         try:
                             return observed_client(client, purpose="study").generate_structured(*args, **kwargs)

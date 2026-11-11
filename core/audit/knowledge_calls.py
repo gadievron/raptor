@@ -33,6 +33,15 @@ class _Scope:
     closed: Event
     work_id: str | None = None
     beneficiaries: tuple[str, ...] = ()
+    validity: Callable[[], bool] | None = None
+
+    def validate(self) -> bool:
+        """Check captured lifetime without consuming another admission credit."""
+        if self.closed.is_set():
+            raise KnowledgeCallRefused("scope_closed")
+        if self.validity is not None and self.validity() is not True:
+            raise KnowledgeCallRefused("unit_validity")
+        return True
 
 
 _current: ContextVar[_Scope | None] = ContextVar("audit_knowledge_call_scope", default=None)
@@ -40,8 +49,11 @@ _current: ContextVar[_Scope | None] = ContextVar("audit_knowledge_call_scope", d
 
 @contextmanager
 def owned_call_scope(admit: Admission, *, work_id: str | None = None,
-                     beneficiaries: tuple[str, ...] = ()) -> Iterator[None]:
-    scope = _Scope(admit, Event(), work_id, tuple(beneficiaries))
+                     beneficiaries: tuple[str, ...] = (),
+                     validity: Callable[[], bool] | None = None) -> Iterator[None]:
+    if validity is not None and not callable(validity):
+        raise TypeError("owned call validity must be callable")
+    scope = _Scope(admit, Event(), work_id, tuple(beneficiaries), validity)
     token = _current.set(scope)
     try:
         yield
@@ -73,8 +85,7 @@ class _ObservedClient:
         return getattr(self.__wrapped__, name)
 
     def _invoke(self, method: str, args: tuple, kwargs: dict):
-        if self._scope.closed.is_set():
-            raise KnowledgeCallRefused("scope_closed")
+        self._scope.validate()
         if not self._scope.admit(self._purpose, method):
             raise KnowledgeCallRefused("unit_admission")
         owned = accounting_context_kwargs(
@@ -89,8 +100,7 @@ class _ObservedClient:
             first = True
             def admit_attempt():
                 nonlocal first
-                if self._scope.closed.is_set():
-                    raise KnowledgeCallRefused("scope_closed")
+                self._scope.validate()
                 if first:
                     # Keep the wrapper's existing admission for cache/replay;
                     # its first provider attempt must not count it twice.
@@ -99,6 +109,12 @@ class _ObservedClient:
                     raise KnowledgeCallRefused("unit_admission")
                 return True
             owned["accounting_attempt_admission"] = admit_attempt
+        try:
+            validity_protocol = getattr(self.__wrapped__, "_attempt_validity_protocol", None)
+        except Exception:
+            validity_protocol = None
+        if type(validity_protocol) is int and validity_protocol == 1:
+            owned["accounting_attempt_validity"] = self._scope.validate
         return getattr(self.__wrapped__, method)(*args, **{**kwargs, **owned})
 
     def generate(self, *args, **kwargs):

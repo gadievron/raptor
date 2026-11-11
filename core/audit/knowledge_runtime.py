@@ -121,7 +121,8 @@ class AuditKnowledgeRuntime:
                 self._busy[key] = self._busy.get(key, 0) + 1
             try:
                 from .knowledge_calls import owned_call_scope
-                with owned_call_scope(lambda purpose, method: self.admit_client_call(gap, purpose, method)):
+                with owned_call_scope(lambda purpose, method: self.admit_client_call(gap, purpose, method),
+                                      validity=self.client_lifetime_valid):
                     return review_one_fn(gap, *args, **kwargs)
             finally:
                 with self._lock:
@@ -209,7 +210,8 @@ class AuditKnowledgeRuntime:
                 from .knowledge_calls import owned_call_scope
                 with owned_call_scope(lambda purpose, method: self.admit_client_call(
                         {"file": origin.file, "name": origin.function, "line_start": origin.line_start}, purpose, method),
-                        work_id="review:" + origin.pass_id, beneficiaries=(origin.pass_id,)):
+                        work_id="review:" + origin.pass_id, beneficiaries=(origin.pass_id,),
+                        validity=self.client_lifetime_valid):
                     outcome = review_fn(ctx, config)
             except BaseException:
                 with self._lock:
@@ -1055,6 +1057,11 @@ class AuditKnowledgeRuntime:
                 append_audit_log(out_dir, {"action": "audit_knowledge", "sequence": index,
                                           "role": payload["role"], "knowledge_event": events[index]})
                 self._written_events[path_key] = index + 1
+
+    def client_lifetime_valid(self) -> bool:
+        """Observe existing runtime lifetime; no counters, events or source admission."""
+        with self._lock:
+            return not self._closed and monotonic() < self.deadline
 
     def admit_client_call(self, gap: dict, purpose: str, method: str) -> bool:
         key = self._gap_key(gap)
