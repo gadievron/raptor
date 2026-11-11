@@ -70,6 +70,9 @@ class AuditKnowledgeRuntime:
         self._source_answers: dict[str, list[SubjectExplanation]] = {}
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
+        self._reserving: set[tuple[str, str, int]] = set()
+        self._context_deltas: dict[tuple, dict] = {}
+        self._external_deliveries: dict[str, list[list[dict]]] = {}
         self._knowledge_deliveries: dict[str, list[dict[str, list[dict]]]] = {}
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
         self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
@@ -266,6 +269,11 @@ class AuditKnowledgeRuntime:
                 if isinstance(delivered, list):
                     with self._lock:
                         self._caller_deliveries.setdefault(reservation.packet.pass_id, []).append(deepcopy(delivered))
+                external = outcome.review_result.get("external_context_delivery")
+                if (isinstance(external, list)
+                        and getattr(review_fn, "_knowledge_observed_client_contract", None) is True):
+                    with self._lock:
+                        self._external_deliveries.setdefault(reservation.packet.pass_id, []).append(deepcopy(external))
             # Retain this invocation's fitting, including explicit omissions.
             # This is disclosure only; continuation credit uses owned receipts.
             reference_fitting = outcome.review_result.get("language_reference_delivery")
@@ -699,13 +707,76 @@ class AuditKnowledgeRuntime:
             self._required_calls = required_calls
             candidates = tuple((key, cycle, self._calls.get(key, 0) if key not in self._unknown_calls else None)
                                for key, cycle in self._cycles.items()
-                               if key not in self._busy and key not in self._active_units)
+                               if key not in self._busy and key not in self._active_units and key not in self._reserving)
         ready = []
         for key, cycle, calls in candidates:
+            reservation = self._reserve_cycle(key, cycle, calls, now=now,
+                                              admission=admission, required_calls=required_calls)
+            if reservation is not None:
+                ready.append(reservation)
+        return tuple(ready)
+
+    def offer_context_delta(self, ctx: dict, *, kind: str, version: str) -> bool:
+        """Offer an exact pipeline-owned rendered-input version, not a claim."""
+        from .continuation_context import context_spec
+
+        spec = context_spec(ctx, kind=kind, version=version)
+        if spec is None:
+            return False
+        origin = self._origin(ctx)
+        key = self._key(origin)
+        if origin.source_identity is None:
+            return False
+        with self._lock:
+            if self._closed:
+                return False
+            cycle = self._cycles.get(key)
+            if cycle is None:
+                cycle = KnowledgeCycle(origin, KnowledgeBatch((), ()), deadline=self.deadline,
+                    admit_study=self.bindings.admit, admit_caller_context=self._admit_caller_context, **self._policy)
+                self._cycles[key] = cycle
+            if not self._same_snapshot(origin, cycle.origin):
+                return False
+            self._context_deltas[(key, spec["context_id"])] = spec
+        offered = cycle.context_delta(spec["context_id"], now=monotonic(), kind=kind)
+        if offered:
+            with self._lock:
+                self._events.append({"event": "context_delta_offered", "origin": asdict(origin), **spec})
+            self.notify()
+        return offered
+
+    def reserve_context_continuation(self, ctx: dict, *, admission: Callable[[], bool],
+                                     required_calls: int = 1,
+                                     required_context_id: str | None = None) -> KnowledgeReservation | None:
+        """Use the same round, call and source gates as knowledge continuations."""
+        origin = self._origin(ctx)
+        key = self._key(origin)
+        with self._lock:
+            cycle = self._cycles.get(key)
+            if cycle is None or not self._same_snapshot(origin, cycle.origin):
+                return None
+            calls = self._calls.get(key, 0) if key not in self._unknown_calls else None
+            if required_context_id is not None:
+                from .continuation_context import context_spec
+                spec = self._context_deltas.get((key, required_context_id))
+                if (spec is None or
+                        context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec):
+                    return None
+        return self._reserve_cycle(key, cycle, calls, now=monotonic(),
+                                   admission=admission, required_calls=required_calls,
+                                   required_context_ids=(() if required_context_id is None else (required_context_id,)))
+
+    def _reserve_cycle(self, key, cycle, calls, *, now, admission, required_calls, required_context_ids=()):
+        with self._lock:
+            if self._closed or key in self._busy or key in self._active_units or key in self._reserving:
+                return None
+            self._reserving.add(key)
+        try:
             packet = cycle.reserve(now=now, current_source=capture_source_identity(self.target_root, key[0]),
-                                   admission=admission, all_model_calls=calls, required_calls=required_calls)
+                                   admission=admission, all_model_calls=calls, required_calls=required_calls,
+                                   required_context_ids=required_context_ids)
             if packet is None:
-                continue
+                return None
             reservation = KnowledgeReservation(cycle.origin, packet)
             with self._lock:
                 self._active[packet.pass_id] = reservation
@@ -713,8 +784,10 @@ class AuditKnowledgeRuntime:
                 self._events.append({"event": "continuation_reserved", "origin": asdict(cycle.origin),
                                      "pass_id": packet.pass_id, "delta_ids": list(packet.delta_ids),
                                      "pending_ids": list(packet.pending_ids), "required_calls": required_calls})
-            ready.append(reservation)
-        return tuple(ready)
+            return reservation
+        finally:
+            with self._lock:
+                self._reserving.discard(key)
 
     def _owned_reservation(self, reservation: KnowledgeReservation) -> bool:
         with self._lock:
@@ -727,6 +800,14 @@ class AuditKnowledgeRuntime:
             return False
         with self._lock:
             cycle = self._cycles[self._key(reservation.origin)]
+        with self._lock:
+            ctx["continuation_context_inputs"] = tuple(deepcopy(self._context_deltas[(self._key(reservation.origin), cid)])
+                for cid in reservation.packet.external_context_ids
+                if (self._key(reservation.origin), cid) in self._context_deltas)
+        from .continuation_context import context_spec
+        for spec in ctx["continuation_context_inputs"]:
+            if context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec:
+                return False
         ctx["knowledge_requests"] = tuple(cycle.requests.values())
         ctx["language_reference_answers"] = reservation.packet.references
         ctx["study_explanations"] = reservation.packet.explanations
@@ -817,16 +898,31 @@ class AuditKnowledgeRuntime:
                     if row.get("delivered") is True:
                         delivered.add(row["request_id"])
         with self._lock:
+            external_deliveries = deepcopy(self._external_deliveries.get(reservation.packet.pass_id, ()))
+        for assessment in external_deliveries:
+            for row in assessment:
+                if isinstance(row, dict) and row.get("context_id") in reservation.packet.external_context_ids:
+                    rows.append({"field": "external_context_delivery", **row})
+                    if row.get("delivered") is True:
+                        delivered.add(row["context_id"])
+        with self._lock:
             self._events.append({"event": "review_prompt_context", "pass_id": reservation.packet.pass_id,
                                  "records": rows, "renderer_observed": bool(rows),
                                  "meaning": "fitted into review prompt; not provider acknowledgement or model use"})
         return tuple(sorted(delivered))
+
+    def context_was_delivered(self, reservation: KnowledgeReservation) -> bool:
+        """Require completed, owned renderer receipts for external context."""
+        if not self._owned_reservation(reservation) or not reservation.packet.external_context_ids:
+            return False
+        return set(reservation.packet.external_context_ids) <= set(self._delivery(reservation, None))
 
     def _release(self, reservation: KnowledgeReservation) -> None:
         with self._lock:
             self._active.pop(reservation.packet.pass_id, None)
             self._active_units.pop(self._key(reservation.origin), None)
             self._knowledge_deliveries.pop(reservation.packet.pass_id, None)
+            self._external_deliveries.pop(reservation.packet.pass_id, None)
             self._caller_deliveries.pop(reservation.packet.pass_id, None)
             self._live_input_sets.pop(reservation.packet.pass_id, None)
             self._live_input_errors.discard(reservation.packet.pass_id)

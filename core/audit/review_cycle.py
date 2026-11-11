@@ -31,6 +31,7 @@ class KnowledgeContinuation:
     delta_ids: tuple[str, ...]
     pending_ids: tuple[str, ...]
     caller_contexts: tuple[CallerContextAnswer, ...] = ()
+    external_context_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,8 @@ class KnowledgeCycle:
         self._events: list[KnowledgeCycleEvent] = []
         self._deferred: set[str] = set()
         self._retired = False
+        self._external_context: set[str] = set()
+        self._external_latest: dict[str, str] = {}
 
     def _changed(self, request_id: str, now: float) -> None:
         self._delta.add(request_id)
@@ -123,6 +126,25 @@ class KnowledgeCycle:
             self.requests = MappingProxyType({**self.requests, **additions})
             if new_ids:
                 self._events.append(KnowledgeCycleEvent("requests_added", new_ids))
+            return True
+
+    def context_delta(self, context_id: str, *, now: float, kind: str = "") -> bool:
+        """Offer pipeline-owned context once; never confer evidence authority."""
+        if not context_id or not math.isfinite(now):
+            raise ValueError("invalid context delta")
+        with self._lock:
+            if self._retired:
+                return False
+            if context_id in self._external_context:
+                return False
+            self._external_context.add(context_id)
+            if kind:
+                previous = self._external_latest.get(kind)
+                if previous is not None:
+                    self._delta.discard(previous)
+                self._external_latest[kind] = context_id
+            self._changed(context_id, now)
+            self._events.append(KnowledgeCycleEvent("context_delta", (context_id,)))
             return True
 
     def _request_ids(self) -> set[str]:
@@ -237,10 +259,13 @@ class KnowledgeCycle:
     def reserve(
         self, *, now: float, current_source: SourceIdentity | None,
         admission: Callable[[], bool], all_model_calls: int | None, required_calls: int = 1,
+        required_context_ids: tuple[str, ...] = (),
     ) -> KnowledgeContinuation | None:
         if type(required_calls) is not int or required_calls < 1:
             raise ValueError("invalid required call count")
         with self._lock:
+            if not set(required_context_ids) <= (self._delta & self._external_context):
+                return None
             if self._active is not None or not self._delta or self._retired:
                 return None
             if not math.isfinite(now):
@@ -306,6 +331,7 @@ class KnowledgeCycle:
             packet = KnowledgeContinuation(
                 uuid4().hex, tuple(self._references.values()),
                 tuple(explanations), tuple(sorted(self._delta)), pending, tuple(caller_contexts),
+                tuple(sorted(self._delta & self._external_context)),
             )
             self.started += 1
             self._active = packet
@@ -328,7 +354,8 @@ class KnowledgeCycle:
                 return False
             candidates = ({a.request_id for a in self._active.references if a.entries}
                           | {a.request_id for a in self._active.explanations}
-                          | {a.request_id for a in self._active.caller_contexts})
+                          | {a.request_id for a in self._active.caller_contexts}
+                          | set(self._active.external_context_ids))
             if not set(delivered) <= candidates:
                 self._events.append(KnowledgeCycleEvent("rejected_completion", reason="unknown_information", pass_id=pass_id))
                 return False

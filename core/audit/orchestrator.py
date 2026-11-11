@@ -9957,212 +9957,219 @@ def _run_audit_body(
         composition_active=config.open_discovery,
     )
 
-    knowledge_runtime.close("review_drain_complete")
-    if config.out_dir is not None:
-        knowledge_runtime.write_artifacts(config.out_dir)
-
-    # --- SIGTERM salvage: skip every optional post pass ---
-    # In-flight completions are already harvested (the executor's
-    # shutdown path) and the study consumer drained above. Everything
-    # past this point is enrichment the ~30s grace cannot afford —
-    # flush what exists, write the partial exports, and return so the
-    # CLI can write the salvage report and mark the lifecycle
-    # interrupted.
-    if is_sigterm_requested():
-        return _sigterm_salvage(result, config, collector, start_time)
-
-    # --- Journal checkpoint: post-review-drain segment boundary ---
-    # The executor has returned, the batched pass joined its pool,
-    # and the study consumer is drained (or stop-requested — the
-    # quiescer's park protocol outwaits/asserts the residue). Runs
-    # synchronously on this thread; a skipped or aborted checkpoint
-    # costs nothing (the journal stands).
-    if journal_quiescer is not None:
-        journal_quiescer.run_at_boundary("post-review-drain")
-
-    # --- Concept discovery: mine outcomes for invariants ---
     try:
-        if not executor_stats.budget_stopped:
-            _run_concept_discovery(
-                reviewed_outcomes, config, shared, gaps,
-                mechanical_findings, reviewed_set,
-            )
-    except Exception:
-        logger.debug("concept discovery failed", exc_info=True)
+        if config.out_dir is not None:
+            knowledge_runtime.write_artifacts(config.out_dir)
 
-    # --- Synthesis queue second pass ---
-    #
-    # Optional enrichment, so it must never cost the run its results.
-    # Everything here runs after the main review loop but *before* the
-    # state sync-back and the single one-shot ``collector.flush()``
-    # below, so any exception raised in resolution, graph construction
-    # or the executor would discard the run's findings and its buffered
-    # audit log. Degrade to "second pass skipped" instead: the main pass
-    # has already earned its output.
-    # External ground-truth seeds (prior-run journal findings, crash
-    # RCAs, cvefix fixture pairs): synthesize checkers from them now so
-    # the hits ride the SAME second-pass review below. Bounded per
-    # source and by the shared amplification-lane cap; budget-gated.
-    try:
-        if not executor_stats.budget_stopped and not _check_budget(
-            config, start_time, result,
-        ):
-            _synthesize_external_seeds(config, result, shared, checklist)
-    except Exception:
-        logger.warning(
-            "external seed synthesis failed — continuing without it",
-            exc_info=True,
-        )
+        # --- SIGTERM salvage: skip every optional post pass ---
+        # In-flight completions are already harvested (the executor's
+        # shutdown path) and the study consumer drained above. Everything
+        # past this point is enrichment the ~30s grace cannot afford —
+        # flush what exists, write the partial exports, and return so the
+        # CLI can write the salvage report and mark the lifecycle
+        # interrupted.
+        if is_sigterm_requested():
+            return _sigterm_salvage(result, config, collector, start_time)
 
-    try:
-        if shared.synthesis_queue and not executor_stats.budget_stopped:
-            synth_hits = list(shared.synthesis_queue)
-            shared.synthesis_queue.clear()
-            if shared.quarantined_rules:
-                kept = [
-                    h for h in synth_hits
-                    if h.get("rule_id") not in shared.quarantined_rules
-                ]
-                dropped = len(synth_hits) - len(kept)
-                if dropped:
-                    logger.info(
-                        "synthesis pass: %d hit(s) dropped from "
-                        "quarantined rule(s) (%s)",
-                        dropped,
-                        ", ".join(sorted(shared.quarantined_rules)),
-                    )
-                synth_hits = kept
-            synth_gaps = _synthesis_hits_to_gaps(
-                synth_hits,
-                checklist,
-                config.out_dir,
-            )
-            logger.info(
-                "synthesis pass: %d targets from mid-loop synthesis "
-                "(%d hits resolved to reviewable functions)",
-                len(synth_hits),
-                len(synth_gaps),
-            )
-        else:
-            synth_gaps = []
+        # --- Journal checkpoint: post-review-drain segment boundary ---
+        # The executor has returned, the batched pass joined its pool,
+        # and the study consumer is drained (or stop-requested — the
+        # quiescer's park protocol outwaits/asserts the residue). Runs
+        # synchronously on this thread; a skipped or aborted checkpoint
+        # costs nothing (the journal stands).
+        if journal_quiescer is not None:
+            journal_quiescer.run_at_boundary("post-review-drain")
 
-        if synth_gaps:
-            synth_graph = TaskGraph.from_workqueue(synth_gaps, call_edges)
-            run_executor_sync(
-                synth_graph,
-                review_fn,
-                shared,
-                config,
-                result,
-                executor_config,
-                joern_server=joern_server,
-                audit_log=audit_log,
-                workqueue=workqueue,
-                reviewed_set=reviewed_set,
-                start_time=start_time,
-                layer_disagreements=layer_disagreements,
-                on_progress=on_progress,
-                collector=collector,
-                budget_check=lambda: _check_budget(config, start_time, result),
-                # Environment tick per dispatch — the executor's own
-                # post-tick budget_check re-check handles a conclusion.
-                on_tick=_make_executor_on_tick(config),
-            )
-    except Exception as exc:
-        logger.warning(
-            "synthesis second pass failed (%s: %s) — keeping main-pass "
-            "results and flushing buffered state",
-            type(exc).__name__,
-            exc,
-            exc_info=True,
-        )
-
-    throttle.close()
-
-    # --- Sync mutable state back from SharedState ---
-    constraints = shared.constraints
-    evidence_index = shared.evidence_index
-    session_observations = shared.session_observations
-    discovered_evidence = shared.discovered_evidence
-    reviewed_before_joern = shared.reviewed_before_joern
-
-    if collector is not None:
-        collector.flush()
-
-    # --- Callee-contract propagation (#6): re-review callers whose
-    #     callee assumption was contradicted by the callee's review ---
-    # Budget-gated like the synthesis pass above: a budget/deadline-
-    # stopped run must not dispatch a fresh post-loop LLM pass — it
-    # overruns the SIGTERM drain margin and gets hard-killed with no
-    # report, leaving the lifecycle stuck running.
-    try:
-        if executor_stats.budget_stopped or _check_budget(
-            config, start_time, result,
-        ):
-            logger.info(
-                "callee-contract propagation skipped — budget/deadline "
-                "exhausted",
-            )
-        else:
-            contract_re = _callee_contract_requeue(
-                result, config, review_fn,
-                checklist=checklist,
-                context_map=context_map,
-                fuzz_coverage=fuzz_coverage,
-                evidence_index=evidence_index,
-                discovered_evidence=discovered_evidence,
-                session_observations=session_observations,
-                joern_server=joern_server,
-                start_time=start_time,
-                on_progress=on_progress,
-                max_workers=resolved_workers,
-            )
-            if contract_re:
-                logger.info(
-                    "callee-contract propagation: re-reviewed %d callers",
-                    contract_re,
+        # --- Concept discovery: mine outcomes for invariants ---
+        try:
+            if not executor_stats.budget_stopped:
+                _run_concept_discovery(
+                    reviewed_outcomes, config, shared, gaps,
+                    mechanical_findings, reviewed_set,
                 )
-    except Exception:
-        logger.debug(
-            "callee-contract propagation failed", exc_info=True,
-        )
+        except Exception:
+            logger.debug("concept discovery failed", exc_info=True)
 
-    # --- Post-executor: joern drain + constraint save ---
-    if joern_future is not None:
-        if not joern_future.done():
-            joern_future = _await_joern_build(joern_future, joern_timeout_s)
-        if joern_future is not None:
-            evidence_index = _drain_joern_future(
-                joern_future,
-                evidence_index,
-                checklist,
-                sarif_cache,
+        # --- Synthesis queue second pass ---
+        #
+        # Optional enrichment, so it must never cost the run its results.
+        # Everything here runs after the main review loop but *before* the
+        # state sync-back and the single one-shot ``collector.flush()``
+        # below, so any exception raised in resolution, graph construction
+        # or the executor would discard the run's findings and its buffered
+        # audit log. Degrade to "second pass skipped" instead: the main pass
+        # has already earned its output.
+        # External ground-truth seeds (prior-run journal findings, crash
+        # RCAs, cvefix fixture pairs): synthesize checkers from them now so
+        # the hits ride the SAME second-pass review below. Bounded per
+        # source and by the shared amplification-lane cap; budget-gated.
+        try:
+            if not executor_stats.budget_stopped and not _check_budget(
+                config, start_time, result,
+            ):
+                _synthesize_external_seeds(config, result, shared, checklist)
+        except Exception:
+            logger.warning(
+                "external seed synthesis failed — continuing without it",
+                exc_info=True,
             )
-        joern_future = None
 
-    if config.propagate_constraints and constraints:
-        save_constraints(constraints, config.out_dir)
+        try:
+            if shared.synthesis_queue and not executor_stats.budget_stopped:
+                synth_hits = list(shared.synthesis_queue)
+                shared.synthesis_queue.clear()
+                if shared.quarantined_rules:
+                    kept = [
+                        h for h in synth_hits
+                        if h.get("rule_id") not in shared.quarantined_rules
+                    ]
+                    dropped = len(synth_hits) - len(kept)
+                    if dropped:
+                        logger.info(
+                            "synthesis pass: %d hit(s) dropped from "
+                            "quarantined rule(s) (%s)",
+                            dropped,
+                            ", ".join(sorted(shared.quarantined_rules)),
+                        )
+                    synth_hits = kept
+                synth_gaps = _synthesis_hits_to_gaps(
+                    synth_hits,
+                    checklist,
+                    config.out_dir,
+                )
+                logger.info(
+                    "synthesis pass: %d targets from mid-loop synthesis "
+                    "(%d hits resolved to reviewable functions)",
+                    len(synth_hits),
+                    len(synth_gaps),
+                )
+            else:
+                synth_gaps = []
 
-    if reviewed_before_joern:
-        result = _re_review_joern_enriched(
-            result,
-            config,
-            review_fn,
-            checklist,
-            context_map,
-            fuzz_coverage,
-            evidence_index,
-            sarif_cache,
-            entry_points,
-            reviewed_before_joern,
-            start_time,
-            on_progress,
-            audit_log=audit_log,
-            session_observations=session_observations,
-            discovered_evidence=discovered_evidence,
-            joern_server=joern_server,
-            max_workers=resolved_workers,
-        )
+            if synth_gaps:
+                synth_graph = TaskGraph.from_workqueue(synth_gaps, call_edges)
+                run_executor_sync(
+                    synth_graph,
+                    review_fn,
+                    shared,
+                    config,
+                    result,
+                    executor_config,
+                    joern_server=joern_server,
+                    audit_log=audit_log,
+                    workqueue=workqueue,
+                    reviewed_set=reviewed_set,
+                    start_time=start_time,
+                    layer_disagreements=layer_disagreements,
+                    on_progress=on_progress,
+                    collector=collector,
+                    budget_check=lambda: _check_budget(config, start_time, result),
+                    # Environment tick per dispatch — the executor's own
+                    # post-tick budget_check re-check handles a conclusion.
+                    on_tick=_make_executor_on_tick(config),
+                )
+        except Exception as exc:
+            logger.warning(
+                "synthesis second pass failed (%s: %s) — keeping main-pass "
+                "results and flushing buffered state",
+                type(exc).__name__,
+                exc,
+                exc_info=True,
+            )
+
+        throttle.close()
+
+        # --- Sync mutable state back from SharedState ---
+        constraints = shared.constraints
+        evidence_index = shared.evidence_index
+        session_observations = shared.session_observations
+        discovered_evidence = shared.discovered_evidence
+        reviewed_before_joern = shared.reviewed_before_joern
+
+        if collector is not None:
+            collector.flush()
+
+        # --- Callee-contract propagation (#6): re-review callers whose
+        #     callee assumption was contradicted by the callee's review ---
+        # Budget-gated like the synthesis pass above: a budget/deadline-
+        # stopped run must not dispatch a fresh post-loop LLM pass — it
+        # overruns the SIGTERM drain margin and gets hard-killed with no
+        # report, leaving the lifecycle stuck running.
+        try:
+            if executor_stats.budget_stopped or _check_budget(
+                config, start_time, result,
+            ):
+                logger.info(
+                    "callee-contract propagation skipped — budget/deadline "
+                    "exhausted",
+                )
+            else:
+                contract_re = _callee_contract_requeue(
+                    result, config, review_fn,
+                    checklist=checklist,
+                    context_map=context_map,
+                    fuzz_coverage=fuzz_coverage,
+                    evidence_index=evidence_index,
+                    discovered_evidence=discovered_evidence,
+                    session_observations=session_observations,
+                    joern_server=joern_server,
+                    start_time=start_time,
+                    on_progress=on_progress,
+                    max_workers=resolved_workers,
+                )
+                if contract_re:
+                    logger.info(
+                        "callee-contract propagation: re-reviewed %d callers",
+                        contract_re,
+                    )
+        except Exception:
+            logger.debug(
+                "callee-contract propagation failed", exc_info=True,
+            )
+
+        # --- Post-executor: joern drain + constraint save ---
+        if joern_future is not None:
+            if not joern_future.done():
+                joern_future = _await_joern_build(joern_future, joern_timeout_s)
+            if joern_future is not None:
+                evidence_index = _drain_joern_future(
+                    joern_future,
+                    evidence_index,
+                    checklist,
+                    sarif_cache,
+                )
+            joern_future = None
+
+        if config.propagate_constraints and constraints:
+            save_constraints(constraints, config.out_dir)
+
+        if reviewed_before_joern:
+            result = _re_review_joern_enriched(
+                result,
+                config,
+                review_fn,
+                checklist,
+                context_map,
+                fuzz_coverage,
+                evidence_index,
+                sarif_cache,
+                entry_points,
+                reviewed_before_joern,
+                start_time,
+                on_progress,
+                audit_log=audit_log,
+                session_observations=session_observations,
+                discovered_evidence=discovered_evidence,
+                joern_server=joern_server,
+                max_workers=resolved_workers,
+                knowledge_runtime=knowledge_runtime,
+            )
+    finally:
+        knowledge_runtime.close("review_and_late_joern_complete")
+        try:
+            knowledge_runtime.write_artifacts(config.out_dir)
+        except Exception:
+            logger.warning("Could not persist late Joern continuation state", exc_info=True)
 
     # Release the deepen reserve: from here on the deepen phase itself
     # is the consumer (or, when deepen is disabled/has nothing to do,
@@ -34751,6 +34758,7 @@ def _re_review_joern_enriched(
     discovered_evidence: dict[str, Any] | None = None,
     joern_server=None,
     max_workers: int = 1,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> OrchestratorResult:
     """Re-review clean verdicts that now have Joern evidence.
 
@@ -34826,10 +34834,18 @@ def _re_review_joern_enriched(
             ctx["prior_hypotheses"] = prior_hyps
         prepared.append((len(prepared), gap, prior_outcome, ctx))
 
+    continuation_owner = None
+    if knowledge_runtime is not None:
+        from .late_joern_continuation import LateJoernContinuations
+        continuation_owner = LateJoernContinuations(
+            knowledge_runtime, review_fn,
+            admission=lambda: not _check_budget(config, start_time, result))
+
     def _do_review(item):
         idx, _gap, _prior, ctx = item
         try:
-            outcome = review_fn(ctx, config)
+            outcome = (continuation_owner.dispatch(idx, ctx, config) if continuation_owner is not None
+                       else review_fn(ctx, config))
             return (idx, outcome, None)
         except Exception as exc:  # noqa: BLE001
             return (idx, None, exc)
@@ -34837,114 +34853,134 @@ def _re_review_joern_enriched(
     def _stop_rails() -> bool:
         return _check_budget(config, start_time, result)
 
-    raw_results = _collect_reviews_until_budget(
-        prepared,
-        _do_review,
-        _stop_rails,
-        effective_workers,
-        phase_label="joern re-review",
-        dispatch_gate=_make_dispatch_gate(config, stop_check=_stop_rails),
-    )
-
-    # --- Process results in main thread ---
-    idx_to_prepared = {item[0]: item for item in prepared}
-    for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
-        _, gap, prior_outcome, ctx = idx_to_prepared[idx]
-
-        if exc is not None:
-            logger.warning(
-                "joern re-review failed for %s:%s: %s",
-                gap["file"],
-                gap["name"],
-                exc,
-            )
-            continue
-
-        outcome.line = gap.get("line_start", 0)
-        # Phase ledger — the call cost money whether or not the
-        # verdict changed (deepen's booking is the template).
-        result.cost_tracker.record_call(
-            "re_review",
-            cost_usd=outcome.cost_usd,
-            wall_time_s=outcome.duration_s,
+    try:
+        raw_results = _collect_reviews_until_budget(
+            prepared,
+            _do_review,
+            _stop_rails,
+            effective_workers,
+            phase_label="joern re-review",
+            dispatch_gate=_make_dispatch_gate(config, stop_check=_stop_rails),
         )
 
-        if outcome.status in ("finding", "suspicious"):
-            if outcome.status == "finding" and config.sweep_validate_findings:
-                outcome = _sweep_validate(
-                    outcome,
-                    config,
-                    sarif_cache,
-                    tier_counters=result.tier_counters,
-                    evidence_index=evidence_index,
-                    joern_server=joern_server,
-                )
-            if outcome.status == "finding":
-                outcome = _apply_reachability_gate(
-                    outcome,
-                    ctx,
-                    entry_points,
-                    config,
-                )
-            if outcome.status == "finding":
-                gate_violations = _check_finding_gates(
-                    outcome,
-                    audit_log=audit_log,
-                    mode=config.mode,
-                )
-                if gate_violations:
-                    outcome = _demote_outcome(
-                        outcome,
-                        f"[gate violation: {'; '.join(gate_violations)}]",
-                    )
+        # --- Process results in main thread ---
+        idx_to_prepared = {item[0]: item for item in prepared}
+        for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
+            _, gap, prior_outcome, ctx = idx_to_prepared[idx]
 
-            # Guarded like the sibling passes (_iterative_re_review,
-            # _callee_contract_requeue): the prior outcome may no
-            # longer be in the list by replace time.
-            if prior_outcome in result.outcomes:
-                _untally_outcome(result, prior_outcome)
-                oi = result.outcomes.index(prior_outcome)
-                result.outcomes[oi] = outcome
-                _tally_outcome(result, outcome, append=False)
-            else:
-                result.outcomes.append(outcome)
-                _tally_outcome(result, outcome, append=False)
-
-            try:
-                _commit_outcome(config, outcome, gap)
-            except Exception:
+            if exc is not None:
                 logger.warning(
-                    "commit failed for %s:%s",
+                    "joern re-review failed for %s:%s: %s",
                     gap["file"],
                     gap["name"],
-                    exc_info=True,
+                    exc,
                 )
+                continue
 
-            if (
-                config.enable_session_context
-                and session_observations is not None
-                and outcome.review_result
-            ):
-                _accumulate_observations(
-                    session_observations,
-                    outcome,
-                    gap,
-                    sweep_pre_status=prior_outcome.status,
-                    target_path=config.target_path,
-                )
-
-            logger.info(
-                "joern re-review %s:%s: clean -> %s",
-                gap["file"],
-                gap["name"],
-                outcome.status,
+            outcome.line = gap.get("line_start", 0)
+            # Phase ledger — the call cost money whether or not the
+            # verdict changed (deepen's booking is the template).
+            result.cost_tracker.record_call(
+                "re_review",
+                cost_usd=outcome.cost_usd,
+                wall_time_s=outcome.duration_s,
             )
-        else:
-            # Kept the prior verdict — the re-review call still spent
-            # real money; accepted verdicts book it via _tally_outcome
-            # above (deepen's dominated branch is the template).
-            with result._lock:
-                result.total_cost_usd += outcome.cost_usd
+
+            if continuation_owner is not None and not continuation_owner.can_publish(idx):
+                continuation_owner.fail(idx, "late_joern_context_not_admissible")
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                continue
+
+            if outcome.status in ("finding", "suspicious"):
+                if outcome.status == "finding" and config.sweep_validate_findings:
+                    outcome = _sweep_validate(
+                        outcome,
+                        config,
+                        sarif_cache,
+                        tier_counters=result.tier_counters,
+                        evidence_index=evidence_index,
+                        joern_server=joern_server,
+                    )
+                if outcome.status == "finding":
+                    outcome = _apply_reachability_gate(
+                        outcome,
+                        ctx,
+                        entry_points,
+                        config,
+                    )
+                if outcome.status == "finding":
+                    gate_violations = _check_finding_gates(
+                        outcome,
+                        audit_log=audit_log,
+                        mode=config.mode,
+                    )
+                    if gate_violations:
+                        outcome = _demote_outcome(
+                            outcome,
+                            f"[gate violation: {'; '.join(gate_violations)}]",
+                        )
+
+                # Guarded like the sibling passes (_iterative_re_review,
+                # _callee_contract_requeue): the prior outcome may no
+                # longer be in the list by replace time.
+                if continuation_owner is not None and not continuation_owner.can_publish(idx):
+                    continuation_owner.fail(idx, "late_joern_source_changed_before_publication")
+                    with result._lock:
+                        result.total_cost_usd += outcome.cost_usd
+                    continue
+                if prior_outcome in result.outcomes:
+                    _untally_outcome(result, prior_outcome)
+                    oi = result.outcomes.index(prior_outcome)
+                    result.outcomes[oi] = outcome
+                    _tally_outcome(result, outcome, append=False)
+                else:
+                    result.outcomes.append(outcome)
+                    _tally_outcome(result, outcome, append=False)
+
+                try:
+                    _commit_outcome(config, outcome, gap)
+                except Exception:
+                    logger.warning(
+                        "commit failed for %s:%s",
+                        gap["file"],
+                        gap["name"],
+                        exc_info=True,
+                    )
+
+                if (
+                    config.enable_session_context
+                    and session_observations is not None
+                    and outcome.review_result
+                ):
+                    _accumulate_observations(
+                        session_observations,
+                        outcome,
+                        gap,
+                        sweep_pre_status=prior_outcome.status,
+                        target_path=config.target_path,
+                    )
+
+                logger.info(
+                    "joern re-review %s:%s: clean -> %s",
+                    gap["file"],
+                    gap["name"],
+                    outcome.status,
+                )
+            else:
+                # Kept the prior verdict — the re-review call still spent
+                # real money; accepted verdicts book it via _tally_outcome
+                # above (deepen's dominated branch is the template).
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+
+            if continuation_owner is not None:
+                continuation_owner.complete(idx, outcome.status if outcome.status in ("finding", "suspicious")
+                                            else prior_outcome.status)
+
+    finally:
+        if continuation_owner is not None:
+            continuation_owner.close()
 
     return result
 
