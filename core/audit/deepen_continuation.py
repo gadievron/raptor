@@ -5,9 +5,13 @@ A selection is a policy decision to spend attention, never new source evidence.
 from __future__ import annotations
 
 from threading import Lock
+from typing import TYPE_CHECKING
 
 from .continuation_context import context_version
 from .knowledge_calls import KnowledgeCallRefused
+
+if TYPE_CHECKING:
+    from .knowledge_runtime import AuditKnowledgeRuntime, KnowledgeReservation
 
 QUALITY_POLICY = "deepen-quality-v1"
 _QUALITY_REASONS = {
@@ -34,12 +38,12 @@ def render_deepen_selection(value) -> str:
 class DeepenContinuations:
     """Own only pass handles; all admission and limits belong to the runtime."""
 
-    def __init__(self, runtime, review_fn, admission):
+    def __init__(self, runtime: AuditKnowledgeRuntime, review_fn, admission):
         self.runtime = runtime
         self.review_fn = runtime.wrap_review(review_fn)
         self.admission = admission
         self._lock = Lock()
-        self._passes = {}
+        self._passes: dict[int, tuple[KnowledgeReservation, dict]] = {}
 
     def dispatch(self, index, ctx, config):
         value = render_deepen_selection(ctx.get("deepen_quality_selection"))

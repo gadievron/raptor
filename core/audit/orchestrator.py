@@ -27974,7 +27974,7 @@ def _deepen_suspicious(
                         continuation_owner.fail(idx, "deepen_source_changed_before_publication")
                         continue
                     disposition = _publish_study_outcome(
-                        config, result, knowledge_runtime, continuation_owner.reservation(idx),
+                        config, result, continuation_owner.runtime, continuation_owner.reservation(idx),
                         prior_outcome, outcome, gap)
                     if disposition != "published":
                         continuation_owner.fail(idx, disposition)
