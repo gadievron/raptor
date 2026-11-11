@@ -14,10 +14,14 @@ from __future__ import annotations
 
 import core.coverage.journal as _mock_consumer_os
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 from core.testing.processes import run_in_process_group as _run_memory_process
 
 
+from contextlib import ExitStack, contextmanager
+import errno
 import os
+import stat as _stat
 import threading
 import time
 import tracemalloc
@@ -47,9 +51,10 @@ class TestManifestReader:
             done.set()
 
         t = threading.Thread(target=_read, daemon=True)
-        t.start()
-        assert done.wait(5), "manifest read wedged on a planted FIFO"
-        assert result == [set()]
+        with _retiring_fifo_thread(t, done, manifest, writer=False):
+            t.start()
+            assert done.wait(5), "manifest read wedged on a planted FIFO"
+            assert result == [set()]
 
     def test_missing_manifest_is_silent_empty(self, tmp_path):
         assert read_manifest_lines(tmp_path / ".reads-manifest") == set()
@@ -112,7 +117,53 @@ class TestManifestReader:
             assert swapped.is_set(), "swapper never installed the foreign symlink"
 
 
-def _bounded(fn, secs: float = 5.0):
+@contextmanager
+def _retiring_fifo_thread(worker, finished, fifo, *, writer):
+    """Offer the owned FIFO peer, then retire the watchdog before its fixture."""
+    held = []
+
+    def peer(flags):
+        fd = os.open(fifo, flags | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            assert _stat.S_ISFIFO(os.fstat(fd).st_mode), "watchdog peer is not a FIFO"
+        except BaseException:
+            os.close(fd)
+            raise
+        return fd
+
+    def release():
+        if fifo is None or finished.is_set() or not worker.is_alive():
+            return
+        if writer:
+            held.append(peer(os.O_RDONLY))
+            return
+        deadline = time.monotonic() + 5
+        while worker.is_alive() and not finished.is_set():
+            try:
+                fd = peer(os.O_WRONLY)
+            except OSError as error:
+                if error.errno != errno.ENXIO:
+                    raise
+                assert time.monotonic() < deadline, "watchdog reader never offered a peer"
+                time.sleep(0.005)
+            else:
+                # A successful writer open pairs with the waiting reader.
+                # Close immediately so a reader awaiting data also receives EOF.
+                os.close(fd)
+                return
+
+    def close_peers():
+        with ExitStack() as cleanup:
+            for fd in held:
+                cleanup.callback(os.close, fd)
+
+    with ExitStack() as cleanup:
+        cleanup.callback(close_peers)
+        with retiring_threads([worker], release=release, timeout=5):
+            yield
+
+
+def _bounded(fn, secs: float = 5.0, *, fifo, writer):
     """Run *fn* on a watchdog thread; fail the test if it wedges."""
     done = threading.Event()
     box: list = []
@@ -126,9 +177,10 @@ def _bounded(fn, secs: float = 5.0):
             done.set()
 
     t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    assert done.wait(secs), "call wedged on a planted FIFO"
-    return box[0]
+    with _retiring_fifo_thread(t, done, fifo, writer=writer):
+        t.start()
+        assert done.wait(secs), "call wedged on a planted FIFO"
+        return box[0]
 
 
 class TestWriterFifoRefusal:
@@ -148,7 +200,8 @@ class TestWriterFifoRefusal:
         from core.coverage.journal import append_entry
         os.mkfifo(tmp_path / "review-journal.jsonl")
         kind, value = _bounded(
-            lambda: append_entry(tmp_path, self._entry()))
+            lambda: append_entry(tmp_path, self._entry()),
+                fifo=tmp_path / "review-journal.jsonl", writer=True)
         assert kind == "raised" and isinstance(value, OSError)
 
     def test_append_entry_refuses_fifo_with_reader(self, tmp_path):
@@ -161,7 +214,8 @@ class TestWriterFifoRefusal:
         rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
         try:
             kind, value = _bounded(
-                lambda: append_entry(tmp_path, self._entry()))
+                lambda: append_entry(tmp_path, self._entry()),
+                fifo=tmp_path / "review-journal.jsonl", writer=True)
             assert kind == "raised" and isinstance(value, OSError)
         finally:
             os.close(rfd)
@@ -175,7 +229,7 @@ class TestWriterFifoRefusal:
             with coverage_store_lock(cov):
                 return "entered"
 
-        kind, value = _bounded(_take)
+        kind, value = _bounded(_take, fifo=tmp_path / "coverage.json.lock", writer=True)
         assert (kind, value) == ("ok", "entered")
 
     def test_index_lock_degrades_on_fifo_sidecar(self, tmp_path):
@@ -187,13 +241,14 @@ class TestWriterFifoRefusal:
             with _flock(index):
                 return "entered"
 
-        kind, value = _bounded(_take)
+        kind, value = _bounded(_take, fifo=tmp_path / "review-journal-index.json.lock", writer=True)
         assert (kind, value) == ("ok", "entered")
 
     def test_flush_journal_skips_fifo(self, tmp_path):
         from core.coverage.journal import flush_journal
         os.mkfifo(tmp_path / "review-journal.jsonl")
-        kind, _ = _bounded(lambda: flush_journal(tmp_path))
+        kind, _ = _bounded(lambda: flush_journal(tmp_path),
+                           fifo=tmp_path / "review-journal.jsonl", writer=False)
         assert kind == "ok"
 
     def test_flush_journal_skips_symlink(self, tmp_path):
@@ -203,7 +258,7 @@ class TestWriterFifoRefusal:
         foreign = tmp_path / "foreign"
         foreign.write_text("x")
         (tmp_path / "review-journal.jsonl").symlink_to(foreign)
-        kind, _ = _bounded(lambda: flush_journal(tmp_path))
+        kind, _ = _bounded(lambda: flush_journal(tmp_path), fifo=None, writer=False)
         assert kind == "ok"
 
     def test_append_entry_still_writes_regular_journal(self, tmp_path):
@@ -257,9 +312,10 @@ class TestJournalReader:
             done.set()
 
         t = threading.Thread(target=_read, daemon=True)
-        t.start()
-        assert done.wait(5), "journal read wedged on a planted FIFO"
-        assert result == [[]]
+        with _retiring_fifo_thread(t, done, tmp_path / "review-journal.jsonl", writer=False):
+            t.start()
+            assert done.wait(5), "journal read wedged on a planted FIFO"
+            assert result == [[]]
 
     def test_symlink_journal_refused(self, tmp_path):
         foreign = tmp_path / "foreign.jsonl"
