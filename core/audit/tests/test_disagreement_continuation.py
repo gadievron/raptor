@@ -251,3 +251,10 @@ def test_disagreement_invocation_failure_releases_reservation(actual):
     run()
     assert result.outcomes[0] is prior
     assert not runtime._active
+
+
+def test_positive_same_name_occurrence_cannot_make_clean_target_unambiguous(actual):
+    _, _, _, client, result, _, _, run = actual
+    result.outcomes.append(orch.ReviewOutcome("selected.py", "selected", "suspicious", "Different occurrence", line=8))
+    run()
+    assert client.prompts == []

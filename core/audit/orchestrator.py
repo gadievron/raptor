@@ -10013,6 +10013,23 @@ def _run_audit_body(
                 joern_future, evidence_index, checklist, sarif_cache)
             joern_future = None
 
+        ready_disagreements = {}
+        try:
+            from .ready_review_context import prepare_ready_disagreement_contexts
+            ready_disagreements = prepare_ready_disagreement_contexts(result, layer_disagreements)
+        except Exception:
+            logger.warning("Could not collect advisory disagreement context", exc_info=True)
+
+        ready_live_sinks = {}
+        if live_classifications is not None and live_classifications.sinks:
+            try:
+                from .ready_review_context import prepare_ready_live_sinks
+                expand_wrapper_sinks(live_classifications, call_edges or [])
+                ready_live_sinks = prepare_ready_live_sinks(
+                    result, gaps, call_edges, live_classifications)
+            except Exception:
+                logger.warning("Could not collect advisory live-sink context", exc_info=True)
+
         # --- Callee-contract propagation (#6): re-review callers whose
         #     callee assumption was contradicted by the callee's review ---
         # Budget-gated like the synthesis pass above: a budget/deadline-
@@ -10041,6 +10058,8 @@ def _run_audit_body(
                     on_progress=on_progress,
                     max_workers=resolved_workers,
                     knowledge_runtime=knowledge_runtime,
+                    ready_live_sinks=ready_live_sinks,
+                    ready_disagreements=ready_disagreements,
                     ready_joern_gaps=reviewed_before_joern,
                 )
                 if contract_re:
@@ -10119,6 +10138,8 @@ def _run_audit_body(
                 mechanical_findings=mechanical_findings,
                 synthesis_counter=getattr(shared, "synthesis_counter", None),
                 knowledge_runtime=knowledge_runtime,
+                ready_live_sinks=ready_live_sinks,
+                ready_disagreements=ready_disagreements,
             )
 
         # Post-loop pass wall-clock phases: one start/end per pass at its
@@ -10229,6 +10250,8 @@ def _run_audit_body(
             joern_server=joern_server,
             max_workers=resolved_workers,
             knowledge_runtime=knowledge_runtime,
+            ready_live_sinks=ready_live_sinks,
+            ready_disagreements=ready_disagreements,
         )
         _pass_ledger.end_phase()
         logger.debug("exited _iterative_re_review")
@@ -10237,30 +10260,18 @@ def _run_audit_body(
         if live_classifications is not None and live_classifications.sinks:
             _pass_ledger.start_phase("live_sink_requeue")
             try:
-                expand_wrapper_sinks(
-                    live_classifications,
-                    call_edges or [],
-                )
-                # One index build instead of two linear outcome scans per
-                # gap (the pass was O(gaps x outcomes) — quadratic on
-                # large audits).  First occurrence wins, matching the old
-                # next() semantics.
-                ls_outcome_by_key: dict[tuple[str, str], ReviewOutcome] = {}
-                for o in result.outcomes:
-                    ls_outcome_by_key.setdefault((o.file, o.function), o)
+                # Resolve the current canonical occurrence, never the first
+                # bare file/name match. The ready classification snapshot was
+                # collected before any post-loop reservation.
+                ls_outcome_by_key = {}
+                for outcome in result.outcomes:
+                    key = (outcome.file, outcome.function, outcome.line)
+                    ls_outcome_by_key.setdefault(key, []).append(outcome)
                 live_sink_targets = []
                 for gap in gaps:
-                    gap_key = f"{gap['file']}:{gap['name']}"
-                    prior = ls_outcome_by_key.get((gap["file"], gap["name"]))
-                    if prior is None:
-                        continue
-                    callees = [
-                        e.get("callee", "")
-                        for e in (call_edges or [])
-                        if f"{e.get('caller_file', '')}:{e.get('caller', '')}" == gap_key
-                    ]
-                    upgrade = live_classifications.should_upgrade_triage(gap_key, callees)
-                    if upgrade and prior.status == "clean":
+                    key = (gap["file"], gap["name"], gap.get("line_start"))
+                    matches = ls_outcome_by_key.get(key, ())
+                    if key in ready_live_sinks and len(matches) == 1 and matches[0].status == "clean":
                         live_sink_targets.append(gap)
                 if live_sink_targets:
                     effective_ls_workers = max(1, resolved_workers)
@@ -10269,7 +10280,6 @@ def _run_audit_body(
                         len(live_sink_targets),
                         effective_ls_workers,
                     )
-                    sorted_sinks = sorted(live_classifications.sinks)
                     ls_prepared = []
                     for target_gap in live_sink_targets:
                         ctx = _build_context(
@@ -10280,86 +10290,116 @@ def _run_audit_body(
                             evidence_index,
                             discovered_evidence=discovered_evidence,
                         )
-                        ctx["live_sinks"] = sorted_sinks
+                        ctx["live_sinks"] = ready_live_sinks[(target_gap["file"], target_gap["name"], target_gap.get("line_start"))]
+                        disagreement = ready_disagreements.get(
+                            (target_gap["file"], target_gap["name"], target_gap.get("line_start")))
+                        if disagreement:
+                            ctx["disagreement_override"] = disagreement
                         ctx["triage_bucket"] = "DEEP_DIVE"
-                        prior = ls_outcome_by_key.get(
-                            (target_gap["file"], target_gap["name"]),
-                        )
+                        prior, = ls_outcome_by_key[
+                            (target_gap["file"], target_gap["name"], target_gap.get("line_start"))]
                         ls_prepared.append((len(ls_prepared), target_gap, prior, ctx))
 
-                    # Environment gate at worker entry: this pass
-                    # pre-submits every future and its only stop check
-                    # runs at harvest (cancellation cannot stop an item a
-                    # worker already picked up), so without the gate a
-                    # pause/conclusion never stops new live-sink
-                    # dispatches. Same seam as the re-review driver.
-                    _ls_env_gate = _make_dispatch_gate(config)
+                    from .live_sink_continuation import LiveSinkContinuations, retain_unbound_advisory_input_limit
+                    _ls_owner = LiveSinkContinuations(
+                        knowledge_runtime, review_fn,
+                        lambda: not _check_budget(config, start_time, result))
 
-                    def _do_ls_review(item):
-                        idx, _gap, _prior, ctx = item
-                        if _ls_env_gate is not None:
-                            _ls_env_gate()
-                            if _check_budget(config, start_time, result):
-                                # Never dispatched — dropped like a
-                                # cancelled future (idx, None, None).
-                                return (idx, None, None)
-                        try:
-                            outcome = review_fn(ctx, config)
-                            return (idx, outcome, None)
-                        except Exception as exc:  # noqa: BLE001
-                            return (idx, None, exc)
+                    try:
+                        # Environment gate at worker entry: this pass
+                        # pre-submits every future and its only stop check
+                        # runs at harvest (cancellation cannot stop an item a
+                        # worker already picked up), so without the gate a
+                        # pause/conclusion never stops new live-sink
+                        # dispatches. Same seam as the re-review driver.
+                        _ls_env_gate = _make_dispatch_gate(config)
 
-                    if effective_ls_workers <= 1:
-                        ls_raw = []
-                        for item in ls_prepared:
+                        def _do_ls_review(item):
+                            idx, _gap, _prior, ctx = item
                             if _ls_env_gate is not None:
                                 _ls_env_gate()
-                            if _check_budget(config, start_time, result):
-                                break
-                            ls_raw.append(_do_ls_review(item))
-                    else:
-                        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-                        ls_raw = []
-                        with ThreadPoolExecutor(max_workers=effective_ls_workers) as pool:
-                            ls_futs = {
-                                submit_with_joern(pool, _do_ls_review, item): item
-                                for item in ls_prepared
-                            }
-                            for fut in as_completed(ls_futs):
-                                # Harvest BEFORE the stop decision: this
-                                # future already completed — its outcome
-                                # is paid work and must reach the tally
-                                # (see the batched-review loop above).
-                                ls_raw.append(fut.result())
                                 if _check_budget(config, start_time, result):
-                                    for f in ls_futs:
-                                        f.cancel()
-                                    break
-
-                    for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):  # type: ignore[misc]
-                        _, target_gap, prior, _ctx = ls_prepared[idx]
-                        if outcome is None and exc is None:
-                            continue  # gate-skipped — never dispatched
-                        if exc is not None:
-                            logger.warning(
-                                "live-sink re-review failed for %s:%s: %s",
-                                target_gap["file"],
-                                target_gap["name"],
-                                exc,
-                            )
-                            continue
-                        if prior is not None:
-                            _untally_outcome(result, prior)
+                                    # Never dispatched — dropped like a
+                                    # cancelled future (idx, None, None).
+                                    return (idx, None, None)
                             try:
-                                result.outcomes.remove(prior)
-                            except ValueError:
-                                pass
-                        _tally_outcome(result, outcome)
-                        if collector is not None:
-                            collector.submit(outcome, target_gap)
+                                outcome = _ls_owner.dispatch(idx, ctx, config)
+                                return (idx, outcome, None)
+                            except Exception as exc:  # noqa: BLE001
+                                return (idx, None, exc)
+
+                        if effective_ls_workers <= 1:
+                            ls_raw = []
+                            for item in ls_prepared:
+                                if _ls_env_gate is not None:
+                                    _ls_env_gate()
+                                if _check_budget(config, start_time, result):
+                                    break
+                                ls_raw.append(_do_ls_review(item))
                         else:
-                            _commit_outcome(config, outcome, target_gap)
+                            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                            ls_raw = []
+                            with ThreadPoolExecutor(max_workers=effective_ls_workers) as pool:
+                                ls_futs = {
+                                    submit_with_joern(pool, _do_ls_review, item): item
+                                    for item in ls_prepared
+                                }
+                                stop_observed = False
+                                for fut in as_completed(ls_futs):
+                                    if fut.cancelled():
+                                        continue
+                                    # Harvest BEFORE the stop decision: this
+                                    # future already completed — its outcome
+                                    # is paid work and must reach the tally
+                                    # (see the batched-review loop above).
+                                    ls_raw.append(fut.result())
+                                    if not stop_observed and _check_budget(config, start_time, result):
+                                        stop_observed = True
+                                        for f in ls_futs:
+                                            f.cancel()
+                                        # Already-running paid reviews still reach the
+                                        # harvest and cost ledger; cancellation stops
+                                        # only work that has not begun.
+
+                        for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):  # type: ignore[misc]
+                            _, target_gap, prior, _ctx = ls_prepared[idx]
+                            if outcome is None and exc is None:
+                                continue  # gate-skipped — never dispatched
+                            if exc is not None:
+                                logger.warning(
+                                    "live-sink re-review failed for %s:%s: %s",
+                                    target_gap["file"],
+                                    target_gap["name"],
+                                    exc,
+                                )
+                                continue
+                            outcome.line = target_gap.get("line_start", 0)
+                            result.cost_tracker.record_call(
+                                "re_review", cost_usd=outcome.cost_usd, wall_time_s=outcome.duration_s)
+                            with result._lock:
+                                result.total_cost_usd += outcome.cost_usd
+                            if outcome.status not in ("finding", "suspicious", "clean"):
+                                _ls_owner.fail(idx, "live_sink_assessment_failed")
+                                continue
+                            if not _ls_owner.can_publish(idx):
+                                _ls_owner.fail(idx, "live_sink_context_or_source_not_admissible")
+                                continue
+                            reservation = _ls_owner.reservation(idx)
+                            retain_unbound_advisory_input_limit(outcome, reservation)
+                            if outcome.status in ("finding", "suspicious"):
+                                disposition = _publish_study_outcome(
+                                    config, result, knowledge_runtime, reservation, prior, outcome, target_gap)
+                            else:
+                                disposition = _publish_study_candidates(
+                                    config, result, knowledge_runtime, reservation, prior, outcome, target_gap)
+                            if disposition not in ("published", "unchanged"):
+                                _ls_owner.fail(idx, disposition)
+                            else:
+                                _ls_owner.complete(idx, (outcome.status
+                                    if outcome.status in ("finding", "suspicious") else prior.status))
+                    finally:
+                        _ls_owner.close()
             except Exception:
                 logger.debug("live-sink expansion failed", exc_info=True)
 
@@ -27500,6 +27540,8 @@ def _deepen_suspicious(
     mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
     synthesis_counter: AtomicSynthesisCounter | None = None,
     knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
+    ready_live_sinks: dict | None = None,
+    ready_disagreements: dict | None = None,
 ) -> OrchestratorResult:
     """Re-review suspicious verdicts with enriched context.
 
@@ -27652,6 +27694,12 @@ def _deepen_suspicious(
         if prior_hyps:
             ctx["prior_hypotheses"] = prior_hyps
 
+        live_names = (ready_live_sinks or {}).get((prior_outcome.file, prior_outcome.function, gap.get("line_start")))
+        if live_names:
+            ctx["live_sinks"] = live_names
+        disagreement = (ready_disagreements or {}).get((prior_outcome.file, prior_outcome.function, gap.get("line_start")))
+        if disagreement:
+            ctx["disagreement_override"] = disagreement
         ctx["deepen"] = True
         ctx["deepen_quality_selection"] = {
             "policy": "deepen-quality-v1",
@@ -27742,6 +27790,9 @@ def _deepen_suspicious(
             if continuation_owner is not None:
                 with result._lock:
                     result.total_cost_usd += outcome.cost_usd
+                if ctx.get("live_sinks") or ctx.get("disagreement_override"):
+                    from .live_sink_continuation import retain_unbound_advisory_input_limit
+                    retain_unbound_advisory_input_limit(outcome, continuation_owner.reservation(idx))
                 if not continuation_owner.can_publish(idx):
                     continuation_owner.fail(idx, "deepen_context_or_source_not_admissible")
                     continue
@@ -28076,14 +28127,15 @@ def _re_review_disagreements(
     prepared: list[Any] = []
     for d in disagreements:
         key = f"{d.file}:{d.function}"
-        matches = [o for o in result.outcomes if (o.file, o.function) == (d.file, d.function)
-                   and o.status == "clean"]
+        matches = [o for o in result.outcomes if (o.file, o.function) == (d.file, d.function)]
         line = getattr(d, "line_start", None)
         if type(line) is int and line > 0:
             matches = [o for o in matches if o.line == line]
         if len(matches) != 1:
             continue
         prior = matches[0]
+        if prior.status != "clean":
+            continue
         gaps = [{**item, "file": path} for path, _info, item in _iter_checklist_items(checklist)
                 if (path, item.get("name")) == (prior.file, prior.function)
                 and (not prior.line or item.get("line_start", 0) == prior.line)]
@@ -28305,6 +28357,8 @@ def _iterative_re_review(
     joern_server=None,
     max_workers: int = 1,
     knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
+    ready_live_sinks: dict | None = None,
+    ready_disagreements: dict | None = None,
 ) -> OrchestratorResult:
     """Re-review callers of findings with propagated knowledge.
 
@@ -28329,7 +28383,8 @@ def _iterative_re_review(
                 result, config, review_fn, checklist=checklist, context_map=context_map,
                 fuzz_coverage=fuzz_coverage, evidence_index=evidence_index or {},
                 discovered_evidence=discovered_evidence, start_time=start_time,
-                max_workers=max_workers, knowledge_runtime=knowledge_runtime)
+                max_workers=max_workers, knowledge_runtime=knowledge_runtime,
+                ready_live_sinks=ready_live_sinks, ready_disagreements=ready_disagreements)
             for outcome in result.outcomes:
                 if id(outcome) not in previous and outcome.review_result:
                     constraints = _extract_and_propagate(
@@ -35088,6 +35143,10 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                 continue
             from .ready_review_context import offer_ready_joern_context
             offer_ready_joern_context(runtime, ctx, gap, ready_joern_gaps, evidence_index or {})
+            from .ready_review_context import offer_ready_live_sink_context
+            offer_ready_live_sink_context(runtime, ctx)
+            from .ready_review_context import offer_ready_disagreement_context
+            offer_ready_disagreement_context(runtime, ctx)
             version = context_version(render_callee_context(
                 ctx.get("callee_contract_violation"), defend_identifier=_defend_identifier))
             spec = context_spec(ctx, kind="callee_contract", version=version)
@@ -35153,7 +35212,8 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
 
 def _requeue_ready_callee_assessments(
     result, config, review_fn, *, checklist, context_map, fuzz_coverage, evidence_index,
-    discovered_evidence, start_time, runtime, ready_joern_gaps=(),
+    discovered_evidence, start_time, runtime, ready_joern_gaps=(), ready_live_sinks=None,
+    ready_disagreements=None,
 ):
     """Build one current relation/assessment union regardless of triggering stage."""
     from collections import Counter
@@ -35190,6 +35250,12 @@ def _requeue_ready_callee_assessments(
             gap["line_end"] = ctx["line_end"]
         if fuzz_coverage:
             ctx["fuzz_coverage"] = _fuzz_coverage_for(fuzz_coverage, path, gap["name"])
+        live_names = (ready_live_sinks or {}).get((caller.file, caller.function, gap.get("line_start")))
+        if live_names:
+            ctx["live_sinks"] = live_names
+        disagreement = (ready_disagreements or {}).get((caller.file, caller.function, gap.get("line_start")))
+        if disagreement:
+            ctx["disagreement_override"] = disagreement
         ctx["callee_contract_violation"] = bundle.payload
         prepared.append((len(prepared), gap, caller, ctx, bundle.contributors))
     return _run_callee_continuations(
@@ -35215,6 +35281,8 @@ def _callee_contract_requeue(
     max_workers: int = 1,
     knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
     ready_joern_gaps: list[dict[str, Any]] | tuple = (),
+    ready_live_sinks: dict | None = None,
+    ready_disagreements: dict | None = None,
 ) -> int:
     """Re-review callers with advisory assessments of their named callees.
 
@@ -35229,7 +35297,8 @@ def _callee_contract_requeue(
             result, config, review_fn, checklist=checklist, context_map=context_map,
             fuzz_coverage=fuzz_coverage, evidence_index=evidence_index,
             discovered_evidence=discovered_evidence, start_time=start_time,
-            runtime=knowledge_runtime, ready_joern_gaps=ready_joern_gaps)
+            runtime=knowledge_runtime, ready_joern_gaps=ready_joern_gaps,
+            ready_live_sinks=ready_live_sinks, ready_disagreements=ready_disagreements)
 
     def resolve_callee(name, dep):
         matches = [o for o in result.outcomes

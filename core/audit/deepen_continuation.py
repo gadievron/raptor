@@ -48,6 +48,10 @@ class DeepenContinuations:
         with self._lock:
             if index in self._passes:
                 raise KnowledgeCallRefused("deepen_pass_already_owned")
+        from .ready_review_context import offer_ready_live_sink_context
+        offer_ready_live_sink_context(self.runtime, ctx)
+        from .ready_review_context import offer_ready_disagreement_context
+        offer_ready_disagreement_context(self.runtime, ctx)
         version = context_version(value)
         self.runtime.offer_context_delta(ctx, kind="deepen_quality", version=version)
         width = max(1, config.review_passes,

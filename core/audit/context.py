@@ -1923,20 +1923,11 @@ def format_context_for_prompt(
             2,
         ))
 
-    if ctx.get("live_sinks"):
-        ls_lines = [
-            "\n### Live sinks (dynamic classification)",
-            ("These sinks were classified LIVE for this run — this "
-             "re-review runs at DEEP_DIVE depth because the function "
-             "can reach one of them:"),
-        ]
-        ls_lines.extend(
-            f"- {_defend_identifier(str(s), max_length=200)}"
-            for s in ctx["live_sinks"][:15]
-        )
-        sections.append(PromptSection(
-            "live_sinks", "\n".join(ls_lines), 1,
-        ))
+    from .live_sink_continuation import render_live_sink_context
+
+    live_sink_block = render_live_sink_context(ctx.get("live_sinks"), defend_identifier=_defend_identifier)
+    if live_sink_block:
+        sections.append(PromptSection("live_sinks", live_sink_block, 1))
 
     if ctx.get("exploit_feedback"):
         sections.append(PromptSection(
