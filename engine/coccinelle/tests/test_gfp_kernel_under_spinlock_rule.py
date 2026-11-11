@@ -1,9 +1,8 @@
-"""Fixture tests for the gfp_kernel_under_spinlock rule.
+"""Native fixtures for allocation candidates in spinlock scope.
 
-Verification-role rule (fires mint confirmed CWE-764 verdicts):
-GFP_KERNEL can sleep, and sleeping under a spinlock deadlocks. The
-positive pins kmalloc(GFP_KERNEL) inside the lock; the negatives
-pin the GFP_ATOMIC fix and an allocation moved after the unlock.
+Literal sleeping flags remain visible, nonblocking supported calls and
+released-lock cases stay quiet. Local patterns do not establish the full
+lock lifetime, execution context or allocator contract.
 """
 
 from __future__ import annotations
@@ -93,6 +92,8 @@ def test_allocator_flags_at_declared_position(tmp_path, allocation):
     assert [(row["rule"], row["line"]) for row in results] == [
         ("gfp_kernel_under_spinlock", 4),
     ]
+    assert "API-supported flags" in results[0]["message"]
+    assert "use GFP_ATOMIC" not in results[0]["message"]
 
 
 @pytest.mark.parametrize("allocation", _ALLOCATOR_CALLS)

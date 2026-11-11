@@ -1,13 +1,16 @@
-// gfp_kernel_under_spinlock.cocci — Detect GFP_KERNEL allocation
-// while holding a spinlock.
+// gfp_kernel_under_spinlock.cocci — Review potentially sleeping allocations
+// in spinlock scope. Lock ownership, release wrappers, allocator identity
+// and execution context require review before treating a match as a defect.
 //
-// GFP_KERNEL can sleep (triggers direct reclaim). Sleeping under a
-// spinlock is illegal: the scheduler can deadlock or corrupt the
-// lock state. Must use GFP_ATOMIC or GFP_NOWAIT under spinlocks.
+// Prefer moving an allocation outside atomic context. Where that is not
+// possible, only use nonblocking flags supported by the particular API;
+// kvmalloc does not support GFP_ATOMIC or GFP_NOWAIT.
 //
-// CWE-764: Multiple Locks of a Critical Resource (deadlock class)
-// Zero-FP confidence: very high — always wrong in kernel context.
-// @role: verification
+// Composite flags and other allocation/lock forms are not comprehensively
+// matched, so silence cannot refute the broader sleeping-allocation class.
+// CWE-764: Multiple Locks of a Critical Resource (deadlock class).
+// @role: detection
+// raptor: confirm-only
 
 @gfp_under_spin@
 expression E, S, L;
@@ -40,6 +43,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Sleeping allocation (GFP_KERNEL) under spinlock — use GFP_ATOMIC (CWE-764)"
+  "message":   "Allocation with a potentially sleeping GFP flag in spinlock scope; review lock lifetime, execution context and API-supported flags (CWE-764)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

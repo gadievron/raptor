@@ -514,3 +514,18 @@ def test_atomic_actions_require_counter_and_callee_ownership(monkeypatch, tmp_pa
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_sleeping_allocation_candidates_require_lock_and_api_context(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/gfp_kernel_under_spinlock.cocci"
+    receipt = "coccinelle:gfp_kernel_under_spinlock"
+    assert get_rule_role(str(rule)) == "detection"
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
