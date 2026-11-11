@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from hashlib import sha256
 import logging
+import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -301,7 +302,13 @@ def study_batch(batch, runtime: AuditKnowledgeRuntime, config: OrchestratorConfi
                         raise SubjectDispatchRefused(reason)
                     if not runtime.admit_source_attempt(submitted):
                         raise SubjectDispatchRefused("source_study_admission_refused")
-                    return client.generate_structured(*args, **kwargs)
+                    from .knowledge_calls import accounting_context_kwargs
+                    packet_key = json.dumps(sorted({r.request_id for r in submitted}), separators=(",", ":"))
+                    owned = accounting_context_kwargs(
+                        client, work_id="study:" + sha256(packet_key.encode()).hexdigest(),
+                        beneficiaries=tuple(dict.fromkeys(r.origin.pass_id for r in submitted)),
+                    )
+                    return client.generate_structured(*args, **{**kwargs, **owned})
 
         run_phase2(plan.items, str(config.study_root or config.target_path), StudyClient(),
                    source_root=str(config.study_root or config.target_path), subjects=subjects,
