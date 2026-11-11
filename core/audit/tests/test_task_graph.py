@@ -1032,3 +1032,88 @@ class TestBreakCyclesDeterminism:
             "cycle-break edge drops varied with PYTHONHASHSEED:\n"
             + "\n".join(sorted(outputs))
         )
+
+
+class TestReviewAdmissionFairness:
+    def test_bulk_and_individual_pops_share_persistent_lane_opportunities(self):
+        graph = TaskGraph.from_workqueue([_gap('a.py', f'initial-{i}', 0) for i in range(4)], [],
+                                         review_fairness=True)
+        assert graph.stats.initial_ready == 4
+        for i in range(2):
+            assert graph.inject_task(f'followup-{i}', _gap('a.py', f'followup-{i}'),
+                                     priority=100, continuation=True)
+        first = graph.pop_ready(2)
+        second = graph.pop_ready(2)
+        assert [task.gap['name'] for task in first + second] == [
+            'initial-0', 'initial-1', 'initial-2', 'followup-0']
+        assert [task.gap['name'] for task in graph.pop_ready(10)] == ['initial-3', 'followup-1']
+        assert graph.pop_ready(1) == []
+        state = graph.admission_state()
+        assert state['initial_admissions'] == 4 and state['continuation_admissions'] == 2
+        assert state['starvation_opportunities'] == 0
+
+    def test_fairness_preserves_dependencies_issued_exclusion_and_requeue_cap(self):
+        graph = TaskGraph.from_workqueue(
+            [_gap('a.py', 'caller', 10), _gap('a.py', 'callee', 0)],
+            [_edge('a.py', 'caller', 'a.py', 'callee')], review_fairness=True)
+        assert graph.inject_task('a.py:caller:0', _gap('a.py', 'caller'), priority=100,
+                                 continuation=True)
+        callee, = graph.pop_ready(10)
+        assert callee.gap['name'] == 'callee'
+        assert graph.pop_ready(10) == []
+        graph.mark_complete(callee.key)
+        caller, = graph.pop_ready(10)
+        assert caller.gap['name'] == 'caller'
+        assert graph.inject_task(caller.key, _gap('a.py', 'caller'), priority=200,
+                                 continuation=True)
+        assert graph.pop_ready(10) == []
+        graph.mark_complete(caller.key)
+        assert graph.inject_task(caller.key, _gap('a.py', 'caller'), priority=200, requeue=True)
+        assert graph.pop_ready(10) == [graph._tasks[caller.key]]
+        assert graph.pop_ready(10) == []
+        graph.mark_complete(caller.key)
+        assert not graph.inject_task(caller.key, _gap('a.py', 'caller'), priority=300, requeue=True)
+
+    def test_reprioritisation_and_precompleted_work_do_not_double_count_admission(self):
+        graph = TaskGraph.from_workqueue([_gap('a.py', 'old', 0), _gap('a.py', 'new', 0)], [],
+                                         review_fairness=True)
+        for priority in range(10):
+            assert graph.inject_task('a.py:old:0', _gap('a.py', 'old'), priority=priority)
+        graph.mark_complete('a.py:new:0')
+        old, = graph.pop_ready(10)
+        assert old.gap['name'] == 'old'
+        assert graph.pop_ready(10) == []
+        snapshot = graph.admission_state()
+        assert snapshot['initial_admissions'] == 1
+        snapshot['initial_admissions'] = 999
+        assert graph.admission_state()['initial_admissions'] == 1
+
+    def test_legacy_default_retains_priority_order_and_no_fairness_state(self):
+        graph = TaskGraph.from_workqueue([_gap('a.py', 'old', 0), _gap('a.py', 'new', 100)], [])
+        assert [task.gap['name'] for task in graph.pop_ready(2)] == ['new', 'old']
+        assert graph.admission_state() == {'policy_version': 'legacy'}
+
+
+    def test_ready_lane_change_does_not_require_a_priority_increase(self):
+        graph = TaskGraph.from_workqueue([_gap('a.py', 'followup', 0)], [], review_fairness=True)
+        assert graph.inject_task('a.py:followup:0', _gap('a.py', 'followup'), priority=0,
+                                 continuation=True)
+        assert len(graph.pop_ready(10)) == 1
+        state = graph.admission_state()
+        assert state['initial_admissions'] == 0 and state['continuation_admissions'] == 1
+
+
+    def test_permission_to_requeue_does_not_relabel_an_unreviewed_unit(self):
+        for already_queued in (False, True):
+            gap = _gap('a.py', 'first-review', 0)
+            graph = TaskGraph.from_workqueue([gap] if already_queued else [], [], review_fairness=True)
+            key = 'a.py:first-review:0'
+            assert graph.inject_task(key, gap, priority=100, requeue=True)
+            first, = graph.pop_ready(1)
+            assert graph.admission_state()['initial_admissions'] == 1
+            assert graph.admission_state()['continuation_admissions'] == 0
+            graph.mark_complete(first.key)
+            assert graph.inject_task(key, gap, priority=100, requeue=True)
+            assert len(graph.pop_ready(1)) == 1
+            assert graph.admission_state()['initial_admissions'] == 1
+            assert graph.admission_state()['continuation_admissions'] == 1

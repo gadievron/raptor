@@ -17,6 +17,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
+from .review_fairness import ReviewAdmissionQueue
+
 logger = logging.getLogger(__name__)
 
 _UNBLOCKING_WEIGHT = 0.2
@@ -204,6 +206,10 @@ class TaskGraph:
       Chain-injected tasks (``inject_task``) stay urgent — a
       confirmed finding's neighbours are the most valuable next
       reviews under either objective.
+    With ``review_fairness=True``, ready initial reviews and continuations
+    instead share persistent 3:1 admission opportunities with a bounded
+    priority boost over FIFO age. This policy does not promise completion
+    times and takes precedence over legacy cost/priority ordering.
     """
 
     _tasks: dict[str, ReviewTask] = field(default_factory=dict)
@@ -221,6 +227,8 @@ class TaskGraph:
     _issued: set[str] = field(default_factory=set)
     _duration_hints: dict[str, float] = field(default_factory=dict)
     _schedule: str = "priority"
+    _review_admission: ReviewAdmissionQueue | None = field(default=None, repr=False)
+    _continuation_keys: set[str] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     stats: GraphStats = field(default_factory=GraphStats)
 
@@ -234,6 +242,9 @@ class TaskGraph:
         the classic priority ordering; in cost mode ``primary`` is
         the duration hint (urgent pushes jump the queue entirely).
         """
+        if self._review_admission is not None:
+            self._review_admission.push(key, priority_value, continuation=key in self._continuation_keys)
+            return
         if self._schedule == "cost":
             primary = (
                 float("inf") if urgent
@@ -254,6 +265,7 @@ class TaskGraph:
         duration_hints: dict[str, float] | None = None,
         schedule: str = "priority",
         soft_dep_keys: frozenset[str] = frozenset(),
+        review_fairness: bool = False,
     ) -> TaskGraph:
         scores = priority_scores or {}
         if schedule not in ("priority", "cost"):
@@ -321,6 +333,8 @@ class TaskGraph:
 
         graph = cls()
         graph._schedule = schedule
+        if review_fairness:
+            graph._review_admission = ReviewAdmissionQueue()
         graph._duration_hints = dict(duration_hints or {})
 
         # Soft dependencies: edges INTO glance-tier / vendored-verdict
@@ -404,7 +418,8 @@ class TaskGraph:
             cycle_back_edges_dropped=n_cycle_edges,
             bottleneck_edges_dropped=n_bottleneck_edges,
             repass_tasks=len(graph._repass_keys),
-            initial_ready=len(graph._ready),
+            initial_ready=(len(graph._review_admission) if graph._review_admission is not None
+                           else len(graph._ready)),
             max_fan_out=max(
                 (len(v) for v in graph._dependents.values()), default=0,
             ),
@@ -422,8 +437,15 @@ class TaskGraph:
         """
         with self._lock:
             result: list[ReviewTask] = []
-            while self._ready and len(result) < n:
-                *_, key = heapq.heappop(self._ready)
+            while len(result) < n:
+                if self._review_admission is not None:
+                    key = self._review_admission.pop()
+                    if key is None:
+                        break
+                else:
+                    if not self._ready:
+                        break
+                    *_, key = heapq.heappop(self._ready)
                 if key in self._completed or key in self._issued:
                     continue
                 self._issued.add(key)
@@ -435,6 +457,8 @@ class TaskGraph:
         with self._lock:
             self._completed.add(key)
             self._issued.discard(key)
+            if self._review_admission is not None:
+                self._review_admission.discard(key)
             newly_ready: list[str] = []
             for dep_key in self._dependents.get(key, []):
                 remaining = self._remaining_deps.get(dep_key)
@@ -474,6 +498,7 @@ class TaskGraph:
         priority: float,
         *,
         requeue: bool = False,
+        continuation: bool = False,
     ) -> bool:
         """Inject a new task or reprioritise an existing one.
 
@@ -486,11 +511,15 @@ class TaskGraph:
         ready queue for re-review with chain context.  Each task can be
         requeued at most once to prevent infinite cascades.
 
+        ``continuation`` explicitly selects the follow-up lane when review
+        fairness is enabled; requeued work uses that lane as well. First
+        reviews and follow-ups otherwise retain dependency/ownership checks.
+
         Returns True if the task was injected or reprioritised, False if
         already completed and not eligible for requeue.
         """
         with self._lock:
-            return self._inject_task_locked(key, gap, priority, requeue=requeue)
+            return self._inject_task_locked(key, gap, priority, requeue=requeue, continuation=continuation)
 
     def _inject_task_locked(
         self,
@@ -499,10 +528,16 @@ class TaskGraph:
         priority: float,
         *,
         requeue: bool = False,
+        continuation: bool = False,
     ) -> bool:
+        already_completed = key in self._completed
+        if already_completed and (not requeue or key in self._requeued):
+            return False
+        # requeue is permission, not evidence that this unit has already
+        # had its first review. Chain discoveries use it for both cases.
+        if continuation or already_completed:
+            self._continuation_keys.add(key)
         if key in self._completed:
-            if not requeue or key in self._requeued:
-                return False
             self._completed.discard(key)
             self._issued.discard(key)
             self._requeued.add(key)
@@ -523,6 +558,10 @@ class TaskGraph:
             if gap.get("force_review"):
                 existing_gap["force_review"] = True
             old_ep = self._effective_priority.get(key, 0.0)
+            if (continuation and priority <= old_ep
+                    and not self._remaining_deps.get(key) and key not in self._issued):
+                # A lane change is meaningful even without a priority boost.
+                self._push_ready(key, old_ep, urgent=True)
             if priority > old_ep:
                 self._effective_priority[key] = priority
                 # Only push tasks whose dependencies are satisfied and
@@ -554,6 +593,16 @@ class TaskGraph:
             key.rsplit(":", 1)[0], priority,
         )
         return True
+
+    @property
+    def review_fairness_enabled(self) -> bool:
+        return self._review_admission is not None
+
+    def admission_state(self) -> dict[str, str | int | float]:
+        """Snapshot the optional ready-lane policy without exposing its state."""
+        with self._lock:
+            return (self._review_admission.state() if self._review_admission is not None
+                    else {"policy_version": "legacy"})
 
     @property
     def injected_count(self) -> int:
