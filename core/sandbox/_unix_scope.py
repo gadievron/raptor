@@ -636,6 +636,7 @@ class UnixScopeSupervisor:
 
     def _decide_and_execute(self, nid, pid, nr, sockfd, addr_ptr,
                             addr_len) -> tuple[int, int]:
+        from ._retirement import retire_parent_resources
         if self._connect_nr is not None and nr != self._connect_nr:
             return -errno.ENOSYS, 0
         if addr_len < 2 or addr_len > 128 or addr_ptr == 0:
@@ -663,19 +664,20 @@ class UnixScopeSupervisor:
             pidfd = _pidfd_open_task(pid)
         except OSError as e:
             return -(e.errno or errno.EPERM), 0
+        dupfd = None
         try:
-            if not self._id_valid(nid):
-                return -errno.EPERM, 0
             try:
-                dupfd = _pidfd_getfd(pidfd, sockfd)
-            except OSError as e:
-                if e.errno in (errno.EBADF, errno.ENOTSOCK):
-                    return -e.errno, 0
-                return -errno.EPERM, 0
-        finally:
-            os.close(pidfd)
+                if not self._id_valid(nid):
+                    return -errno.EPERM, 0
+                try:
+                    dupfd = _pidfd_getfd(pidfd, sockfd)
+                except OSError as e:
+                    if e.errno in (errno.EBADF, errno.ENOTSOCK):
+                        return -e.errno, 0
+                    return -errno.EPERM, 0
+            finally:
+                retire_parent_resources(lambda: os.close(pidfd))
 
-        try:
             if family != socket.AF_UNIX:
                 return self._connect_inet_policied(dupfd, addr, family,
                                                    pid, nid=nid)
@@ -709,7 +711,9 @@ class UnixScopeSupervisor:
                 return -errno.EPERM, 0
             return self._connect_pathname(dupfd, pid, path, nid=nid)
         finally:
-            os.close(dupfd)
+            retire_parent_resources(
+                lambda: os.close(dupfd) if dupfd is not None else None,
+            )
 
     def _connect_inet_policied(self, dupfd: int, addr: bytes,
                                family: int, pid: int,
