@@ -1,11 +1,8 @@
-"""Fixture tests for the teardown_lifetime verification-grade rule.
+"""Fixture tests for cancellation/free candidate matching.
 
-Asynchronous callback cancel (timer_delete / del_timer / cancel_work
-/ cancel_delayed_work / hrtimer_try_to_cancel) followed by a free of
-the callback's container is the teardown-lifetime UAF race. The safe
-teardown uses the waiting _sync/_shutdown variants; a self-handler
-(container_of-derived container) is protected by non-reentrancy of
-the executing item — neither may fire.
+Rows establish local syntactic candidates. Callback concurrency, registration,
+container use and prior quiescence require separate review. The matcher retains
+its existing heuristic suppressions; silence is not a lifetime-safety proof.
 """
 
 from __future__ import annotations
