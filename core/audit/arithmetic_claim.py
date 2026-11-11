@@ -15,7 +15,6 @@ _MAX_CHARS = 8192
 _MAX_TOKENS = 512
 _MAX_DEPTH = 8
 _WORD_OPERATORS = {"plus": "+", "minus": "-", "times": "*"}
-_INTEGER_SUBJECT = re.compile(r"\b(?:integer|int)\s*(?:overflow|underflow|wraparound)\b", re.IGNORECASE)
 # Bare CWE labels and width modifiers are prose; code quotes retain the
 # arithmetic interpretation of the same characters.
 _TOKEN = re.compile(
@@ -230,9 +229,6 @@ def parse_overflow_claim(hypothesis: str) -> ArithmeticClaim | None:
     return claim if requested in {"overflow", claim.operator} else None
 
 
-def has_integer_overflow_subject(hypothesis: str) -> bool:
-    """The auxiliary disproof API must not reinterpret another bug class."""
-    return isinstance(hypothesis, str) and len(hypothesis) <= _MAX_CHARS and bool(_INTEGER_SUBJECT.search(hypothesis))
 
 
 def _quoted_arithmetic_claim(hypothesis, operators, *, negative_literals=False):

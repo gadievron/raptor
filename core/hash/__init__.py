@@ -17,7 +17,6 @@ doesn't wrap it.
 """
 
 import hashlib
-import os as __os
 from pathlib import Path
 from typing import BinaryIO
 
