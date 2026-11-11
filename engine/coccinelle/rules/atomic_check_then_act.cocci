@@ -53,7 +53,8 @@ position p_free != kfree_locked.p;
 if (<+... atomic_read(&obj->cnt) ...+>)
 {
 ... when != \(spin_lock\|spin_lock_irq\|spin_lock_bh\|spin_lock_irqsave\|mutex_lock\|write_lock\)(...)
-    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_add\|atomic_sub\|atomic_cmpxchg\|atomic_xchg\|atomic_dec_and_test\|atomic_inc_return\|atomic_dec_return\)(...)
+    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_cmpxchg\|atomic_xchg\|atomic_dec_and_test\|atomic_inc_return\|atomic_dec_return\)(&obj->cnt, ...)
+    when != \(atomic_add\|atomic_sub\)(..., &obj->cnt)
 kfree@p_free(obj);
 ...
 }
@@ -83,7 +84,8 @@ position p_act != destroy_locked.p;
 if (<+... atomic_read(&obj->cnt) ...+>)
 {
 ... when != \(spin_lock\|spin_lock_irq\|spin_lock_bh\|spin_lock_irqsave\|mutex_lock\|write_lock\)(...)
-    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_add\|atomic_sub\|atomic_cmpxchg\|atomic_xchg\|atomic_dec_and_test\|atomic_inc_return\|atomic_dec_return\)(...)
+    when != \(atomic_dec\|atomic_inc\|atomic_set\|atomic_cmpxchg\|atomic_xchg\|atomic_dec_and_test\|atomic_inc_return\|atomic_dec_return\)(&obj->cnt, ...)
+    when != \(atomic_add\|atomic_sub\)(..., &obj->cnt)
 destructor@p_act(obj, ...);
 ...
 }
