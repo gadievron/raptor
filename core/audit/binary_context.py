@@ -511,11 +511,13 @@ def assemble_binary_context(
     if db is not None:
         if address is not None:
             func = db.function_by_address(address)
-        if func is None:
-            func = next(
-                (f for f in db.functions if f.name == lookup_name),
-                None,
-            )
+        else:
+            # Name-only lookup is advisory and must identify one occurrence.
+            # An explicit address miss must never fall back to another one.
+            matches = (f for f in db.functions if f.name == lookup_name)
+            func = next(matches, None)
+            if next(matches, None) is not None:
+                func = None
             if func is not None:
                 address = func.address
 

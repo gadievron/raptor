@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 from core.audit.binary_context import assemble_binary_context
 from core.inventory.binary_builder import (
     BINARY_PATH_PREFIX,
@@ -123,6 +125,69 @@ class TestAssembleBinaryContext:
         )
         assert ctx["address"] == 0x4000
         assert ctx["source"] == "z"
+
+    @pytest.mark.parametrize("address_source", ["item", "metadata", "suffix"])
+    @pytest.mark.parametrize("address", [0, 0x1010, 0x3000])
+    def test_explicit_address_miss_never_uses_same_name(
+        self, address_source, address,
+    ):
+        # Interior addresses are deliberately not exact function starts.
+        name = "repeated"
+        checklist = self._checklist(name, address)
+        if address_source == "metadata":
+            del checklist["files"][0]["items"][0]["address"]
+        elif address_source == "suffix":
+            name = f"repeated@0x{address:x}"
+            checklist = None
+        ctx = assemble_binary_context(
+            target_path=Path("/x/target"),
+            file_path="binary:target",
+            function_name=name,
+            checklist=checklist,
+            db=_make_db(functions=[
+                _make_func("repeated", 0x1000, decomp="first occurrence"),
+                _make_func("repeated", 0x2000, decomp="second occurrence"),
+            ]),
+        )
+        assert ctx["address"] == address
+        assert ctx["representation"] == "unknown"
+        assert "not found" in ctx["source"]
+        assert "signature" not in ctx["metadata"]
+        assert ctx["callers"] == []
+        assert ctx["callees"] == []
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_name_only_duplicate_is_unresolved(self, reverse):
+        functions = [
+            _make_func("repeated", 0x1000, decomp="first occurrence"),
+            _make_func("repeated", 0x2000, decomp="second occurrence"),
+        ]
+        ctx = assemble_binary_context(
+            target_path=Path("/x/target"),
+            file_path="binary:target",
+            function_name="repeated",
+            db=_make_db(functions=functions[::-1] if reverse else functions),
+        )
+        assert ctx["address"] is None
+        assert ctx["representation"] == "unknown"
+        assert "not found" in ctx["source"]
+        assert "address" not in ctx["metadata"]
+
+    @pytest.mark.parametrize("address", [0, 0x2000])
+    def test_explicit_address_selects_exact_duplicate(self, address):
+        ctx = assemble_binary_context(
+            target_path=Path("/x/target"),
+            file_path="binary:target",
+            function_name="repeated",
+            checklist=self._checklist("repeated", address),
+            db=_make_db(functions=[
+                _make_func("repeated", 0x1000, decomp="other occurrence"),
+                _make_func("repeated", address, decomp="exact occurrence"),
+            ]),
+        )
+        assert ctx["address"] == address
+        assert ctx["source"] == "exact occurrence"
+        assert ctx["representation"] == "decompilation"
 
     def test_missing_function_degrades(self):
         ctx = assemble_binary_context(
