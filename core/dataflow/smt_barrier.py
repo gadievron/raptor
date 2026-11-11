@@ -2634,9 +2634,11 @@ def _class_body_escaping_bindings(
 
 
 def _nested_scope_escaping_rebinds(scope_root: ast.AST) -> frozenset:
-    """Enclosing-scope names a NESTED function can rebind — the
-    ``nonlocal``/``global``-declared names that some nested
-    function/method body assigns.
+    """Enclosing names a nested function or generator can rebind.
+
+    Named functions use explicit ``nonlocal``/``global`` declarations;
+    generator assignment expressions can capture an enclosing cell
+    without such a declaration. Iteration targets remain generator-local.
 
     Function bodies do not execute inline, but any call between
     validator and sink (direct, indirect, or through a callback) may
@@ -2652,6 +2654,21 @@ def _nested_scope_escaping_rebinds(scope_root: ast.AST) -> frozenset:
     suppression, never a false one.
     """
     out: set = set()
+    # Generator bodies can run after creation. Follow only this scope's
+    # expressions, including nested definition headers: a lambda's body
+    # owns its walrus targets, whereas its defaults execute outside it.
+    initial = (scope_root.body if isinstance(scope_root, (ast.FunctionDef, ast.AsyncFunctionDef))
+               else list(ast.iter_child_nodes(scope_root)))
+    pending = [(node, False) for node in initial]
+    while pending:
+        node, deferred = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            pending.extend((part, deferred) for part in _python_definition_headers(node))
+            continue
+        deferred = deferred or isinstance(node, ast.GeneratorExp)
+        if deferred and isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            out.add(node.target.id)
+        pending.extend((part, deferred) for part in ast.iter_child_nodes(node))
     for node in ast.walk(scope_root):
         if node is scope_root or not isinstance(
             node, (ast.FunctionDef, ast.AsyncFunctionDef),
