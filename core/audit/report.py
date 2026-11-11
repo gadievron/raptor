@@ -468,6 +468,11 @@ def generate_report(
         _load_graded_stats(out_dir),
     )
 
+    from .knowledge_reporting import load_knowledge_processing
+
+    knowledge_processing = load_knowledge_processing(out_dir)
+    if knowledge_processing is not None:
+        report["knowledge_processing"] = knowledge_processing
     report["summary"] = _format_summary(report)
     return report
 
@@ -1778,7 +1783,9 @@ def _find_unrecorded_reads(
 
 def _completeness_lines(report: dict[str, Any]) -> list[str]:
     """Shared partial-run / segment statements for summary + markdown."""
-    lines: list[str] = []
+    from .knowledge_reporting import knowledge_processing_lines
+
+    lines: list[str] = knowledge_processing_lines(report)
     segments = report.get("segments")
     if segments:
         lines.append(
