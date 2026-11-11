@@ -501,3 +501,83 @@ def test_prepared_retries_preserve_owned_attempt_limit_and_first_credit(sdk_clie
     assert len(b.client.pending_usage_reservations) == 2
     assert b.client.reported_spend_usd == 0
     assert not b.client.is_budget_exhausted()
+
+
+@pytest.mark.parametrize("kind", ["openai", "anthropic"])
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+@pytest.mark.parametrize("remaining", [None, 4.0], ids=["stage", "remaining-window"])
+def test_prepared_sdk_timeout_fits_existing_stage_and_window(sdk_clients, monkeypatch, kind, structured, remaining):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients(kind)
+    if remaining is not None:
+        b.client.config.max_seconds_per_scan = 30
+        b.client._run_start = 100.0
+        patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: 130.0 - remaining)
+    allowed = min(17.0, remaining) if remaining is not None else 17.0
+    def bounded(request):
+        timeout = request.extensions["timeout"]
+        assert set(timeout) == {"connect", "read", "write", "pool"}
+        assert all(value is not None and 0 <= value <= allowed for value in timeout.values())
+    b.state["handler"] = bounded
+    if structured:
+        b.client.generate_structured("captured", SCHEMA, timeout_s=17.0)
+    else:
+        b.client.generate("captured", timeout_s=17.0)
+    assert len(b.state["requests"]) == 1
+
+
+def test_prepared_timeout_preserves_stricter_sdk_phases(sdk_clients):
+    b = sdk_clients()
+    def existing(request):
+        request.extensions["timeout"] = {"connect": 0.5, "read": 2.0, "write": 0.0, "pool": None}
+    b.provider.client._client.event_hooks["request"].insert(0, existing)
+    def bounded(request):
+        assert request.extensions["timeout"] == {"connect": 0.5, "read": 2.0, "write": 0.0, "pool": 17.0}
+    b.state["handler"] = bounded
+    b.client.generate("captured", timeout_s=17.0)
+    assert len(b.state["requests"]) == 1
+
+
+def test_unlimited_prepared_request_retains_existing_sdk_timeouts(sdk_clients):
+    b = sdk_clients()
+    before = []
+    def existing(request):
+        before.append(dict(request.extensions["timeout"]))
+    b.provider.client._client.event_hooks["request"].insert(0, existing)
+    def unchanged(request):
+        assert request.extensions["timeout"] == before[0]
+    b.state["handler"] = unchanged
+    _generate(b)
+    assert len(b.state["requests"]) == 1
+
+
+@pytest.mark.parametrize("after_admission", [129.0, 131.0], ids=["remaining", "expired"])
+def test_prepared_timeout_rechecks_window_after_durable_admission(sdk_clients, tmp_path, monkeypatch, after_admission):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients(run_dir=tmp_path / "run")
+    now = [126.0]
+    b.client.config.max_seconds_per_scan = 30.0
+    b.client._run_start = 100.0
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: now[0])
+    store = b.client._attempt_reservation_store
+    original = store.admit
+    def committed(row):
+        result = original(row)
+        now[0] = after_admission
+        return result
+    monkeypatch.setattr(store, "admit", committed)
+    if after_admission >= 130.0:
+        with pytest.raises(LLMGovernorExceededError, match="wall-clock"):
+            b.client.generate("captured", timeout_s=17.0)
+        assert b.state["requests"] == [] and b.client.reported_spend_usd == 0
+        assert b.client.pending_usage_reservations == []
+        assert store.pending() == []
+    else:
+        def bounded(request):
+            assert all(0 <= value <= 130.0 - after_admission
+                       for value in request.extensions["timeout"].values())
+        b.state["handler"] = bounded
+        b.client.generate("captured", timeout_s=17.0)
+        assert len(b.state["requests"]) == 1

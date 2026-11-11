@@ -3265,6 +3265,45 @@ class LLMClient:
             self._attempt_recovery_gap = "prepared_failure_signal_unavailable"
             return False
 
+    def _clamp_prepared_timeout(self, request, stage_timeout=None) -> None:
+        """Bound SDK phase timeouts; this is not a hard elapsed-time limit."""
+        limits = []
+        if stage_timeout is not None:
+            if (isinstance(stage_timeout, bool) or not isinstance(stage_timeout, (int, float))
+                    or not math.isfinite(stage_timeout) or stage_timeout <= 0):
+                raise LLMCallAdmissionRefused("prepared request stage timeout is invalid")
+            limits.append(float(stage_timeout))
+        with self._stats_lock:
+            maximum, started = self.config.max_seconds_per_scan, self._run_start
+            if maximum is not None and started is not None:
+                remaining = maximum - (time.monotonic() - started)
+                if math.isnan(remaining):
+                    raise LLMCallAdmissionRefused("prepared request time allowance is invalid")
+                if remaining <= 0:
+                    raise LLMGovernorExceededError("resource governor: wall-clock limit reached before dispatch")
+                if math.isfinite(remaining):
+                    limits.append(remaining)
+        if not limits:
+            return
+        bound = min(limits)
+        phases = {"connect", "read", "write", "pool"}
+        current = request.extensions.get("timeout")
+        if current is None:
+            current = {}
+        if not isinstance(current, dict) or set(current) - phases:
+            raise LLMCallAdmissionRefused("prepared request timeout policy is unsupported")
+        bounded = {}
+        for phase in phases:
+            value = current.get(phase)
+            if value is None or value == math.inf:
+                bounded[phase] = bound
+            elif (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise LLMCallAdmissionRefused("prepared request phase timeout is invalid")
+            else:
+                bounded[phase] = min(value, bound)
+        request.extensions["timeout"] = bounded
+
     def _dispatch_prepared_attempt(self, provider, method: str, args: tuple,
                                     kwargs: dict[str, Any], identity: dict[str, Any],
                                     hold: dict[str, Any], attempt_admission=None):
@@ -3295,6 +3334,9 @@ class LLMClient:
                     except BaseException:
                         pass
                     raise
+                # Durable admission may itself wait. Recompute the remaining
+                # window after it commits, before this hook permits transport.
+                self._clamp_prepared_timeout(request, kwargs.get("timeout_s"))
             except (LLMBudgetExceededError, LLMCallAdmissionRefused) as refusal:
                 hold["refusal"] = refusal
                 raise
