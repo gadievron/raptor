@@ -10089,6 +10089,13 @@ def _run_audit_body(
         if collector is not None:
             collector.flush()
 
+        # Collect a completed producer before reserving a caller continuation.
+        # Unfinished analysis retains its later drain; this point never waits.
+        if joern_future is not None and joern_future.done():
+            evidence_index = _drain_joern_future(
+                joern_future, evidence_index, checklist, sarif_cache)
+            joern_future = None
+
         # --- Callee-contract propagation (#6): re-review callers whose
         #     callee assumption was contradicted by the callee's review ---
         # Budget-gated like the synthesis pass above: a budget/deadline-
@@ -10117,6 +10124,7 @@ def _run_audit_body(
                     on_progress=on_progress,
                     max_workers=resolved_workers,
                     knowledge_runtime=knowledge_runtime,
+                    ready_joern_gaps=reviewed_before_joern,
                 )
                 if contract_re:
                     logger.info(
@@ -35033,7 +35041,8 @@ def _re_review_joern_enriched(
     return result
 
 
-def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, env_gate, start_time):
+def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, env_gate, start_time,
+                              ready_joern_gaps=(), evidence_index=None):
     """Admit advisory callee context through the run-owned continuation ledger."""
     from .callee_review_context import render_callee_context
     from .context import _defend_identifier
@@ -35054,6 +35063,8 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
             scope = callee.review_input_scope
             if scope is not None and not scope.current(config.target_path):
                 continue
+            from .ready_review_context import offer_ready_joern_context
+            offer_ready_joern_context(runtime, ctx, gap, ready_joern_gaps, evidence_index or {})
             version = context_version(render_callee_context(
                 ctx.get("callee_contract_violation"), defend_identifier=_defend_identifier))
             spec = context_spec(ctx, kind="callee_contract", version=version)
@@ -35133,6 +35144,7 @@ def _callee_contract_requeue(
     on_progress: Callable | None = None,
     max_workers: int = 1,
     knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
+    ready_joern_gaps: list[dict[str, Any]] | tuple = (),
 ) -> int:
     """Re-review callers with advisory assessments of their named callees.
 
@@ -35235,7 +35247,8 @@ def _callee_contract_requeue(
     if knowledge_runtime is not None:
         return _run_callee_continuations(
             result, config, review_fn, prepared, knowledge_runtime,
-            env_gate=_env_gate, start_time=start_time)
+            env_gate=_env_gate, start_time=start_time,
+            ready_joern_gaps=ready_joern_gaps, evidence_index=evidence_index)
 
     def _do_review(item):
         idx, _gap, _prior, ctx, _callee = item
