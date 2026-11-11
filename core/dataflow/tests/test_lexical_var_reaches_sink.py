@@ -52,16 +52,16 @@ def test_self_referencing_mixture_requires_a_transfer_contract():
     assert _reaches(src, "p", 2, 4) is False
 
 
-def test_member_and_index_writes_are_not_rebinds():
+def test_member_and_index_mutations_cannot_reuse_value_certificate():
     src = (
         "function h(req){\n"
         "  let p = validate(req.q);\n"  # 2
-        "  p.field = req.query.evil;\n"  # 3 member write, p still validated
+        "  p.field = req.query.evil;\n"  # 3 mutation invalidates the earlier value epoch
         "  p[0] = 9;\n"                  # 4 index write
         "  exec(p);\n"                   # 5
         "}\n"
     )
-    assert _reaches(src, "p", 2, 5) is True
+    assert _reaches(src, "p", 2, 5) is False
 
 
 def test_comparison_is_not_a_rebind():
@@ -135,3 +135,15 @@ def test_comparison_operators_still_not_rebinds():
         "}\n"
     )
     assert _reaches(src, "p", 2, 4) is True
+
+
+def test_unrelated_member_and_index_writes_preserve_validated_local():
+    src = (
+        "function h(req){\n"
+        "  let p = validate(req.q);\n"
+        "  other.field = req.query.evil;\n"
+        "  other[0] = 9;\n"
+        "  exec(p);\n"
+        "}\n"
+    )
+    assert _reaches(src, "p", 2, 5) is True
