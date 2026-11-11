@@ -340,9 +340,10 @@ class TestSha256TreeFstatBoundedRead:
             return os.stat_result(fields)
 
         import core.hash as hash_module
-        from core.testing.module_bindings import patch_module_attribute
-        patch_module_attribute(monkeypatch, hash_module, "__os", "fstat", clamped_fstat)
-        digest = sha256_tree(tmp_path)
+        from core.testing.module_views import scoped_function_imports
+        with scoped_function_imports(hash_module, ["sha256_tree"], {"os": os}) as imports:
+            monkeypatch.setattr(imports.os, "fstat", clamped_fstat)
+            digest = hash_module.sha256_tree(tmp_path)
 
         expected = hashlib.sha256()
         expected.update(len(b"grow.bin").to_bytes(8, "little"))
@@ -374,9 +375,10 @@ class TestSha256TreeFstatBoundedRead:
             return os.stat_result(fields)
 
         import core.hash as hash_module
-        from core.testing.module_bindings import patch_module_attribute
-        patch_module_attribute(monkeypatch, hash_module, "__os", "fstat", inflated_fstat)
-        digest = sha256_tree(tmp_path)
+        from core.testing.module_views import scoped_function_imports
+        with scoped_function_imports(hash_module, ["sha256_tree"], {"os": os}) as imports:
+            monkeypatch.setattr(imports.os, "fstat", inflated_fstat)
+            digest = hash_module.sha256_tree(tmp_path)
         assert len(digest) == 64
 
 

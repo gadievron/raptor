@@ -7,15 +7,17 @@ import os
 
 import pytest
 
+from core import atomic_fs
 from core.inventory import builder
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture
 def reader_case(tmp_path, monkeypatch):
     source = tmp_path / "sample.py"
     source.write_text("def entry():\n    return 1\n")
-    original_open, original_close, original_fdopen = os.open, os.close, os.fdopen
+    original_open, original_close, original_fdopen = atomic_fs.open_hardened_read, os.close, os.fdopen
     descriptors, closes, streams = [], [], []
 
     def run(*, failure=None, close_failure=False, grow=False):
@@ -40,10 +42,15 @@ def reader_case(tmp_path, monkeypatch):
             streams.append(stream)
             return stream
 
-        patch_module_attribute(monkeypatch, builder, "os", "open", allocate)
         patch_module_attribute(monkeypatch, builder, "os", "close", close)
         patch_module_attribute(monkeypatch, builder, "os", "fdopen", construct)
-        return builder._process_single_file(source, tmp_path, [])
+        with scoped_function_imports(
+            builder, ["_process_single_file"], {"core.atomic_fs": atomic_fs},
+        ) as imports:
+            monkeypatch.setattr(
+                getattr(imports, "core.atomic_fs"), "open_hardened_read", allocate,
+            )
+            return builder._process_single_file(source, tmp_path, [])
 
     yield run, source, descriptors, closes, streams
     for stream in streams:
