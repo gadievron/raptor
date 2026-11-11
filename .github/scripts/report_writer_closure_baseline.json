@@ -100,9 +100,6 @@
     "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::seed_hyp_text": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; the seed body additionally rides wrap_untrusted at construction; same disposition as this file's other rows"
     },
-    "core/audit/context.py::format_context_for_prompt::unsanitised_llm_value::source": {
-      "note": "prompt/context construction — the analysed function's own source is fenced into the LLM prompt (the analysis subject), not an operator render surface"
-    },
     "core/audit/context.py::render_pattern_library::unsanitised_llm_value::exemplar_lines": {
       "note": "prompt-construction accumulator (context injected into LLM prompts), not an operator terminal/report lane — input-side envelope territory; same disposition as this file's other rows"
     },
@@ -312,9 +309,6 @@
     },
     "core/orchestration/skill_dispatch.py::run_skill_dispatch::unsanitised_llm_value::prompt": {
       "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
-    },
-    "core/recall/score.py::render_markdown::unsanitised_llm_value::id": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
     "core/recall/verify_enforced.py::render_verify_markdown::unsanitised_llm_value::file_path": {
       "note": "verify-enforced records are RAPTOR-authored artifacts; repo-derived path residue in the heading is the same triaged residual as this file's existing 'reason' entry — sanitise + register on next functional touch"
@@ -717,6 +711,9 @@
     },
     "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::data": {
       "note": "LLM input packet, not operator report: whole metadata/source dictionary passes dumps_display directly into canonical nonce-tagged wrap_untrusted(kind=caller_context) before atomic PromptSection fitting. All foreign metadata stays inside untrusted envelope; no raw operator output."
+    },
+    "core/audit/knowledge_context.py::reference_sections::unsanitised_llm_value::reason": {
+      "note": "Prompt-only reference resolution reason: both branches serialise answer.reason with dumps_display inside wrap_untrusted(kind=reference_resolution, origin=language-reference). The nonce envelope escapes controls and forged tags and strips autofetch markup. No terminal/HTML/report sink or applicability/proof credit; raw interpolation outside that envelope remains unaudited."
     }
   },
   "bash_manual_audit": {
