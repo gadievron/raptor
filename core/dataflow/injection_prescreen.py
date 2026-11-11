@@ -17,6 +17,7 @@ from __future__ import annotations
 from core.source.java_unicode import JAVA_UNICODE_UNVERIFIED, java_unicode_unverified
 
 import ast
+from hashlib import sha256
 import re as _re
 import threading
 import time
@@ -532,6 +533,8 @@ def prescreen_finding(
                     ),
                     "sink_classes": sorted(sink_classes),
                     "reasoning": reasoning,
+                    # Exact model-input identity, not current source authority.
+                    "source_input_sha256": sha256(source_text.encode("utf-8")).hexdigest(),
                 })
                 path_refuted = True
                 break
