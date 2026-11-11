@@ -13,6 +13,7 @@ from pathlib import Path
 
 from core.paths import confine
 from core.source import open_regular, read_text_capped
+from core.source.streams import preserving_stream_error
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -257,7 +258,7 @@ def _sink_discovery_fingerprint(target_path, scope_dirs) -> str | None:
             fh = open_regular(p, "rb")
             if fh is None:
                 return b""
-            with fh:
+            with preserving_stream_error(fh):
                 return fh.read()
 
         return content_fingerprint(
