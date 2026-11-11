@@ -290,3 +290,70 @@ def adapt_smt_claim_fact(
             and not is_non_refuting_smt_rule(result.rule_id)):
         return replace(fact, semantic=semantic)
     return fact
+
+
+def smt_fact_from_result(
+    record: object, *, result: object, event_id: str, obligation: str,
+    expected_context: ClaimContext, expected_scope: VerificationScope,
+    expected_revision: ClaimRevision, contracts: Mapping[str, SMTContractAdapter],
+    prepared_admission: PreparedSMTAdmission | None = None,
+    expected_target: PreparedTargetBinding | None = None,
+    expected_conclusion: ConclusionSignature | None = None,
+    retain_result: Callable[[SweepResult], str | None] | None = None,
+) -> FactEvent | None:
+    """Bridge one existing overflow result; never dispatch or register a checker.
+
+    The pipeline owns the current manifest/registry and retain_result. That
+    callback must acknowledge durable retention of the actual result, returning
+    its reference only after success. raw_output, log warnings and caller/model
+    labels are not acknowledgments. Missing inputs preserve unknown observation.
+    This helper does not enable authoritative publication.
+    """
+    from copy import deepcopy
+    from .sweep import SweepResult
+
+    if not isinstance(result, SweepResult) or not isinstance(expected_context, ClaimContext):
+        return None
+    registration = contracts.get(expected_context.contract) if isinstance(contracts, Mapping) else None
+    contract = registration.contract if isinstance(registration, SMTContractAdapter) else None
+    registered = isinstance(contract, ClaimContract)
+    details = result.details if isinstance(result.details, dict) else {}
+    execution = details.get("smt_execution")
+    execution = execution if isinstance(execution, dict) else {}
+    request_id = execution.get("request_id")
+    executed_id = execution.get("executed_request_id")
+    request_id = request_id if isinstance(request_id, str) else ""
+    executed_id = executed_id if isinstance(executed_id, str) else ""
+    completed = (result.tool == "smt" and result.rule_id == "smt:check-overflow"
+                 and result.outcome in {"confirmed", "refuted"} and not result.errors
+                 and execution.get("identity_status") == "matched"
+                 and execution.get("scope") == "worker-invocation-only"
+                 and bool(request_id) and request_id == executed_id)
+    reference = ""
+    if (completed and registered and callable(retain_result)
+            and isinstance(expected_target, PreparedTargetBinding)
+            and isinstance(expected_conclusion, ConclusionSignature)
+            and _prepared_binding_matches(prepared_admission, expected_context, expected_scope)
+            and isinstance(prepared_admission, PreparedSMTAdmission)
+            and prepared_admission.target_binding == expected_target
+            and prepared_admission.requested_conclusion == expected_conclusion):
+        snapshot = deepcopy(result)
+        try:
+            acknowledged = retain_result(snapshot)
+        except Exception:
+            acknowledged = None
+        if isinstance(acknowledged, str) and acknowledged.strip() and snapshot == result:
+            reference = acknowledged
+    event = FactEvent(
+        event_id, expected_context, obligation,
+        contract.adapter if isinstance(contract, ClaimContract) else "",
+        contract.version if isinstance(contract, ClaimContract) else "",
+        "completed" if completed else "unknown", "unknown", request_id, executed_id,
+        completed, reference,
+    )
+    return adapt_smt_claim_fact(
+        record, event=event, expected_context=expected_context, expected_scope=expected_scope,
+        expected_revision=expected_revision, result=result, contracts=contracts,
+        prepared_admission=prepared_admission, expected_target=expected_target,
+        expected_conclusion=expected_conclusion,
+    )
