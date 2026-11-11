@@ -126,6 +126,7 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
     fixture = None
     streams = []
     real_pipe, real_fdopen = os.pipe, os.fdopen
+    real_adopt = getattr(support, "adopt_fd", None) if support is not None else None
 
     with _record_fds() as (record, entries):
 
@@ -163,6 +164,16 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
             streams.append(wrapped)
             return wrapped
 
+        def adopt(fd, mode, close_fd=None, **kwargs):
+            if (fault == "reader" and mode == "r") or (
+                fault == "writer" and mode == "wb"
+            ):
+                (close_fd or os.close)(fd)
+                raise error("injected stream fixture failure")
+            wrapped = Stream(real_adopt(fd, mode, close_fd, **kwargs), mode)
+            streams.append(wrapped)
+            return wrapped
+
         def fail(*args, **kwargs):
             raise error("injected stream fixture failure")
 
@@ -172,6 +183,8 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
                 patcher.setattr(module, "os", proxy, raising=False)
                 if support is not None:
                     patcher.setattr(support, "os", proxy)
+                    if real_adopt is not None:
+                        patcher.setattr(support, "adopt_fd", adopt)
                 if fault == "mock":
                     patcher.setattr(module, "Mock", fail)
                 if fault == "write":

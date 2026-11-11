@@ -1,17 +1,32 @@
 """Owned pipe streams for test fixtures with fallible setup."""
 
+import io
 import os
 from contextlib import ExitStack, contextmanager, suppress
+from inspect import signature
+
+from core.source.streams import adopt_fd
+
+
+_FDOPEN_ARGUMENTS = signature(io.open)
 
 
 def fdopen_owned(fd, *args, **kwargs):
     """Transfer a descriptor to a stream, closing it if adoption fails."""
     try:
-        return os.fdopen(fd, *args, **kwargs)
+        if not isinstance(fd, int):
+            raise TypeError("invalid fd type (%s, expected integer)" % type(fd))
+        options = dict(_FDOPEN_ARGUMENTS.bind(fd, *args, **kwargs).arguments)
     except BaseException:
-        with suppress(OSError):
+        # Argument binding has not handed the descriptor to a native owner.
+        with suppress(BaseException):
             os.close(fd)
         raise
+    options.pop("file")
+    mode = options.pop("mode", "r")
+    # The adopter owns every later failure, including native construction
+    # which may already have closed and recycled this descriptor number.
+    return adopt_fd(fd, mode, os.close, **options)
 
 
 @contextmanager
