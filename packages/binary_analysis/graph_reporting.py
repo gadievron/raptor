@@ -13,7 +13,7 @@ from .reporting import _safe
 def complete_graph_report(args, payload: dict | None, db_path: Path, status: int):
     options = args._report_options
     default_root = Path(args.run_dir) if args.run_dir else db_path.parent
-    if not options.enabled:
+    if not options.enabled or not (args.report_format or args.report_output):
         notice = unrefreshed_report_notice(default_root)
         if notice:
             print("Warning: " + notice, file=sys.stderr)

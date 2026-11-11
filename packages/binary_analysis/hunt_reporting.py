@@ -12,7 +12,7 @@ from .reporting import _safe
 
 def complete_hunt_report(args, results: list[dict], run_dir: Path):
     options = args._report_options
-    if not options.enabled:
+    if not options.enabled or not (args.report_format or args.report_output):
         notice = unrefreshed_report_notice(run_dir)
         if notice:
             print("Warning: " + notice, file=sys.stderr)

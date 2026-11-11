@@ -18,7 +18,7 @@ def complete_harness_report(args, spec: dict, run_dir: Path):
     options = getattr(args, "_report_options", None)
     if options is None:
         return None  # direct native handler callers retain their old contract
-    if not options.enabled:
+    if not options.enabled or not (args.report_format or args.report_output):
         notice = unrefreshed_report_notice(run_dir)
         if notice:
             print("Warning: " + notice, file=sys.stderr)
