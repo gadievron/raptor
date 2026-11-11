@@ -268,11 +268,6 @@ _OVERFLOW_MARKERS_RE = __import__("re").compile(
 )
 
 
-# Retained confidence policy for the separately source-bound string-theory
-# prescreen. Generic UNSAT over extracted predicates no longer mints a
-# not-exploitable verdict, regardless of its numeric confidence.
-SMT_INFEASIBLE_CONFIDENCE = 0.7
-
 # Compatibility constant for older consumers. Unbound predicate diagnostics
 # no longer prune or select SARIF paths, so this does not authorize refutation.
 MAX_SMT_PATHS = 3
@@ -761,6 +756,7 @@ class DataflowValidator:
 
     def _record_charset_models(
         self, models: list[dict], out_dir: Path | None, request_context: dict,
+        *, producer_claimed_refutation: bool, producer_reason: str,
     ) -> None:
         """Retain conditional models without issuing claim or source authority."""
         if out_dir is None or not models:
@@ -795,6 +791,8 @@ class DataflowValidator:
                         details={
                             "scope": "conditional-charset-language-model",
                             "source_bound": False,
+                            "producer_claimed_refutation": producer_claimed_refutation,
+                            "producer_reason": producer_reason,
                             "unverified_source_premises": [
                                 "sink_interpretation", "source_execution_semantics",
                             ],
@@ -813,7 +811,7 @@ class DataflowValidator:
         diagnostics: list[dict] | None = None,
         diagnostic_quality: dict | None = None,
         observation_out_dir: Path | None = None,
-    ) -> DataflowValidation | None:
+    ) -> None:
         """Collect conditional string models over the result's paths.
 
         Charset observations do not establish source-effect refutation and
@@ -828,7 +826,6 @@ class DataflowValidator:
                 MAX_PRESCREEN_PATHS,
                 MAX_PRESCREEN_STEPS,
                 prescreen_finding,
-                snapshot_stats,
             )
             rule_id = dataflow.rule_id
             paths = [dataflow, *dataflow.alternatives]
@@ -864,19 +861,21 @@ class DataflowValidator:
             )
             if verdict is None:
                 return None
-            if not verdict.refuted:
-                self._record_charset_models(verdict.evidence, observation_out_dir, request_context)
-                if diagnostics is not None:
-                    reported_models = len(verdict.diagnostics)
-                    diagnostics.extend(deepcopy(verdict.diagnostics))
-                    if diagnostic_quality is not None:
-                        diagnostic_quality.update({
-                            "scope": "injection-prescreen-diagnostic-collection",
-                            "complete": True, "reported_models": reported_models,
-                            "retained_models": len(diagnostics) - initial_count,
-                            "discarded_models": 0,
-                        })
-                return None
+            self._record_charset_models(
+                verdict.evidence, observation_out_dir, request_context,
+                producer_claimed_refutation=verdict.refuted, producer_reason=verdict.reason,
+            )
+            if diagnostics is not None:
+                reported_models = len(verdict.diagnostics)
+                diagnostics.extend(deepcopy(verdict.diagnostics))
+                if diagnostic_quality is not None:
+                    diagnostic_quality.update({
+                        "scope": "injection-prescreen-diagnostic-collection",
+                        "complete": True, "reported_models": reported_models,
+                        "retained_models": len(diagnostics) - initial_count,
+                        "discarded_models": 0,
+                    })
+            return None
         except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             if diagnostic_quality is not None:
                 retained = len(diagnostics) - initial_count if diagnostics is not None else 0
@@ -889,39 +888,6 @@ class DataflowValidator:
                 })
             self.logger.warning("Injection prescreen failed: %s", e)
             return None
-        self.logger.info(
-            "Injection prescreen refuted %s in %.1f ms (%d path(s); "
-            "cumulative stats: %s)",
-            dataflow.rule_id, verdict.solver_ms, verdict.paths_checked,
-            snapshot_stats(),
-        )
-        barriers = [
-            (
-                f"path {ev['path_index'] + 1}: charset validator at "
-                f"{ev['validator_file']}:{ev['validator_line']} "
-                f"({ev['kind']}: [{ev['pattern']}])"
-            )
-            for ev in verdict.evidence
-        ]
-        return DataflowValidation(
-            is_exploitable=False,
-            confidence=SMT_INFEASIBLE_CONFIDENCE,
-            sanitizers_effective=True,
-            bypass_possible=False,
-            bypass_strategy=None,
-            attack_complexity="high",
-            reasoning=(
-                f"String-theory prescreen: {verdict.reason}. "
-                f"Confidence is capped at {SMT_INFEASIBLE_CONFIDENCE} "
-                "because the verdict rests on mechanical validator "
-                "extraction, which can misjudge dominance in unusual "
-                "control flow."
-            ),
-            barriers=barriers,
-            prerequisites=[],
-            smt_path_index=verdict.paths_checked - 1,
-            smt_paths_checked=verdict.paths_checked,
-        )
 
     def validate_dataflow_path(
         self,
@@ -932,8 +898,8 @@ class DataflowValidator:
         """Validate source flow, retaining optional predicate-model diagnostics.
 
         Extracted predicates and type hints cannot establish a source-path
-        refutation or select a different SARIF path. Source-bound prescreens
-        and the existing review policy retain their separate contracts.
+        refutation or select a different SARIF path. Conditional charset models
+        remain observations while the existing review policy continues.
 
         Args:
             dataflow: DataflowPath object
@@ -951,18 +917,16 @@ class DataflowValidator:
         slice_diagnostics: list[dict] = []
         slice_diagnostic_quality: dict = {}
         if observation_out_dir is None:
-            prescreen = self._injection_prescreen(
+            self._injection_prescreen(
                 dataflow, repo_path, diagnostics=slice_diagnostics,
                 diagnostic_quality=slice_diagnostic_quality,
             )
         else:
-            prescreen = self._injection_prescreen(
+            self._injection_prescreen(
                 dataflow, repo_path, diagnostics=slice_diagnostics,
                 diagnostic_quality=slice_diagnostic_quality,
                 observation_out_dir=observation_out_dir,
             )
-        if prescreen is not None:
-            return prescreen
 
         # Extracted predicates, scalar identities and type hints are not
         # source-bound premises. Even an owned UNSAT core proves only a
