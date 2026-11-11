@@ -55,6 +55,9 @@ def build_verification_trace(outcome: Any, finding: dict[str, Any]) -> dict[str,
                 "source_revalidated_at_export": False,
             })
 
+    from .claim_comparison_inputs import historical_claim_link
+
+    lineage = historical_claim_link((getattr(outcome, "review_result", None) or {}).get("review_claims"), finding)
     discovery = finding["discovery"]
     hypothesis_reviews = []
     for index, hypothesis in enumerate(hypotheses):
@@ -84,6 +87,7 @@ def build_verification_trace(outcome: Any, finding: dict[str, Any]) -> dict[str,
         })
     return {
         "schema_version": 1,
+        "claim_lineage": lineage,
         "derivation": getattr(outcome, "trace_derivation", "outcome"),
         "claim": finding["hypothesis"],
         "scope": {"file": finding["file"], "function": finding["function"],

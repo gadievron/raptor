@@ -97,11 +97,12 @@ def index_claim_observations(claim_events, checks) -> dict:
             quarantine.append({"revision_id": revision_id, "reason": "conflicting_or_invalid_definition",
                                "observations": _refs(occurrences[revision_id])})
             continue
-        variant = next(iter(variants.values()))
+        fingerprint, variant = next(iter(variants.items()))
         reference = variant["definition"]
         refs = _refs(occurrences[revision_id])
         row = {"claim_reference": {"claim_id": reference["claim_id"], "revision_id": revision_id},
-               "definition": reference, "statement_reference": dict(refs[0]),
+               "definition": reference, "definition_sha256": fingerprint.hex(),
+               "statement_reference": dict(refs[0]),
                "observations": refs, "producer_check_ids": [], "adjudication": "unadjudicated"}
         claims.append(row)
         admitted[revision_id] = {"claim": row, "scope": (
