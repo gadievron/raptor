@@ -1,44 +1,15 @@
-"""Z3 string-theory prescreen for LIVE injection findings.
+"""Conditional charset-exclusion observations for live injection findings.
 
-:mod:`core.dataflow.smt_barrier` proves that a fix-added charset
-validator neutralises an injection sink (regex-language-intersection
-emptiness, single-digit-ms per query) — but only for PATCH
-verification. The same proof applies to a finding that is still open:
-when the finding's own dataflow path crosses a validator whose pattern
-the mechanical extractor can lift, and the validator's accepted
-language shares no string with the sink's danger language, the path is
-provably neutralised BEFORE any LLM call is spent on it.
+The lifted regex/substitution and value-chain checks establish a narrow
+model property: accepted values exclude the selected finite danger set.
+They do not establish how the sink interprets those values. In particular,
+a sole direct call argument is a value-use binding, not a callee or sink
+interpretation contract. Successful models therefore remain non-refuting
+observations and normal finding validation continues.
 
-Verdict semantics mirror the SMT-unsat handling in the CodeQL
-dataflow validator: a refuted finding is demoted (confidence-capped
-non-exploitable with the barrier evidence attached), never silently
-dropped, and a finding with several (codeFlow, threadFlow) paths is
-refuted only when EVERY path is individually neutralised — one
-unliftable path means no signal for the whole finding.
-
-Soundness posture (a false "refuted" here suppresses a real bug):
-
-* Extraction reuses ``smt_barrier``'s deliberately conservative
-  extractor — anchored whole-string charset ``re.match``/``fullmatch``
-  (or single-line guard-and-exit shapes for JS/TS/Java/Ruby) and the
-  same-identifier ``re.sub`` strip form. Anything else — partial
-  matches, ``re.search``, unanchored patterns, shorthand classes,
-  negated classes — is NOT liftable and yields no signal.
-* Dominance reuses the same AST machinery the patch flow earned its
-  soundness receipts with: same-function + source-order +
-  exit-on-fail for guards, no-reassignment for substitutions, and the
-  variable/data-dependency chain check that the validated value is
-  what reaches the sink. The validator step and the sink must be in
-  the SAME file; cross-file paths yield no signal.
-* The proof is ``smt_barrier.prove_neutralizes`` — Z3
-  regex-intersection emptiness (with a hard per-query timeout; a
-  timeout reads as unknown, never as refuted) or finite-set inclusion
-  for the substitution form.
-
-Layering: this module sits beside ``smt_barrier`` (whose machinery it
-reuses) in ``core.dataflow`` and imports only downward (core.smt_solver,
-core.inventory). The pipeline hook lives in
-``packages/codeql/dataflow_validator.py``.
+Extraction, dominance and solver limits remain conservative. Conditional
+slice diagnostics stay separate from charset model evidence. No model
+observation alone establishes source-effect refutation.
 """
 
 from __future__ import annotations
@@ -208,12 +179,12 @@ def _strict_lift(
 class PrescreenVerdict:
     """Structured outcome of one prescreen run over a finding.
 
-    ``refuted`` is True only when every path was neutralised by a
-    lifted charset barrier. ``evidence`` then holds one entry per
-    path: {path_index, validator_file, validator_line, kind, pattern,
-    sink_class, reasoning}. ``solver_ms`` is the summed wall time of
-    the Z3/inclusion proofs. Non-refuting observations may carry separate
-    conditional ``diagnostics``; these do not constitute barrier evidence.
+    ``evidence`` retains conditional charset-model observations, one per
+    checked path. It does not establish sink interpretation or source-effect
+    refutation. ``solver_ms`` is the summed wall time of the Z3/inclusion
+    proofs. Conditional slice ``diagnostics`` remain a separate model schema.
+    This producer has no sink-context admission contract and does not issue
+    ``refuted=True``.
     """
     refuted: bool
     paths_checked: int
@@ -443,9 +414,9 @@ def prescreen_finding(
 
     Returns None when the prescreen does not apply (no danger model
     for the rule, unsupported language, too many paths) or found no
-    signal. Conditional slice observations return a non-refuting result
-    with separate diagnostics. ``refuted=True`` is reserved for EVERY path
-    being provably neutralised by a lifted validator.
+    signal. Successful charset models and conditional slice observations
+    return non-refuting results. Checking every path's charset exclusion
+    does not establish the sink interpretation needed for source refutation.
     """
     sink_classes = sink_classes_for_rule(rule_id, cwe)
     if not sink_classes or not paths:
@@ -585,15 +556,16 @@ def prescreen_finding(
 
     with _STATS_LOCK:
         _STATS.lifted += 1
-        _STATS.refuted += 1
+        _STATS.no_signal += 1
     return PrescreenVerdict(
-        refuted=True,
+        refuted=False,
         paths_checked=len(paths),
         evidence=evidence,
         reason=(
-            f"every dataflow path ({len(paths)}) crosses a charset "
-            f"validator whose accepted language provably excludes all "
-            f"{'/'.join(sorted(sink_classes))} danger characters"
+            f"charset model excludes {'/'.join(sorted(sink_classes))} danger "
+            f"characters on every checked path ({len(paths)}); "
+            "sink interpretation context is unverified, so the source effect "
+            "is not refuted"
         ),
         solver_ms=total_ms,
     )

@@ -59,7 +59,7 @@ def test_regex_import_origin_reaches_all_consumers(tmp_path: Path, shadow):
     mechanical, pointed, prescreen = adjudicate()
     assert mechanical.status is sb.Tier0Status.SOUND
     assert pointed.status is sb.Tier0Status.SOUND
-    assert prescreen is not None and prescreen.refuted
+    assert prescreen is not None and not prescreen.refuted and prescreen.evidence
 
 
 @pytest.mark.skipif(not z3_available(), reason="z3-solver not installed")

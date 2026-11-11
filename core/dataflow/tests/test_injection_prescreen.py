@@ -3,8 +3,8 @@
 Soundness bar: a false "refuted" suppresses a real bug, so every
 tricky liftability fixture (partial anchors, re.search, flags/count
 arguments, Ruby line anchors, the re.match trailing-newline quirk)
-must yield NO signal — only the exact whole-string charset shapes may
-refute, and only when every path is neutralised.
+must yield NO signal. Exact whole-string charset shapes retain conditional
+model evidence, without source-effect refutation or sink authority.
 """
 
 from __future__ import annotations
@@ -163,13 +163,13 @@ class TestSinkClassMapping:
 
 
 class TestGuardFormRefutation:
-    def test_dotless_charset_shape_refutes(self, guard_repo):
+    def test_dotless_charset_retains_nonrefuting_model(self, guard_repo):
         verdict = prescreen_finding(
             paths=[_guard_path()], repo_root=guard_repo,
             rule_id="py/path-injection",
         )
         assert isinstance(verdict, PrescreenVerdict)
-        assert verdict.refuted is True
+        assert verdict.refuted is False
         assert verdict.paths_checked == 1
         (ev,) = verdict.evidence
         assert ev["validator_file"] == "app.py"
@@ -198,18 +198,19 @@ class TestGuardFormRefutation:
             rule_id="py/path-injection",
         ) is None
 
-    def test_sub_form_refutes(self, sub_repo):
+    def test_sub_form_retains_nonrefuting_model(self, sub_repo):
         verdict = prescreen_finding(
             paths=[_sub_path()], repo_root=sub_repo,
             rule_id="py/path-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
         (ev,) = verdict.evidence
         assert ev["kind"] == "charset_sub"
 
-    def test_fullmatch_refutes_cmdi(self, tmp_path):
+    def test_fullmatch_retains_nonrefuting_cmdi_model(self, tmp_path):
         # fullmatch has no trailing-newline quirk, so a charset
-        # excluding every cmdi danger char may refute a cmdi finding.
+        # excluding every cmdi danger char yields a conditional model.
         # Dotted, dash-free: the command-line-injection rule family
         # also puts the argv-context model in play, and '-' is an argv
         # danger char (option injection).
@@ -222,7 +223,8 @@ class TestGuardFormRefutation:
             paths=[_guard_path()], repo_root=repo,
             rule_id="py/command-line-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
 
 # ---------------------------------------------------------------------------
@@ -354,12 +356,13 @@ class TestDominanceConservatism:
 
 
 class TestMultiPath:
-    def test_all_paths_refuted(self, guard_repo):
+    def test_all_paths_modelled_without_refutation(self, guard_repo):
         verdict = prescreen_finding(
             paths=[_guard_path(), _guard_path()], repo_root=guard_repo,
             rule_id="py/path-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
         assert verdict.paths_checked == 2
         assert len(verdict.evidence) == 2
 
@@ -423,7 +426,8 @@ class TestGatesAndTelemetry:
         )
         after_refute = snapshot_stats()
         assert after_refute["attempted"] == before["attempted"] + 1
-        assert after_refute["refuted"] == before["refuted"] + 1
+        assert after_refute["refuted"] == before["refuted"]
+        assert after_refute["no_signal"] == before["no_signal"] + 1
         assert after_refute["lifted"] == before["lifted"] + 1
 
         bare = _path("app.py", GUARD_SOURCE_LINE, [], GUARD_SINK_LINE)
@@ -665,7 +669,8 @@ class TestDecoyValidatorsNeverRefute:
             paths=[_guard_path()], repo_root=guard_repo,
             rule_id="py/path-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
 
 class TestNestedScopeRebindKill:
@@ -766,7 +771,8 @@ class TestNestedScopeRebindKill:
             paths=[_path("app.py", 6, [7], 13)], repo_root=repo,
             rule_id="py/command-line-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
 
 class TestBranchWrappedLexicalGuards:
@@ -808,7 +814,8 @@ class TestBranchWrappedLexicalGuards:
             paths=[_path("honest.js", 1, [2], 3)], repo_root=tmp_path,
             rule_id="js/command-line-injection", cwe="CWE-78",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
 
 class TestBalancedPhantomPairE2E:
@@ -900,7 +907,8 @@ class TestArgvContextDangerModel:
             paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
             rule_id="java/command-line-injection", cwe="CWE-88",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
 
     @pytest.mark.parametrize("source", [ARGV_JAVA, CLEAN_JAVA], ids=["argv-dangerous", "argv-clean"])
@@ -932,7 +940,8 @@ class TestExoticLineTerminators:
             paths=[_path("shift.js", 2, [3], 4)], repo_root=tmp_path,
             rule_id="js/command-injection", cwe="CWE-78",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
     def test_split_source_lines_is_newline_only(self):
         from core.dataflow.smt_barrier import split_source_lines
@@ -965,7 +974,8 @@ class TestResourceBounds:
             paths=[path], repo_root=guard_repo,
             rule_id="py/path-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
 
     def test_file_read_and_view_computed_once_per_file(
             self, guard_repo, monkeypatch):
@@ -997,7 +1007,8 @@ class TestResourceBounds:
             paths=[path], repo_root=guard_repo,
             rule_id="py/path-injection",
         )
-        assert verdict is not None and verdict.refuted is True
+        assert verdict is not None and verdict.refuted is False
+        assert verdict.evidence
         assert len(reads) == 1
         assert len(views) == 1
 
