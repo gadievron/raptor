@@ -35818,7 +35818,7 @@ def _publish_study_candidates(
 
 def _publish_study_outcome(
     config: OrchestratorConfig, result: OrchestratorResult,
-    runtime: "AuditKnowledgeRuntime", reservation: "KnowledgeReservation",
+    runtime: "AuditKnowledgeRuntime | None", reservation: "KnowledgeReservation | None",
     prior: ReviewOutcome, candidate: ReviewOutcome, gap: dict[str, Any],
 ) -> str:
     """Publish a changed assessment after the owned journal append succeeds."""
@@ -35827,6 +35827,9 @@ def _publish_study_outcome(
     from .journal import ReviewJournalEntry
     from .source_anchor import parse_source_anchor
     from .verification_results import ReviewPublicationScope
+
+    if runtime is None or reservation is None:
+        return "study_publication_owner_unavailable"
 
     with result._lock:
         if config._verdicts_finalized:
