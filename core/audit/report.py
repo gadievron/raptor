@@ -58,7 +58,7 @@ def _retained_processing_limitations(out_dir: Path) -> list[str]:
     """Read only the bounded explicit projection, never infer failures from logs."""
     path = out_dir / _PROCESSING_HISTORY_FILE
     try:
-        if not path.exists():
+        if not path.exists() and not path.is_symlink():
             return []
         data = load_json(path, max_bytes=4096)
     except OSError:
