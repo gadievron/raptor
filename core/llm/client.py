@@ -2836,6 +2836,27 @@ class LLMClient:
             estimate = min(estimate, cap * fraction)
         return max(_BUDGET_RESERVATION, estimate)
 
+    def _attempt_cost_reservation(self, call_class: str, provider: Any,
+                                  kwargs: dict[str, Any]) -> float:
+        """Keep the requested output allowance above a typical-call estimate.
+
+        The provider's normal billing calculation also handles configured
+        fallback rates. This floor is never clipped to a budget fraction:
+        a permitted response can consume its entire output allowance.
+        Input costs and unpriced/unspecified ceilings still require a
+        prepared-request bound; this is not a whole-request cost ceiling.
+        """
+        reservation = self._estimate_call_cost(call_class)
+        if not self.config.enable_cost_tracking or not isinstance(provider, LLMProvider):
+            return reservation
+        ceiling = kwargs.get("max_tokens", provider.config.max_tokens)
+        if type(ceiling) is not int or ceiling <= 0:
+            return reservation
+        output_cost = provider._calculate_cost_split(0, ceiling)
+        if not math.isfinite(output_cost) or output_cost < 0:
+            raise LLMBudgetExceededError("permitted model output cost is unavailable")
+        return max(reservation, output_cost)
+
     def _note_call_cost(self, call_class: str, cost: float) -> None:
         """Record one completed call's actual cost for ``call_class``
         so subsequent reservations track observed reality."""
@@ -3382,7 +3403,7 @@ class LLMClient:
                         if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                             raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
-                        reservation = self._estimate_call_cost(call_class)
+                        reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
                         if not self._acquire_budget(reservation):
                             msg = (
                                 f"LLM budget exceeded: ${self.total_cost:.4f} spent "
@@ -4026,7 +4047,7 @@ class LLMClient:
                         if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                             raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
-                        reservation = self._estimate_call_cost(call_class)
+                        reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
                         if not self._acquire_budget(reservation):
                             msg = (
                                 f"LLM budget exceeded: ${self.total_cost:.4f} spent "
