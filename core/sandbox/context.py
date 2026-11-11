@@ -3735,7 +3735,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     strict=bool(require_sanitisation),
                 )
             except BaseException:
-                _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                from ._retirement import retire_parent_resources
+                retire_parent_resources(
+                    lambda: _shutil.rmtree(_persona_tmpdir, ignore_errors=True),
+                )
                 raise
     elif cpu_count is not None:
         # cpu_count without the master switch is a caller mistake — the
