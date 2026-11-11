@@ -33,6 +33,7 @@ from .config import DEFAULT_CACHE_MAX_ENTRIES, LLMConfig, ModelConfig
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 from .response_validation import SchemaUnknownFieldError, unknown_response_fields
 from .budget_errors import (
+    LLMCallAdmissionRefused,
     LLMBudgetExceededError as LLMBudgetExceededError,
     LLMDegradedModeError as LLMDegradedModeError,
     LLMGovernorExceededError as LLMGovernorExceededError,
@@ -1482,6 +1483,7 @@ class _KeyLockHandle:
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
     _attempt_accounting_protocol = 1
+    _attempt_admission_protocol = 1
 
 
     # Lazily-created per-run accounting attributes (created on first use
@@ -3196,6 +3198,9 @@ class LLMClient:
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
         accounting_call_id = uuid4().hex
+        accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
+            raise TypeError("attempt admission must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
         accounting_beneficiaries = tuple(dict.fromkeys(
             str(item) for item in kwargs.pop("accounting_beneficiaries", ())
@@ -3374,6 +3379,8 @@ class LLMClient:
                         # tokens even when the dollar path is off ($0 local
                         # models, max_cost=inf audit runs). Terminal, like
                         # the dollar budget; raised before any reservation.
+                        if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
+                            raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
@@ -3497,7 +3504,7 @@ class LLMClient:
 
                         return response
 
-                    except LLMBudgetExceededError:
+                    except (LLMBudgetExceededError, LLMCallAdmissionRefused):
                         # Budget exhaustion is TERMINAL for the run
                         # (see the class docstring): re-raise so
                         # callers catching by type actually see it.
@@ -3832,6 +3839,9 @@ class LLMClient:
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
         accounting_call_id = uuid4().hex
+        accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
+            raise TypeError("attempt admission must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
         accounting_beneficiaries = tuple(dict.fromkeys(
             str(item) for item in kwargs.pop("accounting_beneficiaries", ())
@@ -4013,6 +4023,8 @@ class LLMClient:
                         # History-sized reservation: overshoot bounded
                         # by one call's estimate error.
                         # Non-dollar governor first (see generate()).
+                        if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
+                            raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
                         reservation = self._estimate_call_cost(call_class)
                         if not self._acquire_budget(reservation):
@@ -4244,7 +4256,7 @@ class LLMClient:
                             )
                         return structured_response
 
-                    except LLMBudgetExceededError:
+                    except (LLMBudgetExceededError, LLMCallAdmissionRefused):
                         # Terminal for the run — re-raise past the
                         # blanket handler so typed callers see it.
                         # See ``generate`` above for the rationale.
