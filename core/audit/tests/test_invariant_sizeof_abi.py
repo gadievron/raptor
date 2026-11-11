@@ -98,8 +98,8 @@ def test_reply_cannot_change_the_query_abi(monkeypatch, mode):
         )
 
 
-@pytest.mark.parametrize("abi,outcome", [("ilp32", "refuted"), ("lp64", "confirmed")])
-def test_protocol_adjudication_uses_the_target_abi(abi, outcome):
+@pytest.mark.parametrize("abi,outcome,step", [("ilp32", "inconclusive", "preserved"), ("lp64", "confirmed", "violable")])
+def test_protocol_adjudication_uses_the_target_abi(abi, outcome, step):
     from core.audit.protocol_state import run_protocol_state_check
 
     result = run_protocol_state_check(
@@ -114,7 +114,11 @@ def test_protocol_adjudication_uses_the_target_abi(abi, outcome):
         integer_abi=abi,
     )
     assert result.outcome == outcome, result.to_dict()
+    assert len(result.invariant["per_site"]) == 1
     assert result.invariant["per_site"][0]["integer_abi"] == INTEGER_ABIS[abi].record()
+    assert result.invariant["per_site"][0]["verdict"] == step
+    if step == "preserved":
+        assert "base case not checked" in result.reason
 
 
 def test_audit_tool_chain_persists_abi_context(tmp_path):
@@ -137,7 +141,8 @@ def test_audit_tool_chain_persists_abi_context(tmp_path):
         hypothesis="Count == 8 can be violated",
         line_start=1,
     )
-    assert [row.verdict for row in result.outcomes] == ["refuted"]
+    assert [row.verdict for row in result.outcomes] == ["inconclusive"]
+    assert "base case not checked" in result.outcomes[0].reason
     import json
     from core.audit.record import AUDIT_LOG_FILENAME
 
@@ -152,8 +157,25 @@ def test_audit_tool_chain_persists_abi_context(tmp_path):
     )
 
 
-def test_standing_protocol_prepass_receives_the_abi():
+def test_standing_protocol_prepass_receives_the_abi(monkeypatch):
+    from core.audit import condition_smt, protocol_state
     from core.audit.protocol_state import run_protocol_state_prepass
+
+    calls, adjudications = [], []
+    original_worker = condition_smt._run_z3_child
+    original_adjudicate = protocol_state._adjudicate_invariant
+
+    def dispatch(tag, args, **kwargs):
+        calls.append((tag, args))
+        return original_worker(tag, args, **kwargs)
+
+    def adjudicate(*args, **kwargs):
+        result = original_adjudicate(*args, **kwargs)
+        adjudications.append(result)
+        return result
+
+    monkeypatch.setattr(condition_smt, "_run_z3_child", dispatch)
+    monkeypatch.setattr(protocol_state, "_adjudicate_invariant", adjudicate)
 
     domain = {
         "invariants": [
@@ -168,7 +190,16 @@ def test_standing_protocol_prepass_receives_the_abi():
     texts = {"a.c": "void Read(struct S *State){\nState->Count=sizeof(long);\n}"}
     result = run_protocol_state_prepass(texts, domain_model=domain, integer_abi="ilp32")
     assert result["telemetry"]["invariants_checked"] == 1
-    assert result["telemetry"]["refuted"] == 1
+    assert len(adjudications) == 1
+    assert len(calls) == 1, adjudications[0].to_dict()
+    assert calls[0][0] == "invariant_site_batch"
+    assert calls[0][1]["integer_abi"] == INTEGER_ABIS["ilp32"].record()
+    site = adjudications[0].invariant["per_site"][0]
+    assert site["verdict"] == "preserved" and site["integer_abi"] == INTEGER_ABIS["ilp32"].record()
+    assert adjudications[0].outcome == "inconclusive"
+    assert "base case not checked" in adjudications[0].reason
+    assert result["telemetry"]["refuted"] == 0
+    assert result["telemetry"]["inconclusive"] == 1
 
 
 @pytest.mark.parametrize("bad", ["absent-profile", {"name": "incomplete"}])

@@ -65,7 +65,21 @@ def test_controlling_comparison_hint_reaches_the_existing_native_oracle(source, 
     'int Read(int Value,int Other){if(Other<10){if(Value>20)return 1;}return 0;}',
 ])
 def test_own_truth_disjunctions_and_unmodeled_guard_literals_do_not_invent_constants(source):
-    assert discover(source) == []
+    rows = discover(source)
+    assert not any(row['arithmetic_site']['candidate_basis'] == 'controlling-comparison-range' for row in rows)
+    if source == 'int Read(int Value){if(Value<10 && Value>20)return 1;return 0;}':
+        assert len(rows) == 1
+        row = rows[0]
+        assert row['mechanism'] == 'Condition is always false in `Value < 10 && Value > 20`.'
+        assert row['confidence'] == 'low' and row['source'] == 'source_arithmetic'
+        assert 'verdict' not in row and 'confirmed' not in row
+        site = row['arithmetic_site']
+        assert site['candidate_basis'] == 'literal-comparison-ranges'
+        assert site['claim_kind'] == 'constant-condition-false'
+        assert site['binding_status'] == 'candidate'
+        assert site['operator'] == '&&' and site['operands'] == ['Value', '10', 'Value', '20']
+    else:
+        assert rows == []
 
 
 def test_empty_guard_range_does_not_generate_a_vacuous_inner_constant():
