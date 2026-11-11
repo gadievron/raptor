@@ -1,5 +1,7 @@
 """Diagnostic truth of two pure builtin comparisons in a whole if condition."""
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, z3, z3_available
 from core.smt_solver.session import check_solver, new_solver, query_budget
 from core.smt_solver.witness import format_vars
@@ -73,10 +75,12 @@ def conjunction_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [(node, leaves) for node in nodes
+              if (leaves := _shape(node, data)) is not None]
+    occurrences = Counter(leaves for _, leaves in shapes)
     candidates = []
-    for node in nodes:
-        leaves = _shape(node, data)
-        if leaves is None:
+    for node, leaves in shapes:
+        if occurrences[leaves] != 1:
             continue
         left, right = leaves
         if (left[0], left[2]) != (right[0], right[2]) or _RELATIONS[left[1]] & _RELATIONS[right[1]]:
@@ -96,10 +100,12 @@ def disjunction_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [(node, leaves) for node in nodes
+              if (leaves := _shape(node, data, logical_operator='||')) is not None]
+    occurrences = Counter(leaves for _, leaves in shapes)
     candidates = []
-    for node in nodes:
-        leaves = _shape(node, data, logical_operator='||')
-        if leaves is None:
+    for node, leaves in shapes:
+        if occurrences[leaves] != 1:
             continue
         left, right = leaves
         atoms = [left[0], left[2], right[0], right[2]]
@@ -138,14 +144,20 @@ def range_condition_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
-    candidates = []
+    shapes = []
     for node in nodes:
         operator_node = node.child_by_field_name('operator') if node.type == 'binary_expression' else None
         logical_operator = data[operator_node.start_byte:operator_node.end_byte].decode() if operator_node is not None else ''
         if logical_operator not in {'&&', '||'}:
             continue
         leaves = _shape(node, data, logical_operator=logical_operator)
-        if leaves is None or leaves[0][0] != leaves[1][0] or integer_literal_value(leaves[0][0]) is not None:
+        if leaves is not None:
+            shapes.append((node, logical_operator, leaves))
+    occurrences = Counter((operator, leaves) for _, operator, leaves in shapes)
+    candidates = []
+    for node, logical_operator, leaves in shapes:
+        if (occurrences[(logical_operator, leaves)] != 1
+                or leaves[0][0] != leaves[1][0] or integer_literal_value(leaves[0][0]) is not None):
             continue
         if logical_operator == '||' and leaves[0][1] == leaves[1][1] == '!=':
             continue  # already handled by unequal-exclusion discovery
