@@ -24,6 +24,7 @@ money, all "true" for different ledgers):
 from __future__ import annotations
 
 import threading
+import math
 import time
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
@@ -93,6 +94,7 @@ class PhaseCostLedger:
     segments: list[dict[str, Any]] = field(default_factory=list)
     _active_phase: str | None = field(default=None, repr=False)
     _phase_start: float = field(default=0.0, repr=False)
+    _attempt_accounting: dict[str, Any] = field(default_factory=dict, repr=False)
     # Authoritative end-of-run LLM-client ledger (None until injected
     # via set_total_spend — e.g. runs without a budget client).
     _total_spend_usd: float | None = field(default=None, repr=False)
@@ -205,6 +207,85 @@ class PhaseCostLedger:
             if count_call:
                 pc.failed_calls += 1
             pc.failed_attempts_cost_usd += cost_usd
+
+    def project_attempts(
+        self, projection: dict[str, Any], *, authoritative_spend: float | None,
+    ) -> None:
+        """Materialize identified charges once, after coverage reconciles."""
+        gaps = []
+        if projection.get("legacy_usage_records"):
+            gaps.append("unidentified_usage_records")
+        if projection.get("conflicts"):
+            gaps.append("conflicting_usage_records")
+        if projection.get("write_failed"):
+            gaps.append("usage_persistence_failed")
+        rows = projection.get("attempts", [])
+        phases: dict[str, PhaseCost] = {}
+        attempts = []
+        pending = 0.0
+        seen = set()
+        try:
+            for row in rows:
+                identity = {key: row.get(key) for key in ("attempt_id", "call_id", "work_id")}
+                if not all(isinstance(value, str) and value for value in identity.values()):
+                    raise ValueError("incomplete_attempt_identity")
+                if identity["attempt_id"] in seen:
+                    raise ValueError("duplicate_attempt_identity")
+                seen.add(identity["attempt_id"])
+                cost = float(row.get("cost_usd") or 0)
+                reserve = float(row.get("reservation_usd") or 0)
+                if not (math.isfinite(cost) and cost >= 0 and math.isfinite(reserve) and reserve >= 0):
+                    raise ValueError("invalid_attempt_usage")
+                state = row.get("billing_state", "reported")
+                if state == "unknown":
+                    pending += reserve
+                    gaps.append("unknown_attempt_usage")
+                elif state == "estimated":
+                    gaps.append("estimated_attempt_usage")
+                elif state != "reported":
+                    gaps.append("unreported_attempt_usage")
+                phase = str(row.get("call_class") or "unclassified")
+                pc = phases.setdefault(phase, PhaseCost())
+                if row.get("event") == "attempt_failed":
+                    pc.failed_calls += 1
+                    pc.failed_attempts_cost_usd += cost
+                else:
+                    pc.calls += 1
+                    pc.cost_usd += cost
+                pc.tokens_in += int(row.get("tokens_in") or 0)
+                pc.tokens_out += int(row.get("tokens_out") or 0)
+                pc.wall_time_s += max(0, float(row.get("duration_s") or 0))
+                pc.cache_read_tokens += int(row.get("cache_read_tokens") or 0)
+                pc.cache_write_tokens += int(row.get("cache_write_tokens") or 0)
+                attempts.append({**identity, "phase": phase, "billing_state": state,
+                                 "cost_usd": cost, "reservation_usd": reserve,
+                                 "beneficiaries": list(row.get("beneficiaries") or ())})
+        except (TypeError, ValueError, OverflowError):
+            gaps.append("invalid_attempt_records")
+        charge = sum(pc.cost_usd + pc.failed_attempts_cost_usd for pc in phases.values())
+        if not rows:
+            gaps.append("no_identified_attempts")
+        if authoritative_spend is None or not math.isclose(charge, authoritative_spend, rel_tol=1e-9, abs_tol=1e-9):
+            gaps.append("provider_ledger_not_reconciled")
+        with self._lock:
+            self._attempt_accounting = {
+                "status": "incomplete" if gaps else "projected",
+                "gaps": sorted(set(gaps)), "attempts": attempts,
+                "pending_reservation_usd": pending,
+                "scope": "identified_client_attempts",
+                "wire_coverage": "not_proven",
+                "durable_recovery": "not_replayed",
+            }
+            if gaps:
+                return
+            # Retain prior segments and serial wall markers. Current costs
+            # now come solely from distinct identified provider attempts.
+            for phase, observed in self.phases.items():
+                if phase == PRIOR_SEGMENTS_PHASE:
+                    phases[phase] = observed
+                else:
+                    phases.setdefault(phase, PhaseCost()).pass_wall_time_s = observed.pass_wall_time_s
+            self.phases = phases
 
     def set_total_spend(self, spend_usd: float) -> None:
         """Inject the authoritative end-of-run LLM-client ledger.
@@ -394,6 +475,9 @@ class PhaseCostLedger:
             "phases": {k: v.to_dict() for k, v in sorted(self.phases.items())},
             "totals": totals,
         }
+        if self._attempt_accounting:
+            from copy import deepcopy
+            out["attempt_accounting"] = deepcopy(self._attempt_accounting)
         if self.segments:
             out["segments"] = list(self.segments)
         return out
