@@ -1,10 +1,9 @@
-"""Fixture tests for the insecure_temp_file rule.
+"""Fixture tests for temporary-file review candidates.
 
-Verification-role rule (fires mint confirmed CWE-377 verdicts). Group
-1 flags the race-prone name-generation APIs themselves; group 2 flags
-a mkstemp template reopened BY PATH, which discards the fd's race-free
-guarantee. The negatives pin the safe idiom (use the returned fd) and
-the reassigned-template shape group 2 must not confirm.
+Group 1 retains name-generation API policy warnings; group 2 records
+by-name reopens. Matches require filesystem and use-context review.
+The negatives pin retained-descriptor and different-path syntax;
+they do not establish complete filesystem safety.
 """
 
 from __future__ import annotations

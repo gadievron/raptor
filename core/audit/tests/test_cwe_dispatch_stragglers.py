@@ -64,10 +64,18 @@ class TestCwe377InsecureTempFile:
         assert codeql_query_for_cwe("CWE-377") == "py/insecure-temporary-file"
         assert not joern_applicable("CWE-377")
 
-    def test_cocci_rule_on_disk_verification_role(self):
+    def test_cocci_rule_on_disk_candidate_role(self, monkeypatch):
+        from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+        from core.audit.sweep import is_confirm_only_coccinelle_rule
+
+        monkeypatch.setenv("RAPTOR_DIR", str(_RULES_DIR.parents[2]))
         rule = _RULES_DIR / "insecure_temp_file.cocci"
         assert rule.is_file()
-        assert get_rule_role(str(rule)) == "verification"
+        assert get_rule_role(str(rule)) == "detection"
+        assert is_confirm_only_coccinelle_rule(str(rule))
+        assert not is_tool_evidence("coccinelle:insecure_temp_file")
+        assert not is_verification_evidence("coccinelle:insecure_temp_file")
+        assert is_verification_evidence("coccinelle:free_stack_array")
         text = rule.read_text()
         # Both witness shapes present in the rule material.
         assert "mktemp" in text
