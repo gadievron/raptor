@@ -368,6 +368,13 @@ def _make_llm_client(opts: AuditPipelineOpts):
         # Corpus/library callers without lifecycle metadata retain their
         # existing process-local accounting; durable recovery is unavailable.
         if metadata.exists() or metadata.is_symlink() or resumed:
+            from core.llm.budget_errors import LLMCallAdmissionRefused
+            protocol = getattr(client.primary_provider, "_prepared_wire_admission_protocol", None)
+            if type(protocol) is not int or protocol != 1:
+                raise LLMCallAdmissionRefused(
+                    "audit processing unsupported/not_run: the selected provider does not "
+                    "support prepared request admission; no audit model request was sent"
+                )
             from .attempt_reservations import AttemptReservations
             store = AttemptReservations(opts.out_dir, resume=resumed,
                 prior_known_usd=opts.prior_booked_spend_usd)
