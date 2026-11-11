@@ -387,8 +387,14 @@ def test_late_overrun_preserves_actual_usage_and_allows_existing_holds_to_drain(
 
 
 @pytest.mark.parametrize("failure", ["malformed", "truncated"])
-def test_consumed_invalid_generation_keeps_one_prepared_charge(sdk_clients, tmp_path, failure):
+def test_consumed_invalid_generation_keeps_one_prepared_charge(sdk_clients, tmp_path, monkeypatch, failure):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+
+    clock = [100.0]
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: clock[0])
     b = sdk_clients(run_dir=tmp_path / "run", retries=2)
+    b.state["handler"] = lambda request: clock.__setitem__(0, 100.125)
     def invalid(response):
         choice = response["choices"][0]
         if failure == "truncated":
@@ -404,12 +410,49 @@ def test_consumed_invalid_generation_keeps_one_prepared_charge(sdk_clients, tmp_
     paid = b.provider._calculate_cost_split(3, 3)
     assert b.client.reported_spend_usd == pytest.approx(paid)
     assert b.client.pending_usage_reservations == []
-    row, = b.sink.attempt_projection()["attempts"]
+    projection = b.sink.attempt_projection()
+    row, = projection["attempts"]
+    assert projection["conflicts"] == []
     assert row["event"] == "attempt_failed" and row["billing_state"] == "reported"
+    assert row["cost_usd"] == pytest.approx(paid)
+    assert row["tokens_in"] + row["tokens_out"] == 6
+    assert row["duration_s"] == 0.125
+    terminal, = [entry for entry in load_verified_audit_log(tmp_path / "run")
+                 if entry.get("stage") == "reported"]
+    assert terminal["attempt"]["attempt_id"] == row["attempt_id"]
     ledger = PhaseCostLedger()
     ledger.project_attempts(b.sink.attempt_projection(), authoritative_spend=b.client.reported_spend_usd)
     assert ledger.total_spend_usd == pytest.approx(paid)
     assert ledger.total_failed_attempts_cost_usd == pytest.approx(paid)
+
+
+
+@pytest.mark.parametrize("secondary", [KeyboardInterrupt, SystemExit])
+def test_paid_refusal_survives_secondary_telemetry_cancellation(sdk_clients, tmp_path, monkeypatch, secondary):
+    b = sdk_clients(run_dir=tmp_path / "run", retries=2)
+    def malformed(response):
+        response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"] = "{"
+        return response
+    b.state["transform"] = malformed
+    original_emit = telemetry.emit
+    observed = []
+    def fail_observer(**fields):
+        if fields.get("event") == "attempt_failed":
+            observed.append(fields)
+            raise secondary("secondary observer cancellation")
+        return original_emit(**fields)
+    monkeypatch.setattr(telemetry, "emit", fail_observer)
+    with pytest.raises(LLMCallAdmissionRefused):
+        _generate(b, structured=True)
+    assert len(observed) == len(b.state["requests"]) == 1
+    assert b.client._governed_tokens == 6
+    paid = b.provider._calculate_cost_split(3, 3)
+    assert b.client.reported_spend_usd == pytest.approx(paid)
+    assert b.client.pending_usage_reservations == []
+    terminal, = [entry for entry in load_verified_audit_log(tmp_path / "run")
+                 if entry.get("stage") == "reported"]
+    assert terminal["cost_usd"] == pytest.approx(paid)
+    assert b.sink.attempt_projection()["attempts"] == []
 
 
 def test_outer_retry_keeps_unknown_hold_and_reconciles_each_attempt_once(sdk_clients, tmp_path, monkeypatch):
