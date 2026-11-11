@@ -349,3 +349,22 @@ def test_panel_keeps_nonselected_caller_dependency_without_delivery_credit(tmp_p
     sources = outcome.review_result['review_claims']['source_inputs']['sources']
     assert {row['file'] for row in sources} == {'unit.py', 'caller.py'}
     assert runtime.complete(reservation, ctx, published_status=outcome.status)
+
+
+def test_malformed_caller_reason_cannot_poison_sibling_artifacts(tmp_path):
+    runtime, ctx, request = case(tmp_path)
+    valid = request['caller_context_requests'][0]
+    valid['reason'] = 'café 東京 😀\nDoes this caller validate n?'
+    request['caller_context_requests'].insert(0, {**valid, 'reason': chr(0xD800)})
+    try:
+        runtime._register_caller_requests(runtime._origin(ctx), request)
+        out = tmp_path / 'artifacts'
+        out.mkdir()
+        runtime.write_artifacts(out)
+        payload = json.loads((out / 'knowledge-results.json').read_text(encoding='utf-8'))
+        assert len(payload['caller_context_requests']) == 1
+        assert payload['caller_context_requests'][0]['reason'] == valid['reason']
+        assert any(row.get('reason') == 'invalid_request_fields'
+                   for event in payload['events'] for row in event.get('rejected', []))
+    finally:
+        runtime.close()
