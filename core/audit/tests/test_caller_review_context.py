@@ -262,3 +262,14 @@ def test_missing_nonpython_grammar_is_explicit(tmp_path, monkeypatch):
     monkeypatch.setattr('core.inventory.extractors.TreeSitterExtractor', MissingGrammar)
     answer = adapter.resolve_caller_context(request, root, inventory)
     assert answer.material is None and answer.reason == 'caller_definition_parser_unavailable'
+
+
+@pytest.mark.parametrize('field', ['file', 'function', 'reason'])
+@pytest.mark.parametrize('invalid', [chr(0xD800), chr(0xDFFF)])
+def test_non_utf8_request_text_is_rejected(tmp_path, field, invalid):
+    _root, request, _inventory = _case(tmp_path)
+    row = {'file': 'caller.py', 'function': 'caller', 'line_start': 1, 'reason': 'needed'}
+    row[field] += invalid
+    batch = adapter.register_caller_context_requests({'caller_context_requests': [row]}, request.origin)
+    assert batch.accepted == ()
+    assert batch.rejected == (adapter.CallerContextRejection(0, 'invalid_request_fields'),)

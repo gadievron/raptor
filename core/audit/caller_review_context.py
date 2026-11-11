@@ -67,6 +67,10 @@ def _bounded_request_text(row: dict, field: str, limit: int) -> str | None:
     value = row.get(field)
     if not isinstance(value, str) or len(value) > limit or not value.strip():
         return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
     return value.strip()
 
 
