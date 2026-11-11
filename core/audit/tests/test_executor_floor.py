@@ -3,6 +3,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -119,7 +120,8 @@ def test_floor_reaches_owner_during_quiesce_drain(tmp_path, monkeypatch):
         return True
 
     quiescer = SimpleNamespace(
-        drain_bound_s=3.0, should_attempt=should_attempt,
+        drain_bound_s=3.0, drain_deadline=lambda: time.monotonic() + 3.0,
+        should_attempt=should_attempt,
         run_quiesced=lambda: checkpoints.append(True),
         note_drain_timeout=lambda n: pytest.fail('inert refusal did not drain'),
     )
