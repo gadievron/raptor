@@ -92,7 +92,8 @@ def _setup_target(tmp_path: Path, n_functions: int = 3):
 
     out = tmp_path / "out"
     out.mkdir()
-    checklist = {"files": [{"path": "src/big.c", "items": items}]}
+    checklist = {"target_path": str(target),
+                 "files": [{"path": "src/big.c", "items": items}]}
     (out / "checklist.json").write_text(json.dumps(checklist))
     return target, out, names
 
@@ -164,9 +165,15 @@ class TestBudgetStopsReviewLoop:
                 raise LLMBudgetExceededError(
                     "LLM budget exceeded: $6.25 spent > $6.00 limit",
                 )
+            from core.audit.context import format_context_for_prompt
+
+            delivered = []
+            format_context_for_prompt(ctx, knowledge_delivery_sink=delivered.append)
+            assert len(delivered) == 1
             return ReviewOutcome(
                 file=ctx["file"], function=ctx["function"],
                 status="clean", body="ok", cost_usd=0.5,
+                review_result=delivered[0],
             )
 
         result = run_orchestrator(_config(target, out), review_fn)

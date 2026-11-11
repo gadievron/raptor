@@ -160,7 +160,10 @@ def compute_drift(
     """
     from .context import fallback_span_end
     from .journal import latest_entries
-    from .source_anchor import SOURCE_ANCHOR_PREFIX, hash_source_spans, make_source_anchor
+    from .source_anchor import (
+        SOURCE_ANCHOR_PREFIX, hash_source_spans, make_source_anchor, parse_source_anchor,
+    )
+    from .gaps import _review_context_current
 
     by_file: dict[str, list[Any]] = {}
     # fresh=True: drift decides which prior verdicts a resume may
@@ -203,7 +206,9 @@ def compute_drift(
         for entry, span_hash in zip(bound, hashes):
             current = make_source_anchor(digest, span_hash) if digest and span_hash else ""
             checked += 1
-            if current != entry.source_hash:
+            if (parse_source_anchor(entry.source_hash) != (digest, span_hash)
+                    or not digest or not span_hash
+                    or not _review_context_current(entry, Path(target_path))):
                 bound_drifted.append(DriftItem(file=entry.file, function=entry.function,
                     stored_hash=entry.source_hash, current_hash=current))
     return (

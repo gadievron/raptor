@@ -88,6 +88,24 @@ def _make_target(root: Path) -> Path:
         (target / f"proto{file_idx}.c").write_text("\n".join(body))
     return target
 
+
+def _captured_review_delivery(ctx: dict) -> dict:
+    """Give scripted reviews the real formatter's invocation-owned fitting."""
+    from core.audit.context import format_context_for_prompt
+
+    delivered_knowledge: list[dict] = []
+    delivered_callers: list[list[dict]] = []
+    format_context_for_prompt(
+        ctx,
+        knowledge_delivery_sink=delivered_knowledge.append,
+        caller_delivery_sink=delivered_callers.append,
+    )
+    result = dict(delivered_knowledge[0]) if delivered_knowledge else {}
+    if delivered_callers:
+        result["caller_context_delivery"] = delivered_callers[0]
+    return result
+
+
 _DRIVER = textwrap.dedent("""\
     import sys, time
     sys.path.insert(0, sys.argv[3])
@@ -95,7 +113,7 @@ _DRIVER = textwrap.dedent("""\
     from core.audit.orchestrator import (
         OrchestratorConfig, ReviewOutcome, run_orchestrator,
     )
-    from core.audit.tests.test_resume_e2e import _review_loop_only
+    from core.audit.tests.test_resume_e2e import _captured_review_delivery, _review_loop_only
 
     def review_fn(ctx, config):
         time.sleep(0.6)   # window for the parent's SIGKILL
@@ -103,6 +121,7 @@ _DRIVER = textwrap.dedent("""\
             file=ctx["file"], function=ctx["function"],
             status="clean", body="stub segment-1 review",
             cost_usd=%(cost)s,
+            review_result=_captured_review_delivery(ctx),
         )
 
     config = OrchestratorConfig(
@@ -455,6 +474,7 @@ def resumed_run(killed_run):
             file=ctx["file"], function=ctx["function"],
             status="clean", body="stub segment-2 review",
             cost_usd=_COST_PER_REVIEW,
+            review_result=_captured_review_delivery(ctx),
         )
 
     config = OrchestratorConfig(

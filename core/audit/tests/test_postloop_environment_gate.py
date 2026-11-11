@@ -970,8 +970,8 @@ class _SiteRecordingGuard:
 
 def _binding_target(tmp_path):
     """Two trivial (sub-threshold SLOC) functions in one file: with the
-    default batch_sloc_threshold both route through the trivial-batch
-    pass and the main executor graph is empty."""
+    default batch_sloc_threshold both receive trivial sibling context
+    and run through the shared executor graph."""
     import json
 
     target = tmp_path / "target"
@@ -1066,8 +1066,9 @@ class TestRunLevelGateBindings:
     def test_trivial_batch_worker_gates(self, tmp_path, monkeypatch):
         result, guard = _binding_run(tmp_path, monkeypatch)
         assert result.reviewed == 2
-        # The trivial-batch worker drove the guard at its entry.
-        assert ("_gate", "_review_batch") in guard.tick_callers
+        # Trivial units now share the ready graph and its dispatch gate.
+        # Keep both worker-entry bindings: removing the executor tick must fail.
+        assert guard.tick_callers.count(("_executor_tick", "_run_task")) == 2
 
     def test_synthesis_second_pass_executor_ticks(
         self, tmp_path, monkeypatch,

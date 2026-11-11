@@ -513,7 +513,8 @@ def test_full_orchestrator_delivers_sibling_not_in_checklist(tmp_path,monkeypatc
     write_sources(target)
     out = tmp_path/"out"
     out.mkdir()
-    (out/"checklist.json").write_text(json.dumps({"files":[{"path":"reader.c","items":[
+    (out/"checklist.json").write_text(json.dumps({"target_path":str(target),
+        "files":[{"path":"reader.c","items":[
         {"name":"get","line_start":2,"line_end":2}]}]}))
     captured = []
     # This test exercises shared-state prep and delivery, not the unrelated
@@ -521,10 +522,21 @@ def test_full_orchestrator_delivers_sibling_not_in_checklist(tmp_path,monkeypatc
     monkeypatch.setattr("core.audit.orchestrator._run_mechanical_detectors",lambda *a,**kw:({},set()))
     def review(ctx,cfg):
         captured.append(ctx)
+        from core.audit.context import format_context_for_prompt
         from core.audit.cross_entry.progress import acknowledge_delivery
+        delivered, callers = [], []
+        rendered = format_context_for_prompt(ctx, knowledge_delivery_sink=delivered.append,
+                                             caller_delivery_sink=callers.append)
+        assert "void put" in rendered
+        assert len(delivered) == 1
+        review_result = dict(delivered[0])
+        if callers:
+            review_result["caller_context_delivery"] = callers[0]
         if ctx.get("cross_entry_receipt"):
+            assert ctx.get("cross_entry_rendered") is True
             acknowledge_delivery(cfg.out_dir,ctx["cross_entry_receipt"])
-        return ReviewOutcome(file=ctx["file"],function=ctx["function"],status="clean",body="reviewed")
+        return ReviewOutcome(file=ctx["file"],function=ctx["function"],status="clean",body="reviewed",
+                             review_result=review_result)
     cfg = OrchestratorConfig(target_path=target,out_dir=out,cross_entry="context",resume=False,
         prefilter_skip=False,triage=False,vendored_triage=False,iris=False,sage_recall=False,
         domain_model_import=False,dynamic_validation=False,max_workers=1,
