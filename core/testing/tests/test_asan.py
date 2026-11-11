@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from core.testing import asan
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -40,7 +41,7 @@ def test_clean_runtime_probe_checks_execution_and_is_cached(monkeypatch, mode):
             raise subprocess.TimeoutExpired(command, 5)
         return SimpleNamespace(returncode=1 if mode == 'startup-failure' else 0,
                                stdout='' if mode == 'no-main-marker' else 'raptor-asan-main\n')
-    monkeypatch.setattr(subprocess, 'run', run)
+    patch_module_attribute(monkeypatch, asan, 'subprocess', 'run', run)
     reason = asan._runtime_unavailable_reason('/usr/bin/c++')
     assert (reason is None) == (mode == 'healthy')
     assert asan._runtime_unavailable_reason('/usr/bin/c++') == reason
