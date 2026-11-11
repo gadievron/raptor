@@ -42,6 +42,10 @@ _MAX_ERRORED_LISTED = 20
 
 logger = logging.getLogger(__name__)
 
+UNACKNOWLEDGED_ASSESSMENTS_LIMITATION = (
+    "new review assessments (journal acknowledgement unavailable)"
+)
+
 
 def _line(value: Any, *, max_chars: int = 300) -> str:
     """Collapse a finding/journal-derived value to one sanitised line.
@@ -135,6 +139,7 @@ def generate_report(
     target_path: Path | None = None,
     final_status: str | None = None,
     processing_limitations: list[str] | None = None,
+    unacknowledged_assessments: bool = False,
 ) -> dict[str, Any]:
     """Generate the final audit report.
 
@@ -176,6 +181,14 @@ def generate_report(
         if labels:
             completeness["missing"] = list(dict.fromkeys([*completeness.get("missing", []), *labels]))
             completeness["partial"] = True
+    # The caller supplies only the explicit publication signal. Missing or
+    # mismatched acknowledgements are not necessarily failed disk writes.
+    if unacknowledged_assessments is True:
+        completeness["missing"] = list(dict.fromkeys([
+            *completeness.get("missing", []),
+            UNACKNOWLEDGED_ASSESSMENTS_LIMITATION,
+        ]))
+        completeness["partial"] = True
     segments = _load_segments(out_dir)
 
     audit_data = _load_review_state(out_dir)

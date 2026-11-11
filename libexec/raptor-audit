@@ -2327,6 +2327,7 @@ def _finalize_run(
     import subprocess
 
     from core.audit.report import (
+        UNACKNOWLEDGED_ASSESSMENTS_LIMITATION,
         format_residue_lines,
         generate_report,
         write_report,
@@ -2362,7 +2363,20 @@ def _finalize_run(
         else "completed"
     )
     processing_limitations = getattr(result, "processing_limitations", None)
-    if processing_limitations:
+    publication_failures = getattr(result, "publication_failures", None)
+    unacknowledged_assessments = isinstance(publication_failures, list) and any(
+        isinstance(item, dict)
+        and item.get("reason") == "initial_journal_acknowledgement_unavailable"
+        and item.get("adjudication") == "unverified"
+        for item in publication_failures
+    )
+    if unacknowledged_assessments:
+        report = generate_report(
+            out_dir, final_status=_final_status,
+            processing_limitations=processing_limitations,
+            unacknowledged_assessments=True,
+        )
+    elif processing_limitations:
         report = generate_report(
             out_dir, final_status=_final_status,
             processing_limitations=processing_limitations,
@@ -2461,7 +2475,9 @@ def _finalize_run(
     # Display only limitations accepted by the report's fixed-label contract.
     # A completed lifecycle does not imply every processing result was retained.
     for limitation in report.get("completeness", {}).get("missing", []):
-        if limitation in (processing_limitations or ()):
+        if (limitation in (processing_limitations or ())
+                or (unacknowledged_assessments
+                    and limitation == UNACKNOWLEDGED_ASSESSMENTS_LIMITATION)):
             print(sanitise_for_terminal(
                 f"Processing incomplete: {limitation}. Prior assessments retained.",
                 max_len=300,
