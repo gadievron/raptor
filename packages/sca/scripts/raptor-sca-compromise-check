@@ -449,7 +449,7 @@ def _parity_check(art: "_ScanArtifacts") -> Tuple[bool, str]:
             if not line.startswith("|"):
                 break
             cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-            if len(cells) == 8 and re.fullmatch(r"F[0-9]+", cells[0]):
+            if len(cells) in (8, 9) and re.fullmatch(r"F[0-9]+", cells[0]):
                 severity = cells[6].lower()
                 if severity in md_counts:
                     md_counts[severity] += 1

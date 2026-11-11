@@ -49,23 +49,23 @@ Outcome: partial. Captured findings: 7.
 ## Findings
 
 
-| Ref | Tool | Rule | Location | Status | Scanner level | Security severity | Scanner security score |
+| Ref | Tool | Rule | Location | Status | Scanner level | Security severity | Scanner security score | Suppressed |
 
-|---|---|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|---|---|
 
-| F00001 | sca | sca:vulnerable_dependency | /repo/package.json | Advisory match | — | critical | — |
+| F00001 | sca | sca:vulnerable_dependency | /repo/package.json | Advisory match | — | critical | — | False |
 
-| F00002 | sca | sca:vulnerable_dependency | /repo/requirements.txt | Advisory match | — | medium | — |
+| F00002 | sca | sca:vulnerable_dependency | /repo/requirements.txt | Advisory match | — | medium | — | True |
 
-| F00003 | sca | sca:hygiene:loose_pin | /repo/package.json | Recorded signal | — | low | — |
+| F00003 | sca | sca:hygiene:loose_pin | /repo/package.json | Recorded signal | — | low | — | False |
 
-| F00004 | sca | sca:supply_chain:typosquat_candidate | /repo/requirements.txt | Recorded signal | — | high | — |
+| F00004 | sca | sca:supply_chain:typosquat_candidate | /repo/requirements.txt | Recorded signal | — | high | — | False |
 
-| F00005 | sca | sca:supply_chain:image_capability_drift | /repo/Dockerfile | Recorded signal | — | medium | — |
+| F00005 | sca | sca:supply_chain:image_capability_drift | /repo/Dockerfile | Recorded signal | — | medium | — | False |
 
-| F00006 | sca | sca:license:denied | /repo/package.json | Recorded signal | — | high | — |
+| F00006 | sca | sca:license:denied | /repo/package.json | Recorded signal | — | high | — | False |
 
-| F00007 | sca | sca:scan_health:osv_lookup_failed | unknown | Scan limitation | — | info | — |
+| F00007 | sca | sca:scan_health:osv_lookup_failed | unknown | Scan limitation | — | info | — | False |
 
 ## Finding details
 

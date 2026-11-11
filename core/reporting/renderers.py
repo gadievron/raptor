@@ -191,6 +191,7 @@ def _xml(document: ReportDocument) -> RenderedReport:
 
 
 _RENDERERS: dict[str, Renderer] = {}
+_FORMAT_ALIASES = {"md": "markdown"}
 
 
 def _link_allowed(value: str) -> bool:
@@ -203,6 +204,8 @@ def _link_allowed(value: str) -> bool:
 def register_renderer(renderer: Renderer) -> None:
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", renderer.name) or not re.fullmatch(r"\.[a-z0-9]{1,10}", renderer.extension):
         raise ValueError("Unsafe renderer name or extension")
+    if renderer.name in _FORMAT_ALIASES:
+        raise ValueError(f"Renderer name is a reserved alias: {renderer.name}")
     if renderer.name in _RENDERERS:
         raise ValueError(f"Renderer already registered: {renderer.name}")
     _RENDERERS[renderer.name] = renderer
@@ -213,7 +216,7 @@ def available_formats() -> tuple[str, ...]:
 
 
 def get_renderer(name: str) -> Renderer:
-    name = "markdown" if name == "md" else name
+    name = _FORMAT_ALIASES.get(name, name)
     if name not in _RENDERERS:
         raise ValueError(f"Unsupported report format {name!r}; available: {', '.join(available_formats())}")
     return _RENDERERS[name]
@@ -225,6 +228,11 @@ def render_document(document: ReportDocument, format: str = "markdown") -> Rende
     renderer = get_renderer(format)
     try:
         rendered = renderer.render(document)
+        if (not isinstance(rendered, RenderedReport)
+                or not isinstance(rendered.content, bytes)
+                or not isinstance(rendered.diagnostics, tuple)
+                or not all(isinstance(note, str) for note in rendered.diagnostics)):
+            raise ValueError(f"{renderer.name} renderer returned invalid report content or diagnostics")
     except (OSError, ValueError, TypeError):
         raise
     except Exception as exc:  # noqa: BLE001 — isolate optional plugins; cancellation still propagates
