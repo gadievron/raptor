@@ -7,6 +7,7 @@ from typing import TypeVar
 
 from core.source.contained import DEFAULT_MAX_SOURCE_CHARS, _open_contained, open_regular
 from core.source.lines import split_lines
+from core.source.streams import preserving_stream_error
 
 _CHUNK_BYTES = 64 * 1024
 _CHUNK_CHARS = 64 * 1024
@@ -66,7 +67,7 @@ def read_bytes_prefix_capped(
     selected = bytearray()
     consumed = 0
     try:
-        with stream:
+        with preserving_stream_error(stream):
             while chunk := stream.read(min(_CHUNK_BYTES, max_bytes + 1 - consumed)):
                 consumed += len(chunk)
                 if consumed > max_bytes:
@@ -102,7 +103,7 @@ def read_line_window_capped(
     consumed = 0
     line = 0
     try:
-        with stream:
+        with preserving_stream_error(stream):
             while chunk := stream.read(min(_CHUNK_BYTES, max_bytes + 1 - consumed)):
                 consumed += len(chunk)
                 if consumed > max_bytes:
@@ -157,7 +158,7 @@ def read_text_line_window_capped(
     line = 0
     truncated = False
     try:
-        with stream:
+        with preserving_stream_error(stream):
             while chunk := stream.read(min(_CHUNK_CHARS, max_chars + 1 - consumed)):
                 allowed = max_chars - consumed
                 consumed += len(chunk)
