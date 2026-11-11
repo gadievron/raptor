@@ -297,8 +297,16 @@ class JournalCheckpointQuiescer:
         q = self.study_queue
         if q is None or q.consumer_done:
             return True
-        q.request_pause()
-        return q.wait_quiescent(self.drain_bound_s)
+        try:
+            q.request_pause()
+            return q.wait_quiescent(self.drain_bound_s)
+        except BaseException:
+            # A failed wait still owns the pause it requested.
+            try:
+                q.resume_from_pause()
+            except BaseException:
+                pass
+            raise
 
     def _resume_study(self) -> None:
         q = self.study_queue
