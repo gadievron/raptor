@@ -81,6 +81,34 @@ def test_unsafe_existing_directory_is_refused_and_released(tmp_path, private_os,
     assert directory.stat().st_mode & 0o777 == mode
 
 
+@pytest.mark.parametrize('primary_type', [OSError, KeyboardInterrupt])
+@pytest.mark.parametrize('secondary_type', [RuntimeError, KeyboardInterrupt])
+def test_directory_validation_failure_survives_close_interruption(
+        tmp_path, private_os, monkeypatch, primary_type, secondary_type):
+    private, acquired, closed = private_os
+    close = private.close
+    primary = primary_type('directory validation interrupted')
+    secondary = secondary_type('directory close interrupted')
+
+    def fail_fstat(fd):
+        raise primary
+
+    def interrupted_close(fd):
+        close(fd)
+        raise secondary
+
+    monkeypatch.setattr(private, 'fstat', fail_fstat)
+    monkeypatch.setattr(private, 'close', interrupted_close)
+    with pytest.raises(primary_type) as caught:
+        evidence.ensure_audit_dirfd(tmp_path)
+    assert caught.value is primary
+    assert not acquired
+    assert len(closed) == 1
+    with pytest.raises(OSError) as released:
+        os.fstat(closed[0])
+    assert released.value.errno == errno.EBADF
+
+
 def test_foreign_directory_owner_is_refused_without_chown(tmp_path, private_os, monkeypatch):
     private, acquired, closed = private_os
     original_fstat = private.fstat
