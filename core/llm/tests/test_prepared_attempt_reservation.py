@@ -678,3 +678,42 @@ def test_absolute_deadline_keeps_usage_from_an_already_dispatched_call(sdk_clien
     with pytest.raises(LLMGovernorExceededError, match="run deadline"):
         _generate(b, prompt="later")
     assert len(b.state["requests"]) == 1 and b.client.pending_usage_reservations == []
+
+
+def test_prepared_fallback_prices_each_identified_attempt_once(sdk_clients, tmp_path):
+    b = sdk_clients(run_dir=tmp_path / "run")
+    fallback = ModelConfig(provider="openai", model_name="gpt-4o-mini", api_key="inert",
+        api_base="https://scripted.invalid/v1", max_tokens=16)
+    b.client.config.enable_fallback = True
+    b.client.config.fallback_models = [fallback]
+    alternate = b.client._get_provider(fallback)
+    def first_response_lost(request):
+        if json.loads(request.content)["model"] == "gpt-4o":
+            raise httpx.ReadError("captured primary response lost", request=request)
+    b.state["handler"] = first_response_lost
+    try:
+        response = _generate(b)
+        assert response.model == "gpt-4o-mini"
+        assert len(b.state["requests"]) == b.client._governed_calls == 2
+        pending, = b.client.pending_usage_reservations
+        assert pending["model"] == "gpt-4o"
+        assert pending["reservation_usd"] > 0 and pending["reservation_tokens"] > 16
+        first_cost = b.provider._calculate_cost_split(3, 3)
+        second_cost = alternate._calculate_cost_split(3, 3)
+        assert first_cost != second_cost and response.cost == pytest.approx(second_cost)
+        receipt = dict(cost_usd=first_cost, tokens_in=3, tokens_out=3, tokens_total=6)
+        assert b.client.reconcile_pending_usage(pending["attempt_id"], **receipt)
+        assert not b.client.reconcile_pending_usage(pending["attempt_id"], **receipt)
+        rows = b.sink.attempt_projection()["attempts"]
+        assert len({row["attempt_id"] for row in rows}) == 2
+        assert len({row["call_id"] for row in rows}) == 1
+        assert {row["model"] for row in rows} == {"gpt-4o", "gpt-4o-mini"}
+        assert all(set(row["beneficiaries"]) == {"first", "second"} for row in rows)
+        assert b.client.reported_spend_usd == pytest.approx(first_cost + second_cost)
+        assert b.client._governed_tokens == 12 and b.client.pending_usage_reservations == []
+        ledger = PhaseCostLedger()
+        ledger.project_attempts(b.sink.attempt_projection(), authoritative_spend=b.client.reported_spend_usd)
+        assert ledger.total_spend_usd == pytest.approx(first_cost + second_cost)
+        assert ledger.total_failed_attempts_cost_usd == pytest.approx(first_cost)
+    finally:
+        alternate.client.close()
