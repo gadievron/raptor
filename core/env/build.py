@@ -694,8 +694,12 @@ def _elf_executables(root: Path) -> dict[str, Path]:
                     continue
                 if not path.stat().st_mode & 0o111:
                     continue
-                with path.open("rb") as fh:
-                    if fh.read(4) != _ELF_MAGIC:
+                with preserving_stream_error(path.open("rb")) as fh:
+                    try:
+                        magic = fh.read(4)
+                    except OSError:
+                        continue
+                    if magic != _ELF_MAGIC:
                         continue
             except OSError:
                 continue
