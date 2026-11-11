@@ -2090,9 +2090,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # fake-home setup below consumes fake_home (the authoritative
     # profile-override block further down runs too late for it). The
     # profile choice mirrors that block exactly: CLI wins, then
-    # disabled, then the caller's profile=. Unknown profile strings
-    # resolve to no implications here; the authoritative block still
-    # raises ValueError for them.
+    # disabled, then the caller's profile=. Reject unknown selected
+    # profiles before path staging can consume their configuration.
     if (profile == "rr" and disabled
             and state._cli_sandbox_profile is None
             and not state._cli_sandbox_disabled):
@@ -2105,6 +2104,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _profile_for_defaults = "none"
     else:
         _profile_for_defaults = profile  # type: ignore[assignment]
+    if _profile_for_defaults is not None and _profile_for_defaults not in PROFILES:
+        raise ValueError(
+            f"Unknown sandbox profile {_profile_for_defaults!r}. "
+            f"Valid profiles: {sorted(PROFILES)}."
+        )
     _profile_defaults: Mapping[str, object] = (
         PROFILES.get(_profile_for_defaults)
         if _profile_for_defaults else None
