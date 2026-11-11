@@ -22939,6 +22939,7 @@ def _run_tool_chain(
                     config, file_path, function_name,
                 ) or (line_start + 50 if line_start else 0)
                 _sg_hypothesis = hypothesis if rule_keyword else ""
+                _sg_failed = False
                 try:
                     sweep = _memoized_sweep_step(
                         config,
@@ -22972,12 +22973,18 @@ def _run_tool_chain(
                             language=_probed_language,
                         ),
                     )
+                except BaseException:
+                    _sg_failed = True
+                    raise
                 finally:
                     if rule_path and os.path.basename(rule_path).startswith("audit_sweep_"):
                         try:
                             os.unlink(rule_path)
                         except OSError:
                             pass
+                        except BaseException:
+                            if not _sg_failed:
+                                raise
                 # Normalized outcome dispatch: only an explicit
                 # refuted may reach the refuted counter — a skipped
                 # (did not look) or novel outcome falling into a bare
