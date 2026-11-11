@@ -110,3 +110,25 @@ def test_quality_mask_discovery_is_pure_and_still_needs_native_admission(monkeyp
     assert row['arithmetic_site']['candidate_basis'] == 'masked-out-bits'
     assert row['arithmetic_site']['binding_status'] == 'candidate'
     assert row['confidence'] == 'low' and 'verdict' not in row
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("body,expected", [('if((Flags & 5)==2)return 1;if((Flags & 5)==2)return 2;return 0;', []), ('if((Flags & 5)==2)return 1;if((Flags & 0x5)==0x2)return 2;return 0;', []), ('if((Flags & 5)==2)return 1;if((Other & 5)==2)return 2;return 0;', [('Flags', 5, 2, '=='), ('Other', 5, 2, '==')]), ('if((Flags & 5)==2)return 1;if((Flags & 9)==2)return 2;return 0;', [('Flags', 5, 2, '=='), ('Flags', 9, 2, '==')]), ('if((Flags & 5)==2)return 1;if((Flags & 5)==8)return 2;return 0;', [('Flags', 5, 2, '=='), ('Flags', 5, 8, '==')]), ('if((Flags & 5)==2)return 1;if((Flags & 5)!=2)return 2;return 0;', [('Flags', 5, 2, '=='), ('Flags', 5, 2, '!=')]), ('if((Flags & 5)==2)return 1;{void *Flags=0;if((Flags & 5)==2)return 2;}return 0;', []), ('if((Flags & 5)==2)return 1;return sizeof((Flags & 5)==2);', []), ('if((Flags & 5)==2)return 1;if((Flags & 5U)==2)return 2;return 0;', [('Flags', 5, 2, '==')])], ids=["duplicate", "numeric-alias", "operand", "mask", "value", "operator", "later-type-refusal", "unevaluated", "suffix-refusal"])
+def test_mask_discovery_requires_a_unique_numeric_objective(body, expected, language):
+    from core.audit import integer_mask_comparison as subject
+
+    pytest.importorskip("tree_sitter_" + language)
+    source = "int Read(unsigned Flags,unsigned Other){" + body + "}"
+    rows = subject.mask_comparison_candidates(source, language=language, integer_abi="lp64")
+    assert [row[1:] for row in rows] == expected
+
+
+def test_mask_discovery_cap_follows_ambiguity_filtering():
+    from core.audit import integer_mask_comparison as subject
+
+    parameters = ",".join(f"unsigned Flags{i}" for i in range(17))
+    duplicate = "if((Flags0 & 5)==2)return 1;" * 2
+    distinct = "".join(f"if((Flags{i} & 5)==2)return 1;" for i in range(1, 17))
+    source = f"int Read({parameters}){{{duplicate}{distinct}return 0;}}"
+    rows = subject.mask_comparison_candidates(source, language="c", integer_abi="lp64")
+    assert [row[1] for row in rows] == [f"Flags{i}" for i in range(1, 17)]
