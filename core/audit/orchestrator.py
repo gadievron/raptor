@@ -14488,7 +14488,7 @@ def _commit_outcome(
             "%s:%s (status %s) — the run's exports are already cut",
             outcome.file, outcome.function, outcome.status,
         )
-        return
+        return None
 
     checked_by = ["audit"]
     if outcome.model:

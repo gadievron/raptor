@@ -41,7 +41,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +204,8 @@ class TelemetrySink:
             if self._usage_fingerprint(row) != self._usage_fingerprint(historical):
                 self._attempt_conflicts.append(row)
                 return
+            # Accepted history is written only after its current record.
+            previous = cast(dict[str, Any], previous)
             previous["beneficiaries"] = list(dict.fromkeys(
                 previous["beneficiaries"] + row["beneficiaries"]
             ))
