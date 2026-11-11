@@ -212,7 +212,8 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = _write_target(node)
                 if target is None:
                     return True
-                if target.type not in {"array_pattern", "object_pattern"}:
+                if (target.type not in {"array_pattern", "object_pattern"}
+                        and b"\\" not in target.text):
                     if node.type != "variable_declarator" or node.child_by_field_name("value") is not None:
                         continue
                     # A JS var redeclaration without an initialiser does not
