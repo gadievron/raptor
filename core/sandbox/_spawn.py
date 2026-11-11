@@ -4473,7 +4473,10 @@ def run_sandboxed(
         # Step 8: tell child to proceed.
         try:
             os.write(p_go_w, b"G")
-        finally:
+        except BaseException:
+            _retire_parent_resources(lambda: _close_parent_fd(p_go_w))
+            raise
+        else:
             _close_parent_fd(p_go_w)
 
         # Step 8.9: deliver the live grandchild pid to the caller.
