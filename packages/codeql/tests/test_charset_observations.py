@@ -109,6 +109,45 @@ def test_model_observations_keep_their_actual_path_sink(validator, tmp_path, mon
     assert requests[1]["sink"] == {"file": "other.py", "line": 42}
 
 
+def test_recorded_request_uses_dispatch_snapshot_not_mutated_caller(validator, tmp_path, monkeypatch):
+    path = _dataflow()
+
+    def model_then_caller_changes(**kwargs):
+        assert kwargs["rule_id"] == "py/path-injection"
+        assert kwargs["paths"][0].sink.file_path == "app.py"
+        path.rule_id = "changed-after-dispatch"
+        path.sink.file_path = "after.py"
+        path.sink.line = 999
+        path.intermediate_steps[0].line = 888
+        assert kwargs["paths"][0].sink.file_path == "app.py"
+        assert kwargs["paths"][0].sink.line == 10
+        assert kwargs["paths"][0].intermediate_steps[0].line == 7
+        return ip.PrescreenVerdict(refuted=False, paths_checked=1, evidence=[deepcopy(MODEL)])
+
+    monkeypatch.setattr(ip, "prescreen_finding", model_then_caller_changes)
+    assert validator._injection_prescreen(path, tmp_path, observation_out_dir=tmp_path) is None
+    event, = [row for row in load_verified_audit_log(tmp_path)
+              if row.get("rule_id") == "smt:conditional-charset-model"]
+    request = event["result"]["data"]["request"]
+    assert request["rule_id"] == "py/path-injection"
+    assert request["sink"] == {"file": "app.py", "line": 10}
+
+
+@pytest.mark.parametrize("overflow", ["paths", "steps"])
+def test_observation_snapshot_declines_oversized_inputs_before_dispatch(
+    validator, tmp_path, monkeypatch, overflow,
+):
+    path = _dataflow()
+    if overflow == "paths":
+        path.alternatives = [_dataflow() for _ in range(ip.MAX_PRESCREEN_PATHS)]
+    else:
+        path.intermediate_steps = [path.intermediate_steps[0]] * (ip.MAX_PRESCREEN_STEPS + 1)
+    producer = MagicMock(side_effect=AssertionError("oversized snapshot must not dispatch"))
+    monkeypatch.setattr(ip, "prescreen_finding", producer)
+    assert validator._injection_prescreen(path, tmp_path, observation_out_dir=tmp_path) is None
+    producer.assert_not_called()
+
+
 @pytest.mark.parametrize("with_output", [False, True])
 def test_validate_finding_forwards_owned_directory_only_when_present(validator, tmp_path, with_output):
     path = _dataflow()
