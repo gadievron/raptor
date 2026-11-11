@@ -414,3 +414,53 @@ def test_caller_publication_scope_requires_the_owned_delivery_binding(tmp_path, 
     finally:
         runtime.fail(reservation, 'local_binding_control')
         runtime.close()
+
+
+@pytest.mark.parametrize('delivered', [False, True], ids=['omitted', 'fitted'])
+@pytest.mark.parametrize('failed', [False, True], ids=['completed', 'failed'])
+def test_returned_caller_receipt_mutation_cannot_rewrite_retained_delivery(tmp_path, monkeypatch, delivered, failed):
+    from copy import deepcopy
+
+    runtime, ctx, request = case(tmp_path)
+    runtime._register_caller_requests(runtime._origin(ctx), request)
+    reservation, = runtime.ready_continuations(admission=lambda: True)
+    assert runtime.enrich_context(ctx, reservation)
+    monkeypatch.setattr('core.audit.llm_review._prompt_budget', lambda *_: 100000 if delivered else 100)
+    config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / 'out')
+
+    class Client:
+        def generate_structured(self, prompt, schema, **kwargs):
+            assert ('return f(n)' in prompt) is delivered
+            return StructuredResponse(result={'status': 'clean', 'body': 'Scripted local assessment'},
+                                      raw='', cost=0, model='scripted')
+
+    try:
+        outcome = runtime.wrap_review(make_review_fn(Client(), escalate_clean=False))(ctx, config)
+        row, = outcome.review_result['caller_context_delivery']
+        original = deepcopy(row)
+        assert original['delivered'] is delivered
+        row['delivered'] = not delivered
+        row['request_id'] = 'replacement-request'
+        row['source_materials'][0]['sha256'] = '0' * 64
+        row['source_materials'][0]['source_version'][0] = -1
+        if failed:
+            assert runtime.fail(reservation, 'scripted_review_failure', ctx)
+        else:
+            assert runtime.complete(reservation, ctx, published_status=outcome.status)
+        prompt_event = [event for event in runtime.events() if event['event'] == 'review_prompt_context'][-1]
+        assert prompt_event['records'] == [{'field': 'caller_context_delivery', **original}]
+        terminal = [event for event in runtime.events()
+                    if event['event'] in ('continuation_completed', 'continuation_failed')][-1]
+        if failed:
+            assert terminal['published_status'] == '' and 'delivered_request_ids' not in terminal
+        else:
+            assert terminal['delivered_request_ids'] == ([original['request_id']] if delivered else [])
+        config.out_dir.mkdir()
+        runtime.write_artifacts(config.out_dir)
+        payload = json.loads((config.out_dir / 'knowledge-results.json').read_text(encoding='utf-8'))
+        processing = payload['caller_context_requests'][0]['processing']
+        assert processing['state'] == ('review_completed' if delivered and not failed else 'deferred')
+        assert processing['adjudication'] == 'unverified'
+        assert not runtime._caller_deliveries
+    finally:
+        runtime.close()
