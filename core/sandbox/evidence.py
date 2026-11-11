@@ -436,8 +436,12 @@ class EvidenceFile:
                 return self._close_result
             self._closed = True
             verification_result = False
+            verification_failure: BaseException | None = None
             try:
                 verification_result = self.verify() if verify else True
+            except BaseException as exc:
+                verification_failure = exc
+                raise
             finally:
                 # Verify while the fd is owned, but publish success only
                 # after close completes. Never retry a released fd number.
@@ -453,6 +457,13 @@ class EvidenceFile:
                         sanitise_for_terminal(type(exc).__name__, max_len=64),
                         sanitise_exception_message(exc),
                     )
+                except BaseException as cleanup_error:
+                    if verification_failure is None:
+                        raise
+                    with contextlib.suppress(BaseException):
+                        verification_failure.add_note(
+                            "evidence fd cleanup: " + type(cleanup_error).__name__,
+                        )
                 else:
                     self._close_result = verification_result
             return self._close_result

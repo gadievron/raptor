@@ -108,6 +108,28 @@ def test_verification_error_survives_secondary_close_error(handle, monkeypatch, 
     assert handle.close() is False
 
 
+@pytest.mark.parametrize('primary_type', [RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize('secondary_type', [RuntimeError, KeyboardInterrupt])
+def test_verification_failure_survives_interrupted_close(
+    handle, monkeypatch, primary_type, secondary_type,
+):
+    primary = primary_type('owned verification failure')
+    secondary = secondary_type('owned secondary close interruption')
+    closed, private = close_fault(monkeypatch, handle, secondary)
+
+    def fail():
+        raise primary
+
+    monkeypatch.setattr(handle, '_verify_locked', fail)
+    with pytest.raises(primary_type) as caught:
+        handle.close()
+    assert caught.value is primary
+    assert closed == [handle.fd]
+    forbid_inspection(private)
+    assert handle.verify() is False
+    assert handle.close() is False
+
+
 def test_failed_verification_remains_failed_after_close_error(handle, monkeypatch):
     handle.path.write_bytes(b'')
     closed, private = close_fault(monkeypatch, handle, OSError(errno.EIO, 'close failed'))
