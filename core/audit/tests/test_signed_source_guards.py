@@ -108,7 +108,7 @@ def test_confined_array_worker_preserves_signed_guard_semantics(guard, expected)
     result = sweep.run_smt_verb_direct(file_path="record.c", function_name="Read", verb="check-array-bounds",
                                       source=source, hypothesis="out-of-bounds read at Data[Index]", integer_abi="ilp32")
     assert result.outcome == expected, result.errors
-    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v12"
+    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v17"
     assert result.details["violation"] is (expected == "confirmed")
     if expected == "confirmed":
         assert result.details["witness_index"] == -1
@@ -135,4 +135,11 @@ def test_confined_literal_caller_checks_the_same_negative_guard(tmp_path, argume
     decision = evaluate_caller_gate(tmp_path, "record.c", "Read", "check-array-bounds", "Data[Index]",
                                     source=source, def_span=(1, 1), integer_abi="ilp32")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v11"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v17"
+    assert decision.details["status"] == "checked"
+    assert decision.details["proof_scope"] == "caller-entry-source-model"
+    assert dict(decision.details["parameter_types"]) == {"Index": "int"}
+    assert len(decision.details["calls"]) == 1
+    call = decision.details["calls"][0]
+    assert call["arguments"] == {"Index": int(argument)}
+    assert call["verdict"] == ("violation" if action == "promote" else "guard-excluded")

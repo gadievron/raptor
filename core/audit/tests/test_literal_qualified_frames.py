@@ -183,5 +183,14 @@ def test_native_qualified_literal_caller_receipt(tmp_path, arguments, action):
     result = evaluate_caller_gate(tmp_path, 'record.cpp', 'Read', 'check-overflow', CLAIM,
                                   source=text, def_span=(1, 1), integer_abi='ilp32')
     assert result.action == action, result.reason
-    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v11'
+    assert result.details['binding']['query_contract'] == 'common-width-literal-frame-v17'
     assert result.details['proof_scope'] == 'caller-entry-source-model'
+    assert result.details["status"] == "checked"
+    assert dict(result.details["parameter_types"]) == {"Value": "unsigned", "Step": "unsigned"}
+    assert len(result.details["calls"]) == 1
+    call = result.details["calls"][0]
+    values = [int(value) for value in arguments.split(",")]
+    assert call["arguments"] == {"Value": values[0], "Step": values[1]}
+    assert call["verdict"] == ("violation" if action == "promote" else "safe")
+    assert call["mathematical_result"] == (1 << 32 if action == "promote" else 64)
+    assert call["result_range"] == {"minimum": 0, "maximum": (1 << 32) - 1}
