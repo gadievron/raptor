@@ -13,9 +13,9 @@ def test_noninteger_locations_decline_before_source_reads(tmp_path, monkeypatch)
     reader = sv._read_file_content
     reads = []
 
-    def observe_read(file):
+    def observe_read(file, repo_path=None):
         reads.append(file)
-        return reader(file)
+        return reader(file, repo_path)
 
     monkeypatch.setattr(sv, "_read_file_content", observe_read)
     for invalid in (True, False, 1.0, "1"):
