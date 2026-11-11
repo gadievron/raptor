@@ -1480,6 +1480,8 @@ class _KeyLockHandle:
 
 class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
+    _attempt_accounting_protocol = 1
+
 
     # Lazily-created per-run accounting attributes (created on first use
     # by _record_usage / _record_schema_validity).

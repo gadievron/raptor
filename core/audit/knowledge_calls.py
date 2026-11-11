@@ -28,20 +28,36 @@ class KnowledgeCallRefused(RuntimeError):
 class _Scope:
     admit: Admission
     closed: Event
+    work_id: str | None = None
+    beneficiaries: tuple[str, ...] = ()
 
 
 _current: ContextVar[_Scope | None] = ContextVar("audit_knowledge_call_scope", default=None)
 
 
 @contextmanager
-def owned_call_scope(admit: Admission) -> Iterator[None]:
-    scope = _Scope(admit, Event())
+def owned_call_scope(admit: Admission, *, work_id: str | None = None,
+                     beneficiaries: tuple[str, ...] = ()) -> Iterator[None]:
+    scope = _Scope(admit, Event(), work_id, tuple(beneficiaries))
     token = _current.set(scope)
     try:
         yield
     finally:
         scope.closed.set()
         _current.reset(token)
+
+
+def accounting_context_kwargs(client: object, *, work_id: str | None,
+                              beneficiaries: tuple[str, ...]) -> dict:
+    """Forward pipeline provenance only to an explicit accounting protocol."""
+    try:
+        version = getattr(client, "_attempt_accounting_protocol", None)
+    except Exception:
+        return {}
+    if type(version) is not int or version != 1 or not work_id:
+        return {}
+    return {"accounting_work_id": work_id,
+            "accounting_beneficiaries": tuple(dict.fromkeys(beneficiaries))}
 
 
 class _ObservedClient:
@@ -58,7 +74,11 @@ class _ObservedClient:
             raise KnowledgeCallRefused("scope_closed")
         if not self._scope.admit(self._purpose, method):
             raise KnowledgeCallRefused("unit_admission")
-        return getattr(self.__wrapped__, method)(*args, **kwargs)
+        owned = accounting_context_kwargs(
+            self.__wrapped__, work_id=self._scope.work_id,
+            beneficiaries=self._scope.beneficiaries,
+        )
+        return getattr(self.__wrapped__, method)(*args, **{**kwargs, **owned})
 
     def generate(self, *args, **kwargs):
         return self._invoke("generate", args, kwargs)

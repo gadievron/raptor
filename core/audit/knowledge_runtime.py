@@ -208,7 +208,8 @@ class AuditKnowledgeRuntime:
             try:
                 from .knowledge_calls import owned_call_scope
                 with owned_call_scope(lambda purpose, method: self.admit_client_call(
-                        {"file": origin.file, "name": origin.function, "line_start": origin.line_start}, purpose, method)):
+                        {"file": origin.file, "name": origin.function, "line_start": origin.line_start}, purpose, method),
+                        work_id="review:" + origin.pass_id, beneficiaries=(origin.pass_id,)):
                     outcome = review_fn(ctx, config)
             except BaseException:
                 with self._lock:
