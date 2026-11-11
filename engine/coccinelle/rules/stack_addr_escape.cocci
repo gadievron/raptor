@@ -1,21 +1,18 @@
 // stack_addr_escape.cocci — Detect stack buffer address assigned to
 // a pointer that outlives the function scope.
 //
-// 0xdea catches return-of-stack-address. This rule catches the
-// subtler case: assigning a local's address to a global, heap, or
-// output pointer parameter, where the dangling pointer survives
-// the function return.
+// Address assignment alone does not establish a dangling reference after
+// return: the object can have static storage, and the target can be cleared
+// or restored before the automatic object's lifetime ends. Review storage
+// duration, later overwrites and retained references before confirmation.
 //
-// Position discipline (format_string.cocci technique): a safe rule
-// binds the positions of &LOCAL assignments whose target provably
-// stays in the same scope — a locally declared pointer variable, or
-// a member of a locally declared struct (same lifetime as LOCAL).
-// The bug rule reports assignments at positions NOT in the safe set:
-// globals/statics, members reached through pointers, and any other
-// target that can survive the frame.
+// Position exclusions cover selected local pointer/aggregate targets in
+// either declaration order. They do not track outward copies of those
+// targets, so absence cannot refute a broader escape hypothesis.
 //
 // CWE-562: Return of Stack Variable Address (generalised)
-// @role: verification
+// @role: detection
+// raptor: confirm-only
 
 @safe_local_target@
 identifier FUNC, LOCAL;
@@ -84,7 +81,7 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Address of stack variable assigned to non-local pointer — dangling pointer after function return (CWE-562)"
+  "message":   "Local-address assignment to a potentially escaping pointer — review storage duration, later overwrites and retained references after scope exit (CWE-562)"
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
@@ -112,6 +109,6 @@ msg = {
   "file":  p[0].file,
   "line":  int(p[0].line),
   "col":   int(p[0].column),
-  "message":   "Address of stack variable written to output parameter — dangling pointer after function return (CWE-562)"
+  "message":   "Local-address assignment through an output parameter — review storage duration, later overwrites and retained references after scope exit (CWE-562)"
 }
 print("COCCIRESULT:" + json.dumps(msg))

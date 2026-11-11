@@ -368,7 +368,7 @@ class TestMechDetectorPromotion:
         pytest.param("mmap_free", "mmap_free", "mapping pointer passed to free", "CWE-762", False, id="detection-mapping-release"),
         pytest.param("free_nonbase_ptr_inc", "free_nonbase_ptr", "invalid free of an offset pointer", "CWE-761", False, id="detection-offset-alias"),
         pytest.param("double_fclose", "double_close", "double close of a stream", "CWE-415", False, id="detection-stream-alias"),
-        pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", True, id="verified-stack-alias"),
+        pytest.param("stack_addr_escape_outparam", "stack_addr_escape", "stack address escapes through output parameter", "CWE-562", False, id="detection-stack-alias"),
         pytest.param("uid_truncation", "uid_truncation", "UID cast narrows an identity value", "CWE-681", False, id="detection-uid-range"),
         pytest.param("shift_overflow", "shift_overflow", "invalid built-in shift count", "CWE-682", False, id="detection-shift-family"),
         pytest.param("shift_overflow_int", "shift_overflow", "invalid built-in int shift count", "CWE-682", False, id="detection-shift-int"),

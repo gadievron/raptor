@@ -160,7 +160,7 @@ class TestDetectionRoleResolution:
 @pytest.mark.parametrize("owner,alias,role", [
     ("free_nonbase_ptr", "free_nonbase_ptr_inc", "detection"),
     ("double_close", "double_fclose", "detection"),
-    ("stack_addr_escape", "stack_addr_escape_outparam", "verification"),
+    ("stack_addr_escape", "stack_addr_escape_outparam", "detection"),
     ("va_arg_mismatch", "va_arg_promoted_type", "verification"),
     ("va_arg_mismatch", "va_arg_promoted_type_short", "verification"),
 ])
@@ -451,6 +451,22 @@ def test_lock_imbalance_requires_acquisition_and_release_context(monkeypatch, tm
     assert get_rule_role(str(rule)) == 'detection'
     assert is_confirm_only_coccinelle_rule(str(rule))
     receipt = 'coccinelle:lock_imbalance'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
+
+
+@pytest.mark.parametrize('rule_id', ['stack_addr_escape', 'stack_addr_escape_outparam'])
+def test_address_assignments_require_retained_lifetime_evidence(monkeypatch, tmp_path, rule_id):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/stack_addr_escape.cocci'
+    receipt = f'coccinelle:{rule_id}'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert is_confirm_only_coccinelle_rule(str(rule))
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
