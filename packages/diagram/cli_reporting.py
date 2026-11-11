@@ -16,7 +16,7 @@ _MAX_CAPTURE_CHARS = 1_000_000
 
 def complete_diagram_report(args, content: str | None, out_dir: Path, target: str | None, sources: list[Path]):
     options = args._report_options
-    if not options.enabled:
+    if not options.enabled or not (args.report_format or args.report_output):
         notice = unrefreshed_report_notice(out_dir)
         if notice:
             print("Warning: " + notice, file=sys.stderr)
