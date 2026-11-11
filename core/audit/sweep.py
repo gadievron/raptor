@@ -1630,11 +1630,13 @@ def _rule_languages_include(rule_config: str, lang: str) -> bool:
     flag, target skipped, witness gate caps at inconclusive) rather
     than scanning a file as a language nothing vouched for.
     """
+    from core.source.streams import preserving_stream_error
+
     try:
         path = Path(rule_config)
         if not path.is_file():
             return False
-        with path.open(encoding="utf-8", errors="replace") as fh:  # raw-open: RAPTOR-owned rule config (shipped pack or run-dir generated)
+        with preserving_stream_error(path.open(encoding="utf-8", errors="replace")) as fh:  # raw-open: RAPTOR-owned rule config (shipped pack or run-dir generated)
             text = fh.read(_RULE_LANGS_MAX_BYTES)
     except OSError:
         return False
