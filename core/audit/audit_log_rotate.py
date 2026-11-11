@@ -68,7 +68,7 @@ from core.audit.record import (
     audit_log_paths,
 )
 
-from core.source.streams import adopt_fd
+from core.source.streams import adopt_fd, preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -269,7 +269,7 @@ def _rotate_audit_log(out_dir: Path) -> RotateStats:
                     "nothing was replaced."
                 ) from exc
             source_stream = adopt_fd(src_fd, "rb")
-            with source_stream as fh:
+            with preserving_stream_error(source_stream) as fh:
                 while True:
                     chunk = fh.readline(_CHUNK_BYTES)
                     if not chunk:
