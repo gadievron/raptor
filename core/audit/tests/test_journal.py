@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -412,7 +413,10 @@ class TestMechanicalEchoRows:
         loader = SourceFileLoader("raptor_review_cli", cli_path)
         spec = importlib.util.spec_from_loader("raptor_review_cli", loader)
         mod = importlib.util.module_from_spec(spec)
-        with patch.object(sys, "path", sys.path.copy()):
+        with patch.object(sys, "path", sys.path.copy()), patch.dict(os.environ):
+            for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+                os.environ.pop(name, None)
+            os.environ["_RAPTOR_TRUSTED"] = "1"
             loader.exec_module(mod)
 
         import io
@@ -448,7 +452,10 @@ class TestReviewDiffLive:
         loader = SourceFileLoader("raptor_review_cli_dl", cli_path)
         spec = importlib.util.spec_from_loader("raptor_review_cli_dl", loader)
         mod = importlib.util.module_from_spec(spec)
-        with patch.object(sys, "path", sys.path.copy()):
+        with patch.object(sys, "path", sys.path.copy()), patch.dict(os.environ):
+            for name in ("PYTHONPATH", "PYTHONSTARTUP", "PYTHONHOME", "PYTHONUSERBASE"):
+                os.environ.pop(name, None)
+            os.environ["_RAPTOR_TRUSTED"] = "1"
             loader.exec_module(mod)
         return mod
 

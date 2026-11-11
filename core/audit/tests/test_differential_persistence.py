@@ -2,6 +2,7 @@
 
 import errno
 import json
+import time
 
 import pytest
 
@@ -38,6 +39,8 @@ def test_existing_assessment_requires_retained_differential_record(tmp_path, mon
 
 
 def test_floor_refusal_survives_differential_record_write_failure(tmp_path, monkeypatch):
+    config = harness._config(tmp_path)
+    config.run_deadline_monotonic = time.monotonic() + 60.0
     outcome = harness._outcome(status='dark')
     result = harness._result([outcome])
     client, model_calls = harness._seq_client(harness._VECTOR_JSON)
@@ -45,7 +48,8 @@ def test_floor_refusal_survives_differential_record_write_failure(tmp_path, monk
     failure = OSError(errno.EIO, 'owned differential refusal persistence fault')
     executions, writes = [], []
 
-    def refuse(spec, target_path, audit_run_dir=None):
+    def refuse(spec, target_path, audit_run_dir=None, *, deadline_monotonic=None):
+        assert deadline_monotonic is config.run_deadline_monotonic
         executions.append(spec.finding_key)
         raise refusal
 
@@ -60,7 +64,7 @@ def test_floor_refusal_survives_differential_record_write_failure(tmp_path, monk
     monkeypatch.setattr(dark_verify, 'execute_witness', refuse)
     monkeypatch.setattr(orch, 'save_json', reject)
     with pytest.raises(BaseException) as caught:
-        orch._run_differential_verification(result, harness._config(tmp_path),
+        orch._run_differential_verification(result, config,
             {'leads': [harness._lead()]}, llm_client=client)
     assert len(executions) == 1 and len(model_calls) == 1 and len(writes) == 1
     assert outcome.status == 'dark' and result.findings == 0
@@ -199,13 +203,16 @@ def test_optional_journal_failure_keeps_retained_assessment(tmp_path, monkeypatc
 
 @pytest.mark.parametrize('floor', [False, True], ids=['promotion', 'refusal'])
 def test_record_write_cancellation_keeps_prior_assessment(tmp_path, monkeypatch, floor):
+    config = harness._config(tmp_path)
+    config.run_deadline_monotonic = time.monotonic() + 60.0
     outcome = harness._outcome(status='dark')
     result = harness._result([outcome])
     client, _ = harness._seq_client(harness._VECTOR_JSON)
     cancellation = KeyboardInterrupt('owned differential record cancellation')
     refusal = _floor_error()
     if floor:
-        def refuse(spec, target_path, audit_run_dir=None):
+        def refuse(spec, target_path, audit_run_dir=None, *, deadline_monotonic=None):
+            assert deadline_monotonic is config.run_deadline_monotonic
             raise refusal
         monkeypatch.setattr(dark_verify, 'execute_witness', refuse)
     else:
@@ -219,7 +226,7 @@ def test_record_write_cancellation_keeps_prior_assessment(tmp_path, monkeypatch,
 
     monkeypatch.setattr(orch, 'save_json', cancel)
     with pytest.raises(KeyboardInterrupt) as caught:
-        orch._run_differential_verification(result, harness._config(tmp_path),
+        orch._run_differential_verification(result, config,
             {'leads': [harness._lead()]}, llm_client=client)
     assert caught.value is cancellation
     assert (outcome.status, outcome.evidence_tool, result.findings, result.dormant) == ('dark', '', 0, 1)
@@ -228,6 +235,8 @@ def test_record_write_cancellation_keeps_prior_assessment(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize('existing', [False, True], ids=['synthesized-prefix', 'existing-prefix'])
 def test_completed_prefix_retained_before_floor_refusal(tmp_path, monkeypatch, existing):
+    config = harness._config(tmp_path)
+    config.run_deadline_monotonic = time.monotonic() + 60.0
     first = harness._outcome(status='dark')
     second = orch.ReviewOutcome(file='pkg/other.py', function='other', status='dark',
                                body='second scoped concern', hypothesis='separate boundary')
@@ -237,7 +246,8 @@ def test_completed_prefix_retained_before_floor_refusal(tmp_path, monkeypatch, e
     calls, writes, published = [], [], []
     real_save, real_append = orch.save_json, collector.append_journal_for_outcome
 
-    def execute(spec, target_path, audit_run_dir=None):
+    def execute(spec, target_path, audit_run_dir=None, *, deadline_monotonic=None):
+        assert deadline_monotonic is config.run_deadline_monotonic
         calls.append(spec.function)
         if spec.function == 'other':
             raise refusal
@@ -261,7 +271,7 @@ def test_completed_prefix_retained_before_floor_refusal(tmp_path, monkeypatch, e
     monkeypatch.setattr(orch, 'save_json', observe_write)
     leads = [harness._lead(), harness._lead(file='pkg/other.py', function='other')]
     with pytest.raises(type(refusal)) as caught:
-        orch._run_differential_verification(result, harness._config(tmp_path),
+        orch._run_differential_verification(result, config,
             {'leads': leads}, llm_client=client)
     assert caught.value is refusal
     assert len(calls) == 5 and len(model_calls) == 2
