@@ -1,19 +1,15 @@
-// kfree_not_rcu.cocci — Find plain kfree/vfree on THE pointer that was
-// published via rcu_assign_pointer or hlist_add_head_rcu.
+// kfree_not_rcu.cocci — Find plain kfree/vfree after publication of the
+// same expression via rcu_assign_pointer or hlist_add_head_rcu.
 //
-// The pattern: a pointer is RCU-published (rcu_assign_pointer(head, ptr)
-// or hlist_add_head_rcu(&ptr->node, head)) and then that SAME pointer is
-// passed to plain kfree/vfree with no grace period in between. Concurrent
-// RCU readers may still hold a reference, causing use-after-free.
+// The matcher relates publication and free expressions, not stable object
+// identity. Reassignment, unpublication, reader domains and deferred-free
+// ownership require caller context before confirming an RCU lifetime bug.
+// Selected wait/callback names suppress reports without proving those
+// properties; a quiet result cannot refute a broader lifetime hypothesis.
 //
-// The freed expression is bound to the published one — freeing an
-// unrelated pointer after an RCU publish does not match. A grace period
-// (synchronize_rcu / synchronize_rcu_expedited) or a kfree_rcu of the
-// pointer on the path defuses the match: publish; synchronize_rcu();
-// kfree(old) is the correct teardown idiom and must not fire.
-//
-// Covers CWE-416 (use-after-free) via RCU lifecycle violation.
-// @role: verification
+// Covers CWE-416 (use-after-free) via possible RCU lifecycle violation.
+// @role: detection
+// raptor: confirm-only
 
 @rcu_kfree exists@
 expression ptr, head;
@@ -26,11 +22,9 @@ position p1, p2;
 |
   hlist_add_head_rcu@p1(&ptr->member, ...)
 )
-// Any grace-period wait defuses the match, not just synchronize_rcu:
-// synchronize_net/synchronize_srcu are documented grace-period
-// equivalents, rcu_barrier waits for all in-flight callbacks, and
-// handing the pointer to call_rcu/call_srcu transfers the free to a
-// post-grace-period callback.
+// These synchronization/callback exclusions are coverage filters, not
+// proof of a matching reader domain, unpublication or deferred ownership.
+// In particular, a callback barrier need not wait for a new grace period.
   ... when != synchronize_rcu(...)
       when != synchronize_rcu_expedited(...)
       when != synchronize_net(...)
@@ -59,5 +53,5 @@ sys.stdout.write("COCCIRESULT:" + json.dumps({
     "file": _p.file,
     "line": int(_m.line),
     "rcu_line": int(_p.line),
-    "message": "plain kfree on the RCU-published pointer (should use kfree_rcu or wait a grace period)",
+    "message": "Plain free after RCU publication of the same expression — review object identity, unpublication, reader domain and deferred-free or grace-period semantics",
 }) + "\n")

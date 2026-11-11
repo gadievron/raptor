@@ -1,13 +1,12 @@
-"""Fixture tests for the kfree_not_rcu verification-grade rule.
+"""Native selected publication/free expression and exclusion contracts.
 
-The rule is promote-capable (@role: verification), so its match
-condition must bind the freed pointer to the RCU-published one — a
-free of an unrelated pointer after any publish, or a free behind a
-grace period, must not fire.
+Matches require object-identity and lifetime review. Exclusion by a wait
+or callback spelling alone is not complete grace-period evidence.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -99,7 +98,7 @@ class TestNegatives:
 
     def test_synchronize_net_grace_period_does_not_fire(self, tmp_path):
         # synchronize_net is a documented RCU grace-period equivalent;
-        # the unpublish + synchronize_net + kfree teardown is correct.
+        # a safe teardown also requires unpublication and matching readers.
         results = _run_rule(tmp_path, """\
             void ok(struct cfg **head, struct cfg *newc)
             {
@@ -133,8 +132,8 @@ class TestNegatives:
         assert results == []
 
     def test_call_rcu_handoff_does_not_fire(self, tmp_path):
-        # Handing the published pointer to call_rcu transfers the free
-        # to a post-grace-period callback.
+        # Current callback exclusion suppresses even a later plain free;
+        # queueing alone is not proof that this immediate free is safe.
         results = _run_rule(tmp_path, """\
             void ok(struct cfg **head, struct cfg *newc)
             {
@@ -144,3 +143,60 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('variant,expected', [('direct', 1), ('rebound', 1), ('barrier', 0), ('srcu', 0), ('retire_wait', 0)])
+def test_publication_expression_requires_lifetime_evidence(tmp_path, monkeypatch, variant, expected):
+    from core.audit.sweep import (
+        is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
+    )
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+    from packages.coccinelle import runner
+    from packages.coccinelle.models import SpatchMatch, SpatchResult
+    rule = _RULE
+    tails = {
+        'direct': 'kfree(p);',
+        'rebound': 'p = spare; kfree(p);',
+        'barrier': 'rcu_barrier(); kfree(p);',
+        'srcu': 'synchronize_srcu(ss); kfree(p);',
+        'retire_wait': 'rcu_assign_pointer(*head, 0); synchronize_rcu(); kfree(p);',
+    }
+    source = ('struct cfg { int value; };\n'
+              'void candidate(struct cfg **head, struct cfg *p, struct cfg *spare, struct srcu_struct *ss) {\n'
+              ' if (p == spare) return;\n rcu_assign_pointer(*head, p);\n '+tails[variant]+'\n}\nvoid untouched(void) {}\n')
+    target = tmp_path / 'owned.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(rule), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Owned RCU publication and lifetime syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert len(rows) == expected
+    assert all(row['rule'] == 'kfree_not_rcu' and 'review object identity' in row['message'] for row in rows)
+    native = SpatchResult(rule=rule.stem, rule_path=str(rule),
+        matches=[SpatchMatch.from_dict(row) for row in rows], files_examined=[str(target)])
+    calls = []
+    def replay(file_path, rule_path, **kwargs):
+        assert file_path == target and rule_path == rule
+        calls.append((str(file_path), str(rule_path)))
+        return native
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'run_rule', replay)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path=target.name,
+        cocci_rule=str(rule), language='c')
+    assert len(calls) == 1
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert result.details['confirm_only']
+    assert result.outcome == ('confirmed' if expected else 'inconclusive')
+    last = len(source.splitlines())
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name='untouched',
+        line_start=last, line_end=last, language='c')
+    assert scoped.matches == [] and scoped.outcome == 'inconclusive'
+    assert scoped.details['confirm_only']
+    assert len(result.matches) == expected
