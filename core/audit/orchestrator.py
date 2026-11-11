@@ -37302,10 +37302,14 @@ def _run_differential_verification(
             "verdict": refusal.verdict,
             "match_detail": refusal.match_detail,
         })
-        if config.out_dir is not None:
-            save_json(
-                config.out_dir / "differential-results.json", records,
-            )
+        try:
+            _retain_and_apply()
+        except Exception as persistence_error:
+            # Keep a containment refusal out of ordinary pass-error handling.
+            exc.add_note(
+                "differential refusal persistence failed: "
+                + type(persistence_error).__name__)
+            raise exc from persistence_error
         logger.error(
             "differential execution refused: %s",
             refusal_summary_line(refusal_detail(exc) or {}),
@@ -37345,11 +37349,21 @@ def _run_differential_verification(
         by_key.setdefault((o.file, o.function), o)
 
     synthesized: list[Any] = []
+    staged: dict[int, tuple[Any, str, str]] = {}
+    counter_deltas = {"findings": 0, "dormant": 0, "suspicious": 0,
+                      "clean": 0, "errors": 0}
+    pending_journals: list[dict[str, Any]] = []
+
+    def _projected_state(outcome: Any) -> tuple[str, str]:
+        pending = staged.get(id(outcome))
+        return ((pending[1], pending[2]) if pending is not None else
+                (getattr(outcome, "status", ""),
+                 getattr(outcome, "evidence_tool", "") or ""))
 
     def _promote(
         lead: dict[str, Any], stamp: str, *, checked_by: str,
     ) -> dict[str, str]:
-        """The ONE write path this pass has into outcome state.
+        """Stage the pass's only changes to outcome state.
 
         Chain-extends the deviant's receipt (never replacing engine
         provenance) and promotes to finding; when the review loop
@@ -37364,25 +37378,25 @@ def _run_differential_verification(
         function = str(lead.get("function") or "")
         outcome = by_key.get((file, function))
         if outcome is not None:
-            prior = getattr(outcome, "status", "")
-            outcome.status = "finding"
-            _prior_ev = getattr(outcome, "evidence_tool", "") or ""
+            prior, evidence_tool = _projected_state(outcome)
+            _prior_ev = evidence_tool
             if stamp in _prior_ev:
                 pass
             elif _prior_ev and _is_tool_ev(_prior_ev):
-                outcome.evidence_tool = f"{_prior_ev}+{stamp}"
+                evidence_tool = f"{_prior_ev}+{stamp}"
             else:
-                outcome.evidence_tool = stamp
+                evidence_tool = stamp
             if prior != "finding":
-                result.findings += 1
+                counter_deltas["findings"] += 1
                 if prior in ("dark", "dormant"):
-                    result.dormant -= 1
+                    counter_deltas["dormant"] -= 1
                 elif prior == "suspicious":
-                    result.suspicious -= 1
+                    counter_deltas["suspicious"] -= 1
                 elif prior == "clean":
-                    result.clean -= 1
+                    counter_deltas["clean"] -= 1
                 elif prior == "error":
-                    result.errors -= 1
+                    counter_deltas["errors"] -= 1
+            staged[id(outcome)] = (outcome, "finding", evidence_tool)
             return {"applied": "chain-extend", "prior_status": prior}
 
         description = str(lead.get("description") or "")
@@ -37411,29 +37425,62 @@ def _run_differential_verification(
         by_key[(file, function)] = co
         synthesized.append(co)
         try:
-            from .collector import append_journal_for_outcome
-
-            append_journal_for_outcome(
-                out_dir=config.out_dir,
-                target_path=config.target_path,
-                source_roots=_review_source_roots(config),
-                run_id=_resolved_run_id(config.out_dir),
-                outcome=co,
-                gap={
-                    "line_start": co.line,
-                    "line_end": None,
-                    "strategies": ["differential-execution"],
+            # Preserve the creation-time journal row and its source binding.
+            # Later leads may extend the private synthesized object's receipt.
+            pending_journals.append({
+                "file": file,
+                "function": function,
+                "kwargs": {
+                    "out_dir": config.out_dir,
+                    "target_path": config.target_path,
+                    "source_roots": _review_source_roots(config),
+                    "run_id": _resolved_run_id(config.out_dir),
+                    "outcome": SimpleNamespace(**vars(co)),
+                    "gap": {
+                        "line_start": co.line,
+                        "line_end": None,
+                        "strategies": ["differential-execution"],
+                    },
+                    "checked_by": [checked_by],
                 },
-                checked_by=[checked_by],
-            )
-            with result._lock:
-                result.post_loop_mechanical += 1
+            })
         except Exception:
             logger.debug(
                 "differential journal append failed for %s:%s",
                 file, function, exc_info=True,
             )
         return {"applied": "synthesized", "prior_status": ""}
+
+    def _retain_and_apply() -> bool:
+        if config.out_dir is None:
+            logger.warning(
+                "differential results could not be retained: no output "
+                "directory configured; assessments unchanged")
+            return False
+        save_json(config.out_dir / "differential-results.json", records)
+        for outcome, status, evidence_tool in staged.values():
+            outcome.status = status
+            outcome.evidence_tool = evidence_tool
+        for field, delta in counter_deltas.items():
+            if delta:
+                setattr(result, field, getattr(result, field) + delta)
+        for action in pending_journals:
+            try:
+                from .collector import append_journal_for_outcome
+
+                append_journal_for_outcome(**action["kwargs"])
+                with result._lock:
+                    result.post_loop_mechanical += 1
+            except Exception:
+                logger.debug(
+                    "differential journal append failed for %s:%s",
+                    action["file"], action["function"], exc_info=True,
+                )
+        staged.clear()
+        for field in counter_deltas:
+            counter_deltas[field] = 0
+        pending_journals.clear()
+        return True
 
     n_confirmed = 0
     n_relation_violations = 0
@@ -37740,8 +37787,7 @@ def _run_differential_verification(
             stopped_reason, executed_leads, len(eligible),
         )
 
-    if records and config.out_dir is not None:
-        save_json(config.out_dir / "differential-results.json", records)
+    retained = _retain_and_apply() if records else False
     if config.out_dir is not None:
         with contextlib.suppress(Exception):
             append_audit_log(config.out_dir, {
@@ -37755,4 +37801,4 @@ def _run_differential_verification(
                 "stopped": stopped_reason,
                 "skipped_ineligible": skipped[:20],
             })
-    return synthesized
+    return synthesized if retained else []
