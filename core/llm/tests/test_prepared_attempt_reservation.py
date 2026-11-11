@@ -523,6 +523,106 @@ def test_closed_owned_scope_refuses_after_sdk_preparation_before_wire(sdk_client
     assert len(b.state["requests"]) == b.client._governed_calls == 1
 
 
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+def test_owned_validity_refuses_after_signed_admission_before_wire(sdk_clients, tmp_path, monkeypatch, structured):
+    from core.llm.budget_errors import is_budget_exceeded_error
+
+    out = tmp_path / "run"
+    b = sdk_clients(run_dir=out, max_calls=1)
+    entered, release, valid = Event(), Event(), Event()
+    valid.set()
+    admissions = []
+    store = b.client._attempt_reservation_store
+    original_admit = store.admit
+
+    def admit_and_wait(row):
+        result = original_admit(row)
+        entered.set()
+        assert release.wait(5)
+        return result
+
+    monkeypatch.setattr(store, "admit", admit_and_wait)
+    kwargs = dict(accounting_work_id="review:owned", accounting_beneficiaries=("owned",),
+                  accounting_attempt_admission=lambda: admissions.append(True) or True,
+                  accounting_attempt_validity=valid.is_set)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            future = (pool.submit(b.client.generate_structured, "captured", SCHEMA, **kwargs) if structured
+                      else pool.submit(b.client.generate, "captured", **kwargs))
+            assert entered.wait(5)
+            # The durable admission exists, but no request may cross wire
+            # after its owner's pure lifetime check becomes false.
+            valid.clear()
+        finally:
+            release.set()
+        with pytest.raises(LLMCallAdmissionRefused, match="validity") as caught:
+            future.result(timeout=5)
+    assert not is_budget_exceeded_error(caught.value)
+    assert admissions == [True]
+    assert b.state["requests"] == []
+    assert b.client.reported_spend_usd == b.client._governed_tokens == 0
+    assert b.client._prepared_resource_reservations == {}
+    assert b.client.pending_usage_reservations == []
+    assert b.client._governed_calls == 1  # admission was consumed, not refunded
+    rows = load_verified_audit_log(out)
+    admitted, = [row for row in rows if row.get("stage") == "admitted"]
+    reported, = [row for row in rows if row.get("stage") == "reported"]
+    assert reported["attempt"]["attempt_id"] == admitted["attempt"]["attempt_id"]
+    assert reported["cost_usd"] == reported["tokens_total"] == 0
+
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+def test_owned_validity_true_keeps_one_admission_and_charge(sdk_clients, structured):
+    b = sdk_clients(max_calls=1)
+    admissions, validations = [], []
+    def valid():
+        validations.append(True)
+        return True
+    kwargs = dict(accounting_attempt_admission=lambda: admissions.append(True) or True,
+                  accounting_attempt_validity=valid)
+    response = (b.client.generate_structured("captured", SCHEMA, **kwargs) if structured
+                else b.client.generate("captured", **kwargs))
+    assert type(b.client._attempt_validity_protocol) is int and b.client._attempt_validity_protocol == 1
+    assert len(validations) >= 2
+    assert admissions == [True]
+    assert len(b.state["requests"]) == b.client._governed_calls == 1
+    assert b.client.reported_spend_usd == pytest.approx(response.cost)
+    assert len(b.sink.attempt_projection()["attempts"]) == 1
+    assert "accounting_attempt_validity" not in json.loads(b.state["requests"][0].content)
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+@pytest.mark.parametrize("value", [False, None, 1], ids=["false", "none", "truthy-one"])
+def test_owned_validity_requires_exact_true_before_admission(sdk_clients, structured, value):
+    from core.llm.budget_errors import is_budget_exceeded_error
+    b = sdk_clients(max_calls=1)
+    admissions = []
+    kwargs = dict(accounting_attempt_admission=lambda: admissions.append(True) or True,
+                  accounting_attempt_validity=lambda: value)
+    with pytest.raises(LLMCallAdmissionRefused, match="validity") as caught:
+        if structured:
+            b.client.generate_structured("captured", SCHEMA, **kwargs)
+        else:
+            b.client.generate("captured", **kwargs)
+    assert not is_budget_exceeded_error(caught.value)
+    assert admissions == b.state["requests"] == []
+    assert b.client._governed_calls == b.client.reported_spend_usd == 0
+    assert b.client.pending_usage_reservations == []
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+def test_owned_validity_rejects_noncallable_before_dispatch(sdk_clients, structured):
+    b = sdk_clients()
+    with pytest.raises(TypeError, match="validity must be callable"):
+        if structured:
+            b.client.generate_structured("captured", SCHEMA, accounting_attempt_validity=True)
+        else:
+            b.client.generate("captured", accounting_attempt_validity=True)
+    assert b.state["requests"] == [] and b.client._governed_calls == 0
+
+
 def test_prepared_retries_preserve_owned_attempt_limit_and_first_credit(sdk_clients, monkeypatch):
     from core.audit.knowledge_calls import observed_client, owned_call_scope
     import core.llm.client as consumer
