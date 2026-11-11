@@ -1,7 +1,9 @@
 """Language detection by file extension (plus content refinement)."""
 
 import functools
+import os
 import re
+import stat
 from pathlib import Path
 
 from core.source.streams import owned_fd
