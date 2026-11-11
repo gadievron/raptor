@@ -26,7 +26,7 @@ def owned_state(tmp_path, monkeypatch):
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux mountless routing')
 @pytest.mark.parametrize('body_failure', [False, True])
 @pytest.mark.parametrize('stage', ['remove', 'unregister'])
-@pytest.mark.parametrize('route', ['demoted', 'single'])
+@pytest.mark.parametrize('route', ['demoted', 'single', 'persona'])
 def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure, stage, route):
     owned, registered, retired, dispatched = [], set(), [], []
     identities = {}
@@ -37,7 +37,7 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         pytest.fail('unexpected native dispatch or probe')
 
     def allocate(**kwargs):
-        assert kwargs['prefix'] == '.scr-'
+        assert kwargs['prefix'] == ('.fp-' if route == 'persona' else '.scr-')
         path = tempfile.mkdtemp(dir=tmp_path, **kwargs)
         owned.append(path)
         info = Path(path).stat()
@@ -76,7 +76,9 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         'check_unshare_engages': lambda flags: (True, ''),
         'unshare_supports_cgroup': lambda: False,
     })
-    private_spawn = module_function_view(_spawn, bindings={'run_sandboxed': dispatch})
+    private_spawn = module_function_view(_spawn, bindings={
+        'run_sandboxed': dispatch, 'mount_ns_available': lambda: True,
+    })
     private_state = module_function_view(state, bindings={
         '_speculative_failure_cache': {}, '_mountless_backend_warned': False,
         'warn_once': lambda *args: False,
@@ -111,6 +113,10 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         'activity': module_function_view(activity, bindings={
             'record_execution': lambda *args, **kwargs: None,
         }),
+        'fingerprint': SimpleNamespace(
+            is_supported=lambda: True,
+            build_persona=lambda *args, **kwargs: SimpleNamespace(),
+        ),
     }
     absolute = {
         'tempfile': module_function_view(tempfile, bindings={'mkdtemp': allocate}),
@@ -133,8 +139,8 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         'sandbox': context.sandbox.__wrapped__, 'state': private_state,
         '_probes': private_probes, '_landlock': private_landlock,
         '_seccomp': private_seccomp,
-        'check_net_available': lambda: route == 'demoted',
-        'check_mount_available': lambda: route == 'demoted',
+        'check_net_available': lambda: route != 'single',
+        'check_mount_available': lambda: route != 'single',
         'check_landlock_available': lambda: True, '_get_landlock_abi': lambda: 6,
         'check_seccomp_available': lambda: True, 'check_seatbelt_available': lambda: False,
         '_make_preexec_fn': lambda *args, **kwargs: None,
@@ -145,7 +151,7 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
             with contextmanager(private.sandbox)(
                     block_network=route == 'demoted',
                     target=str(tmp_path), output=str(tmp_path),
-                    restrict_reads=True) as run:
+                    restrict_reads=True, sanitise_host_fingerprint=route == 'persona') as run:
                 if route == 'demoted':
                     for _ in range(2):
                         result = run([sys.executable], timeout=1, skip_mount_ns=True)
