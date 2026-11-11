@@ -26,7 +26,7 @@ def test_source_truth_receipt_binds_new_goal_and_actual_ast():
     assert result.details['constant_truth'] is False and result.details['entry_witness_validated']
     assert result.details['checked_property']=='constant-bitwise-condition'
     assert result.details['source_scope']==source_binding(SOURCE,'Read',verb=VERB,hypothesis=CLAIM,integer_abi='lp64')
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v10'
 
 @pytest.mark.parametrize('suffix',['',':witness',':model',':unknown'])
 def test_constant_condition_is_not_defect_intent_or_function_refutation(suffix):
@@ -59,12 +59,19 @@ def test_quality_condition_candidates_are_pure_and_do_not_generalize_true_rhs(mo
     assert hypothesis_to_smt_verb(row['mechanism'])==VERB
     assert arithmetic_seeds.seed_arithmetic_hypotheses([gap],{'unit.c':SOURCE},mode='quality',integer_abi='lp64')==0
     other=dict(file='unit.c',name='Read',line_start=1,line_end=1)
-    assert arithmetic_seeds.seed_arithmetic_hypotheses([other],{'unit.c':SOURCE.replace('4 == 0','4 != 0')},mode='quality',integer_abi='lp64')==0
+    nonconstant = SOURCE.replace('4 == 0','4 != 0')
+    assert integer_condition.condition_candidates(nonconstant, language='c', integer_abi='lp64') == []
+    assert arithmetic_seeds.seed_arithmetic_hypotheses([other],{'unit.c':nonconstant},mode='quality',integer_abi='lp64')==1
+    distinct = other['injected_hypotheses'][0]
+    assert distinct['arithmetic_site']['claim_kind'] == 'grouping-truth-difference'
+    assert distinct['mechanism'] == 'Condition grouping changes truth in `Flags & 4 != 0`.'
+    assert not any(row['arithmetic_site']['claim_kind'].startswith('constant-condition-')
+                   for row in other['injected_hypotheses'])
 
 @pytest.mark.slow
 def test_real_confined_actual_condition_receipt():
     result=sweep.run_smt_verb_direct(file_path='unit.c',function_name='Read',verb=VERB,source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
     assert result.details['constant_truth'] is False and result.details['entry_witness_validated']
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v10'
     assert result.details['checked_property']=='constant-bitwise-condition'

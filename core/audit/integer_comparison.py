@@ -20,6 +20,9 @@ def check_integer_comparison(source, hypothesis, *, language, integer_abi=None):
     abi = integer_abi_record(integer_abi)
     if abi is None or not z3_available():
         return details
+    from .integer_grouping import GROUPING_GOALS, check_integer_grouping
+    if parse_integer_goal(hypothesis, GROUPING_GOALS) is not None:
+        return check_integer_grouping(source, hypothesis, language=language, integer_abi=integer_abi)
     from .integer_condition import CONDITION_GOALS, check_integer_condition
     if parse_integer_goal(hypothesis, CONDITION_GOALS) is not None:
         return check_integer_condition(source, hypothesis, language=language, integer_abi=integer_abi)
