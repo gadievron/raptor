@@ -45,6 +45,29 @@ logger = logging.getLogger(__name__)
 UNACKNOWLEDGED_ASSESSMENTS_LIMITATION = (
     "new review assessments (journal acknowledgement unavailable)"
 )
+_RETENTION_LIMITATIONS = (
+    "new dark verification pass results (persistence failed)",
+    "new differential verification pass results (persistence failed)",
+)
+_PROCESSING_HISTORY_LABELS = (*_RETENTION_LIMITATIONS, UNACKNOWLEDGED_ASSESSMENTS_LIMITATION)
+_PROCESSING_HISTORY_FILE = "processing-completeness.json"
+_PROCESSING_HISTORY_INVALID = "processing completeness record (unreadable or invalid)"
+
+
+def _retained_processing_limitations(out_dir: Path) -> list[str]:
+    """Read only the bounded explicit projection, never infer failures from logs."""
+    path = out_dir / _PROCESSING_HISTORY_FILE
+    try:
+        if not path.exists():
+            return []
+        data = load_json(path, max_bytes=4096)
+    except OSError:
+        return [_PROCESSING_HISTORY_INVALID]
+    if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
+            or data["schema_version"] != 1 or not isinstance(data.get("limitations"), list)
+            or any(label not in _PROCESSING_HISTORY_LABELS for label in data["limitations"])):
+        return [_PROCESSING_HISTORY_INVALID]
+    return [label for label in _PROCESSING_HISTORY_LABELS if label in data["limitations"]]
 
 
 def _line(value: Any, *, max_chars: int = 300) -> str:
@@ -172,10 +195,7 @@ def generate_report(
             completeness["partial"] = bool(completeness.get("missing"))
     # Preserve durable assessments while disclosing explicit retention failures.
     # Apply after the terminal-status override can reset partial.
-    allowed_limitations = (
-        "new dark verification pass results (persistence failed)",
-        "new differential verification pass results (persistence failed)",
-    )
+    allowed_limitations = _RETENTION_LIMITATIONS
     if isinstance(processing_limitations, list):
         labels = [label for label in allowed_limitations if label in processing_limitations]
         if labels:
@@ -187,6 +207,12 @@ def generate_report(
         completeness["missing"] = list(dict.fromkeys([
             *completeness.get("missing", []),
             UNACKNOWLEDGED_ASSESSMENTS_LIMITATION,
+        ]))
+        completeness["partial"] = True
+    retained_limitations = _retained_processing_limitations(out_dir)
+    if retained_limitations:
+        completeness["missing"] = list(dict.fromkeys([
+            *completeness.get("missing", []), *retained_limitations,
         ]))
         completeness["partial"] = True
     segments = _load_segments(out_dir)
@@ -641,6 +667,18 @@ def write_report(report: dict[str, Any], out_dir: Path) -> Path:
     """Write the report to audit-report.json."""
     path = out_dir / "audit-report.json"
     serializable = {k: v for k, v in report.items() if k != "summary"}
+    # Processing-history loss is sticky within this run. A later render or a
+    # healthy segment does not reconstruct an earlier unretained assessment.
+    missing = report.get("completeness", {}).get("missing", [])
+    retained = _retained_processing_limitations(out_dir)
+    limitations = [label for label in _PROCESSING_HISTORY_LABELS
+                   if label in missing or label in retained]
+    if limitations:
+        # Persist before replacing the report: a failed projection write must
+        # leave its previous durable report available and fail visibly.
+        save_json(out_dir / _PROCESSING_HISTORY_FILE, {
+            "schema_version": 1, "limitations": limitations,
+        })
     save_json(path, serializable)
     return path
 
