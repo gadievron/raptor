@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from typing import cast
 
 # Each adapted producer names its actual existing prompt input and section.
 _CONTEXT_INPUTS = {
@@ -44,14 +45,14 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
 
 def context_delivery(ctx: dict, original, kept) -> list[dict]:
     """Credit only an exact, complete section surviving actual prompt fitting."""
-    rows = []
+    rows: list[dict] = []
     specs = ctx.get("continuation_context_inputs", ())
     if not isinstance(specs, (list, tuple)):
         return rows
     for spec in specs:
         if not isinstance(spec, dict):
             continue
-        valid = context_spec(ctx, kind=spec.get("kind"), version=spec.get("version"))
+        valid = context_spec(ctx, kind=cast(str, spec.get("kind")), version=cast(str, spec.get("version")))
         if valid != spec:
             continue
         sections = [s for s in original if s.label == spec["section"]]
