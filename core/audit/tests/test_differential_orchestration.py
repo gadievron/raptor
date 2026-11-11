@@ -145,7 +145,7 @@ def _install_fake(monkeypatch, behave) -> list:
     ``(observed_status, value)``."""
     calls: list = []
 
-    def fake(spec, target_path, audit_run_dir=None):
+    def fake(spec, target_path, audit_run_dir=None, *, deadline_monotonic=None):
         calls.append(spec)
         status, value = behave(spec)
         return DarkVerifyResult(
@@ -678,7 +678,7 @@ class TestDifferentialFold:
     def test_floor_refusal_records_then_raises(
         self, tmp_path, monkeypatch,
     ):
-        def raising(spec, target_path, audit_run_dir=None):
+        def raising(spec, target_path, audit_run_dir=None, *, deadline_monotonic=None):
             raise SandboxFloorError(
                 "sandbox containment floor violated",
                 "install uidmap; re-run",

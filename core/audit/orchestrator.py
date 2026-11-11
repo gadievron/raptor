@@ -36621,6 +36621,7 @@ def _submit_dark_probes_early(
         try:
             return execute_witness(
                 spec, config.target_path, audit_run_dir=config.out_dir,
+                deadline_monotonic=config.run_deadline_monotonic,
             )
         except _floor_errors:
             return None
@@ -37023,6 +37024,7 @@ def _run_dark_verification(
         try:
             return execute_witness(
                 spec, config.target_path, audit_run_dir=config.out_dir,
+                deadline_monotonic=config.run_deadline_monotonic,
             )
         except _floor_errors as exc:
             # Containment floor unmet — the witness never executed, so
@@ -37450,6 +37452,7 @@ def _run_differential_verification(
         try:
             witness_result = execute_witness(
                 spec, config.target_path, audit_run_dir=config.out_dir,
+                deadline_monotonic=config.run_deadline_monotonic,
             )
         except _floor_errors as exc:
             _record_floor_refusal(spec, exc)
