@@ -303,7 +303,7 @@ class TestSingleFunctionWrapper:
         self, tmp_path, monkeypatch,
     ):
         """Without line_end, the +50 window binds exactly: a match AT
-        line_start+50 confirms, one line past it refutes."""
+        line_start+50 confirms; one line past it remains inconclusive."""
         rule = _write_tree(tmp_path)
         _stub_runner(monkeypatch, match_lines=[51])
         inside = run_coccinelle_sweep(
@@ -317,7 +317,9 @@ class TestSingleFunctionWrapper:
             target_path=tmp_path, file_path="src/a.c",
             function_name="f", cocci_rule=str(rule), line_start=1,
         )
-        assert outside.outcome == "refuted"
+        assert outside.outcome == "inconclusive"
+        assert outside.matches == []
+        assert "end is unknown" in outside.details["reason"]
 
     def test_containment_escape_keeps_empty_function_name(
         self, tmp_path, monkeypatch,
