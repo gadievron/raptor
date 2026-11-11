@@ -75,7 +75,28 @@ def failed_keys(groups):
     return {key for key, rows in groups.items() if any(_failed(row) for row in rows)}
 
 
-def eligible(path):
+def require_passing_guards(path, attempt):
+    if path is None or not isinstance(attempt, str) or not attempt:
+        raise ValueError("first-attempt global guard receipt and binding are required")
+    try:
+        receipt = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError("first-attempt global guard receipt is missing or invalid") from exc
+    names = {"git_config", "egress", "session_budget", "test_wall_budget"}
+    if (not isinstance(receipt, dict)
+            or set(receipt) != {"version", "attempt", "complete", "guards"}
+            or type(receipt["version"]) is not int or receipt["version"] != 1
+            or receipt["attempt"] != attempt or receipt["complete"] is not True
+            or not isinstance(receipt["guards"], dict)
+            or set(receipt["guards"]) != names
+            or any(type(value) is not bool for value in receipt["guards"].values())):
+        raise ValueError("first-attempt global guard receipt is incomplete or mismatched")
+    if not all(receipt["guards"].values()):
+        raise ValueError("first-attempt global guards failed; retry cannot replace that failure")
+
+
+def eligible(path, guard_report=None, attempt=None):
+    require_passing_guards(guard_report, attempt)
     _, _, groups = _read(path)
     return len(failed_keys(groups))
 
@@ -120,13 +141,21 @@ def main(argv=None):
     check = commands.add_parser("eligible")
     check.add_argument("first", type=Path)
     check.add_argument("cache", type=Path)
+    check.add_argument("--guard-report", type=Path)
+    check.add_argument("--attempt")
+    guards = commands.add_parser("guards")
+    guards.add_argument("report", type=Path)
+    guards.add_argument("attempt")
     combine = commands.add_parser("merge")
     for name in ("first", "retry", "output"):
         combine.add_argument(name, type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.command == "guards":
+            require_passing_guards(args.report, args.attempt)
+            return 0
         if args.command == "eligible":
-            count = eligible(args.first)
+            count = eligible(args.first, args.guard_report, args.attempt)
             if count:
                 try:
                     cached = json.loads((args.cache / "v/cache/lastfailed").read_text())

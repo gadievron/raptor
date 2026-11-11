@@ -368,6 +368,10 @@ jobs:
           source $VENV_PATH/bin/activate
           # Keep the same roots as the slow phase: mixed-marker cases in
           # the CI checker suites must retain an integration owner too.
+          guard_attempt="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+          export RAPTOR_PYTEST_GUARD_ATTEMPT="$guard_attempt"
+          export RAPTOR_PYTEST_GUARD_REPORT="$RUNNER_TEMP/integration-guards-1.json"
+          rm -f -- "$RAPTOR_PYTEST_GUARD_REPORT"
           rc=0
           python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --cache-clear -m integration core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
@@ -378,18 +382,25 @@ jobs:
           if [ -f "$RUNNER_TEMP/integration-attempt-1.xml" ]; then
             cp "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration.xml"
           fi
+          if ! python3 .github/scripts/pytest_retry_reports.py guards "$RUNNER_TEMP/integration-guards-1.json" "$guard_attempt"; then
+            if [ "$rc" -eq 0 ]; then rc=1; fi
+            exit "$rc"
+          fi
           if [ "$rc" -eq 0 ]; then
             exit 0
           fi
           # Collection/internal/usage errors and session-level failures do
           # not become another complete test run.
-          if [ "$rc" -ne 1 ] || ! python3 .github/scripts/pytest_retry_reports.py eligible "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration-pytest-cache"; then
+          if [ "$rc" -ne 1 ] || ! python3 .github/scripts/pytest_retry_reports.py eligible "$RUNNER_TEMP/integration-attempt-1.xml" "$RUNNER_TEMP/integration-pytest-cache" --guard-report "$RUNNER_TEMP/integration-guards-1.json" --attempt "$guard_attempt"; then
             exit "$rc"
           fi
           echo ""
           echo "::warning::Integration tests failed (exit $rc) — retrying only failed cases in 60s"
           echo ""
           sleep 60
+          export RAPTOR_PYTEST_GUARD_REPORT="$RUNNER_TEMP/integration-guards-2.json"
+          export RAPTOR_PYTEST_GUARD_ATTEMPT="${guard_attempt}-retry"
+          rm -f -- "$RAPTOR_PYTEST_GUARD_REPORT"
           retry_rc=0
           python -m pytest -o "cache_dir=$RUNNER_TEMP/integration-pytest-cache" --lf --last-failed-no-failures=none -m integration core packages engine .github/tests .github/scripts/tests \
             --ignore=engine/semgrep/tests \
@@ -446,6 +457,7 @@ jobs:
           path: |
             ${{ runner.temp }}/slow.xml
             ${{ runner.temp }}/integration-attempt-*.xml
+            ${{ runner.temp }}/integration-guards-*.json
             ${{ runner.temp }}/integration.xml
           retention-days: 14
           if-no-files-found: ignore
