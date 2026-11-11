@@ -487,3 +487,8 @@ def _complete_bridge_report(args, native, out_dir, status, error=None):
     if args._report_options.enabled and (args.report_format or args.report_output):
         from .reporting import complete_bridge_report
         complete_bridge_report(args, native, out_dir, status, error=error)
+    else:
+        from core.reporting.service import unrefreshed_report_notice
+        notice = unrefreshed_report_notice(out_dir)
+        if notice:
+            print("Warning: " + notice, file=sys.stderr)
