@@ -20,6 +20,8 @@ chain builder drops the step loudly-once.
 
 from __future__ import annotations
 
+from core.source.streams import preserving_stream_error
+
 import json
 import logging
 import os
@@ -181,7 +183,7 @@ def _index_pack(pack: str) -> dict[str, str] | None:
                 )
                 return index
             try:
-                with open(ql, encoding="utf-8", errors="replace") as fh:  # raw-open: shipped CodeQL query pack file (RAPTOR-owned)
+                with preserving_stream_error(open(ql, encoding="utf-8", errors="replace")) as fh:  # raw-open: shipped CodeQL query pack file (RAPTOR-owned)
                     header = fh.read(_HEADER_READ_BYTES)
             except OSError:
                 continue
