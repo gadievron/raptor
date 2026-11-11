@@ -373,12 +373,14 @@ def extract_from_files(
             all_errors.append(f"{rel}: path escapes repo root")
             continue
         # Capped read (shared default): contained but untrusted repo
-        # content — truncation only loses extraction candidates past
-        # the cap, it never invents one.
+        # content. Prefix candidates remain useful, but downstream
+        # evidence must disclose the incomplete file coverage.
         got = read_text_capped(full, errors="replace")
         if got is None:
             all_errors.append(f"{rel}: read failed")
             continue
+        if got[1]:
+            all_errors.append(f"{rel}: source read truncated; extraction covers a prefix only")
         content = got[0]
 
         candidates, errors = extract_from_content(
