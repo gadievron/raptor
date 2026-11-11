@@ -869,21 +869,50 @@ def pytest_sessionfinish(session, exitstatus):
     the session overran its tier wallclock budget, mutated the ambient
     checkout's repo-level git config, or leaked the LLM-egress proxy
     env past the end of the session."""
-    _check_git_config_drift(session)
-    _check_egress_leak(session)
-    _check_session_budget(session)
-    # The leak-marker dir has served its purpose once the controller's
-    # check above merged it (workers never remove it — their controller
-    # still needs it). Findings live on in _egress_leaks for the
-    # terminal summary. SIGKILLed sessions leak one reaper-prefixed
-    # dir, reclaimed by tmp_reaper past the age floor.
-    if _egress_leak_dir_owner and _egress_leak_dir:
-        import shutil as _shutil
-        _shutil.rmtree(_egress_leak_dir, ignore_errors=True)
-    if _slow_test_threshold is None or not _slow_test_overruns:
+    _guard_checks_complete = False
+    try:
+        _check_git_config_drift(session)
+        _check_egress_leak(session)
+        _check_session_budget(session)
+        # The leak-marker dir has served its purpose once the controller's
+        # check above merged it (workers never remove it — their controller
+        # still needs it). Findings live on in _egress_leaks for the
+        # terminal summary. SIGKILLed sessions leak one reaper-prefixed
+        # dir, reclaimed by tmp_reaper past the age floor.
+        if _egress_leak_dir_owner and _egress_leak_dir:
+            import shutil as _shutil
+            _shutil.rmtree(_egress_leak_dir, ignore_errors=True)
+        if _slow_test_threshold is None or not _slow_test_overruns:
+            _guard_checks_complete = True
+            return
+        if session.exitstatus == 0:
+            session.exitstatus = 1
+        _guard_checks_complete = True
+    finally:
+        _write_global_guard_report(session, complete=_guard_checks_complete)
+
+
+def _write_global_guard_report(session, *, complete):
+    """Keep controller-wide guard outcomes separate from testcase XML."""
+    if getattr(session.config, "workerinput", None) is not None:
         return
-    if session.exitstatus == 0:
-        session.exitstatus = 1
+    path = os.environ.get("RAPTOR_PYTEST_GUARD_REPORT")
+    if not path:
+        return
+    attempt = os.environ.get("RAPTOR_PYTEST_GUARD_ATTEMPT")
+    if not attempt or not Path(path).is_absolute():
+        raise ValueError("guard report requires an absolute owned path and attempt binding")
+    import json
+
+    guards = {
+        "git_config": not bool(_git_config_drift),
+        "egress": not bool(_egress_leaks),
+        "session_budget": _session_overrun is None,
+        "test_wall_budget": not bool(_slow_test_overruns),
+    }
+    Path(path).write_text(json.dumps({
+        "version": 1, "attempt": attempt, "complete": complete is True, "guards": guards,
+    }, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _check_session_budget(session):
