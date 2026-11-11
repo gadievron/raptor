@@ -404,3 +404,19 @@ def test_byte_order_pairs_require_width_and_intent_evidence(monkeypatch, tmp_pat
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+@pytest.mark.parametrize('rule_id', ['socket_no_cloexec', 'accept_no_cloexec'])
+def test_socket_inheritance_requires_lifetime_and_exec_context(monkeypatch, tmp_path, rule_id):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/socket_no_cloexec.cocci'
+    receipt = f'coccinelle:{rule_id}'
+    assert get_rule_role(str(rule)) == 'detection'
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)
