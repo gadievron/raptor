@@ -1074,8 +1074,10 @@ async def _run_async_body(
             return
         quiesce_state["draining"] = True
         try:
-            deadline = time.monotonic() + quiescer.drain_bound_s
+            deadline = quiescer.drain_deadline()
             while inflight:
+                if _should_stop():
+                    return
                 timeout = deadline - time.monotonic()
                 if timeout <= 0:
                     quiescer.note_drain_timeout(len(inflight))

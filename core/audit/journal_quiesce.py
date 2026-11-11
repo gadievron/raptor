@@ -103,16 +103,34 @@ class JournalCheckpointQuiescer:
         study_queue: Any | None = None,
         should_abort: Callable[[], bool] | None = None,
         slim_consent: bool = False,
+        deadline_monotonic: float | None = None,
     ) -> None:
         self.out_dir = out_dir
         self.enabled = bool(enabled) and out_dir is not None
         self.collector = collector
         self.study_queue = study_queue
         self.should_abort = should_abort
+        self.deadline_monotonic = deadline_monotonic
         self.slim_consent = slim_consent
         self._next_eval = 0.0
         self._cooldown_until = 0.0
         self._advisory_next = 0.0
+
+    def drain_deadline(self) -> float:
+        """Keep checkpoint waits inside both the drain and absolute run bounds."""
+        bound = time.monotonic() + self.drain_bound_s
+        return min(bound, self.deadline_monotonic) if self.deadline_monotonic is not None else bound
+
+    def _deadline_reached(self) -> bool:
+        return (self.deadline_monotonic is not None
+                and time.monotonic() >= self.deadline_monotonic)
+
+    def _abort_requested(self) -> bool:
+        return self._deadline_reached() or bool(self.should_abort and self.should_abort())
+
+    @staticmethod
+    def _deadline_outcome() -> CheckpointOutcome:
+        return CheckpointOutcome(aborted=True, reason="run deadline reached")
 
     # ── executor-facing cadence ──────────────────────────────────────
 
@@ -133,7 +151,7 @@ class JournalCheckpointQuiescer:
         if now < self._next_eval or now < self._cooldown_until:
             return False
         self._next_eval = now + _QUIESCE_EVAL_INTERVAL_S
-        if self.should_abort is not None and self.should_abort():
+        if self._abort_requested():
             return False
         try:
             decision = evaluate_trigger(out_dir)
@@ -210,6 +228,8 @@ class JournalCheckpointQuiescer:
         out_dir = self.out_dir
         if not self.enabled or out_dir is None:
             return None
+        if self._deadline_reached():
+            return self._deadline_outcome()
         try:
             decision = evaluate_trigger(out_dir)
             if decision.advisory:
@@ -228,6 +248,8 @@ class JournalCheckpointQuiescer:
                 # checkpoint coming, a latched pause would starve the
                 # study consumer for the rest of the segment.
                 self._resume_study()
+                if self._deadline_reached():
+                    return self._deadline_outcome()
                 self._cooldown_until = (
                     time.monotonic() + _QUIESCE_RETRY_COOLDOWN_S)
                 logger.warning(
@@ -239,13 +261,15 @@ class JournalCheckpointQuiescer:
                 return None
             checkpoint_failed = False
             try:
+                if self._deadline_reached():
+                    return self._deadline_outcome()
                 outcome = checkpoint_journal(
                     out_dir,
                     boundary=boundary,
                     collector=self.collector,
                     slim_consent=self.slim_consent,
                     allow_worker_pid=os.getpid(),
-                    should_abort=self.should_abort,
+                    should_abort=self._abort_requested,
                     busy_probes=(self._study_busy_probe,),
                 )
             except BaseException:
@@ -307,7 +331,7 @@ class JournalCheckpointQuiescer:
             return True
         try:
             q.request_pause()
-            return q.wait_quiescent(self.drain_bound_s)
+            return q.wait_quiescent(max(0.0, self.drain_deadline() - time.monotonic()))
         except BaseException:
             # A failed wait still owns the pause it requested.
             try:
