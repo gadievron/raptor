@@ -50,12 +50,12 @@ def _open_output_directory(path: Path) -> int:
     """Anchor every existing output path component without following links."""
     if ".." in path.parts:
         raise ValueError("output directory contains traversal")
-    fd = os.open(path.anchor or ".", _DIRECTORY_FLAGS)
+    fd = os.open(path.anchor or ".", _DIRECTORY_FLAGS)  # raw-open: O_DIRECTORY|O_NOFOLLOW pins directory handles without reading file bytes.
     try:
         parts = path.parts[1:] if path.anchor else path.parts
         for part in parts:
             previous = fd
-            fd = os.open(part, _DIRECTORY_FLAGS, dir_fd=previous)
+            fd = os.open(part, _DIRECTORY_FLAGS, dir_fd=previous)  # raw-open: O_DIRECTORY|O_NOFOLLOW pins directory handles without reading file bytes.
             with owned_fd(previous, close_fd=os.close):
                 pass
         return fd
@@ -98,7 +98,7 @@ def retain_smt_result(out_dir: Path, result: SweepResult) -> str:
             os.mkdir(RESULT_DIRECTORY, mode=0o700, dir_fd=root_fd)
         except FileExistsError:
             pass
-        directory_fd = os.open(RESULT_DIRECTORY, _DIRECTORY_FLAGS, dir_fd=root_fd)
+        directory_fd = os.open(RESULT_DIRECTORY, _DIRECTORY_FLAGS, dir_fd=root_fd)  # raw-open: O_DIRECTORY|O_NOFOLLOW pins directory handles without reading file bytes.
         with owned_fd(directory_fd, close_fd=os.close):
             created = False
             try:
@@ -140,7 +140,7 @@ def retained_smt_result_matches(out_dir: Path, reference: str, result: SweepResu
         encoded = _result_bytes(result)
         root_fd = _open_output_directory(Path(out_dir))
         with owned_fd(root_fd, close_fd=os.close):
-            directory_fd = os.open(RESULT_DIRECTORY, _DIRECTORY_FLAGS, dir_fd=root_fd)
+            directory_fd = os.open(RESULT_DIRECTORY, _DIRECTORY_FLAGS, dir_fd=root_fd)  # raw-open: O_DIRECTORY|O_NOFOLLOW pins directory handles without reading file bytes.
             with owned_fd(directory_fd, close_fd=os.close):
                 if not _read_matches(directory_fd, reference.split("/")[1], encoded):
                     return False
