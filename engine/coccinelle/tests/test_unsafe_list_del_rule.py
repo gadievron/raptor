@@ -8,6 +8,7 @@ the invalidated cursor is only a bug if iteration continues.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -144,3 +145,49 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.slow
+def test_cursor_repairs_require_traversal_review(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    cases = [
+        ('plain', 'list_for_each_entry', 'list_del(&e->node);', True),
+        ('repaired', 'list_for_each_entry',
+         'if (list_is_first(&e->node, head)) continue;\nprevious = list_prev_entry(e, node);\nlist_del(&e->node);\ne = previous;', True),
+        ('reverse_repaired', 'list_for_each_entry_reverse',
+         'if (list_is_last(&e->node, head)) continue;\nprevious = list_next_entry(e, node);\nlist_del(&e->node);\ne = previous;', True),
+        ('init', 'list_for_each_entry', 'list_del_init(&e->node);', True),
+        ('other_node', 'list_for_each_entry', 'list_del(&other->node);', False),
+        ('break', 'list_for_each_entry', 'list_del(&e->node);\nbreak;', False),
+        ('return', 'list_for_each_entry', 'list_del(&e->node);\nreturn;', False),
+        ('goto', 'list_for_each_entry', 'list_del(&e->node);\ngoto done;', False),
+    ]
+    lines = ['struct list_head { struct list_head *next, *prev; };',
+             'struct entry { struct list_head node; };']
+    expected, labelled = [], []
+    for name, iterator, body, fires in cases:
+        lines += [f'void {name}(struct list_head *head, struct entry *other) {{',
+                  'struct entry *e, *previous;', f'{iterator}(e, head, node) {{']
+        lines += body.splitlines()
+        deletion = next(i+1 for i in range(len(lines)-len(body.splitlines()),len(lines)) if 'list_del' in lines[i])
+        lines += ['}', 'done: return;', '}']
+        labelled.append({'case':name, 'line':deletion, 'expected_match':fires})
+        if fires:
+            expected.append(deletion)
+    source = '\n'.join(lines)+'\n'
+    target = tmp_path / 'cursors.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='List cursor repair candidate syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted(row['line'] for row in rows) == expected
+    assert all(row['rule'] == 'unsafe_list_del' for row in rows)
+    assert all('review cursor identity' in row['message'] for row in rows)
