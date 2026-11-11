@@ -164,7 +164,7 @@ def build_cache_key(
         f"prompt_{_PROMPT_VERSION_SHA}",
         f"model_{model_family}",
         f"lang_{language or 'unknown'}",
-        f"source_{hashlib.sha256(file_path.encode('utf-8')).hexdigest()}",
+        f"source_{hashlib.sha256(file_path.encode('utf-8', errors='surrogatepass')).hexdigest()}",
         file_content_sha,
     ]
     return ":".join(parts)
