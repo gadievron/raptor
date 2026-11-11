@@ -315,6 +315,7 @@ def run_executor_sync(
             ec.max_workers,
         )
         loop = asyncio.new_event_loop()
+        primary = None
         try:
             stats = loop.run_until_complete(
                 _run_async(
@@ -339,8 +340,15 @@ def run_executor_sync(
                     quiescer=quiescer,
                 ),
             )
+        except BaseException as exc:
+            primary = exc
+            raise
         finally:
-            loop.close()
+            try:
+                loop.close()
+            except BaseException:
+                if primary is None:
+                    raise
         return stats
 
     glance_batch: list[Any] = []
@@ -649,6 +657,7 @@ async def _run_async(
     if owns_throttle:
         cooldown = read_throttle_cooldown_s()
         throttle = AdaptiveThrottle(ec.max_workers, cooldown_s=cooldown)
+    primary = None
     try:
         return await _run_async_body(
             graph, review_fn, shared, config, result, ec, throttle,
@@ -669,15 +678,24 @@ async def _run_async(
             concept_index_ref=concept_index_ref,
             quiescer=quiescer,
         )
+    except BaseException as exc:
+        primary = exc
+        raise
     finally:
-        if throttle is not None and throttle.signal_count:
-            logger.info(
-                "throttle stats: %d 429 signals, final effective=%d/%d",
-                throttle.signal_count, throttle.effective_workers,
-                throttle.max_workers,
-            )
-        if owns_throttle and throttle is not None:
-            throttle.close()
+        try:
+            try:
+                if throttle is not None and throttle.signal_count:
+                    logger.info(
+                        "throttle stats: %d 429 signals, final effective=%d/%d",
+                        throttle.signal_count, throttle.effective_workers,
+                        throttle.max_workers,
+                    )
+            finally:
+                if owns_throttle and throttle is not None:
+                    throttle.close()
+        except BaseException:
+            if primary is None:
+                raise
 
 
 async def _run_async_body(
