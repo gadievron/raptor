@@ -1702,7 +1702,7 @@ class OrchestratorResult:
     prefilter_kills: list = field(default_factory=list)
     dormant: int = 0
     error_counts: dict[str, int] = field(default_factory=dict)
-    publication_failures: list[dict[str, Any]] = field(default_factory=list)
+    publication_failures: list[dict[str, Any]] = field(default_factory=list, kw_only=True)
     error_retries: int = 0
     error_retry_recovered: int = 0
     # Phases that ABORTED on persistent auth-layer refusal (see
