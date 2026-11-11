@@ -1140,13 +1140,14 @@ def flush_journal(out_dir: Path, *, strict: bool = False) -> None:
     append. It does not lock out later deletion or replacement of journal data.
     """
     from core.source import open_regular
+    from core.source.streams import preserving_stream_error
     for shard in journal_shard_paths(out_dir):
         fh = open_regular(shard, "rb")
         if fh is None:
             if strict:
                 raise OSError(f"journal shard could not be opened for flush: {shard}")
             continue
-        with fh:
+        with preserving_stream_error(fh):
             os.fsync(fh.fileno())
 
 
