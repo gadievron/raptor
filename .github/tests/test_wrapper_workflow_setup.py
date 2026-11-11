@@ -76,8 +76,8 @@ def test_native_setup_installs_only_selected_tool_groups(tmp_path, platform, rad
     expected += ['radare2'] if radare else []
     expected += ['ruby'] if gadgets else []
     if platform == 'Linux':
-        assert calls == [['sudo', 'apt-get', 'update'],
-                         ['sudo', 'apt-get', 'install', '-y', '--no-install-recommends', *expected]]
+        assert calls == [['sudo', 'bash', '.github/scripts/with-ubuntu-apt.sh',
+                          'packages', *expected]]
     else:
         assert calls[0] == ['brew', 'install', *expected]
         assert (['brew', '--prefix', 'ruby'] in calls) == gadgets
