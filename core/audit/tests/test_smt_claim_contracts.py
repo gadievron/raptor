@@ -112,7 +112,9 @@ def adapter_case():
                       "completed", "supports_fact", "request-1", "request-1", True, "owned-result-1")
     result = SweepResult(tool="smt", file_path=scope.file, function_name=scope.function,
                          outcome="confirmed", rule_id="smt:check-overflow",
-                         details={"value": 8, "limit": 7})
+                         details={"value": 8, "limit": 7, "smt_execution": {
+                             "request_id": event.request_id, "executed_request_id": event.executed_request_id,
+                             "identity_status": "matched", "scope": "worker-invocation-only"}})
     calls = []
 
     def validate(claim, actual_result, actual_context, obligation):
@@ -120,7 +122,7 @@ def adapter_case():
         # An inert fixture contract with exact conclusion and arithmetic facts.
         # This is not a registration for any production SMT operation.
         if (claim.hypothesis == hypothesis and actual_context == context and obligation == "exact-fault"
-                and actual_result.details == {"value": 8, "limit": 7}):
+                and actual_result.details.get("value") == 8 and actual_result.details.get("limit") == 7):
             return "supports_fact"
         return "unknown"
 
@@ -217,7 +219,7 @@ def test_result_content_must_satisfy_the_registered_validator(adapter_case):
     from dataclasses import replace
 
     case = adapter_case
-    fact = adapt(case, result=replace(case.result, details={"value": 1, "limit": 7}))
+    fact = adapt(case, result=replace(case.result, details={**case.result.details, "value": 1}))
     assert fact.semantic == "unknown" and len(case.calls) == 1
 
 
@@ -296,3 +298,30 @@ def test_event_must_name_exact_registered_coverage(adapter_case, change):
     case = adapter_case
     fact = adapt(case, event=replace(case.event, **change))
     assert fact.semantic == "unknown" and not case.calls
+
+
+def test_a_result_from_another_execution_cannot_support_the_current_event(adapter_case):
+    from dataclasses import replace
+
+    case = adapter_case
+    result = replace(case.result, details={**case.result.details, "smt_execution": {
+        "request_id": "other-request", "executed_request_id": "other-request",
+        "identity_status": "matched", "scope": "worker-invocation-only",
+    }})
+    fact = adapt(case, result=result)
+    assert fact.semantic == "unknown" and not case.calls
+
+
+@pytest.mark.parametrize("receipt", [
+    None, {}, {"complete": True},
+    {"request_id": "request-1", "executed_request_id": "request-1", "identity_status": "missing",
+     "scope": "worker-invocation-only"},
+    {"request_id": "request-1", "executed_request_id": "request-1", "identity_status": "matched",
+     "scope": "whole-claim-proof"},
+])
+def test_result_requires_a_parent_bound_execution_receipt(adapter_case, receipt):
+    from dataclasses import replace
+
+    case = adapter_case
+    result = replace(case.result, details={**case.result.details, "smt_execution": receipt})
+    assert adapt(case, result=result).semantic == "unknown" and not case.calls
