@@ -937,7 +937,9 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     pre-write size — legal because ``flock`` is still held, so our
     partial line is provably the tail of the file — and the whole
     line is retried, bounded by ``_APPEND_MAX_ATTEMPTS``. Exhaustion
-    raises ``OSError`` with the journal left line-intact.
+    raises ``OSError`` with the journal left line-intact when rollbacks
+    succeeded. A rollback failure raises immediately without retrying;
+    the partial tail may remain.
 
     Raises ``OSError`` — notably ELOOP when the journal path is a
     symlink (O_NOFOLLOW). No per-entry fsync — the caller can
@@ -998,8 +1000,7 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
     # No load-cache invalidation on append, by design: this writer
     # only ever ADDS whole newline-terminated lines to the ACTIVE
     # (last) shard past any cached reader offset (O_APPEND under
-    # flock; short writes rolled back below, so no torn tail
-    # survives), and a roll only CREATES the next shard file — the
+    # flock), and a roll only CREATES the next shard file — the
     # reader's extension arm picks up appended rows from the cached
     # offset and a rolled set through its new-shard arm, while
     # sealed shards are never written again. Invalidating here would
@@ -1090,8 +1091,7 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                     # journal never carries a torn tail. Safe under
                     # the held flock — no cooperating writer can have
                     # appended after our partial bytes.
-                    with contextlib.suppress(OSError):
-                        os.ftruncate(fd, size_before)
+                    os.ftruncate(fd, size_before)
                     logger.warning(
                         "journal append short write (%d of %d bytes, "
                         "attempt %d/%d) — rolled back",
