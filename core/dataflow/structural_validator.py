@@ -477,8 +477,8 @@ def _extract_branch_guards_from_content(
 _SUB_STATIC_TAGS = frozenset({"assumed_propagation", "binding_approx"})
 
 #: The one tier value that IS source-static derivation. Any other
-#: tier string (``resolved_convention``, ``heuristic_dynamic``,
-#: ``unresolved`` — or an unknown future value, conservatively) marks
+#: explicit tier value (``resolved_convention``, ``heuristic_dynamic``,
+#: ``unresolved`` — or an unknown/malformed value, conservatively) marks
 #: the step as beyond what tree-sitter can be expected to re-derive.
 _TIER_RESOLVED_STATIC = "resolved_static"
 
@@ -493,7 +493,7 @@ def _step_sub_static(step: dict) -> bool:
     if not isinstance(props, dict):
         return False
     tier = props.get("tier")
-    if isinstance(tier, str) and tier and tier != _TIER_RESOLVED_STATIC:
+    if "tier" in props and tier != _TIER_RESOLVED_STATIC:
         return True
     tags = props.get("tags")
     if isinstance(tags, (list, tuple)):
