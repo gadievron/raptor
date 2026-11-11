@@ -100,3 +100,12 @@ def test_contradictory_entry_is_checked_but_never_gets_truth_credit():
     result=check(source)
     assert result['comparison_status']=='checked',result
     assert result['matches_claim'] is None and not result['entry_witness_validated']
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("body,expected", [('if(Flags & 4 == 0)return 1;if(Flags & 4 == 0)return 2;return 0;', []), ('if(Flags & 4 == 0)return 1;if(Flags & (4 == 0))return 2;return 0;', []), ('if(Flags & 4 == 0)return 1;if(Flags & 8 == 0)return 2;return 0;', [('Flags', '4', '==', '0'), ('Flags', '8', '==', '0')]), ('if(Flags & 4 == 0)return 1;return Flags & 4 == 0;', []), ('if(Flags & 4 == 0)return 1;{void *Flags=0;if(Flags & 4 == 0)return 2;}return 0;', []), ('if(Flags & 4 == 0)return 1;if(Flags & 0x4 == 0)return 2;return 0;', [('Flags', '4', '==', '0'), ('Flags', '0x4', '==', '0')])], ids=["duplicate", "parenthesized", "distinct", "return-context", "later-type-refusal", "literal-spelling"])
+def test_discovery_requires_a_unique_condition_objective(body, expected, language):
+    pytest.importorskip("tree_sitter_" + language)
+    source = "int Read(unsigned Flags){" + body + "}"
+    rows = subject.condition_candidates(source, language=language, integer_abi="lp64")
+    assert [row[1:] for row in rows] == expected

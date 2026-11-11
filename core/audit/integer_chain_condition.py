@@ -1,5 +1,7 @@
 """Actual left-associated builtin comparison truth, without range rewriting."""
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, ge, gt, le, lt, mk_val, z3, z3_available
 from core.smt_solver.session import check_solver, new_solver, query_budget
 from core.smt_solver.witness import format_vars
@@ -67,10 +69,12 @@ def chain_condition_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [(node, shape) for node in nodes
+              if (shape := _shape(node, data, language, integer_abi)) is not None]
+    occurrences = Counter(shape for _, shape in shapes)
     candidates = []
-    for node in nodes:
-        shape = _shape(node, data, language, integer_abi)
-        if shape is None:
+    for node, shape in shapes:
+        if occurrences[shape] != 1:
             continue
         _, _, name, op, literal = shape
         outcomes = {COMPARISONS[op](value, integer_literal_value(literal)) for value in (0, 1)}

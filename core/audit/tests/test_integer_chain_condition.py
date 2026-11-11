@@ -91,3 +91,12 @@ def test_budget_and_forged_entry_replay_remain_inconclusive(monkeypatch):
     monkeypatch.setattr(subject,'format_vars',lambda *args,**kwargs:{'Value':0})
     source=f'int Read(int Value){{if(Value>2){{if({EXPRESSION})return 1;}}return 0;}}'
     assert check(source)['matches_claim'] is None
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("body,expected", [('if(0 <= Value < 10)return 1;if(0 <= Value < 10)return 2;return 0;', []), ('if(0 <= Value < 10)return 1;if((0 <= Value) < 10)return 2;return 0;', []), ('if(0 <= Value < 10)return 1;if(0 <= Value < 11)return 2;return 0;', [('0', '<=', 'Value', '<', '10'), ('0', '<=', 'Value', '<', '11')]), ('if(0 <= Value < 10)return 1;return 0 <= Value < 10;', [('0', '<=', 'Value', '<', '10')]), ('if(0 <= Value < 10)return 1;{void *Value=0;if(0 <= Value < 10)return 2;}return 0;', []), ('if(0 <= Value < 10)return 1;if(0 <= Value < 0xA)return 2;return 0;', [('0', '<=', 'Value', '<', '10'), ('0', '<=', 'Value', '<', '0xA')])], ids=["duplicate", "parenthesized", "distinct", "return-context", "later-type-refusal", "literal-spelling"])
+def test_discovery_requires_a_unique_condition_objective(body, expected, language):
+    pytest.importorskip("tree_sitter_" + language)
+    source = "int Read(int Value){" + body + "}"
+    rows = subject.chain_condition_candidates(source, language=language, integer_abi="lp64")
+    assert [row[1] for row in rows] == expected
