@@ -3111,7 +3111,7 @@ class WebScanner:
         failed = bool(payload.get("error") or payload.get("check_failures") or payload.get("checks_degraded"))
         from core.coverage.journal import resolved_run_id
         complete_native_result(NativeResult(
-            "web", self.base_url, resolved_run_id(self.out_dir), payload,
+            "web", _redact_json_artifact(self.base_url), resolved_run_id(self.out_dir), payload,
             findings=payload.get("findings", []), state="partial" if failed else "completed",
             stages=[StageEnvelope(str(p), "completed") for p in payload.get("phases_completed", [])],
             diagnostics=["Web checks failed, degraded, or did not complete; inspect recorded check outcomes."] if failed else [],
