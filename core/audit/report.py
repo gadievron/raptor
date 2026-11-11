@@ -20,6 +20,7 @@ from core.coverage.journal import is_mechanical_echo as _is_mechanical_echo
 from core.coverage.record import READS_MANIFEST, read_manifest_lines
 from core.json import load_json, save_json
 from core.security.prompt_output_sanitise import sanitise_string
+from core.source.streams import preserving_stream_error
 
 # Byte budgets for the report's artifact reads: 1 MiB for run
 # metadata, 8 MiB for small state files, 64 MiB for findings-class
@@ -1586,7 +1587,7 @@ def _load_glance_cap(out_dir: Path) -> int:
         return 0
     capped = 0
     try:
-        with Path(path).open(encoding="utf-8") as f:  # raw-open: RAPTOR-written report artifact in the run dir
+        with preserving_stream_error(Path(path).open(encoding="utf-8")) as f:  # raw-open: RAPTOR-written report artifact in the run dir
             for line in f:
                 line = line.strip()
                 if not line:
