@@ -520,6 +520,8 @@ def test_tier3_census_trip_names_unit_and_gate(tmp_path):
     assert "check_fixture_census.py" in fnd[0]
 
 
+# Exercise actual Git composition and nested pytest attribution in both directions.
+@pytest.mark.slow
 def test_tier3_added_failing_file_attributes_to_the_adding_unit(tmp_path):
     # The middle unit ADDS a failing test file to a workflow-derived
     # (folded run: >) pytest gate. At boundaries before the adder the
@@ -549,6 +551,8 @@ def test_tier3_added_failing_file_attributes_to_the_adding_unit(tmp_path):
     assert "pytest" in fnd[0]
 
 
+# Exercise actual Git composition and nested pytest attribution in both directions.
+@pytest.mark.slow
 def test_tier3_broken_existing_test_attributes_to_the_breaking_unit(tmp_path):
     # Direction control: the FIRST unit breaks a test that exists at
     # every boundary — the bisection must name that unit, not walk

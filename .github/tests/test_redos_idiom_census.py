@@ -4813,6 +4813,8 @@ class NestedQuantifierCensus(unittest.TestCase):
         self.assertFalse(_nested_is_member(r"(?:a+)++x"))
         self.assertFalse(_nested_is_member(r"(?:a+)*+x"))
 
+    # Whole-tree AST extraction executes the shared census worker processes.
+    @pytest.mark.slow
     def test_runtime_source_has_no_members(self) -> None:
         """Default-tier closure: no runtime regex — call site or
         table entry — is a Rule N member beyond the (empty)
