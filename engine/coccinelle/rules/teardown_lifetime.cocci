@@ -1,18 +1,15 @@
-// teardown_lifetime.cocci — asynchronous callback cancel followed by
-// free of the callback's container: the teardown-lifetime
-// use-after-free race. timer_delete()/del_timer()/cancel_work()/
-// cancel_delayed_work()/hrtimer_try_to_cancel() only DEACTIVATE a
-// pending callback; one already executing on another CPU keeps
-// running and dereferences the container after kfree. Safe teardown
-// uses the waiting _sync/_shutdown variants, so their presence
-// between cancel and free suppresses the match.
+// teardown_lifetime.cocci — callback cancellation/free review candidates.
+// Local syntax does not establish callback registration, concurrent execution,
+// container dereferences, or the absence of prior quiescence and other lifetime
+// protocols. Review those conditions before concluding a use-after-free race.
+// Waiting APIs require their own target-specific calling and rearming contract;
+// timer_shutdown alone does not wait for an executing callback.
 //
-// Self-handler suppression: when the freed container was derived via
-// container_of() in the same function, the function is (in the
-// dominant kernel idiom) the callback handler itself — non-reentrancy
-// of the executing work/timer item makes cancel-then-free safe there,
-// so those matches are recorded and subtracted in the finalize block.
-// @role: verification
+// The container_of shape below is a heuristic suppression, not proof that this
+// function is the registered handler for that field. Silence does not establish
+// safe teardown or cover other callback-lifetime patterns.
+// @role: detection
+// raptor: confirm-only
 
 @initialize:python@
 @@
@@ -76,7 +73,7 @@ fld << direct.fld;
 for _pu in p:
     _td_candidates.append((_pu.file, int(_pu.line), int(_pu.column),
                            int(_pu.line_end), int(_pu.column_end),
-                           "async cancel of '&%s->%s' then kfree(%s): a concurrently-executing callback can still dereference the freed container (use the _sync/_shutdown teardown)" % (E, fld, E)))
+                           "callback teardown candidate: cancel of '&%s->%s' then kfree(%s); review callback state, container use and lifetime synchronization" % (E, fld, E)))
 
 // Alias form: priv = E; async_cancel(&priv->fld); ... kfree(E);
 @alias exists@
@@ -112,7 +109,7 @@ fld << alias.fld;
 for _pu in p:
     _td_candidates.append((_pu.file, int(_pu.line), int(_pu.column),
                            int(_pu.line_end), int(_pu.column_end),
-                           "async cancel of the callback in '%s' on an alias of %s, then kfree(%s): a concurrently-executing callback can still dereference the freed container" % (fld, E, E)))
+                           "callback teardown candidate: cancel of '%s' on an alias of %s, then kfree(%s); review alias identity, callback state and lifetime synchronization" % (fld, E, E)))
 
 @finalize:python@
 @@
