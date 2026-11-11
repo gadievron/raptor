@@ -22811,6 +22811,11 @@ def _run_tool_chain(
                 "promotion-grade receipt %s already stands",
                 tool_type, file_path, function_name, _exit_receipt,
             )
+            _exit_rule = tool_cfg.get("rule") or ""
+            if (tool_type == "semgrep" and tool_cfg.get("keyword")
+                    and os.path.basename(_exit_rule).startswith("audit_sweep_")):
+                with contextlib.suppress(OSError):
+                    os.unlink(_exit_rule)
             continue
 
         # Substrate gate (pre-dispatch): a registered tier whose
