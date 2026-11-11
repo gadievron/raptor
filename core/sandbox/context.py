@@ -6360,7 +6360,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 # A returned failure status keeps the existing
                                 # typed setup decision table authoritative.
                                 _spawn_execution_committed = False
-                            if _explicit_codec:
+                            # Setup diagnostics must reach the decision table
+                            # before applying the target's requested codec.
+                            if (_explicit_codec
+                                    and getattr(_native_result, "_setup_status", None) is None):
                                 # Explicit codecs imply text mode in subprocess.
                                 # Keep raw bytes until the selected decoder runs;
                                 # the backend's legacy UTF-8 replacement would
