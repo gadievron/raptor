@@ -4,7 +4,10 @@ from __future__ import annotations
 from hashlib import sha256
 
 # Each adapted producer names its actual existing prompt input and section.
-_CONTEXT_INPUTS = {"late_joern": ("mechanical_evidence", "evidence")}
+_CONTEXT_INPUTS = {
+    "late_joern": ("mechanical_evidence", "evidence"),
+    "callee_contract": ("callee_contract_violation", "callee_contract"),
+}
 
 
 def context_version(value: str) -> str:
@@ -17,6 +20,11 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         return None
     key, section = fields
     value = ctx.get(key)
+    if kind == "callee_contract":
+        from .callee_review_context import render_callee_context
+        from .context import _defend_identifier
+
+        value = render_callee_context(value, defend_identifier=_defend_identifier)
     if not isinstance(value, str) or not value or context_version(value) != version:
         return None
     return {"context_id": f"context:{kind}:{version}", "kind": kind, "version": version,

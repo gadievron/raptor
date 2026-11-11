@@ -10116,6 +10116,7 @@ def _run_audit_body(
                     start_time=start_time,
                     on_progress=on_progress,
                     max_workers=resolved_workers,
+                    knowledge_runtime=knowledge_runtime,
                 )
                 if contract_re:
                     logger.info(
@@ -34985,6 +34986,90 @@ def _re_review_joern_enriched(
     return result
 
 
+def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, env_gate, start_time):
+    """Admit advisory callee context through the run-owned continuation ledger."""
+    from .callee_review_context import render_callee_context
+    from .context import _defend_identifier
+    from .continuation_context import context_spec, context_version
+    from .review_claims import read_history
+    from .review_context_inputs import context_inputs_from_sources, merge_context_inputs
+
+    reviewer = runtime.wrap_review(review_fn)
+    published = 0
+    for _index, gap, prior, ctx, callee in prepared:
+        reservation = None
+        settled = False
+        try:
+            if env_gate is not None:
+                env_gate()
+            if _check_budget(config, start_time, result):
+                break
+            scope = callee.review_input_scope
+            if scope is not None and not scope.current(config.target_path):
+                continue
+            version = context_version(render_callee_context(
+                ctx.get("callee_contract_violation"), defend_identifier=_defend_identifier))
+            spec = context_spec(ctx, kind="callee_contract", version=version)
+            if spec is None or not runtime.offer_context_delta(ctx, kind="callee_contract", version=version):
+                continue
+            width = max(1, config.review_passes,
+                        len(config.models or []) if config.multi_model else 1)
+            reservation = runtime.reserve_context_continuation(
+                ctx, admission=lambda: not _check_budget(config, start_time, result),
+                required_calls=width, required_context_id=spec["context_id"])
+            if reservation is None:
+                continue
+            if not runtime.enrich_context(ctx, reservation):
+                runtime.fail(reservation, "callee_context_stale", ctx=ctx)
+                settled = True
+                continue
+            outcome = reviewer(ctx, config)
+            outcome.line = gap.get("line_start", 0)
+            # Spend is an invocation property, even when publication is rejected.
+            result.cost_tracker.record_call("re_review", cost_usd=outcome.cost_usd,
+                                            wall_time_s=outcome.duration_s)
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
+            if not runtime.context_was_delivered(reservation):
+                runtime.fail(reservation, "callee_context_not_delivered", ctx=ctx)
+                settled = True
+                continue
+            if scope is not None and not scope.current(config.target_path):
+                runtime.fail(reservation, "callee_source_changed", ctx=ctx)
+                settled = True
+                continue
+            # An old model assessment is advisory. Never recapture its bytes to
+            # turn it into proof of the source seen by that earlier invocation.
+            history = read_history((outcome.review_result or {}).get("review_claims"))
+            if history is not None:
+                origin = reservation.origin
+                incomplete = context_inputs_from_sources(
+                    [("target", origin.file, origin.source_identity.sha256)], complete=False)
+                history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), incomplete)
+                outcome.review_result = {**(outcome.review_result or {}), "review_claims": history}
+            if outcome.status in ("finding", "suspicious"):
+                disposition = _publish_study_outcome(config, result, runtime, reservation,
+                                                     prior, outcome, gap)
+            else:
+                disposition = _publish_study_candidates(config, result, runtime, reservation,
+                                                        prior, outcome, gap)
+            if disposition not in ("published", "unchanged"):
+                runtime.fail(reservation, disposition, ctx=ctx)
+            else:
+                runtime.complete(reservation, ctx, published_status=(outcome.status
+                    if outcome.status in ("finding", "suspicious") else prior.status),
+                    reason="callee_context_reviewed")
+                published += int(disposition == "published" and outcome.status in ("finding", "suspicious"))
+            settled = True
+        except Exception:
+            logger.warning("callee continuation failed for %s:%s", gap.get("file"),
+                           gap.get("name"), exc_info=True)
+        finally:
+            if reservation is not None and not settled:
+                runtime.fail(reservation, "callee_continuation_failed", ctx=ctx)
+    return published
+
+
 def _callee_contract_requeue(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -35000,20 +35085,26 @@ def _callee_contract_requeue(
     start_time: float = 0.0,
     on_progress: Callable | None = None,
     max_workers: int = 1,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> int:
-    """Re-review callers whose callee assumptions were contradicted.
+    """Re-review callers with advisory assessments of their named callees.
 
-    Scans outcomes for ``relies_on`` references.  When a callee was
-    reviewed and found to have a finding/suspicious status, any caller
-    that assumed the callee was safe is re-reviewed with the callee's
-    actual result injected as context.
+    Only an unambiguous callee occurrence can supply context. A previous
+    model assessment is not proof that the caller assumption is false.
+    Production dispatch shares the existing run continuation owner.
 
     Returns the count of callers re-reviewed.
     """
-    callee_outcomes: dict[str, ReviewOutcome] = {}
-    for o in result.outcomes:
-        callee_outcomes[o.function] = o
-        callee_outcomes[f"{o.file}:{o.function}"] = o
+    def resolve_callee(name, dep):
+        matches = [o for o in result.outcomes
+                   if name in (o.function, f"{o.file}:{o.function}",
+                               f"{o.file}:{o.function}:{o.line}")]
+        if dep.get("file"):
+            matches = [o for o in matches if o.file == dep["file"]]
+        line = dep.get("line_start", dep.get("line"))
+        if line is not None:
+            matches = [o for o in matches if o.line == line]
+        return matches[0] if len(matches) == 1 else None
 
     candidates: list[tuple] = []
     for o in result.outcomes:
@@ -35028,16 +35119,10 @@ def _callee_contract_requeue(
             assumption = dep.get("assumption", "")
             if not callee_name:
                 continue
-            co = callee_outcomes.get(callee_name)
-            if co is None and ":" not in callee_name:
-                co = next(
-                    (v for k, v in callee_outcomes.items()
-                     if k.endswith(f":{callee_name}")),
-                    None,
-                )
+            co = resolve_callee(callee_name, dep)
             if co is not None and co.status in ("finding", "suspicious"):
                 co_ev = getattr(co, "evidence_tool", "") or ""
-                if not co_ev or co_ev.startswith(("prefilter:", "llm-claimed:")):
+                if knowledge_runtime is None and (not co_ev or co_ev.startswith(("prefilter:", "llm-claimed:"))):
                     continue
                 candidates.append((o, callee_name, assumption, co))
                 break
@@ -35053,11 +35138,13 @@ def _callee_contract_requeue(
     effective_workers = max(1, max_workers)
     prepared: list[Any] = []
     cl = checklist if isinstance(checklist, dict) else {}
-    cl_index = _checklist_item_index(cl) if cl else {}
     for caller_outcome, callee_name, assumption, callee_outcome in candidates:
-        hit = cl_index.get(
-            (caller_outcome.file, caller_outcome.function),
-        )
+        matches = [(path, item) for path, _info, item in _iter_checklist_items(cl)
+                   if path == caller_outcome.file and item.get("name") == caller_outcome.function
+                   and (not caller_outcome.line or item.get("line_start", 0) == caller_outcome.line)]
+        if len(matches) > 1:
+            continue
+        hit = matches[0] if matches else None
         gap = {**hit[1], "file": hit[0]} if hit is not None else None
         if gap is None:
             gap = {
@@ -35081,16 +35168,30 @@ def _callee_contract_requeue(
             "assumption": assumption,
             "callee_status": callee_outcome.status,
             "callee_hypothesis": callee_outcome.hypothesis or "",
+            "scope_note": (
+                f"Original assessment occurrence {callee_outcome.file}:"
+                f"{callee_outcome.function}:{callee_outcome.line}; "
+                f"source sha256 {callee_outcome.review_input_scope.origin.source_identity.sha256}; "
+                "original captured inputs are checked before and after review."
+                if (callee_outcome.review_input_scope is not None
+                    and callee_outcome.review_input_scope.origin.source_identity is not None)
+                else "Original callee source binding unavailable; advisory assessment only."
+            ),
         }
-        prepared.append((len(prepared), gap, caller_outcome, ctx))
+        prepared.append((len(prepared), gap, caller_outcome, ctx, callee_outcome))
 
     # Environment gate shares the per-item dispatch points with the
     # rails polls below: tick (pause/probe) first, then the rails —
     # a conclusion surfaces through _check_budget.
     _env_gate = _make_dispatch_gate(config)
 
+    if knowledge_runtime is not None:
+        return _run_callee_continuations(
+            result, config, review_fn, prepared, knowledge_runtime,
+            env_gate=_env_gate, start_time=start_time)
+
     def _do_review(item):
-        idx, _gap, _prior, ctx = item
+        idx, _gap, _prior, ctx, _callee = item
         # Poll the budget/SIGTERM rails before EACH dispatch — this
         # pass runs after the main loop, exactly where a budget-
         # stopped run would otherwise overrun the drain margin.
@@ -35124,7 +35225,7 @@ def _callee_contract_requeue(
 
     re_reviewed = 0
     for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
-        _, gap, prior_outcome, _ctx = prepared[idx]
+        _, gap, prior_outcome, _ctx, _callee = prepared[idx]
         if outcome is None and exc is None:
             continue  # budget-skipped — never dispatched
         if exc is not None:
