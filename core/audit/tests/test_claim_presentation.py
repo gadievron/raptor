@@ -29,7 +29,7 @@ def test_actual_publisher_shadow_reaches_json_and_markdown_without_upgrading(tmp
     assert shadow["mode"] == "shadow" and shadow["authoritative"] is False
     row, = shadow["claims"]
     assert row["claim_id"] == revision.claim_id and row["state"] == "unresolved"
-    assert row["assessment_basis"] is None and row["assurance"] is None
+    assert "assessment_basis" not in row and "assurance" not in row
     # The normal publisher adds trace links. Assessment fields must stay
     # unchanged while that additional provenance reaches the report.
     for key in ("status", "confidence", "verification_tier", "hypothesis"):
@@ -43,7 +43,8 @@ def test_actual_publisher_shadow_reaches_json_and_markdown_without_upgrading(tmp
     for fmt in ("json", "markdown"):
         rendered = get_renderer(fmt).render(document).content.decode()
         (tmp_path / ("rendered-report." + fmt)).write_text(rendered, encoding="utf-8")
-        assert "unresolved" in rendered and "Unavailable" in rendered
+        assert "unresolved" in rendered
+        assert "Assessment basis and assurance grade were not recorded" in rendered
         assert "Shadow comparison only" in rendered
         assert "not replace legacy assessments" in rendered
         assert "no current finding was established" in rendered
@@ -53,11 +54,20 @@ def test_actual_publisher_shadow_reaches_json_and_markdown_without_upgrading(tmp
 
 
 def test_missing_shadow_retains_legacy_projection(tmp_path):
+    outcome = ReviewOutcome(file="owned.c", function="f", line=1, status="suspicious",
+                            body="Captured prior judgment", hypothesis="Captured prior concern")
+    findings = export_findings([outcome])["findings"]
+    (tmp_path / "findings.json").write_text(json.dumps(findings), encoding="utf-8")
     report = generate_report(tmp_path)
-    assert "claim_adjudication" not in report
+    assert report["claim_adjudication"]["mode"] == "unavailable"
+    assert report["claim_adjudication"]["authoritative"] is False
+    assert report["claim_adjudication"]["artifact"] is None
+    assert report["findings"][0]["status"] == findings[0]["status"] == "suspicious"
+    assert report["findings"][0]["confidence"] == findings[0]["confidence"]
     context, document = build_audit_document(report, tmp_path)
     assert all("claim-adjudication-shadow.json" not in item["path"] for item in context.artifacts)
-    assert "Shadow comparison only" not in get_renderer("markdown").render(document).content.decode()
+    markdown = get_renderer("markdown").render(document).content.decode()
+    assert "Claim adjudication unavailable" in markdown and "legacy assessments are unchanged" in markdown
 
 
 def test_authoritative_flag_cannot_activate_consumer_switch(tmp_path):
