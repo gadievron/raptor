@@ -48,16 +48,16 @@
 //   dominate the call (exists-path semantics, above); reassignment
 //   in a different function (setter/printer split) is invisible.
 //   All of these are false-negative direction only — accepted in
-//   exchange for removing the confirmed-verdict false positive on
-//   the ubiquitous static-const-format idiom; a verification rule
-//   must not fire on safe code even at the cost of missing some
-//   unsafe code. The accepted misses are witnessed in the rule's
-//   fixture tests.
+//   exchange for suppressing candidates on the ubiquitous static-const
+//   format idiom. The accepted misses are witnessed in the rule's
+//   fixture tests; silence does not establish format provenance.
 // - Macros that expand to a string literal are safe after
 //   preprocessing and will not be flagged (correct behaviour).
 //
 // Covers CWE-134 (Use of Externally-Controlled Format String).
-// @role: verification
+// Non-literal syntax alone does not establish attacker control; review
+// wrapper callers and format provenance before confirming CWE-134.
+// @role: detection
 
 @safe_global@
 identifier fmt;
@@ -162,7 +162,7 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "format_string",
-          "message": "Non-literal format string '%s' — attacker-controlled format enables stack read/write (CWE-134)" % E}
+          "message": "Non-literal format string '%s' — review callers and format provenance for possible attacker control (CWE-134)" % E}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // ---------------------------------------------------------------
@@ -284,7 +284,7 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "format_string",
-          "message": "Non-literal format string '%s' — attacker-controlled format enables stack read/write (CWE-134)" % E}
+          "message": "Non-literal format string '%s' — review callers and format provenance for possible attacker control (CWE-134)" % E}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // ---------------------------------------------------------------
@@ -351,5 +351,5 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "format_string",
-          "message": "Non-literal format string '%s' — attacker-controlled format enables stack read/write (CWE-134)" % E}
+          "message": "Non-literal format string '%s' — review callers and format provenance for possible attacker control (CWE-134)" % E}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")

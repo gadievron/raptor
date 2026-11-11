@@ -1,8 +1,7 @@
 """Fixture tests for the format_string rule.
 
-This is a verification-role rule — a false positive mints a false
-"confirmed" CWE-134 verdict — so the negatives pin the safe idioms the
-rule used to flag: a gettext-family translation of a string literal
+This detection rule reports format-provenance candidates. The negatives
+pin the literal idioms excluded from review: a gettext-family translation of a string literal
 (inline at the call OR assigned to a local first), a ternary whose
 both arms are string literals, a const local initialized from a
 literal, and the file-scope ``static const char *fmt = "..."`` idiom
@@ -518,3 +517,37 @@ def test_inline_format_shapes_across_every_callee(tmp_path, names, prefix):
     results = _run_rule(tmp_path, "\n".join(lines) + "\n")
     assert sorted(r["line"] for r in results) == expected
     assert all(r["rule"] == "format_string" for r in results)
+
+
+def test_literal_only_wrapper_callers_require_provenance_review(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    source = '\n'.join([
+        'static void first(const char *a, int n) {',
+        ' printf(a, n);', '}',
+        'static void second(char *out, const char *b, int n) {',
+        ' sprintf(out, b, n);', '}',
+        'static void third(char *out, const char *c, int n) {',
+        ' snprintf(out, 128, c, n);', '}',
+        'void callers(char *out, int n) {',
+        ' first("count %d", n);',
+        ' second(out, "count %d", n);',
+        ' third(out, "count %d", n);',
+        ' printf("count %d", n);',
+        ' sprintf(out, "count %d", n);',
+        ' snprintf(out, 128, "count %d", n);', '}', ''])
+    target = tmp_path / 'wrappers.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Literal-only format wrapper candidates',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted(row['line'] for row in rows) == [2, 5, 8]
+    assert all(row['rule'] == 'format_string' for row in rows)
+    assert all('review callers and format provenance' in row['message'] for row in rows)
