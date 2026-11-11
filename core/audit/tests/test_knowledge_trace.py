@@ -2,6 +2,7 @@
 
 import json
 
+from core.audit.record import audit_log_paths
 from core.audit.tests.test_knowledge_runtime_coordinator import _runtime
 
 
@@ -37,10 +38,9 @@ def test_trace_retains_omission_and_failure_without_claiming_model_use(tmp_path,
     failed = [row for row in payload["events"] if row["event"] == "continuation_failed"][0]
     assert failed["pass_id"] == reservation.packet.pass_id
     assert failed["published_status"] == ""
-    before = (out / "audit-log.jsonl").read_bytes() if (out / "audit-log.jsonl").exists() else None
+    before = [path.read_bytes() for path in audit_log_paths(out)]
     runtime.write_artifacts(out)
-    if before is not None:
-        assert (out / "audit-log.jsonl").read_bytes() == before
+    assert [path.read_bytes() for path in audit_log_paths(out)] == before
 
 
 def test_report_material_fallback_uses_canonical_bytes_and_preserves_binding_ids(tmp_path):
