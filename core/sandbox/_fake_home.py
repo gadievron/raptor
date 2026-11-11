@@ -7,7 +7,7 @@ _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 def _close_after_error(fd):
     """Attempt one cleanup close without replacing the active failure."""
-    with suppress(OSError):
+    with suppress(BaseException):
         os.close(fd)
 
 

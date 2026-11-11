@@ -120,6 +120,18 @@ def test_acquisition_failure_survives_close_failure(tmp_path, ops, action, failu
 
 
 @pytest.mark.parametrize("action", _ACTIONS)
+def test_acquisition_failure_survives_interrupted_close(tmp_path, ops, action):
+    ops.mode = "primary"
+    ops.close_error = KeyboardInterrupt("owned cleanup interrupted after release")
+    with pytest.raises(BaseException) as caught:
+        _invoke(tmp_path, ops, action)
+    assert caught.value is ops.primary
+    assert ops.close_fired
+    assert not ops.live
+    assert ops.duplicates == []
+
+
+@pytest.mark.parametrize("action", _ACTIONS)
 def test_success_retains_only_the_returned_descriptor(tmp_path, ops, action):
     result = _invoke(tmp_path, ops, action)
     if action in ("walk", "open_home"):
