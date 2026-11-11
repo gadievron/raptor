@@ -169,9 +169,10 @@ def reduce_claims(contexts, events, *, contracts, changes=(), unadmitted_claims=
         row["contradicted_obligations"] = sorted(contradicted)
         row["missing_obligations"] = sorted(contract.obligations - supported)
         for change in bound_changes:
-            # A model's abandonment of a theory cannot erase admitted facts,
-            # including partial support or a scoped mechanical contradiction.
-            if change.kind == "withdrawn" and (supported or contradicted):
+            # Withdrawal retracts an unsupported conclusion, not its narrow
+            # facts. Whole-claim support and scoped refutation remain binding;
+            # partial support stays recorded even when the theory is withdrawn.
+            if change.kind == "withdrawn" and (contract.obligations <= supported or contradicted):
                 row["rejected_event_ids"].append(change.event_id)
             else:
                 lifecycle.add(change.kind)

@@ -59,7 +59,11 @@ def test_unsubstantiated_withdrawal_cannot_erase_supported_facts():
         result = reduce(facts, changes=[withdrawal])["claims"][0]
         assert result["state"] == "supported"
         assert "change" in result["rejected_event_ids"]
-    assert reduce([fact()], changes=[change()])["claims"][0]["state"] == "unresolved"
+    partial = reduce([fact()], changes=[change()])["claims"][0]
+    assert partial["state"] == "withdrawn"
+    assert partial["supported_obligations"] == ["reach"]
+    assert partial["missing_obligations"] == ["effect"]
+    assert partial["accepted_event_ids"] == ["a", "change"]
     assert reduce([], changes=[change()])["claims"][0]["state"] == "withdrawn"
     assert reduce([fact(semantic="contradicts_fact")], changes=[change()])["claims"][0]["state"] == "refuted"
 
@@ -104,3 +108,39 @@ def test_ambiguous_lifecycle_event_cannot_restore_otherwise_supported_claim():
     result = reduce([fact(), fact("b", "effect")], changes=changes)
     assert result["claims"][0]["state"] == "unresolved"
     assert result["quarantined_event_ids"] == ["same"]
+
+
+def test_partial_fact_withdrawal_preserves_facts_without_transfer_or_refutation():
+    events = [fact(), change()]
+    values = [reduce_claims([CONTEXT], order, contracts=CONTRACTS)
+              for order in permutations(events)]
+    assert all(value == values[0] for value in values)
+    row = values[0]["claims"][0]
+    assert row["state"] == "withdrawn"
+    assert row["supported_obligations"] == ["reach"]
+    assert row["contradicted_obligations"] == []
+    assert row["missing_obligations"] == ["effect"]
+    assert row["accepted_event_ids"] == ["a", "change"]
+    assert row["rejected_event_ids"] == []
+    # Old facts remain on their original revision, not a new conclusion.
+    revised = replace(CONTEXT, revision_id="other", parent_revision_id="rev")
+    result = reduce_claims([CONTEXT, revised], events, contracts=CONTRACTS)
+    new = next(row for row in result["claims"] if row["revision_id"] == "other")
+    assert new["state"] == "unresolved"
+    assert new["supported_obligations"] == []
+
+
+def test_grounded_withdrawal_cannot_override_full_support_or_negative_authority():
+    for events, state in (([fact(), fact("b", "effect")], "supported"),
+                          ([fact(semantic="contradicts_fact")], "refuted"),
+                          ([fact(), fact("n", semantic="contradicts_fact")], "conflicted")):
+        row = reduce(events, changes=[change()])["claims"][0]
+        assert row["state"] == state
+        assert "change" in row["rejected_event_ids"]
+    for bad in (change(context=replace(CONTEXT, assumptions=("invented",))),
+                change(reason="model_disagrees"), change(evidence_reference=""),
+                replace(change(), kind="unknown")):
+        row = reduce([fact()], changes=[bad])["claims"][0]
+        assert row["state"] == "unresolved"
+        assert row["supported_obligations"] == ["reach"]
+        assert "change" in row["rejected_event_ids"]
