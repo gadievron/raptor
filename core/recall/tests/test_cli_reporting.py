@@ -57,15 +57,22 @@ def test_one_pipeline_native_measurement_and_export_policy(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("destination", ["target", "native", "manifest"])
-def test_destination_refusal_before_clone_or_pipeline(tmp_path, monkeypatch, destination):
+def test_destination_refusal_before_clone_or_pipeline(tmp_path, monkeypatch, destination, capsys):
     manifest, target = _manifest(tmp_path)
     out = tmp_path / "run"
     path = target / "receipt.json" if destination == "target" else out / "report.json" if destination == "native" else manifest
     before = manifest.read_bytes()
     monkeypatch.setattr(cli, "verify_pinned_clone", lambda *args: pytest.fail("must refuse before clone"))
     monkeypatch.setattr(cli, "run_pipeline", lambda *args, **kwargs: pytest.fail("must refuse before detector"))
-    assert cli.main(["run", "--manifest", str(manifest), "--out", str(out),
-                     "--report-format", "json", "--report-output", str(path)]) == 2
+    argv = ["run", "--manifest", str(manifest), "--out", str(out),
+            "--report-format", "json", "--report-output", str(path)]
+    if destination == "manifest":
+        with pytest.raises(SystemExit) as error:
+            cli.main(argv)
+        assert error.value.code == 2
+        assert "reserved persistence filename" in capsys.readouterr().err
+    else:
+        assert cli.main(argv) == 2
     assert manifest.read_bytes() == before
     assert not out.exists()
 

@@ -123,9 +123,11 @@ def test_checker_report_cannot_replace_rule_library_manifest(tmp_path, monkeypat
     manifest = library / "manifest.json"
     manifest.write_text('{"owned-library":true}')
     before = manifest.read_bytes()
-    monkeypatch.setattr(bridge, "_build_llm", lambda: object())
-    monkeypatch.setattr(bridge, "synthesise_checker_from_cve", lambda *args, **kwargs: bridge.CveBridgeReport())
-    assert bridge.cli_main([str(output), "--repo", str(tmp_path), "--library-dir", str(library),
-                            "--report-format", "json", "--report-output", str(manifest)]) == 0
+    monkeypatch.setattr(bridge, "_build_llm", lambda: pytest.fail("must refuse before LLM"))
+    monkeypatch.setattr(bridge, "synthesise_checker_from_cve", lambda *args, **kwargs: pytest.fail("must refuse before synthesis"))
+    with pytest.raises(SystemExit) as error:
+        bridge.cli_main([str(output), "--repo", str(tmp_path), "--library-dir", str(library),
+                         "--report-format", "json", "--report-output", str(manifest)])
+    assert error.value.code == 2
     assert manifest.read_bytes() == before and not (library / ".manifest-report").exists()
-    assert "Optional checker report unavailable" in capsys.readouterr().err
+    assert "reserved persistence filename" in capsys.readouterr().err
