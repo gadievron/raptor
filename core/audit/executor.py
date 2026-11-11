@@ -806,6 +806,8 @@ async def _run_async_body(
                 released.append(held_tasks.pop(key))
         return released
 
+    fair_review_admission = getattr(graph, "review_fairness_enabled", False)
+
     def _dispatch_ready(tasks: list[Any], *, suppress: bool = True) -> None:
         """Route ready tasks: glance-tier into batch queue, others individual.
 
@@ -814,7 +816,9 @@ async def _run_async_body(
         exactly the failure being broken.
         """
         for task in tasks:
-            if suppress and _check_suppression(task):
+            # The governed graph owns per-unit coalescing. Global study
+            # activity must not hold initial review opportunities.
+            if suppress and not fair_review_admission and _check_suppression(task):
                 continue
             if (
                 batch_review_fn
@@ -847,6 +851,11 @@ async def _run_async_body(
             # after a drain timeout).
             return
         if _should_stop():
+            return
+        if fair_review_admission:
+            # Let the owner refill only genuinely free slots. Popping a
+            # worker-sized batch after every completion pre-admits a hidden
+            # throttle backlog and defeats later continuation opportunities.
             return
         newly_ready = graph.pop_ready(ec.max_workers)
         _dispatch_ready(newly_ready)
@@ -1108,7 +1117,8 @@ async def _run_async_body(
     initial = graph.pop_ready(ec.max_workers)
     _dispatch_ready(initial)
 
-    while inflight or glance_pending or hold_set:
+    while (inflight or glance_pending or hold_set
+           or (fair_review_admission and graph.pending > 0 and not _should_stop())):
         if (quiescer is not None and not _should_stop()
                 and quiescer.should_attempt()):
             await _quiesce_checkpoint()
@@ -1119,7 +1129,7 @@ async def _run_async_body(
                 _dispatch_ready(graph.pop_ready(ec.max_workers))
 
         idle_timeout = _idle_timeout()
-        if on_idle is not None and not _should_stop():
+        if (on_idle is not None or fair_review_admission) and not _should_stop():
             # The owner callback may inject a newly useful continuation while
             # unrelated reviews are still running. Dispatch into free slots
             # here instead of waiting for an unrelated completion to drain it.

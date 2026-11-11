@@ -9159,9 +9159,19 @@ def _run_audit_body(
             workqueue, config, result, checklist,
         )
 
-    total = len(workqueue) + batched_count
+    # Trivial reviews still receive their same-file sibling context, but
+    # use the same ready graph and admission opportunities as other units.
+    # A separate batch pool cannot interleave their newly useful knowledge.
+    trivial_context: dict[tuple[str, str, int], list[str]] = {}
+    for batch in batched:
+        siblings = [f"{g['name']} (L{g.get('line_start', '?')}-{g.get('line_end', '?')})"
+                    for g in batch]
+        for gap in batch:
+            trivial_context[(gap['file'], gap['name'], gap.get('line_start', 0))] = siblings
+            workqueue.append(gap)
+    total = len(workqueue)
     logger.info(
-        "orchestrator: %d functions to review (%d skipped, %d batched as trivial)",
+        "orchestrator: %d functions to review (%d skipped, %d with trivial sibling context)",
         total,
         result.skipped,
         batched_count,
@@ -9556,6 +9566,7 @@ def _run_audit_body(
         duration_hints=_review_duration_hints(workqueue, triage_results),
         schedule=_schedule,
         soft_dep_keys=_soft_keys,
+        review_fairness=True,
     )
     if _soft_keys:
         logger.info(
@@ -9643,7 +9654,7 @@ def _run_audit_body(
             gap = {"file": origin.file, "name": origin.function,
                    "line_start": origin.line_start, "line_end": origin.line_end}
             knowledge_gaps[id(gap)] = (gap, reservation)
-            if not graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0):
+            if not graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0, continuation=True):
                 knowledge_gaps.pop(id(gap), None)
                 knowledge_runtime.fail(reservation, "continuation_schedule_refused")
         return knowledge_runtime.wake_interval()
@@ -9653,6 +9664,9 @@ def _run_audit_body(
         if owned is None or owned[0] is not gap:
             from .knowledge_calls import KnowledgeCallRefused
             try:
+                siblings = trivial_context.get((gap["file"], gap["name"], gap.get("line_start", 0)))
+                if siblings is not None:
+                    kwargs["batch_context"] = siblings
                 return review_one_function(gap, *args, knowledge_runtime=knowledge_runtime, **kwargs)
             except KnowledgeCallRefused:
                 # Refusal is local to this unit. No completed verdict is
@@ -9803,111 +9817,6 @@ def _run_audit_body(
             result, executor_stats, graph, on_progress,
         )
 
-    # --- Trivial-function batch pass (moved after the main executor) ---
-    # Batched trivial functions are the lowest-value reviews per
-    # dollar: under a cost cap they must not consume budget before the
-    # priority-ordered graph pass has had it (observed live: a capped
-    # run spent its budget on the trivial tier and stopped before any
-    # top-priority function was reviewed). Worker-side rail pre-checks
-    # (see _review_batch) stop this pass cleanly when the executor
-    # already exhausted the budget.
-    if batched:
-        from concurrent.futures import (
-            FIRST_COMPLETED,
-            ThreadPoolExecutor,
-            wait,
-        )
-
-        # Environment gate at the same worker-entry point as the rail
-        # check: the tick pauses batch dispatch on resource pressure
-        # and a conclusion surfaces through the rails poll after it.
-        _env_gate = _make_dispatch_gate(config)
-
-        def _review_batch(batch):
-            # Pre-execution rail check: every batch is submitted to the
-            # pool up front, so a QUEUED batch must re-check the budget
-            # when a worker picks it up. Pre-fix, nothing gated queued
-            # batches: after the rails tripped, the pool kept executing
-            # the entire pre-submitted backlog (observed live: many
-            # hours of post-exhaustion reviews on one run).
-            if _env_gate is not None:
-                _env_gate()
-            if _check_budget(config, start_time, result):
-                return None, batch
-            from .executor import review_work_active
-            with review_work_active():
-                return _review_items(
-                    batch,
-                    shared,
-                    config,
-                    review_fn,
-                    result,
-                    joern_server=joern_server,
-                    audit_log=audit_log,
-                    workqueue=workqueue,
-                    reviewed_set=reviewed_set,
-                    start_time=start_time,
-                    layer_disagreements=layer_disagreements,
-                    collector=collector,
-                    graph=graph,
-                    reviewed_outcomes=reviewed_outcomes,
-                    knowledge_runtime=knowledge_runtime,
-                ), batch
-
-        review_idx = 0
-        batch_stop = False
-        with ThreadPoolExecutor(max_workers=resolved_workers) as pool:
-            pending = {submit_with_joern(pool, _review_batch, b) for b in batched}
-            while pending:
-                if batch_stop:
-                    # shutdown(cancel_futures=True) cancels queued
-                    # batches by DRAINING the pool's work queue: no
-                    # worker ever picks them up, so nothing ever
-                    # notifies a completion waiter for them. Both
-                    # as_completed and wait() treat such a future as
-                    # pending forever — waiting on one deadlocks the
-                    # pass (a capped run hung here when the cost rail
-                    # fired with batches still queued). Drop them by
-                    # state instead; whatever remains was RUNNING at
-                    # the drain and always completes.
-                    pending = {f for f in pending if not f.cancelled()}
-                    if not pending:
-                        break
-                done, pending = wait(pending, return_when=FIRST_COMPLETED)
-                for fut in done:
-                    if fut.cancelled():
-                        continue
-                    batch_outcomes, batch = fut.result()
-                    if batch_outcomes is None:
-                        # Worker-side rail refusal — nothing was
-                        # dispatched.
-                        continue
-                    # review_one_function (called by _review_items)
-                    # already handles cost booking, tally, and commit
-                    # for each outcome.  The consumption loop only
-                    # tracks progress and the budget rail.
-                    for outcome in batch_outcomes:
-                        if on_progress:
-                            on_progress(review_idx, total, outcome)
-                        review_idx += 1
-                    if not batch_stop and _check_budget(
-                        config, start_time, result,
-                    ):
-                        # Cancel every not-yet-started batch; keep
-                        # harvesting in-flight completions in this loop
-                        # so their outcomes are tallied. The cancelled
-                        # futures can never complete — the loop head
-                        # drops them by state — and the
-                        # context-manager join then has nothing
-                        # unstarted left to block on.
-                        batch_stop = True
-                        pool.shutdown(wait=False, cancel_futures=True)
-        if batch_stop:
-            logger.info(
-                "batched review pass stopped on budget/deadline "
-                "exhaustion — pending batches cancelled",
-            )
-
     # Keep the source producer open for bounded follow-up requests.
     if deepen_reserve_held:
         deepen_reserve_held = _hold_deepen_reserve(config, composition_active=config.open_discovery)
@@ -9960,6 +9869,14 @@ def _run_audit_body(
     try:
         if config.out_dir is not None:
             knowledge_runtime.write_artifacts(config.out_dir)
+            try:
+                save_json(config.out_dir / "review-admission.json", {
+                    "schema_version": 1, "scope": "main_review_graph",
+                    "global_review_ownership": False,
+                    "policy": graph.admission_state(),
+                })
+            except Exception:
+                logger.warning("review admission trace flush failed", exc_info=True)
 
         # --- SIGTERM salvage: skip every optional post pass ---
         # In-flight completions are already harvested (the executor's
