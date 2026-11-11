@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_stack_lifetime_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_stack_addr_escape_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_address_assignments_require_lifetime_evidence"}
+
     def test_lock_acquisition_context_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_lock_imbalance_rule.py")
         assert _callers_of(calls, "run") == set()
