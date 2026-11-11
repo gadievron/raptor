@@ -874,9 +874,11 @@ class UnixScopeSupervisor:
             addr = struct.pack("=H", socket.AF_UNIX) + proxied + b"\x00"
             return self._connect_raw(dupfd, addr, nid=nid)
         finally:
-            if target_fd is not None:
-                os.close(target_fd)
-            os.close(rootfd)
+            from ._retirement import retire_parent_resources
+            retire_parent_resources(
+                lambda: os.close(target_fd) if target_fd is not None else None,
+                lambda: os.close(rootfd),
+            )
 
     def _target_allowed(self, st) -> bool:
         if (st.st_dev, st.st_ino) in self._allowed_inodes:
