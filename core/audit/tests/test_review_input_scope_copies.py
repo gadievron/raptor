@@ -1,6 +1,6 @@
 """Finite contract for manual review-record copies in the orchestrator.
 
-These are the fourteen current direct copies, independently of the separate
+These are the fifteen current direct copies, independently of the separate
 nine-site tools_errored census. Panel dictionaries are separate producers:
 the owner rebuilds their combined live scope after merging members.
 """
@@ -12,6 +12,7 @@ from pathlib import Path
 _ORCHESTRATOR = Path(__file__).resolve().parents[1] / "orchestrator.py"
 _EXPECTED_COPIES = {
     ("_multi_pass_review", 0): "outcome.review_input_scope",
+    ("_retain_initial_publication_failure", 0): "outcome.review_input_scope",
     ("_apply_reachability_gate", 0): "outcome.review_input_scope",
     ("_apply_reachability_gate", 1): "outcome.review_input_scope",
     ("_sweep_validate", 0): "outcome.review_input_scope",
@@ -76,7 +77,7 @@ def _violations(tree):
 
 def test_manual_review_copies_keep_their_actual_source_scope():
     tree = ast.parse(_ORCHESTRATOR.read_text())
-    assert len(_EXPECTED_COPIES) == 14
+    assert len(_EXPECTED_COPIES) == 15
     assert _violations(tree) == set()
 
 
@@ -119,18 +120,63 @@ def test_scope_field_is_transient_and_appended_after_existing_positional_fields(
     assert field.repr is False and field.compare is False
 
 
-def test_orchestrator_writers_use_current_trusted_roots():
-    tree = ast.parse(_ORCHESTRATOR.read_text())
+def _assert_orchestrator_writers_use_current_trusted_roots(tree):
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
              and isinstance(node.func, ast.Name)
              and node.func.id in ("append_journal_for_outcome", "Collector", "compute_gaps")]
     assert len(calls) == 10, "eight direct journal sites, Collector and gap computation"
     roots = []
+    staged = []
     for call in calls:
-        value, = [keyword.value for keyword in call.keywords if keyword.arg == "source_roots"]
-        roots.append(ast.unparse(value))
+        values = [keyword.value for keyword in call.keywords if keyword.arg == "source_roots"]
+        if values:
+            value, = values
+            roots.append(ast.unparse(value))
+        else:
+            staged.append(call)
+    call, = staged
+    assert len(call.keywords) == 1 and call.keywords[0].arg is None
+    assert ast.unparse(call.keywords[0].value) == "action['kwargs']"
+    differential = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "_run_differential_verification")
+    producers = [node for node in ast.walk(differential) if isinstance(node, ast.Call)
+                 and ast.unparse(node.func) == "pending_journals.append"]
+    producer, = producers
+    payload, = producer.args
+    kwargs, = [value for key, value in zip(payload.keys, payload.values)
+               if isinstance(key, ast.Constant) and key.value == "kwargs"]
+    source_roots, = [value for key, value in zip(kwargs.keys, kwargs.values)
+                    if isinstance(key, ast.Constant) and key.value == "source_roots"]
+    loops = [node for node in ast.walk(differential) if isinstance(node, ast.For)
+             and ast.unparse(node.target) == "action"
+             and ast.unparse(node.iter) == "pending_journals"]
+    loop, = loops
+    assert call in list(ast.walk(loop))
+    roots.append(ast.unparse(source_roots))
     assert roots.count("_review_source_roots(config)") == 8
     assert roots.count("runtime.source_roots()") == 2
+
+
+def test_orchestrator_writers_use_current_trusted_roots():
+    _assert_orchestrator_writers_use_current_trusted_roots(ast.parse(_ORCHESTRATOR.read_text()))
+
+
+def test_staged_differential_journal_cannot_replace_the_current_root_mapping():
+    import pytest
+
+    tree = ast.parse(_ORCHESTRATOR.read_text())
+    differential = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == "_run_differential_verification")
+    producer, = [node for node in ast.walk(differential) if isinstance(node, ast.Call)
+                 and ast.unparse(node.func) == "pending_journals.append"]
+    payload, = producer.args
+    kwargs, = [value for key, value in zip(payload.keys, payload.values)
+               if isinstance(key, ast.Constant) and key.value == "kwargs"]
+    index, = [index for index, key in enumerate(kwargs.keys)
+              if isinstance(key, ast.Constant) and key.value == "source_roots"]
+    kwargs.values[index] = ast.parse("untrusted_source_roots", mode="eval").body
+    with pytest.raises(AssertionError):
+        _assert_orchestrator_writers_use_current_trusted_roots(tree)
 
 
 def test_panel_reconstructions_bind_the_combined_runtime_scope():
@@ -142,3 +188,24 @@ def test_panel_reconstructions_bind_the_combined_runtime_scope():
              and ast.unparse(node.func) == "knowledge_runtime.bind_review_input_scope"]
     assert {ast.unparse(call.args[0]) for call in calls} == {"panel_outcome", "consistency_outcome"}
     assert len(calls) == 2
+
+
+def test_initial_publication_failure_keeps_original_live_scope(tmp_path, monkeypatch):
+    from core.audit.orchestrator import (
+        OrchestratorConfig, OrchestratorResult, ReviewOutcome, _retain_initial_publication_failure,
+    )
+    from core.audit.tests.test_review_input_scope import _scope
+
+    scope, manifest, target, _ = _scope(tmp_path)
+    original = ReviewOutcome(file="unit.c", function="f", line=1, status="clean",
+                             body="Unpublished proposal", review_input_scope=scope)
+    config = OrchestratorConfig(target_path=target, out_dir=tmp_path / "out")
+    result = OrchestratorResult()
+    monkeypatch.setattr("core.audit.orchestrator.append_audit_log", lambda *args, **kwargs: None)
+    held = _retain_initial_publication_failure(result, config, original, {})
+    assert held.status == "error" and held.error_class == "publication"
+    assert held.review_input_scope is scope
+    assert scope.current(target)
+    assert scope.matches(file="unit.c", function="f", line_start=1, source_inputs=manifest)
+    assert held.review_result["publication_failure"]["adjudication"] == "unverified"
+    assert result.outcomes == []
