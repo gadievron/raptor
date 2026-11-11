@@ -43,18 +43,36 @@ class TestPositives:
         assert len(results) == 1
         assert results[0]["rule"] == "double_fetch"
 
+    @pytest.mark.parametrize("operation", ["uptr += 0;", "uptr -= 0;"])
+    def test_zero_offset_keeps_same_pointer_fetch(self, tmp_path, operation):
+        results = _run_rule(tmp_path, """\
+            int handler(void *dst, char *uptr)
+            {
+                struct hdr h;
+                copy_from_user(&h, uptr, sizeof(h));
+                if (h.len > 64)
+                    return -1;
+                %s
+                copy_from_user(dst, uptr, h.len);
+                return 0;
+            }
+        """ % operation)
+        assert len(results) == 1
+        assert results[0]["rule"] == "double_fetch"
+
 
 class TestNegatives:
-    def test_advanced_pointer_does_not_fire(self, tmp_path):
+    @pytest.mark.parametrize("operation", ["uptr += 8;", "uptr -= 8;"])
+    def test_advanced_pointer_does_not_fire(self, tmp_path, operation):
         results = _run_rule(tmp_path, """\
             int chunked(void *dst, char *uptr)
             {
                 copy_from_user(dst, uptr, 8);
-                uptr += 8;
+                %s
                 copy_from_user(dst, uptr, 8);
                 return 0;
             }
-        """)
+        """ % operation)
         assert results == []
 
     def test_reassigned_pointer_does_not_fire(self, tmp_path):
