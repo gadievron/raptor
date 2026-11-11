@@ -1591,6 +1591,13 @@ def _stmt_order(
 
 
 class TestSemgrepSurfaceFences:
+    def test_go_command_argument_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/semgrep/tests/test_go_command_argument_precision.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_go_shell_command_text_with_extra_arguments",
+        }
+
     def test_pkcs_identity_fixtures_are_guarded(self):
         calls = _function_call_map("../../../engine/semgrep/tests/test_pkcs_padding_precision.py")
         assert _callers_of(calls, "run") == set()

@@ -37,16 +37,17 @@ rules:
           - pattern: os.Getenv(...)
           - pattern: os.Args[...]
     pattern-sinks:
-      - pattern-either:
-          # Shell invocation — the dangerous pattern
-          - pattern: exec.Command("sh", "-c", $CMD)
-          - pattern: exec.Command("bash", "-c", $CMD)
-          - pattern: exec.Command("/bin/sh", "-c", $CMD)
-          - pattern: exec.Command("/bin/bash", "-c", $CMD)
-          - pattern: exec.CommandContext($CTX2, "sh", "-c", $CMD)
-          - pattern: exec.CommandContext($CTX2, "bash", "-c", $CMD)
-          - pattern: exec.CommandContext($CTX2, "/bin/sh", "-c", $CMD)
-          - pattern: exec.CommandContext($CTX2, "/bin/bash", "-c", $CMD)
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command("sh", "-c", $CMD, ...)
+              - pattern: exec.Command("bash", "-c", $CMD, ...)
+              - pattern: exec.Command("/bin/sh", "-c", $CMD, ...)
+              - pattern: exec.Command("/bin/bash", "-c", $CMD, ...)
+              - pattern: exec.CommandContext($CTX2, "sh", "-c", $CMD, ...)
+              - pattern: exec.CommandContext($CTX2, "bash", "-c", $CMD, ...)
+              - pattern: exec.CommandContext($CTX2, "/bin/sh", "-c", $CMD, ...)
+              - pattern: exec.CommandContext($CTX2, "/bin/bash", "-c", $CMD, ...)
+          - focus-metavariable: $CMD
       # Tainted binary name — attacker controls which program runs.
       # focus-metavariable restricts taint to $CMD only, preventing FPs
       # when a constant binary receives tainted arguments (e.g.
