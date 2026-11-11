@@ -4,6 +4,8 @@ The actual AST is preserved: Flags & 4 == 0 is Flags & (4 == 0), not a
 rewritten grouped mask comparison. Constant truth does not prove bug intent.
 """
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, mk_val, z3, z3_available
 from core.smt_solver.csem import cast
 from core.smt_solver.session import check_solver, new_solver, query_budget
@@ -72,10 +74,12 @@ def condition_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _body, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _shape(node, data, language, integer_abi)) is not None]
+    occurrences = Counter(shape[1:] for shape in shapes)
     result = []
-    for node in nodes:
-        shape = _shape(node, data, language, integer_abi)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[shape[1:]] != 1:
             continue
         target, name, left, op, right = shape
         if COMPARISONS[op](integer_literal_value(left), integer_literal_value(right)):
