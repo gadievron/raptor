@@ -466,3 +466,174 @@ def test_missing_canonical_executed_binding_remains_unknown(adapter_case):
     case = adapter_case
     registration = replace(case.registration, validate_prepared_admission=lambda *args: replace(case.validated, executed_support=None))
     assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
+
+
+def test_existing_result_bridge_without_retention_ack_stays_unknown(adapter_case):
+    from core.audit.smt_claim_contracts import smt_fact_from_result
+    case = adapter_case
+    fact = smt_fact_from_result(
+        case.record, result=case.result, event_id="bridge-1", obligation=case.event.obligation,
+        expected_context=case.context, expected_scope=case.scope, expected_revision=case.revision,
+        prepared_admission=case.prepared, expected_target=case.target,
+        expected_conclusion=case.conclusion, contracts={case.context.contract: case.registration},
+    )
+    assert fact.semantic == "unknown" and not fact.raw_reference
+    assert not case.calls
+
+
+def bridge(case, **overrides):
+    from core.audit.smt_claim_contracts import smt_fact_from_result
+    arguments = dict(result=case.result, event_id="bridge-1", obligation=case.event.obligation,
+                     expected_context=case.context, expected_scope=case.scope,
+                     expected_revision=case.revision, prepared_admission=case.prepared,
+                     expected_target=case.target, expected_conclusion=case.conclusion,
+                     contracts={case.context.contract: case.registration},
+                     retain_result=lambda result: case.event.raw_reference)
+    arguments.update(overrides)
+    return smt_fact_from_result(case.record, **arguments)
+
+
+def test_existing_result_bridge_uses_pipeline_ack_without_mutating_result(adapter_case):
+    case = adapter_case
+    retained = []
+    def retain(result):
+        assert result is not case.result and result == case.result
+        retained.append(result)
+        return case.event.raw_reference
+    fact = bridge(case, retain_result=retain)
+    assert fact.semantic == "supports_fact" and fact.raw_reference == case.event.raw_reference
+    assert len(retained) == 1 and len(case.calls) == 1
+
+
+@pytest.mark.parametrize("missing", ["manifest", "registry", "ack", "ack-error", "ack-empty", "ack-mutates"])
+def test_bridge_missing_admission_or_retention_remains_unknown(adapter_case, missing):
+    case = adapter_case
+    overrides = {}
+    if missing == "manifest":
+        overrides["expected_target"] = None
+    elif missing == "registry":
+        overrides["contracts"] = {}
+    elif missing == "ack":
+        overrides["retain_result"] = None
+    elif missing == "ack-empty":
+        overrides["retain_result"] = lambda result: ""
+    elif missing == "ack-error":
+        def failed(result):
+            raise OSError("retention unavailable")
+        overrides["retain_result"] = failed
+    else:
+        def changed(result):
+            result.outcome = "refuted"
+            return case.event.raw_reference
+        overrides["retain_result"] = changed
+    assert bridge(case, **overrides).semantic == "unknown"
+    assert not case.calls and case.result.outcome == "confirmed"
+
+
+@pytest.mark.parametrize("change", [
+    {"outcome": "inconclusive"}, {"outcome": "error"}, {"errors": ["timed out"]},
+    {"rule_id": "smt:check-overflow:supplied-model", "outcome": "refuted"},
+    {"rule_id": "smt:check-oob", "outcome": "refuted"},
+])
+def test_bridge_status_and_supplied_model_cannot_obtain_ack(adapter_case, change):
+    case = adapter_case
+    retained = []
+    assert bridge(case, result=replace(case.result, **change),
+                  retain_result=lambda result: retained.append(result)).semantic == "unknown"
+    assert not retained and not case.calls
+
+
+@pytest.mark.parametrize("change", ["anchor", "statement", "build", "assumptions", "request", "result", "signature"])
+def test_bridge_changed_inputs_preserve_unknown(adapter_case, change):
+    case = adapter_case
+    overrides = {}
+    if change == "anchor":
+        overrides["prepared_admission"] = replace(case.prepared, anchors=())
+    elif change == "statement":
+        overrides["expected_conclusion"] = replace(case.conclusion, statement="all paths exploitable")
+    elif change == "build":
+        overrides["expected_target"] = replace(case.target, build_identity="other-build")
+    elif change == "assumptions":
+        overrides["expected_target"] = replace(case.target, assumptions=("caller always permits path",))
+    elif change == "request":
+        execution = {**case.result.details["smt_execution"], "executed_request_id": "other-request"}
+        overrides["result"] = replace(case.result, details={**case.result.details, "smt_execution": execution})
+    elif change == "result":
+        overrides["result"] = replace(case.result, details={**case.result.details, "value": 1})
+    else:
+        overrides["expected_conclusion"] = replace(case.conclusion, conditions=("different semantic condition",))
+    assert bridge(case, **overrides).semantic == "unknown"
+
+
+def test_bridge_accepts_one_actual_existing_arithmetic_dispatch(tmp_path, adapter_case):
+    from dataclasses import asdict
+    import json
+    from core.audit import sweep
+    from core.audit.smt_claim_contracts import PreparedSMTAnchor, SMTValidatedConclusion
+    from core.audit.claim_support_contracts import ExecutedSupportBinding
+
+    pytest.importorskip("z3")
+    pytest.importorskip("tree_sitter_c")
+    source = b"int Read(int Value) { if (Value >= 2147483647) return Value + 1; return 0; }\n"
+    statement = "integer overflow in `Value + 1`"
+    result = sweep._smt_verb_in_subprocess(file_path="unit.c", function_name="Read", verb="check-overflow",
+                                           source=source.decode(), hypothesis=statement, integer_abi="ilp32")
+    assert result.outcome == "confirmed", (result.errors, result.details)
+    assert result.details["witness_validated"] is True
+    assert result.details["mathematical_result"] == 2147483648
+    case = adapter_case
+    revision = ClaimRevision({"mechanism": statement}, pass_id="pipeline-pass", file="unit.c", function="Read", line_start=1)
+    scope = VerificationScope("unit.c", "Read", 1, statement, SourceIdentity(hashlib.sha256(source).hexdigest(), (1, 2, len(source), 4, 5)))
+    target = replace(case.target, build_identity="fixture-ilp32-build",
+                     dependencies=("source:" + scope.source_identity.sha256, "integer-abi:ilp32"),
+                     assumptions=("supplied declarations describe the active build",
+                                  "entry parameters have their declared value domains",
+                                  "no additional caller constraints are encoded"))
+    context = replace(case.context, claim_id=revision.claim_id, revision_id=revision.revision_id,
+                      source=scope.source_identity, dependencies=target.dependencies, assumptions=target.assumptions)
+    conclusion = replace(case.conclusion, statement=statement,
+                         conditions=("integer-abi:ilp32", "Value >= 2147483647", "signed int32 addition"))
+    prepared = replace(case.prepared, context=context, statement=statement, requested_conclusion=conclusion,
+                       build_identity=target.build_identity, target_binding=target,
+                       anchors=(PreparedSMTAnchor("unit.c", scope.source_identity, source, 0, len(source), source),))
+    execution = result.details["smt_execution"]
+    retained = tmp_path / "actual-result.json"
+    def retain(actual):
+        payload = json.dumps(asdict(actual), sort_keys=True)
+        with retained.open("w") as stream:
+            stream.write(payload)
+            stream.flush()
+            import os
+            os.fsync(stream.fileno())
+        assert retained.read_text() == payload
+        return str(retained)
+    def validate_admission(admission, actual, event):
+        support = ExecutedSupportBinding(target, event.request_id, event.executed_request_id,
+                                         event.raw_reference, *case.registration.registered_identity,
+                                         "supports_fact", conclusion)
+        return SMTValidatedConclusion(admission, event.request_id, event.executed_request_id,
+                                      event.raw_reference, "mechanical_observation", "registered-worker-invocation",
+                                      conclusion.effect_scope, admission.conclusion_signature, support)
+    def validate_witness(record, actual, current, obligation):
+        # Fixture covers this exact bounded arithmetic witness only. No product
+        # registration, caller reachability or vulnerability claim is admitted.
+        if (record.hypothesis == revision.hypothesis and current == context
+                and actual.details.get("witness_validated") is True
+                and actual.details.get("mathematical_result") == 2147483648
+                and actual.details.get("model", {}).get("Value") == 2147483647
+                and actual.details.get("source_operation", {}).get("profile") == "int32"
+                and actual.details.get("result_range") == {"minimum": -2147483648, "maximum": 2147483647}
+                and actual.details.get("proof_scope") == "function-entry-source-model"):
+            return "supports_fact"
+        return "unknown"
+    registration = replace(case.registration, validate_prepared_admission=validate_admission,
+                           validate_conclusion=validate_witness)
+    record = ClaimVerification(revision.hypothesis, binding=scope, claim_revision=revision)
+    from core.audit.smt_claim_contracts import smt_fact_from_result
+    fact = smt_fact_from_result(record, result=result, event_id="actual-bridge", obligation="exact-fault",
+                               expected_context=context, expected_scope=scope, expected_revision=revision,
+                               contracts={context.contract: registration}, prepared_admission=prepared,
+                               expected_target=target, expected_conclusion=conclusion, retain_result=retain)
+    assert fact.semantic == "supports_fact" and fact.request_id == execution["request_id"]
+    assert fact.executed_request_id == execution["executed_request_id"]
+    assert fact.raw_reference == str(retained) and retained.exists()
