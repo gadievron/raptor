@@ -526,9 +526,9 @@ INTEGER_PARSE_FUNCS: frozenset[str] = frozenset({
 
 
 # === TOCTOU + path-traversal pattern markers ===
-# Includes the BANNED-BY-DESIGN temp-file APIs (mktemp, tempnam) which
-# CWE-377-guarantee a race condition by construction. tmpfile and
-# mkstemp are NOT here — they're race-free when used correctly.
+# Includes discouraged temp-name APIs (mktemp, tempnam) as CWE-377
+# review hints; a symbol alone does not prove file creation or a race.
+# tmpfile and mkstemp are NOT here — keep their descriptor-based use.
 # stat / lstat / chdir excluded — too common to signal anything.
 TOCTOU_FUNCS: frozenset[str] = frozenset({
     "access", "faccessat",

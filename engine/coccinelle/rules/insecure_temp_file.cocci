@@ -1,29 +1,26 @@
-// insecure_temp_file.cocci — Detect race-prone temporary-file creation.
+// insecure_temp_file.cocci — Review temporary-name and by-name reopen risks.
 //
-// Two shapes, both CWE-377 (Insecure Temporary File):
+// Two CWE-377 candidate shapes:
 //
-// 1. Name-generation APIs: mktemp/tmpnam/tmpnam_r/tempnam only
-//    produce a pathname — between name generation and the open() an
-//    attacker who can write the temp directory creates or symlinks
-//    the path, redirecting the victim's create/write (classic /tmp
-//    symlink attack). glibc marks all four with link-time warnings;
-//    any call is the bug, so this group flags the call itself.
+// 1. Name-generation APIs: mktemp/tmpnam/tmpnam_r/tempnam produce a
+//    pathname without atomically opening the file. Keep these API
+//    policy warnings, but review whether the name is later opened and
+//    whether directory and creation controls permit substitution.
+//    A dead name-generation call does not prove insecure file creation.
 //
-// 2. mkstemp-then-reopen-by-path: mkstemp and friends are the safe
-//    replacement because the fd they return is race-free — but
-//    re-opening the filled-in template BY PATH afterwards discards
-//    that guarantee and reintroduces the same window shape 1 avoids.
-//    Use the returned fd (fdopen/dup) instead.
+// 2. mkstemp-then-reopen-by-path: the reopened descriptor does not
+//    inherit the original descriptor's atomic-creation identity.
+//    Review directory ownership, open flags and descriptor identity
+//    before use. Destructive open flags can act before later checks.
+//    Prefer the returned descriptor (fdopen/dup) where possible.
 //
-// Known limitations:
-// - Group 2 is intra-procedural: a template reopened by a callee is
-//   not seen (Coccinelle cannot trace the path across functions).
-// - Group 1 does not attempt to prove the generated name is used —
-//   a dead mktemp() call is still flagged (correct: the API itself
-//   is the defect, and glibc warns on any use).
+// Group 2 is intra-procedural; a template reopened by a callee is
+// not covered. Neither these syntax shapes nor their absence establish
+// the complete filesystem threat model.
 //
-// CWE-377: Insecure Temporary File
-// @role: verification
+// CWE-377: Insecure Temporary File review
+// raptor: confirm-only
+// @role: detection
 
 // ---------------------------------------------------------------
 // Group 1: race-prone temp-name generation APIs
@@ -52,9 +49,9 @@ for _p in p:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "insecure_temp_file",
-          "message": "Race-prone temp-name API — the pathname can be "
-                     "hijacked between generation and open (CWE-377). "
-                     "Use mkstemp and keep the returned fd."}
+          "message": "Discouraged temp-name API (CWE-377) — review later "
+                     "file creation and directory controls. Prefer mkstemp "
+                     "and keep the returned fd."}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // ---------------------------------------------------------------
@@ -94,7 +91,8 @@ for _p1, _p2 in zip(p1, p2):
           "line_end": int(_p2.line_end), "col_end": int(_p2.column_end),
           "rule": "insecure_temp_file",
           "message": "Template '%s' from mkstemp at line %s reopened "
-                     "by path — the by-name reopen races like mktemp "
-                     "(CWE-377). Use the returned fd (fdopen/dup)."
+                     "by path — review directory ownership, open flags and "
+                     "descriptor identity before use (CWE-377). Prefer "
+                     "the returned fd (fdopen/dup)."
                      % (T, _p1.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
