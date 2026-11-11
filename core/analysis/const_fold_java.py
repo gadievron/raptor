@@ -508,7 +508,7 @@ def _member_value_names_at(node: Node) -> frozenset[str]:
                 if declaration.type == "variable_declarator":
                     ident = declaration.child_by_field_name("name")
                     if ident is not None:
-                        names.add(ident.text.decode())
+                        names.add(cast(bytes, ident.text).decode())
         body = current.child_by_field_name("body")
         parameters = current.child_by_field_name("parameters")
         if body is not None and body.type in JAVA_TABLES.scope_barriers \
@@ -517,7 +517,7 @@ def _member_value_names_at(node: Node) -> frozenset[str]:
             for parameter in parameters.named_children:
                 ident = parameter.child_by_field_name("name")
                 if ident is not None:
-                    names.add(ident.text.decode())
+                    names.add(cast(bytes, ident.text).decode())
         current = current.parent
     return frozenset(names)
 
@@ -530,7 +530,7 @@ def _exact_creation_class(node: Node) -> str | None:
     ty = node.child_by_field_name("type")
     if ty is None:
         return None
-    cls = ty.text.decode("utf-8", "replace").split("<", 1)[0]
+    cls = cast(bytes, ty.text).decode("utf-8", "replace").split("<", 1)[0]
     return None if _type_receiver_is_shadowed(ty, cls) else cls
 
 

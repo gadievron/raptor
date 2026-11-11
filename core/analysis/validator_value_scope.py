@@ -126,6 +126,8 @@ def _shared_slot_epoch_unverified(tree, name: bytes, after_line: int, through_li
     if not owners or any(owner is None or owner != owners[0] for owner in owners):
         return True
     owner = owners[0]
+    if owner is None:
+        return True
     exposes_slot = any(
         ((node.type in {"await_expression", "yield_expression"}
           or (node.type == "for_in_statement" and any(child.type == "await" for child in node.children)))
