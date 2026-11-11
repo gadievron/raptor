@@ -61,7 +61,7 @@ def _receipt(cost, tokens_in, tokens_out, tokens_total=None):
 def _admission(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("invalid_attempt_admission")
-    result = {}
+    result: dict[str, Any] = {}
     for key in _ATTEMPT_KEYS:
         text = value.get(key)
         if not isinstance(text, str) or not text:

@@ -3055,7 +3055,7 @@ class LLMClient:
                 applied = True
         from core.llm.telemetry import current_sink, emit
         sink = current_sink()
-        previous = {}
+        previous: dict[str, Any] = {}
         try:
             snapshot = getattr(sink, "attempt_projection", None)
             projection = snapshot() if callable(snapshot) else {}
