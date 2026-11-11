@@ -3000,9 +3000,9 @@ class TestNonceTheftForgeryChainClosed:
 
 class TestFileSetBatching:
     """Explicit multi-file batches: one spatch invocation carries the
-    file list on argv, verified silence comes from argv membership
-    (spatch is silent about match-free files, parse-broken included),
-    and an empty batch never falls through to a whole-tree --dir scan.
+    file list on argv, quiet coverage follows argv membership only
+    after reported parse/output errors are ruled out, and an empty
+    batch never falls through to a whole-tree --dir scan.
     """
 
     def _tree(self, tmp_path):
@@ -3685,3 +3685,55 @@ def test_forged_marker_notice_accepts_single_pass_streams(tmp_path, monkeypatch)
     count = runner_mod._warn_forged_markers('ab', 'cd', nonce='n', rule_name='r', target=tmp_path)
     assert count == 4
     assert notices[-1][-1] == 'COCCIRESULT:a'
+
+
+@pytest.mark.parametrize("mode", ["single-file", "file-set", "rule-batch"])
+def test_parse_diagnostics_prevent_zero_exit_false_coverage(tmp_path, mode):
+    root = tmp_path / "sources"
+    root.mkdir()
+    valid = root / "valid.c"
+    broken = root / "broken.c"
+    valid.write_text("void valid(void *p) { free(p); }\n")
+    broken.write_text("void broken( { free(p); }\n")
+    rules = []
+    for name in ("observe_a", "observe_b"):
+        rule = tmp_path / (name + ".cocci")
+        rule.write_text(
+            f"@{name}@\nposition p;\n@@\nfree@p(...)\n\n"
+            f"@script:python@\np << {name}.p;\n@@\n"
+            "import json, sys\n"
+            f'msg = {{"rule": "{name}", "file": "valid.c", "line": 1}}\n'
+            'sys.stderr.write("COCCIRESULT:" + json.dumps(msg) + "\\n")\n'
+        )
+        rules.append(rule)
+    calls = []
+    def engine(cmd, **kwargs):
+        calls.append(list(cmd))
+        # Model the independently observed engine diagnostic switches.
+        visible = "--parse-error-msg" in cmd and "--very-quiet" not in cmd
+        stderr = "parse error\n" if visible else ""
+        if mode == "file-set":
+            prefix = _nonced_prefix_from_cmd(cmd)
+            stderr += prefix + json.dumps({"file": str(valid), "line": 1}) + "\n"
+        return MagicMock(returncode=0, stdout="", stderr=stderr)
+    with patch("packages.coccinelle.runner.is_available", return_value=True):
+        if mode == "rule-batch":
+            results = run_rules_batched(root, rules, allow_scripting=True,
+                subprocess_runner=engine, env=dict(os.environ))
+            assert set(results) == {rule.stem for rule in rules}
+            assert all(not result.ok and result.files_examined == []
+                       for result in results.values())
+            assert len(calls) == 3  # Batch plus the existing per-rule recovery.
+        else:
+            result = run_rule(broken if mode == "single-file" else root, rules[0],
+                file_set=[valid, broken] if mode == "file-set" else None,
+                allow_scripting=True, subprocess_runner=engine, env=dict(os.environ))
+            assert not result.ok and "parse error" in result.errors
+            assert str(broken) not in result.files_examined
+            if mode == "file-set":
+                assert len(result.matches) == 1  # Keep the authentic partial hit.
+                members = demux_result_by_file(result, [valid, broken], root)
+                assert all(member.files_examined == [] for member in members.values())
+                assert members["valid.c"].matches
+        assert all("--quiet" in cmd and "--parse-error-msg" in cmd
+                   and "--very-quiet" not in cmd for cmd in calls)

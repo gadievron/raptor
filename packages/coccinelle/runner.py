@@ -587,12 +587,12 @@ def run_rule(
             becomes the subprocess cwd, exactly as in ``--dir`` mode —
             and every entry should be an absolute path so match
             attribution (``SpatchMatch.file`` echoes the argv
-            spelling) is unambiguous. A parse-broken entry does not
-            poison the batch: spatch 1.3 skips it silently (exit 0,
-            other files' matches intact), which is also why
-            ``files_examined`` for a successful batch is exactly the
-            argv list — verified silence comes from argv membership,
-            never from the match set. Split the combined result per
+            spelling) is unambiguous. Reported input parse errors
+            make coverage incomplete even when spatch exits zero;
+            partial matches remain available. With no reported parse
+            or output errors, quiet members are attributed from argv,
+            not the match set. This is not an independent complete-parse
+            witness. Split the combined result per
             file with :func:`demux_result_by_file`. An empty list is a
             no-op success (never a whole-tree ``--dir`` fallback).
         jobs: When > 1 and scanning in ``--dir`` mode, pass
@@ -841,7 +841,8 @@ def run_rule(
             for d in include_dirs:
                 cmd.extend(["-I", str(d)])
 
-        cmd.append("--very-quiet")
+        # Very-quiet can suppress C parse failures even on a zero exit.
+        cmd.extend(["--quiet", "--parse-error-msg"])
 
         if defines:
             for k, v in defines.items():
@@ -942,18 +943,14 @@ def run_rule(
                 + (f": {stderr_tail}" if stderr_tail else "")
             )
 
-        # files_examined claims verified silence for every listed
-        # file; errors or output loss can leave a zero-exit run incomplete
-        # too, so nothing beyond actual matches is verified. Partial
-        # matches are kept (same stance as the timeout path).
+        # Reported parse failures or output loss can leave a zero-exit
+        # run incomplete. Withhold quiet coverage and keep authentic
+        # partial matches, as on the timeout path.
         if proc.returncode == 0 and not errors:
             if file_set:
-                # Verified silence in batch mode is exactly the argv
-                # list: spatch emits NOTHING for a match-free file —
-                # including a parse-broken one (exit 0, empty stderr
-                # under --very-quiet, measured on spatch 1.3) — so
-                # examined attribution must come from what we passed
-                # on argv, never from the match set.
+                # Attribute quiet members from argv only after the
+                # reported parse/output error checks above. A match
+                # set alone cannot witness a complete parse.
                 files_examined = sorted(str(f) for f in file_set)
             else:
                 files_examined = _collect_files_examined(
@@ -1307,7 +1304,7 @@ def run_rules_batched(
         if include_dirs:
             for d in include_dirs:
                 cmd.extend(["-I", str(d)])
-        cmd.append("--very-quiet")
+        cmd.extend(["--quiet", "--parse-error-msg"])
         if defines:
             for k, v in defines.items():
                 cmd.extend(["-D", f"{k}={v}"])
@@ -1864,10 +1861,9 @@ def demux_result_by_file(
     entry resolves under it, else the argv spelling). Matches
     attribute by ``SpatchMatch.file`` — spatch echoes the argv path in
     the position metavariable. A match-free file gets an empty-match
-    result whose ``files_examined`` carries itself: verified silence
-    comes from argv membership, never from the match set (spatch is
-    completely silent about files it examined without matching,
-    parse-broken ones included).
+    result whose ``files_examined`` carries itself only when the batch
+    has no reported parse/output error. Quiet-member attribution comes
+    from argv, not the match set, and is not a complete-parse witness.
 
     A failed batch (``not result.ok``) propagates the error to EVERY
     member with ``files_examined=[]`` so no consumer can read a member
