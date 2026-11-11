@@ -418,7 +418,7 @@
     "core/run/tests/test_cli.py": "7c1f2b9b52d4237a5d7476cf6be1424c04e7b18441f2049e814d29a2a9da6bc1",
     "core/run/tests/test_emu_basetemp_sweep.py": "f6b22dc1e6983db08017ed9f507e698c2a0a08d4520be5608525c627f2710476",
     "core/run/tests/test_frida_wrapper_project_pin.py": "703bafff3787653601bbcc65944660f8c477bac7479874f4eb207a35a434b875",
-    "core/run/tests/test_frida_wrapper_signals.py": "622636add4677c9935c0bdd39d06c77472ebea02cd554bb3f9fbc8a39ba746f8",
+    "core/run/tests/test_frida_wrapper_signals.py": "f74f17f0c81afe12cb887a4c9328b770665a4cbbba487cd82bd955077d688976",
     "core/run/tests/test_hook_finalize_precedence.py": "dd20928c4e85f57d7870be4c3ae6b23355703079446b862a555386e426ec0e8f",
     "core/run/tests/test_launcher_import_paths.py": "f3c0f2becac9a9cae1dfec3385ad55b701fa5f5c4aaf41bf0d0bd511d14b7dbb",
     "core/run/tests/test_lifecycle_cost_gate.py": "c1595bf735884e1ec4dab59b75a93ff9849e993960cc6688320b8915b6f7e7cc",

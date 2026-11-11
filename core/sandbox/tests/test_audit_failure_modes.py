@@ -635,26 +635,29 @@ class TestAuditConfigWriteFailureHandling:
         if not probes.check_mount_available():
             pytest.skip()
 
-        # Patch os.write to return 0 on the audit-config fd → simulates
-        # disk-full mid-write. Need to be careful not to break OTHER
-        # writes (the spawn flow uses many).
-        original_write = os.write
+        # This fault is before fork: own capability admission so cached
+        # ptrace degradation cannot bypass the config-write boundary.
+        from core.sandbox import ptrace_probe, seccomp
+        monkeypatch.setattr(ptrace_probe, "check_ptrace_available", lambda: True)
+        monkeypatch.setattr(seccomp, "check_seccomp_available", lambda: True)
+
+        def forbidden_fork():
+            pytest.fail("config write failure must propagate before fork")
+
+        patch_module_attribute(monkeypatch, _spawn, "os", "fork", forbidden_fork)
+        original_write = evidence_mod.os.write
         sentinel_paths = []
 
         def selective_write(fd, data):
-            # Only intercept writes to the audit-config anonymous fd.
-            # Use /proc/self/fd/<fd> to check the symlink target —
-            # for the memfd it reads "/memfd:raptor-audit-cfg
-            # (deleted)".
-            try:
-                target = os.readlink(f"/proc/self/fd/{fd}")
-                if "raptor-audit-cfg" in target:
-                    sentinel_paths.append(target)
-                    return 0  # simulate disk-full
-            except OSError:
-                pass
+            target = os.readlink(f"/proc/self/fd/{fd}")
+            if "raptor-audit-cfg" in target:
+                sentinel_paths.append(target)
+                if len(sentinel_paths) == 1:
+                    return original_write(fd, data[:1])
+                return 0
             return original_write(fd, data)
-        monkeypatch.setattr(os, "write", selective_write)
+
+        patch_module_attribute(monkeypatch, evidence_mod, "os", "write", selective_write)
 
         out = tmp_path / "out"
         out.mkdir()
@@ -671,7 +674,7 @@ class TestAuditConfigWriteFailureHandling:
             )
         # The intercept must actually have fired on the config fd —
         # otherwise the raise above came from somewhere else.
-        assert sentinel_paths, "config-fd write intercept never fired"
+        assert len(sentinel_paths) == 2, "partial config write was not retried"
         # Anonymous fds have no filesystem name; nothing can leak on
         # disk regardless of the failure path.
         for p in sentinel_paths:
