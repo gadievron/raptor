@@ -368,3 +368,49 @@ def test_malformed_caller_reason_cannot_poison_sibling_artifacts(tmp_path):
                    for event in payload['events'] for row in event.get('rejected', []))
     finally:
         runtime.close()
+
+
+@pytest.mark.parametrize('corruption', [None, 'request_id', 'sha256', 'source_version', 'missing'])
+def test_caller_publication_scope_requires_the_owned_delivery_binding(tmp_path, corruption):
+    runtime, ctx, request = case(tmp_path)
+    runtime._register_caller_requests(runtime._origin(ctx), request)
+    reservation, = runtime.ready_continuations(admission=lambda: True)
+    assert runtime.enrich_context(ctx, reservation)
+    config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path / 'out')
+
+    class Client:
+        def generate_structured(self, prompt, schema, **kwargs):
+            assert 'return f(n)' in prompt
+            return StructuredResponse(result={'status': 'clean', 'body': 'Scripted local assessment'},
+                                      raw='', cost=0, model='scripted')
+
+    rendered_review = make_review_fn(Client(), escalate_clean=False)
+
+    def review(context, cfg):
+        outcome = rendered_review(context, cfg)
+        rows = outcome.review_result['caller_context_delivery']
+        assert rows[0]['delivered'] is True
+        if corruption == 'request_id':
+            rows[0]['request_id'] = 'unowned-request'
+        elif corruption in ('sha256', 'source_version'):
+            rows[0]['source_materials'][0][corruption] = ('0' * 64 if corruption == 'sha256' else [0])
+        elif corruption == 'missing':
+            del outcome.review_result['caller_context_delivery']
+        return outcome
+
+    review._knowledge_observed_client_contract = True
+    try:
+        outcome = runtime.wrap_review(review)(ctx, config)
+        scope = runtime.publication_input_scope(reservation, outcome)
+        unbound = [event for event in runtime.events() if event['event'] == 'review_inputs_unbound']
+        if corruption is None:
+            assert scope is not None and scope.current(tmp_path)
+            assert {source.file for source in scope.inputs} == {'caller.py'}
+            assert not unbound
+        else:
+            assert scope is None
+            assert len(unbound) == 1
+            assert unbound[0]['reason'] == 'delivered_input_binding_unavailable'
+    finally:
+        runtime.fail(reservation, 'local_binding_control')
+        runtime.close()
