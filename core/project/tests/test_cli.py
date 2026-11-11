@@ -5,6 +5,7 @@ import errno
 import io
 import json
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,6 +28,7 @@ import pytest
 
 import core.project.cli as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture(autouse=True)
@@ -484,17 +486,20 @@ class TestEditorGuard(unittest.TestCase):
 
     def _run_notes_edit(self, editor):
         buf = io.StringIO()
-        with patch("core.project.cli.ProjectManager") as MockMgr, \
-                patch.object(_os_fault_consumer.os, "isatty", lambda fd: True), \
-                patch.dict(os.environ, {"EDITOR": editor}), \
-                patch("subprocess.run") as run_mock, \
-                contextlib.redirect_stdout(buf), \
-                contextlib.redirect_stderr(buf):
-            instance = MockMgr.return_value
-            instance.load.return_value = type("P", (), {"notes": ""})()
-            with patch("sys.argv",
-                       ["raptor-project", "notes", "test", "--edit"]):
-                main()
+        with scoped_function_imports(
+            _os_fault_consumer, ("main",), {"subprocess": subprocess},
+        ) as imports:
+            with patch("core.project.cli.ProjectManager") as MockMgr, \
+                    patch.object(_os_fault_consumer.os, "isatty", lambda fd: True), \
+                    patch.dict(os.environ, {"EDITOR": editor}), \
+                    patch.object(imports.subprocess, "run") as run_mock, \
+                    contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                instance = MockMgr.return_value
+                instance.load.return_value = type("P", (), {"notes": ""})()
+                with patch("sys.argv",
+                           ["raptor-project", "notes", "test", "--edit"]):
+                    _os_fault_consumer.main()
         return buf.getvalue(), run_mock
 
     def test_editor_command_argument_refused(self):
