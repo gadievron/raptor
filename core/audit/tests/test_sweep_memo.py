@@ -491,57 +491,73 @@ class TestControlErrorNotPinned:
     KEYWORD = "use after free"
     HYP = "use after free of `p` in f"
 
-    @pytest.fixture(autouse=True)
-    def _clear_control_cache(self, monkeypatch):
-        from core.audit import sweep as sweep_mod
-
-        monkeypatch.setattr(sweep_mod, "_negative_control_cache", {})
-
     def _fake_runner(self, monkeypatch):
-        """Fake packages.semgrep.runner: the target scan always finds
-        a match (control fixture silently skipped when it rides
-        along); the SEPARATE control leg fails transiently on its
-        first run and FIRES on its second."""
-        import sys
-        import types
+        """Own only the runner lookups of this sweep and its control helper."""
+        import builtins
+        from types import SimpleNamespace
+
+        from core.audit import sweep as sweep_mod
+        from core.testing.module_views import module_function_view
+        from packages.semgrep.models import SemgrepFinding, SemgrepResult
 
         control_calls: list[int] = []
-
-        class _Res:
-            def __init__(self, findings, errors=None, returncode=0,
-                         files_examined=None):
-                self.findings = findings
-                self.errors = errors or []
-                self.returncode = returncode
-                self.files_failed: list = []
-                self.files_examined = files_examined or []
+        results: list[SweepResult] = []
 
         def run_rule(target, config, **kw):
             if "negative_controls" in str(target):
                 control_calls.append(1)
                 if len(control_calls) == 1:
-                    return _Res([], errors=["semgrep crashed"],
-                                returncode=2)
-                return _Res([{"file": str(target),
-                              "start": {"line": 3}}])
-            return _Res(
-                [{"file": "src/a.c", "start": {"line": 1}}],
+                    return SemgrepResult(
+                        config=str(config), target=str(target),
+                        errors=["semgrep crashed"], returncode=2,
+                    )
+                return SemgrepResult(
+                    config=str(config), target=str(target),
+                    findings=[SemgrepFinding(
+                        file=str(target), line=3, rule_id="memo-control",
+                    )],
+                    files_examined=[str(target)],
+                )
+            return SemgrepResult(
+                config=str(config), target=str(target),
+                findings=[SemgrepFinding(
+                    file="src/a.c", line=1, rule_id="memo-control",
+                )],
                 files_examined=[str(target)],
             )
 
-        fake = types.ModuleType("packages.semgrep.runner")
-        fake.run_rule = run_rule
-        fake.is_available = lambda: True
-        monkeypatch.setitem(sys.modules, "packages.semgrep.runner", fake)
-        return control_calls
+        runner = SimpleNamespace(run_rule=run_rule, is_available=lambda: True)
+
+        def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+            if level == 0 and name == "packages.semgrep.runner":
+                return runner
+            return builtins.__import__(name, globals, locals, fromlist, level)
+
+        sweep_view = module_function_view(
+            sweep_mod, bindings={"_negative_control_cache": {}},
+            import_hook=import_local,
+        )
+
+        def run_sweep(**kwargs):
+            result = sweep_view.run_semgrep_sweep(**kwargs)
+            results.append(result)
+            return result
+
+        monkeypatch.setattr(orch, "run_semgrep_sweep", run_sweep)
+        return control_calls, results
 
     def test_second_dispatch_reruns_control_and_caps(
         self, tmp_path, monkeypatch,
     ):
-        _write_target(tmp_path, "void f(char *p) { free(p); }\n")
+        source = "void f(char *p) { free(p); }\n"
+        _write_target(tmp_path, source)
         rule = _write_rule(tmp_path)
+        rule.write_text(
+            "rules:\n- id: memo-control\n  languages: [c]\n"
+            "  message: pointer use\n  severity: WARNING\n  pattern: free($P)\n"
+        )
         cfg = _Cfg(tmp_path)
-        control_calls = self._fake_runner(monkeypatch)
+        control_calls, results = self._fake_runner(monkeypatch)
         chain = [{
             "type": "semgrep",
             "config": {"rule": str(rule), "keyword": self.KEYWORD},
@@ -553,7 +569,7 @@ class TestControlErrorNotPinned:
                 config=cfg,
                 file_path="src/a.c",
                 function_name="f",
-                source="",
+                source=source,
                 hypothesis=self.HYP,
                 line_start=1,
             )
@@ -561,12 +577,25 @@ class TestControlErrorNotPinned:
         first = run()
         assert first == [f"semgrep:{rule}"]  # uncapped this dispatch
         assert len(control_calls) == 1
+        assert len(results) == 1
+        assert results[0].outcome == "confirmed"
+        assert results[0].errors == []
+        assert results[0].details["negative_control_error"] is True
+        assert results[0].matches[0]["rule_id"] == "memo-control"
         # The memo must NOT have pinned the uncapped result: the
         # second dispatch re-runs the sweep, the control succeeds and
         # fires, and the presence-detector cap lands.
         second = run()
         assert len(control_calls) == 2
         assert second == []
+        assert len(results) == 2  # the transient result was not memo-pinned
+        assert results[1].outcome == "inconclusive"
+        assert results[1].errors == []
+        assert not results[1].details.get("negative_control_error")
+        assert results[1].details["reason"] == (
+            "presence detector: rule for 'use after free' also "
+            "matches the guarded negative-control fixture"
+        )
 
 
 def test_memoizable_set_excludes_stateful_classes():
