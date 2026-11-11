@@ -198,9 +198,14 @@ jobs:
           save-on-rebuild: 'true'
 
       - name: Install Chromium for native browser tests
+        timeout-minutes: 8
+        shell: bash
         run: |
+          set -euo pipefail
+          sudo bash .github/scripts/with-ubuntu-apt.sh playwright \
+            "$GITHUB_WORKSPACE/$VENV_PATH/bin/python"
           source "$VENV_PATH/bin/activate"
-          python -m playwright install --with-deps --only-shell chromium
+          python -m playwright install --only-shell chromium
 
       - name: Install semgrep
         # semgrep is deliberately NOT a pyproject.toml dep (optional

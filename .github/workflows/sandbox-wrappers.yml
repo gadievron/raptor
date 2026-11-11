@@ -107,8 +107,7 @@ jobs:
           packages=(binutils libseccomp2)
           if [[ "$NEEDS_RADARE2" == true ]]; then packages+=(radare2); fi
           if [[ "$NEEDS_GADGETS" == true ]]; then packages+=(ruby); fi
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends "${packages[@]}"
+          sudo bash .github/scripts/with-ubuntu-apt.sh packages "${packages[@]}"
       - name: Install macOS parser tools
         if: runner.os == 'macOS' && toJSON(matrix.families) != '[]'
         timeout-minutes: 8
@@ -153,26 +152,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          wrapper_apt_config="$RUNNER_TEMP/wrapper-apt.conf"
-          # Use Ubuntu's archive directly; the hosted runner's Azure mirror
-          # has repeatedly stalled while downloading Chromium font packages.
-          wrapper_apt_sources="$RUNNER_TEMP/wrapper-ubuntu.sources.list"
-          cat > "$wrapper_apt_sources" <<'SOURCES'
-          deb https://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb https://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb https://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          SOURCES
-          cat > "$wrapper_apt_config" <<APT
-          Dir::Etc::sourcelist "$wrapper_apt_sources";
-          Dir::Etc::sourceparts "-";
-          Acquire::http::Timeout "20";
-          Acquire::https::Timeout "20";
-          Acquire::Retries "2";
-          APT
-          # Run dependency provisioning as root so Playwright does not cross a
-          # second sudo boundary that would discard this scoped APT config.
-          sudo env APT_CONFIG="$wrapper_apt_config" \
-            "$GITHUB_WORKSPACE/$VENV_PATH/bin/python" -m playwright install-deps chromium
+          sudo bash .github/scripts/with-ubuntu-apt.sh playwright \
+            "$GITHUB_WORKSPACE/$VENV_PATH/bin/python"
       - name: Install isolated Chromium runtime
         if: contains(matrix.families, 'playwright-browser')
         timeout-minutes: 5

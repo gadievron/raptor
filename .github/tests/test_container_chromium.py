@@ -74,7 +74,9 @@ def test_nightly_provisions_browser_sdk_and_native_runtime():
     assert "runs-on: ubuntu-24.04" in slow_job
     assert "cache-key-prefix: venv-grammars-web" in slow_job
     assert "uv-export-extra-args: --extra grammars --extra web" in slow_job
-    install = slow_job.index("python -m playwright install --with-deps --only-shell chromium")
+    dependencies = slow_job.index("sudo bash .github/scripts/with-ubuntu-apt.sh playwright")
+    install = slow_job.index("python -m playwright install --only-shell chromium")
+    assert dependencies < install
     slow_command = re.search(r"(?m)^\s+python -m pytest\b[^\n]*\s-m\s+", slow_job)
     assert slow_command is not None
     assert install < slow_command.start()
