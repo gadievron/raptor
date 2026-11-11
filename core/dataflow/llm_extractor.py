@@ -34,7 +34,7 @@ from core.dataflow.sanitizer_evidence import (
 )
 from core.inventory.languages import detect_language
 from core.paths import confine
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 from core.security.prompt_defense_profiles import CONSERVATIVE, get_profile_for
 from core.security.prompt_envelope import (
     PromptBundle,
@@ -153,9 +153,10 @@ def build_cache_key(
     file_content_sha: str,
     language: str,
     model_family: str,
+    file_path: str = "",
 ) -> str:
     """Stable cache key. Bumps to schema_version, prompt template,
-    model family, language, or file content all force re-extraction
+    model family, language, source path, or file content all force re-extraction
     — by design."""
     parts = [
         "sanitizer_evidence",
@@ -163,6 +164,7 @@ def build_cache_key(
         f"prompt_{_PROMPT_VERSION_SHA}",
         f"model_{model_family}",
         f"lang_{language or 'unknown'}",
+        f"source_{hashlib.sha256(file_path.encode('utf-8')).hexdigest()}",
         file_content_sha,
     ]
     return ":".join(parts)
@@ -260,12 +262,12 @@ def _parse_response(
         if confidence is None:
             errors.append(f"{file_path} item {i}: confidence missing or out of range")
             continue
-        if not isinstance(source_line, int) or source_line < 1:
+        if isinstance(source_line, bool) or not isinstance(source_line, int) or source_line < 1:
             errors.append(
                 f"{file_path} item {i}: source_line not a positive integer"
             )
             continue
-        if line_count and source_line > line_count:
+        if source_line > line_count:
             errors.append(
                 f"{file_path} item {i}: source_line {source_line} > file lines "
                 f"{line_count}"
@@ -323,6 +325,7 @@ def extract_from_content(
         file_content_sha=sha,
         language=language,
         model_family=model_family,
+        file_path=file_path,
     )
     if cache is not None and cache_key in cache:
         return cache[cache_key], []
@@ -332,7 +335,7 @@ def extract_from_content(
     if raw is None:
         return (), [f"{file_path}: extractor returned no response"]
 
-    line_count = content.count("\n") + 1
+    line_count = len(split_lines(content))
     candidates, errors = _parse_response(raw, file_path, line_count)
 
     if cache is not None and not errors:
