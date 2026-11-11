@@ -2853,23 +2853,12 @@ def format_context_for_prompt(
             PromptSection("seed_hypotheses", seed_hyp_text, 1),
         )
 
-    if ctx.get("disagreement_override"):
-        do = ctx["disagreement_override"]
-        dp = [
-            "\n### Mechanical tool disagreement",
-            ("A mechanical analysis tool (Semgrep, Joern, or CodeQL) "
-            "DISAGREES with your prior clean verdict. The tool found "
-            "a reachable dataflow or taint path that your review missed."),
-        ]
-        if do.get("resolution"):
-            dp.append(f"Resolution: {do['resolution']}")
-        dp.append(
-            "Re-examine the function with this signal in mind. The "
-            "mechanical tool may have found a flow you overlooked. "
-            "If after re-examination the function is still clean, "
-            "explain specifically why the tool's flow is a false positive."
-        )
-        sections.append(PromptSection("disagreement_override", "\n".join(dp), 1))
+    from .disagreement_review_context import render_disagreement_context
+    disagreement_block = render_disagreement_context(
+        ctx.get("disagreement_override"), defend_identifier=_defend_identifier,
+    )
+    if disagreement_block:
+        sections.append(PromptSection("disagreement_override", disagreement_block, 1))
 
     if ctx.get("callee_findings"):
         # Hypothesis/body are PRIOR-LLM output over attacker-visible

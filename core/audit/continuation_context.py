@@ -6,6 +6,7 @@ from hashlib import sha256
 # Each adapted producer names its actual existing prompt input and section.
 _CONTEXT_INPUTS = {
     "late_joern": ("mechanical_evidence", "evidence"),
+    "disagreement": ("disagreement_override", "disagreement_override"),
     "deepen_quality": ("deepen_quality_selection", "deepen_quality"),
     "callee_contract": ("callee_contract_violation", "callee_contract"),
 }
@@ -26,6 +27,11 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         from .context import _defend_identifier
 
         value = render_callee_context(value, defend_identifier=_defend_identifier)
+    if kind == "disagreement":
+        from .disagreement_review_context import render_disagreement_context
+        from .context import _defend_identifier
+
+        value = render_disagreement_context(value, defend_identifier=_defend_identifier)
     if kind == "deepen_quality":
         from .deepen_continuation import render_deepen_selection
 

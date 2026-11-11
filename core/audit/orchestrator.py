@@ -10204,594 +10204,595 @@ def _run_audit_body(
                 knowledge_runtime=knowledge_runtime,
             )
 
-    finally:
-        knowledge_runtime.close("review_context_and_deepen_complete")
-        try:
-            knowledge_runtime.write_artifacts(config.out_dir)
-        except Exception:
-            logger.warning("Could not persist continuation state", exc_info=True)
+        # Post-loop pass wall-clock phases: one start/end per pass at its
+        # outermost boundary, adjacent to the existing breadcrumbs. All
+        # passes run serially on this thread (the ledger's single-slot
+        # marker discipline); parallelism inside a pass books through
+        # record_call, which is independent of the phase slot.
+        _pass_ledger = result.cost_tracker
 
-    # Post-loop pass wall-clock phases: one start/end per pass at its
-    # outermost boundary, adjacent to the existing breadcrumbs. All
-    # passes run serially on this thread (the ledger's single-slot
-    # marker discipline); parallelism inside a pass books through
-    # record_call, which is independent of the phase slot.
-    _pass_ledger = result.cost_tracker
-
-    if config.deepen_suspicious:
-        logger.debug("entering post-deepen mechanical sweep")
-        _pass_ledger.start_phase("post_deepen_sweep")
-        sink_reachable = build_sink_reachable_set(context_map)
-        new_outcomes = []
-        for outcome in result.outcomes:
-            if outcome.status == "finding":
-                corroborated = _has_mechanical_corroboration(
-                    outcome,
-                    config,
-                    sarif_cache,
-                    checklist,
-                    domain_model=domain_model,
-                    mechanical_findings=mechanical_findings,
-                )
-                if corroborated:
-                    new_outcomes.append(outcome)
-                    continue
-                checked = _check_preconditions(outcome, config, context_map)
-                if checked.status != outcome.status:
-                    result.findings -= 1
-                    result.suspicious += 1
-                    new_outcomes.append(checked)
-                else:
-                    reason = compute_demotion_verdict(
-                        outcome.function,
-                        outcome.body or "",
-                        context_map,
-                        sink_reachable=sink_reachable,
-                        joern_server=joern_server,
+        if config.deepen_suspicious:
+            logger.debug("entering post-deepen mechanical sweep")
+            _pass_ledger.start_phase("post_deepen_sweep")
+            sink_reachable = build_sink_reachable_set(context_map)
+            new_outcomes = []
+            for outcome in result.outcomes:
+                if outcome.status == "finding":
+                    corroborated = _has_mechanical_corroboration(
+                        outcome,
+                        config,
+                        sarif_cache,
+                        checklist,
+                        domain_model=domain_model,
+                        mechanical_findings=mechanical_findings,
                     )
-                    if reason is None:
-                        reason = _smt_demotion_reason(
-                            outcome,
-                            config,
-                            checklist,
-                        )
-                    if reason is not None:
-                        logger.info(
-                            "gate: %s:%s demoted — %s",
-                            outcome.file,
-                            outcome.function,
-                            reason,
-                        )
-                        demoted = _demote_outcome(outcome, reason)
+                    if corroborated:
+                        new_outcomes.append(outcome)
+                        continue
+                    checked = _check_preconditions(outcome, config, context_map)
+                    if checked.status != outcome.status:
                         result.findings -= 1
                         result.suspicious += 1
-                        new_outcomes.append(demoted)
-                        # Grade by what the reason actually proves:
-                        # SMT UNSAT follows the existing refutation
-                        # contract; safety-self-contradiction is
-                        # the model contradicting its own finding
-                        # body → consistency axis; reachability
-                        # reasons (entry/sink-unreachability) are
-                        # triage facts about the call graph. Generic
-                        # guarded-sink observations are also context,
-                        # not claim-specific refutations; neither grades
-                        # the model's claim as incorrect.
-                        _r = str(reason)
-                        if _r.startswith("[smt-disproof:"):
-                            _sc_record_refutation(
-                                result.scorecard_events, demoted,
-                                gate="post-deepen-sweep", reason=_r,
-                                models=config.models,
-                            )
-                        elif _r.startswith("[self-contradiction:"):
-                            _sc_record_self_consistency(
-                                result.scorecard_events, demoted,
-                                detail=_r,
-                                models=config.models,
-                            )
-                    else:
                         new_outcomes.append(checked)
-            else:
-                new_outcomes.append(outcome)
-        result.outcomes = new_outcomes
+                    else:
+                        reason = compute_demotion_verdict(
+                            outcome.function,
+                            outcome.body or "",
+                            context_map,
+                            sink_reachable=sink_reachable,
+                            joern_server=joern_server,
+                        )
+                        if reason is None:
+                            reason = _smt_demotion_reason(
+                                outcome,
+                                config,
+                                checklist,
+                            )
+                        if reason is not None:
+                            logger.info(
+                                "gate: %s:%s demoted — %s",
+                                outcome.file,
+                                outcome.function,
+                                reason,
+                            )
+                            demoted = _demote_outcome(outcome, reason)
+                            result.findings -= 1
+                            result.suspicious += 1
+                            new_outcomes.append(demoted)
+                            # Grade by what the reason actually proves:
+                            # SMT UNSAT follows the existing refutation
+                            # contract; safety-self-contradiction is
+                            # the model contradicting its own finding
+                            # body → consistency axis; reachability
+                            # reasons (entry/sink-unreachability) are
+                            # triage facts about the call graph. Generic
+                            # guarded-sink observations are also context,
+                            # not claim-specific refutations; neither grades
+                            # the model's claim as incorrect.
+                            _r = str(reason)
+                            if _r.startswith("[smt-disproof:"):
+                                _sc_record_refutation(
+                                    result.scorecard_events, demoted,
+                                    gate="post-deepen-sweep", reason=_r,
+                                    models=config.models,
+                                )
+                            elif _r.startswith("[self-contradiction:"):
+                                _sc_record_self_consistency(
+                                    result.scorecard_events, demoted,
+                                    detail=_r,
+                                    models=config.models,
+                                )
+                        else:
+                            new_outcomes.append(checked)
+                else:
+                    new_outcomes.append(outcome)
+            result.outcomes = new_outcomes
+            _pass_ledger.end_phase()
+            logger.debug("exited post-deepen mechanical sweep")
+
+        logger.debug("entering _iterative_re_review")
+        _pass_ledger.start_phase("iterative_re_review")
+        result = _iterative_re_review(
+            result,
+            config,
+            review_fn,
+            checklist,
+            context_map,
+            fuzz_coverage,
+            entry_points,
+            constraints,
+            prop_config,
+            sarif_cache,
+            start_time,
+            on_progress,
+            evidence_index,
+            audit_log=audit_log,
+            session_observations=session_observations,
+            discovered_evidence=discovered_evidence,
+            joern_server=joern_server,
+            max_workers=resolved_workers,
+        )
         _pass_ledger.end_phase()
-        logger.debug("exited post-deepen mechanical sweep")
+        logger.debug("exited _iterative_re_review")
 
-    logger.debug("entering _iterative_re_review")
-    _pass_ledger.start_phase("iterative_re_review")
-    result = _iterative_re_review(
-        result,
-        config,
-        review_fn,
-        checklist,
-        context_map,
-        fuzz_coverage,
-        entry_points,
-        constraints,
-        prop_config,
-        sarif_cache,
-        start_time,
-        on_progress,
-        evidence_index,
-        audit_log=audit_log,
-        session_observations=session_observations,
-        discovered_evidence=discovered_evidence,
-        joern_server=joern_server,
-        max_workers=resolved_workers,
-    )
-    _pass_ledger.end_phase()
-    logger.debug("exited _iterative_re_review")
-
-    # --- Live-sink expansion + re-queue ---
-    if live_classifications is not None and live_classifications.sinks:
-        _pass_ledger.start_phase("live_sink_requeue")
-        try:
-            expand_wrapper_sinks(
-                live_classifications,
-                call_edges or [],
-            )
-            # One index build instead of two linear outcome scans per
-            # gap (the pass was O(gaps x outcomes) — quadratic on
-            # large audits).  First occurrence wins, matching the old
-            # next() semantics.
-            ls_outcome_by_key: dict[tuple[str, str], ReviewOutcome] = {}
-            for o in result.outcomes:
-                ls_outcome_by_key.setdefault((o.file, o.function), o)
-            live_sink_targets = []
-            for gap in gaps:
-                gap_key = f"{gap['file']}:{gap['name']}"
-                prior = ls_outcome_by_key.get((gap["file"], gap["name"]))
-                if prior is None:
-                    continue
-                callees = [
-                    e.get("callee", "")
-                    for e in (call_edges or [])
-                    if f"{e.get('caller_file', '')}:{e.get('caller', '')}" == gap_key
-                ]
-                upgrade = live_classifications.should_upgrade_triage(gap_key, callees)
-                if upgrade and prior.status == "clean":
-                    live_sink_targets.append(gap)
-            if live_sink_targets:
-                effective_ls_workers = max(1, resolved_workers)
-                logger.info(
-                    "live-sink re-queue: %d functions to re-review at DEEP_DIVE depth (workers=%d)",
-                    len(live_sink_targets),
-                    effective_ls_workers,
+        # --- Live-sink expansion + re-queue ---
+        if live_classifications is not None and live_classifications.sinks:
+            _pass_ledger.start_phase("live_sink_requeue")
+            try:
+                expand_wrapper_sinks(
+                    live_classifications,
+                    call_edges or [],
                 )
-                sorted_sinks = sorted(live_classifications.sinks)
-                ls_prepared = []
-                for target_gap in live_sink_targets:
-                    ctx = _build_context(
-                        config,
-                        target_gap,
-                        checklist,
-                        context_map,
-                        evidence_index,
-                        discovered_evidence=discovered_evidence,
+                # One index build instead of two linear outcome scans per
+                # gap (the pass was O(gaps x outcomes) — quadratic on
+                # large audits).  First occurrence wins, matching the old
+                # next() semantics.
+                ls_outcome_by_key: dict[tuple[str, str], ReviewOutcome] = {}
+                for o in result.outcomes:
+                    ls_outcome_by_key.setdefault((o.file, o.function), o)
+                live_sink_targets = []
+                for gap in gaps:
+                    gap_key = f"{gap['file']}:{gap['name']}"
+                    prior = ls_outcome_by_key.get((gap["file"], gap["name"]))
+                    if prior is None:
+                        continue
+                    callees = [
+                        e.get("callee", "")
+                        for e in (call_edges or [])
+                        if f"{e.get('caller_file', '')}:{e.get('caller', '')}" == gap_key
+                    ]
+                    upgrade = live_classifications.should_upgrade_triage(gap_key, callees)
+                    if upgrade and prior.status == "clean":
+                        live_sink_targets.append(gap)
+                if live_sink_targets:
+                    effective_ls_workers = max(1, resolved_workers)
+                    logger.info(
+                        "live-sink re-queue: %d functions to re-review at DEEP_DIVE depth (workers=%d)",
+                        len(live_sink_targets),
+                        effective_ls_workers,
                     )
-                    ctx["live_sinks"] = sorted_sinks
-                    ctx["triage_bucket"] = "DEEP_DIVE"
-                    prior = ls_outcome_by_key.get(
-                        (target_gap["file"], target_gap["name"]),
-                    )
-                    ls_prepared.append((len(ls_prepared), target_gap, prior, ctx))
+                    sorted_sinks = sorted(live_classifications.sinks)
+                    ls_prepared = []
+                    for target_gap in live_sink_targets:
+                        ctx = _build_context(
+                            config,
+                            target_gap,
+                            checklist,
+                            context_map,
+                            evidence_index,
+                            discovered_evidence=discovered_evidence,
+                        )
+                        ctx["live_sinks"] = sorted_sinks
+                        ctx["triage_bucket"] = "DEEP_DIVE"
+                        prior = ls_outcome_by_key.get(
+                            (target_gap["file"], target_gap["name"]),
+                        )
+                        ls_prepared.append((len(ls_prepared), target_gap, prior, ctx))
 
-                # Environment gate at worker entry: this pass
-                # pre-submits every future and its only stop check
-                # runs at harvest (cancellation cannot stop an item a
-                # worker already picked up), so without the gate a
-                # pause/conclusion never stops new live-sink
-                # dispatches. Same seam as the re-review driver.
-                _ls_env_gate = _make_dispatch_gate(config)
+                    # Environment gate at worker entry: this pass
+                    # pre-submits every future and its only stop check
+                    # runs at harvest (cancellation cannot stop an item a
+                    # worker already picked up), so without the gate a
+                    # pause/conclusion never stops new live-sink
+                    # dispatches. Same seam as the re-review driver.
+                    _ls_env_gate = _make_dispatch_gate(config)
 
-                def _do_ls_review(item):
-                    idx, _gap, _prior, ctx = item
-                    if _ls_env_gate is not None:
-                        _ls_env_gate()
-                        if _check_budget(config, start_time, result):
-                            # Never dispatched — dropped like a
-                            # cancelled future (idx, None, None).
-                            return (idx, None, None)
-                    try:
-                        outcome = review_fn(ctx, config)
-                        return (idx, outcome, None)
-                    except Exception as exc:  # noqa: BLE001
-                        return (idx, None, exc)
-
-                if effective_ls_workers <= 1:
-                    ls_raw = []
-                    for item in ls_prepared:
+                    def _do_ls_review(item):
+                        idx, _gap, _prior, ctx = item
                         if _ls_env_gate is not None:
                             _ls_env_gate()
-                        if _check_budget(config, start_time, result):
-                            break
-                        ls_raw.append(_do_ls_review(item))
-                else:
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-                    ls_raw = []
-                    with ThreadPoolExecutor(max_workers=effective_ls_workers) as pool:
-                        ls_futs = {
-                            submit_with_joern(pool, _do_ls_review, item): item
-                            for item in ls_prepared
-                        }
-                        for fut in as_completed(ls_futs):
-                            # Harvest BEFORE the stop decision: this
-                            # future already completed — its outcome
-                            # is paid work and must reach the tally
-                            # (see the batched-review loop above).
-                            ls_raw.append(fut.result())
                             if _check_budget(config, start_time, result):
-                                for f in ls_futs:
-                                    f.cancel()
-                                break
-
-                for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):  # type: ignore[misc]
-                    _, target_gap, prior, _ctx = ls_prepared[idx]
-                    if outcome is None and exc is None:
-                        continue  # gate-skipped — never dispatched
-                    if exc is not None:
-                        logger.warning(
-                            "live-sink re-review failed for %s:%s: %s",
-                            target_gap["file"],
-                            target_gap["name"],
-                            exc,
-                        )
-                        continue
-                    if prior is not None:
-                        _untally_outcome(result, prior)
+                                # Never dispatched — dropped like a
+                                # cancelled future (idx, None, None).
+                                return (idx, None, None)
                         try:
-                            result.outcomes.remove(prior)
-                        except ValueError:
-                            pass
-                    _tally_outcome(result, outcome)
-                    if collector is not None:
-                        collector.submit(outcome, target_gap)
+                            outcome = review_fn(ctx, config)
+                            return (idx, outcome, None)
+                        except Exception as exc:  # noqa: BLE001
+                            return (idx, None, exc)
+
+                    if effective_ls_workers <= 1:
+                        ls_raw = []
+                        for item in ls_prepared:
+                            if _ls_env_gate is not None:
+                                _ls_env_gate()
+                            if _check_budget(config, start_time, result):
+                                break
+                            ls_raw.append(_do_ls_review(item))
                     else:
-                        _commit_outcome(config, outcome, target_gap)
-        except Exception:
-            logger.debug("live-sink expansion failed", exc_info=True)
+                        from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    _pass_ledger.end_phase()  # live_sink_requeue (when it ran)
+                        ls_raw = []
+                        with ThreadPoolExecutor(max_workers=effective_ls_workers) as pool:
+                            ls_futs = {
+                                submit_with_joern(pool, _do_ls_review, item): item
+                                for item in ls_prepared
+                            }
+                            for fut in as_completed(ls_futs):
+                                # Harvest BEFORE the stop decision: this
+                                # future already completed — its outcome
+                                # is paid work and must reach the tally
+                                # (see the batched-review loop above).
+                                ls_raw.append(fut.result())
+                                if _check_budget(config, start_time, result):
+                                    for f in ls_futs:
+                                        f.cancel()
+                                    break
 
-    _dark_outcomes: list[ReviewOutcome] = []
-    _dark_futures: list = []
-    _dark_executor = None
+                    for idx, outcome, exc in sorted(ls_raw, key=lambda r: r[0]):  # type: ignore[misc]
+                        _, target_gap, prior, _ctx = ls_prepared[idx]
+                        if outcome is None and exc is None:
+                            continue  # gate-skipped — never dispatched
+                        if exc is not None:
+                            logger.warning(
+                                "live-sink re-review failed for %s:%s: %s",
+                                target_gap["file"],
+                                target_gap["name"],
+                                exc,
+                            )
+                            continue
+                        if prior is not None:
+                            _untally_outcome(result, prior)
+                            try:
+                                result.outcomes.remove(prior)
+                            except ValueError:
+                                pass
+                        _tally_outcome(result, outcome)
+                        if collector is not None:
+                            collector.submit(outcome, target_gap)
+                        else:
+                            _commit_outcome(config, outcome, target_gap)
+            except Exception:
+                logger.debug("live-sink expansion failed", exc_info=True)
 
-    if config.sweep_validate_findings:
-        _pass_ledger.start_phase("sweep_promotion")
-        pre_sweep = {
-            (o.file, o.function): o.status for o in result.outcomes
-        }
-        # When IHV is active, per-function verification already ran
-        # during review — skip the legacy re-sweep and promotion
-        # passes (§Immediate hypothesis verification, §Post-loop
-        # pipeline optimisations in docs/audit.md design).
-        if not config.immediate_verify:
-            # Queue contradictory review claims BEFORE verification;
-            # doing this after the sweep left them with no chance to
-            # earn a receipt before final resolution.
-            logger.debug("entering _promote_hypothesis_inconsistent")
-            _promote_hypothesis_inconsistent(result)
-            logger.debug("exited _promote_hypothesis_inconsistent")
+        _pass_ledger.end_phase()  # live_sink_requeue (when it ran)
 
-            logger.debug("entering _resweep_zero_dispatch_suspicious")
-            try:
-                _resweep_zero_dispatch_suspicious(
-                    result, config,
-                    sarif_cache=sarif_cache,
-                    checklist=checklist,
+        _dark_outcomes: list[ReviewOutcome] = []
+        _dark_futures: list = []
+        _dark_executor = None
+
+        if config.sweep_validate_findings:
+            _pass_ledger.start_phase("sweep_promotion")
+            pre_sweep = {
+                (o.file, o.function): o.status for o in result.outcomes
+            }
+            # When IHV is active, per-function verification already ran
+            # during review — skip the legacy re-sweep and promotion
+            # passes (§Immediate hypothesis verification, §Post-loop
+            # pipeline optimisations in docs/audit.md design).
+            if not config.immediate_verify:
+                # Queue contradictory review claims BEFORE verification;
+                # doing this after the sweep left them with no chance to
+                # earn a receipt before final resolution.
+                logger.debug("entering _promote_hypothesis_inconsistent")
+                _promote_hypothesis_inconsistent(result)
+                logger.debug("exited _promote_hypothesis_inconsistent")
+
+                logger.debug("entering _resweep_zero_dispatch_suspicious")
+                try:
+                    _resweep_zero_dispatch_suspicious(
+                        result, config,
+                        sarif_cache=sarif_cache,
+                        checklist=checklist,
+                        joern_server=joern_server,
+                        max_workers=resolved_workers,
+                    )
+                except Exception:
+                    logger.debug("zero-dispatch re-sweep failed", exc_info=True)
+                logger.debug("exited _resweep_zero_dispatch_suspicious")
+
+                logger.debug("entering _promote_suspicious")
+                _promote_suspicious(
+                    result, config, sarif_cache, checklist,
                     joern_server=joern_server,
+                    mechanical_findings=mechanical_findings,
                     max_workers=resolved_workers,
                 )
-            except Exception:
-                logger.debug("zero-dispatch re-sweep failed", exc_info=True)
-            logger.debug("exited _resweep_zero_dispatch_suspicious")
-
-            logger.debug("entering _promote_suspicious")
-            _promote_suspicious(
-                result, config, sarif_cache, checklist,
-                joern_server=joern_server,
-                mechanical_findings=mechanical_findings,
-                max_workers=resolved_workers,
-            )
-            logger.debug("exited _promote_suspicious")
-        if config.immediate_verify:
-            try:
-                _dark_client = _run_llm_client(config)
-                _dark_outcomes, _dark_futures, _dark_executor = (
-                    _submit_dark_probes_early(
-                        result,
-                        config,
-                        llm_client=lambda p, s: (
-                            _dark_client.generate(
-                                p,
-                                system_prompt=s or None,
-                            ).content
-                        ),
+                logger.debug("exited _promote_suspicious")
+            if config.immediate_verify:
+                try:
+                    _dark_client = _run_llm_client(config)
+                    _dark_outcomes, _dark_futures, _dark_executor = (
+                        _submit_dark_probes_early(
+                            result,
+                            config,
+                            llm_client=lambda p, s: (
+                                _dark_client.generate(
+                                    p,
+                                    system_prompt=s or None,
+                                ).content
+                            ),
+                        )
                     )
-                )
-            except Exception:
-                logger.debug(
-                    "dark concurrent: early submission failed",
-                    exc_info=True,
-                )
+                except Exception:
+                    logger.debug(
+                        "dark concurrent: early submission failed",
+                        exc_info=True,
+                    )
 
-        if config.immediate_verify:
-            # IHV path: preconditions ∥ (clean-refuted → smt-clean).
-            # Lanes operate on disjoint outcome subsets (suspicious vs
-            # clean); shared counters are guarded by result._lock.
-            from concurrent.futures import ThreadPoolExecutor
+            if config.immediate_verify:
+                # IHV path: preconditions ∥ (clean-refuted → smt-clean).
+                # Lanes operate on disjoint outcome subsets (suspicious vs
+                # clean); shared counters are guarded by result._lock.
+                from concurrent.futures import ThreadPoolExecutor
 
-            def _lane_preconditions():
+                def _lane_preconditions():
+                    logger.debug("entering _promote_suspicious_preconditions")
+                    _promote_suspicious_preconditions(result, config, context_map)
+                    logger.debug("exited _promote_suspicious_preconditions")
+
+                def _lane_refuted_smt():
+                    logger.debug("entering _promote_clean_refuted")
+                    _promote_clean_refuted(
+                        result, config, checklist, joern_server=joern_server,
+                    )
+                    logger.debug("exited _promote_clean_refuted")
+                    logger.debug("entering _promote_smt_clean (IHV reorder)")
+                    _promote_smt_clean(result, config, checklist)
+                    logger.debug("exited _promote_smt_clean (IHV reorder)")
+
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    fut_a = pool.submit(_lane_preconditions)
+                    fut_b = pool.submit(_lane_refuted_smt)
+                    _errors = []
+                    for _fut in (fut_a, fut_b):
+                        try:
+                            _fut.result()
+                        except Exception as _exc:  # noqa: BLE001
+                            _errors.append(_exc)
+                    if _errors:
+                        raise _errors[0]
+            else:
                 logger.debug("entering _promote_suspicious_preconditions")
                 _promote_suspicious_preconditions(result, config, context_map)
                 logger.debug("exited _promote_suspicious_preconditions")
 
-            def _lane_refuted_smt():
                 logger.debug("entering _promote_clean_refuted")
                 _promote_clean_refuted(
                     result, config, checklist, joern_server=joern_server,
                 )
                 logger.debug("exited _promote_clean_refuted")
-                logger.debug("entering _promote_smt_clean (IHV reorder)")
-                _promote_smt_clean(result, config, checklist)
-                logger.debug("exited _promote_smt_clean (IHV reorder)")
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                fut_a = pool.submit(_lane_preconditions)
-                fut_b = pool.submit(_lane_refuted_smt)
-                _errors = []
-                for _fut in (fut_a, fut_b):
-                    try:
-                        _fut.result()
-                    except Exception as _exc:  # noqa: BLE001
-                        _errors.append(_exc)
-                if _errors:
-                    raise _errors[0]
-        else:
-            logger.debug("entering _promote_suspicious_preconditions")
-            _promote_suspicious_preconditions(result, config, context_map)
-            logger.debug("exited _promote_suspicious_preconditions")
+                logger.debug("entering _dispatch_secondary_hypotheses")
+                _dispatch_secondary_hypotheses(
+                    result, config, checklist, joern_server=joern_server,
+                )
+                logger.debug("exited _dispatch_secondary_hypotheses")
 
-            logger.debug("entering _promote_clean_refuted")
-            _promote_clean_refuted(
-                result, config, checklist, joern_server=joern_server,
-            )
-            logger.debug("exited _promote_clean_refuted")
+            logger.debug("entering _demote_self_contradictions")
+            _demote_self_contradictions(result)
+            logger.debug("exited _demote_self_contradictions")
 
-            logger.debug("entering _dispatch_secondary_hypotheses")
-            _dispatch_secondary_hypotheses(
-                result, config, checklist, joern_server=joern_server,
-            )
-            logger.debug("exited _dispatch_secondary_hypotheses")
+            if not config.immediate_verify:
+                # Run refutation gates on newly-promoted suspicious outcomes.
+                # Hypothesis-consistency promotes clean→suspicious when the
+                # LLM had high-confidence race/leak hypotheses but said
+                # "clean".  The per-function refutation gate missed these
+                # because they were clean at that point.
+                try:
+                    from .refutation import refute_hypothesis
 
-        logger.debug("entering _demote_self_contradictions")
-        _demote_self_contradictions(result)
-        logger.debug("exited _demote_self_contradictions")
+                    for i, outcome in enumerate(result.outcomes):
+                        if outcome.status != "suspicious":
+                            continue
+                        if "[hypothesis-consistency:" not in outcome.body:
+                            continue
+                        # Own try: records only, must never skip refutation.
+                        try:
+                            from .binary_honesty import record_gate_engagement
 
-        if not config.immediate_verify:
-            # Run refutation gates on newly-promoted suspicious outcomes.
-            # Hypothesis-consistency promotes clean→suspicious when the
-            # LLM had high-confidence race/leak hypotheses but said
-            # "clean".  The per-function refutation gate missed these
-            # because they were clean at that point.
-            try:
-                from .refutation import refute_hypothesis
-
-                for i, outcome in enumerate(result.outcomes):
-                    if outcome.status != "suspicious":
-                        continue
-                    if "[hypothesis-consistency:" not in outcome.body:
-                        continue
-                    # Own try: records only, must never skip refutation.
-                    try:
-                        from .binary_honesty import record_gate_engagement
-
-                        record_gate_engagement(
-                            config.out_dir,
+                            record_gate_engagement(
+                                config.out_dir,
+                                outcome,
+                                domain_model=domain_model,
+                                checklist=checklist,
+                                phase="post_promote",
+                            )
+                        except Exception:
+                            logger.debug(
+                                "gate-engagement record skipped (post-promote)",
+                                exc_info=True,
+                            )
+                        rv = refute_hypothesis(
                             outcome,
                             domain_model=domain_model,
                             checklist=checklist,
-                            phase="post_promote",
+                            config=config,
+                            joern_server=joern_server,
+                            tier_counters=result.tier_counters,
                         )
-                    except Exception:
-                        logger.debug(
-                            "gate-engagement record skipped (post-promote)",
-                            exc_info=True,
-                        )
-                    rv = refute_hypothesis(
-                        outcome,
-                        domain_model=domain_model,
-                        checklist=checklist,
-                        config=config,
-                        joern_server=joern_server,
-                        tier_counters=result.tier_counters,
+                        if rv is not None:
+                            append_audit_log(config.out_dir, {
+                                "action": "refutation_gate_post_promote",
+                                "gate": rv.gate,
+                                "file": outcome.file,
+                                "function": outcome.function,
+                                "reason": rv.reason,
+                                "demote_to": rv.demote_to,
+                                "original_status": "suspicious",
+                            })
+                            logger.info(
+                                "refutation gate (post-promote) [%s] %s:%s — %s → %s",
+                                rv.gate, outcome.file, outcome.function,
+                                rv.reason, rv.demote_to,
+                            )
+                            result.outcomes[i] = _demote_outcome(
+                                outcome, f"[{rv.gate}: {rv.reason}]",
+                            )
+                            result.outcomes[i].status = rv.demote_to
+                            # Counters must follow demote_to. The old
+                            # unconditional suspicious-=1/clean+=1 drifted
+                            # the tallies whenever the gate demoted TO
+                            # suspicious (the outcome stayed suspicious
+                            # while the counters recorded a clean).
+                            result.suspicious -= 1
+                            if rv.demote_to == "suspicious":
+                                result.suspicious += 1
+                            else:
+                                result.clean += 1
+                except Exception:
+                    logger.debug(
+                        "refutation gate (post-promote) error",
+                        exc_info=True,
                     )
-                    if rv is not None:
-                        append_audit_log(config.out_dir, {
-                            "action": "refutation_gate_post_promote",
-                            "gate": rv.gate,
-                            "file": outcome.file,
-                            "function": outcome.function,
-                            "reason": rv.reason,
-                            "demote_to": rv.demote_to,
-                            "original_status": "suspicious",
-                        })
-                        logger.info(
-                            "refutation gate (post-promote) [%s] %s:%s — %s → %s",
-                            rv.gate, outcome.file, outcome.function,
-                            rv.reason, rv.demote_to,
-                        )
-                        result.outcomes[i] = _demote_outcome(
-                            outcome, f"[{rv.gate}: {rv.reason}]",
-                        )
-                        result.outcomes[i].status = rv.demote_to
-                        # Counters must follow demote_to. The old
-                        # unconditional suspicious-=1/clean+=1 drifted
-                        # the tallies whenever the gate demoted TO
-                        # suspicious (the outcome stayed suspicious
-                        # while the counters recorded a clean).
-                        result.suspicious -= 1
-                        if rv.demote_to == "suspicious":
-                            result.suspicious += 1
-                        else:
-                            result.clean += 1
-            except Exception:
-                logger.debug(
-                    "refutation gate (post-promote) error",
-                    exc_info=True,
-                )
 
-        if not config.immediate_verify:
-            # Legacy path: smt-clean runs after refutation gate.
-            logger.debug("entering _promote_smt_clean")
-            _promote_smt_clean(result, config, checklist)
-            logger.debug("exited _promote_smt_clean")
+            if not config.immediate_verify:
+                # Legacy path: smt-clean runs after refutation gate.
+                logger.debug("entering _promote_smt_clean")
+                _promote_smt_clean(result, config, checklist)
+                logger.debug("exited _promote_smt_clean")
 
-        for outcome in result.outcomes:
-            key = (outcome.file, outcome.function)
-            old_status = pre_sweep.get(key)
-            if old_status and old_status != outcome.status:
-                entry = {
-                    "action": "sweep_promotion",
-                    "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
-                    "status": outcome.status,
-                    "prior_status": old_status,
-                    "evidence_tool": outcome.evidence_tool or "",
-                    "model": outcome.model or "",
-                    "cost_usd": 0.0,
-                    "duration_s": 0.0,
-                    "hypothesis": outcome.hypothesis or "",
-                }
-                if getattr(outcome, "function_qualified", ""):
-                    entry["function_qualified"] = outcome.function_qualified
-                append_audit_log(config.out_dir, entry)
+            for outcome in result.outcomes:
+                key = (outcome.file, outcome.function)
+                old_status = pre_sweep.get(key)
+                if old_status and old_status != outcome.status:
+                    entry = {
+                        "action": "sweep_promotion",
+                        "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
+                        "status": outcome.status,
+                        "prior_status": old_status,
+                        "evidence_tool": outcome.evidence_tool or "",
+                        "model": outcome.model or "",
+                        "cost_usd": 0.0,
+                        "duration_s": 0.0,
+                        "hypothesis": outcome.hypothesis or "",
+                    }
+                    if getattr(outcome, "function_qualified", ""):
+                        entry["function_qualified"] = outcome.function_qualified
+                    append_audit_log(config.out_dir, entry)
 
-    _pass_ledger.end_phase()  # sweep_promotion (when it ran)
+        _pass_ledger.end_phase()  # sweep_promotion (when it ran)
 
-    if config.adversarial:
-        logger.debug("entering _adversarial_refute_pass")
-        _pass_ledger.start_phase("adversarial_refute")
-        try:
-            _adversarial_refute_pass(
-                result, config, checklist,
-                joern_server=joern_server,
-                start_time=start_time,
-                max_workers=resolved_workers,
-            )
-        except Exception:
-            logger.warning(
-                "adversarial refutation pass failed — positive outcomes "
-                "keep their verdicts",
-                exc_info=True,
-            )
-        _pass_ledger.end_phase()
-        logger.debug("exited _adversarial_refute_pass")
-
-    # A neighbour's clean verdict is not proof of a call contract.
-    # Claim-specific verification, rather than confidence propagation,
-    # must adjudicate each suspicious outcome.
-
-    # 5c: drain early dark probes before resolve-gate-demoted.
-    _dark_handled: set[int] = set()
-    if _dark_futures:
-        try:
-            _dark_handled = _drain_dark_probes(
-                result, config,
-                _dark_outcomes, _dark_futures, _dark_executor,
-                timeout=120.0,
-            )
-        except Exception:
-            logger.debug("dark concurrent: drain failed", exc_info=True)
-
-    logger.debug("entering _resolve_gate_demoted")
-    _pass_ledger.start_phase("resolve_gate_demoted")
-    # A mid-run health-gate trip means joern stopped looking: mark it
-    # unavailable so is_class_covered discards it from any stale
-    # dispatch record (belt-and-braces behind the skipped_types fix —
-    # phantom coverage must not demote suspicious to clean).
-    _gate_caps = dict(tool_capabilities or {})
-    if _joern_channel_unhealthy(config):
-        _gate_caps["joern"] = False
-    _resolve_gate_demoted(
-        result,
-        config,
-        sarif_cache,
-        checklist,
-        domain_model=domain_model,
-        available_tools=_gate_caps,
-        mechanical_findings=mechanical_findings,
-    )
-    _pass_ledger.end_phase()
-    logger.debug("exited _resolve_gate_demoted")
-
-    logger.debug("entering _auto_synthesize_rules")
-    _pass_ledger.start_phase("auto_synthesize_rules")
-    _auto_synthesize_rules(result, config)
-    _pass_ledger.end_phase()
-    logger.debug("exited _auto_synthesize_rules")
-
-    retired = checker_library.retire_low_precision()
-    if retired:
-        logger.info("rule library: retired %d low-precision rules", len(retired))
-
-    if config.out_dir and checker_library.all_entries():
-        try:
-            # Graduation writes TRUSTED engine config — the run pin
-            # (or the target-keyed standalone dir) decides where,
-            # never bare out_dir.parent topology: a standalone run
-            # graduating into the shared out/ root made its rules load
-            # as trusted config for every future standalone run of ANY
-            # target.
-            from core.audit.rules_dirs import graduation_dir
-            engine_rules_dir = graduation_dir(
-                config.out_dir, config.target_path)
-            graduated = (checker_library.graduate(engine_rules_dir)
-                         if engine_rules_dir is not None else [])
-            if graduated:
-                logger.info(
-                    "rule library: graduated %d rules to %s",
-                    len(graduated),
-                    engine_rules_dir,
-                )
-        except Exception:
-            logger.debug("rule graduation failed", exc_info=True)
-
-    if layer_disagreements and config.out_dir:
-        try:
-            from .layer_resolution import (
-                LayerVerdict,
-                format_disagreement_summary,
-                write_disagreements,
-            )
-
-            write_disagreements(layer_disagreements, config.out_dir)
-            logger.info(format_disagreement_summary(layer_disagreements))
-
-            mechanical_wins = [
-                d for d in layer_disagreements
-                if d.winner == LayerVerdict.MECHANICAL
-            ]
-            if mechanical_wins and not _check_budget(config, start_time, result):
-                result = _re_review_disagreements(
-                    mechanical_wins,
-                    result,
-                    config,
-                    review_fn,
-                    checklist,
-                    context_map,
-                    evidence_index,
-                    start_time,
-                    on_progress,
-                    audit_log=audit_log,
-                    session_observations=session_observations,
-                    discovered_evidence=discovered_evidence,
+        if config.adversarial:
+            logger.debug("entering _adversarial_refute_pass")
+            _pass_ledger.start_phase("adversarial_refute")
+            try:
+                _adversarial_refute_pass(
+                    result, config, checklist,
                     joern_server=joern_server,
+                    start_time=start_time,
                     max_workers=resolved_workers,
                 )
+            except Exception:
+                logger.warning(
+                    "adversarial refutation pass failed — positive outcomes "
+                    "keep their verdicts",
+                    exc_info=True,
+                )
+            _pass_ledger.end_phase()
+            logger.debug("exited _adversarial_refute_pass")
+
+        # A neighbour's clean verdict is not proof of a call contract.
+        # Claim-specific verification, rather than confidence propagation,
+        # must adjudicate each suspicious outcome.
+
+        # 5c: drain early dark probes before resolve-gate-demoted.
+        _dark_handled: set[int] = set()
+        if _dark_futures:
+            try:
+                _dark_handled = _drain_dark_probes(
+                    result, config,
+                    _dark_outcomes, _dark_futures, _dark_executor,
+                    timeout=120.0,
+                )
+            except Exception:
+                logger.debug("dark concurrent: drain failed", exc_info=True)
+
+        logger.debug("entering _resolve_gate_demoted")
+        _pass_ledger.start_phase("resolve_gate_demoted")
+        # A mid-run health-gate trip means joern stopped looking: mark it
+        # unavailable so is_class_covered discards it from any stale
+        # dispatch record (belt-and-braces behind the skipped_types fix —
+        # phantom coverage must not demote suspicious to clean).
+        _gate_caps = dict(tool_capabilities or {})
+        if _joern_channel_unhealthy(config):
+            _gate_caps["joern"] = False
+        _resolve_gate_demoted(
+            result,
+            config,
+            sarif_cache,
+            checklist,
+            domain_model=domain_model,
+            available_tools=_gate_caps,
+            mechanical_findings=mechanical_findings,
+        )
+        _pass_ledger.end_phase()
+        logger.debug("exited _resolve_gate_demoted")
+
+        logger.debug("entering _auto_synthesize_rules")
+        _pass_ledger.start_phase("auto_synthesize_rules")
+        _auto_synthesize_rules(result, config)
+        _pass_ledger.end_phase()
+        logger.debug("exited _auto_synthesize_rules")
+
+        retired = checker_library.retire_low_precision()
+        if retired:
+            logger.info("rule library: retired %d low-precision rules", len(retired))
+
+        if config.out_dir and checker_library.all_entries():
+            try:
+                # Graduation writes TRUSTED engine config — the run pin
+                # (or the target-keyed standalone dir) decides where,
+                # never bare out_dir.parent topology: a standalone run
+                # graduating into the shared out/ root made its rules load
+                # as trusted config for every future standalone run of ANY
+                # target.
+                from core.audit.rules_dirs import graduation_dir
+                engine_rules_dir = graduation_dir(
+                    config.out_dir, config.target_path)
+                graduated = (checker_library.graduate(engine_rules_dir)
+                             if engine_rules_dir is not None else [])
+                if graduated:
+                    logger.info(
+                        "rule library: graduated %d rules to %s",
+                        len(graduated),
+                        engine_rules_dir,
+                    )
+            except Exception:
+                logger.debug("rule graduation failed", exc_info=True)
+
+        if layer_disagreements and config.out_dir:
+            try:
+                from .layer_resolution import (
+                    LayerVerdict,
+                    format_disagreement_summary,
+                    write_disagreements,
+                )
+
+                write_disagreements(layer_disagreements, config.out_dir)
+                logger.info(format_disagreement_summary(layer_disagreements))
+
+                mechanical_wins = [
+                    d for d in layer_disagreements
+                    if d.winner == LayerVerdict.MECHANICAL
+                ]
+                if mechanical_wins and not _check_budget(config, start_time, result):
+                    result = _re_review_disagreements(
+                        mechanical_wins,
+                        result,
+                        config,
+                        review_fn,
+                        checklist,
+                        context_map,
+                        evidence_index,
+                        start_time,
+                        on_progress,
+                        audit_log=audit_log,
+                        session_observations=session_observations,
+                        discovered_evidence=discovered_evidence,
+                        joern_server=joern_server,
+                        max_workers=resolved_workers,
+                        knowledge_runtime=knowledge_runtime,
+                    )
+            except Exception:
+                logger.debug("layer disagreement persistence failed", exc_info=True)
+
+    finally:
+        knowledge_runtime.close("review_context_deepen_and_disagreement_complete")
+        try:
+            knowledge_runtime.write_artifacts(config.out_dir)
         except Exception:
-            logger.debug("layer disagreement persistence failed", exc_info=True)
+            logger.warning("Could not persist continuation state", exc_info=True)
 
     _pass_ledger.start_phase("flow_trace_review")
     result = _review_flow_traces(
@@ -28054,6 +28055,81 @@ def _deepen_suspicious(
             continuation_owner.close()
 
 
+def _run_disagreement_continuations(result, config, review_fn, prepared, runtime, *, start_time):
+    """Review advisory disagreement inputs under the existing unit owner."""
+    from .context import _defend_identifier
+    from .continuation_context import context_spec, context_version
+    from .disagreement_review_context import render_disagreement_context
+    from .review_claims import read_history
+    from .review_context_inputs import context_inputs_from_sources, merge_context_inputs
+
+    reviewer = runtime.wrap_review(review_fn)
+    env_gate = _make_dispatch_gate(config)
+    for _index, _key, prior, ctx, gap in prepared:
+        reservation = None
+        settled = False
+        try:
+            if env_gate is not None:
+                env_gate()
+            if _check_budget(config, start_time, result):
+                break
+            version = context_version(render_disagreement_context(
+                ctx.get("disagreement_override"), defend_identifier=_defend_identifier))
+            spec = context_spec(ctx, kind="disagreement", version=version)
+            if spec is None or not runtime.offer_context_delta(ctx, kind="disagreement", version=version):
+                continue
+            width = max(1, config.review_passes,
+                        len(config.models or []) if config.multi_model else 1)
+            reservation = runtime.reserve_context_continuation(
+                ctx, admission=lambda: not _check_budget(config, start_time, result),
+                required_calls=width, required_context_id=spec["context_id"])
+            if reservation is None:
+                continue
+            if not runtime.enrich_context(ctx, reservation):
+                runtime.fail(reservation, "disagreement_context_stale", ctx=ctx)
+                settled = True
+                continue
+            outcome = reviewer(ctx, config)
+            outcome.line = gap.get("line_start", 0)
+            result.cost_tracker.record_call("re_review", cost_usd=outcome.cost_usd,
+                                            wall_time_s=outcome.duration_s)
+            with result._lock:
+                result.total_cost_usd += outcome.cost_usd
+            if not runtime.context_was_delivered(reservation) or not runtime.can_publish(reservation):
+                runtime.fail(reservation, "disagreement_context_not_admissible", ctx=ctx)
+                settled = True
+                continue
+            # An advisory mechanical claim is not a captured execution receipt.
+            # Retain that limitation instead of laundering it into reusable proof.
+            history = read_history((outcome.review_result or {}).get("review_claims"))
+            if history is not None:
+                origin = reservation.origin
+                incomplete = context_inputs_from_sources(
+                    [("target", origin.file, origin.source_identity.sha256)], complete=False)
+                history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), incomplete)
+                outcome.review_result = {**(outcome.review_result or {}), "review_claims": history}
+            if outcome.status in ("finding", "suspicious"):
+                disposition = _publish_study_outcome(
+                    config, result, runtime, reservation, prior, outcome, gap)
+            else:
+                disposition = _publish_study_candidates(
+                    config, result, runtime, reservation, prior, outcome, gap)
+            if disposition not in ("published", "unchanged"):
+                runtime.fail(reservation, disposition, ctx=ctx)
+            else:
+                runtime.complete(reservation, ctx, published_status=(outcome.status
+                    if outcome.status in ("finding", "suspicious") else prior.status),
+                    reason="disagreement_context_reviewed")
+            settled = True
+        except Exception:
+            logger.warning("disagreement continuation failed for %s:%s", gap.get("file"),
+                           gap.get("name"), exc_info=True)
+        finally:
+            if reservation is not None and not settled:
+                runtime.fail(reservation, "disagreement_continuation_failed", ctx=ctx)
+    return result
+
+
 def _re_review_disagreements(
     disagreements,
     result: OrchestratorResult,
@@ -28070,6 +28146,7 @@ def _re_review_disagreements(
     discovered_evidence: dict[str, Any] | None = None,
     joern_server=None,
     max_workers: int = 1,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> OrchestratorResult:
     """Re-review functions where the mechanical layer overruled the LLM.
 
@@ -28078,19 +28155,23 @@ def _re_review_disagreements(
     context and ask the LLM to reconsider with the mechanical evidence
     explicitly surfaced.
     """
-    outcome_by_key = {f"{o.file}:{o.function}": o for o in result.outcomes}
-    gap_by_key = _gap_index(checklist)
-
     prepared: list[Any] = []
     for d in disagreements:
         key = f"{d.file}:{d.function}"
-        prior = outcome_by_key.get(key)
-        if prior is None or prior.status not in ("clean",):
+        matches = [o for o in result.outcomes if (o.file, o.function) == (d.file, d.function)
+                   and o.status == "clean"]
+        line = getattr(d, "line_start", None)
+        if type(line) is int and line > 0:
+            matches = [o for o in matches if o.line == line]
+        if len(matches) != 1:
             continue
-
-        gap = gap_by_key.get(key)
-        if gap is None:
+        prior = matches[0]
+        gaps = [{**item, "file": path} for path, _info, item in _iter_checklist_items(checklist)
+                if (path, item.get("name")) == (prior.file, prior.function)
+                and (not prior.line or item.get("line_start", 0) == prior.line)]
+        if len(gaps) != 1:
             continue
+        gap = gaps[0]
 
         ctx = _build_context(
             config, gap, checklist, context_map,
@@ -28112,10 +28193,14 @@ def _re_review_disagreements(
             "status": prior.status,
             "body": prior.body,
         }
-        prepared.append((len(prepared), key, prior, ctx))
+        prepared.append((len(prepared), key, prior, ctx, gap))
 
     if not prepared:
         return result
+
+    if knowledge_runtime is not None:
+        return _run_disagreement_continuations(
+            result, config, review_fn, prepared, knowledge_runtime, start_time=start_time)
 
     effective_workers = max(1, max_workers)
     logger.info(
@@ -28125,7 +28210,7 @@ def _re_review_disagreements(
     )
 
     def _do_review(item):
-        idx, _key, _prior, ctx = item
+        idx, _key, _prior, ctx, _gap = item
         try:
             outcome = review_fn(ctx, config)
             return (idx, outcome, None)
@@ -28146,7 +28231,7 @@ def _re_review_disagreements(
 
     re_reviewed = 0
     for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
-        _, key, prior, _ctx = prepared[idx]
+        _, key, prior, _ctx, _gap = prepared[idx]
 
         if exc is not None:
             # exc was captured in the worker; exc_info=True here predates
