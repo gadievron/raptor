@@ -77,7 +77,10 @@ def _read_matches(directory_fd: int, filename: str, encoded: bytes) -> bool:
             if not chunk:
                 break
             retained.extend(chunk)
-        return retained == encoded
+        if retained != encoded:
+            return False
+        linked = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
+        return (linked.st_dev, linked.st_ino) == (current.st_dev, current.st_ino)
 
 
 def retain_smt_result(out_dir: Path, result: SweepResult) -> str:
@@ -139,6 +142,10 @@ def retained_smt_result_matches(out_dir: Path, reference: str, result: SweepResu
         with owned_fd(root_fd, close_fd=os.close):
             directory_fd = os.open(RESULT_DIRECTORY, _DIRECTORY_FLAGS, dir_fd=root_fd)
             with owned_fd(directory_fd, close_fd=os.close):
-                return _read_matches(directory_fd, reference.split("/")[1], encoded)
+                if not _read_matches(directory_fd, reference.split("/")[1], encoded):
+                    return False
+                linked = os.stat(RESULT_DIRECTORY, dir_fd=root_fd, follow_symlinks=False)
+                opened = os.fstat(directory_fd)
+                return (linked.st_dev, linked.st_ino) == (opened.st_dev, opened.st_ino)
     except (OSError, TypeError, ValueError, RecursionError):
         return False
