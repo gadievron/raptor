@@ -549,10 +549,10 @@ def anonymous_fd(data: bytes, *, name: str = "raptor-audit-cfg") -> int:
         return fd
     except BaseException:
         if fd is not None:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(BaseException):
                 os.close(fd)
         if path is not None:
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(BaseException):
                 os.unlink(path)
         raise
 

@@ -66,6 +66,43 @@ def test_unlink_failure_closes_fd_and_removes_tempfile(
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize("secondary_type", [RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("cleanup_stage", ["close", "unlink"])
+def test_unlink_failure_survives_close_interruption(
+    tmp_path, monkeypatch, tempfile_branch, secondary_type, cleanup_stage,
+):
+    primary = KeyboardInterrupt("initial unlink interruption")
+    secondary = secondary_type("secondary close interruption")
+    real_unlink, real_close = os.unlink, evidence.os.close
+    unlinked, closed = [], []
+
+    def unlink(path):
+        unlinked.append(path)
+        if len(unlinked) == 1:
+            raise primary
+        real_unlink(path)
+        if cleanup_stage == "unlink":
+            raise secondary
+
+    def close(fd):
+        closed.append(fd)
+        real_close(fd)
+        if cleanup_stage == "close":
+            raise secondary
+
+    patch_module_attribute(monkeypatch, evidence, 'os', "unlink", unlink)
+    patch_module_attribute(monkeypatch, evidence, 'os', "close", close)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        evidence.anonymous_fd(b"config")
+    assert caught.value is primary
+    assert closed == tempfile_branch
+    assert len(unlinked) == 2
+    with pytest.raises(OSError) as released:
+        os.fstat(tempfile_branch[0])
+    assert released.value.errno == errno.EBADF
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_partial_writes_use_one_backing_buffer_and_rewind(
     tmp_path, monkeypatch, tempfile_branch,
 ):
