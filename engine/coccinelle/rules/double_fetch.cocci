@@ -1,13 +1,17 @@
-// double_fetch.cocci — Detect TOCTOU via double copy_from_user.
+// double_fetch.cocci — Review repeated userspace copies for possible TOCTOU.
 //
 // The pattern: a function calls copy_from_user on the same userspace
-// pointer more than once. Between fetches, a racing thread can
-// mutate the user buffer, breaking assumptions that the first fetch
-// validated. (get_user is NOT covered: it is a macro whose fetch
-// shape differs per size class, and no leg here matches it.)
+// pointer more than once. A racing thread may change the buffer
+// between reads, but two copies alone do not establish a security
+// decision: review whether first-read validation governs second-read
+// use, and whether concurrent mutation is possible. get_user is NOT
+// covered: it is a macro whose fetch shape differs per size class,
+// and no leg here matches it.
 //
-// Covers CWE-367: TOCTOU race in userspace reads.
-// @role: verification
+// CWE-367: TOCTOU review of userspace reads.
+// Direct-copy syntax is not complete coverage of user-read APIs.
+// raptor: confirm-only
+// @role: detection
 
 @first_fetch@
 expression uptr, dst1;
@@ -51,5 +55,5 @@ for _p2 in p2:
         _m = {"file": _p2.file, "line": int(_p2.line), "col": int(_p2.column),
               "line_end": int(_p2.line_end), "col_end": int(_p2.column_end),
               "rule": "double_fetch",
-              "message": "Second copy_from_user from '%s' (first at line %s) — TOCTOU risk" % (uptr, _p1.line)}
+              "message": "Repeated copy_from_user from '%s' (first at line %s) — review first-read validation, second-read use, and userspace mutation context" % (uptr, _p1.line)}
         sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
