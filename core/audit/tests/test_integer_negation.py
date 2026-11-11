@@ -81,3 +81,17 @@ def test_unevaluated_and_variable_sizeof_contexts_are_not_fault_sites(source,lan
     result=check(source,language=language)
     assert result['violation'] is None and not result['witness_validated']
     assert subject.negation_candidates(source,language=language,integer_abi='lp64')==[]
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("source,expected", [
+    ("int Negate(int Value){return -Value + -Value;}", []),
+    ("int Negate(int Value,int Other){return -Value + -Value + -Other;}", ["Other"]),
+    ("int Negate(int Value,int Other){return -Value + -Other;}", ["Value", "Other"]),
+    ("int Negate(int Value){return -Value + sizeof(-Value);}", ["Value"]),
+    ("int Negate(int Value){int Result=-Value;{unsigned Value=1;Result=-Value;}return Result;}", []),
+], ids=["duplicate", "other-name", "distinct", "unevaluated", "later-type-refusal"])
+def test_discovery_requires_an_unambiguous_negation_name(source, expected, language):
+    pytest.importorskip("tree_sitter_" + language)
+    rows = subject.negation_candidates(source, language=language, integer_abi="lp64")
+    assert [row[1] for row in rows] == expected
