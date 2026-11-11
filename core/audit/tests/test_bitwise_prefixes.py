@@ -234,7 +234,7 @@ def test_literal_caller_consumes_bitwise_prefix_obligations(verb):
     call = reply["calls"][0]
     assert call["verdict"] == "violation"
     assert literal_call_witness_valid(reply, call, verb, hypothesis, abi)
-    assert reply["binding"]["query_contract"] == "common-width-literal-frame-v11"
+    assert reply["binding"]["query_contract"] == "common-width-literal-frame-v17"
 
 
 @pytest.mark.parametrize(
