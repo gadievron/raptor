@@ -110,7 +110,11 @@ def native_value_epoch_unverified(source: str, name: str, after_line: int,
                 target = node.child_by_field_name("name")
             elif node.type == "update_expression":
                 target = _write_target(node)
-            elif node.type in {"assignment_expression", "variable_declarator"}:
+            elif node.type in {"assignment_expression", "augmented_assignment_expression"}:
+                target = _write_target(node)
+                if target is not None and target.type == "identifier":
+                    continue  # Bare names retain the lexical self-assignment check.
+            elif node.type == "variable_declarator":
                 target = _write_target(node)
                 if target is None:
                     return True
