@@ -6,6 +6,7 @@ from hashlib import sha256
 # Each adapted producer names its actual existing prompt input and section.
 _CONTEXT_INPUTS = {
     "late_joern": ("mechanical_evidence", "evidence"),
+    "deepen_quality": ("deepen_quality_selection", "deepen_quality"),
     "callee_contract": ("callee_contract_violation", "callee_contract"),
 }
 
@@ -25,6 +26,10 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         from .context import _defend_identifier
 
         value = render_callee_context(value, defend_identifier=_defend_identifier)
+    if kind == "deepen_quality":
+        from .deepen_continuation import render_deepen_selection
+
+        value = render_deepen_selection(value)
     if not isinstance(value, str) or not value or context_version(value) != version:
         return None
     return {"context_id": f"context:{kind}:{version}", "kind": kind, "version": version,

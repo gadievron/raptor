@@ -10165,42 +10165,43 @@ def _run_audit_body(
                 max_workers=resolved_workers,
                 knowledge_runtime=knowledge_runtime,
             )
+        # Release the deepen reserve: from here on the deepen phase itself
+        # is the consumer (or, when deepen is disabled/has nothing to do,
+        # the remaining post-loop phases inherit the headroom).
+        if deepen_reserve_held:
+            _release_deepen_reserve(config)
+        _comp_reserve_held = _hold_composition_reserve(config)
+
+        if config.deepen_suspicious:
+            result = _deepen_suspicious(
+                result,
+                config,
+                review_fn,
+                checklist,
+                context_map,
+                fuzz_coverage,
+                session_observations,
+                sarif_cache,
+                entry_points,
+                start_time,
+                on_progress,
+                evidence_index,
+                audit_log=audit_log,
+                discovered_evidence=discovered_evidence,
+                joern_server=joern_server,
+                project_learnings=project_learnings,
+                max_workers=resolved_workers,
+                mechanical_findings=mechanical_findings,
+                synthesis_counter=getattr(shared, "synthesis_counter", None),
+                knowledge_runtime=knowledge_runtime,
+            )
+
     finally:
-        knowledge_runtime.close("review_and_late_joern_complete")
+        knowledge_runtime.close("review_context_and_deepen_complete")
         try:
             knowledge_runtime.write_artifacts(config.out_dir)
         except Exception:
-            logger.warning("Could not persist late Joern continuation state", exc_info=True)
-
-    # Release the deepen reserve: from here on the deepen phase itself
-    # is the consumer (or, when deepen is disabled/has nothing to do,
-    # the remaining post-loop phases inherit the headroom).
-    if deepen_reserve_held:
-        _release_deepen_reserve(config)
-    _comp_reserve_held = _hold_composition_reserve(config)
-
-    if config.deepen_suspicious:
-        result = _deepen_suspicious(
-            result,
-            config,
-            review_fn,
-            checklist,
-            context_map,
-            fuzz_coverage,
-            session_observations,
-            sarif_cache,
-            entry_points,
-            start_time,
-            on_progress,
-            evidence_index,
-            audit_log=audit_log,
-            discovered_evidence=discovered_evidence,
-            joern_server=joern_server,
-            project_learnings=project_learnings,
-            max_workers=resolved_workers,
-            mechanical_findings=mechanical_findings,
-            synthesis_counter=getattr(shared, "synthesis_counter", None),
-        )
+            logger.warning("Could not persist continuation state", exc_info=True)
 
     # Post-loop pass wall-clock phases: one start/end per pass at its
     # outermost boundary, adjacent to the existing breadcrumbs. All
@@ -27571,6 +27572,7 @@ def _deepen_suspicious(
     max_workers: int = 1,
     mechanical_findings: dict[str, list[dict[str, Any]]] | None = None,
     synthesis_counter: AtomicSynthesisCounter | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> OrchestratorResult:
     """Re-review suspicious verdicts with enriched context.
 
@@ -27627,7 +27629,10 @@ def _deepen_suspicious(
     _stranded_dup = 0
     _stranded_sloc = 0
     for o in suspicious:
-        gap = _find_gap_in_checklist(checklist, o.file, o.function)
+        matches = [(path, item) for path, _info, item in _iter_checklist_items(checklist)
+                   if path == o.file and item.get("name") == o.function
+                   and (not o.line or item.get("line_start", 0) == o.line)]
+        gap = ({**matches[0][1], "file": matches[0][0]} if len(matches) == 1 else None)
         if not gap:
             continue
         sloc = (gap.get("line_end", 0) or 0) - (gap.get("line_start", 0) or 0)
@@ -27721,12 +27726,24 @@ def _deepen_suspicious(
             ctx["prior_hypotheses"] = prior_hyps
 
         ctx["deepen"] = True
+        ctx["deepen_quality_selection"] = {
+            "policy": "deepen-quality-v1",
+            "reason": "reduced_context" if prior_outcome.context_reduced else "unresolved_concern",
+        }
         prepared.append((deepen_idx, prior_outcome, gap, ctx))
+
+    continuation_owner = None
+    if knowledge_runtime is not None:
+        from .deepen_continuation import DeepenContinuations
+        continuation_owner = DeepenContinuations(
+            knowledge_runtime, review_fn,
+            lambda: not _check_budget(config, start_time, result))
 
     def _do_review(item):
         idx, _prior, _gap, ctx = item
         try:
-            outcome = review_fn(ctx, config)
+            outcome = (continuation_owner.dispatch(idx, ctx, config)
+                       if continuation_owner is not None else review_fn(ctx, config))
             return (idx, outcome, None)
         except Exception as exc:  # noqa: BLE001
             return (idx, None, exc)
@@ -27734,269 +27751,299 @@ def _deepen_suspicious(
     def _stop_rails() -> bool:
         return _check_budget(config, start_time, result)
 
-    raw_results = _collect_reviews_until_budget(
-        prepared,
-        _do_review,
-        _stop_rails,
-        effective_workers,
-        phase_label="deepen",
-        dispatch_gate=_make_dispatch_gate(config, stop_check=_stop_rails),
-    )
-
-    # --- Process results (always in main thread) ---
-    idx_to_prepared = {item[0]: item for item in prepared}
-    # Deepen targets the phase never adjudicated: dispatched calls
-    # that died (budget cap, or any other dispatch error) collect
-    # here in the loop; items that never returned a result at all
-    # (serial pre-dispatch stop, cancelled futures, gate refusals)
-    # join after it. The third field is the stamp reason — ``None``
-    # means "use the phase stop cause", set at stamp time.
-    _unadjudicated: list[tuple[ReviewOutcome, dict[str, Any], str | None]] = []
-    for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
-        _, prior_outcome, gap, ctx = idx_to_prepared[idx]
-
-        if exc is not None:
-            from core.llm.budget_errors import is_budget_exceeded_error
-
-            if is_budget_exceeded_error(exc):
-                # Terminal — the client-aware _check_budget above stops
-                # further dispatch; keep the prior verdict quietly
-                # instead of one warning per already-dispatched item.
-                logger.debug(
-                    "deepen skipped for %s:%s: LLM budget exhausted",
-                    gap["file"], gap["name"],
-                )
-                _unadjudicated.append((prior_outcome, gap, None))
-                continue
-            logger.warning(
-                "deepen failed for %s:%s: %s",
-                gap["file"],
-                gap["name"],
-                exc,
-            )
-            # A failed dispatch strands the announced re-review just
-            # like a rail stop does — the prior verdict stands, and
-            # the stamp (a constant, never the exception text) names
-            # it in the run output instead of only in the log.
-            _unadjudicated.append(
-                (prior_outcome, gap, _DEEPEN_DISPATCH_ERROR),
-            )
-            continue
-
-        outcome.line = gap.get("line_start", 0)
-        # Phase ledger: deepen calls cost money whether or not the new
-        # verdict is accepted below — without this the spend appeared
-        # in result.total_cost_usd (when accepted) but in no phase of
-        # cost-breakdown.json, so the ledgers couldn't reconcile.
-        result.cost_tracker.record_call(
-            "re_review",
-            cost_usd=outcome.cost_usd,
-            wall_time_s=outcome.duration_s,
+    try:
+        raw_results = _collect_reviews_until_budget(
+            prepared,
+            _do_review,
+            _stop_rails,
+            effective_workers,
+            phase_label="deepen",
+            dispatch_gate=_make_dispatch_gate(config, stop_check=_stop_rails),
         )
 
-        # Accept the deepen verdict when it's non-clean, OR when
-        # the clean came from a structured demotion (all-refuted)
-        # rather than a bare LLM flip-flop. The review-time
-        # rationale-consistency check is no basis: prose heuristics
-        # never change a verdict, they only annotate.
-        # A reduced-context prior is never dominated: a full-context
-        # clean genuinely supersedes a clean formed with stripped
-        # context (and clears the context_reduced tag).
-        _rr = outcome.review_result or {}
-        _structured_demotion = bool(_rr.get("all_refuted_demotion"))
-        _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
-        _deepen_dominated = (
-            outcome.status == "clean"
-            and not prior_outcome.context_reduced
-            and not _structured_demotion
-        )
+        # --- Process results (always in main thread) ---
+        idx_to_prepared = {item[0]: item for item in prepared}
+        # Deepen targets the phase never adjudicated: dispatched calls
+        # that died (budget cap, or any other dispatch error) collect
+        # here in the loop; items that never returned a result at all
+        # (serial pre-dispatch stop, cancelled futures, gate refusals)
+        # join after it. The third field is the stamp reason — ``None``
+        # means "use the phase stop cause", set at stamp time.
+        _unadjudicated: list[tuple[ReviewOutcome, dict[str, Any], str | None]] = []
+        for idx, outcome, exc in sorted(raw_results, key=lambda r: r[0]):
+            _, prior_outcome, gap, ctx = idx_to_prepared[idx]
 
-        if _referee_holds:
-            # The rejected deepen call still spent real money.
-            with result._lock:
-                result.total_cost_usd += outcome.cost_usd
-            if prior_outcome.review_result is None:
-                prior_outcome.review_result = {}
-            prior_outcome.review_result["demotion_referee"] = (
-                "probe-backed suspicious retained — deepen refutation "
-                "was LLM-only"
-            )
-            prior_outcome.body = (
-                "[demotion referee: the deepen re-review concluded "
-                "clean on LLM argument alone, but this suspicious is "
-                "backed by a fired probe — retained pending a "
-                "verification-role refuter]\n\n"
-                + (prior_outcome.body or "")
-            )
-            logger.info(
-                "deepen [%d/%d] %s:%s: demotion referee — stays "
-                "suspicious (probe-backed; LLM-only refutation)",
-                idx,
-                len(targets),
-                gap["file"],
-                gap["name"],
-            )
-        elif _deepen_dominated:
-            # The discarded deepen call still spent real money; the
-            # accepted path books it via _tally_outcome below.
-            with result._lock:
-                result.total_cost_usd += outcome.cost_usd
-            logger.info(
-                "deepen [%d/%d] %s:%s: stayed %s (clean without structured basis)",
-                idx,
-                len(targets),
-                gap["file"],
-                gap["name"],
-                prior_outcome.status,
-            )
-        else:
-            if outcome.status in ("finding", "suspicious"):
-                if config.immediate_verify:
-                    outcome = _verify_hypotheses_immediate(
-                        outcome,
-                        config,
-                        result,
-                        sarif_cache=sarif_cache,
-                        evidence_index=evidence_index,
-                        joern_server=joern_server,
-                        mechanical_findings=mechanical_findings,
-                        synthesis_counter=synthesis_counter,
-                        gap=gap,
-                        source=gap.get("source") or ctx.get("source"),
-                        source_is_numbered=not bool(gap.get("source")),
+            if exc is not None:
+                from core.llm.budget_errors import is_budget_exceeded_error
+
+                if is_budget_exceeded_error(exc):
+                    # Terminal — the client-aware _check_budget above stops
+                    # further dispatch; keep the prior verdict quietly
+                    # instead of one warning per already-dispatched item.
+                    logger.debug(
+                        "deepen skipped for %s:%s: LLM budget exhausted",
+                        gap["file"], gap["name"],
                     )
-                elif outcome.status == "finding" and config.sweep_validate_findings:
-                    outcome = _sweep_validate(
-                        outcome,
-                        config,
-                        sarif_cache,
-                        tier_counters=result.tier_counters,
-                        evidence_index=evidence_index,
-                        joern_server=joern_server,
-                    )
-            if outcome.status == "finding":
-                outcome = _apply_reachability_gate(
-                    outcome,
-                    ctx,
-                    entry_points,
-                    config,
-                )
-            if outcome.status == "finding":
-                gate_violations = _check_finding_gates(
-                    outcome,
-                    audit_log=audit_log,
-                    mode=config.mode,
-                )
-                if gate_violations:
-                    for v in gate_violations:
-                        logger.warning(
-                            "gate violation %s:%s: %s — demoted to suspicious",
-                            outcome.file,
-                            outcome.function,
-                            v,
-                        )
-                    outcome = _demote_outcome(
-                        outcome,
-                        f"[gate violation: {'; '.join(gate_violations)}]",
-                    )
-
-            # A genuine receipt on the prior row survives the replace:
-            # the deepen re-review is an LLM pass whose (sanitised)
-            # restated evidence would otherwise erase mechanical
-            # provenance the run already earned for this same
-            # still-standing verdict. A deepen outcome that earned its
-            # own tool stamp (e.g. sweep-validated finding) keeps it.
-            if (
-                outcome.status in ("finding", "suspicious")
-                and prior_outcome.status in ("finding", "suspicious")
-                and prior_outcome.evidence_tool
-                and _is_tool_confirmed(prior_outcome.evidence_tool)
-                and not _is_tool_confirmed(outcome.evidence_tool or "")
-            ):
-                # Same merge rule as refinement.merge_outcomes: a
-                # channel probative in EITHER outcome stays probative;
-                # one inconclusive in both stays non-probative.
-                _merged_inconclusive = (
-                    set(outcome.tools_inconclusive or set())
-                    | set(prior_outcome.tools_inconclusive or set())
-                ) - probative_channels(outcome) - probative_channels(
-                    prior_outcome,
-                )
-                outcome.tools_dispatched = (
-                    set(outcome.tools_dispatched or set())
-                    | set(prior_outcome.tools_dispatched or set())
-                )
-                outcome.tools_inconclusive = _merged_inconclusive or None
-                _stamp_evidence(outcome, prior_outcome.evidence_tool)
-
-            _untally_outcome(result, prior_outcome)
-            _outcomes_to_remove.add(id(prior_outcome))
-
-            try:
-                _commit_outcome(config, outcome, gap)
-            except Exception as exc:
+                    _unadjudicated.append((prior_outcome, gap, None))
+                    continue
                 logger.warning(
-                    "commit failed for %s:%s: %s",
+                    "deepen failed for %s:%s: %s",
                     gap["file"],
                     gap["name"],
                     exc,
-                    exc_info=True,
                 )
-
-            _tally_outcome(result, outcome)
-
-            if config.enable_session_context and outcome.review_result:
-                _accumulate_observations(
-                    session_observations,
-                    outcome,
-                    gap,
-                    sweep_pre_status=prior_outcome.status,
-                    target_path=config.target_path,
+                # A failed dispatch strands the announced re-review just
+                # like a rail stop does — the prior verdict stands, and
+                # the stamp (a constant, never the exception text) names
+                # it in the run output instead of only in the log.
+                _unadjudicated.append(
+                    (prior_outcome, gap, _DEEPEN_DISPATCH_ERROR),
                 )
+                continue
 
-            logger.info(
-                "deepen [%d/%d] %s:%s: %s -> %s",
-                idx,
-                len(targets),
-                gap["file"],
-                gap["name"],
-                prior_outcome.status,
-                outcome.status,
+            outcome.line = gap.get("line_start", 0)
+            # Phase ledger: deepen calls cost money whether or not the new
+            # verdict is accepted below — without this the spend appeared
+            # in result.total_cost_usd (when accepted) but in no phase of
+            # cost-breakdown.json, so the ledgers couldn't reconcile.
+            result.cost_tracker.record_call(
+                "re_review",
+                cost_usd=outcome.cost_usd,
+                wall_time_s=outcome.duration_s,
             )
 
-    # Announced re-reviews that returned no result were never
-    # dispatched (budget/SIGTERM rails, cancelled futures, gate
-    # refusals, executor shutdown) — their prior verdicts stand.
-    # Name the stranding in the run's output instead of finishing
-    # silently: withheld all-refuted demotions rely on this pass as
-    # their verification lane, so an exhausted reserve otherwise
-    # leaves the withhold marker un-adjudicated with no trace of why.
-    _returned = {r[0] for r in raw_results}
-    _unadjudicated.extend(
-        (item[1], item[2], None)
-        for idx, item in idx_to_prepared.items()
-        if idx not in _returned
-    )
-    if _unadjudicated:
-        _stop_reason = _deepen_stop_reason(result)
-        for _prior, _gap, _reason in _unadjudicated:
-            _mark_deepen_unadjudicated(_prior, _reason or _stop_reason)
-        _reasons = ", ".join(
-            sorted({_r or _stop_reason for _, _, _r in _unadjudicated}),
-        )
-        logger.warning(
-            "deepen: %d of %d announced re-review(s) unadjudicated "
-            "(%s) — the prior verdicts stand, with any withhold "
-            "markers unresolved",
-            len(_unadjudicated), len(targets), _reasons,
-        )
+            if continuation_owner is not None:
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                if not continuation_owner.can_publish(idx):
+                    continuation_owner.fail(idx, "deepen_context_or_source_not_admissible")
+                    continue
 
-    if _outcomes_to_remove:
-        result.outcomes = [
-            o for o in result.outcomes if id(o) not in _outcomes_to_remove
-        ]
+            # Accept the deepen verdict when it's non-clean, OR when
+            # the clean came from a structured demotion (all-refuted)
+            # rather than a bare LLM flip-flop. The review-time
+            # rationale-consistency check is no basis: prose heuristics
+            # never change a verdict, they only annotate.
+            # A reduced-context prior is never dominated: a full-context
+            # clean genuinely supersedes a clean formed with stripped
+            # context (and clears the context_reduced tag).
+            _rr = outcome.review_result or {}
+            _structured_demotion = bool(_rr.get("all_refuted_demotion"))
+            _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
+            _deepen_dominated = (
+                outcome.status == "clean"
+                and not prior_outcome.context_reduced
+                and not _structured_demotion
+            )
 
-    return result
+            if _referee_holds:
+                # The rejected deepen call still spent real money.
+                if continuation_owner is None:
+                    with result._lock:
+                        result.total_cost_usd += outcome.cost_usd
+                if prior_outcome.review_result is None:
+                    prior_outcome.review_result = {}
+                prior_outcome.review_result["demotion_referee"] = (
+                    "probe-backed suspicious retained — deepen refutation "
+                    "was LLM-only"
+                )
+                prior_outcome.body = (
+                    "[demotion referee: the deepen re-review concluded "
+                    "clean on LLM argument alone, but this suspicious is "
+                    "backed by a fired probe — retained pending a "
+                    "verification-role refuter]\n\n"
+                    + (prior_outcome.body or "")
+                )
+                logger.info(
+                    "deepen [%d/%d] %s:%s: demotion referee — stays "
+                    "suspicious (probe-backed; LLM-only refutation)",
+                    idx,
+                    len(targets),
+                    gap["file"],
+                    gap["name"],
+                )
+            elif _deepen_dominated:
+                # The discarded deepen call still spent real money; the
+                # accepted path books it via _tally_outcome below.
+                if continuation_owner is None:
+                    with result._lock:
+                        result.total_cost_usd += outcome.cost_usd
+                logger.info(
+                    "deepen [%d/%d] %s:%s: stayed %s (clean without structured basis)",
+                    idx,
+                    len(targets),
+                    gap["file"],
+                    gap["name"],
+                    prior_outcome.status,
+                )
+            else:
+                if outcome.status in ("finding", "suspicious"):
+                    if config.immediate_verify:
+                        outcome = _verify_hypotheses_immediate(
+                            outcome,
+                            config,
+                            result,
+                            sarif_cache=sarif_cache,
+                            evidence_index=evidence_index,
+                            joern_server=joern_server,
+                            mechanical_findings=mechanical_findings,
+                            synthesis_counter=synthesis_counter,
+                            gap=gap,
+                            source=gap.get("source") or ctx.get("source"),
+                            source_is_numbered=not bool(gap.get("source")),
+                        )
+                    elif outcome.status == "finding" and config.sweep_validate_findings:
+                        outcome = _sweep_validate(
+                            outcome,
+                            config,
+                            sarif_cache,
+                            tier_counters=result.tier_counters,
+                            evidence_index=evidence_index,
+                            joern_server=joern_server,
+                        )
+                if outcome.status == "finding":
+                    outcome = _apply_reachability_gate(
+                        outcome,
+                        ctx,
+                        entry_points,
+                        config,
+                    )
+                if outcome.status == "finding":
+                    gate_violations = _check_finding_gates(
+                        outcome,
+                        audit_log=audit_log,
+                        mode=config.mode,
+                    )
+                    if gate_violations:
+                        for v in gate_violations:
+                            logger.warning(
+                                "gate violation %s:%s: %s — demoted to suspicious",
+                                outcome.file,
+                                outcome.function,
+                                v,
+                            )
+                        outcome = _demote_outcome(
+                            outcome,
+                            f"[gate violation: {'; '.join(gate_violations)}]",
+                        )
+
+                # A genuine receipt on the prior row survives the replace:
+                # the deepen re-review is an LLM pass whose (sanitised)
+                # restated evidence would otherwise erase mechanical
+                # provenance the run already earned for this same
+                # still-standing verdict. A deepen outcome that earned its
+                # own tool stamp (e.g. sweep-validated finding) keeps it.
+                if (
+                    continuation_owner is None
+                    and outcome.status in ("finding", "suspicious")
+                    and prior_outcome.status in ("finding", "suspicious")
+                    and prior_outcome.evidence_tool
+                    and _is_tool_confirmed(prior_outcome.evidence_tool)
+                    and not _is_tool_confirmed(outcome.evidence_tool or "")
+                ):
+                    # Same merge rule as refinement.merge_outcomes: a
+                    # channel probative in EITHER outcome stays probative;
+                    # one inconclusive in both stays non-probative.
+                    _merged_inconclusive = (
+                        set(outcome.tools_inconclusive or set())
+                        | set(prior_outcome.tools_inconclusive or set())
+                    ) - probative_channels(outcome) - probative_channels(
+                        prior_outcome,
+                    )
+                    outcome.tools_dispatched = (
+                        set(outcome.tools_dispatched or set())
+                        | set(prior_outcome.tools_dispatched or set())
+                    )
+                    outcome.tools_inconclusive = _merged_inconclusive or None
+                    _stamp_evidence(outcome, prior_outcome.evidence_tool)
+
+                if continuation_owner is not None:
+                    if not continuation_owner.can_publish(idx):
+                        continuation_owner.fail(idx, "deepen_source_changed_before_publication")
+                        continue
+                    disposition = _publish_study_outcome(
+                        config, result, knowledge_runtime, continuation_owner.reservation(idx),
+                        prior_outcome, outcome, gap)
+                    if disposition != "published":
+                        continuation_owner.fail(idx, disposition)
+                        continue
+                else:
+                    _untally_outcome(result, prior_outcome)
+                    _outcomes_to_remove.add(id(prior_outcome))
+
+                    try:
+                        _commit_outcome(config, outcome, gap)
+                    except Exception as exc:
+                        logger.warning(
+                            "commit failed for %s:%s: %s",
+                            gap["file"],
+                            gap["name"],
+                            exc,
+                            exc_info=True,
+                        )
+
+                    _tally_outcome(result, outcome)
+
+                if config.enable_session_context and outcome.review_result:
+                    _accumulate_observations(
+                        session_observations,
+                        outcome,
+                        gap,
+                        sweep_pre_status=prior_outcome.status,
+                        target_path=config.target_path,
+                    )
+
+                logger.info(
+                    "deepen [%d/%d] %s:%s: %s -> %s",
+                    idx,
+                    len(targets),
+                    gap["file"],
+                    gap["name"],
+                    prior_outcome.status,
+                    outcome.status,
+                )
+
+            if continuation_owner is not None:
+                continuation_owner.complete(idx, (outcome.status
+                    if not (_referee_holds or _deepen_dominated) else prior_outcome.status))
+
+        # Announced re-reviews that returned no result were never
+        # dispatched (budget/SIGTERM rails, cancelled futures, gate
+        # refusals, executor shutdown) — their prior verdicts stand.
+        # Name the stranding in the run's output instead of finishing
+        # silently: withheld all-refuted demotions rely on this pass as
+        # their verification lane, so an exhausted reserve otherwise
+        # leaves the withhold marker un-adjudicated with no trace of why.
+        _returned = {r[0] for r in raw_results}
+        _unadjudicated.extend(
+            (item[1], item[2], None)
+            for idx, item in idx_to_prepared.items()
+            if idx not in _returned
+        )
+        if _unadjudicated:
+            _stop_reason = _deepen_stop_reason(result)
+            for _prior, _gap, _reason in _unadjudicated:
+                _mark_deepen_unadjudicated(_prior, _reason or _stop_reason)
+            _reasons = ", ".join(
+                sorted({_r or _stop_reason for _, _, _r in _unadjudicated}),
+            )
+            logger.warning(
+                "deepen: %d of %d announced re-review(s) unadjudicated "
+                "(%s) — the prior verdicts stand, with any withhold "
+                "markers unresolved",
+                len(_unadjudicated), len(targets), _reasons,
+            )
+
+        if _outcomes_to_remove:
+            result.outcomes = [
+                o for o in result.outcomes if id(o) not in _outcomes_to_remove
+            ]
+
+        return result
+
+    finally:
+        if continuation_owner is not None:
+            continuation_owner.close()
 
 
 def _re_review_disagreements(

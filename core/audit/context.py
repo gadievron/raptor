@@ -2068,6 +2068,12 @@ def format_context_for_prompt(
             "fail_open_leads", "\n".join(lines_fo), 1,
         ))
 
+    from .deepen_continuation import render_deepen_selection
+
+    deepen_selection = render_deepen_selection(ctx.get("deepen_quality_selection"))
+    if deepen_selection:
+        sections.append(PromptSection("deepen_quality", deepen_selection, 0))
+
     from .callee_review_context import render_callee_context
 
     ccv_block = render_callee_context(
