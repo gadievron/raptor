@@ -1619,7 +1619,7 @@ def _python_definition_headers(node: ast.AST) -> list[ast.AST]:
         parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
         parameters += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
         annotations = [arg.annotation for arg in parameters if arg.annotation is not None]
-        if getattr(node, "returns", None) is not None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.returns is not None:
             annotations.append(node.returns)
         return [*getattr(node, "decorator_list", []), *args.defaults,
                 *(value for value in args.kw_defaults if value is not None), *annotations]
