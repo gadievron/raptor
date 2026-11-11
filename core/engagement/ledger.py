@@ -151,6 +151,7 @@ from core.binary.identity import (
 from core.atomic_fs import rmtree_hardened
 from core.atomic_fs.fs_lock import artifact_lock
 from core.hash import sha256_file, sha256_string
+from core.source.streams import preserving_stream_error
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal
 
@@ -399,8 +400,11 @@ def _esc(value: str) -> str:
 
 def _read_head(path: Path) -> bytes | None:
     try:
-        with path.open("rb") as fh:
-            return fh.read(_HEAD_BYTES)
+        with preserving_stream_error(path.open("rb")) as fh:
+            try:
+                return fh.read(_HEAD_BYTES)
+            except OSError:
+                return None
     except OSError:
         return None
 
