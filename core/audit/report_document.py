@@ -53,6 +53,8 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
     artifacts = [{"path": str(out_dir / name)} for name in ("audit-report.json", "findings.json", "findings-graded.json", ".raptor-run.json")]
     if report.get("knowledge_processing") is not None:
         artifacts.append({"path": str(out_dir / "knowledge-results.json")})
+    if report.get("claim_adjudication") is not None:
+        artifacts.append({"path": str(out_dir / "claim-adjudication-shadow.json")})
     context = ReportContext("audit", out_dir.name, target=metadata["Target"], state="partial" if completeness.get("partial") else "unknown",
                             findings=native_findings(findings[:MAX_FINDINGS], producer="audit", run_id=out_dir.name),
                             diagnostics=diagnostics, artifacts=artifacts,
@@ -61,6 +63,7 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
                                                                       "duration_minutes": duration_minutes, "cost_usd": cost_usd,
                                                                       "suppressions_count": suppressions_count},
                                         "raptor.accounting": {"recorded_findings": len(findings), "captured_findings": min(len(findings), MAX_FINDINGS)}})
+    from .claim_presentation import claim_presentation_blocks
     blocks = []
     if diagnostics:
         blocks.append(Block("section", title="Run completeness", children=[Block("paragraph", text=line) for line in _completeness_lines(report)]))
@@ -128,6 +131,7 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
     reads = report.get("unrecorded_reads", [])
     if reads:
         blocks.extend(result_blocks(reads, title=f"Unrecorded reads ({sum(len(u['functions']) for u in reads)} functions in {len(reads)} files)"))
+    blocks.extend(claim_presentation_blocks(report))
     summary = build_operator_summary(context)
     return context, ReportDocument("Audit Report", "audit", context.snapshot_id, metadata=metadata, blocks=blocks,
                                    extensions={"raptor.summary": summary.to_dict(), "raptor.artifacts": artifacts,
