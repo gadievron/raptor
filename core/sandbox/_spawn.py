@@ -1275,7 +1275,7 @@ def _pin_bind_sources(
         return fds
     except BaseException:
         for fd in fds.values():
-            with contextlib.suppress(OSError):
+            with contextlib.suppress(BaseException):
                 os.close(fd)
         raise
 
