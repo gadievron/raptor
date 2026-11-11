@@ -2361,7 +2361,14 @@ def _finalize_run(
         "interrupted" if result.terminated_by in ("sigterm", "environment")
         else "completed"
     )
-    report = generate_report(out_dir, final_status=_final_status)
+    processing_limitations = getattr(result, "processing_limitations", None)
+    if processing_limitations:
+        report = generate_report(
+            out_dir, final_status=_final_status,
+            processing_limitations=processing_limitations,
+        )
+    else:
+        report = generate_report(out_dir, final_status=_final_status)
 
     # Forecast vs actual (the calibration loop): pair the run's
     # pre-spend forecast with the cost ledger, append the calibration
@@ -2451,6 +2458,14 @@ def _finalize_run(
     # suspicious/dark/errored items sit in the persisted artifacts —
     # these lines say where the rest went. Silent only when every
     # class is zero (single render seam with the report summary).
+    # Display only limitations accepted by the report's fixed-label contract.
+    # A completed lifecycle does not imply every processing result was retained.
+    for limitation in report.get("completeness", {}).get("missing", []):
+        if limitation in (processing_limitations or ()):
+            print(sanitise_for_terminal(
+                f"Processing incomplete: {limitation}. Prior assessments retained.",
+                max_len=300,
+            ), flush=True)
     for residue_line in format_residue_lines(report):
         print(residue_line, flush=True)
     from core.audit.cost_tracker import format_cost_summary
