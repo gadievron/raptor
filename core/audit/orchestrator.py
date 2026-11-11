@@ -36945,31 +36945,42 @@ def _run_dark_verification(
             # worlds: run_parallel catches only ``Exception``).
             return _FloorRefusal(floor_refusal_result(spec, lang, exc), exc)
 
+    staged: dict[int, tuple[ReviewOutcome, str, str]] = {}
+    counter_deltas = {"findings": 0, "dormant": 0, "suspicious": 0,
+                      "clean": 0, "errors": 0}
+
+    def _projected_state(outcome: ReviewOutcome) -> tuple[str, str]:
+        pending = staged.get(id(outcome))
+        return ((pending[1], pending[2]) if pending is not None
+                else (outcome.status, outcome.evidence_tool))
+
     def _apply(outcome: ReviewOutcome, verify_result: Any) -> dict[str, Any]:
-        """Fold one witness verdict into the outcome + counters."""
-        prior = outcome.status
+        """Stage one witness fold until its records have been retained."""
+        prior, evidence_tool = _projected_state(outcome)
+        status = prior
         if witness_can_confirm(verify_result, finding_key=f"{outcome.file}:{outcome.function}"):
             from .evidence_grade import is_tool_evidence as _is_tool_ev
 
-            outcome.status = "finding"
+            status = "finding"
             # Extend the existing receipt chain without erasing engine provenance.
-            _prior_ev = outcome.evidence_tool or ""
+            _prior_ev = evidence_tool or ""
             if SANITIZER_RECEIPT in _prior_ev:
                 pass
             elif _prior_ev and _is_tool_ev(_prior_ev):
-                outcome.evidence_tool = f"{_prior_ev}+{SANITIZER_RECEIPT}"
+                evidence_tool = f"{_prior_ev}+{SANITIZER_RECEIPT}"
             else:
-                outcome.evidence_tool = SANITIZER_RECEIPT
+                evidence_tool = SANITIZER_RECEIPT
             if prior != "finding":
-                result.findings += 1
+                counter_deltas["findings"] += 1
                 if prior in ("dark", "dormant"):
-                    result.dormant -= 1
+                    counter_deltas["dormant"] -= 1
                 elif prior == "suspicious":
-                    result.suspicious -= 1
+                    counter_deltas["suspicious"] -= 1
                 elif prior == "clean":
-                    result.clean -= 1
+                    counter_deltas["clean"] -= 1
                 elif prior == "error":
-                    result.errors -= 1
+                    counter_deltas["errors"] -= 1
+            staged[id(outcome)] = (outcome, status, evidence_tool)
         elif verify_result.verdict == "confirmed":
             logger.info("dark witness matched a prediction for %s:%s; no independent violation", outcome.file, outcome.function)
         elif verify_result.verdict == "refuted":
@@ -36990,12 +37001,26 @@ def _run_dark_verification(
         return {
             "file": outcome.file,
             "function": outcome.function,
-            "status": outcome.status,
-            "evidence_tool": outcome.evidence_tool,
+            "status": status,
+            "evidence_tool": evidence_tool,
             "verdict": verify_result.verdict,
             "violation_observed": getattr(verify_result, "violation_observed", False) is True,
             "match_detail": verify_result.match_detail,
         }
+
+    def _retain_and_apply() -> None:
+        # Retain the projected batch before exposing any stronger assessment.
+        # Apply deltas to the live objects so callers retain their identities.
+        save_json(config.out_dir / "dark-verify-results.json", records)
+        for outcome, status, evidence_tool in staged.values():
+            outcome.status = status
+            outcome.evidence_tool = evidence_tool
+        for field, delta in counter_deltas.items():
+            if delta:
+                setattr(result, field, getattr(result, field) + delta)
+        staged.clear()
+        for field in counter_deltas:
+            counter_deltas[field] = 0
 
     records: list[dict[str, Any]] = []
     workers = max(1, max_workers)
@@ -37025,15 +37050,24 @@ def _run_dark_verification(
         # benign-looking "error" rows. Runs on the calling thread
         # only, so the record lands exactly once and in item order
         # even when probes fanned out across workers.
+        status, evidence_tool = _projected_state(outcome)
         records.append({
             "file": outcome.file,
             "function": outcome.function,
-            "status": outcome.status,
-            "evidence_tool": outcome.evidence_tool,
+            "status": status,
+            "evidence_tool": evidence_tool,
             "verdict": refusal.result.verdict,
             "match_detail": refusal.result.match_detail,
         })
-        save_json(config.out_dir / "dark-verify-results.json", records)
+        try:
+            _retain_and_apply()
+        except Exception as persistence_error:
+            # Keep the fail-closed floor error out of ordinary pass-error
+            # handling even when its diagnostic record could not be retained.
+            refusal.exc.add_note(
+                "dark verification refusal persistence failed: "
+                + type(persistence_error).__name__)
+            raise refusal.exc from persistence_error
         logger.error(
             "dark verification refused: %s",
             refusal_summary_line(refusal_detail(refusal.exc) or {}),
@@ -37112,8 +37146,8 @@ def _run_dark_verification(
                 continue
             if isinstance(verify_result, _FloorRefusal):
                 # The first refusal in item order records and
-                # re-raises; verdicts already folded stay applied,
-                # later slots are discarded — matching the serial
+                # re-raises after retaining and applying its staged
+                # prefix; later slots are discarded — matching the serial
                 # pass, which never probes past the refusal.
                 _record_floor_refusal(outcome, verify_result)
             records.append(_apply(outcome, verify_result))
@@ -37125,8 +37159,7 @@ def _run_dark_verification(
             )
 
     if records:
-        results_path = config.out_dir / "dark-verify-results.json"
-        save_json(results_path, records)
+        _retain_and_apply()
 
 
 def _run_differential_verification(
