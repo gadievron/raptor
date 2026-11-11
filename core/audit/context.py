@@ -2068,27 +2068,12 @@ def format_context_for_prompt(
             "fail_open_leads", "\n".join(lines_fo), 1,
         ))
 
-    if ctx.get("callee_contract_violation"):
-        ccv = ctx["callee_contract_violation"]
-        ccv_callee = _defend_identifier(ccv.get("callee", "?"),
-                                        max_length=128)
-        ccv_assumption = _defend_identifier(ccv.get("assumption", ""),
-                                            max_length=300)
-        ccv_status = _defend_identifier(ccv.get("callee_status", "?"),
-                                        max_length=64)
-        ccv_hypothesis = _defend_identifier(
-            ccv.get("callee_hypothesis", ""), max_length=400,
-        )
-        ccv_block = (
-            "\n### Callee-contract violation\n"
-            f"Your previous review marked this function **clean** because "
-            f"you assumed `{ccv_callee}` {ccv_assumption}.\n\n"
-            f"However, the review of `{ccv_callee}` found it has a "
-            f"**{ccv_status}**: {ccv_hypothesis}\n\n"
-            f"Re-evaluate this function given that your callee assumption "
-            f"was wrong. Does the callee's actual behaviour make THIS "
-            f"function vulnerable?"
-        )
+    from .callee_review_context import render_callee_context
+
+    ccv_block = render_callee_context(
+        ctx.get("callee_contract_violation"), defend_identifier=_defend_identifier,
+    )
+    if ccv_block:
         sections.append(PromptSection("callee_contract", ccv_block, 0))
 
     if ctx.get("sink_unreachable"):
