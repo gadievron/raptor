@@ -11,6 +11,7 @@ from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
 from core.audit.record import _compute_hash
 from core.audit.strategy import strategies_from_item
 from core.audit.verdict_reuse import import_reused_verdicts
+from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields, current_review_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
@@ -72,8 +73,7 @@ def _entry(target, **over):
         "model": "model-a",
         "body": "segment-1 review body",
     }
-    fields.update(over)
-    return ReviewJournalEntry(**fields)
+    return ReviewJournalEntry(**current_review_fields(target, fields, over))
 
 
 def _run_dir(tmp_path, *entries):
@@ -91,6 +91,27 @@ def _gap_keys(gaps):
 class TestOwnRunReuseFold:
     def test_corrective_empty_strategies_row_reuses_on_resume(
             self, tmp_path):
+        """Legacy None-end corrective history remains visible for fresh review."""
+        target = _write_target(tmp_path)
+        original = _entry(target, verdict="suspicious")
+        corrective = _entry(
+            target, verdict="clean", strategies=[], line_end=None,
+            source_hash=_compute_hash(target, "auth.c", 1, None),
+            body="[resolution] corrective entry",
+        )
+        run_dir = _run_dir(tmp_path, original, corrective)
+        sink: dict = {}
+        gaps = compute_gaps(
+            _checklist(target), [], out_dir=run_dir,
+            reuse_sink=sink, own_run_reuse=True,
+            current_model="model-a",
+        )
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_corrective_empty_strategies_row_reuses_on_resume_measured_current(
+            self, tmp_path):
+        """Separately measured current history preserves the strategy contract."""
         # The interrupted run's post-loop pass appended a corrective
         # row with strategies=[] (the writer's synthetic gap carried
         # none) AFTER the strategy-briefed review row. Resume must
@@ -99,10 +120,8 @@ class TestOwnRunReuseFold:
         target = _write_target(tmp_path)
         original = _entry(target, verdict="suspicious")
         corrective = _entry(
-            target, verdict="clean", strategies=[], line_end=None,
-            # The corrective writer's minimal gap had no line_end, so
-            # its stamp covers the fallback read window.
-            source_hash=_compute_hash(target, "auth.c", 1, None),
+            target, verdict="clean", strategies=[], line_end=5,
+            source_hash=hash_span(target / "auth.c", 1, 5),
             body="[resolution] corrective entry",
         )
         run_dir = _run_dir(tmp_path, original, corrective)
@@ -204,7 +223,11 @@ class TestOwnRunReuseFold:
         project = tmp_path / "project"
         prior_dir = project / "run0"
         prior_dir.mkdir(parents=True)
-        append_entry(prior_dir, _entry(target, run_id="run0"))
+        # The prior run really predates the current review; context-bound
+        # journals also enforce chronology across both loaded sources.
+        prior = _entry(target, run_id="run0", ts="2000-01-01T00:00:00Z")
+        assert prior.ts < own.ts
+        append_entry(prior_dir, prior)
         merge_into_index(project, prior_dir)
 
         sink: dict = {}
@@ -485,8 +508,7 @@ def _site_entry(target, site, strategies):
         file="conf.c",
         function="SSHINT",
         verdict="clean",
-        source_hash=hash_span(
-            target / "conf.c", site["line_start"], site["line_end"]),
+        **current_foundation_fields(target, "conf.c", site["line_start"], site["line_end"]),
         line_start=site["line_start"],
         line_end=site["line_end"],
         strategies=strategies,
@@ -586,7 +608,7 @@ class TestSpanBoundCredits:
         append_entry(run_dir, ReviewJournalEntry(
             ts=now_iso(), run_id="run1", file="r.c", function="fn",
             verdict="clean",
-            source_hash=hash_span(target / "r.c", 1, 1),
+            **current_foundation_fields(target, "r.c", 1, 1),
             line_start=1, line_end=1,
             strategies=sorted(strategies_from_item(dict(fn_item), "r.c")),
         ))
@@ -663,8 +685,7 @@ def _collision_entry(target, site, **over):
         "model": "model-a",
         "body": "segment-1 review body",
     }
-    fields.update(over)
-    return ReviewJournalEntry(**fields)
+    return ReviewJournalEntry(**current_review_fields(target, fields, over))
 
 
 class TestPerSiteEligibility:
@@ -701,10 +722,7 @@ class TestPerSiteEligibility:
         )
 
     def test_single_site_key_resolves_to_sole_item(self, tmp_path):
-        # Single-site key (the overwhelming case): an entry whose
-        # recorded span no longer matches any current site still
-        # resolves to the key's sole item — identical to the legacy
-        # first-item behaviour.
+        """A unique name cannot repair a mismatching historical occurrence."""
         target = _write_target(tmp_path)
         run_dir = _run_dir(
             tmp_path, _entry(target, line_start=2, line_end=6))
@@ -715,14 +733,12 @@ class TestPerSiteEligibility:
             reuse_sink=sink, own_run_reuse=True,
             current_model="model-a", reuse_stats=stats,
         )
-        assert stats == {}
-        assert "auth.c:check_pw" in sink
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert stats == {"auth.c:check_pw": "reference_foundation"}
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_zero_line_start_falls_back_to_first_site(self, tmp_path):
-        # A legacy entry with no recorded site (line_start 0) keeps
-        # the historical first-site resolution: admitted with the
-        # FIRST item's strategies, refused with a sibling's.
+        """Both zero-site legacy rows fail admission before strategy comparison."""
         target = _collision_target(tmp_path)
 
         run_dir = tmp_path / "run1"
@@ -734,13 +750,14 @@ class TestPerSiteEligibility:
         ))
         sink: dict = {}
         stats: dict = {}
-        compute_gaps(
+        gaps = compute_gaps(
             _collision_checklist(target), [], out_dir=run_dir,
             reuse_sink=sink, own_run_reuse=True,
             current_model="model-a", reuse_stats=stats,
         )
-        assert stats == {}
-        assert "auth.c:check_pw" in sink
+        assert stats == {"auth.c:check_pw": "reference_foundation"}
+        assert sink == {}
+        assert {g["line_start"] for g in gaps} == {1, 7}
 
         run2 = tmp_path / "run2"
         run2.mkdir(exist_ok=True)
@@ -752,13 +769,14 @@ class TestPerSiteEligibility:
         ))
         sink2: dict = {}
         stats2: dict = {}
-        compute_gaps(
+        gaps2 = compute_gaps(
             _collision_checklist(target), [], out_dir=run2,
             reuse_sink=sink2, own_run_reuse=True,
             current_model="model-a", reuse_stats=stats2,
         )
-        assert stats2 == {"auth.c:check_pw": "strategy_changed"}
+        assert stats2 == {"auth.c:check_pw": "reference_foundation"}
         assert sink2 == {}
+        assert {g["line_start"] for g in gaps2} == {1, 7}
 
 
 class TestDarkRowResumeMatrix:
@@ -984,7 +1002,12 @@ class TestDarkRecordSurfaces:
         assert token
         row[journal_mac.TOKEN_KEY] = token
         record = {"tool": "journal", "functions_analysed": [row]}
-        return _gap_keys(compute_gaps(_checklist(target), [record]))
+        current = None
+        if status == "clean":
+            # A positive C projection needs the actual delivered review.
+            # Dark/error controls retain their projection-only inputs.
+            current = _run_dir(tmp_path, _entry(target, verdict="clean"))
+        return _gap_keys(compute_gaps(_checklist(target), [record], out_dir=current))
 
     @pytest.mark.parametrize("status,suppressed", [
         ("dark", False),

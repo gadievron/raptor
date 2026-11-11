@@ -86,7 +86,8 @@ def gaps_env(tmp_path, monkeypatch):
     # The indexed row represents a current C review, including the actual
     # conditional reference core fitted by the real context renderer. The CLI
     # continues to test its default policy rather than bypassing admission.
-    answers = foundation_answers("c", request_id="cli-foundation-fixture")
+    answers = foundation_answers("c", request_id="cli-foundation-fixture",
+                                 source=_SOURCE, file="auth.c")
     context = {"file": "auth.c", "function": "check_pw", "line_start": 1,
                "line_end": 5, "source": _SOURCE, "language": "c",
                "language_reference_answers": answers}
