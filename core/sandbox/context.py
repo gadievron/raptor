@@ -9088,14 +9088,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             if _persona_tmpdir is not None:
                 import shutil as _shutil
                 from core.run.scratch import keepalive_unregister
-                keepalive_unregister(_persona_tmpdir)
-                try:
-                    _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
-                except Exception:
-                    logger.debug(
-                        "persona tmpdir cleanup failed for %s",
-                        _persona_tmpdir, exc_info=True,
-                    )
+
+                def _remove_persona_dir() -> None:
+                    try:
+                        _shutil.rmtree(_persona_tmpdir, ignore_errors=True)
+                    except Exception:
+                        logger.debug(
+                            "persona tmpdir cleanup failed for %s",
+                            _persona_tmpdir, exc_info=True,
+                        )
+
+                retire_parent_resources(
+                    lambda: keepalive_unregister(_persona_tmpdir),
+                    _remove_persona_dir,
+                )
 
         def _retire_context_scratch() -> None:
             # Private scratch dir (restricted Landlock-only posture) —
