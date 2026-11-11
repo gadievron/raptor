@@ -761,7 +761,8 @@ def build_engagement_document(report: dict[str, Any], *, run_id: str = "", artif
     if recorded and recorded != earned:
         coverage_blocks.append(Block("paragraph", text="Rows recorded at verdict time: " + journal_counts(recorded) + " — the live journal differs; the divergence is per-artifact below"))
     coverage_rows = []
-    for entry in (coverage.get("per_artifact") or [])[:_MAX_TABLE_ROWS_MD]:
+    coverage_records = coverage.get("per_artifact") or []
+    for entry in coverage_records[:_MAX_TABLE_ROWS_MD]:
         count = sum((entry.get("journal_verdict_rows") or {}).values())
         status = "" if entry.get("journal_load_complete") else " (partial load)"
         if entry.get("journal_rows_absent_since_verdict"):
@@ -774,6 +775,8 @@ def build_engagement_document(report: dict[str, Any], *, run_id: str = "", artif
     if coverage_rows:
         coverage_blocks.extend([Block("table", columns=["Artifact", "Journal Rows", "Checklist Items", "Reviewed (Analysed Depth)", "No-Lane Residual", "Advisory Llm Extent (Incl. Reads)"], rows=coverage_rows),
                                 Block("paragraph", text="Advisory columns are labeled strata only — they never count as earned coverage (N17).")])
+    if len(coverage_records) > len(coverage_rows):
+        coverage_blocks.append(elision(len(coverage_records) - len(coverage_rows), "more coverage row(s)"))
     blocks.append(Block("section", title="Coverage Synthesis", children=coverage_blocks))
     survivors = report.get("survivors") or {}
     total, listed = survivors.get("total", 0), survivors.get("listed") or []
