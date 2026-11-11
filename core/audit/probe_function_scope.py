@@ -178,7 +178,7 @@ def source_binding(source: str, function_name: str, *, verb: str, integer_abi=No
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-integer-comparison":
         from .integer_abi import integer_abi_record
-        binding["query_contract"] = "source-integer-comparison-v9"
+        binding["query_contract"] = "source-integer-comparison-v10"
         binding["integer_abi"] = integer_abi_record(integer_abi)
     elif verb == "check-shift-count":
         from .integer_abi import integer_abi_record

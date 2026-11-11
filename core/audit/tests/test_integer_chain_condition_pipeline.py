@@ -19,7 +19,7 @@ def test_chain_receipt_is_exact_source_bound_and_non_refuting():
     result=sweep._run_smt_verb_inner(file_path='unit.c',function_name='Read',verb=VERB,source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed' and result.matches,result.errors
     assert result.details['source_scope']==source_binding(SOURCE,'Read',verb=VERB,hypothesis=CLAIM,integer_abi='lp64')
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v10'
     assert result.details['checked_property']=='constant-chained-comparison'
     assert is_diagnostic_smt_rule('smt:'+VERB) and is_non_refuting_smt_rule('smt:'+VERB)
 
@@ -43,7 +43,7 @@ def test_discovery_uses_both_boolean_outcomes_without_solver_or_guard_calls(monk
 def test_real_confined_chain_receipt():
     result=sweep.run_smt_verb_direct(file_path='unit.c',function_name='Read',verb=VERB,source=SOURCE,hypothesis=CLAIM,integer_abi='lp64')
     assert result.outcome=='confirmed',result.errors
-    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract']=='source-integer-comparison-v10'
     assert result.details['checked_property']=='constant-chained-comparison'
     assert result.details['entry_witness_validated']
 

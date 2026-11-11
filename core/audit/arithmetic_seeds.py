@@ -502,7 +502,15 @@ def _operations(source, language, abi):
         if access.status == "candidate":
             writes.append((target, "[]", (array, index), "fixed-array-write", mechanism,
                            {"object_extent": access.extent, "access_kind": "write", "binding_status": "candidate"}))
-    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains + unsigned_updates + writes
+    from .integer_grouping import grouping_candidates
+    grouping = []
+    for target, name, left, op, right in grouping_candidates(source, language=language, integer_abi=abi):
+        expression = data[target.start_byte:target.end_byte].decode()
+        mechanism = f"Condition grouping changes truth in `{expression}`."
+        if len(mechanism) <= 300:
+            grouping.append((target, '&', (name, left, right), 'grouping-truth-difference', mechanism,
+                             {'binding_status': 'candidate', 'candidate_basis': 'alternative-mask-grouping'}))
+    return result + deferred_guards + affine_candidates + affine_divisions + negations + updates + remainder_candidates + mask_candidates + compound_candidates + conditions + conjunctions + disjunctions + range_conditions + chains + unsigned_updates + writes + grouping
 
 
 def seed_arithmetic_hypotheses(gaps, source_texts, *, mode, integer_abi=None):

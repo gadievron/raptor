@@ -20,7 +20,7 @@ def test_worker_receipt_remains_diagnostic_and_exactly_bound():
                                        source=SOURCE, hypothesis=CLAIM, integer_abi='lp64')
     assert result.outcome == 'confirmed' and result.matches, result.errors
     assert result.details['source_scope'] == source_binding(SOURCE, 'Read', verb=VERB, hypothesis=CLAIM, integer_abi='lp64')
-    assert result.details['source_scope']['query_contract'] == 'source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-comparison-v10'
     assert result.details['checked_property'] == 'constant-integer-disjunction'
     assert is_diagnostic_smt_rule('smt:'+VERB) and is_non_refuting_smt_rule('smt:'+VERB)
 
@@ -53,6 +53,6 @@ def test_real_confined_disjunction_receipt():
     result = sweep.run_smt_verb_direct(file_path='unit.c', function_name='Read', verb=VERB,
                                       source=SOURCE, hypothesis=CLAIM, integer_abi='lp64')
     assert result.outcome == 'confirmed', result.errors
-    assert result.details['source_scope']['query_contract'] == 'source-integer-comparison-v9'
+    assert result.details['source_scope']['query_contract'] == 'source-integer-comparison-v10'
     assert result.details['checked_property'] == 'constant-integer-disjunction'
     assert result.details['entry_witness_validated']

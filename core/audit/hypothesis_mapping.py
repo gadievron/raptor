@@ -267,6 +267,7 @@ def hypothesis_to_semgrep_rule_keyed(
 
 
 _SMT_HYPOTHESIS_VERBS = [
+    ("condition grouping changes truth", "check-integer-comparison"),
     ("unsigned increment wrap", "check-integer-update"),
     ("unsigned decrement wrap", "check-integer-update"),
     ("condition is always false", "check-integer-comparison"),
