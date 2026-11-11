@@ -63,7 +63,7 @@ def prepare_understand_report(args, out_dir: Path, target: Path) -> None:
 
 def complete_understand_report(args, payload: dict, native_path: Path):
     options = getattr(args, "_report_options", None) or options_from_args(args)
-    if not options.enabled:
+    if not options.enabled or not (getattr(args, "report_format", None) or getattr(args, "report_output", None)):
         notice = unrefreshed_report_notice(native_path.parent / "portable-reports")
         if notice:
             print("Warning: " + notice, file=sys.stderr)
