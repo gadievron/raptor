@@ -220,7 +220,7 @@ def test_overflow_branch_allocation_is_not_protected(tmp_path, condition, value)
 def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
     from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
 
-    prefix = 'typedef unsigned long size_t;\n'
+    prefix = '#include <stddef.h>\n'
     source = prefix + 'void *partial(size_t count) { return malloc(count * sizeof(int)); }' + "\n"
     partial_line = 1 + prefix.count("\n")
     if other_hit:
