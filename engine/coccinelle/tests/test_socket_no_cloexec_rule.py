@@ -1,12 +1,13 @@
 """Fixture tests for the socket_no_cloexec rule.
 
-Descriptors that reach the portable post-call idiom
-``fcntl(fd, F_SETFD, ...)`` are close-on-exec by the time any exec can
-happen, so neither the socket() nor the accept() leg may report them.
+Existing post-call and text-based exclusions are coverage filters, not
+proof that a descriptor is protected. Reports need lifetime/exec review,
+and quiet results remain inconclusive.
 """
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -145,3 +146,57 @@ class TestNegatives:
         """)
         assert len(results) == 1
         assert results[0]["rule"] == "socket_no_cloexec"
+
+
+@pytest.mark.parametrize('api,variant,expected', [('socket', 'closed', 1), ('socket', 'cleared', 0), ('socket', 'substring', 0), ('accept', 'closed', 1), ('accept', 'cleared', 0)])
+def test_socket_inheritance_requires_context_and_coverage(tmp_path, monkeypatch, api, variant, expected):
+    from core.audit.sweep import (
+        is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
+    )
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+    from packages.coccinelle import runner
+    from packages.coccinelle.models import SpatchMatch, SpatchResult
+    rule = _RULE
+    flags = 'SOCK_STREAM | MY_SOCK_CLOEXEC' if variant == 'substring' else 'SOCK_STREAM'
+    tail = 'fcntl(fd, F_SETFD, 0);' if variant == 'cleared' else ''
+    if variant == 'closed':
+        tail = 'close(fd);'
+    creation = f'socket(AF_INET, {flags}, 0)' if api == 'socket' else 'accept(0, 0, 0)'
+    source = ('int candidate(void) {\n'
+              f' int fd = {creation};\n'
+              f' {tail}\n return 0;\n}}\nvoid untouched(void) {{}}\n')
+    target = tmp_path / 'owned.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(rule), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Owned socket inheritance syntax classification',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert len(rows) == expected
+    native = SpatchResult(rule=rule.stem, rule_path=str(rule),
+        matches=[SpatchMatch.from_dict(row) for row in rows], files_examined=[str(target)])
+    calls = []
+    def replay(file_path, rule_path, **kwargs):
+        assert file_path == target and rule_path == rule
+        calls.append((str(file_path), str(rule_path)))
+        return native
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'run_rule', replay)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path=target.name,
+        cocci_rule=str(rule), language='c')
+    assert len(calls) == 1
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert result.details['confirm_only']
+    assert all('review descriptor lifetime' in row['message'] for row in rows)
+    assert result.outcome == ('confirmed' if expected else 'inconclusive')
+    last = len(source.splitlines())
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name='untouched',
+        line_start=last, line_end=last, language='c')
+    assert scoped.matches == [] and scoped.outcome == 'inconclusive'
+    assert scoped.details['confirm_only']
+    assert len(result.matches) == expected
