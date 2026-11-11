@@ -112,6 +112,16 @@ class PreparedClaimPipeline:
 
         event = None
         out_dir = self.out_dir
+        retention_failed = False
+
+        def retain(snapshot):
+            nonlocal retention_failed
+            try:
+                return retain_smt_result(out_dir, snapshot)
+            except Exception:
+                retention_failed = True
+                raise
+
         try:
             snapshot = (
                 deepcopy(result)
@@ -131,10 +141,14 @@ class PreparedClaimPipeline:
                     prepared_admission=prepared.admission,
                     expected_target=prepared.target,
                     expected_conclusion=prepared.conclusion,
-                    retain_result=lambda snapshot: retain_smt_result(out_dir, snapshot),
+                    retain_result=retain,
                 )
         except Exception:
             snapshot = None
+            prepared = PreparationUnavailable("result-retention-unavailable")
+        if retention_failed:
+            snapshot = None
+            event = None
             prepared = PreparationUnavailable("result-retention-unavailable")
         with self._lock:
             self._observed.append((record, snapshot, prepared, event, integer_abi))
@@ -149,11 +163,11 @@ class PreparedClaimPipeline:
         for record, result, prior, event, abi in rows:
             projected_event = None
             current = self.prepare(record, integer_abi=abi)
-            reason = (
-                current.reason
-                if isinstance(current, PreparationUnavailable)
-                else "unknown-result"
-            )
+            reason = "unknown-result"
+            if isinstance(current, PreparationUnavailable):
+                reason = current.reason
+            elif isinstance(prior, PreparationUnavailable):
+                reason = prior.reason
             if (
                 isinstance(current, PreparedOverflowContext)
                 and isinstance(prior, PreparedOverflowContext)
