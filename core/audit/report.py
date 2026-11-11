@@ -164,6 +164,7 @@ def generate_report(
     final_status: str | None = None,
     processing_limitations: list[str] | None = None,
     unacknowledged_assessments: bool = False,
+    publication_failures: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Generate the final audit report.
 
@@ -204,7 +205,14 @@ def generate_report(
             completeness["partial"] = True
     # The caller supplies only the explicit publication signal. Missing or
     # mismatched acknowledgements are not necessarily failed disk writes.
-    if unacknowledged_assessments is True:
+    if unacknowledged_assessments is True or (
+        isinstance(publication_failures, list) and any(
+            isinstance(failure, dict)
+            and failure.get("reason") == "initial_journal_acknowledgement_unavailable"
+            and failure.get("adjudication") == "unverified"
+            for failure in publication_failures
+        )
+    ):
         completeness["missing"] = list(dict.fromkeys([
             *completeness.get("missing", []),
             UNACKNOWLEDGED_ASSESSMENTS_LIMITATION,
