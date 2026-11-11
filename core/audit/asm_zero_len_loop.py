@@ -41,6 +41,7 @@ import logging
 import re
 
 from core.source import open_regular
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -438,7 +439,7 @@ def scan_inventory_asm(checklist: dict | None) -> list[dict]:
             fh = open_regular(gen_path, "rb")
             if fh is None:
                 continue
-            with fh:
+            with preserving_stream_error(fh):
                 text = fh.read(_MAX_ASM_BYTES).decode("utf-8", "replace")
         except OSError as exc:
             logger.warning(
