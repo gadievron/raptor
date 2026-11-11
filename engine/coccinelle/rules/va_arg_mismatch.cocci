@@ -17,17 +17,17 @@ position p;
 @@
 
 (
-* va_arg(AP, char)@p
+va_arg(AP, char)@p
 |
-* va_arg(AP, signed char)@p
+va_arg(AP, signed char)@p
 |
-* va_arg(AP, unsigned char)@p
+va_arg(AP, unsigned char)@p
 |
-* __builtin_va_arg(AP, char)@p
+__builtin_va_arg(AP, char)@p
 |
-* __builtin_va_arg(AP, signed char)@p
+__builtin_va_arg(AP, signed char)@p
 |
-* __builtin_va_arg(AP, unsigned char)@p
+__builtin_va_arg(AP, unsigned char)@p
 )
 
 @script:python va_arg_char_report depends on va_arg_char@
@@ -49,29 +49,29 @@ position p;
 @@
 
 (
-* va_arg(AP, short)@p
+va_arg(AP, short)@p
 |
-* va_arg(AP, signed short)@p
+va_arg(AP, signed short)@p
 |
-* va_arg(AP, unsigned short)@p
+va_arg(AP, unsigned short)@p
 |
-* va_arg(AP, short int)@p
+va_arg(AP, short int)@p
 |
-* va_arg(AP, signed short int)@p
+va_arg(AP, signed short int)@p
 |
-* va_arg(AP, unsigned short int)@p
+va_arg(AP, unsigned short int)@p
 |
-* __builtin_va_arg(AP, short)@p
+__builtin_va_arg(AP, short)@p
 |
-* __builtin_va_arg(AP, signed short)@p
+__builtin_va_arg(AP, signed short)@p
 |
-* __builtin_va_arg(AP, unsigned short)@p
+__builtin_va_arg(AP, unsigned short)@p
 |
-* __builtin_va_arg(AP, short int)@p
+__builtin_va_arg(AP, short int)@p
 |
-* __builtin_va_arg(AP, signed short int)@p
+__builtin_va_arg(AP, signed short int)@p
 |
-* __builtin_va_arg(AP, unsigned short int)@p
+__builtin_va_arg(AP, unsigned short int)@p
 )
 
 @script:python va_arg_short_report depends on va_arg_short@
@@ -93,9 +93,9 @@ position p;
 @@
 
 (
-* va_arg(AP, float)@p
+va_arg(AP, float)@p
 |
-* __builtin_va_arg(AP, float)@p
+__builtin_va_arg(AP, float)@p
 )
 
 @script:python va_arg_float_report depends on va_arg_float@
@@ -119,15 +119,15 @@ position p;
 @@
 
 (
-* va_arg(AP, _Bool)@p
+va_arg(AP, _Bool)@p
 |
-* __builtin_va_arg(AP, _Bool)@p
+__builtin_va_arg(AP, _Bool)@p
 |
 // Some spatch parsers initially classify the C keyword as an identifier.
 // The exact spelling is still a language keyword, not a typedef-name guess.
-* va_arg(AP, BOOL_NAME)@p
+va_arg(AP, BOOL_NAME)@p
 |
-* __builtin_va_arg(AP, BOOL_NAME)@p
+__builtin_va_arg(AP, BOOL_NAME)@p
 )
 
 @script:python va_arg_bool_report depends on va_arg_bool@

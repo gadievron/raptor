@@ -69,7 +69,7 @@ size_t comment_spacing(void) { return ( /* comment */ - /* comment */ EIO); } /*
 def test_partial_arithmetic_silence_is_inconclusive(tmp_path, other_hit):
     from core.audit.sweep import run_coccinelle_file_sweep, scope_coccinelle_result
 
-    prefix = 'typedef unsigned long size_t;\n'
+    prefix = '#include <stddef.h>\n'
     source = prefix + 'size_t partial(int failed) { return fail_count(failed); }' + "\n"
     partial_line = 1 + prefix.count("\n")
     if other_hit:

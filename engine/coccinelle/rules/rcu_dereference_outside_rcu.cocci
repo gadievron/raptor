@@ -30,7 +30,7 @@ rcu_read_unlock@release();
 expression E;
 position p;
 @@
-* rcu_dereference@p(E)
+rcu_dereference@p(E)
 
 @rcu_plain_held exists@
 expression rcu_plain.E;
@@ -114,7 +114,7 @@ rcu_read_unlock_bh@release();
 expression E;
 position p;
 @@
-* rcu_dereference_bh@p(E)
+rcu_dereference_bh@p(E)
 
 @rcu_bh_held exists@
 expression rcu_bh.E;

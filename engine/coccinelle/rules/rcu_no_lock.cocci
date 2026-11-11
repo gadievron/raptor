@@ -30,7 +30,7 @@ rcu_read_unlock@release();
 expression ptr, E;
 position p;
 @@
-* ptr = rcu_dereference@p(E)
+ptr = rcu_dereference@p(E)
 
 @rcu_assignment_held exists@
 expression no_lock.E;

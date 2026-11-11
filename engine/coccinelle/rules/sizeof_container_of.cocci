@@ -18,9 +18,9 @@ position p;
 @@
 
 (
-* PTR = \(kmalloc\|kzalloc\)(sizeof(*PTR)@p, FLAGS)
+PTR = \(kmalloc\|kzalloc\)(sizeof(*PTR)@p, FLAGS)
 |
-* PTR = \(kmalloc\|kzalloc\)(sizeof(MT)@p, FLAGS)
+PTR = \(kmalloc\|kzalloc\)(sizeof(MT)@p, FLAGS)
 )
   ... when any
       when != PTR op ...

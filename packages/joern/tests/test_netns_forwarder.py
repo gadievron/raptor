@@ -419,9 +419,29 @@ def _wait_for(predicate, timeout_s: float = 15.0) -> None:
 def _pid_state(pid):
     try:
         fields = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1].split()
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
         return None
     return fields[19], fields[0]  # start ticks and state; never act on a reused PID
+
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError, ProcessLookupError, PermissionError])
+def test_pid_state_exit_during_read_preserves_other_errors(error):
+    from core.testing.module_views import module_function_view
+
+    failure = error("owned procfs read failure")
+
+    class Exited:
+        def read_text(self):
+            raise failure
+
+    view = module_function_view(sys.modules[__name__], bindings={"Path": lambda _: Exited()})
+    if error is PermissionError:
+        with pytest.raises(PermissionError) as caught:
+            view._pid_state(12345)
+        assert caught.value is failure
+    else:
+        assert view._pid_state(12345) is None
 
 
 def _stopped(pid):
