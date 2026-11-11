@@ -297,18 +297,29 @@ def study_batch(batch, runtime: AuditKnowledgeRuntime, config: OrchestratorConfi
                         raise SubjectDispatchRefused("source_study_stopped")
                     if not submitted or packet is None or len(submitted) != len(packet.subjects):
                         raise SubjectDispatchRefused("source_dispatch_packet_unavailable")
-                    admitted, reason = runtime.bindings.admit_inputs(packet.materials)
-                    if not admitted:
-                        raise SubjectDispatchRefused(reason)
-                    if not runtime.admit_source_attempt(submitted):
-                        raise SubjectDispatchRefused("source_study_admission_refused")
-                    from .knowledge_calls import accounting_context_kwargs
+                    from .knowledge_calls import KnowledgeCallRefused, observed_client, owned_call_scope
+                    reason = "source_study_admission_refused"
+
+                    def admit(purpose, method):
+                        nonlocal reason
+                        if should_stop():
+                            reason = "source_study_stopped"
+                            return False
+                        admitted, reason = runtime.bindings.admit_inputs(packet.materials)
+                        if not admitted:
+                            return False
+                        reason = "source_study_admission_refused"
+                        return runtime.admit_source_attempt(submitted)
+
                     packet_key = json.dumps(sorted({r.request_id for r in submitted}), separators=(",", ":"))
-                    owned = accounting_context_kwargs(
-                        client, work_id="study:" + sha256(packet_key.encode()).hexdigest(),
+                    with owned_call_scope(
+                        admit, work_id="study:" + sha256(packet_key.encode()).hexdigest(),
                         beneficiaries=tuple(dict.fromkeys(r.origin.pass_id for r in submitted)),
-                    )
-                    return client.generate_structured(*args, **{**kwargs, **owned})
+                    ):
+                        try:
+                            return observed_client(client, purpose="study").generate_structured(*args, **kwargs)
+                        except KnowledgeCallRefused as error:
+                            raise SubjectDispatchRefused(reason) from error
 
         run_phase2(plan.items, str(config.study_root or config.target_path), StudyClient(),
                    source_root=str(config.study_root or config.target_path), subjects=subjects,
