@@ -49,7 +49,7 @@ def test_supported_cpp_qualifiers_retain_a_complete_literal_tuple(location, spec
     assert reply['status'] == 'checked' and len(reply['calls']) == 1, reply
     assert reply['calls'][0]['arguments'] == {'Value': 65536, 'Step': 65536}
     assert reply['calls'][0]['verdict'] == 'violation'
-    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v11'
+    assert reply['binding']['query_contract'] == 'common-width-literal-frame-v17'
 
 
 @pytest.mark.parametrize('void', [False, True])
@@ -113,14 +113,18 @@ def test_utf8_comment_does_not_shift_the_raw_signature_or_call_line():
     assert reply['calls'][0]['verdict'] == 'violation'
 
 
-def test_worker_from_before_shared_frame_admission_cannot_promote(tmp_path, monkeypatch):
+@pytest.mark.parametrize('version', [
+    'common-width-literal-frame-v10', 'common-width-literal-frame-v11',
+    'common-width-literal-frame-v16', 'common-width-literal-frame-v18', None,
+], ids=['pre-frame', 'stale-v11', 'previous-v16', 'future-v18', 'missing'])
+def test_worker_from_before_shared_frame_admission_cannot_promote(tmp_path, monkeypatch, version):
     pytest.importorskip('tree_sitter_cpp')
     pytest.importorskip('z3')
     text = source(constexpr=True)
     (tmp_path / 'record.cpp').write_text(text)
     reply = check_literal_calls(text, 'Read', 'check-overflow', CLAIM, 'ilp32', [2], 'cpp')
     assert reply['calls'][0]['verdict'] == 'violation'
-    reply['binding']['query_contract'] = 'common-width-literal-frame-v10'
+    reply['binding']['query_contract'] = version
     monkeypatch.setattr(condition_smt, '_run_z3_child', lambda *a, **kw: deepcopy(reply))
     result = evaluate_caller_gate(tmp_path, 'record.cpp', 'Read', 'check-overflow', CLAIM,
                                   source=text, def_span=(1, 1), integer_abi='ilp32')
