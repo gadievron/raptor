@@ -2565,7 +2565,7 @@ class LLMClient:
         """
         # getattr: tests build clients via ``__new__`` without the
         # constructor-initialised flag.
-        emit = (
+        budget_log = (
             logger.debug
             if getattr(self, "_budget_exceeded_logged", False)
             else logger.info
@@ -2573,7 +2573,7 @@ class LLMClient:
         self._budget_exceeded_logged = True
         reserve = getattr(self, "_budget_reserve", 0.0) or 0.0
         if reserve:
-            emit(
+            budget_log(
                 "Budget exceeded: $%.2f + $%.2f > $%.2f "
                 "($%.2f cap - $%.2f held in reserve)",
                 self.total_cost, estimated_cost,
@@ -2581,7 +2581,7 @@ class LLMClient:
                 self.config.max_cost_per_scan, reserve,
             )
         else:
-            emit(
+            budget_log(
                 "Budget exceeded: $%.2f + $%.2f > $%.2f",
                 self.total_cost, estimated_cost,
                 self.config.max_cost_per_scan,

@@ -43,6 +43,9 @@
     "artifacts:orphan_reader::README.txt": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::_iris.sarif": {
+      "note": "IRIS SARIF is produced by the external CodeQL CLI: _run_iris_pack passes codeql_{lang}_iris.sarif through _run_local_pack to _run_selected_local_pack, which supplies --output=<out_dir/sarif_name>. iris_overlap_summary reads the identical per-language path. The detector indexes the f-string suffix and does not trace sarif_name into the subprocess writer."
+    },
     "artifacts:orphan_reader::analysed_results.json": {
       "note": "explicit-input convention: raptor-ghidra export and attach.sync_findings_to_attached accept an operator-placed bare record list at this name; no pipeline writes it by design \u2014 the wired sources are the run-written reports (orchestrated_report.json, autonomous_analysis_report.json)"
     },
@@ -492,6 +495,9 @@
     },
     "artifacts:write_only_artifact::results.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::review-admission.json": {
+      "note": "Diagnostic snapshot of the main review graph admission policy, intentionally written after review/study drain for inspection. It records schema_version, scope=main_review_graph, global_review_ownership=false and graph.admission_state(); no production replay or control-flow consumer is intended. The actual-audit fairness integration test reads and verifies initial/continuation admission counts."
     },
     "artifacts:write_only_artifact::rule-eval-results.json": {
       "note": "rule_eval outputs: operator-facing results JSON and human summary for the corpus rule-verification runner; read by the operator, never by production code"
