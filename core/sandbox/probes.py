@@ -513,6 +513,8 @@ def _probe_pidns_fresh_proc() -> tuple[bool, bool]:
             [*base, "--mount-proc", "--", true_bin],
             capture_output=True, timeout=5, env=env,
         )
+        if with_proc.returncode < 0:
+            return True, False
         if with_proc.returncode == 0:
             return True, True
         # Attribute the failure: only "namespaces engage WITHOUT
@@ -522,6 +524,8 @@ def _probe_pidns_fresh_proc() -> tuple[bool, bool]:
             [*base, "--", true_bin],
             capture_output=True, timeout=5, env=env,
         )
+        if without_proc.returncode < 0:
+            return True, False
         if without_proc.returncode == 0:
             logger.debug(
                 "Sandbox: fresh procfs probe — namespaces engage but "
