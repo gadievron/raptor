@@ -51,6 +51,8 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
     if len(findings) > MAX_FINDINGS:
         diagnostics.append(f"Finding presentation truncated to {MAX_FINDINGS} of {len(findings)}; complete domain report retained in report-context.json.")
     artifacts = [{"path": str(out_dir / name)} for name in ("audit-report.json", "findings.json", "findings-graded.json", ".raptor-run.json")]
+    if report.get("knowledge_processing") is not None:
+        artifacts.append({"path": str(out_dir / "knowledge-results.json")})
     context = ReportContext("audit", out_dir.name, target=metadata["Target"], state="partial" if completeness.get("partial") else "unknown",
                             findings=native_findings(findings[:MAX_FINDINGS], producer="audit", run_id=out_dir.name),
                             diagnostics=diagnostics, artifacts=artifacts,
