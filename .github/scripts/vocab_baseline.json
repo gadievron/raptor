@@ -378,6 +378,21 @@
     "kind": "literal",
     "note": "verification_summary JSON field schema in findings-graded.json: artifact/export status, event admission, source-validation withdrawals and rejected inputs, finding/clean-review counts, observation summaries and limitations. Fixed report keys, not target function/API names or detection vocabulary; produced by write_check_results and read back by source-freshness/check-trace tests. Source-validation metadata withdraws applicability and grants no proof authority. Current role review (previous baseline count 10; reviewed count 11): 10to11 verification_summary reportfields addsclaim_observations sidecar/status. Structural schema; no domain-vocabulary change."
   },
+  "core/audit/claim_adjudication.py::publication_shadow": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed shadow publication schema fields preserve missing authority/history gaps and unchanged legacy projections; not function-name matching vocabulary."
+  },
+  "core/audit/claim_comparison_inputs.py::comparison_inputs": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed manual-comparison publication schema records historical pairs, omissions and explicit non-authority/current-context gaps; not learned API vocabulary."
+  },
+  "core/audit/claim_comparison_inputs.py::historical_claim_link": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed historical identity receipt schema records exact claim/revision and pass/attempt identities with authoritative=False and source_revalidated_at_export=False; not function-name matching vocabulary."
+  },
   "core/audit/cocci_flow.py::_PROSE_VICTIMS": {
     "count": 30,
     "kind": "literal"
@@ -1104,6 +1119,11 @@
     "kind": "alternation",
     "note": "Unchanged JavaScript filesystem-call pattern moved from _check_js_patterns into the lazy matcher catalog; no names added."
   },
+  "core/audit/prepared_claim_pipeline.py::shadow_inputs": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed publication availability-record field manifest: current prepared target/conclusion and retained event provenance with explicit shadow-only/non-authoritative flags; not a learned API or function-name vocabulary."
+  },
   "core/audit/preprocessor_view.py::_C_KEYWORDS": {
     "count": 50,
     "kind": "literal"
@@ -1753,6 +1773,11 @@
     "kind": "literal",
     "note": "Python-owned reserved native-provider namespace and aliases; prevents broker registry data from overriding native providers or borrowing their credentials. Security boundary constants, not learned target vocabulary; must remain independent of registry data.",
     "reviewed": "2026-11-03"
+  },
+  "core/llm/prepared_budget.py::_FIELDS": {
+    "count": 24,
+    "kind": "literal",
+    "note": "Closed supported fully buffered request-envelope key allowlist used to refuse unknown fields before conservative quote construction; protocol fields, not function-name discovery vocabulary. Adding a note does not broaden supported routes, payloads or billing authority."
   },
   "core/llm/providers.py::_TRANSPORT_EXC_MODULE_ROOTS": {
     "count": 10,
