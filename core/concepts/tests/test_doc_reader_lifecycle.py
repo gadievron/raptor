@@ -3,19 +3,21 @@
 from __future__ import annotations
 
 import errno
+import io
 import os
 
 import pytest
 
 from core.concepts import study
-from core.testing.module_bindings import patch_module_attribute
+from core.source import contained, streams as source_streams
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 @pytest.fixture
 def doc_case(tmp_path, monkeypatch):
     path = tmp_path / "notes.md"
     path.write_text("Owned documentation.\n")
-    original_open, original_close, original_fdopen = os.open, os.close, os.fdopen
+    original_open, original_close, original_stream_open = os.open, os.close, io.open
     descriptors, closes, streams = [], [], []
 
     def run(*, failure=None, close_failure=False, related=None):
@@ -34,15 +36,37 @@ def doc_case(tmp_path, monkeypatch):
         def construct(*args, **kwargs):
             if failure is not None and len(descriptors) == 1:
                 raise failure
-            stream = original_fdopen(*args, **kwargs)
+            stream = original_stream_open(*args, **kwargs)
+            native_close = stream.close
+            descriptor = stream.fileno()
+            retired = False
+
+            def close_stream():
+                nonlocal retired
+                try:
+                    return native_close()
+                finally:
+                    if stream.closed and not retired:
+                        retired = True
+                        closes.append(descriptor)
+
+            # Successful adoption now retires through the native stream.
+            # Observe that actual close without changing its descriptor owner.
+            stream.close = close_stream
             streams.append(stream)
             return stream
 
-        patch_module_attribute(monkeypatch, study, "os", "open", allocate)
-        patch_module_attribute(monkeypatch, study, "os", "close", close)
-        patch_module_attribute(monkeypatch, study, "os", "fdopen", construct)
+        private_os = module_function_view(os, bindings={"open": allocate, "close": close})
+        private_io = module_function_view(io, bindings={"open": construct})
+        private_streams = module_function_view(source_streams, bindings={"io": private_io})
+        private_contained = module_function_view(
+            contained, bindings={"os": private_os, "adopt_fd": private_streams.adopt_fd},
+        )
         entries = [{"file": path.name}] if related is None else related
-        return study._load_doc_context(entries, tmp_path)
+        with scoped_function_imports(
+            study, ["_load_doc_context"], {"core.source.contained": private_contained},
+        ):
+            return study._load_doc_context(entries, tmp_path)
 
     yield run, path, descriptors, closes, streams
     for stream in streams:

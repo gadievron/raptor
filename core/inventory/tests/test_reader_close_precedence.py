@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 
 from core.inventory import exclusions, header_api
+from core.source import contained
+from core.testing.module_views import scoped_function_imports
 
 
 def _read_case(tmp_path, monkeypatch, reader, primary):
@@ -48,7 +50,17 @@ def _read_case(tmp_path, monkeypatch, reader, primary):
     def consume():
         if reader == 'header':
             return module.scan_public_api(str(tmp_path))
-        return module.is_binary_file(source)
+        def open_binary(path, mode, **kwargs):
+            stream = contained.open_regular(path, mode, **kwargs)
+            assert path == source and stream is not None
+            streams.append(stream)
+            return Reader(stream)
+
+        with scoped_function_imports(
+            module, ["is_binary_file"], {"core.source.contained": contained},
+        ) as imports:
+            monkeypatch.setattr(getattr(imports, "core.source.contained"), "open_regular", open_binary)
+            return module.is_binary_file(source)
 
     return consume, streams
 
