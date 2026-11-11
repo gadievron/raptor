@@ -3260,6 +3260,7 @@ class LLMClient:
             cost, tin, tout, total = usage
             self._settle_prepared_usage(hold, cost=cost, tokens_in=tin, tokens_out=tout, tokens_total=total,
                                         outcome_event="attempt_failed")
+            hold["reported_failure_usage"] = usage
         try:
             from core.llm.dispatcher.client import take_upstream_response_started
             return take_upstream_response_started()
@@ -3396,6 +3397,22 @@ class LLMClient:
                     if isinstance(item, (SchemaUnknownFieldError, json.JSONDecodeError)) or type(item).__name__ == "ValidationError":
                         break
             if refusal is not None:
+                usage = hold.get("reported_failure_usage")
+                if usage is not None:
+                    # An internal SDK generation was denied after a paid
+                    # response. The typed refusal skips the outer failure
+                    # emitter, so publish that settled response exactly once.
+                    try:
+                        from core.llm.telemetry import emit
+                        cost, tin, tout, total = usage
+                        emit(**{**identity, "event": "attempt_failed", "disposition": "consumed",
+                                "billing_state": "reported", "cost_usd": cost,
+                                "tokens_in": tin, "tokens_out": tout, "tokens_total": total,
+                                "duration_s": round(time.monotonic() - hold["attempt_start"], 3)})
+                    except BaseException:
+                        # Optional publication cannot replace the active
+                        # refusal; the signed paid receipt remains intact.
+                        pass
                 raise refusal from None
             if chosen is not error:
                 raise chosen from None
@@ -3731,7 +3748,7 @@ class LLMClient:
                     # THIS attempt's failure (hookless transports have
                     # no request-hook reset of their own).
                     _clear_attempt_spend_signal()
-                    prepared_hold: dict[str, Any] = {"outer_error": None}
+                    prepared_hold: dict[str, Any] = {"outer_error": None, "attempt_start": attempt_start}
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO: the prior attempt's
@@ -4415,7 +4432,7 @@ class LLMClient:
                     # THIS attempt's failure (hookless transports have
                     # no request-hook reset of their own).
                     _clear_attempt_spend_signal()
-                    prepared_hold: dict[str, Any] = {"outer_error": None}
+                    prepared_hold: dict[str, Any] = {"outer_error": None, "attempt_start": attempt_start}
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO — see ``generate`` above
