@@ -56,6 +56,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.run.scratch import scratch_dir
 from core.source.lines import splitlines_prefix
+from core.source.streams import preserving_stream_error
 from core.source import (
     ReadBudgetExceededError, read_bytes_gated, read_text_capped, open_regular,
 )
@@ -447,7 +448,7 @@ def _prepared_view_key(target_path, full_path, pre, macro_flags, include_flags):
         fh = open_regular(full_path, "rb")
         if fh is None:
             return None
-        with fh:
+        with preserving_stream_error(fh):
             data = fh.read(1024 * 1024 + 1)
         if len(data) > 1024 * 1024:
             return None
