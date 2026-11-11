@@ -2270,7 +2270,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # polish and must not survive the disable as the run's one
     # residual env mutation.
     _temp_rebranding = (not _effectively_disabled and bool(target or output or rootfs)
-                       and (profile is None or PROFILES[profile]["use_landlock"]))
+                       and (_profile_for_defaults is None
+                            or bool(_profile_defaults.get("use_landlock"))))
     for _tv in ("TMPDIR", "TEMP", "TMP") if _temp_rebranding else ():
         _tval = os.environ.get(_tv, "")
         if (_tval.startswith(("/tmp/", "/var/tmp/"))
