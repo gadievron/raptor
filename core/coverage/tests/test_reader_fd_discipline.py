@@ -368,8 +368,8 @@ class TestJournalReader:
         monkeypatch.setattr(_mock_consumer_os, "Path", StatPath)
         monkeypatch.setattr(
             "core.coverage.journal._MAX_JOURNAL_BYTES", 64 * 1024)
-        tracemalloc.start()
         try:
+            tracemalloc.start()
             entries = load_entries(tmp_path)
             _, peak = tracemalloc.get_traced_memory()
         finally:
