@@ -267,16 +267,19 @@ def _prepare_apple_tool(cmd: list[str], child_env: dict[str, str]) -> list[str]:
     if not command:
         return command
     index = 0
+    search_path = child_env.get("PATH", "/usr/bin:/bin")
     if command[0] in ("/usr/bin/env", "/bin/env"):
         index = 1
         while index < len(command) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", command[index]):
+            if command[index].startswith("PATH="):
+                search_path = command[index][len("PATH="):]
             index += 1
         if index == len(command) or command[index].startswith("-"):
             return command
     executable = command[index]
     name = os.path.basename(executable)
     resolved = (executable if os.path.isabs(executable) else
-                shutil.which(executable, path=child_env.get("PATH", "/usr/bin:/bin")))
+                shutil.which(executable, path=search_path))
     system_shim = name in _APPLE_DEVELOPER_SHIMS and resolved == f"/usr/bin/{name}"
     if not system_shim and name != "rustc":
         return command
