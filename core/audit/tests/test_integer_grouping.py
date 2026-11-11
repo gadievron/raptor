@@ -95,3 +95,17 @@ def test_duplicate_source_conditions_are_ambiguous():
     source = SOURCE.replace("return 0; }", "if(Flags & 4 == 4) return 2; return 0; }")
     result = grouping.check_integer_grouping(source, CLAIM, language="c", integer_abi="lp64")
     assert result["comparison_status"] == "unavailable" and result["matches_claim"] is None
+
+
+@pytest.mark.parametrize("other", ["Flags & 4 == 4", "Flags & (4 == 4)"])
+def test_ambiguous_shapes_do_not_consume_discovery_slots(other):
+    source = SOURCE.replace("return 0; }", f"if({other}) return 2; return 0; }}")
+    result = grouping.check_integer_grouping(source, CLAIM, language="c", integer_abi="lp64")
+    assert result["comparison_status"] == "unavailable"
+    assert grouping.grouping_candidates(source, language="c", integer_abi="lp64") == []
+
+
+def test_ambiguous_shapes_preserve_distinct_discovery_candidates():
+    source = SOURCE.replace("return 0; }", "if(Flags & 4 == 4) return 2; if(Flags & 8 == 8) return 3; return 0; }")
+    candidates = grouping.grouping_candidates(source, language="c", integer_abi="lp64")
+    assert [shape[1:] for shape in candidates] == [("Flags", "8", "==", "8")]
