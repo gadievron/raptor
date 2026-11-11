@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 from core.container.failures import classify_docker_stderr
 from core.container.proc import run_cli
 
@@ -159,7 +160,7 @@ def extract_rootfs_tar(
         tree.mkdir()
         if previous is not None:
             tree.chmod(stat.S_IMODE(previous.st_mode))
-        with tarfile.open(tar_path) as tf:
+        with preserving_stream_error(tarfile.open(tar_path)) as tf:
             for count, member in enumerate(tf, start=1):
                 if count > max_entry_count:
                     raise RootfsQuotaExceeded(
