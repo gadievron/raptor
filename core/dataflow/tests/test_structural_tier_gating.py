@@ -172,11 +172,11 @@ class TestStepSubStaticHelper:
         assert _step_sub_static(
             {"properties": {"tier": "resolved_static"}}) is False
 
-    def test_non_string_tier_ignored(self):
-        assert _step_sub_static({"properties": {"tier": 3}}) is False
+    def test_non_string_tier_is_unknown(self):
+        assert _step_sub_static({"properties": {"tier": 3}}) is True
 
-    def test_empty_tier_ignored(self):
-        assert _step_sub_static({"properties": {"tier": ""}}) is False
+    def test_empty_tier_is_unknown(self):
+        assert _step_sub_static({"properties": {"tier": ""}}) is True
 
     def test_sub_static_tier_true(self):
         assert _step_sub_static(
