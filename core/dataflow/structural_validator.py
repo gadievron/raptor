@@ -157,22 +157,15 @@ def _resolve_file(step: dict, repo_path: Path) -> Path | None:
     if ".." in raw:
         return None
     p = Path(raw)
-    repo_resolved = repo_path.resolve()
-    if p.is_absolute():
-        try:
-            resolved = p.resolve()
-            if not resolved.is_relative_to(repo_resolved):
-                return None
-        except (OSError, ValueError):
-            return None
-        if resolved.exists():
-            return resolved
+    try:
+        repo_resolved = repo_path.resolve()
+        candidate = (p if p.is_absolute() else repo_path / p).resolve()
+        if candidate.is_relative_to(repo_resolved) and candidate.exists():
+            return candidate
+    except (OSError, RuntimeError, ValueError):
+        # Both absolute and relative scanner paths can fail resolution.
+        # Unavailable source is no evidence for a structural verdict.
         return None
-    candidate = (repo_path / p).resolve()
-    if not candidate.is_relative_to(repo_resolved):
-        return None
-    if candidate.exists():
-        return candidate
     return None
 
 
