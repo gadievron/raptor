@@ -63,6 +63,10 @@ def _bounded_field_text(item: dict, name: str, limit: int, *, required: bool = T
     value = item.get(name, "" if not required else None)
     if not isinstance(value, str) or len(value) > limit:
         return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
     value = value.strip()
     return value if value or not required else None
 

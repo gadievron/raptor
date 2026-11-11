@@ -1,5 +1,7 @@
 """Review requests gain pipeline identity, never model-provided provenance."""
 
+import pytest
+
 from core.audit.knowledge_requests import KnowledgeOrigin, register_requests
 from core.audit.refutation_source import SourceIdentity
 
@@ -70,3 +72,35 @@ def test_distinct_symbols_and_learning_contexts_are_not_lost_as_duplicates():
     ]}, _origin())
     assert not batch.rejected
     assert len(batch.accepted) == 4
+
+
+@pytest.mark.parametrize("invalid", ["\ud800", "\udfff"], ids=["high-surrogate", "low-surrogate"])
+@pytest.mark.parametrize("field,name,reason", [
+    ("reading_list", "subject", "invalid_request_fields"),
+    ("reading_list", "context", "invalid_request_fields"),
+    ("language_reference_requests", "topic", "invalid_request_fields"),
+    ("language_reference_requests", "needed_for", "invalid_request_fields"),
+    ("language_reference_requests", "entry_id", "invalid_reference_id"),
+])
+def test_non_utf8_request_text_is_rejected_without_losing_valid_sibling(field, name, reason, invalid):
+    bad = {"subject": "target type", "resolution": "concept"} if field == "reading_list" else {"topic": "conversion"}
+    bad[name] = invalid
+    valid = {"subject": "other_t"} if field == "reading_list" else {"topic": "integer promotion"}
+    batch = register_requests({field: [bad, valid]}, _origin())
+    assert len(batch.accepted) == 1
+    assert batch.accepted[0].subject == valid.get("subject", valid.get("topic"))
+    rejected, = batch.rejected
+    assert (rejected.field, rejected.index, rejected.reason) == (field, 0, reason)
+
+
+def test_valid_unicode_request_text_is_retained_without_repair():
+    text = "café 東京 😀"
+    context = text + "\nContinued context."
+    batch = register_requests({
+        "reading_list": [{"subject": text, "resolution": "concept", "context": context}],
+        "language_reference_requests": [{"topic": text, "needed_for": context, "entry_id": text}],
+    }, _origin())
+    assert not batch.rejected
+    assert len(batch.accepted) == 2
+    assert all(request.subject == text and request.context == context for request in batch.accepted)
+    assert batch.accepted[1].entry_id == text
