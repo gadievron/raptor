@@ -551,3 +551,56 @@ def test_literal_only_wrapper_callers_require_provenance_review(tmp_path):
     assert sorted(row['line'] for row in rows) == [2, 5, 8]
     assert all(row['rule'] == 'format_string' for row in rows)
     assert all('review callers and format provenance' in row['message'] for row in rows)
+
+
+@pytest.mark.parametrize('shape,expected', [('direct', 1), ('conditional', 0), ('collision', 0)])
+def test_native_format_absence_remains_inconclusive(tmp_path, monkeypatch, shape, expected):
+    from core.audit.sweep import (
+        is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
+    )
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+    from packages.coccinelle import runner
+    from packages.coccinelle.models import SpatchMatch, SpatchResult
+    rule = _RULE
+    if shape == 'conditional':
+        body = 'const char *fmt = "default %d";\n if (custom) fmt = user_fmt;\n printf(fmt, n);'
+    else:
+        body = 'printf(user_fmt, n);'
+    source = 'void candidate(char *user_fmt, int custom, int n) {\n '+body+'\n}\nvoid untouched(void) {}\n'
+    if shape == 'collision':
+        source = ('void safe(int n) { const char *fmt = "default %d"; printf(fmt, n); }\n'
+                  'void candidate(char *fmt) { printf(fmt); }\nvoid untouched(void) {}\n')
+    target = tmp_path / 'owned.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(rule), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Owned format missed-path classification',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert len(rows) == expected
+    native = SpatchResult(rule=rule.stem, rule_path=str(rule),
+        matches=[SpatchMatch.from_dict(row) for row in rows], files_examined=[str(target)])
+    calls = []
+    def replay(file_path, rule_path, **kwargs):
+        assert file_path == target and rule_path == rule
+        calls.append((str(file_path), str(rule_path)))
+        return native
+    monkeypatch.setattr(runner, 'is_available', lambda: True)
+    monkeypatch.setattr(runner, 'run_rule', replay)
+    result = run_coccinelle_file_sweep(target_path=tmp_path, file_path=target.name,
+        cocci_rule=str(rule), language='c')
+    assert len(calls) == 1
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert result.details['confirm_only']
+    assert result.outcome == ('confirmed' if expected else 'inconclusive')
+    last = len(source.splitlines())
+    scoped = scope_coccinelle_result(result, target_path=tmp_path, function_name='untouched',
+        line_start=last, line_end=last, language='c')
+    assert scoped.matches == [] and scoped.outcome == 'inconclusive'
+    assert scoped.details['confirm_only']
+    assert len(result.matches) == expected

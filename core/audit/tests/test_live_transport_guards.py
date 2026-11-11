@@ -1810,7 +1810,10 @@ class TestCoccinelleSurfaceFences:
     def test_format_provenance_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_format_string_rule.py")
         assert _callers_of(calls, "run") == {"_run_rule"}
-        assert _callers_of(calls, "run_pinned_subprocess") == {"test_literal_only_wrapper_callers_require_provenance_review"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_literal_only_wrapper_callers_require_provenance_review",
+            "test_native_format_absence_remains_inconclusive",
+        }
 
     def test_chroot_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_chroot_no_chdir_rule.py")

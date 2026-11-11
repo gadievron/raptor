@@ -58,6 +58,9 @@
 // Non-literal syntax alone does not establish attacker control; review
 // wrapper callers and format provenance before confirming CWE-134.
 // @role: detection
+// Documented conditional writes and name collisions leave unsafe paths
+// unreported; absence cannot refute a format-control hypothesis.
+// raptor: confirm-only
 
 @safe_global@
 identifier fmt;
