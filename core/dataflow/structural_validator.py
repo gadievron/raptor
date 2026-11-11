@@ -547,6 +547,15 @@ def validate_structurally(
             confidence="low",
         )
 
+    for index, step in enumerate(steps):
+        line = step.get("line")
+        if line is not None and (isinstance(line, bool) or not isinstance(line, int)):
+            return StructuralResult(
+                verdict="inconclusive",
+                reasoning=f"Step {index} has non-integer line metadata",
+                confidence="low",
+            )
+
     verifications: list[StepVerification] = []
     all_sanitizers: list[str] = []
     seen_sanitizers: set[tuple[str, str]] = set()
