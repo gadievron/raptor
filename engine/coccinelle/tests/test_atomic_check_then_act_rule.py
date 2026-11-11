@@ -95,3 +95,49 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+@pytest.mark.parametrize("action", [
+    pytest.param("kfree(o)", id="free"),
+    pytest.param("obj_destroy(o)", id="destructor"),
+])
+def test_intervening_atomic_operations_keep_counter_identity(tmp_path, action):
+    # Inert syntax matrix: a different object or field does not operate on
+    # the counter checked by atomic_read. A same-counter exclusion does not
+    # itself certify lifetime or concurrency safety.
+    operations = [
+        "atomic_dec({pointer})",
+        "atomic_inc({pointer})",
+        "atomic_set({pointer}, 1)",
+        "atomic_add(1, {pointer})",
+        "atomic_sub(1, {pointer})",
+        "atomic_cmpxchg({pointer}, 1, 2)",
+        "atomic_xchg({pointer}, 1)",
+        "atomic_dec_and_test({pointer})",
+        "atomic_inc_return({pointer})",
+        "atomic_dec_return({pointer})",
+    ]
+    lines = [
+        "typedef struct { int counter; } atomic_t;",
+        "struct obj { atomic_t refcnt; atomic_t othercnt; };",
+    ]
+    expected_lines = set()
+    for index, operation in enumerate(operations):
+        for scope, pointer in enumerate((
+            "&o->refcnt", "&o->othercnt", "&other->refcnt",
+        )):
+            lines += [
+                f"void case_{index}_{scope}(struct obj *o, struct obj *other) {{",
+                "if (o == other) return;",
+                "if (atomic_read(&o->refcnt) > 0) {",
+                operation.format(pointer=pointer) + ";",
+                action + ";",
+                "}",
+                "}",
+            ]
+            if scope:
+                expected_lines.add(len(lines) - 2)
+    rows = _run_rule(tmp_path, "\n".join(lines) + "\n")
+    assert len(rows) == len(expected_lines)
+    assert {row["line"] for row in rows} == expected_lines
+    assert all(row["rule"] == "atomic_check_then_act" for row in rows)
