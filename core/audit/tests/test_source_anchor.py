@@ -284,3 +284,71 @@ def test_compaction_does_not_merge_distinct_whole_file_bindings(bound_subject, t
     entries = load_entries(compact_run, fresh=True)
     assert {item.source_hash for item in entries} == {entry.source_hash, other}
     assert all(journal_mac.entry_provenance(item) == journal_mac.ROW_VERIFIED for item in entries)
+
+
+@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("change", ["none", "unknown", "primary", "dependency", "manifest"])
+def test_resume_context_anchor_requires_current_inputs(bound_subject, tmp_path, version, change):
+    from core.audit.resume import compute_drift
+    from core.audit.review_context_inputs import context_inputs_from_sources
+    from core.audit.reference_inputs import reference_inputs_from_delivery, review_context_digest
+    from core.audit.knowledge_context import reference_delivery, reference_sections
+    from core.audit.source_anchor import make_context_source_anchor
+    from core.language_reference import lookup, ReferenceContext
+
+    target, path, _, entry = bound_subject
+    dependency = target / "helper.h"
+    dependency.write_text("#define HELPER 1\n")
+    primary, span = parse_source_anchor(entry.source_hash)
+    sources = context_inputs_from_sources([
+        ("target", "a.c", primary),
+        ("target", "helper.h", capture_source_identity(target, "helper.h").sha256),
+    ])
+    if version == 1:
+        sources = {**sources, "version": 1,
+                   "sources": [{k: v for k, v in row.items() if k != "root"}
+                               for row in sources["sources"]]}
+    history = {"source_inputs": sources}
+    reference = None
+    if version == 3:
+        answer = lookup("resume-owned", "", ReferenceContext("c"), entry_id="c.integer-promotion")
+        reference = reference_inputs_from_delivery(
+            reference_delivery((answer,), reference_sections((answer,))), (answer,))
+        assert reference["complete"] is True
+        history["reference_inputs"] = reference
+    digest = review_context_digest(sources, reference)
+    assert digest is not None
+    anchor = make_context_source_anchor(primary, span, None if change == "unknown" else digest,
+                                        context_version=version)
+    if change == "primary":
+        path.write_text(path.read_text().replace("DEFAULT_VALUE 0", "DEFAULT_VALUE 1"))
+    elif change == "dependency":
+        dependency.write_text("#define HELPER 2\n")
+    elif change == "manifest":
+        history = {}
+    run = tmp_path / "context-run"
+    append_entry(run, replace(entry, source_hash=anchor, review_claims=history))
+    drifted, checked = compute_drift(run, target)
+    assert checked == 1
+    assert bool(drifted) == (change != "none")
+
+
+def test_resume_reference_anchor_rejects_changed_delivered_rule(tmp_path, monkeypatch):
+    from core.audit.tests.test_reference_context_reuse import _journaled_reference
+    from core.audit.resume import compute_drift
+    from core.language_reference import c_integer
+
+    runtime, outcome, gap = _journaled_reference(tmp_path, monkeypatch)
+    try:
+        entry = append_journal_for_outcome(out_dir=tmp_path / "out", target_path=tmp_path,
+                                          run_id="resume", outcome=outcome, gap=gap)
+        assert entry is not None
+        assert compute_drift(tmp_path / "out", tmp_path) == ([], 1)
+        used = {row["id"] for row in entry.review_claims["reference_inputs"]["entries"]}
+        monkeypatch.setattr(c_integer, "ENTRIES", tuple(
+            replace(item, rule=item.rule + " Changed conditional rule.")
+            if item.entry_id in used else item for item in c_integer.ENTRIES))
+        drifted, checked = compute_drift(tmp_path / "out", tmp_path)
+        assert checked == 1 and len(drifted) == 1
+    finally:
+        runtime.close()

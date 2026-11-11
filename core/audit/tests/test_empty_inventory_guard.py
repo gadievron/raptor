@@ -293,11 +293,21 @@ class TestFullCoverageZeroGapsStillCompletes:
             ]}],
         }))
 
+        def review_with_delivered_context(ctx, config):
+            from core.audit.context import format_context_for_prompt
+
+            delivered = []
+            format_context_for_prompt(ctx, knowledge_delivery_sink=delivered.append)
+            assert len(delivered) == 1
+            outcome = _clean_review(ctx, config)
+            outcome.review_result = delivered[0]
+            return outcome
+
         first = run_orchestrator(
             OrchestratorConfig(target_path=target, out_dir=out,
                                resume=False,
                                joern_overrides={"enabled": False}),
-            _clean_review,
+            review_with_delivered_context,
         )
         assert first.terminated_by == "complete"
         assert first.reviewed == 1
@@ -306,7 +316,7 @@ class TestFullCoverageZeroGapsStillCompletes:
             OrchestratorConfig(target_path=target, out_dir=out,
                                resume=False,
                                joern_overrides={"enabled": False}),
-            _clean_review,
+            review_with_delivered_context,
         )
         assert second.terminated_by == "complete"
         assert second.reviewed == 0
