@@ -862,3 +862,92 @@ def test_prepared_fallback_prices_each_identified_attempt_once(sdk_clients, tmp_
         assert ledger.total_failed_attempts_cost_usd == pytest.approx(first_cost)
     finally:
         alternate.client.close()
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+@pytest.mark.parametrize("reason", ["closed", "deadline"])
+def test_runtime_validity_after_signed_admission_before_wire(sdk_clients, tmp_path, monkeypatch, structured, reason):
+    from core.audit.knowledge_calls import KnowledgeCallRefused, observed_client
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.audit.orchestrator import StudyQueue
+
+    clock = [1.0]
+    monkeypatch.setattr("core.audit.knowledge_runtime.monotonic", lambda: clock[0])
+    runtime = AuditKnowledgeRuntime(tmp_path, StudyQueue(), deadline=10.0)
+    out = tmp_path / "run"
+    b = sdk_clients(run_dir=out, max_calls=1)
+    entered, release = Event(), Event()
+    captured_scopes = []
+    original_admit = b.client._attempt_reservation_store.admit
+    def admit_and_wait(row):
+        result = original_admit(row)
+        entered.set()
+        assert release.wait(5)
+        return result
+    monkeypatch.setattr(b.client._attempt_reservation_store, "admit", admit_and_wait)
+
+    @runtime.wrap_unit
+    def review(gap):
+        client = observed_client(b.client, purpose="review")
+        captured_scopes.append(client._scope)
+        return (client.generate_structured("captured", SCHEMA) if structured
+                else client.generate("captured"))
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            try:
+                future = pool.submit(review, {"file": "unit.c", "name": "f", "line_start": 1})
+                assert entered.wait(5)
+                assert not captured_scopes[0].closed.is_set()
+                if reason == "closed":
+                    runtime.close()
+                else:
+                    clock[0] = 10.0
+                assert not captured_scopes[0].closed.is_set()
+            finally:
+                release.set()
+            with pytest.raises(KnowledgeCallRefused, match="unit_validity"):
+                future.result(timeout=5)
+        assert runtime._calls[("unit.c", "f", 1)] == 1
+        assert b.client._governed_calls == 1
+        assert b.state["requests"] == []
+        assert b.client.reported_spend_usd == b.client._governed_tokens == 0
+        assert b.client._prepared_resource_reservations == {}
+        assert b.client.pending_usage_reservations == []
+        rows = load_verified_audit_log(out)
+        admitted, = [row for row in rows if row.get("stage") == "admitted"]
+        reported, = [row for row in rows if row.get("stage") == "reported"]
+        assert reported["attempt"]["attempt_id"] == admitted["attempt"]["attempt_id"]
+        assert reported["cost_usd"] == reported["tokens_total"] == 0
+    finally:
+        runtime.close()
+
+
+def test_runtime_validity_healthy_sdk_attempt_charges_once(sdk_clients, tmp_path):
+    from core.audit.knowledge_calls import observed_client
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.audit.orchestrator import StudyQueue
+    from time import monotonic
+
+    runtime = AuditKnowledgeRuntime(tmp_path, StudyQueue(), deadline=monotonic() + 30)
+    out = tmp_path / "run"
+    b = sdk_clients(run_dir=out, max_calls=1)
+    @runtime.wrap_unit
+    def review(gap):
+        return observed_client(b.client, purpose="review").generate("captured")
+    try:
+        response = review({"file": "unit.c", "name": "f", "line_start": 1})
+        assert runtime._calls[("unit.c", "f", 1)] == 1
+        assert len([e for e in runtime.events() if e["event"] == "client_call_attempt"]) == 1
+        assert len(b.state["requests"]) == b.client._governed_calls == 1
+        assert b.client.reported_spend_usd == pytest.approx(response.cost)
+        assert b.client._governed_tokens == 6 and b.client.pending_usage_reservations == []
+        rows = load_verified_audit_log(out)
+        admitted, = [row for row in rows if row.get("stage") == "admitted"]
+        reported, = [row for row in rows if row.get("stage") == "reported"]
+        projected, = b.sink.attempt_projection()["attempts"]
+        assert admitted["attempt"]["attempt_id"] == reported["attempt"]["attempt_id"] == projected["attempt_id"]
+        assert admitted["attempt"]["call_id"] == reported["attempt"]["call_id"] == projected["call_id"]
+        assert reported["cost_usd"] == projected["cost_usd"] == pytest.approx(response.cost)
+    finally:
+        runtime.close()
