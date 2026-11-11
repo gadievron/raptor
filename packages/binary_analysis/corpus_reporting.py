@@ -14,7 +14,7 @@ _FAMILY_FIELDS = ("id", "key", "sample_count", "size_min", "size_max", "truncate
 
 def complete_corpus_report(args, profile: dict, samples_dir: Path, out_dir: Path):
     options = args._report_options
-    if not options.enabled:
+    if not options.enabled or not (args.report_format or args.report_output):
         notice = unrefreshed_report_notice(out_dir)
         if notice:
             print("Warning: " + notice, file=sys.stderr)
