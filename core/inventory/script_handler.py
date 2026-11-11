@@ -163,12 +163,14 @@ _CONST_NAME_RE = re.compile(r"^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$")
 # swallowing their interior, so the interior's own text feeds the
 # lit/dyn split instead (census material only; the shape stays
 # dynamic). Real interpolation holes are tens of chars.
+# Delimiter-disjoint interiors cannot benefit from backtracking. Keep their
+# bounded scans possessive so a missing closer does not retry every prefix.
 _INTERP_VAR_RE = re.compile(
     r"\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*"
-    r"(?:\[[^\]]{0,1000}\]|->[A-Za-z_]\w*)?"
-    r"|\$\{[^}]{0,1000}\}"
+    r"(?:\[[^\]]{0,1000}+\]|->[A-Za-z_]\w*)?"
+    r"|\$\{[^}]{0,1000}+\}"
     r"|\$\{(?=[^}]{1000})"
-    r"|\{\$[^}]{0,1000}\}"
+    r"|\{\$[^}]{0,1000}+\}"
     r"|\{\$(?=[^}]{1000})",
 )
 
