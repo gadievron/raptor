@@ -1190,6 +1190,7 @@ def format_context_for_prompt(
     *, claim_delivery_sink: Callable[[dict], None] | None = None,
     caller_delivery_sink: Callable[[list[dict]], None] | None = None,
     knowledge_delivery_sink: Callable[[dict[str, list[dict]]], None] | None = None,
+    external_delivery_sink: Callable[[list[dict]], None] | None = None,
 ) -> str:
     """Format a context slice as text for the LLM prompt.
 
@@ -3007,6 +3008,11 @@ def format_context_for_prompt(
 
     sections.append(PromptSection("tool_catalog", _get_tool_catalog(), 5))
 
+    def deliver_external_context(kept):
+        if external_delivery_sink is not None and ctx.get("continuation_context_inputs"):
+            from .continuation_context import context_delivery
+            external_delivery_sink(context_delivery(ctx, sections, kept))
+
     # ── Budget gate ─────────────────────────────────────────────────
     if budget_limit > 0:
         # (stale-stamp guard runs at function top, before any early
@@ -3052,6 +3058,7 @@ def format_context_for_prompt(
             ctx["cross_entry_rendered"] = any(s.label == "cross_entry_analysis" for s in kept)
         kept = dedupe_reference_sections(
             reference_answers, kept, rendered_sections=reference_blocks)
+        deliver_external_context(kept)
         deliver_knowledge_context(kept)
         if caller_requests:
             deliver_caller_context(kept)
@@ -3062,6 +3069,7 @@ def format_context_for_prompt(
         ctx["cross_entry_rendered"] = True
     sections = dedupe_reference_sections(
         reference_answers, sections, rendered_sections=reference_blocks)
+    deliver_external_context(sections)
     deliver_knowledge_context(sections)
     if caller_requests:
         deliver_caller_context(sections)

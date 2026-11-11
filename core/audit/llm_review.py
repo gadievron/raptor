@@ -1437,12 +1437,14 @@ def make_review_fn(
         delivered_claim_context: list[dict] = []
         delivered_caller_context: list[list[dict]] = []
         delivered_knowledge_context: list[dict[str, list[dict]]] = []
+        delivered_external_context: list[list[dict]] = []
         prompt = format_context_for_prompt(
             ctx, budget_limit=budget,
             patterns_in_system=patterns_in_system,
             claim_delivery_sink=delivered_claim_context.append,
             caller_delivery_sink=delivered_caller_context.append,
             knowledge_delivery_sink=delivered_knowledge_context.append,
+            external_delivery_sink=delivered_external_context.append,
         )
         t0 = time.monotonic()
 
@@ -1513,6 +1515,9 @@ def make_review_fn(
                 drop_pipeline_owned,
             )
             result = defang_model_fields(drop_pipeline_owned(result))
+            result.pop("external_context_delivery", None)
+            if delivered_external_context and ctx.get("continuation_context_inputs"):
+                result["external_context_delivery"] = delivered_external_context[0]
             if delivered_claim_context:
                 result["claim_review_delivery"] = delivered_claim_context[0]
             if delivered_caller_context:
