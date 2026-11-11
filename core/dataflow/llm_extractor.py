@@ -242,7 +242,9 @@ def _parse_response(
 
     try:
         obj = json.loads(raw)
-    except json.JSONDecodeError as e:
+    except ValueError as e:
+        # JSONDecodeError and configured integer-decoder limits both
+        # represent response refusals, not a successful empty extraction.
         return (), [f"{file_path}: response not JSON ({e})"]
 
     if not isinstance(obj, dict):
