@@ -1015,6 +1015,8 @@ def run_landlock_audit(
         elif text:
             stdout_out = stdout_bytes.decode(errors="replace")
             stderr_out = stderr_bytes.decode(errors="replace")
+            stdout_out = stdout_out.replace("\r\n", "\n").replace("\r", "\n")
+            stderr_out = stderr_out.replace("\r\n", "\n").replace("\r", "\n")
         else:
             stdout_out = stdout_bytes  # type: ignore[assignment]
             stderr_out = stderr_bytes  # type: ignore[assignment]

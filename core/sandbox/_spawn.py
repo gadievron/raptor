@@ -4784,8 +4784,12 @@ def run_sandboxed(
     stdout_out = stderr_out = None
     if _capture_stdout:
         stdout_out = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf  # type: ignore[union-attr]
+        if isinstance(stdout_out, str):
+            stdout_out = stdout_out.replace("\r\n", "\n").replace("\r", "\n")
     if _capture_stderr:
         stderr_out = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf  # type: ignore[union-attr]
+        if isinstance(stderr_out, str):
+            stderr_out = stderr_out.replace("\r\n", "\n").replace("\r", "\n")
 
     cp = subprocess.CompletedProcess(
         args=list(cmd),
