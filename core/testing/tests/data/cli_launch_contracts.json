@@ -609,7 +609,7 @@
     "core/security/tests/test_launcher_env_strip.py": "a39acc6d713e7247f1a9b937590a2fe462bc8e52f1ca75efa61f9c4c7a2ee792",
     "core/security/tests/test_python_imports.py": "430ab0305fd14ddfae18be7f911331a2a0cd68a6aede65e8b4f9c5f179f3256e",
     "core/security/tests/test_python_probe.py": "b0116617110f71d652ff469cc08b4121a1f5f8ac5e5020efee3f7f04833ca8d0",
-    "core/security/tests/test_reader_migrations.py": "a6ae4e33685eeb5261c79bf87deec06941ce1d689a07f047acd15f301b5a2a08",
+    "core/security/tests/test_reader_migrations.py": "d5620fdcc32090f0c1cc26fedf52e0f8b0901c28b860ce285ebdbda82858f8b1",
     "core/security/tests/test_scratch_lifecycle.py": "56abba1339ceb85b220ac32aaba4aab406798d04bce504f9417c1c8553450d7f",
     "core/security/tests/test_scratch_supervisor.py": "b21780b6c883f76cc09d0b47fd007bc6a2b614f30555f2b6e81520496cf84cc7",
     "core/security/tests/test_webfetch_domain_hook.py": "93eae599ce045f8ebe167dff3ad57ff4fd2991077e1e9fc8fcfcbf712731f06f",
@@ -46251,10 +46251,10 @@
     {
       "path": "core/security/tests/test_reader_migrations.py",
       "scope": "test_migrated_reader_refuses_fifo_without_writer",
-      "signature": "2789e8e1033f8ea763c50a0d53669196c5e73cd8fe7dd803a32e07eed27a8b4f",
+      "signature": "38173433f8a304f72348cd8960a9aff8a103ab0c3100f456f2d2e8cdaf468a4d",
       "count": 1,
       "contract": "owned-custom-launch",
-      "purpose": "Bound FIFO-without-writer refusal for key/source/inventory reader"
+      "purpose": "Bound FIFO-without-writer refusal for key/source/inventory reader The inventory arm pins refusal at its earlier regular-file binary probe; the owned writerless FIFO, exclusion assertion, subprocess timeout and refusal checks remain."
     },
     {
       "path": "core/testing/tests/test_process_fault_binding_ownership.py",

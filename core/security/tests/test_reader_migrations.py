@@ -30,7 +30,9 @@ else:
     from core.inventory.builder import _process_single_file
     result = _process_single_file(path, path.parent, [])
     assert result['_excluded'] is True, result
-    assert result['_reason'] == 'open_failed_or_symlink', result
+    # The binary-content probe is the first regular-file reader; it refuses
+    # non-regular inputs conservatively before the later inventory read.
+    assert result['_reason'] == 'binary_content', result
 print('refused')
 """, str(fifo), reader], cwd=Path(__file__).resolve().parents[3], timeout=8,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True,

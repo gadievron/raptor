@@ -1063,12 +1063,20 @@ class TestRunLevelGateBindings:
     orchestrator run body (not directly callable): remove the wiring
     line and the corresponding tick-caller assertion goes red."""
 
-    def test_trivial_batch_worker_gates(self, tmp_path, monkeypatch):
-        result, guard = _binding_run(tmp_path, monkeypatch)
+    @pytest.mark.parametrize("workers, caller", [
+        (1, "run_executor_sync"), (2, "_run_task"),
+    ])
+    def test_trivial_batch_worker_gates(self, tmp_path, monkeypatch, workers, caller):
+        def select_workers(config):
+            config.max_workers = workers
+
+        result, guard = _binding_run(
+            tmp_path, monkeypatch, before_run=select_workers,
+        )
         assert result.reviewed == 2
-        # Trivial units now share the ready graph and its dispatch gate.
-        # Keep both worker-entry bindings: removing the executor tick must fail.
-        assert guard.tick_callers.count(("_executor_tick", "_run_task")) == 2
+        # Own the serial/parallel dispatch choice rather than inheriting
+        # the operator's model-rate/account-concurrency policy.
+        assert guard.tick_callers.count(("_executor_tick", caller)) == 2
 
     def test_synthesis_second_pass_executor_ticks(
         self, tmp_path, monkeypatch,
