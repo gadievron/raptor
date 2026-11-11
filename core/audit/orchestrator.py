@@ -9492,6 +9492,30 @@ def _run_audit_body(
 
     # --- Joern tick: drain future between dispatches ---
     joern_state = {"future": joern_future, "submit_time": joern_submit_time}
+    main_ready_joern_gaps = shared.reviewed_before_joern
+
+    def _drain_completed_joern() -> None:
+        # Coordinator-only consumption of an already finished producer. No
+        # wait, server restart or second post-loop consumption is introduced.
+        nonlocal evidence_index, joern_future
+        jf = joern_state["future"]
+        if jf is None or not jf.done():
+            return
+        if not jf.cancelled():
+            with result._lock:
+                ready = [{"file": item.file, "name": item.function, "line_start": item.line}
+                         for item in result.outcomes]
+            new_index = _drain_joern_future(jf, evidence_index, checklist, sarif_cache)
+            with shared._evidence_lock:
+                evidence_index = new_index
+                shared.evidence_index = evidence_index
+            known = {(item.get("file"), item.get("name"), item.get("line_start"))
+                     for item in main_ready_joern_gaps}
+            main_ready_joern_gaps.extend(item for item in ready
+                if (item["file"], item["name"], item["line_start"]) not in known)
+        joern_state["future"] = None
+        if joern_future is jf:
+            joern_future = None
 
     def _joern_tick(gap: dict) -> None:
         # Health probe at loop entry: relaunch-on-death is bounded and
@@ -9507,17 +9531,7 @@ def _run_audit_body(
                 logger.debug("joern liveness probe failed", exc_info=True)
         jf = joern_state["future"]
         if jf is not None and jf.done():
-            nonlocal evidence_index
-            new_index = _drain_joern_future(
-                jf,
-                evidence_index,
-                checklist,
-                sarif_cache,
-            )
-            with shared._evidence_lock:
-                evidence_index = new_index
-                shared.evidence_index = evidence_index
-            joern_state["future"] = None
+            _drain_completed_joern()
         elif jf is not None:
             idle_s = time.monotonic() - _joern_last_activity[0]
             if idle_s > joern_timeout_s:
@@ -9646,7 +9660,8 @@ def _run_audit_body(
         max_model_calls=6 * knowledge_panel_width,
         caller_inventory=(config.inventory if isinstance(config.inventory, dict) else checklist),
     )
-    knowledge_gaps: dict[int, tuple[dict, Any]] = {}
+    knowledge_gaps: dict[int, tuple[dict, Any, Any]] = {}
+    knowledge_ready_frames: dict = {}
     knowledge_source_closed = False
 
     def _knowledge_idle() -> float | None:
@@ -9656,6 +9671,23 @@ def _run_audit_body(
                 and not study_consumer_thread.is_alive()):
             knowledge_source_closed = True
             knowledge_runtime.close_sources("source_worker_stopped")
+        if _check_budget(config, start_time, result):
+            return knowledge_runtime.wake_interval()
+        _drain_completed_joern()
+        from .ready_review_context import collect_ready_review_frames
+        from .live_classifications import LiveClassifications
+        with shared._live_lock:
+            current_classifications = shared.live_classifications
+            ready_classifications = (LiveClassifications(sinks=set(current_classifications.sinks))
+                                     if current_classifications is not None else None)
+        ready_frames = collect_ready_review_frames(
+            knowledge_runtime, result, config, checklist, context_map, evidence_index,
+            ready_joern_gaps=main_ready_joern_gaps,
+            call_edges=call_edges, classifications=ready_classifications,
+            disagreements=tuple(layer_disagreements), cache=knowledge_ready_frames,
+            assemble=lambda gap: _build_context(config, gap, checklist, context_map, evidence_index,
+                                                discovered_evidence=discovered_evidence),
+        )
         for reservation in knowledge_runtime.ready_continuations(
             admission=lambda: not _check_budget(config, start_time, result),
             required_calls=knowledge_panel_width,
@@ -9663,7 +9695,8 @@ def _run_audit_body(
             origin = reservation.origin
             gap = {"file": origin.file, "name": origin.function,
                    "line_start": origin.line_start, "line_end": origin.line_end}
-            knowledge_gaps[id(gap)] = (gap, reservation)
+            occurrence = (origin.file, origin.function, origin.line_start)
+            knowledge_gaps[id(gap)] = (gap, reservation, ready_frames.get(occurrence))
             if not graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0, continuation=True):
                 knowledge_gaps.pop(id(gap), None)
                 knowledge_runtime.fail(reservation, "continuation_schedule_refused")
@@ -9694,6 +9727,7 @@ def _run_audit_body(
                 discovered_evidence=discovered_evidence, joern_server=joern_server,
                 max_workers=1, throttle=None,
                 knowledge_runtime=knowledge_runtime, knowledge_reservation=reservation,
+                ready_review_frame=owned[2],
             )
             knowledge_runtime.fail(reservation, "continuation_not_completed")
             canonical = next((o for o in reversed(result.outcomes)
@@ -35917,6 +35951,7 @@ def _re_review_study_enriched(
     synthesis_counter: AtomicSynthesisCounter | None = None,
     knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
     knowledge_reservation: Any = None,
+    ready_review_frame: Any = None,
 ) -> OrchestratorResult:
     """Re-review functions that queued reading-list items.
 
@@ -35930,6 +35965,15 @@ def _re_review_study_enriched(
     ThreadPoolExecutor.  Post-processing runs in the main thread.
     When *throttle* is provided, each LLM call acquires a slot first.
     """
+    if ready_review_frame is not None:
+        from .ready_review_context import ReadyReviewFrame
+        with result._lock:
+            current = tuple(result.outcomes)
+        if (not isinstance(ready_review_frame, ReadyReviewFrame)
+                or not ready_review_frame.current(current, config.target_path)):
+            if knowledge_runtime is not None:
+                knowledge_runtime.fail(knowledge_reservation, "ready_context_stale")
+            return result
     candidates = []
     seen_candidate_keys: set[str] = set()
     for key in reading_list_functions:
@@ -35989,14 +36033,15 @@ def _re_review_study_enriched(
     # --- Build all contexts up-front ---
     prepared: list[Any] = []
     for gap, prior_outcome in candidates:
-        ctx = _build_context(
-            config,
-            gap,
-            checklist,
-            context_map,
-            evidence_index,
-            discovered_evidence=discovered_evidence,
-        )
+        if ready_review_frame is not None:
+            if prior_outcome is not ready_review_frame.prior:
+                if knowledge_runtime is not None:
+                    knowledge_runtime.fail(knowledge_reservation, "ready_canonical_changed")
+                continue
+            ctx = ready_review_frame.context()
+        else:
+            ctx = _build_context(config, gap, checklist, context_map, evidence_index,
+                discovered_evidence=discovered_evidence)
         if knowledge_runtime is not None and not knowledge_runtime.enrich_context(ctx, knowledge_reservation):
             knowledge_runtime.fail(knowledge_reservation, "context_unavailable", ctx=ctx)
             continue
@@ -36099,7 +36144,24 @@ def _re_review_study_enriched(
             wall_time_s=outcome.duration_s,
         )
 
-        if knowledge_runtime is not None and not knowledge_runtime.can_publish(knowledge_reservation):
+        if knowledge_runtime is not None:
+            missing_external_receipt = (knowledge_reservation is not None
+                and bool(knowledge_reservation.packet.external_context_ids)
+                and not knowledge_runtime.context_was_delivered(knowledge_reservation))
+            if missing_external_receipt or outcome.status not in {"clean", "suspicious", "finding", "dormant"}:
+                with result._lock:
+                    result.total_cost_usd += outcome.cost_usd
+                reason = "ready_context_not_delivered" if missing_external_receipt else "study_assessment_failed"
+                knowledge_runtime.fail(knowledge_reservation, reason, ctx=ctx)
+                continue
+            if knowledge_reservation is not None and knowledge_reservation.packet.external_context_ids:
+                from .live_sink_continuation import retain_unbound_advisory_input_limit
+                retain_unbound_advisory_input_limit(outcome, knowledge_reservation)
+
+        if knowledge_runtime is not None and (
+                not knowledge_runtime.can_publish(knowledge_reservation)
+                or ready_review_frame is not None
+                and not ready_review_frame.current(tuple(result.outcomes), config.target_path)):
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
             knowledge_runtime.fail(knowledge_reservation, "source_changed", ctx=ctx)
@@ -36169,7 +36231,10 @@ def _re_review_study_enriched(
                         f"[gate violation: {'; '.join(gate_violations)}]",
                     )
 
-        if knowledge_runtime is not None and not knowledge_runtime.can_publish(knowledge_reservation):
+        if knowledge_runtime is not None and (
+                not knowledge_runtime.can_publish(knowledge_reservation)
+                or ready_review_frame is not None
+                and not ready_review_frame.current(tuple(result.outcomes), config.target_path)):
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
             knowledge_runtime.fail(knowledge_reservation, "source_changed", ctx=ctx)
