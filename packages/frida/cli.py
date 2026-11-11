@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _complete_report(args, cfg, result, status):
-    if not args._report_options.enabled:
+    if not args._report_options.enabled or not (args.report_format or args.report_output):
         from core.reporting.service import unrefreshed_report_notice
         notice = unrefreshed_report_notice(Path(args.out))
         if notice:
