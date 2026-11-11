@@ -706,7 +706,7 @@ def _probe_pidns_supervision() -> tuple[bool | None, str]:
                        "ENOSYS/EINVAL (kernel lacks the namespace "
                        "support)")
     if code == 192:
-        return (False, "unshare(CLONE_NEWUSER|CLONE_NEWPID) failed")
+        return (None, "unshare(CLONE_NEWUSER|CLONE_NEWPID) failed")
     if code == 193:
         return (False, "post-unshare identity uid/gid self-map write "
                        "refused (hosts with restricted unprivileged "
