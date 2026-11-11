@@ -78,7 +78,7 @@ def test_nested_suspension_without_execution_keeps_existing_epoch(tmp_path, lang
     assert "does not dominate" in result.reasoning
     name = 'app.js' if language == 'javascript' else 'app.ts'
     source = (tmp_path / name).read_text()
-    assert not validator_value_scope.implicit_value_epoch_unverified(
+    assert not validator_value_scope.native_value_epoch_unverified(
         source, "value", 3, 5, language=language,
     )
 
