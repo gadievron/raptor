@@ -2533,12 +2533,13 @@ class TestCoccinelleRangeFilter:
             **kwargs,
         )
 
-    def test_match_in_other_function_refuted_start_only(
+    def test_distant_match_without_end_is_inconclusive(
         self, monkeypatch, tmp_path: Path,
     ):
         self._install_runner(monkeypatch, match_line=400)
         result = self._sweep(tmp_path, line_start=10, line_end=None)
-        assert result.outcome == "refuted"
+        assert result.outcome == "inconclusive"
+        assert "end is unknown" in result.details["reason"]
 
     def test_match_in_window_confirmed_start_only(
         self, monkeypatch, tmp_path: Path,

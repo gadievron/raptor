@@ -2187,11 +2187,22 @@ def scope_coccinelle_result(
             m for m in matches
             if _match_in_range(m, line_start, effective_end)
         ]
+    # A fallback window excludes distant rows but does not establish where
+    # this function ends. A discarded row may belong to a longer function.
+    # A genuinely empty file result retains its complete-file negative scope.
+    fallback_discarded = bool(line_start and not line_end and scoped.matches and not matches)
     scoped.matches = matches
     # Carry the execution-time policy through memoization and function scoping.
     # A hit in another function cannot turn a confirm-only check into refutation.
     confirm_only = bool((scoped.details or {}).get("confirm_only"))
-    scoped.outcome = "confirmed" if matches else ("inconclusive" if confirm_only else "refuted")
+    scoped.outcome = "confirmed" if matches else (
+        "inconclusive" if confirm_only or fallback_discarded else "refuted"
+    )
+    if fallback_discarded:
+        scoped.details = {
+            **(scoped.details or {}),
+            "reason": "function end is unknown: fallback window discarded file matches",
+        }
     if confirm_only and not matches:
         scoped.details = {
             **(scoped.details or {}),
