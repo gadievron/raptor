@@ -2333,6 +2333,13 @@ def run_orchestrator(
     if config.max_seconds:
         config.run_deadline_monotonic = start_time + config.max_seconds
 
+    # Reuse the analysis clock before preparation or a governed model attempt.
+    _deadline_clients = (config.llm_budget_client, config.llm_client)
+    for index, _deadline_client in enumerate(_deadline_clients):
+        if _deadline_client is not None and not any(
+                _deadline_client is prior for prior in _deadline_clients[:index]):
+            _bind_client_run_deadline(config, _deadline_client)
+
     # ── Environment guard ──────────────────────────────────────────
     # Keeps watching the preflighted filesystems from the executor
     # tick. Constructed AFTER the deadline stamp: every pause/probe
@@ -15925,6 +15932,21 @@ def _client_class_cost(client: Any, call_class: str) -> float:
     return float(entry[1]) if entry else 0.0
 
 
+def _bind_client_run_deadline(config: OrchestratorConfig, client: Any) -> None:
+    """Pass the existing analysis clock only through the explicit client protocol."""
+    deadline = getattr(config, "run_deadline_monotonic", None)
+    try:
+        protocol = getattr(client, "_run_deadline_protocol", None)
+    except Exception:
+        return
+    if deadline is None or deadline == float("inf") or type(protocol) is not int or protocol != 1:
+        return
+    bind = getattr(client, "bind_run_deadline", None)
+    if not callable(bind):
+        raise TypeError("run deadline protocol requires bind_run_deadline")
+    bind(deadline)
+
+
 def _run_llm_client(config: OrchestratorConfig) -> Any:
     """The run's budget-governed LLM client.
 
@@ -15941,6 +15963,7 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
     from .knowledge_calls import observed_client
     client = getattr(config, "llm_budget_client", None)
     if client is not None:
+        _bind_client_run_deadline(config, client)
         return observed_client(client, purpose="auxiliary")
     # Transcript seam: identical to LLMClient(...) with no session
     # active.
@@ -15952,6 +15975,7 @@ def _run_llm_client(config: OrchestratorConfig) -> Any:
         else None
     )
     client = build_llm_client(pinned_model=model) if model else build_llm_client()
+    _bind_client_run_deadline(config, client)
     return observed_client(client, purpose="auxiliary")
 
 
