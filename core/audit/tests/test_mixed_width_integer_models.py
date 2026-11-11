@@ -199,7 +199,10 @@ def test_confined_array_worker_keeps_narrow_guards_in_the_wide_index_frame(upper
                                       source=source, hypothesis="Data[Index] out-of-bounds read", integer_abi="lp64")
     assert result.outcome == outcome, result.details
     assert result.details["source_access"]["profile"] == "int64"
-    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v12"
+    assert result.details["source_scope"]["query_contract"] == "common-width-array-guards-v17"
+    assert result.details["violation"] is (outcome == "confirmed")
+    if outcome == "confirmed":
+        assert result.details["witness_index"] == 4
 
 
 @pytest.mark.slow
@@ -212,8 +215,15 @@ def test_confined_literal_call_frame_keeps_mixed_width_parameter_guards(tmp_path
     decision = evaluate_caller_gate(tmp_path, "unit.c", "Read", "check-array-bounds", "Data[Index] out-of-bounds read",
                                     source=source, integer_abi="lp64")
     assert decision.action == action, decision.reason
-    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v11"
+    assert decision.details["binding"]["query_contract"] == "common-width-literal-frame-v17"
     assert decision.details["callee_obligation"]["profile"] == "int64"
+    assert decision.details["status"] == "checked"
+    assert decision.details["proof_scope"] == "caller-entry-source-model"
+    assert dict(decision.details["parameter_types"]) == {"Index": "long", "Flag": "int"}
+    assert len(decision.details["calls"]) == 1
+    call = decision.details["calls"][0]
+    assert call["arguments"] == {"Index": index, "Flag": 1}
+    assert call["verdict"] == ("violation" if action == "promote" else "safe")
 
 
 def test_guard_only_first_declaration_cannot_choose_the_literal_arithmetic_range():
