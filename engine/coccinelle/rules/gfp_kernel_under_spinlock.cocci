@@ -15,6 +15,7 @@ position p;
 @@
 
   \(spin_lock\|spin_lock_irq\|spin_lock_irqsave\|spin_lock_bh\)(L, ...);
+// @vocab: lock_releases
   ... when != \(spin_unlock\|spin_unlock_irq\|spin_unlock_irqrestore\|spin_unlock_bh\)(L, ...)
 (
 * kmalloc@p(S, \(GFP_KERNEL\|GFP_USER\|GFP_HIGHUSER\|GFP_NOFS\|GFP_NOIO\))

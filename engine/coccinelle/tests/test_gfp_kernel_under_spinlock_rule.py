@@ -129,3 +129,37 @@ def test_size_and_count_arguments_are_not_allocation_flags(tmp_path, allocation)
         }}
     """)
     assert results == []
+
+
+@pytest.mark.parametrize("allocation", _ALLOCATOR_CALLS)
+@pytest.mark.parametrize("release, expected", [
+    pytest.param("project_unlock(&c->lock);", 0, id="same-lock"),
+    pytest.param("project_unlock(&other->lock);", 1, id="other-lock"),
+    pytest.param("other_unlock(&c->lock);", 1, id="unlearned-wrapper"),
+    pytest.param("", 1, id="still-held"),
+])
+def test_learned_release_keeps_lock_identity(tmp_path, allocation, release, expected):
+    from core.audit.condition_smt import DomainVocabulary
+    from engine.coccinelle.vocab_renderer import render_text
+
+    text = render_text(
+        _RULE, DomainVocabulary(lock_releases=frozenset({"project_unlock"})),
+    )
+    assert text is not None
+    rendered = tmp_path / "rendered.cocci"
+    rendered.write_text(text)
+    results = _run_rule(tmp_path, f"""\
+        struct lock {{ int opaque; }};
+        struct ctx {{ struct lock lock; void *buf; }};
+        static void project_unlock(struct lock *lock) {{ spin_unlock(lock); }}
+        void reserve(struct ctx *c, struct ctx *other, void *old)
+        {{
+            if (c == other) return;
+            spin_lock(&c->lock);
+            {release}
+            c->buf = {allocation};
+            spin_unlock(&c->lock);
+        }}
+    """, rule=rendered)
+    assert len(results) == expected
+    assert all(row["rule"] == "gfp_kernel_under_spinlock" for row in results)
