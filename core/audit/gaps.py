@@ -18,6 +18,7 @@ import logging
 from pathlib import Path
 
 from core.source import open_regular
+from core.source.streams import preserving_stream_error
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -1772,7 +1773,7 @@ def _read_spans(
         probe = open_regular(resolved, "rb")
         if probe is None:
             return None
-        with probe:
+        with preserving_stream_error(probe):
             if b"\0" in probe.read(8192):
                 logger.debug("skipping binary-looking file: %s", file_path)
                 return None
@@ -1789,7 +1790,7 @@ def _read_spans(
                           errors="replace")
         if fh is None:
             return None
-        with fh:
+        with preserving_stream_error(fh):
             for lineno, text in enumerate(fh, start=1):
                 if lineno > last_line:
                     break
