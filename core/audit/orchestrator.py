@@ -10813,6 +10813,7 @@ def _run_audit_body(
         domain_model=domain_model,
         audit_log=audit_log,
         start_time=start_time,
+        knowledge_runtime=knowledge_runtime,
     )
 
     _pass_ledger.end_phase()  # flow_trace_review
@@ -34021,6 +34022,7 @@ def _review_flow_traces(
     domain_model=None,
     audit_log: list | None = None,
     start_time: float = 0.0,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> OrchestratorResult:
     """Post-loop pass: review entire source→sink flow traces as a unit.
 
@@ -34034,6 +34036,19 @@ def _review_flow_traces(
         return result
     trace_files = sorted(config.out_dir.glob("flow-trace-*.json"))
     if not trace_files:
+        return result
+    if knowledge_runtime is not None:
+        # A synthetic flow label is not an exact source occurrence. Keep the
+        # observations, but do not start another governed pass without its
+        # original bound inputs and reservation (including after owner close).
+        event = {"action": "flow_review_deferred", "adjudication": "unverified",
+                 "reason": "flow_occurrence_scope_unavailable"}
+        if audit_log is not None:
+            audit_log.append(event)
+        try:
+            append_audit_log(config.out_dir, event)
+        except Exception:
+            logger.warning("could not retain flow review deferral", exc_info=True)
         return result
 
     reviewed_keys = {f"{o.file}:{o.function}" for o in result.outcomes}
