@@ -14,6 +14,9 @@ from typing import TYPE_CHECKING
 
 from .claim_adjudication import ClaimContext, ClaimContract, FactEvent
 from .claim_verification import ClaimVerification
+from .claim_support_contracts import (
+    ConclusionSignature, ExecutedSupportBinding, PreparedTargetBinding, support_binding_rejection,
+)
 from .claims import ClaimRevision
 from .refutation_source import SourceIdentity
 from .smt_evidence import is_diagnostic_smt_rule, is_non_refuting_smt_rule
@@ -91,6 +94,8 @@ class PreparedSMTAdmission:
     anchors: tuple[PreparedSMTAnchor, ...]
     processing_status: str
     conclusion_signature: str
+    target_binding: PreparedTargetBinding | None = None
+    requested_conclusion: ConclusionSignature | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +110,7 @@ class SMTValidatedConclusion:
     execution_scope: str
     effect_scope: str
     validated_conclusion_signature: str
+    executed_support: ExecutedSupportBinding | None = None
 
 
 def _prepared_binding_matches(admission: object, context: ClaimContext,
@@ -154,6 +160,9 @@ class SMTContractAdapter:
     validate_conclusion: Callable[[ClaimVerification | ClaimRefutation, SweepResult, ClaimContext, str], object]
     validate_prepared_admission: Callable[[PreparedSMTAdmission, SweepResult, FactEvent], object] | None = None
     effect_scopes: frozenset[str] = frozenset()
+    registered_identity: tuple[str, str, str, str, str, str] | None = None
+    positive_kinds: frozenset[str] = frozenset()
+    negative_kinds: frozenset[str] = frozenset()
 
 
 
@@ -162,6 +171,8 @@ def adapt_smt_claim_fact(
     expected_scope: VerificationScope, expected_revision: ClaimRevision,
     result: object, contracts: Mapping[str, SMTContractAdapter],
     prepared_admission: PreparedSMTAdmission | None = None,
+    expected_target: PreparedTargetBinding | None = None,
+    expected_conclusion: ConclusionSignature | None = None,
 ) -> FactEvent | None:
     """Adapt an executed pipeline observation without inferring its authority.
 
@@ -228,6 +239,18 @@ def adapt_smt_claim_fact(
             or not isinstance(registration.effect_scopes, frozenset)
             or not registration.effect_scopes):
         return fact
+    if (not isinstance(expected_target, PreparedTargetBinding)
+            or not isinstance(expected_conclusion, ConclusionSignature)
+            or prepared_admission.target_binding != expected_target
+            or prepared_admission.requested_conclusion != expected_conclusion
+            or (expected_target.unit_id, expected_target.target_snapshot_id, expected_target.build_identity)
+            != (prepared_admission.unit_id, prepared_admission.target_snapshot_id, prepared_admission.build_identity)
+            or expected_target.dependencies != expected_context.dependencies
+            or expected_target.assumptions != expected_context.assumptions
+            or expected_target.representation != "source"
+            or expected_conclusion.statement != prepared_admission.statement
+            or not isinstance(registration.registered_identity, tuple)):
+        return fact
     try:
         validated = registration.validate_prepared_admission(prepared_admission, result, event)
     except Exception:
@@ -249,6 +272,17 @@ def adapt_smt_claim_fact(
     except Exception:
         return fact  # validator failure supplies no semantic conclusion
     if not isinstance(semantic, str):
+        return fact
+    support = validated.executed_support
+    if not isinstance(support, ExecutedSupportBinding) or support.semantic != semantic:
+        return fact
+    if support_binding_rejection(
+        support, expected_target=expected_target, expected_conclusion=expected_conclusion,
+        request_id=event.request_id, executed_request_id=event.executed_request_id,
+        raw_reference=event.raw_reference, registered_identity=registration.registered_identity,
+        effect_scopes=registration.effect_scopes, positive_kinds=registration.positive_kinds,
+        negative_kinds=registration.negative_kinds,
+    ) is not None:
         return fact
     if semantic == "supports_fact":
         return replace(fact, semantic=semantic)
