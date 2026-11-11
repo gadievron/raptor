@@ -1449,7 +1449,7 @@ def test_agent_credentials_scrubbed_from_chain_environ(tmp_path):
     first-party auth carries CLAUDE_CODE_OAUTH_TOKEN /
     ANTHROPIC_AUTH_TOKEN (and possibly ANTHROPIC_CUSTOM_HEADERS, which
     rides Authorization overrides). The scrub set is derived from the
-    credential-bearing vocabulary tier, so every foreign-userns chain
+    credential-bearing vocabulary tier, so every payload-userns chain
     process must publish ZEROED values for them — pre-fix the
     hand-typed union missed all three and the operator's primary
     session credential was one /proc read away from the target on
@@ -1466,7 +1466,7 @@ def test_agent_credentials_scrubbed_from_chain_environ(tmp_path):
                      "ANTHROPIC_CUSTOM_HEADERS",
                      "GITHUB_TOKEN")
     }
-    my_userns = os.readlink("/proc/self/ns/user")
+    ns_marker = tmp_path / "credential-payload-userns"
     seen: dict[str, tuple[str, bytes]] = {}
     stop = threading.Event()
 
@@ -1477,39 +1477,49 @@ def test_agent_credentials_scrubbed_from_chain_environ(tmp_path):
                 if not pid.isdigit() or pid == me:
                     continue
                 try:
+                    ns_before = os.readlink(f"/proc/{pid}/ns/user")
                     with open(f"/proc/{pid}/environ", "rb") as f:
                         img = f.read()
-                    userns = os.readlink(f"/proc/{pid}/ns/user")
+                    ns_after = os.readlink(f"/proc/{pid}/ns/user")
                 except OSError:
                     continue
+                if ns_before != ns_after:
+                    continue
                 if beacon.encode() + b"=1" in img:
-                    seen[pid] = (userns, img)
+                    seen[pid] = (ns_before, img)
             time.sleep(0.005)
 
     t = threading.Thread(target=watcher)
     t.start()
     try:
         r = _drive_run_in_subprocess(
-            tmp_path, beacon, "sleep 1.5", timeout=150,
-            extra_env=decoys)
+            tmp_path, beacon,
+            f"readlink /proc/self/ns/user > {ns_marker}; sleep 1.5",
+            timeout=150, extra_env=decoys)
     finally:
         stop.set()
         t.join()
     if "RC=0" not in r.stdout:
         pytest.skip(f"sandbox unavailable: {r.stdout} {r.stderr[-300:]}")
-    foreign = {pid: img for pid, (ns, img) in seen.items()
-               if ns != my_userns}
-    if not foreign:
-        pytest.skip("no foreign-userns chain process observed")
+    # Match the session-token watcher above: sibling capability-probe
+    # namespaces are not readable from the payload's user namespace.
+    payload_userns = (ns_marker.read_text(encoding="utf-8").strip()
+                      if ns_marker.exists() else "")
+    if not payload_userns:
+        pytest.skip("payload did not report its user namespace")
+    reachable = {pid: img for pid, (ns, img) in seen.items()
+                 if ns == payload_userns}
+    if not reachable:
+        pytest.skip("no target-userns chain process observed")
     leaks = sorted(
         f"{pid}:{name}"
-        for pid, img in foreign.items()
+        for pid, img in reachable.items()
         for name, value in decoys.items()
         if f"{name}={value}".encode() in img)
     assert not leaks, (
         f"spawn-chain forks readable from inside the sandbox still "
         f"publish agent credentials: {leaks}")
-    for img in foreign.values():
+    for img in reachable.values():
         for name in decoys:
             assert f"{name}=".encode() in img, (
                 "scrub should empty the value, not remove the name")
