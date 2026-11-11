@@ -41,6 +41,8 @@ _DIAGNOSTIC_ORACLE_SCOPES = {
     "check-overflow-to-oob": "inferred-arithmetic-model",
     "check-negative-bypass": "inferred-arithmetic-model",
     "check-null-deref": "pointer-nullability-only",
+    # Transfer descriptions are supplied, not verified against source.
+    "check-encoding-residual": "supplied-byte-transfer",
     "check-lock-discipline": "lexical-lock-discipline",
     "check-integer-narrowing": "type-width-only",
     "check-auth-bypass": "source-pattern",
