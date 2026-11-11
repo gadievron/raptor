@@ -181,12 +181,12 @@ def _read_file_content(path: Path) -> str | None:
 
     Step files are SARIF-named paths into the scanned (untrusted)
     repo — a planted multi-hundred-MB file must not be materialised
-    whole per finding.  Truncation degrades to judging the capped
-    prefix: steps whose line falls past the cap read as not-found
-    (the inconclusive direction), never as fabricated content.
+    whole per finding. A valid prefix can omit a later call while
+    retaining both endpoint functions, so it cannot establish that
+    a call edge is absent. Truncated reads decline validation.
     """
     got = read_text_capped(path)
-    if got is None:
+    if got is None or got[1]:
         return None
     return got[0]
 
