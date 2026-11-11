@@ -6,9 +6,9 @@
 // A closed descriptor need not survive to exec, while concurrent exec can
 // race a later setter. The rule does not establish those program properties.
 //
-// Existing suppression is deliberately permissive: any later F_SETFD call
-// on the expression can suppress, regardless of its flags, return status or
-// descriptor reassignment. Socket flags suppress only when an exact
+// Post-call suppression recognises exact FD_CLOEXEC and top-level OR forms.
+// It still does not establish setter success, path coverage or descriptor
+// identity after reassignment. Socket flags suppress only when an exact
 // SOCK_CLOEXEC identifier survives bounded symbolic OR/AND expressions.
 // These are incomplete coverage filters, not evidence that a descriptor is
 // protected. No match must not refute an inheritance hypothesis.
@@ -17,10 +17,10 @@
 // @role: detection
 // raptor: confirm-only
 
-// Safe set: socket() result reaches an F_SETFD fcntl.
+// Exclusion set: socket() result reaches a recognised FD_CLOEXEC setter.
 @socket_cloexec_safe exists@
 identifier FD;
-expression E;
+expression E, CLOFLAGS;
 type T;
 position p;
 @@
@@ -28,11 +28,11 @@ position p;
 (
   T FD = socket@p(...);
   ... when any
-  fcntl(FD, F_SETFD, ...)
+  fcntl(FD, F_SETFD, \(FD_CLOEXEC\|FD_CLOEXEC | CLOFLAGS\|CLOFLAGS | FD_CLOEXEC\))
 |
   E = socket@p(...);
   ... when any
-  fcntl(E, F_SETFD, ...)
+  fcntl(E, F_SETFD, \(FD_CLOEXEC\|FD_CLOEXEC | CLOFLAGS\|CLOFLAGS | FD_CLOEXEC\))
 )
 
 @socket_no_cloexec@
@@ -86,12 +86,12 @@ if not _socket_has_cloexec:
     }
     print("COCCIRESULT:" + json.dumps(msg))
 
-// Safe set: accept() result reaches an F_SETFD fcntl. accept4() with
+// Exclusion set: accept() result reaches a recognised setter. accept4() with
 // SOCK_CLOEXEC never matches either report rule (different callee
 // name), so it needs no safe-set entry.
 @accept_cloexec_safe exists@
 identifier FD;
-expression E;
+expression E, CLOFLAGS;
 type T;
 position p;
 @@
@@ -99,11 +99,11 @@ position p;
 (
   T FD = accept@p(...);
   ... when any
-  fcntl(FD, F_SETFD, ...)
+  fcntl(FD, F_SETFD, \(FD_CLOEXEC\|FD_CLOEXEC | CLOFLAGS\|CLOFLAGS | FD_CLOEXEC\))
 |
   E = accept@p(...);
   ... when any
-  fcntl(E, F_SETFD, ...)
+  fcntl(E, F_SETFD, \(FD_CLOEXEC\|FD_CLOEXEC | CLOFLAGS\|CLOFLAGS | FD_CLOEXEC\))
 )
 
 @accept_no_cloexec@
