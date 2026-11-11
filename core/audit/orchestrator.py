@@ -1754,6 +1754,10 @@ class OrchestratorResult:
         repr=False,
     )
 
+    # Fixed pipeline-owned retention limitations; previous assessments remain
+    # authoritative. Appended only by the known result-write boundaries.
+    processing_limitations: list[str] = field(default_factory=list)
+
     def counter_lock(self) -> _threading.Lock:
         """Public handle on the counter lock, for cross-module tallies
         (verdict_reuse's sweep re-validation counters) — result
@@ -37175,7 +37179,16 @@ def _run_dark_verification(
     def _retain_and_apply() -> None:
         # Retain the projected batch before exposing any stronger assessment.
         # Apply deltas to the live objects so callers retain their identities.
-        save_json(config.out_dir / "dark-verify-results.json", records)
+        destination = config.out_dir / "dark-verify-results.json"
+        try:
+            save_json(destination, records)
+        except Exception:
+            limitation = (
+                "new dark verification pass results (persistence failed)"
+            )
+            if limitation not in result.processing_limitations:
+                result.processing_limitations.append(limitation)
+            raise
         for outcome, status, evidence_tool in staged.values():
             outcome.status = status
             outcome.evidence_tool = evidence_tool
@@ -37655,7 +37668,16 @@ def _run_differential_verification(
                 "differential results could not be retained: no output "
                 "directory configured; assessments unchanged")
             return False
-        save_json(config.out_dir / "differential-results.json", records)
+        destination = config.out_dir / "differential-results.json"
+        try:
+            save_json(destination, records)
+        except Exception:
+            limitation = (
+                "new differential verification pass results (persistence failed)"
+            )
+            if limitation not in result.processing_limitations:
+                result.processing_limitations.append(limitation)
+            raise
         for outcome, status, evidence_tool in staged.values():
             outcome.status = status
             outcome.evidence_tool = evidence_tool
