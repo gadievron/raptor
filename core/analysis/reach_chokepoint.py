@@ -165,10 +165,13 @@ def record_suppression(
     reason: str,
     dropped: bool = True,
     extra: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     """Append one record to ``out_dir/suppressions.jsonl`` describing
     the finding the chokepoint just dropped. Best-effort — IO errors
-    are logged at debug and never propagate. Adversarial review
+    are logged at debug and never propagate. Return True only after the
+    complete append and close; caught failures return False. This is an
+    append acknowledgement, not fsync, readback or durable-publication proof.
+    Existing record-only callers may ignore the return. Adversarial review
     Agent C P1-1: per-finding ``analysis.reachability_suppression``
     + ``reachability_verdict`` records carry the data, but operators
     asked "show me the N findings the binary-oracle dropped" can't
@@ -261,6 +264,7 @@ def record_suppression(
             record.update(extra)
         from core.json import append_jsonl
         append_jsonl(out_dir / "suppressions.jsonl", record)
+        return True
     except (OSError, TypeError, ValueError) as e:
         # TypeError/ValueError: core.json.append_jsonl raises them for
         # non-serialisable / NaN values a producer smuggles in through
@@ -269,6 +273,7 @@ def record_suppression(
         # except.
         logger.debug(
             "reach_chokepoint: failed to write suppression record: %s", e)
+        return False
 
 
 __all__ = [

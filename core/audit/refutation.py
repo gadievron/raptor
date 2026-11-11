@@ -1509,12 +1509,12 @@ def _record_goconc_discharge(
     never be silent — the discharged dismissal goes through the
     suppressions.jsonl single-writer chokepoint with ``dropped:
     false`` and a verdict naming the witness, so operators can grep
-    every function the witness kept clean.  Returns True only when
-    the record call completed; the caller refuses the discharge on
-    False — an unrecordable discharge must not happen at all.
-    (``record_suppression`` itself swallows pure IO errors by its
-    single-writer contract; this guard covers a missing sink and
-    unexpected failures.)
+    every function the witness kept clean. Returns True only when
+    the writer acknowledges a complete append; the caller refuses on False
+    — an unrecordable discharge must not happen at all.
+    The writer catches ordinary recording failures and returns False;
+    an omitted or merely truthy acknowledgement also refuses. This is
+    append completion, not fsync or durable-publication evidence.
     """
     if not out_dir:
         logger.debug(
@@ -1529,7 +1529,7 @@ def _record_goconc_discharge(
         line = getattr(outcome, "line", 0) or 0
         fpath = getattr(outcome, "file", "")
         func = getattr(outcome, "function", "")
-        record_suppression(
+        return record_suppression(
             Path(out_dir),
             finding={
                 "finding_id": f"audit-refutation:{fpath}:{func}:{line}",
@@ -1553,8 +1553,7 @@ def _record_goconc_discharge(
                 "claimed_types": list(result.claimed_types),
                 "hypothesis": (mechanism or "")[:160],
             },
-        )
-        return True
+        ) is True
     except Exception:
         logger.debug("goconc discharge record failed", exc_info=True)
         return False
@@ -1756,8 +1755,9 @@ def _record_callerlock_discharge(
     Same never-silent contract as the goconc discharge: the record
     goes through the suppressions.jsonl single-writer chokepoint with
     ``dropped: false`` and a verdict naming the witness; returns True
-    only when the record call completed, and the caller refuses the
-    discharge on False (an unrecordable discharge must not happen).
+    only after a literal True append acknowledgement. The caller refuses
+    the discharge otherwise (an unrecordable discharge must not happen).
+    Append completion does not establish fsync or durable publication.
     """
     if not out_dir:
         logger.debug(
@@ -1773,7 +1773,7 @@ def _record_callerlock_discharge(
         line = getattr(outcome, "line", 0) or 0
         fpath = getattr(outcome, "file", "")
         func = getattr(outcome, "function", "")
-        record_suppression(
+        return record_suppression(
             Path(out_dir),
             finding={
                 "finding_id": f"audit-refutation:{fpath}:{func}:{line}",
@@ -1799,8 +1799,7 @@ def _record_callerlock_discharge(
                 "callers": list(result.callers),
                 "hypothesis": (mechanism or "")[:160],
             },
-        )
-        return True
+        ) is True
     except Exception:
         logger.debug("caller-lock discharge record failed", exc_info=True)
         return False
