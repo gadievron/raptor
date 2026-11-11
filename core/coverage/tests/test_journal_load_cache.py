@@ -19,12 +19,14 @@ import os
 import random
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import IO, Any
 
 import pytest
 
 import core.source as core_source
+from core.testing.module_views import scoped_function_imports
 from core.coverage import journal as journal_mod
 from core.coverage.journal import (
     JOURNAL_FILENAME,
@@ -139,7 +141,7 @@ class _CountingFile:
 
 
 @pytest.fixture()
-def read_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
+def read_counter(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, int]]:
     """Counts bytes/calls through every journal ``open_regular``
     stream (the loader resolves the symbol per call)."""
     counter = {"opens": 0, "readline_calls": 0, "read_calls": 0,
@@ -153,8 +155,59 @@ def read_counter(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
             return fh
         return _CountingFile(fh, counter)
 
-    monkeypatch.setattr(core_source, "open_regular", wrapper)
-    return counter
+    real_field_types = journal_mod._field_types
+
+    def field_types():
+        # Import views copy function globals. Keep this lazy cache's
+        # publication on the canonical module without warming it eagerly.
+        return real_field_types()
+
+    with monkeypatch.context() as state:
+        state.setattr(journal_mod, "_field_types", field_types)
+        with scoped_function_imports(
+            journal_mod,
+            ("flush_journal", "_serve_or_extend_set", "_shard_pin_matches", "_load_shard_cold"),
+            {"core.source": core_source},
+        ) as imports:
+            state.setattr(getattr(imports, "core.source"), "open_regular", wrapper)
+            yield counter
+
+
+@pytest.mark.parametrize("warm_types", [False, True], ids=["lazy-types", "warm-types"])
+def test_read_counter_owns_only_journal_imports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, read_counter, warm_types,
+) -> None:
+    if warm_types:
+        expected_types = journal_mod._field_types()
+    else:
+        monkeypatch.setattr(journal_mod, "_FIELD_TYPES", None)
+        expected_types = None
+    unrelated = tmp_path / "unrelated.bin"
+    payload = b"owned unrelated read"
+    unrelated.write_bytes(payload)
+    before = dict(read_counter)
+    with core_source.open_regular(unrelated, "rb") as stream:
+        assert not isinstance(stream, _CountingFile)
+        assert stream.read() == payload
+    assert stream.closed
+    with pytest.raises(ValueError):
+        stream.fileno()
+    assert read_counter == before
+
+    out = tmp_path / "run"
+    out.mkdir()
+    shard = out / JOURNAL_FILENAME
+    row = _row(0)
+    shard.write_bytes(row)
+    loaded = load_entries_checked(out)
+    assert len(loaded.entries) == 1 and loaded.entries[0].function == "fn0"
+    assert read_counter["opens"] > before["opens"]
+    assert read_counter["bytes"] >= before["bytes"] + len(row)
+    published_types = journal_mod._FIELD_TYPES
+    assert isinstance(published_types, dict)
+    if warm_types:
+        assert published_types is expected_types
+    assert journal_mod._field_types() is published_types
 
 
 def _reset(counter: dict[str, int]) -> None:
