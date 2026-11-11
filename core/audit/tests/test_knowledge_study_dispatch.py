@@ -75,6 +75,9 @@ def test_late_source_change_refuses_actual_attempt_and_finishes_job(tmp_path, mo
             answers.extend(job.drain_updates())
             finished.append(job)
 
+        def client_lifetime_valid(self):
+            return True
+
         def admit_source_attempt(self, submitted):
             attempts.extend(submitted)
             return True
@@ -146,6 +149,9 @@ def test_real_phase_failure_books_existing_ledger_and_actual_waiters(tmp_path, m
         def finish_source_job(self, job):
             answers.extend(job.drain_updates())
             self.job = None
+
+        def client_lifetime_valid(self):
+            return True
 
         def admit_source_attempt(self, submitted):
             attempts.append(tuple(r.request_id for r in submitted))
