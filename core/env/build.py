@@ -36,6 +36,7 @@ from pathlib import Path
 from core.atomic_fs import rename_without_replace
 from core.env.spec import ToolchainSpec
 from core.run.scratch import scratch_dir
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +474,7 @@ def _containerized_build(
 def _sha256(path: Path) -> str:
     import hashlib
     h = hashlib.sha256()
-    with path.open("rb") as fh:
+    with preserving_stream_error(path.open("rb")) as fh:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
