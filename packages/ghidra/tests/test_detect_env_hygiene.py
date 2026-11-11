@@ -5,7 +5,6 @@ can attach a Java agent at startup."""
 
 from __future__ import annotations
 
-import subprocess
 from types import SimpleNamespace
 
 
@@ -22,7 +21,7 @@ def test_version_probe_uses_sanitised_env(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="",
                                stderr="Ghidra 11.1.2 banner\n")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    patch_module_attribute(monkeypatch, detect, "subprocess", "run", fake_run)
     patch_module_attribute(monkeypatch,
         detect, 'shutil', "which", lambda _n: "/opt/ghidra/analyzeHeadless",
     )
