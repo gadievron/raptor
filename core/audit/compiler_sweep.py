@@ -237,6 +237,7 @@ def _tu_cache_key(cmd: list[str], full_path: Path) -> tuple | None:
     path. An unreadable TU returns None — run uncached.
     """
     from core.hash import sha256_fileobj
+    from core.source.streams import preserving_stream_error
 
     try:
         # Whole-file bytes BY DESIGN (a capped hash would equate TUs
@@ -245,7 +246,7 @@ def _tu_cache_key(cmd: list[str], full_path: Path) -> tuple | None:
         fh = open_regular(full_path, "rb")
         if fh is None:
             return None
-        with fh:
+        with preserving_stream_error(fh):
             tu_hash = sha256_fileobj(cast(BinaryIO, fh))
     except OSError:
         return None
