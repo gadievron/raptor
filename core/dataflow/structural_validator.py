@@ -594,10 +594,10 @@ def validate_structurally(
             ))
             continue
 
-        # Same line-count convention as the branch-guard extractor
-        # (splitlines) — count('\n')+1 accepted a phantom line one past
-        # the last real source line on trailing-newline files.
-        line_count = len(content.splitlines())
+        # Scanner coordinates and branch guards count LF source lines,
+        # not display separators inside comments or strings. The shared
+        # helper also omits a phantom line after a trailing newline.
+        line_count = len(split_lines(content))
         if line < 1 or line > line_count:
             verifications.append(StepVerification(
                 step_index=i, file=file_path_str, line=line,
