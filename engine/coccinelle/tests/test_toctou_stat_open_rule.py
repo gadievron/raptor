@@ -1,10 +1,8 @@
-"""Fixture tests for the toctou_stat_open rule.
+"""Fixture tests for pathname check/open review candidates.
 
-Verification-role rule (fires mint confirmed CWE-367 verdicts): the
-positive pins the actual check/use pair on one path, the negatives pin
-the shapes that must NOT be confirmed — different paths, a path
-reassigned between check and use, and the fstat-on-fd idiom the rule's
-own message recommends.
+Positives pin direct matching syntax. Negative controls distinguish
+reassigned/different paths and descriptor-only checks; they do not
+establish complete filesystem safety or refute helper-mediated pairs.
 """
 
 from __future__ import annotations

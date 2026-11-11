@@ -1,14 +1,17 @@
-// toctou_stat_open.cocci — Detect time-of-check/time-of-use race
-// between stat/access/lstat and open/fopen on the same path.
+// toctou_stat_open.cocci — Review pathname check/open pairs for TOCTOU.
 //
-// An attacker can replace the file (symlink race) between the check
-// and the open. Use fstat() on the opened fd instead, or open with
-// O_NOFOLLOW.
+// Matching stat/access/lstat and open/fopen/openat pathname text does
+// not establish a security premise or the same lookup anchor/object.
+// Relative openat names use the directory descriptor; review that
+// anchor, reliance on the check, directory mutability and open flags.
+// O_NOFOLLOW protects only the final component. Descriptor validation
+// before use can matter, but destructive opens can act before checks.
+// Prefer descriptor-based operations where the threat model permits.
 //
-// CWE-367: Time-of-check Time-of-use (TOCTOU) Race Condition
-// 0xdea has insecure-api-access-stat (flags access/stat as
-// dangerous functions). We go deeper: match the actual TOCTOU pair.
-// @role: verification
+// Direct intra-procedural pairs do not cover checks hidden in helpers.
+// CWE-367: Time-of-check Time-of-use review
+// raptor: confirm-only
+// @role: detection
 
 @stat_then_open@
 expression PATH;
@@ -40,6 +43,6 @@ msg = {
   "file":  p2[0].file,
   "line":  int(p2[0].line),
   "col":   int(p2[0].column),
-  "message":   "TOCTOU: stat/access at line %s then open on same path — symlink race window (CWE-367). Use fstat on the fd after open." % p1[0].line
+  "message":   "Path-check/open candidate: stat/lstat/access at line %s then pathname open — review check reliance, lookup anchors, directory mutability, open flags and descriptor validation (CWE-367)." % p1[0].line
 }
 print("COCCIRESULT:" + json.dumps(msg))
