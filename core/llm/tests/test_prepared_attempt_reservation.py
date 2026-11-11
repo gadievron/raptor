@@ -924,30 +924,44 @@ def test_runtime_validity_after_signed_admission_before_wire(sdk_clients, tmp_pa
 
 
 def test_runtime_validity_healthy_sdk_attempt_charges_once(sdk_clients, tmp_path):
-    from core.audit.knowledge_calls import observed_client
+    from core.audit.llm_review import make_review_fn
     from core.audit.knowledge_runtime import AuditKnowledgeRuntime
-    from core.audit.orchestrator import StudyQueue
+    from core.audit.orchestrator import OrchestratorConfig, StudyQueue
     from time import monotonic
 
     runtime = AuditKnowledgeRuntime(tmp_path, StudyQueue(), deadline=monotonic() + 30)
     out = tmp_path / "run"
     b = sdk_clients(run_dir=out, max_calls=1)
+    source = "int f(void) { return 0; }\n"
+    (tmp_path / "unit.c").write_text(source)
+    review_fn = runtime.wrap_review(make_review_fn(
+        b.client, schema=SCHEMA, system_prompt="Owned runtime lifetime control.",
+        escalate_clean=False))
+    config = OrchestratorConfig(target_path=tmp_path, out_dir=out)
     @runtime.wrap_unit
     def review(gap):
-        return observed_client(b.client, purpose="review").generate("captured")
+        return review_fn({"file": "unit.c", "function": "f", "line_start": 1,
+                          "line_end": 1, "source": source, "language": "c"}, config)
     try:
         response = review({"file": "unit.c", "name": "f", "line_start": 1})
         assert runtime._calls[("unit.c", "f", 1)] == 1
         assert len([e for e in runtime.events() if e["event"] == "client_call_attempt"]) == 1
         assert len(b.state["requests"]) == b.client._governed_calls == 1
-        assert b.client.reported_spend_usd == pytest.approx(response.cost)
+        assert b.client.reported_spend_usd == pytest.approx(response.cost_usd)
         assert b.client._governed_tokens == 6 and b.client.pending_usage_reservations == []
         rows = load_verified_audit_log(out)
         admitted, = [row for row in rows if row.get("stage") == "admitted"]
         reported, = [row for row in rows if row.get("stage") == "reported"]
         projected, = b.sink.attempt_projection()["attempts"]
+        review_event, = [e for e in runtime.events() if e["event"] == "review_attempt"]
+        pass_id = review_event["origin"]["pass_id"]
+        assert pass_id
+        assert admitted["attempt"]["work_id"] == "review:" + pass_id
+        assert admitted["attempt"]["beneficiaries"] == [pass_id]
+        assert reported["attempt"]["work_id"] == "review:" + pass_id
+        assert reported["attempt"]["beneficiaries"] == [pass_id]
         assert admitted["attempt"]["attempt_id"] == reported["attempt"]["attempt_id"] == projected["attempt_id"]
         assert admitted["attempt"]["call_id"] == reported["attempt"]["call_id"] == projected["call_id"]
-        assert reported["cost_usd"] == projected["cost_usd"] == pytest.approx(response.cost)
+        assert reported["cost_usd"] == projected["cost_usd"] == pytest.approx(response.cost_usd)
     finally:
         runtime.close()
