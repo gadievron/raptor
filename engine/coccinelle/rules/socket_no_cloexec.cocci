@@ -8,7 +8,8 @@
 //
 // Existing suppression is deliberately permissive: any later F_SETFD call
 // on the expression can suppress, regardless of its flags, return status or
-// descriptor reassignment; socket flags use a SOCK_CLOEXEC text check.
+// descriptor reassignment. Socket flags suppress only when an exact
+// SOCK_CLOEXEC identifier survives bounded symbolic OR/AND expressions.
 // These are incomplete coverage filters, not evidence that a descriptor is
 // protected. No match must not refute an inheritance hypothesis.
 //
@@ -46,9 +47,36 @@ position p != socket_cloexec_safe.p;
 TYPE << socket_no_cloexec.TYPE;
 p << socket_no_cloexec.p;
 @@
+import ast
 import json
-type_str = str(TYPE)
-if "SOCK_CLOEXEC" not in type_str:
+import re
+
+
+def _socket_cloexec_survives(node):
+    if isinstance(node, ast.Name):
+        return node.id == "SOCK_CLOEXEC"
+    if isinstance(node, ast.BinOp):
+        left = _socket_cloexec_survives(node.left)
+        right = _socket_cloexec_survives(node.right)
+        if isinstance(node.op, ast.BitOr):
+            return left or right
+        if isinstance(node.op, ast.BitAnd):
+            return left and right
+    return False
+
+
+_socket_flags = str(TYPE)
+_socket_has_cloexec = False
+if len(_socket_flags) <= 512 and _socket_flags.isascii():
+    # Numeric leaves prove no symbolic bit; do not assume platform values.
+    _socket_flags = re.sub(
+        r"\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|[0-9]+)[uUlL]*\b", "0", _socket_flags,
+    )
+    try:
+        _socket_has_cloexec = _socket_cloexec_survives(ast.parse(_socket_flags, mode="eval").body)
+    except (SyntaxError, ValueError, RecursionError):
+        _socket_has_cloexec = False
+if not _socket_has_cloexec:
     msg = {
       "rule":  "socket_no_cloexec",
       "file":  p[0].file,

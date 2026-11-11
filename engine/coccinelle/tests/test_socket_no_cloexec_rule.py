@@ -148,7 +148,7 @@ class TestNegatives:
         assert results[0]["rule"] == "socket_no_cloexec"
 
 
-@pytest.mark.parametrize('api,variant,expected', [('socket', 'closed', 1), ('socket', 'cleared', 0), ('socket', 'substring', 0), ('accept', 'closed', 1), ('accept', 'cleared', 0)])
+@pytest.mark.parametrize('api,variant,expected', [('socket', 'closed', 1), ('socket', 'cleared', 0), ('socket', 'substring', 1), ('accept', 'closed', 1), ('accept', 'cleared', 0)])
 def test_socket_inheritance_requires_context_and_coverage(tmp_path, monkeypatch, api, variant, expected):
     from core.audit.sweep import (
         is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
@@ -200,3 +200,82 @@ def test_socket_inheritance_requires_context_and_coverage(tmp_path, monkeypatch,
     assert scoped.matches == [] and scoped.outcome == 'inconclusive'
     assert scoped.details['confirm_only']
     assert len(result.matches) == expected
+
+
+def test_socket_flags_require_exact_surviving_symbol(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    cases = [
+        ('SOCK_STREAM | SOCK_CLOEXEC', False),
+        ('SOCK_CLOEXEC | SOCK_STREAM', False),
+        ('(SOCK_CLOEXEC | flags) & SOCK_CLOEXEC', False),
+        ('SOCK_CLOEXEC & SOCK_CLOEXEC', False),
+        ('SOCK_CLOEXEC | 0UL', False),
+        ('SOCK_CLOEXEC | 010U', False),
+        ('SOCK_CLOEXEC | 0x0UL', False),
+        ('SOCK_STREAM', True),
+        ('SOCK_STREAM | MY_SOCK_CLOEXEC', True),
+        ('SOCK_CLOEXEC_BACKUP', True),
+        ('SOCK_CLOEXEC & 0', True),
+        ('flags & SOCK_CLOEXEC', True),
+        ('flags & ~SOCK_CLOEXEC', True),
+        ('SOCK_CLOEXEC ^ SOCK_CLOEXEC', True),
+        ('SOCK_CLOEXEC && flags', True),
+        ('contains(SOCK_CLOEXEC)', True),
+        ('(int)SOCK_CLOEXEC', True),
+        ('SOCK_CLOEXEC | ' + '0 | ' * 160 + '0', True),
+    ]
+    lines, expected = [], []
+    for flags, report in cases:
+        lines += [f'int flag_{len(lines)}(int flags) {{',
+                  f' return socket(AF_INET, {flags}, 0);', '}']
+        if report:
+            expected.append(len(lines) - 1)
+    for index in range(120):
+        lines += [f'int repeated_{index}(void) {{',
+                  ' return socket(AF_INET, SOCK_STREAM | MY_SOCK_CLOEXEC, 0);', '}']
+        expected.append(len(lines) - 1)
+    source = tmp_path / 'flags.c'
+    source.write_text('\n'.join(lines) + '\n')
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(source), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Exact socket close-on-exec flag syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted(row['line'] for row in rows) == expected
+    assert all(row['rule'] == 'socket_no_cloexec' for row in rows)
+
+
+def test_socket_flag_filter_keeps_production_batching(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+    from packages.coccinelle import runner
+
+    source = tmp_path / 'batch.c'
+    source.write_text(
+        'int missing(void) { return socket(AF_INET, MY_SOCK_CLOEXEC, 0); }\n'
+        'int present(void) { return socket(AF_INET, SOCK_CLOEXEC, 0); }\n'
+        'int mode(char *p) { return open(p, O_CREAT); }\n'
+    )
+    calls = []
+    def _socket_batch_execute(argv, **options):
+        calls.append(tuple(argv))
+        return run_pinned_subprocess(
+            argv, timeout=45, context='Socket and open symbolic filters production batch',
+            env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+        )
+    results = runner.run_rules_batched(
+        source, [_RULE, _RULE.with_name('open_creat_no_mode.cocci')],
+        subprocess_runner=_socket_batch_execute, allow_scripting=True,
+        no_includes=True, timeout=45, env=RaptorConfig.get_safe_env(),
+    )
+    assert len(calls) == 1, calls
+    assert set(results) == {'socket_no_cloexec', 'open_creat_no_mode'}
+    assert all(result.returncode == 0 and not result.errors for result in results.values()), results
+    assert len(results['socket_no_cloexec'].matches) == 1
+    assert len(results['open_creat_no_mode'].matches) == 1
