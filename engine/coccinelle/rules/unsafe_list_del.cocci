@@ -2,8 +2,9 @@
 //
 // The pattern: list_for_each_entry is used to iterate, but the loop
 // body removes the current entry (list_del / list_del_init /
-// hlist_del). Without the _safe variant, the cursor's ->next is
-// invalid after deletion, corrupting the traversal.
+// hlist_del). These helpers unlink or reinitialise links; they do not
+// themselves free the entry. Review cursor identity, saved-link repairs
+// and whether iteration advances before confirming traversal corruption.
 //
 // The head is an expression metavariable: real call sites
 // overwhelmingly spell it `&obj->list` / `&global_list` (an
@@ -14,7 +15,9 @@
 // would flag safe non-cursor deletions at verification grade.
 //
 // Covers CWE-416 / CWE-119: use-after-free via unsafe list deletion.
-// @role: verification
+// Reassignment of the cursor can repair the next iteration; this pattern
+// does not establish the value used by the iterator update.
+// @role: detection
 
 // `exists`: the deletion only needs to happen on SOME path through the
 // loop body (the common shape is a conditional delete); forall-path
@@ -55,7 +58,7 @@ for _p in p_del:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "unsafe_list_del",
-           "message": "list_del inside non-_safe iteration over '%s' — use-after-free on next iteration" % cursor}
+           "message": "list_del inside non-_safe iteration over '%s' — review cursor identity, link repair and next-iteration reachability" % cursor}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 @unsafe_del_rev exists@
@@ -88,7 +91,7 @@ for _p in p_del:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "unsafe_list_del",
-           "message": "list_del inside non-_safe reverse iteration over '%s' — use-after-free on next iteration" % cursor}
+           "message": "list_del inside non-_safe reverse iteration over '%s' — review cursor identity, link repair and next-iteration reachability" % cursor}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 @unsafe_del_hlist exists@
@@ -121,5 +124,5 @@ for _p in p_del:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "unsafe_list_del",
-           "message": "hlist_del inside non-_safe iteration over '%s' — use-after-free on next iteration" % cursor}
+           "message": "hlist_del inside non-_safe iteration over '%s' — review cursor identity, link repair and next-iteration reachability" % cursor}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
