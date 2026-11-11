@@ -210,3 +210,23 @@ def test_real_confined_guarded_divisor_worker_retains_path_definedness():
     assert result.details['model']['Count'] == 1 and result.details['denominator'] == 0
     assert result.details['source_operation']['denominator_definedness'] == 'path-proved'
     assert result.details['source_scope']['query_contract'] == 'source-integer-division-v5'
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("adjustment,guard", [("Count & 1", ""), ("Count % 3", "if(Count==0)")], ids=["mask", "remainder"])
+def test_non_affine_denominator_operators_have_no_affine_proof(adjustment, guard, language):
+    pytest.importorskip("tree_sitter_" + language)
+    source = f"unsigned Read(unsigned Value,unsigned Count){{{guard}return Value/({adjustment});return 0;}}"
+    result = check(source, f"Potential division by zero in `Value / ({adjustment})`.", language=language)
+    assert result["division_status"] == "unavailable", result
+    assert result["violation"] is None and not result["witness_validated"], result
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+@pytest.mark.parametrize("operator", ["&", "%"])
+def test_non_affine_denominator_operators_do_not_emit_affine_candidates(operator, language):
+    from core.audit import integer_affine_division as subject
+
+    pytest.importorskip("tree_sitter_" + language)
+    source = f"unsigned Read(unsigned Value,unsigned Count){{return Value/(Count{operator}1);}}"
+    assert subject.affine_division_candidates(source, language=language, integer_abi="lp64") == []

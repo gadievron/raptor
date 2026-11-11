@@ -28,7 +28,7 @@ def _shape(node, data):
     left, right = (_unwrap(node.child_by_field_name(field)) for field in ('left', 'right'))
     numerator = data[left.start_byte:left.end_byte].decode() if left is not None and left.type == 'identifier' else source_integer_atom(left, data)
     affine = source_index(right, data)
-    return (node, right, numerator, affine, operator) if numerator is not None and affine is not None and affine[1] else None
+    return (node, right, numerator, affine, operator) if numerator is not None and affine is not None and affine[1] in {'+', '-'} else None
 
 
 def _claim(hypothesis, abi, language):
