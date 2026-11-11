@@ -1,5 +1,7 @@
 """Source-bound grouped builtin mask comparisons, without defect-intent credit."""
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, mk_val, z3, z3_available
 from core.smt_solver.csem import cast
 from core.smt_solver.session import check_solver, new_solver, query_budget
@@ -68,10 +70,11 @@ def mask_comparison_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [shape for node in nodes if (shape := _shape(node, data)) is not None]
+    occurrences = Counter((shape[2], shape[3], shape[5], shape[6]) for shape in shapes)
     result = []
-    for node in nodes:
-        shape = _shape(node, data)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[(shape[2], shape[3], shape[5], shape[6])] != 1:
             continue
         target, left, name, mask, value_atom, value, op = shape
         binding = model_for_integer_terms(target, data, [name], (), integer_abi, language=language)
