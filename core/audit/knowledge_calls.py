@@ -1,7 +1,8 @@
 """Scoped admission of high-level client calls owned by a review unit.
 
-These observations include client response-cache replays, but exclude hidden
-transport retries. The underlying budget client remains the spend authority.
+These observations include response-cache replays and identified retry attempts
+from compatible clients. Opaque provider-internal retries remain unobserved.
+The underlying budget client remains the spend authority.
 """
 from __future__ import annotations
 
@@ -12,11 +13,13 @@ from dataclasses import dataclass
 from threading import Event
 from typing import TypeVar, cast
 
+from core.llm.budget_errors import LLMCallAdmissionRefused
+
 Admission = Callable[[str, str], bool]
 T = TypeVar("T")
 
 
-class KnowledgeCallRefused(RuntimeError):
+class KnowledgeCallRefused(LLMCallAdmissionRefused):
     """A unit admission refusal, rather than a global budget failure."""
 
     def __init__(self, reason: str):
@@ -78,6 +81,24 @@ class _ObservedClient:
             self.__wrapped__, work_id=self._scope.work_id,
             beneficiaries=self._scope.beneficiaries,
         )
+        try:
+            protocol = getattr(self.__wrapped__, "_attempt_admission_protocol", None)
+        except Exception:
+            protocol = None
+        if type(protocol) is int and protocol == 1:
+            first = True
+            def admit_attempt():
+                nonlocal first
+                if self._scope.closed.is_set():
+                    raise KnowledgeCallRefused("scope_closed")
+                if first:
+                    # Keep the wrapper's existing admission for cache/replay;
+                    # its first provider attempt must not count it twice.
+                    first = False
+                elif not self._scope.admit(self._purpose, method):
+                    raise KnowledgeCallRefused("unit_admission")
+                return True
+            owned["accounting_attempt_admission"] = admit_attempt
         return getattr(self.__wrapped__, method)(*args, **{**kwargs, **owned})
 
     def generate(self, *args, **kwargs):

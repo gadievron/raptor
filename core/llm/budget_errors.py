@@ -9,6 +9,10 @@ import json
 from .response_validation import SchemaUnknownFieldError
 
 
+class LLMCallAdmissionRefused(RuntimeError):
+    """A task-scoped refusal: stop this call without exhausting the run."""
+
+
 class LLMBudgetExceededError(RuntimeError):
     """Raised when a call would breach the client's cost cap.
 
@@ -70,7 +74,9 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
 
     1. the typed :class:`LLMBudgetExceededError` anywhere on the
        chain is definitive;
-    2. response-shape failures (schema violations, JSON decode
+    2. typed task-admission refusals stop only their logical call;
+       their text or stale exception context cannot stop the run;
+    3. response-shape failures (schema violations, JSON decode
        errors, pydantic validation) anywhere on the chain are NEVER
        budget — their messages quote MODEL-CHOSEN content (the strict
        schema floor embeds unknown field names verbatim), and the
@@ -78,7 +84,7 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
        ``RuntimeError``: one injected key literally named "budget
        exceeded" would otherwise stop the entire remaining run with
        zero transport failure and zero real spend;
-    3. only then does the historical message fallback run, for
+    4. only then does the historical message fallback run, for
        exceptions raised by older code paths or re-wrapped by
        intermediaries that lose both the type and the causal chain.
     """
@@ -87,6 +93,10 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
     for e in _exception_chain(exc):
         if isinstance(e, LLMBudgetExceededError):
             return True
+        if isinstance(e, LLMCallAdmissionRefused):
+            # Task policy owns this refusal. Its text and stale exception
+            # context cannot promote it into global budget exhaustion.
+            return False
         if isinstance(e, (SchemaUnknownFieldError, json.JSONDecodeError)):
             return False
         if type(e).__name__ == "ValidationError":
