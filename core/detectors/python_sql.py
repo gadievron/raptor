@@ -351,3 +351,31 @@ def is_curated_sql_config(config: str) -> bool:
     except (OSError, ValueError, RuntimeError):
         return False
     return path == source or (path.is_dir() and source.is_relative_to(path))
+
+
+_CONSTRUCTION_RULE_IDS = (
+    "raptor.injection.sql.concatenation",
+    "raptor.injection.sql.concatenation.format",
+)
+
+
+def construction_only_matches(findings: Iterable[Any]) -> bool:
+    """Identify only the two shipped Python SQL construction rules.
+
+    Callers must separately validate ownership of the selected config.
+    Semgrep may prefix IDs with config-directory components. Missing,
+    malformed, mixed or unknown IDs do not qualify for this narrow cap.
+    """
+    found = False
+    for finding in findings:
+        found = True
+        if isinstance(finding, Mapping):
+            identifier = finding.get("rule_id") or finding.get("check_id")
+        else:
+            identifier = getattr(finding, "rule_id", None)
+        if not isinstance(identifier, str) or not any(
+            identifier == rule or identifier.endswith("." + rule)
+            for rule in _CONSTRUCTION_RULE_IDS
+        ):
+            return False
+    return found

@@ -914,7 +914,11 @@ def run_semgrep_sweep(
         # keyword, whose fixtures all carry mapped extensions); a
         # future caller adding unknown-extension extra_targets must
         # re-audit this.
-        from core.detectors.python_sql import is_curated_sql_config, recover_python_sql
+        from core.detectors.python_sql import (
+            construction_only_matches,
+            is_curated_sql_config,
+            recover_python_sql,
+        )
         from core.source import read_contained_bytes
 
         python_sql_language = full_path.suffix.lower() in {".py", ".pyw"}
@@ -1148,6 +1152,16 @@ def run_semgrep_sweep(
             witness_cov = Coverage(
                 covered=None, tier="rule-coverage", reason=capped_reason,
                 unknown_policy=UNKNOWN_INCONCLUSIVE,
+            )
+
+        # Construction alone establishes neither untrusted input nor a
+        # flow into SQL execution. Apply this only to the shipped Python
+        # config and surviving matches, after existing evidence caps.
+        if (capped_reason is None and python_sql_selected
+                and construction_only_matches(in_function)):
+            capped_reason = (
+                "construction-only SQL matches: review untrusted input "
+                "and SQL execution before verification"
             )
 
         if capped_reason:
