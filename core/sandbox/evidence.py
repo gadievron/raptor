@@ -280,18 +280,27 @@ class EvidenceFile:
                 import fcntl as _fcntl
                 fl = _fcntl.fcntl(fd, _fcntl.F_GETFL)
                 _fcntl.fcntl(fd, _fcntl.F_SETFL, fl & ~os.O_NONBLOCK)
-            return cls(fd, path, st)
+            result = cls(fd, path, st)
         except BaseException:
             # Ownership transfers only after construction succeeds.
             # Metadata/flag setup failures must release the file as
             # well as the directory fd, preserving the original error.
             if fd is not None:
-                with contextlib.suppress(OSError):
+                with contextlib.suppress(BaseException):
                     os.close(fd)
+            with contextlib.suppress(BaseException):
+                os.close(dirfd)
             raise
-        finally:
+        try:
             with contextlib.suppress(OSError):
                 os.close(dirfd)
+        except BaseException:
+            # A failed directory retirement cancels the return. The file
+            # has not reached its caller, so it remains ours to retire.
+            with contextlib.suppress(BaseException):
+                os.close(fd)
+            raise
+        return result
 
     def write_line(self, line: str) -> bool:
         """Append one JSONL line through the held fd. Returns True on

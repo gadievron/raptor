@@ -80,3 +80,74 @@ def test_constructor_failure_releases_file_and_directory(
     assert len(closed) == 2
     if existing:
         assert path.read_bytes() == b'previous\n'
+
+
+@pytest.mark.parametrize('failure_type', [RuntimeError, KeyboardInterrupt])
+def test_directory_close_failure_retires_unreturned_file(
+        tmp_path, monkeypatch, descriptors, failure_type):
+    acquired, closed = descriptors
+    close = evidence.os.close
+    failure = failure_type('directory close interrupted')
+    attempts = []
+
+    def interrupted_close(fd):
+        attempts.append(fd)
+        close(fd)
+        if len(attempts) == 1:
+            raise failure
+
+    patch_module_attribute(monkeypatch, evidence, 'os', 'close', interrupted_close)
+    with pytest.raises(failure_type) as caught:
+        evidence.EvidenceFile.open(tmp_path, 'events.jsonl')
+    assert caught.value is failure
+    assert not acquired
+    assert len(closed) == 2
+    assert len(attempts) == len(set(attempts)) == 2
+
+
+@pytest.mark.parametrize('stage', ['path', 'constructor'])
+@pytest.mark.parametrize('secondary_type', [RuntimeError, KeyboardInterrupt])
+def test_setup_failure_survives_cleanup_interruptions(
+        tmp_path, monkeypatch, descriptors, stage, secondary_type):
+    acquired, closed = descriptors
+    close = evidence.os.close
+    primary = Cancelled('setup interrupted')
+    secondary = secondary_type('cleanup interrupted')
+
+    def fail(*args):
+        raise primary
+
+    class FailedEvidence(evidence.EvidenceFile):
+        __init__ = fail
+
+    def interrupted_close(fd):
+        close(fd)
+        raise secondary
+
+    if stage == 'path':
+        monkeypatch.setattr(evidence, 'evidence_write_path', fail)
+    patch_module_attribute(monkeypatch, evidence, 'os', 'close', interrupted_close)
+    with pytest.raises(Cancelled) as caught:
+        FailedEvidence.open(tmp_path, 'events.jsonl')
+    assert caught.value is primary
+    assert not acquired
+    assert len(closed) == (1 if stage == 'path' else 2)
+
+
+def test_directory_oserror_preserves_returned_file(tmp_path, monkeypatch, descriptors):
+    acquired, closed = descriptors
+    close = evidence.os.close
+
+    def interrupted_close(fd):
+        close(fd)
+        if len(closed) == 1:
+            raise OSError('directory close failed')
+
+    patch_module_attribute(monkeypatch, evidence, 'os', 'close', interrupted_close)
+    result = evidence.EvidenceFile.open(tmp_path, 'events.jsonl')
+    try:
+        assert acquired == {result.fd}
+        assert result.write_record({'owned': True})
+    finally:
+        result.close(verify=False)
+    assert not acquired
