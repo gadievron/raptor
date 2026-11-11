@@ -473,6 +473,10 @@ def generate_report(
     knowledge_processing = load_knowledge_processing(out_dir)
     if knowledge_processing is not None:
         report["knowledge_processing"] = knowledge_processing
+    from .claim_presentation import load_claim_presentation
+    claim_projection = load_claim_presentation(out_dir)
+    if claim_projection is not None:
+        report["claim_adjudication"] = claim_projection
     report["summary"] = _format_summary(report)
     return report
 
