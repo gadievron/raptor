@@ -436,6 +436,22 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         claim_admission = None
         logger.warning("could not export claim observations", exc_info=True)
 
+    # Shadow failure must not change legacy observation/export dispositions.
+    try:
+        if claim_artifact is not None:
+            from .claim_adjudication import SHADOW_FILENAME, publication_shadow
+
+            shadow = publication_shadow(claim_index, export.get("findings", []))
+            save_json(out_dir / SHADOW_FILENAME, shadow)
+            export["claim_adjudication_shadow"] = {
+                "artifact": SHADOW_FILENAME, "mode": "shadow", "authoritative": False,
+                "policy_version": shadow["policy_version"], "claims": len(shadow["claims"]),
+            }
+    except Exception:
+        export["claim_adjudication_shadow"] = {"mode": "shadow", "authoritative": False,
+                                                "status": "export_error"}
+        logger.warning("could not export claim adjudication shadow", exc_info=True)
+
     by_location = defaultdict(list)
     for check in checks:
         scope = check["scope"]
