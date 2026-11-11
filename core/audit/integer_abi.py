@@ -12,6 +12,7 @@ from core.smt_solver.integer_abi import (
     integer_abi_record as integer_abi_record, integer_abi_key as integer_abi_key,
 )
 from pathlib import Path
+from core.source.streams import preserving_stream_error
 
 
 def host_integer_abi() -> IntegerABI | None:
@@ -62,7 +63,7 @@ def binary_integer_abi(target_path: Path) -> IntegerABI | None:
     from core.source.gated import open_regular_gated
 
     try:
-        with open_regular_gated(target_path) as handle:
+        with preserving_stream_error(open_regular_gated(target_path)) as handle:
             header = handle.read(64)
     except (OSError, ValueError):
         return None
