@@ -9098,14 +9098,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             if _private_scratch_dir is not None:
                 import shutil as _shutil
                 from core.run.scratch import keepalive_unregister
-                keepalive_unregister(_private_scratch_dir)
-                try:
-                    _shutil.rmtree(_private_scratch_dir, ignore_errors=True)
-                except Exception:
-                    logger.debug(
-                        "private scratch cleanup failed for %s",
-                        _private_scratch_dir, exc_info=True,
-                    )
+
+                def _remove_private_scratch() -> None:
+                    try:
+                        _shutil.rmtree(_private_scratch_dir, ignore_errors=True)
+                    except Exception:
+                        logger.debug(
+                            "private scratch cleanup failed for %s",
+                            _private_scratch_dir, exc_info=True,
+                        )
+
+                retire_parent_resources(
+                    lambda: keepalive_unregister(_private_scratch_dir),
+                    _remove_private_scratch,
+                )
 
         def _retire_context_demotions() -> None:
             # Per-call scratch dirs minted by mount-ns demotions.

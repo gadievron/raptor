@@ -26,7 +26,8 @@ def owned_state(tmp_path, monkeypatch):
 @pytest.mark.skipif(sys.platform != 'linux', reason='Linux mountless routing')
 @pytest.mark.parametrize('body_failure', [False, True])
 @pytest.mark.parametrize('stage', ['remove', 'unregister'])
-def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure, stage):
+@pytest.mark.parametrize('route', ['demoted', 'single'])
+def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure, stage, route):
     owned, registered, retired, dispatched = [], set(), [], []
     identities = {}
     interruption = KeyboardInterrupt('owned scratch cleanup interruption')
@@ -132,7 +133,8 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
         'sandbox': context.sandbox.__wrapped__, 'state': private_state,
         '_probes': private_probes, '_landlock': private_landlock,
         '_seccomp': private_seccomp,
-        'check_net_available': lambda: True, 'check_mount_available': lambda: True,
+        'check_net_available': lambda: route == 'demoted',
+        'check_mount_available': lambda: route == 'demoted',
         'check_landlock_available': lambda: True, '_get_landlock_abi': lambda: 6,
         'check_seccomp_available': lambda: True, 'check_seatbelt_available': lambda: False,
         '_make_preexec_fn': lambda *args, **kwargs: None,
@@ -141,16 +143,21 @@ def test_demoted_scratch_cleanup_attempts_each_directory(tmp_path, body_failure,
     try:
         with pytest.raises(ValueError if body_failure else KeyboardInterrupt) as caught:
             with contextmanager(private.sandbox)(
-                    block_network=True, target=str(tmp_path), output=str(tmp_path),
+                    block_network=route == 'demoted',
+                    target=str(tmp_path), output=str(tmp_path),
                     restrict_reads=True) as run:
-                for _ in range(2):
-                    result = run([sys.executable], timeout=1, skip_mount_ns=True)
-                    assert result.sandbox_info['private_scratch'] is True
+                if route == 'demoted':
+                    for _ in range(2):
+                        result = run([sys.executable], timeout=1, skip_mount_ns=True)
+                        assert result.sandbox_info['private_scratch'] is True
+                else:
+                    assert len(owned) == 1
+                    assert registered == set(owned)
                 if body_failure:
                     raise original
         assert caught.value is (original if body_failure else interruption)
-        assert len(owned) == len(set(owned)) == 2
-        assert dispatched == owned
+        assert len(owned) == len(set(owned)) == (2 if route == 'demoted' else 1)
+        assert dispatched == (owned if route == 'demoted' else [])
         assert retired == owned
         assert not registered
         assert all(not Path(path).exists() for path in owned)
