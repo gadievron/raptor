@@ -34,7 +34,8 @@ from core.dataflow.sanitizer_evidence import (
 )
 from core.inventory.languages import detect_language
 from core.paths import confine
-from core.source import read_text_capped, split_lines
+from core.source import DEFAULT_MAX_SOURCE_CHARS, open_regular_beneath, split_lines
+from core.source.streams import preserving_stream_error
 from core.security.prompt_defense_profiles import CONSERVATIVE, get_profile_for
 from core.security.prompt_envelope import (
     PromptBundle,
@@ -361,6 +362,39 @@ def extract_from_content(
     return candidates, errors
 
 
+def _read_source_prefix(repo_root: Path, full: Path) -> tuple[str, bool] | None:
+    """Read a faithful UTF-8 prefix through an anchored, bounded text stream."""
+    try:
+        base = repo_root.resolve()
+        relative = full.relative_to(base)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    stream = open_regular_beneath(
+        base, relative, "r", encoding="utf-8", errors="strict", newline="",
+    )
+    if stream is None:
+        return None
+    try:
+        with preserving_stream_error(stream):
+            parts: list[str] = []
+            remaining = DEFAULT_MAX_SOURCE_CHARS + 1
+            while remaining > 0:
+                part = stream.read(min(remaining, 64 * 1024))
+                if not part:
+                    break
+                parts.append(part)
+                remaining -= len(part)
+            content = "".join(parts)
+    except (OSError, UnicodeDecodeError):
+        return None
+    if len(content) <= DEFAULT_MAX_SOURCE_CHARS:
+        return content, False
+    content = content[:DEFAULT_MAX_SOURCE_CHARS]
+    if "\n" in content:
+        content = content.rsplit("\n", 1)[0] + "\n"
+    return content, True
+
+
 def extract_from_files(
     *,
     file_paths: Sequence[str],
@@ -378,8 +412,8 @@ def extract_from_files(
     all_errors: list[str] = []
 
     for rel in file_paths:
-        # Shared containment chokepoint (future hardening reaches
-        # this site too); paths originate in finding/config records.
+        # Preserve outside-root diagnostics before the anchored read;
+        # paths originate in finding/config records.
         full = confine(repo_root, rel)
         if full is None:
             all_errors.append(f"{rel}: path escapes repo root")
@@ -387,9 +421,9 @@ def extract_from_files(
         # Capped read (shared default): contained but untrusted repo
         # content. Prefix candidates remain useful, but downstream
         # evidence must disclose the incomplete file coverage.
-        got = read_text_capped(full, errors="replace")
+        got = _read_source_prefix(repo_root, full)
         if got is None:
-            all_errors.append(f"{rel}: read failed")
+            all_errors.append(f"{rel}: read failed or source is not UTF-8")
             continue
         if got[1]:
             all_errors.append(f"{rel}: source read truncated; extraction covers a prefix only")

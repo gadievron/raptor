@@ -560,16 +560,11 @@ def test_extract_from_files_containment_uses_shared_chokepoint(
 
 
 def test_extract_from_files_read_is_capped(tmp_path, monkeypatch):
-    """The contained read routes through the shared capped reader —
+    """The anchored read enforces the shared character budget —
     a planted huge repo file truncates instead of buffering whole
     into the extraction prompt path."""
     import core.dataflow.llm_extractor as le
-    real = le.read_text_capped
-
-    def tiny_cap(path, max_chars=None, **kw):
-        return real(path, 128, **kw)
-
-    monkeypatch.setattr(le, "read_text_capped", tiny_cap)
+    monkeypatch.setattr(le, "DEFAULT_MAX_SOURCE_CHARS", 128)
     (tmp_path / "big.py").write_text(
         "pad = 0\n" * 1000 + "TAIL_SENTINEL = 1\n")
     seen: dict = {}

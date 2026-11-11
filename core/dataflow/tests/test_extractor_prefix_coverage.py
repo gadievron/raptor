@@ -9,11 +9,7 @@ def test_prefix_extraction_reports_incomplete_coverage(tmp_path, monkeypatch):
     source = tmp_path / "app.py"
     header = "def validate(value):\n    return value\n"
     source.write_text(header)
-    reader = le.read_text_capped
     prompts = []
-
-    def bounded_read(file, **kwargs):
-        return reader(file, 128, **kwargs)
 
     def scripted_response(bundle):
         prompts.append(bundle)
@@ -23,14 +19,14 @@ def test_prefix_extraction_reports_incomplete_coverage(tmp_path, monkeypatch):
             "source_line": 1,
         }]})
 
-    monkeypatch.setattr(le, "read_text_capped", bounded_read)
+    monkeypatch.setattr(le, "DEFAULT_MAX_SOURCE_CHARS", 128)
     cache = {}
     candidates, errors = le.extract_from_files(
         file_paths=["app.py"], repo_root=tmp_path, extractor=scripted_response, cache=cache,
     )
     assert len(candidates) == 1 and not errors
     source.write_text(header + "# padding\n" * 30)
-    assert bounded_read(source)[1] is True
+    assert le._read_source_prefix(tmp_path, source)[1] is True
     candidates, errors = le.extract_from_files(
         file_paths=["app.py"], repo_root=tmp_path, extractor=scripted_response, cache=cache,
     )
