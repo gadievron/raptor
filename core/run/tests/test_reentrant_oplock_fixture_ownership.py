@@ -61,11 +61,11 @@ def test_native_lock_fixture_retires_worker_on_failure(
             if operation == "start":
                 fired = True
                 raise failure
-            release.set()
+            # Keep the target parked for both fault schedules until join.
 
         def join(self, timeout=None):
-            # The startup-fault schedule keeps the actual target pending until
-            # its owner joins it. The lock must already have been released.
+            # Both fault schedules keep the actual target pending until its
+            # owner joins it. The lock must already have been released.
             assert native._op_lock_is_free(env.project_dir)
             joined.append(self)
             release.set()
