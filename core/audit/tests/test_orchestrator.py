@@ -4775,7 +4775,7 @@ class TestSessionObservations:
 class TestDeepenSuspicious:
     """Deepen step: re-review suspicious verdicts with enriched context."""
 
-    def test_suspicious_gets_deepened(self, tmp_path: Path):
+    def test_suspicious_gets_deepened(self, tmp_path: Path, monkeypatch):
         target = tmp_path / "target"
         target.mkdir()
         (target / "a.c").write_text("void big() {}\n" * 30)
@@ -4799,36 +4799,32 @@ class TestDeepenSuspicious:
         call_count = [0]
         contexts_seen = []
 
+        from core.audit import orchestrator as orch
+        from core.audit.llm_review import make_review_fn
+        from core.llm.providers import StructuredResponse
+
+        class Client:
+            def is_budget_exhausted(self):
+                return False
+
+            def generate_structured(self, prompt, schema, **kwargs):
+                call_count[0] += 1
+                return StructuredResponse(result={
+                    "status": "suspicious",
+                    "body": "Possible aliasing issue in scatterlist" if call_count[0] == 1
+                            else "Reconsidered aliasing concern remains unresolved",
+                    "hypothesis": "scatterlist reuse",
+                }, raw="", cost=0, model="scripted")
+
+        client = Client()
+        rendered = make_review_fn(client, escalate_clean=False)
+        monkeypatch.setattr(orch, "_run_llm_client", lambda config: client)
+
         def review_fn(ctx, config):
-            call_count[0] += 1
             contexts_seen.append(dict(ctx))
-            if call_count[0] == 1:
-                return ReviewOutcome(
-                    file=ctx["file"],
-                    function=ctx["function"],
-                    status="suspicious",
-                    body="Possible aliasing issue in scatterlist",
-                    hypothesis="scatterlist reuse",
-                    review_result={
-                        "status": "suspicious",
-                        "body": "Possible aliasing issue in scatterlist",
-                        "hypothesis": "scatterlist reuse",
-                    },
-                )
-            return ReviewOutcome(
-                file=ctx["file"],
-                function=ctx["function"],
-                status="finding",
-                body="Page cache corruption through alias",
-                hypothesis="in-place crypto corrupts page cache",
-                evidence_tool="prefilter:alias-check",
-                review_result={
-                    "status": "finding",
-                    "body": "Page cache corruption",
-                    "hypothesis": "in-place crypto corrupts page cache",
-                    "evidence_tool": "prefilter:alias-check",
-                },
-            )
+            return rendered(ctx, config)
+
+        review_fn._knowledge_observed_client_contract = True
 
         config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
@@ -4837,6 +4833,7 @@ class TestDeepenSuspicious:
             validate=False,
             target_path=target, out_dir=out,
             budget=10, batch_sloc_threshold=0,
+            llm_budget_client=client,
             deepen_suspicious=True,
             max_refinements=0,
             sweep_validate_findings=False,
@@ -4849,8 +4846,8 @@ class TestDeepenSuspicious:
         result = run_orchestrator(config, review_fn)
 
         assert call_count[0] == 2
-        assert result.findings == 1
-        assert result.suspicious == 0
+        assert result.findings == 0
+        assert result.suspicious == 1
         assert contexts_seen[1].get("deepen") is True
         assert "prior_verdict" in contexts_seen[1]
 
