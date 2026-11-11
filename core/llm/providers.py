@@ -401,9 +401,12 @@ def _sdk_usage_reported(usage: Any, input_field: str, output_field: str) -> bool
     if usage is None:
         return False
     try:
-        values = [getattr(usage, key, None) for key in (input_field, output_field)]
-        if any(type(value) is not int or value < 0 for value in values):
-            return False
+        raw_values = [getattr(usage, key, None) for key in (input_field, output_field)]
+        values: list[int] = []
+        for value in raw_values:
+            if type(value) is not int or value < 0:
+                return False
+            values.append(value)
         for key in ("thinking_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
             value = getattr(usage, key, None)
             if value is not None and (type(value) is not int or value < 0):
@@ -953,7 +956,7 @@ class LLMProvider(ABC):
             input_field, output_field = (("prompt_tokens", "completion_tokens") if openai_usage
                                          else ("input_tokens", "output_tokens"))
             if not _sdk_usage_reported(usage, input_field, output_field):
-                exc._llm_usage_reported = False
+                setattr(exc, "_llm_usage_reported", False)
                 return
             input_tokens = getattr(usage, "prompt_tokens", None)
             if input_tokens is None:

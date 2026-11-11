@@ -915,7 +915,7 @@ def _failure_disposition(error: Exception) -> str:
     return "fatal"
 
 
-def _reported_failure_cost(error: Exception) -> float | None:
+def _reported_failure_cost(error: BaseException) -> float | None:
     """Validated attempt-local billing marker, including a reported zero."""
     for exc in _exception_chain(error):
         if getattr(exc, "_llm_usage_reported", None) is False:
@@ -932,7 +932,7 @@ def _reported_failure_cost(error: Exception) -> float | None:
     return None
 
 
-def _billed_failure_usage(error: Exception) -> tuple[float, int, int]:
+def _billed_failure_usage(error: BaseException) -> tuple[float, int, int]:
     """(cost_usd, tokens_in, tokens_out) a failed attempt already paid.
 
     Provider shape/truncation guards stamp ``billed_*`` attributes on
@@ -1557,7 +1557,7 @@ class LLMClient:
         self._prepared_resource_reservations: dict[str, dict[str, Any]] = {}
         self._prepared_admission_enabled = False
         self._admission_started = False
-        self._attempt_recovery_gap = None
+        self._attempt_recovery_gap: str | None = None
         self._pending_usage_reservations: dict[str, dict[str, Any]] = {}
         self._settled_pending_usage: dict[str, tuple] = {}
         self.request_count = 0
@@ -3079,7 +3079,8 @@ class LLMClient:
             next_settled = {**old_settled, attempt_id: (receipt, row)}
             next_active = dict(old_active)
             next_cost = old_cost + receipt[0]
-            old_flags = (hold.get("active"), hold.get("settled")) if hold is not None else None
+            old_active_flag = hold.get("active") if hold is not None else None
+            old_settled_flag = hold.get("settled") if hold is not None else None
             try:
                 self._prepared_resource_reservations = next_active
                 self.total_cost = next_cost
@@ -3098,7 +3099,7 @@ class LLMClient:
                 self._settled_pending_usage = old_settled
                 self._prepared_resource_reservations = old_active
                 if hold is not None:
-                    hold["active"], hold["settled"] = old_flags
+                    hold["active"], hold["settled"] = old_active_flag, old_settled_flag
                 raise
             return True
 
@@ -3422,9 +3423,12 @@ class LLMClient:
     @staticmethod
     def _prepared_token_total(response) -> int | None:
         values = [getattr(response, key, None) for key in ("tokens_used", "input_tokens", "output_tokens")]
-        if any(type(value) is not int or value < 0 for value in values):
-            return None
-        return max(values[0], values[1] + values[2])
+        validated: list[int] = []
+        for value in values:
+            if type(value) is not int or value < 0:
+                return None
+            validated.append(value)
+        return max(validated[0], validated[1] + validated[2])
 
     def _guard_prepared_failure(self, hold: dict[str, Any]) -> None:
         primary = sys.exc_info()[1] or hold.get("outer_error")
@@ -3827,7 +3831,7 @@ class LLMClient:
                         # comparison for the rest of the run.
                         from core.llm.cost import sanitize_cost
                         cost_actual = sanitize_cost(response.cost)
-                        if prepared_known:
+                        if prepared_known and prepared_total is not None:
                             self._settle_prepared_usage(prepared_hold, cost=cost_actual,
                                 tokens_in=response.input_tokens, tokens_out=response.output_tokens,
                                 tokens_total=prepared_total)
@@ -4552,7 +4556,7 @@ class LLMClient:
                             cost_delta = 0.0
                             tokens_delta = in_delta = out_delta = cread_delta = cwrite_delta = 0
                             self._pend_prepared_usage(prepared_hold, outcome_event="call")
-                        elif prepared_known:
+                        elif prepared_known and prepared_total is not None:
                             tokens_delta = prepared_total
 
                         # Govern the same per-call usage selected for accounting,
