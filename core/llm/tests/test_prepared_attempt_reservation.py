@@ -441,3 +441,63 @@ def test_outer_retry_keeps_unknown_hold_and_reconciles_each_attempt_once(sdk_cli
     ledger.project_attempts(b.sink.attempt_projection(), authoritative_spend=b.client.reported_spend_usd)
     assert ledger.total_spend_usd == pytest.approx(2 * response.cost)
     assert ledger.total_failed_attempts_cost_usd == pytest.approx(response.cost)
+
+
+@pytest.mark.parametrize("structured", [False, True], ids=["text", "structured"])
+def test_closed_owned_scope_refuses_after_sdk_preparation_before_wire(sdk_clients, structured):
+    from core.audit.knowledge_calls import observed_client, owned_call_scope
+    b = sdk_clients(max_calls=1)
+    entered, release = Event(), Event()
+    admissions = []
+    def admit(purpose, method):
+        admissions.append((purpose, method))
+        return True
+    def wait_before_wire_admission(request):
+        entered.set()
+        assert release.wait(5)
+    b.provider.client._client.event_hooks["request"].insert(0, wait_before_wire_admission)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        try:
+            with owned_call_scope(admit, work_id="review:closed", beneficiaries=("owned",)):
+                view = observed_client(b.client, purpose="review")
+                future = (pool.submit(view.generate_structured, "captured", SCHEMA) if structured
+                          else pool.submit(view.generate, "captured"))
+                assert entered.wait(5)
+            # The request has passed the outer call boundary, but its owner
+            # is now closed before the actual SDK wire-admission hook.
+        finally:
+            release.set()
+        with pytest.raises(LLMCallAdmissionRefused, match="scope_closed"):
+            future.result(timeout=5)
+    assert len(admissions) == 1
+    assert b.state["requests"] == [] and b.client.reported_spend_usd == 0
+    assert b.client.pending_usage_reservations == []
+    assert b.client._governed_calls == 0 and not b.client.is_budget_exhausted()
+    # A refused task must leave the single global attempt available to another.
+    _generate(b)
+    assert len(b.state["requests"]) == b.client._governed_calls == 1
+
+
+def test_prepared_retries_preserve_owned_attempt_limit_and_first_credit(sdk_clients, monkeypatch):
+    from core.audit.knowledge_calls import observed_client, owned_call_scope
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    patch_module_attribute(monkeypatch, consumer, "time", "sleep", lambda _: None)
+    b = sdk_clients(retries=3)
+    admitted = []
+    def admit(purpose, method):
+        if len(admitted) >= 2:
+            return False
+        admitted.append((purpose, method))
+        return True
+    def lost(request):
+        raise httpx.ReadError("captured response lost", request=request)
+    b.state["handler"] = lost
+    with owned_call_scope(admit, work_id="review:bounded", beneficiaries=("owned",)):
+        view = observed_client(b.client, purpose="review")
+        with pytest.raises(LLMCallAdmissionRefused, match="unit_admission"):
+            view.generate("captured")
+    assert len(admitted) == len(b.state["requests"]) == 2
+    assert len(b.client.pending_usage_reservations) == 2
+    assert b.client.reported_spend_usd == 0
+    assert not b.client.is_budget_exhausted()

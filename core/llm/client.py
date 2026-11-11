@@ -3267,7 +3267,7 @@ class LLMClient:
 
     def _dispatch_prepared_attempt(self, provider, method: str, args: tuple,
                                     kwargs: dict[str, Any], identity: dict[str, Any],
-                                    hold: dict[str, Any]):
+                                    hold: dict[str, Any], attempt_admission=None):
         hold.update(active=False, settled=False, failure_handled=False, committed=False,
                     identity=identity, usd=0.0, tokens=0, tracking=False)
         if getattr(provider, "_prepared_wire_admission_protocol", None) != 1:
@@ -3277,6 +3277,11 @@ class LLMClient:
 
         def admit(request):
             try:
+                # Task ownership can close while SDK preparation waits.
+                # Check its admission at this boundary, once per attempt.
+                if attempt_admission is not None and attempt_admission() is not True:
+                    raise LLMCallAdmissionRefused("owned model attempt refused")
+                self._check_governor()
                 quote = quote_prepared_request(request, provider, track_cost=self.config.enable_cost_tracking)
                 self._acquire_prepared_budget(quote, identity, hold)
                 try:
@@ -3680,10 +3685,11 @@ class LLMClient:
                         # tokens even when the dollar path is off ($0 local
                         # models, max_cost=inf audit runs). Terminal, like
                         # the dollar budget; raised before any reservation.
-                        if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
-                            raise LLMCallAdmissionRefused("owned model attempt refused")
-                        self._check_governor()
                         prepared_mode = getattr(self, "_prepared_admission_enabled", False)
+                        if not prepared_mode:
+                            if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
+                                raise LLMCallAdmissionRefused("owned model attempt refused")
+                            self._check_governor()
                         identity = dict(call_id=accounting_call_id, attempt_id=accounting_attempt_id,
                             work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
                             call_class=call_class, provider=model.provider, model=model.model_name)
@@ -3692,7 +3698,8 @@ class LLMClient:
                         t_start = time.monotonic()
                         if prepared_mode:
                             response, reservation = self._dispatch_prepared_attempt(provider, "generate",
-                                (prompt, system_prompt), kwargs, identity, prepared_hold)
+                                (prompt, system_prompt), kwargs, identity, prepared_hold,
+                                attempt_admission=accounting_attempt_admission)
                         else:
                             reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
                             if not self._acquire_budget(reservation):
@@ -4348,10 +4355,11 @@ class LLMClient:
                         # History-sized reservation: overshoot bounded
                         # by one call's estimate error.
                         # Non-dollar governor first (see generate()).
-                        if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
-                            raise LLMCallAdmissionRefused("owned model attempt refused")
-                        self._check_governor()
                         prepared_mode = getattr(self, "_prepared_admission_enabled", False)
+                        if not prepared_mode:
+                            if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
+                                raise LLMCallAdmissionRefused("owned model attempt refused")
+                            self._check_governor()
                         identity = dict(call_id=accounting_call_id, attempt_id=accounting_attempt_id,
                             work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
                             call_class=call_class, provider=model.provider, model=model.model_name)
@@ -4389,7 +4397,8 @@ class LLMClient:
                             provider_kwargs["_governed_single_attempt"] = True
                         if prepared_mode:
                             result_tuple, reservation = self._dispatch_prepared_attempt(provider, "generate_structured",
-                                (prompt, schema, system_prompt), provider_kwargs, identity, prepared_hold)
+                                (prompt, schema, system_prompt), provider_kwargs, identity, prepared_hold,
+                                attempt_admission=accounting_attempt_admission)
                         else:
                             self._persist_attempt_admission(reservation, **identity)
                             try:
