@@ -53,6 +53,8 @@ if TYPE_CHECKING:
 
 
 _PROMPT_VERSION = "2"
+# Validation changes must invalidate cached responses even without a prompt edit.
+_RESPONSE_SCHEMA_VERSION = 1
 
 _SYSTEM_PROMPT = """\
 You are reviewing one source file for project-specific validator or
@@ -161,6 +163,7 @@ def build_cache_key(
     parts = [
         "sanitizer_evidence",
         f"v{SCHEMA_VERSION}",
+        f"response_v{_RESPONSE_SCHEMA_VERSION}",
         f"prompt_{_PROMPT_VERSION_SHA}",
         f"model_{model_family}",
         f"lang_{language or 'unknown'}",
@@ -212,9 +215,11 @@ def _coerce_semantics_tag(tag: object) -> str:
 
 
 def _coerce_confidence(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         f = float(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return None
     if not (0.0 <= f <= 1.0):
         return None
@@ -252,9 +257,22 @@ def _parse_response(
             errors.append(f"{file_path} item {i}: not an object")
             continue
 
-        name = str(raw_item.get("name", "")).strip()
-        qualified_name = str(raw_item.get("qualified_name", "")).strip() or name
-        semantics_text = str(raw_item.get("semantics_text", "")).strip()
+        name = raw_item.get("name")
+        semantics_text = raw_item.get("semantics_text")
+        if (not isinstance(name, str) or not name.strip()
+                or not isinstance(semantics_text, str) or not semantics_text.strip()):
+            errors.append(f"{file_path} item {i}: name or semantics_text empty or not a string")
+            continue
+        name = name.strip()
+        semantics_text = semantics_text.strip()
+        qualified_name = raw_item.get("qualified_name")
+        if qualified_name is None:
+            qualified_name = name
+        elif not isinstance(qualified_name, str):
+            errors.append(f"{file_path} item {i}: qualified_name not a string")
+            continue
+        else:
+            qualified_name = qualified_name.strip() or name
         semantics_tag = _coerce_semantics_tag(raw_item.get("semantics_tag"))
         confidence = _coerce_confidence(raw_item.get("confidence"))
         source_line = raw_item.get("source_line")
@@ -273,12 +291,6 @@ def _parse_response(
                 f"{line_count}"
             )
             continue
-        if not name or not semantics_text:
-            errors.append(
-                f"{file_path} item {i}: name or semantics_text empty"
-            )
-            continue
-
         try:
             candidates.append(
                 CandidateValidator(
