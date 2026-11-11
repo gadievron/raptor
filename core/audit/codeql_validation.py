@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from core.source import open_regular
+from core.source.streams import preserving_stream_error
 from typing import Any
 
 from core.sarif.parser import load_sarif
@@ -739,7 +740,7 @@ def _load_source_lines(
                 fh = open_regular(candidate, "rb")
                 if fh is None:
                     raise OSError(f"not a readable regular file: {candidate}")
-                with fh:
+                with preserving_stream_error(fh):
                     raw = fh.read(_MAX_SOURCE_FILE_BYTES + 1)
                 if len(raw) > _MAX_SOURCE_FILE_BYTES:
                     logger.warning(
