@@ -2512,6 +2512,26 @@ def _collect_target_names(target: ast.AST, names: set) -> None:
         _collect_target_names(target.value, names)
 
 
+def _python_expression_rebinds(value: ast.AST) -> frozenset[str]:
+    """Names an RHS can explicitly replace before a later value read.
+
+    A lambda body owns its assignment expressions; its defaults execute
+    in the surrounding scope. Deferred generator writes remain a
+    conservative exclusion, matching the escaping-cell checks.
+    """
+    names: set[str] = set()
+    pending = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            pending.extend(_python_definition_headers(node))
+            continue
+        if isinstance(node, ast.NamedExpr):
+            _collect_target_names(node.target, names)
+        pending.extend(ast.iter_child_nodes(node))
+    return frozenset(names)
+
+
 def _conditional_outputs_are_chain_members(value: ast.AST, chain: set) -> bool:
     """Every selectable value must be an already validated alias."""
     pending = [value]
@@ -2969,11 +2989,16 @@ def _python_chain_reaches_sink(
                     chain.discard(var)
         targets = (list(node.targets) if isinstance(node, ast.Assign)
                    else [node.target])
+        # An RHS condition or earlier tuple element can replace a name
+        # before a later selected read. Filtering the complete RHS keeps
+        # a parent-first walk from crediting an alias before that write
+        # is visited. Unrelated captured snapshots remain transferable.
+        transfer_chain = chain - _python_expression_rebinds(node.value)
         grows: set = set()
         kills: set = set()
         for t in targets:
             _bind_chain_target(
-                t, node.value, chain, grows, kills,
+                t, node.value, transfer_chain, grows, kills,
                 at_validator=at_validator, tails=sanitizer_call_tails,
                 call_spans=sanitizer_call_spans,
             )
