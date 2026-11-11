@@ -1,13 +1,8 @@
-"""Fixture tests for the atomic_check_then_act verification-grade rule.
+"""Native fixtures for atomic-read action review candidates.
 
-The rule carries ``@role: verification`` — core/audit/sweep.py grants
-it direct status promotion, so a false positive here mints a false
-"confirmed" race verdict. The negatives pin the canonical race-free
-refcount put ``if (atomic_dec_and_test(&o->cnt)) kfree(o);``: the
-dec-and-test IS the atomic check-then-act, so the rule must never
-report it. The positives keep the genuine two-step shape firing:
-``atomic_read`` in a condition followed by a destructive action is a
-real non-atomic check-then-act window.
+Canonical dec-and-test releases remain quiet. Atomic-read/action shapes
+remain visible, while callee behaviour and ownership need independent
+review before treating a candidate as a race.
 """
 
 from __future__ import annotations

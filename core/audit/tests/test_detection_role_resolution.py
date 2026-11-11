@@ -499,3 +499,18 @@ def test_list_deletions_require_cursor_and_traversal_evidence(monkeypatch, tmp_p
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_atomic_actions_require_counter_and_callee_ownership(monkeypatch, tmp_path):
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv("RAPTOR_DIR", _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / "engine/coccinelle/rules/atomic_check_then_act.cocci"
+    receipt = "coccinelle:atomic_check_then_act"
+    assert get_rule_role(str(rule)) == "detection"
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)

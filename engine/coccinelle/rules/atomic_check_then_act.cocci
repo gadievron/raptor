@@ -1,25 +1,19 @@
-// atomic_check_then_act.cocci — Find atomic_read() or
-// atomic_dec_and_test() used in a conditional, followed by a
-// destructive action (kfree, put, destroy, release, remove) on the
-// same object without an intervening lock or atomic operation.
+// atomic_check_then_act.cocci — Review atomic_read check/action candidates.
 //
-// The check (atomic_read/atomic_dec_and_test) and the action are
-// not performed atomically, so another thread can change the
-// refcount between check and action, causing use-after-free or
-// double-free.
+// Local syntax does not establish counter ownership, the caller's held
+// reference, callee reclamation behaviour or concurrent reachability.
+// Destructor names may denote a helper that atomically drops a reference.
+// Review these contracts before treating a candidate as a race.
 //
-// Under-lock suppression uses the position-exclusion technique
-// (format_string.cocci): safe rules bind the positions of
-// destructive actions reached from a lock acquisition with the lock
-// still held, and the bug rules exclude those positions. The
-// in-branch exclusions (a lock taken or an atomic op performed
-// between check and act) stay as 'when !=' path constraints inside
-// each bug rule.
+// Lock and same-counter exclusions remain local filters. Other atomic
+// families and aliases are outside this matcher; silence cannot refute
+// the broader dispatched race or check-then-act hypothesis.
 //
-// Covers CWE-362 (race condition) and CWE-667 (improper locking).
-// @role: verification
+// CWE-362 (race condition) and CWE-667 (improper locking) review leads.
+// @role: detection
+// raptor: confirm-only
 
-// Safe set: kfree reached from a lock acquisition with the lock
+// Suppression set: kfree reached from a lock acquisition with the lock
 // still held.
 @kfree_locked exists@
 expression E;
@@ -30,7 +24,7 @@ position p;
 ... when != \(spin_unlock\|spin_unlock_irq\|spin_unlock_bh\|spin_unlock_irqrestore\|mutex_unlock\|write_unlock\)(...)
 kfree@p(E);
 
-// Safe set: destructor-pattern call reached from a lock acquisition
+// Suppression set: destructor-pattern call reached from a lock acquisition
 // with the lock still held.
 @destroy_locked exists@
 expression E;
@@ -69,7 +63,7 @@ for _p in p_free:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "atomic_check_then_act",
-          "message": "kfree(%s) after atomic_read check — non-atomic check-then-act race" % obj}
+          "message": "kfree(%s) after atomic_read check; review counter ownership and concurrent reachability" % obj}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // atomic_read in an if-condition followed by a
@@ -101,7 +95,7 @@ for _p in p_act:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "atomic_check_then_act",
-          "message": "%s(%s) after atomic_read check — non-atomic check-then-act race" % (destructor, obj)}
+          "message": "%s(%s) after atomic_read check; review callee reclamation, reference ownership and concurrency" % (destructor, obj)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // No atomic_dec_and_test legs. `if (atomic_dec_and_test(&o->cnt))
@@ -109,7 +103,5 @@ for _p in p_act:
 // is itself the atomic check-then-act, and whether a concurrent
 // thread could still take a new reference is a whole-program
 // ownership property that a single-function pattern cannot decide.
-// Flagging the idiom means flagging every correct refcount release
-// in kernel-style code, so only the atomic_read legs above — where
-// the check and the action really are two separate non-atomic
-// steps — report findings.
+// The atomic_read legs above report local review candidates; the
+// action's reclamation and ownership semantics still need review.
