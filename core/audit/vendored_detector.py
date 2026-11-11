@@ -65,6 +65,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from core.source import open_regular
+from core.source.streams import preserving_stream_error
 from typing import Any
 
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
@@ -642,7 +643,7 @@ def _read_file(file_path: str, target_path: Path | None) -> str:
     if fh is None:
         return ""
     try:
-        with fh:
+        with preserving_stream_error(fh):
             raw = fh.read(_MAX_STRUCTURE_BYTES)
     except OSError:
         return ""
