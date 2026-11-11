@@ -102,6 +102,31 @@ def test_cleanup_error_preserves_original_stat_failure(tmp_path, monkeypatch, de
     assert descriptors.owned == set()
 
 
+@pytest.mark.parametrize("primary_type", [OSError, RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("cleanup_type", [KeyboardInterrupt, SystemExit])
+def test_cleanup_interruption_attempts_every_pin_and_preserves_primary(
+    tmp_path, monkeypatch, descriptors, primary_type, cleanup_type,
+):
+    primary = primary_type("owned stat failure")
+    cleanup = cleanup_type("owned cleanup interruption")
+    interrupted = []
+
+    def close(fd):
+        descriptors.close(fd)
+        if not interrupted:
+            interrupted.append(fd)
+            raise cleanup
+
+    patch_module_attribute(monkeypatch, pin, 'os', "fstat", Mock(side_effect=primary))
+    patch_module_attribute(monkeypatch, pin, 'os', "close", close)
+    with pytest.raises(primary_type) as raised:
+        pin.open_pinned(str(tmp_path))
+    assert raised.value is primary
+    assert descriptors.owned == set()
+    assert len(descriptors.opened) == 2
+    assert sorted(descriptors.closed) == sorted(descriptors.opened)
+
+
 def test_success_transfers_only_the_final_pin(tmp_path, descriptors):
     expected = tmp_path.stat()
     fd = pin.open_pinned(str(tmp_path))

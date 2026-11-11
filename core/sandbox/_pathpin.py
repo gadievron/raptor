@@ -240,6 +240,6 @@ def open_pinned(canonical_path: str) -> int:
             if owned is not None:
                 try:
                     os.close(owned)
-                except OSError:
+                except BaseException:
                     pass
         raise
