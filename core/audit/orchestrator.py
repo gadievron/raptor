@@ -27790,6 +27790,9 @@ def _deepen_suspicious(
             if continuation_owner is not None:
                 with result._lock:
                     result.total_cost_usd += outcome.cost_usd
+                if outcome.status not in ("clean", "suspicious", "finding", "dormant"):
+                    continuation_owner.fail(idx, "deepen_assessment_failed")
+                    continue
                 if ctx.get("live_sinks") or ctx.get("disagreement_override"):
                     from .live_sink_continuation import retain_unbound_advisory_input_limit
                     retain_unbound_advisory_input_limit(outcome, continuation_owner.reservation(idx))
@@ -28064,6 +28067,10 @@ def _run_disagreement_continuations(result, config, review_fn, prepared, runtime
                                             wall_time_s=outcome.duration_s)
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
+            if outcome.status not in ("clean", "suspicious", "finding", "dormant"):
+                runtime.fail(reservation, "disagreement_assessment_failed", ctx=ctx)
+                settled = True
+                continue
             if not runtime.context_was_delivered(reservation) or not runtime.can_publish(reservation):
                 runtime.fail(reservation, "disagreement_context_not_admissible", ctx=ctx)
                 settled = True
@@ -35170,6 +35177,10 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                                             wall_time_s=outcome.duration_s)
             with result._lock:
                 result.total_cost_usd += outcome.cost_usd
+            if outcome.status not in ("clean", "suspicious", "finding", "dormant"):
+                runtime.fail(reservation, "callee_assessment_failed", ctx=ctx)
+                settled = True
+                continue
             if not runtime.context_was_delivered(reservation):
                 runtime.fail(reservation, "callee_context_not_delivered", ctx=ctx)
                 settled = True
