@@ -436,3 +436,21 @@ def test_string_conversions_require_input_and_parsing_context(monkeypatch, tmp_p
     assert _is_detection_only(receipt)
     assert not is_tool_evidence(receipt)
     assert not is_verification_evidence(receipt)
+
+
+def test_lock_imbalance_requires_acquisition_and_release_context(monkeypatch, tmp_path):
+    from core.audit.cwe_dispatch import cocci_rules_for_cwe
+    from core.audit.evidence_grade import is_tool_evidence, is_verification_evidence
+    from core.audit.sweep import get_rule_role, is_confirm_only_coccinelle_rule
+
+    monkeypatch.setenv('RAPTOR_DIR', _RAPTOR_DIR)
+    monkeypatch.chdir(tmp_path)
+    rule = Path(_RAPTOR_DIR) / 'engine/coccinelle/rules/lock_imbalance.cocci'
+    assert 'lock_imbalance.cocci' in cocci_rules_for_cwe('CWE-362')
+    assert 'lock_imbalance.cocci' in cocci_rules_for_cwe('CWE-667')
+    assert get_rule_role(str(rule)) == 'detection'
+    assert is_confirm_only_coccinelle_rule(str(rule))
+    receipt = 'coccinelle:lock_imbalance'
+    assert _is_detection_only(receipt)
+    assert not is_tool_evidence(receipt)
+    assert not is_verification_evidence(receipt)

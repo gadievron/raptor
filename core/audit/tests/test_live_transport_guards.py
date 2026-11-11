@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_lock_acquisition_context_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_lock_imbalance_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_acquisition_and_release_context_remains_required"}
+
     def test_strtol_parsing_contract_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_unchecked_strtol_rule.py")
         assert _callers_of(calls, "run") == set()
