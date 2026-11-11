@@ -169,7 +169,7 @@ def ensure_audit_dirfd(run_dir) -> int:
                 f"— refusing to use it"
             )
     except BaseException:
-        with contextlib.suppress(OSError):
+        with contextlib.suppress(BaseException):
             os.close(fd)
         raise
     return fd
