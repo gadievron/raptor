@@ -85,7 +85,7 @@ class Source:
             stream = open_regular_beneath(self.path.resolve(), name, "rb")
             if stream is None:
                 raise ValueError("missing, nonregular or symlinked evidence member: " + name)
-        with stream:
+        with preserving_stream_error(stream):
             if self.archive is None and os.fstat(stream.fileno()).st_size > max_bytes:
                 raise ValueError("evidence member exceeds read budget")
             yield stream
