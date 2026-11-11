@@ -3933,8 +3933,11 @@ class LLMClient:
                         # monotonic() — wall clock can jump under NTP/DST.
                         t_start = time.monotonic()
                         try:
+                            provider_kwargs = dict(kwargs)
+                            if isinstance(provider, LLMProvider):
+                                provider_kwargs["_governed_single_attempt"] = True
                             result_tuple = provider.generate_structured(
-                                prompt, schema, system_prompt, **kwargs,
+                                prompt, schema, system_prompt, **provider_kwargs,
                             )
                         except Exception as error:
                             attempt_response_started = self._fail_budget_attempt(

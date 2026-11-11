@@ -1793,6 +1793,7 @@ class OpenAICompatibleProvider(LLMProvider):
                            system_prompt: str | None = None,
                            **kwargs) -> StructuredResponse:
         """Generate structured output using Instructor (or JSON fallback)."""
+        governed = kwargs.pop("_governed_single_attempt", False) is True
         pydantic_model = _dict_schema_to_pydantic(schema)
         # Honour caller-supplied temperature so DispatchTask's
         # `temperature = 0.2` (analysis), `0.3` (consensus), etc.
@@ -1811,6 +1812,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
                 t_start = time.monotonic()
                 result, completion = self.instructor_client.chat.completions.create_with_completion(
+                    **({"max_retries": 1} if governed else {}),
                     model=self.config.model_name,
                     response_model=pydantic_model,
                     messages=messages,
@@ -1883,6 +1885,10 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                     raise
                 self._note_instructor_failure(e)
+
+                if governed:
+                    # The outer client owns admission and a fresh attempt ID.
+                    raise
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(
@@ -3050,6 +3056,7 @@ class AnthropicProvider(LLMProvider):
             self, prompt: str, schema: dict[str, Any],
             system_prompt: str | None = None,
             **kwargs) -> StructuredResponse:
+        governed = kwargs.pop("_governed_single_attempt", False) is True
         pydantic_model = _dict_schema_to_pydantic(schema)
         # See OpenAI provider — caller-supplied temperature must
         # reach the API for DispatchTask's per-task temperatures
@@ -3097,6 +3104,7 @@ class AnthropicProvider(LLMProvider):
 
                 t_start = time.monotonic()
                 result, completion = self.instructor_client.messages.create_with_completion(
+                    **({"max_retries": 1} if governed else {}),
                     **create_kwargs,
                 )
                 duration = time.monotonic() - t_start
@@ -3210,6 +3218,9 @@ class AnthropicProvider(LLMProvider):
                     )
                     raise
                 self._note_instructor_failure(e)
+
+                if governed:
+                    raise
 
         # Fallback: JSON-in-prompt
         return self._structured_fallback(
@@ -4144,6 +4155,7 @@ class GeminiProvider(LLMProvider):
                            system_prompt: str | None = None,
                            **kwargs) -> StructuredResponse:
         """Generate structured output using Gemini's native JSON mode."""
+        governed = kwargs.pop("_governed_single_attempt", False) is True
         # Normalize simple schema to JSON Schema format so both pydantic and
         # Gemini schema conversion see the same structure
         normalized = _normalize_schema(schema)
@@ -4264,6 +4276,13 @@ class GeminiProvider(LLMProvider):
             )
 
         except (json.JSONDecodeError, ValueError, KeyError) as e:
+            if governed:
+                # Native generation already consumed usage. A format retry
+                # requires its own outer admission and accounting identity.
+                if "cost" in locals():
+                    _attach_billed_usage(e, cost_usd=cost, tokens_in=input_tokens,
+                                        tokens_out=output_tokens + thinking_tokens)
+                raise
             # Schema/parsing error — native mode incompatible, fall back
             # to JSON-in-prompt. Sanitise before logging: the rendered
             # exception can embed the model's raw output (control
