@@ -2484,6 +2484,9 @@ def _finalize_run(
             ), flush=True)
     for residue_line in format_residue_lines(report):
         print(residue_line, flush=True)
+    from core.audit.knowledge_reporting import knowledge_processing_lines
+    for knowledge_line in knowledge_processing_lines(report):
+        print(knowledge_line, flush=True)
     from core.audit.cost_tracker import format_cost_summary
     cost_line = format_cost_summary(result)
     if cost_line:
