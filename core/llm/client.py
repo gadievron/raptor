@@ -1489,6 +1489,7 @@ class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
     _attempt_accounting_protocol = 1
     _attempt_admission_protocol = 1
+    _attempt_validity_protocol = 1
     _run_deadline_protocol = 1
 
 
@@ -3336,7 +3337,7 @@ class LLMClient:
 
     def _dispatch_prepared_attempt(self, provider, method: str, args: tuple,
                                     kwargs: dict[str, Any], identity: dict[str, Any],
-                                    hold: dict[str, Any], attempt_admission=None):
+                                    hold: dict[str, Any], attempt_admission=None, attempt_validity=None):
         hold.update(active=False, settled=False, failure_handled=False, committed=False,
                     identity=identity, usd=0.0, tokens=0, tracking=False)
         if getattr(provider, "_prepared_wire_admission_protocol", None) != 1:
@@ -3348,6 +3349,8 @@ class LLMClient:
             try:
                 # Task ownership can close while SDK preparation waits.
                 # Check its admission at this boundary, once per attempt.
+                if attempt_validity is not None and attempt_validity() is not True:
+                    raise LLMCallAdmissionRefused("owned model attempt validity refused")
                 if attempt_admission is not None and attempt_admission() is not True:
                     raise LLMCallAdmissionRefused("owned model attempt refused")
                 self._check_governor()
@@ -3367,6 +3370,10 @@ class LLMClient:
                 # Durable admission may itself wait. Recompute the remaining
                 # window after it commits, before this hook permits transport.
                 self._clamp_prepared_timeout(request, kwargs.get("timeout_s"))
+                # The journal can wait after consuming admission. Recheck
+                # lifetime without consuming or refunding another credit.
+                if attempt_validity is not None and attempt_validity() is not True:
+                    raise LLMCallAdmissionRefused("owned model attempt validity refused")
             except (LLMBudgetExceededError, LLMCallAdmissionRefused) as refusal:
                 hold["refusal"] = refusal
                 raise
@@ -3598,9 +3605,12 @@ class LLMClient:
         )
         accounting_call_id = uuid4().hex
         accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        accounting_attempt_validity = kwargs.pop("accounting_attempt_validity", None)
         kwargs.pop("_governed_wire_token", None)
         if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
             raise TypeError("attempt admission must be callable")
+        if accounting_attempt_validity is not None and not callable(accounting_attempt_validity):
+            raise TypeError("attempt validity must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
         accounting_beneficiaries = tuple(dict.fromkeys(
             str(item) for item in kwargs.pop("accounting_beneficiaries", ())
@@ -3782,6 +3792,8 @@ class LLMClient:
                         # the dollar budget; raised before any reservation.
                         prepared_mode = getattr(self, "_prepared_admission_enabled", False)
                         if not prepared_mode:
+                            if accounting_attempt_validity is not None and accounting_attempt_validity() is not True:
+                                raise LLMCallAdmissionRefused("owned model attempt validity refused")
                             if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                                 raise LLMCallAdmissionRefused("owned model attempt refused")
                             self._check_governor()
@@ -3794,7 +3806,8 @@ class LLMClient:
                         if prepared_mode:
                             response, reservation = self._dispatch_prepared_attempt(provider, "generate",
                                 (prompt, system_prompt), kwargs, identity, prepared_hold,
-                                attempt_admission=accounting_attempt_admission)
+                                attempt_admission=accounting_attempt_admission,
+                                attempt_validity=accounting_attempt_validity)
                         else:
                             reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
                             if not self._acquire_budget(reservation):
@@ -4265,9 +4278,12 @@ class LLMClient:
         )
         accounting_call_id = uuid4().hex
         accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        accounting_attempt_validity = kwargs.pop("accounting_attempt_validity", None)
         kwargs.pop("_governed_wire_token", None)
         if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
             raise TypeError("attempt admission must be callable")
+        if accounting_attempt_validity is not None and not callable(accounting_attempt_validity):
+            raise TypeError("attempt validity must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
         accounting_beneficiaries = tuple(dict.fromkeys(
             str(item) for item in kwargs.pop("accounting_beneficiaries", ())
@@ -4452,6 +4468,8 @@ class LLMClient:
                         # Non-dollar governor first (see generate()).
                         prepared_mode = getattr(self, "_prepared_admission_enabled", False)
                         if not prepared_mode:
+                            if accounting_attempt_validity is not None and accounting_attempt_validity() is not True:
+                                raise LLMCallAdmissionRefused("owned model attempt validity refused")
                             if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                                 raise LLMCallAdmissionRefused("owned model attempt refused")
                             self._check_governor()
@@ -4493,7 +4511,8 @@ class LLMClient:
                         if prepared_mode:
                             result_tuple, reservation = self._dispatch_prepared_attempt(provider, "generate_structured",
                                 (prompt, schema, system_prompt), provider_kwargs, identity, prepared_hold,
-                                attempt_admission=accounting_attempt_admission)
+                                attempt_admission=accounting_attempt_admission,
+                                attempt_validity=accounting_attempt_validity)
                         else:
                             self._persist_attempt_admission(reservation, **identity)
                             try:
