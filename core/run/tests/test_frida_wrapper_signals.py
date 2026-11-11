@@ -166,9 +166,13 @@ def _owned_wrapper(args, *, stub: Path, **kwargs):
         cleanup.callback(stub.write_text, original, encoding="utf-8")
         lifetime_read, lifetime_write = cleanup.enter_context(pipe_streams())
         done_read, done_write = cleanup.enter_context(pipe_streams())
-        prelude = (f"{shlex.quote(sys.executable)} -I -c "
+        # Protect the watcher before fork/exec, including Python startup.
+        # The stub body still receives TERM with its original disposition.
+        prelude = ("trap '' TERM\n"
+                   f"{shlex.quote(sys.executable)} -I -c "
                    f"{shlex.quote(_LIFELINE_WATCHER)} "
-                   f"{lifetime_read.fileno()} &\n")
+                   f"{lifetime_read.fileno()} &\n"
+                   "trap - TERM\n")
         shebang, body = original.split("\n", 1)
         stub.write_text(shebang + "\n" + prelude + body, encoding="utf-8")
         process = subprocess.Popen(
