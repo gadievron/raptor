@@ -626,6 +626,9 @@ def write_graded_findings(
     from .check_trace import write_check_results
 
     write_check_results(export, out_dir, prepared_claim_pipeline=prepared_claim_pipeline)
+    from .claim_comparison_inputs import write_comparison_inputs
+
+    export["claim_comparison_inputs"] = write_comparison_inputs(export, out_dir)
     path = out_dir / "findings-graded.json"
     save_json(path, export)
     return path
