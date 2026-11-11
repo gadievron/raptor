@@ -99,3 +99,133 @@ def test_actual_empty_runtime_writer_is_not_an_unavailable_record(tmp_path):
     assert report["knowledge_processing"]["requests"] == 0
     assert report["knowledge_processing"]["delivered_requests"] == 0
     assert "not verification evidence" in report["summary"]
+
+
+def test_actual_saved_external_context_is_not_a_dangling_request(tmp_path):
+    from core.audit.continuation_context import context_version
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+
+    source = "def owned(value):\n    return value\n"
+    (tmp_path / "owned.py").write_text(source, encoding="utf-8")
+    context = {"file": "owned.py", "function": "owned", "line_start": 1, "line_end": 2,
+               "source": source, "mechanical_evidence": "Captured context, no analysis executed"}
+    runtime = AuditKnowledgeRuntime(tmp_path, None, deadline=float("inf"))
+    try:
+        assert runtime.offer_context_delta(context, kind="late_joern",
+                                          version=context_version(context["mechanical_evidence"]))
+        runtime.write_artifacts(tmp_path)
+        path = tmp_path / "knowledge-results.json"
+        before = path.read_bytes()
+        payload = json.loads(before)
+        assert payload["requests"] == [] and payload["caller_context_requests"] == []
+        assert len(payload["units"][0]["cycle"]["delta_ids"]) == 1
+        report = generate_report(tmp_path)
+        processing = report["knowledge_processing"]
+        assert processing["state"] == "recorded", "valid offered context is separate from request identities"
+        assert processing["requests"] == 0 and processing["delivered_requests"] == 0
+        assert processing["context_updates"] == 1 and processing["delivered_context_updates"] == 0
+        assert processing["pending_delivery_context_updates"] == 1
+        assert "context updates" in report["summary"]
+        assert path.read_bytes() == before
+    finally:
+        runtime.close()
+
+
+def test_same_context_version_is_counted_per_review_unit(tmp_path):
+    from core.audit.continuation_context import context_version
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+
+    source = "def first():\n    return 1\ndef second():\n    return 2\n"
+    (tmp_path / "owned.py").write_text(source, encoding="utf-8")
+    runtime = AuditKnowledgeRuntime(tmp_path, None, deadline=float("inf"))
+    try:
+        for function, line in (("first", 1), ("second", 3)):
+            context = {"file": "owned.py", "function": function, "line_start": line, "line_end": line + 1,
+                       "source": source, "mechanical_evidence": "Identical captured context"}
+            assert runtime.offer_context_delta(context, kind="late_joern",
+                                              version=context_version(context["mechanical_evidence"]))
+        runtime.write_artifacts(tmp_path)
+        path = tmp_path / "knowledge-results.json"
+        before = path.read_bytes()
+        payload = json.loads(before)
+        offered = [event for event in payload["events"] if event["event"] == "context_delta_offered"]
+        assert len(offered) == 2 and offered[0]["context_id"] == offered[1]["context_id"]
+        processing = generate_report(tmp_path)["knowledge_processing"]
+        assert processing["context_updates"] == 2
+        assert processing["pending_delivery_context_updates"] == 2
+        assert path.read_bytes() == before
+    finally:
+        runtime.close()
+
+
+def test_completed_prompt_receipt_does_not_consume_a_late_context_version(tmp_path, monkeypatch):
+    from core.audit import llm_review
+    from core.audit.continuation_context import context_version
+    from core.audit.knowledge_runtime import AuditKnowledgeRuntime
+    from core.audit.late_joern_continuation import LateJoernContinuations
+    from core.audit.llm_review import make_review_fn
+    from core.audit.orchestrator import OrchestratorConfig, StudyQueue
+    from core.llm.providers import StructuredResponse
+
+    source = "def owned(value):\n    return value\n"
+    (tmp_path / "owned.py").write_text(source, encoding="utf-8")
+    config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path,
+                                enable_session_context=False, sweep_validate_findings=False)
+    monkeypatch.setattr(llm_review, "_prompt_budget", lambda *args: 16000)
+    runtime = AuditKnowledgeRuntime(tmp_path, StudyQueue(), deadline=float("inf"))
+
+    class CapturedReply:
+        calls = 0
+        after = staticmethod(lambda: None)
+
+        def generate_structured(self, prompt, schema, **kwargs):
+            self.calls += 1
+            self.after()
+            return StructuredResponse(result={"status": "clean", "body": "Captured review judgment"},
+                                      raw="", cost=0, model="captured-no-provider")
+
+    client = CapturedReply()
+    review = make_review_fn(client, escalate_clean=False)
+    context = {"file": "owned.py", "function": "owned", "line_start": 1, "line_end": 2,
+               "source": source, "language": "python"}
+    owner = LateJoernContinuations(runtime, review, admission=lambda: True)
+    try:
+        runtime.wrap_review(review)(dict(context), config)
+        context["mechanical_evidence"] = "Captured first context"
+        frozen_id = "context:late_joern:" + context_version(context["mechanical_evidence"])
+        later = {**context, "mechanical_evidence": "Captured later context"}
+        late_id = "context:late_joern:" + context_version(later["mechanical_evidence"])
+
+        def offer_late():
+            assert runtime.offer_context_delta(later, kind="late_joern",
+                                              version=context_version(later["mechanical_evidence"]))
+
+        client.after = offer_late
+        outcome = owner.dispatch(0, context, config)
+        assert outcome.status == "clean" and owner.can_publish(0)
+        assert owner.complete(0, "clean")
+        runtime.write_artifacts(tmp_path)
+        path = tmp_path / "knowledge-results.json"
+        before = path.read_bytes()
+        payload = json.loads(before)
+        completed = [event for event in payload["events"] if event["event"] == "continuation_completed"]
+        assert len(completed) == 1 and completed[0]["delivered_request_ids"] == [frozen_id]
+        assert payload["units"][0]["cycle"]["delta_ids"] == [late_id]
+        processing = generate_report(tmp_path)["knowledge_processing"]
+        assert processing["requests"] == 0 and processing["delivered_requests"] == 0
+        assert processing["context_updates"] == 2 and processing["delivered_context_updates"] == 1
+        assert processing["pending_delivery_context_updates"] == 1
+        assert path.read_bytes() == before and client.calls == 2
+    finally:
+        owner.close()
+        runtime.close()
+
+
+def test_unoffered_context_identity_remains_unavailable(tmp_path):
+    path, payload = _captured(tmp_path)
+    payload["units"][0]["cycle"]["delta_ids"] = ["context:late_joern:unoffered"]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    before = path.read_bytes()
+    processing = generate_report(tmp_path)["knowledge_processing"]
+    assert processing["state"] == "unavailable" and "delivered_context_updates" not in processing
+    assert path.read_bytes() == before
