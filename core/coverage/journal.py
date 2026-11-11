@@ -1020,6 +1020,7 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                 0o644,
             )
             locked = False
+            failed = False
             try:
                 if not _fd_is_regular(fd):
                     # A planted FIFO (with a reader — the reader-less
@@ -1104,10 +1105,23 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
                         )
                         raise OSError(msg)
                 return
+            except BaseException:
+                failed = True
+                raise
             finally:
-                if locked:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
+                try:
+                    if locked:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                except BaseException:
+                    if not failed:
+                        failed = True
+                        raise
+                finally:
+                    try:
+                        os.close(fd)
+                    except BaseException:
+                        if not failed:
+                            raise
 
 
 def flush_journal(out_dir: Path, *, strict: bool = False) -> None:
