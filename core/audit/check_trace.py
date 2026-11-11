@@ -357,7 +357,7 @@ def _admit_claim_events(rows) -> tuple[list[dict], list[dict], dict]:
     return _admit_observation_events(rows, action="ihv_claim_observations", valid_payload=_claim_event_shape)
 
 
-def write_check_results(export: dict, out_dir: Path) -> None:
+def write_check_results(export: dict, out_dir: Path, *, prepared_claim_pipeline=None) -> None:
     """Export run-bound checks and link them to findings and clean reviews.
 
     Only verified event rows are admitted. Links describe claim/location
@@ -441,7 +441,11 @@ def write_check_results(export: dict, out_dir: Path) -> None:
         if claim_artifact is not None:
             from .claim_adjudication import SHADOW_FILENAME, publication_shadow
 
-            shadow = publication_shadow(claim_index, export.get("findings", []))
+            from .prepared_claim_pipeline import PreparedClaimPipeline
+            prepared_inputs = (prepared_claim_pipeline.shadow_inputs()
+                               if isinstance(prepared_claim_pipeline, PreparedClaimPipeline) else None)
+            shadow = publication_shadow(claim_index, export.get("findings", []),
+                                        prepared_inputs=prepared_inputs)
             save_json(out_dir / SHADOW_FILENAME, shadow)
             export["claim_adjudication_shadow"] = {
                 "artifact": SHADOW_FILENAME, "mode": "shadow", "authoritative": False,

@@ -872,6 +872,9 @@ class OrchestratorConfig:
     # Operator-selected target integer ABI. Never infer from the audit host
     # or let a hypothesis/tool configuration supply this assertion.
     integer_abi: IntegerABIInput = None
+    # Run-owned measured preparation inputs. Missing facts remain per-claim
+    # unknown; this does not authorise another checker or public verdict.
+    prepared_claim_pipeline: Any = field(default=None, kw_only=True, repr=False)
     # Wall-time bound for the zero-dispatch re-sweep: the post-loop
     # receipt-supply pass that dispatches the CWE-mapped mechanical
     # chain for every suspicious outcome whose review dispatched no
@@ -1271,6 +1274,9 @@ class OrchestratorConfig:
     def __post_init__(self) -> None:
         if self.integer_abi is not None and _integer_abi_record(self.integer_abi) is None:
             raise ValueError("unknown target integer ABI")
+        if self.prepared_claim_pipeline is None:
+            from .prepared_claim_pipeline import PreparedClaimPipeline
+            self.prepared_claim_pipeline = PreparedClaimPipeline(self.target_path, self.out_dir)
         # Adopt the existing memo; keep constructor compatibility and one cache.
         if self.analysis_setup is None:
             self.analysis_setup = AnalysisSetup(include_dirs_memo=self.include_dirs_memo)
@@ -12014,7 +12020,8 @@ def _run_audit_body(
                             "description": "exploit confirmation from /exploit run",
                         }
                     )
-        write_graded_findings(graded, config.out_dir)
+        write_graded_findings(graded, config.out_dir,
+                              prepared_claim_pipeline=getattr(config, "prepared_claim_pipeline", None))
         logger.info(
             "graded findings: %d total (%d high, %d medium, %d low confidence)",
             graded["stats"]["total"],
@@ -12222,7 +12229,8 @@ def _sigterm_salvage(
             attack_chains=None,
             out_dir=config.out_dir,
         )
-        write_graded_findings(graded, config.out_dir)
+        write_graded_findings(graded, config.out_dir,
+                              prepared_claim_pipeline=getattr(config, "prepared_claim_pipeline", None))
     except Exception:
         logger.debug("salvage: graded export failed", exc_info=True)
 
@@ -22987,6 +22995,17 @@ def _run_tool_chain(
                     _increment_tier_dict(tier_counters, "semgrep", "refuted")
 
             elif tool_type == "smt":
+                from .claim_verification import ClaimVerification
+                from .prepared_claim_pipeline import PreparedClaimPipeline
+                _prepared_pipeline = getattr(config, "prepared_claim_pipeline", None)
+                _prepared_record = ClaimVerification(
+                    claim_revision.hypothesis if claim_revision is not None else {},
+                    binding=confirmed.binding, claim_revision=claim_revision,
+                )
+                _prepared_context = (
+                    _prepared_pipeline.prepare(_prepared_record, integer_abi=getattr(config, "integer_abi", None))
+                    if isinstance(_prepared_pipeline, PreparedClaimPipeline) else None
+                )
                 # target_path is a semantic input here (it selects the
                 # target-kind vocab packs), not a staleness proxy — the
                 # analysed text travels in ``source``.
@@ -23022,6 +23041,11 @@ def _run_tool_chain(
                     integer_abi=getattr(config, "integer_abi", None),
                 )
                 _smt_oc = _observe_sweep(smt_result)
+                if isinstance(_prepared_pipeline, PreparedClaimPipeline):
+                    _prepared_pipeline.observe(
+                        _prepared_record, smt_result, prepared=_prepared_context,
+                        integer_abi=getattr(config, "integer_abi", None),
+                    )
                 if _smt_oc == "confirmed":
                     confirmed.append(getattr(smt_result, "rule_id", "") or f"smt:{tool_cfg['verb']}")
                     if tier_counters:
