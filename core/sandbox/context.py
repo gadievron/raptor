@@ -9112,15 +9112,26 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             if _demoted_scratch_dirs:
                 import shutil as _shutil
                 from core.run.scratch import keepalive_unregister
-                for _dsd in _demoted_scratch_dirs:
-                    keepalive_unregister(_dsd)
-                    try:
-                        _shutil.rmtree(_dsd, ignore_errors=True)
-                    except Exception:
-                        logger.debug(
-                            "demoted scratch cleanup failed for %s",
-                            _dsd, exc_info=True,
-                        )
+
+                def _retire_demoted_dir(_dsd: str) -> None:
+                    def _remove_demoted_dir() -> None:
+                        try:
+                            _shutil.rmtree(_dsd, ignore_errors=True)
+                        except Exception:
+                            logger.debug(
+                                "demoted scratch cleanup failed for %s",
+                                _dsd, exc_info=True,
+                            )
+
+                    retire_parent_resources(
+                        lambda: keepalive_unregister(_dsd),
+                        _remove_demoted_dir,
+                    )
+
+                retire_parent_resources(*(
+                    lambda _dsd=_dsd: _retire_demoted_dir(_dsd)
+                    for _dsd in _demoted_scratch_dirs
+                ))
 
         retire_parent_resources(
             _retire_context_events,
