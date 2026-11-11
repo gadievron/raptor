@@ -36,6 +36,7 @@ import logging
 import math
 import sys
 import types
+from copy import deepcopy
 import threading
 import time
 from dataclasses import dataclass
@@ -97,6 +98,10 @@ class TelemetrySink:
         self._lock = threading.Lock()
         self._write_failed = False
         self._by_class: dict[str, _ClassStats] = {}
+        self._attempt_records: dict[str, dict[str, Any]] = {}
+        self._attempt_history: dict[str, dict[int, dict[str, Any]]] = {}
+        self._attempt_conflicts: list[dict[str, Any]] = []
+        self._legacy_usage_records = 0
 
     # ── Recording ─────────────────────────────────────────────────
 
@@ -147,22 +152,103 @@ class TelemetrySink:
                     self.path, exc_info=True,
                 )
 
+    @staticmethod
+    def _usage_fingerprint(row: dict[str, Any]) -> dict[str, Any]:
+        # Delivery time/caller chain and beneficiary associations are not
+        # another financial usage update.
+        keys = ("attempt_id", "call_id", "work_id", "call_class", "provider", "model",
+                "event", "cost_usd", "tokens_in", "tokens_out", "cache_read_tokens",
+                "cache_write_tokens", "billing_state", "reservation_usd", "usage_revision")
+        return {key: row.get(key) for key in keys}
+
     def _aggregate(self, rec: dict[str, Any]) -> None:
+        if rec.get("event") not in {"call", "attempt_failed"} or rec.get("disposition") == "cache_hit":
+            self._apply_aggregate(rec, 1)
+            return
+        attempt_id = rec.get("attempt_id")
+        if not isinstance(attempt_id, str) or not attempt_id:
+            self._legacy_usage_records += 1
+            self._apply_aggregate(rec, 1)
+            return
+        row = deepcopy({key: value for key, value in rec.items() if key != "ts"})
+        try:
+            row.setdefault("usage_revision", 0)
+            revision = row["usage_revision"]
+            if type(revision) is not int or revision < 0:
+                raise ValueError("invalid usage revision")
+            row["beneficiaries"] = list(dict.fromkeys(row.get("beneficiaries") or ()))
+            for key in ("cost_usd", "reservation_usd", "duration_s"):
+                value = row.get(key, 0.0)
+                if value is None:
+                    value = 0.0
+                if isinstance(value, bool):
+                    raise ValueError("invalid usage amount")
+                row[key] = float(value)
+                if not math.isfinite(row[key]) or row[key] < 0:
+                    raise ValueError("invalid usage amount")
+            for key in ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens"):
+                value = row.get(key, 0)
+                if value is None:
+                    value = 0
+                if type(value) is not int or value < 0:
+                    raise ValueError("invalid usage tokens")
+                row[key] = value
+            row.setdefault("billing_state", "reported")
+        except (TypeError, ValueError, OverflowError):
+            self._attempt_conflicts.append(row)
+            return
+        history = self._attempt_history.setdefault(attempt_id, {})
+        previous = self._attempt_records.get(attempt_id)
+        historical = history.get(revision)
+        if historical is not None:
+            if self._usage_fingerprint(row) != self._usage_fingerprint(historical):
+                self._attempt_conflicts.append(row)
+                return
+            previous["beneficiaries"] = list(dict.fromkeys(
+                previous["beneficiaries"] + row["beneficiaries"]
+            ))
+            return
+        if previous is not None:
+            identity = ("call_id", "work_id", "call_class", "provider", "model")
+            if (revision <= previous["usage_revision"]
+                    or any(row.get(key) != previous.get(key) for key in identity)):
+                self._attempt_conflicts.append(row)
+                return
+            row["beneficiaries"] = list(dict.fromkeys(
+                previous["beneficiaries"] + row["beneficiaries"]
+            ))
+            # Every new value was normalized before touching known totals.
+            self._apply_aggregate(previous, -1)
+        self._apply_aggregate(row, 1)
+        self._attempt_records[attempt_id] = row
+        history[revision] = deepcopy(row)
+
+    def attempt_projection(self) -> dict[str, Any]:
+        """Identified usage snapshot; beneficiaries never add a charge."""
+        with self._lock:
+            return {
+                "attempts": deepcopy(list(self._attempt_records.values())),
+                "conflicts": deepcopy(self._attempt_conflicts),
+                "legacy_usage_records": self._legacy_usage_records,
+                "write_failed": self._write_failed,
+            }
+
+    def _apply_aggregate(self, rec: dict[str, Any], direction: int) -> None:
         cls = str(rec.get("call_class") or "unclassified")
         st = self._by_class.setdefault(cls, _ClassStats())
         event = rec.get("event")
         if event == "attempt_failed":
-            st.failed_attempts += 1
+            st.failed_attempts += direction * (1)
             if rec.get("disposition") == "timeout":
-                st.timeouts += 1
+                st.timeouts += direction * (1)
             elif rec.get("disposition") == "blocked":
-                st.blocked += 1
+                st.blocked += direction * (1)
             elif rec.get("disposition") == "consumed":
-                st.consumed += 1
+                st.consumed += direction * (1)
         elif rec.get("disposition") == "cache_hit":
-            st.cache_hits += 1
+            st.cache_hits += direction * (1)
         else:
-            st.calls += 1
+            st.calls += direction * (1)
         # sanitize_cost: this aggregate feeds mean_call_cost, which
         # sizes the client's budget reservations — one NaN record
         # would poison every later reservation and, through
@@ -172,14 +258,14 @@ class TelemetrySink:
         # stays honest while the money stays visible.
         from core.llm.cost import sanitize_cost
         if event == "attempt_failed":
-            st.failed_cost_usd += sanitize_cost(rec.get("cost_usd"))
+            st.failed_cost_usd += direction * (sanitize_cost(rec.get("cost_usd")))
         else:
-            st.cost_usd += sanitize_cost(rec.get("cost_usd"))
-        st.duration_s += float(rec.get("duration_s") or 0.0)
-        st.tokens_in += int(rec.get("tokens_in") or 0)
-        st.tokens_out += int(rec.get("tokens_out") or 0)
-        st.cache_read_tokens += int(rec.get("cache_read_tokens") or 0)
-        st.cache_write_tokens += int(rec.get("cache_write_tokens") or 0)
+            st.cost_usd += direction * (sanitize_cost(rec.get("cost_usd")))
+        st.duration_s += direction * (float(rec.get("duration_s") or 0.0))
+        st.tokens_in += direction * (int(rec.get("tokens_in") or 0))
+        st.tokens_out += direction * (int(rec.get("tokens_out") or 0))
+        st.cache_read_tokens += direction * (int(rec.get("cache_read_tokens") or 0))
+        st.cache_write_tokens += direction * (int(rec.get("cache_write_tokens") or 0))
 
     # ── Reporting ─────────────────────────────────────────────────
 

@@ -12348,6 +12348,13 @@ def _reconcile_cost_ledgers(config, result) -> None:
             float(getattr(client, "provider_spend_usd", 0.0) or 0.0),
         )
         result.cost_tracker.set_total_spend(spent)
+    projection = getattr(sink, "attempt_projection", None) if sink is not None else None
+    if callable(projection):
+        attempt_snapshot = projection()
+        if isinstance(attempt_snapshot, dict):
+            result.cost_tracker.project_attempts(
+                attempt_snapshot, authoritative_spend=spent if client is not None else None,
+            )
     result.llm_spend_usd = result.cost_tracker.total_spend_usd
     if config.out_dir:
         result.cost_tracker.write(config.out_dir)

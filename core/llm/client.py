@@ -912,6 +912,21 @@ def _failure_disposition(error: Exception) -> str:
     return "fatal"
 
 
+def _reported_failure_cost(error: Exception) -> float | None:
+    """Validated attempt-local billing marker, including a reported zero."""
+    for exc in _exception_chain(error):
+        raw = getattr(exc, "billed_cost_usd", None)
+        if raw is None or isinstance(raw, bool):
+            continue
+        try:
+            amount = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(amount) and amount >= 0:
+            return amount
+    return None
+
+
 def _billed_failure_usage(error: Exception) -> tuple[float, int, int]:
     """(cost_usd, tokens_in, tokens_out) a failed attempt already paid.
 
@@ -2858,6 +2873,7 @@ class LLMClient:
     def _fail_budget_attempt(
         self, reservation: float, error: Exception, *, call_id: str,
         attempt_id: str, call_class: str, provider: str, model: str,
+        work_id: str, beneficiaries: tuple[str, ...],
     ) -> bool:
         """Release unused budget or retain response-started unknown usage.
 
@@ -2870,18 +2886,7 @@ class LLMClient:
             started = take_upstream_response_started()
         except Exception:  # the optional signal must not replace the failure
             started = False
-        billed = False
-        for exc in _exception_chain(error):
-            raw = getattr(exc, "billed_cost_usd", None)
-            if raw is None or isinstance(raw, bool):
-                continue
-            try:
-                amount = float(raw)
-            except (TypeError, ValueError, OverflowError):
-                continue
-            if math.isfinite(amount) and amount >= 0:
-                billed = True
-                break
+        billed = _reported_failure_cost(error) is not None
         unknown = started and _is_transport_failure(error) and not billed
         with self._stats_lock:
             if self.config.enable_cost_tracking:
@@ -2892,11 +2897,56 @@ class LLMClient:
                     pending = self._pending_usage_reservations = {}
                 pending[attempt_id] = {
                     "call_id": call_id, "attempt_id": attempt_id,
+                    "work_id": work_id, "beneficiaries": beneficiaries,
                     "call_class": call_class, "provider": provider,
                     "model": model, "billing_state": "unknown",
                     "reservation_usd": reservation if self.config.enable_cost_tracking else 0.0,
                 }
         return started
+
+    def reconcile_pending_usage(self, attempt_id: str, *, cost_usd: float,
+                                tokens_in: int = 0, tokens_out: int = 0) -> bool:
+        """Apply one trusted late usage receipt without recharging replay."""
+        cost = float(cost_usd)
+        if isinstance(cost_usd, bool) or not math.isfinite(cost) or cost < 0:
+            raise ValueError("invalid reported attempt cost")
+        if any(type(value) is not int or value < 0 for value in (tokens_in, tokens_out)):
+            raise ValueError("invalid reported attempt tokens")
+        receipt = (cost, tokens_in, tokens_out)
+        with self._stats_lock:
+            settled = getattr(self, "_settled_pending_usage", None)
+            if settled is None:
+                settled = self._settled_pending_usage = {}
+            if attempt_id in settled:
+                previous_receipt, row = settled[attempt_id]
+                if previous_receipt != receipt:
+                    raise ValueError("conflicting reported attempt usage")
+                applied = False
+            else:
+                pending = getattr(self, "_pending_usage_reservations", {})
+                row = dict(pending[attempt_id])
+                self.total_cost += cost
+                self._record_governed_tokens(tokens_in + tokens_out)
+                settled[attempt_id] = (receipt, row)
+                del pending[attempt_id]
+                applied = True
+        from core.llm.telemetry import current_sink, emit
+        sink = current_sink()
+        previous = {}
+        try:
+            snapshot = getattr(sink, "attempt_projection", None)
+            projection = snapshot() if callable(snapshot) else {}
+            previous = next((item for item in projection.get("attempts", [])
+                             if item.get("attempt_id") == attempt_id), {})
+        except Exception:
+            # Accounting is settled; an optional observer cannot undo it.
+            # Replayed receipts retry publication without charging again.
+            logger.debug("late usage projection unavailable", exc_info=True)
+        emit(**{**previous, **row, "event": "attempt_failed",
+                "billing_state": "reported", "reservation_usd": 0.0,
+                "cost_usd": cost, "tokens_in": tokens_in, "tokens_out": tokens_out,
+                "usage_revision": 1})
+        return applied
 
     def _check_governor(self) -> None:
         """Enforce the non-dollar resource caps (wall-clock deadline,
@@ -3043,6 +3093,10 @@ class LLMClient:
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
         accounting_call_id = uuid4().hex
+        accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
+        accounting_beneficiaries = tuple(dict.fromkeys(
+            str(item) for item in kwargs.pop("accounting_beneficiaries", ())
+        ))
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -3237,6 +3291,8 @@ class LLMClient:
                                 reservation, error, call_id=accounting_call_id,
                                 attempt_id=accounting_attempt_id, call_class=call_class,
                                 provider=model.provider, model=model.model_name,
+                                work_id=accounting_work_id,
+                                beneficiaries=accounting_beneficiaries,
                             )
                             raise
                         duration = time.monotonic() - t_start
@@ -3292,6 +3348,10 @@ class LLMClient:
                             provider=model.provider.lower(),
                             model=model.model_name,
                             attempt=attempt + 1,
+                            call_id=accounting_call_id,
+                            attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id,
+                            beneficiaries=accounting_beneficiaries,
                             timeout_retries=timeout_failures,
                             duration_s=round(duration, 3),
                             cost_usd=response.cost,
@@ -3448,15 +3508,29 @@ class LLMClient:
                         _paid_cost, _paid_in, _paid_out = (
                             _billed_failure_usage(e)
                         )
+                        if _paid_in + _paid_out > 0:
+                            self._record_governed_tokens(_paid_in + _paid_out)
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             request_cache_key=_telemetry_cache_key(cache_key),
                             event="attempt_failed",
+                            billing_state=("unknown" if any(
+                                row["attempt_id"] == accounting_attempt_id
+                                for row in self.pending_usage_reservations
+                            ) else "reported" if _reported_failure_cost(e) is not None else "unreported"),
+                            reservation_usd=next((
+                                row["reservation_usd"] for row in self.pending_usage_reservations
+                                if row["attempt_id"] == accounting_attempt_id
+                            ), 0.0),
                             disposition=_disposition,
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
                             attempt=attempt + 1,
+                            call_id=accounting_call_id,
+                            attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id,
+                            beneficiaries=accounting_beneficiaries,
                             duration_s=round(
                                 time.monotonic() - attempt_start, 3),
                             http_version=_transport_http_version(),
@@ -3645,6 +3719,10 @@ class LLMClient:
             kwargs.pop('call_class', None) or task_type or "unclassified",
         )
         accounting_call_id = uuid4().hex
+        accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
+        accounting_beneficiaries = tuple(dict.fromkeys(
+            str(item) for item in kwargs.pop("accounting_beneficiaries", ())
+        ))
         if not model_config:
             if task_type:
                 model_config = self.config.get_model_for_task(task_type)
@@ -3861,6 +3939,8 @@ class LLMClient:
                                 reservation, error, call_id=accounting_call_id,
                                 attempt_id=accounting_attempt_id, call_class=call_class,
                                 provider=model.provider, model=model.model_name,
+                                work_id=accounting_work_id,
+                                beneficiaries=accounting_beneficiaries,
                             )
                             raise
                         duration = time.monotonic() - t_start
@@ -3868,7 +3948,6 @@ class LLMClient:
                         # Calculate cost delta
                         cost_delta = provider.total_cost - cost_before
                         tokens_delta = provider.total_tokens - tokens_before
-                        self._record_governed_tokens(tokens_delta)
                         in_delta = max(
                             0, _safe_counter(
                                 provider, "total_input_tokens",
@@ -3912,6 +3991,10 @@ class LLMClient:
                                 result_tuple, "cache_read_tokens", 0) or 0)
                             cwrite_delta = int(getattr(
                                 result_tuple, "cache_write_tokens", 0) or 0)
+
+                        # Govern the same per-call usage selected for accounting,
+                        # not a shared counter delta from concurrent calls.
+                        self._record_governed_tokens(tokens_delta)
 
                         # Reconcile reservation → actual. Skip the
                         # reservation cancel when cost-tracking is
@@ -3993,12 +4076,17 @@ class LLMClient:
                         _t_emit(
                             request_cache_key=_telemetry_cache_key(cache_key),
                             event="call",
+                            billing_state=("reported" if _pc_cost > 0 or _pc_tokens > 0 else "estimated"),
                             disposition="ok",
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
                             structured=True,
                             attempt=attempt + 1,
+                            call_id=accounting_call_id,
+                            attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id,
+                            beneficiaries=accounting_beneficiaries,
                             timeout_retries=timeout_failures,
                             duration_s=round(duration, 3),
                             cost_usd=cost_delta,
@@ -4134,16 +4222,30 @@ class LLMClient:
                         _paid_cost, _paid_in, _paid_out = (
                             _billed_failure_usage(e)
                         )
+                        if _paid_in + _paid_out > 0:
+                            self._record_governed_tokens(_paid_in + _paid_out)
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             request_cache_key=_telemetry_cache_key(cache_key),
                             event="attempt_failed",
+                            billing_state=("unknown" if any(
+                                row["attempt_id"] == accounting_attempt_id
+                                for row in self.pending_usage_reservations
+                            ) else "reported" if _reported_failure_cost(e) is not None else "unreported"),
+                            reservation_usd=next((
+                                row["reservation_usd"] for row in self.pending_usage_reservations
+                                if row["attempt_id"] == accounting_attempt_id
+                            ), 0.0),
                             disposition=_disposition,
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
                             structured=True,
                             attempt=attempt + 1,
+                            call_id=accounting_call_id,
+                            attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id,
+                            beneficiaries=accounting_beneficiaries,
                             duration_s=round(
                                 time.monotonic() - attempt_start, 3),
                             http_version=_transport_http_version(),
