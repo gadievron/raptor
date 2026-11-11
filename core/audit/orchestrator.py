@@ -22699,6 +22699,13 @@ def _run_tool_chain(
                 )
             except Exception:
                 logger.warning("could not record source input rejection", exc_info=True)
+            for _rejected_entry in chain:
+                _rejected_cfg = _rejected_entry.get("config") or {}
+                _rejected_rule = _rejected_cfg.get("rule") or ""
+                if (_rejected_entry.get("type") == "semgrep" and _rejected_cfg.get("keyword")
+                        and os.path.basename(_rejected_rule).startswith("audit_sweep_")):
+                    with contextlib.suppress(OSError):
+                        os.unlink(_rejected_rule)
             return confirmed
 
     def _observe_sweep(sweep_result) -> str:
