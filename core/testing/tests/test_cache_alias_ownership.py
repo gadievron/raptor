@@ -1,7 +1,7 @@
 """Exercise native cache fixtures with private cache owners and aliases."""
 
 from builtins import __import__ as real_import
-from inspect import isgenerator, signature
+from inspect import getclosurevars, isgenerator, signature
 from types import FunctionType, SimpleNamespace
 import importlib
 
@@ -16,10 +16,6 @@ JOURNAL_CASES = [
 CONTROL_CASES = [
     ("core.audit.tests.test_negative_controls", "_clear_negative_control_cache"),
     ("core.audit.tests.test_semgrep_control_batching", "_clear_negative_control_cache"),
-    (
-        "core.audit.tests.test_sweep_memo",
-        "TestControlErrorNotPinned._clear_control_cache",
-    ),
 ]
 ALIAS_CASES = CONTROL_CASES[1:2]
 CASES = JOURNAL_CASES + CONTROL_CASES
@@ -223,3 +219,29 @@ def test_cache_setup_failure_restores_completed_publications(
     assert namespace["_negative_control_cache"] is alias
     assert journal._load_cache is borrowed
     assert not journal._load_cache_lock.held
+
+
+@pytest.mark.parametrize("body_error", [False, True])
+def test_sweep_memo_runner_owns_private_control_cache(monkeypatch, body_error):
+    from core.audit import sweep
+    from core.audit.tests import test_sweep_memo
+
+    borrowed = sweep._negative_control_cache
+    contents = borrowed.copy()
+    owner = test_sweep_memo.TestControlErrorNotPinned()
+    views = []
+    with monkeypatch.context() as patch:
+        for _ in range(2):
+            owner._fake_runner(patch)
+            runner = test_sweep_memo.orch.run_semgrep_sweep
+            view = getclosurevars(runner).nonlocals["sweep_view"]
+            assert view._negative_control_cache is not borrowed
+            assert view._negative_control_cache == {}
+            views.append(view)
+            view._negative_control_cache["owned"] = object()
+        assert views[0]._negative_control_cache is not views[1]._negative_control_cache
+        if body_error:
+            with pytest.raises(KeyboardInterrupt):
+                raise KeyboardInterrupt("owned cache consumer failure")
+    assert sweep._negative_control_cache is borrowed
+    assert borrowed == contents

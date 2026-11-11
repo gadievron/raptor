@@ -41,6 +41,8 @@ def test_no_unadmitted_format_fallback(monkeypatch):
 
 @pytest.mark.parametrize("kind", ["openai", "anthropic"])
 def test_governed_schema_failure_preserves_identified_usage(monkeypatch, tmp_path, kind):
+    if kind == "anthropic":
+        pytest.importorskip("anthropic")
     model = ModelConfig(provider=kind, model_name="governed-stub", api_key="inert")
     provider = (OpenAICompatibleProvider if kind == "openai" else AnthropicProvider)(model)
     calls = []
@@ -96,6 +98,7 @@ def test_direct_ungoverned_provider_keeps_format_fallback(monkeypatch):
 
 
 def test_governed_gemini_parse_failure_keeps_usage_without_fallback(monkeypatch, tmp_path):
+    pytest.importorskip("google.genai")
     model = ModelConfig(provider="gemini", model_name="governed-stub", api_key="inert")
     provider = GeminiProvider(model)
     calls = []
