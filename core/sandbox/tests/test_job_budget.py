@@ -1,4 +1,7 @@
 """Budget admission/control tests. File-backed controls do not prove kernel limits."""
+import sys
+from types import SimpleNamespace
+
 import pytest
 
 from core.sandbox import job_budget
@@ -79,6 +82,8 @@ class Scope:
 
 @pytest.fixture
 def controls(tmp_path, monkeypatch):
+    # This fixture owns a file-backed Linux controller model, not host admission.
+    monkeypatch.setattr(job_budget, "sys", SimpleNamespace(platform="linux"))
     scope = Scope(tmp_path)
     for name, value in [('pids.max', 'max'), ('cpu.max', 'max 100000'),
                         ('memory.max', 'max'), ('cgroup.procs', '')]:
@@ -148,7 +153,7 @@ def test_public_none_profile_cannot_silently_drop_required_job_budget(tmp_path):
 
 def test_optional_budget_records_native_trusted_noop_downgrade():
     from core.sandbox import run
-    result = run(['/bin/true'], profile='none', job_budget={'pids_max': 16, 'required': False},
+    result = run([sys.executable, "-c", "pass"], profile='none', job_budget={'pids_max': 16, 'required': False},
                  capture_output=True, timeout=5)
     assert result.returncode == 0
     assert result.sandbox_info['job_budget']['status'] == 'unavailable'

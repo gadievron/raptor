@@ -61,6 +61,8 @@ def sdk_provider(monkeypatch):
                         lambda **kwargs: (transport, {}))
 
     def build(kind, *, route="text", usage="known", malformed=False):
+        if kind == "anthropic":
+            pytest.importorskip("anthropic")
         script.update(kind=kind, usage=usage, malformed=malformed)
         config = ModelConfig(provider=kind,
             model_name="gpt-4o" if kind == "openai" else "claude-sonnet-4-5",

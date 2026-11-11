@@ -38,6 +38,8 @@ def sdk_clients(monkeypatch, tmp_path):
 
     def make(kind="openai", *, cap=0.12, token_cap=10000, run_dir=None, resume=False,
              usage="known", prepared=True, max_calls=20, retries=1):
+        if kind == "anthropic":
+            pytest.importorskip("anthropic")
         state = {"requests": [], "usage": usage, "handler": None, "cache_read": 0, "cache_write": 0}
 
         def respond(request):
