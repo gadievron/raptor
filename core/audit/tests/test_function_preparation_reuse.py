@@ -279,6 +279,8 @@ def test_hit_does_not_introduce_all_or_zip_callbacks():
     assert (context.misses, context.hits) == (1, 1)
 
 
+# The real repository's transitive import closure parses source across the tree.
+@pytest.mark.slow
 def test_dependency_closure_contains_function_preparation_and_exporter():
     closure = detector_cache.import_closure(
         ('core.audit.fail_open_detector',), root=Path(fail.__file__).resolve().parents[2],
