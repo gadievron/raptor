@@ -1,14 +1,14 @@
 """The dataflow validator's injection-prescreen hook.
 
-A refuted finding must short-circuit BEFORE any LLM call (including
-the path-condition extraction), demoted exactly like an SMT-unsat
-verdict; no signal or a prescreen crash must leave the normal flow
-untouched.
+A charset model has no sink-interpretation authority and must continue
+normal validation. No signal or a prescreen crash likewise leaves normal
+validation available. Fixture source is analysed as text, never executed.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,8 +16,8 @@ import pytest
 pytest.importorskip("z3")
 
 from core.smt_solver.path_feasibility import PathSMTResult
+from packages.codeql.tests.test_dataflow_validator import _validator, _FULL_RESPONSE
 from packages.codeql.dataflow_validator import (
-    SMT_INFEASIBLE_CONFIDENCE,
     DataflowPath,
     DataflowStep,
     DataflowValidator,
@@ -71,17 +71,26 @@ def _exploding_llm() -> MagicMock:
 
 
 class TestPrescreenHook:
-    def test_refutation_short_circuits_before_llm(self, guard_repo):
-        llm = _exploding_llm()
-        v = DataflowValidator(llm)
-        result = v.validate_dataflow_path(_dataflow(), guard_repo)
-        assert result.is_exploitable is False
-        assert result.confidence == SMT_INFEASIBLE_CONFIDENCE
-        assert "String-theory prescreen" in result.reasoning
-        assert any("charset validator at app.py:7" in b
-                   for b in result.barriers)
-        assert result.smt_paths_checked == 1
-        llm.generate_structured.assert_not_called()
+    def test_charset_model_continues_normal_validation(self, guard_repo, monkeypatch):
+        validator = _validator()
+        monkeypatch.setattr("core.llm.scorecard.prefilter_decision",
+                            lambda *a, **k: SimpleNamespace(short_circuit=False))
+        monkeypatch.setattr("core.llm.scorecard.record_prefilter_outcome", lambda *a, **k: None)
+        with patch(
+            "packages.codeql.dataflow_validator.check_path_feasibility_dual",
+            return_value=PathSMTResult(
+                feasible=False, reasoning="independent path result", satisfied=[],
+                unknown=[], unsatisfied=[], smt_available=True, model={},
+            ),
+        ):
+            result = validator.validate_dataflow_path(_dataflow(), guard_repo)
+        validator._extract_path_conditions.assert_called_once()
+        assert result.error is None
+        assert result.is_exploitable is _FULL_RESPONSE["is_exploitable"]
+        assert result.reasoning == _FULL_RESPONSE["reasoning"]
+        assert result.smt_diagnostics["modeled_feasible"] is False
+        assert not any("charset validator" in barrier for barrier in result.barriers)
+        validator.llm.generate_structured.assert_called_once()
 
     def test_uncertified_call_result_does_not_refute(self, guard_repo):
         source = GUARD_APP.replace("    cfg = name\n",
