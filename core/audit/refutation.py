@@ -1448,8 +1448,8 @@ def _record_lifetime_discharge(
     Same contract as the goconc record: the discharged dismissal goes
     through the suppressions.jsonl single-writer chokepoint with
     ``dropped: false`` and a verdict naming the witness.  Returns True
-    only when the record call completed; the caller refuses the
-    discharge on False — an unrecordable discharge must not happen.
+    only after a literal True append acknowledgement; otherwise the
+    discharge is refused. This is not fsync or durable-publication proof.
     """
     if not out_dir:
         logger.debug(
@@ -1464,7 +1464,7 @@ def _record_lifetime_discharge(
         line = getattr(outcome, "line", 0) or 0
         fpath = getattr(outcome, "file", "")
         func = getattr(outcome, "function", "")
-        record_suppression(
+        return record_suppression(
             Path(out_dir),
             finding={
                 "finding_id": f"audit-refutation:{fpath}:{func}:{line}",
@@ -1489,8 +1489,7 @@ def _record_lifetime_discharge(
                 "covered_cwes": sorted(result.covered_cwes),
                 "hypothesis": (mechanism or "")[:160],
             },
-        )
-        return True
+        ) is True
     except Exception:
         logger.debug("lifetime discharge record failed", exc_info=True)
         return False
@@ -2228,12 +2227,9 @@ def _record_floor_dominance(
     receipt that would have held the function at suspicious goes
     through the suppressions.jsonl single-writer chokepoint with
     ``dropped: false`` and a reason naming the dominance decision.
-    Record-or-refuse: returns True only when the record call
-    completed; the caller refuses the dominance on False — the floor
-    stands, because an unrecorded override would be silent.
-    (``record_suppression`` itself swallows pure IO errors by its
-    single-writer contract; this guard covers a missing sink and
-    unexpected failures.)
+    Record-or-refuse: require a literal True append acknowledgement.
+    Otherwise the floor stands, because an unrecorded override would
+    be silent. This is append completion, not fsync or durable publication.
     """
     out_dir = getattr(config, "out_dir", None) if config else None
     if not out_dir:
@@ -2248,7 +2244,7 @@ def _record_floor_dominance(
         line = getattr(outcome, "line", 0) or 0
         fpath = getattr(outcome, "file", "")
         func = getattr(outcome, "function", "")
-        record_suppression(
+        return record_suppression(
             Path(out_dir),
             finding={
                 "finding_id": f"audit-refutation:{fpath}:{func}:{line}",
@@ -2273,8 +2269,7 @@ def _record_floor_dominance(
                 "refuter_grade": refuter.refuter_grade,
                 "receipt": receipt,
             },
-        )
-        return True
+        ) is True
     except Exception:
         logger.debug("floor-dominance record failed", exc_info=True)
         return False
