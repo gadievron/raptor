@@ -594,8 +594,8 @@ def test_distinct_hypotheses_keep_their_native_smt_query_binding(tmp_path, monke
     from core.audit import sweep
 
     source = "unsigned Read(unsigned Value,unsigned Step){if(Value>0 && Step>0) return Value+Step; return 0;}"
-    hypothesis = "integer overflow in `Value + Step` during review ?"
-    malformed = hypothesis.replace("?", "\ud800")
+    hypothesis = "integer overflow in `Value + Step`"
+    distinct = "addition overflow in `Value + Step`"
     config = orch.OrchestratorConfig(
         target_path=tmp_path, out_dir=tmp_path / "out", integer_abi="ilp32",
     )
@@ -618,7 +618,7 @@ def test_distinct_hypotheses_keep_their_native_smt_query_binding(tmp_path, monke
     monkeypatch.setattr(orch, "run_smt_verb_direct", native_worker)
     monkeypatch.setattr(config.sweep_memo, "get_or_run", observe)
     chain = [{"type": "smt", "config": {"verb": "check-overflow"}}]
-    for claim in (hypothesis, malformed, hypothesis):
+    for claim in (hypothesis, distinct, hypothesis):
         result = _run_tool_chain(
             chain, config=config, file_path="unit.c", function_name="Read",
             source=source, hypothesis=claim, line_start=1,
@@ -629,6 +629,23 @@ def test_distinct_hypotheses_keep_their_native_smt_query_binding(tmp_path, monke
         expected = hashlib.sha256(claim.encode("utf-8", "surrogatepass")).hexdigest()
         assert packet.details["source_scope"]["hypothesis_sha256"] == expected
     assert len(native_results) == 2  # only the unchanged query reuses a receipt
+
+    # Distinct unsupported prose/surrogate queries keep their own bindings;
+    # neither may borrow the confirmed receipt from an admitted objective.
+    unsupported = (hypothesis + " during review ?", hypothesis + " during review \ud800")
+    for claim in (*unsupported, unsupported[0]):
+        result = _run_tool_chain(
+            chain, config=config, file_path="unit.c", function_name="Read",
+            source=source, hypothesis=claim, line_start=1,
+        )
+        assert result == []
+        packet = returned_results[-1]
+        assert packet.outcome == "inconclusive"
+        assert packet.details.get("witness_validated") is not True
+        assert packet.details["arithmetic_expression_status"] == "unavailable"
+        expected = hashlib.sha256(claim.encode("utf-8", "surrogatepass")).hexdigest()
+        assert packet.details["source_scope"]["hypothesis_sha256"] == expected
+    assert len(native_results) == 4
 
 
 
