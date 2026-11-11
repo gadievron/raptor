@@ -151,6 +151,7 @@ def _enclosing_from_source(
     """
     from core.source import open_regular_beneath
     from core.source.lines import split_lines
+    from core.source.streams import preserving_stream_error
 
     from ._util import find_enclosing_function
 
@@ -166,7 +167,7 @@ def _enclosing_from_source(
         )
         if fh is None:
             return ""
-        with fh:
+        with preserving_stream_error(fh):
             content = fh.read(_MAX_ATTRIBUTION_SOURCE_BYTES)
     except (OSError, ValueError):
         return ""
