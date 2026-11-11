@@ -60,6 +60,23 @@ class TestPositives:
         assert len(results) == 1
         assert results[0]["rule"] == "double_fetch"
 
+    @pytest.mark.parametrize("pointer", ["uptr", "userptr"])
+    def test_simple_pointer_self_assignment_keeps_fetch(self, tmp_path, pointer):
+        results = _run_rule(tmp_path, f"""\
+            int handler(void *dst, char *{pointer})
+            {{
+                struct hdr h;
+                copy_from_user(&h, {pointer}, sizeof(h));
+                if (h.len > 64)
+                    return -1;
+                {pointer} = {pointer};
+                copy_from_user(dst, {pointer}, h.len);
+                return 0;
+            }}
+        """)
+        assert len(results) == 1
+        assert results[0]["rule"] == "double_fetch"
+
 
 class TestNegatives:
     @pytest.mark.parametrize("operation", ["uptr += 8;", "uptr -= 8;"])
@@ -82,6 +99,32 @@ class TestNegatives:
                 copy_from_user(dst, uptr, 8);
                 uptr = next;
                 copy_from_user(dst, uptr, 8);
+                return 0;
+            }
+        """)
+        assert results == []
+
+
+    def test_self_assignment_then_rebind_keeps_write_guard(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            int handler(void *dst, char *uptr, char *next)
+            {
+                copy_from_user(dst, uptr, 8);
+                uptr = uptr;
+                uptr = next;
+                copy_from_user(dst, uptr, 8);
+                return 0;
+            }
+        """)
+        assert results == []
+
+    def test_complex_lvalue_keeps_write_guard(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            int handler(void *dst, char **slots, unsigned index)
+            {
+                copy_from_user(dst, slots[index++], 8);
+                slots[index++] = slots[index++];
+                copy_from_user(dst, slots[index++], 8);
                 return 0;
             }
         """)
