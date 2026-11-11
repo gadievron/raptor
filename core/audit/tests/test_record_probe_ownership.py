@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.audit import record
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 @pytest.fixture
@@ -15,12 +16,21 @@ def probe(tmp_path, monkeypatch):
     path.write_text('{"seq": 1}\n')
     state = {'root': tmp_path, 'path': path, 'primary': None, 'cleanup': None,
              'live': set(), 'closes': 0, 'parsed': 0, 'opens': []}
-    from core import json as json_io
+    from core import atomic_fs, json as json_io
     real_load = json_io.load_jsonl
 
     def open_probe(*args, **kwargs):
         fd = os.open(*args, **kwargs)
         state['opens'].append((args, kwargs))
+        return fd
+
+    hardened = module_function_view(atomic_fs, bindings={
+        'os': SimpleNamespace(**{**vars(os), 'open': open_probe}),
+    })
+
+    def open_hardened_probe(path):
+        # The shared regular-file guard completes before caller faults apply.
+        fd = hardened.open_hardened_read(path)
         state['live'].add(fd)
         return fd
 
@@ -46,14 +56,19 @@ def probe(tmp_path, monkeypatch):
         return real_load(*args, **kwargs)
 
     monkeypatch.setattr(record, 'os', SimpleNamespace(
-        **{**vars(os), 'open': open_probe, 'fstat': fstat, 'close': close}))
-    monkeypatch.setattr(json_io, 'load_jsonl', load)
-    try:
-        yield state
-    finally:
-        for fd in tuple(state['live']):
-            os.close(fd)
-            state['live'].remove(fd)
+        **{**vars(os), 'fstat': fstat, 'close': close}))
+    with scoped_function_imports(
+        record, ('load_audit_log_disclosed',),
+        {'core.atomic_fs': atomic_fs, 'core.json': json_io},
+    ) as imports:
+        getattr(imports, 'core.atomic_fs').open_hardened_read = open_hardened_probe
+        getattr(imports, 'core.json').load_jsonl = load
+        try:
+            yield state
+        finally:
+            for fd in tuple(state['live']):
+                os.close(fd)
+                state['live'].remove(fd)
 
 
 @pytest.mark.parametrize('primary_type', [OSError, MemoryError, KeyboardInterrupt, SystemExit])
@@ -88,5 +103,6 @@ def test_native_probe_counts_and_parses_after_close(probe):
     assert disclosure.total_bytes == probe['path'].stat().st_size
     assert probe['parsed'] == probe['closes'] == 1 and not probe['live']
     args, kwargs = probe['opens'][0]
-    assert args == (str(probe['path']), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    assert args == (str(probe['path']), os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC
+                    | getattr(os, 'O_NONBLOCK', 0))
     assert kwargs == {}
