@@ -237,6 +237,7 @@ class JournalCheckpointQuiescer:
                     boundary, _QUIESCE_RETRY_COOLDOWN_S,
                 )
                 return None
+            checkpoint_failed = False
             try:
                 outcome = checkpoint_journal(
                     out_dir,
@@ -247,8 +248,15 @@ class JournalCheckpointQuiescer:
                     should_abort=self.should_abort,
                     busy_probes=(self._study_busy_probe,),
                 )
+            except BaseException:
+                checkpoint_failed = True
+                raise
             finally:
-                self._resume_study()
+                try:
+                    self._resume_study()
+                except BaseException:
+                    if not checkpoint_failed:
+                        raise
             if outcome.aborted or outcome.refused:
                 # Refusals cool down like aborts: the refusal condition
                 # (live foreign worker, unreadable run metadata) tends
