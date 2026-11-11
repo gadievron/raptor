@@ -53,13 +53,15 @@ elif name == 'sudo':
         sys.exit(24)
     if args[:3] == ['apt-get', 'install', '-f'] and fail == 'repair':
         sys.exit(25)
-    if args == ['apt-get', 'update'] and fail == 'install':
+    if args == ['bash', '.github/scripts/with-ubuntu-apt.sh', 'packages', 'radare2'] and fail == 'install':
         sys.exit(26)
     if '--download-only' in args:
         if fail == 'download':
             sys.exit(27)
         pathlib.Path(os.environ['DEBS_DIR'], 'captured.deb').write_text('inert')
-    if args[0] not in ('dpkg', 'apt-get', 'mkdir', 'find', 'chown',
+    if args[0] == 'bash' and args != ['bash', '.github/scripts/with-ubuntu-apt.sh', 'packages', 'radare2']:
+        sys.exit(94)
+    if args[0] not in ('dpkg', 'apt-get', 'bash', 'mkdir', 'find', 'chown',
                         'update-alternatives', os.environ['LLVM_SCRIPT']):
         sys.exit(92)
 elif name not in ('wget', 'chmod', 'r2', 'clang', 'llvm-cov', 'llvm-profdata'):
@@ -113,9 +115,8 @@ def test_cold_window_packages_and_install_order(tmp_path):
     assert result.returncode == 0, result.stderr
     assert calls[0][0:3] == ['python3', '.github/scripts/apt_history_window.py', 'snapshot']
     sudo = [call[1:] for call in calls if call[0] == 'sudo']
-    assert sudo[:4] == [
-        ['apt-get', 'update'],
-        ['apt-get', 'install', '-y', '--no-install-recommends', 'radare2'],
+    assert sudo[:3] == [
+        ['bash', '.github/scripts/with-ubuntu-apt.sh', 'packages', 'radare2'],
         [str(tmp_path / 'llvm.sh'), '21'],
         ['apt-get', 'install', '-y', '--no-install-recommends', 'llvm-21', 'clang-21'],
     ]
@@ -155,7 +156,7 @@ def test_capture_failure_publishes_tools_but_fails_step(tmp_path, fail):
 def test_original_install_failure_stops_later_commands(tmp_path):
     result, calls, path_file, _ = _run(tmp_path, fail='install')
     assert result.returncode == 26
-    assert calls[-1] == ['sudo', 'apt-get', 'update']
+    assert calls[-1] == ['sudo', 'bash', '.github/scripts/with-ubuntu-apt.sh', 'packages', 'radare2']
     assert not path_file.exists()
 
 
@@ -181,3 +182,19 @@ def test_cache_save_remains_bound_to_successful_outcome():
     assert 'path: ${{ runner.temp }}/apt-debs' in save
     assert 'continue-on-error: true' in restore
     assert 'continue-on-error: true' in _step('Install binary-analysis toolchain (radare2 + LLVM 21)')
+
+
+def test_archive_fallback_keeps_external_llvm_transactions_separate():
+    for filename in ('nightly.yml', 'weekly_corpus.yml'):
+        workflow = (ROOT / '.github/workflows' / filename).read_text()
+        setup = workflow.split('      - name: Install binary-analysis toolchain (radare2 + LLVM 21)', 1)[1]
+        setup = setup.split('\n      - ', 1)[0]
+        archive = 'sudo bash .github/scripts/with-ubuntu-apt.sh packages radare2'
+        assert setup.count(archive) == 1
+        assert setup.index(archive) < setup.index('wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh')
+        assert 'sudo /tmp/llvm.sh 21' in setup
+        assert 'sudo apt-get install -y --no-install-recommends llvm-21 clang-21' in setup
+        assert 'with-ubuntu-apt.sh packages llvm-21' not in setup
+    publish = (ROOT / '.github/workflows/dockerhub-publish.yml').read_text()
+    builder = publish.split('      - name: Install image builder\n', 1)[1].split('\n      - ', 1)[0]
+    assert 'sudo bash .github/scripts/with-ubuntu-apt.sh packages buildah skopeo' in builder

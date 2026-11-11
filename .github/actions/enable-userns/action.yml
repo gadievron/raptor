@@ -14,5 +14,9 @@ runs:
     - name: Install uidmap and relax the AppArmor userns restriction
       shell: bash
       run: |
-        sudo apt-get install -y --no-install-recommends uidmap
+        # Hosted images usually already provide uidmap; avoid an archive
+        # refresh in that case. Missing packages use the shared signed routes.
+        if ! dpkg-query -W -f='${Status}' uidmap 2>/dev/null | grep -qx 'install ok installed'; then
+          sudo bash .github/scripts/with-ubuntu-apt.sh packages uidmap
+        fi
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

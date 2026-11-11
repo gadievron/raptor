@@ -43,6 +43,7 @@ on:
       - 'uv.lock'
       - '.github/workflows/dockerhub-publish.yml'
       - '.github/scripts/dockerhub_scope.py'
+      - '.github/scripts/with-ubuntu-apt.sh'
       - '.github/scripts/prepare_sbom.py'
       - '.github/scripts/check_playwright_source.py'
       - '.github/scripts/check_node_release.py'
@@ -162,8 +163,7 @@ jobs:
       - name: Install image builder
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends buildah skopeo
+          sudo bash .github/scripts/with-ubuntu-apt.sh packages buildah skopeo
 
       - uses: ./.github/actions/enable-userns
 

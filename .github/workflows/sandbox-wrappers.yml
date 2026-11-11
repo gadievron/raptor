@@ -93,7 +93,8 @@ jobs:
           cache-key-prefix: venv-sandbox-wrappers-browser
           uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
           save-on-rebuild: 'true'
-      - name: Install Linux parser tools
+          requirements-file: ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '.github/scripts/requirements-sandbox-wrappers.txt' || '' }}
+      - name: Install Linux parser tools and Chromium dependencies
         # Contracts include a real confinement check; keep libseccomp2 even
         # when no native family is selected.
         if: runner.os == 'Linux'
@@ -101,13 +102,19 @@ jobs:
         env:
           NEEDS_RADARE2: ${{ contains(matrix.families, 'radare2') }}
           NEEDS_GADGETS: ${{ contains(matrix.families, 'gadget-parsers') }}
+          NEEDS_BROWSER: ${{ contains(matrix.families, 'playwright-browser') }}
         shell: bash
         run: |
           set -euo pipefail
           packages=(binutils libseccomp2)
           if [[ "$NEEDS_RADARE2" == true ]]; then packages+=(radare2); fi
           if [[ "$NEEDS_GADGETS" == true ]]; then packages+=(ruby); fi
-          sudo bash .github/scripts/with-ubuntu-apt.sh packages "${packages[@]}"
+          if [[ "$NEEDS_BROWSER" == true ]]; then
+            sudo bash .github/scripts/with-ubuntu-apt.sh packages-playwright \
+              "$GITHUB_WORKSPACE/$VENV_PATH/bin/python" "${packages[@]}"
+          else
+            sudo bash .github/scripts/with-ubuntu-apt.sh packages "${packages[@]}"
+          fi
       - name: Install macOS parser tools
         if: runner.os == 'macOS' && toJSON(matrix.families) != '[]'
         timeout-minutes: 8
@@ -127,7 +134,7 @@ jobs:
           fi
           wrapper_binutils_prefix=$(brew --prefix binutils)
           echo "$wrapper_binutils_prefix/libexec/gnubin" >> "$GITHUB_PATH"
-      - name: Install Python parser dependencies
+      - name: Expose cached Python parser tools
         # The isolated ELF worker also imports pwntools; it is not solely a
         # gadget-parser dependency.
         if: contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')
@@ -135,7 +142,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv pip install --python "$VENV_PATH/bin/python" -r .github/scripts/requirements-sandbox-wrappers.txt
           test -x "$VENV_PATH/bin/ROPgadget"
           echo "$GITHUB_WORKSPACE/$VENV_PATH/bin" >> "$GITHUB_PATH"
       - name: Install Ruby parser dependencies
@@ -146,14 +152,6 @@ jobs:
           set -euo pipefail
           gem install --no-document --install-dir "$RUNNER_TEMP/wrapper-gems" one_gadget -v 1.10.0
           echo "$RUNNER_TEMP/wrapper-gems/bin" >> "$GITHUB_PATH"
-      - name: Install Chromium Linux dependencies
-        if: runner.os == 'Linux' && contains(matrix.families, 'playwright-browser')
-        timeout-minutes: 8
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo bash .github/scripts/with-ubuntu-apt.sh playwright \
-            "$GITHUB_WORKSPACE/$VENV_PATH/bin/python"
       - name: Install isolated Chromium runtime
         if: contains(matrix.families, 'playwright-browser')
         timeout-minutes: 5

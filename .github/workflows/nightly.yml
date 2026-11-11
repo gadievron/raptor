@@ -264,8 +264,7 @@ jobs:
               /var/log/apt/history.log "$history_snapshot"; then
               history_ready=1
             fi
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends radare2
+            sudo bash .github/scripts/with-ubuntu-apt.sh packages radare2
             wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
             chmod +x /tmp/llvm.sh
             sudo /tmp/llvm.sh 21

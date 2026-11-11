@@ -42,9 +42,36 @@ def interpreter_identity() -> dict:
                 base_executable=str(Path(getattr(sys, "_base_executable", sys.executable)).resolve()))
 
 
+def requirements_identity(repo: Path, name: str) -> dict:
+    """Fingerprint one self-contained manifest of exact package pins.
+
+    Includes, indexes and remote requirements introduce inputs this identity
+    cannot cover. Refuse them before restoring an executable environment.
+    """
+    relative = Path(name)
+    if relative.is_absolute() or '..' in relative.parts or '\\' in name:
+        raise ValueError('requirements file must be relative to the checkout')
+    path = repo / relative
+    if not path.resolve().is_relative_to(repo.resolve()):
+        raise ValueError('requirements file escapes the checkout')
+    raw = path.read_bytes()
+    pins = []
+    for line in raw.decode('utf-8').splitlines():
+        pin = line.split('#', 1)[0].strip()
+        if not pin:
+            continue
+        if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?'
+                        r'==[A-Za-z0-9][A-Za-z0-9.!+_-]*', pin) is None:
+            raise ValueError('requirements file must contain only exact package pins')
+        pins.append(pin)
+    if not pins:
+        raise ValueError('requirements file contains no package pins')
+    return dict(path=relative.as_posix(), sha256=hashlib.sha256(raw).hexdigest())
+
+
 def venv_key(repo: Path, host: dict, interpreter: dict, *, prefix: str = 'venv',
              export_args: str = '', venv_path: str = '.venv',
-             install_method: str = 'export') -> str:
+             install_method: str = 'export', requirements_file: str = '') -> str:
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,100}', prefix):
         raise ValueError('invalid venv cache prefix')
     if install_method not in {'export', 'sync'}:
@@ -59,6 +86,8 @@ def venv_key(repo: Path, host: dict, interpreter: dict, *, prefix: str = 'venv',
     material = dict(schema=3, host=host, interpreter=interpreter, files=files,
                     export_args=export_args, install_method=install_method,
                     path=str((repo / venv_path).resolve()))
+    if requirements_file:
+        material['requirements'] = requirements_identity(repo, requirements_file)
     return prefix + '-v3-' + digest(material)
 
 
@@ -88,7 +117,8 @@ def main(argv=None) -> int:
                                  prefix=os.environ.get('VENV_CACHE_PREFIX', 'venv'),
                                  export_args=os.environ.get('VENV_CACHE_EXPORT_ARGS', ''),
                                  venv_path=os.environ.get('VENV_PATH', '.venv'),
-                                 install_method=os.environ.get('VENV_CACHE_INSTALL_METHOD', 'export'))
+                                 install_method=os.environ.get('VENV_CACHE_INSTALL_METHOD', 'export'),
+                                 requirements_file=os.environ.get('VENV_CACHE_REQUIREMENTS_FILE', ''))
     elif args.kind == 'codeql':
         result.update(codeql_metadata(repo, host))
     if os.environ.get('GITHUB_OUTPUT'):

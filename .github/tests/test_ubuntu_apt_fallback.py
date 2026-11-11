@@ -29,7 +29,7 @@ def apt_runner(tmp_path):
     tools.mkdir()
     log = owned / 'calls.jsonl'
     fake = f'#!{sys.executable}\n' + r'''
-import json, os, pathlib, re, sys
+import json, os, pathlib, re, subprocess, sys
 name = pathlib.Path(sys.argv[0]).name
 if name == 'dpkg':
     print(os.environ.get('FAKE_ARCH', 'amd64'))
@@ -39,7 +39,8 @@ text = config.read_text()
 source = pathlib.Path(re.search(r'Dir::Etc::sourcelist "([^"]+)";', text)[1])
 lists = pathlib.Path(re.search(r'Dir::State::lists "([^"]+)";', text)[1])
 stage = config.parent.name
-phase = 'update' if 'update' in sys.argv else 'install'
+phase = ('browser' if name == 'python-owned' and os.environ.get('COMBINED_BROWSER')
+         else 'update' if 'update' in sys.argv else 'install')
 row = dict(name=name, args=sys.argv[1:], stage=stage, phase=phase,
            config=text, sources=source.read_text(), lists=str(lists),
            empty_lists=not any(lists.iterdir()))
@@ -50,9 +51,20 @@ if phase == 'update':
 failures = os.environ.get('FAIL_PHASES', '').split(',')
 if stage + ':' + phase in failures:
     raise SystemExit(100)
+if (phase == 'install' and 'one-package' in sys.argv
+        and stage + ':parser' in failures):
+    raise SystemExit(100)
+if phase == 'browser':
+    # Match Playwright's real two-command dependency installer. The shell
+    # helper supplies strict signed routes through its scoped APT_CONFIG.
+    status = subprocess.call(['apt-get', 'update'])
+    if not status:
+        status = subprocess.call(['apt-get', 'install', '-y', '--no-install-recommends', 'owned-chromium'])
+    raise SystemExit(status)
 # Model apt's warning-only update unless strict index failure mode is set.
 if stage == 'primary' and phase == 'update' and os.environ.get('WARN_UPDATE'):
-    raise SystemExit(100 if 'APT::Update::Error-Mode=any' in sys.argv else 0)
+    raise SystemExit(100 if ('APT::Update::Error-Mode=any' in sys.argv
+                            or 'APT::Update::Error-Mode \"any\";' in text) else 0)
 '''
     for name in ('apt-get', 'dpkg', 'python-owned'):
         path = tools / name
@@ -66,9 +78,15 @@ if stage == 'primary' and phase == 'update' and os.environ.get('WARN_UPDATE'):
             keyring.unlink()
         env = dict(os.environ, PATH=str(tools) + os.pathsep + os.defpath,
                    CALL_LOG=str(log), FAIL_PHASES=failures,
-                   FAKE_ARCH=arch, WARN_UPDATE='1' if warning else '')
+                   FAKE_ARCH=arch, WARN_UPDATE='1' if warning else '',
+                   COMBINED_BROWSER='1' if mode == 'packages-playwright' else '')
         args = ['bash', str(helper), mode]
-        args += ['one-package', 'another-package'] if mode == 'packages' else [str(tools / 'python-owned')]
+        if mode == 'packages':
+            args += ['one-package', 'another-package']
+        else:
+            args += [str(tools / 'python-owned')]
+            if mode == 'packages-playwright':
+                args += ['one-package', 'another-package']
         result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=10)
         calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
         return result, calls
@@ -152,13 +170,73 @@ def test_workflows_use_scoped_helper_before_browser_download():
     selftest = (ROOT / '.github/workflows/nightly-self-test.yml').read_text()
     assert 'with-ubuntu-apt.sh packages "${packages[@]}"' in wrappers
     assert 'with-ubuntu-apt.sh packages radare2 gcc' in selftest
-    for workflow, download in ((wrappers, '"$VENV_PATH/bin/python" -m playwright install chromium'),
-                               (nightly, 'python -m playwright install --only-shell chromium')):
-        assert 'with-ubuntu-apt.sh playwright' in workflow
+    for workflow, mode, download in ((wrappers, 'packages-playwright', '"$VENV_PATH/bin/python" -m playwright install chromium'),
+                                     (nightly, 'playwright', 'python -m playwright install --only-shell chromium')):
+        assert 'with-ubuntu-apt.sh ' + mode in workflow
         assert '"$GITHUB_WORKSPACE/$VENV_PATH/bin/python"' in workflow
-        assert workflow.index('with-ubuntu-apt.sh playwright') < workflow.index(download)
+        assert workflow.index('with-ubuntu-apt.sh ' + mode) < workflow.index(download)
     helper = HELPER.read_text()
     assert 'trusted=yes' not in helper
     assert 'Check-Valid-Until' not in helper
     assert 'AllowDowngradeToInsecureRepositories "false"' in helper
     assert re.search(r'for stage in primary fallback;', helper)
+
+
+@pytest.mark.parametrize('failures,status,stages', [
+    ('', 0, ['primary']),
+    ('primary:update', 0, ['primary', 'fallback']),
+    ('primary:browser', 0, ['primary', 'fallback']),
+    ('primary:parser', 0, ['primary', 'fallback']),
+    ('primary:parser,fallback:parser', 100, ['primary', 'fallback']),
+])
+def test_combined_browser_and_parser_install_share_one_refresh_per_route(apt_runner, failures, status, stages):
+    result, calls = apt_runner(mode='packages-playwright', failures=failures)
+    assert result.returncode == status, result.stdout + result.stderr
+    browsers = [call for call in calls if call['name'] == 'python-owned']
+    assert [call['stage'] for call in browsers] == stages
+    updates = [call for call in calls if call['phase'] == 'update']
+    assert len(updates) <= len(stages)
+    assert len({call['stage'] for call in updates}) == len(updates)
+    for call in calls:
+        assert 'APT::Update::Error-Mode "any";' in call['config']
+        assert 'AllowUnauthenticated "false"' in call['config']
+        assert all('signed-by=' in row for row in call['sources'].splitlines())
+    parser_installs = [call for call in calls if 'one-package' in call['args']]
+    for call in parser_installs:
+        assert call['args'] == ['install', '-y', '--no-install-recommends', '--', 'one-package', 'another-package']
+        assert any(update['stage'] == call['stage'] for update in updates)
+    if not failures:
+        assert [(call['name'], call['phase']) for call in calls] == [
+            ('python-owned', 'browser'), ('apt-get', 'update'),
+            ('apt-get', 'install'), ('apt-get', 'install')]
+        assert len(parser_installs) == 1
+    if status:
+        assert 'failed on both signed archive routes' in result.stderr
+
+
+def test_combined_playwright_update_warning_uses_independent_fallback(apt_runner):
+    result, calls = apt_runner(mode='packages-playwright', warning=True)
+    assert result.returncode == 0, result.stderr
+    assert [call['stage'] for call in calls if call['phase'] == 'update'] == ['primary', 'fallback']
+    assert [call['stage'] for call in calls if 'one-package' in call['args']] == ['fallback']
+
+
+def test_other_ubuntu_jobs_reuse_signed_archives_without_replacing_llvm_sources():
+    docker = (ROOT / '.github/workflows/dockerhub-publish.yml').read_text()
+    weekly = (ROOT / '.github/workflows/weekly_corpus.yml').read_text()
+    nightly = (ROOT / '.github/workflows/nightly.yml').read_text()
+    assert 'with-ubuntu-apt.sh packages buildah skopeo' in docker
+    for workflow in (weekly, nightly):
+        assert 'with-ubuntu-apt.sh packages radare2' in workflow
+        assert 'sudo /tmp/llvm.sh 21' in workflow
+        assert 'sudo apt-get install -y --no-install-recommends llvm-21 clang-21' in workflow
+    assert 'sudo apt-get install -f -y --no-install-recommends' in nightly
+    assert '--reinstall --download-only' in nightly
+
+
+def test_uidmap_fallback_keeps_the_existing_host_policy_and_avoids_warm_refresh():
+    action = (ROOT / '.github/actions/enable-userns/action.yml').read_text()
+    assert "dpkg-query -W -f='${Status}' uidmap" in action
+    assert "grep -qx 'install ok installed'" in action
+    assert 'with-ubuntu-apt.sh packages uidmap' in action
+    assert 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' in action
