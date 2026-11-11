@@ -37,7 +37,7 @@ def assessment_occurrence_anchor(occurrence):
     return sha256(json.dumps(occurrence, ensure_ascii=True, separators=(",", ":")).encode("ascii")).hexdigest()
 
 
-def _text(value, limit):
+def _bounded_text(value, limit):
     return value[:limit] if isinstance(value, str) else ""
 
 
@@ -122,7 +122,7 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
         if key is not None:
             related.add(key)
             if assumption:
-                assumptions[key].add(_text(assumption, 300))
+                assumptions[key].add(_bounded_text(assumption, 300))
 
     caller_occurrence = _occurrence(caller)
     use_context_map = False
@@ -215,8 +215,8 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
                                          for key, _ in selected)
     rows = [{"file": key[0], "function": key[1], "line_start": key[2],
              "occurrence_anchor": assessment_occurrence_anchor(key),
-             "status": outcome.status, "hypothesis": _text(getattr(outcome, "hypothesis", ""), 400),
-             "body": _text(getattr(outcome, "body", ""), 500),
+             "status": outcome.status, "hypothesis": _bounded_text(getattr(outcome, "hypothesis", ""), 400),
+             "body": _bounded_text(getattr(outcome, "body", ""), 500),
              "assumptions": tuple(sorted(assumptions[key])[:MAX_CALLEE_ASSUMPTIONS]), "scope_note": _scope_note(outcome)}
             for key, outcome in selected]
     limitations = tuple(f"{name}: {count}" for name, count in sorted(limits.items()) if count)

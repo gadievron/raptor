@@ -275,6 +275,11 @@
     "count": 13,
     "kind": "alternation"
   },
+  "core/audit/arithmetic_seeds.py::site": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Source-bound arithmetic hypothesis record: file/function spans, digest, byte geometry, operation/operands/claim kind and ABI; consumed by seed deduplication and injected_hypotheses, not target-name recognition."
+  },
   "core/audit/array_bounds.py::_FRAME_NODES": {
     "count": 21,
     "kind": "literal",
@@ -669,9 +674,9 @@
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 77,
+    "count": 78,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text.",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced.",
     "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
@@ -704,6 +709,16 @@
     "count": 12,
     "kind": "literal",
     "note": "lead receipt-dict field names (schema keys, not a function-name vocabulary)"
+  },
+  "core/audit/fail_open_detector.py::_PREP_BINDING_STATE": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Closed module implementation bindings/regex objects captured for prepared-consumer identity checks; _preparation_consumers_native compares object identity. Not a target identifier vocabulary."
+  },
+  "core/audit/fail_open_detector.py::_PREP_BUILTIN_STATE": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Closed identities of Python builtins actually used by prepared detector execution; _preparation_consumers_native checks globals/builtins identity to refuse stale prepared reuse. Not a target API seed list."
   },
   "core/audit/fail_open_lang.py::SUPPORTED_LANGUAGES": {
     "count": 12,
@@ -764,6 +779,21 @@
     "note": "Closed tree-sitter C++ node types for builtin scalar literals and language operators. Producer node.type; consumer initializer_may_use_value uses the builtin-result check when retaining unresolved overloaded operands. Grammar tags, not target function names or learned API vocabulary.",
     "reviewed": "2026-11-08"
   },
+  "core/audit/integer_affine_division.py::check_affine_division": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Validated division result schema carrying model, numerator/denominator/fault kind and width/sign semantics; integer_division consumer receives mechanical observation, not authority from vocabulary membership."
+  },
+  "core/audit/integer_affine_division.py::details": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Nested source_operation result schema with coordinates, operator, operands, types, premises and width/signedness/definedness. integer_division delegates actual source+ABI checks; fields document admitted source model, not a learned name set."
+  },
+  "core/audit/integer_mask_comparison.py::check_mask_comparison": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Nested source_operation schema for exact mask comparison, coordinates, types/premises and promoted comparison width/sign; delegated by integer_comparison."
+  },
   "core/audit/integer_truncation_checker.py::_WIDE_TYPES": {
     "count": 17,
     "kind": "literal",
@@ -787,6 +817,11 @@
   "core/audit/joern_verify.py::_STOP_WORDS": {
     "count": 42,
     "kind": "literal"
+  },
+  "core/audit/knowledge_reporting.py::load_knowledge_processing": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Closed bounded-count projection from saved schema-checked knowledge-results; report.py consumes it and knowledge_processing_lines emits counts/limitations, not raw prompt text or safety proof."
   },
   "core/audit/knowledge_requests.py::_QUESTION_START": {
     "count": 19,
@@ -1134,6 +1169,11 @@
     "kind": "literal",
     "note": "Bounded review-cycle state snapshot fields for origin, deadlines, continuation/model-call allowances, pending/delta IDs, retirement, active pass and recorded events. Persistence/control-state schema rather than learned function/API names. Current role review (previous baseline count 10; reviewed count 11): Cycle-accounting serialization under lock, including bounded caller_request_ids alongside pending/delta/active/event state. It is not a target lexicon, coverage proof, or acceptance of deserialization/replay correctness."
   },
+  "core/audit/review_fairness.py::state": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Independent scalar admission-policy provenance snapshot: policy parameters, lane admissions/pending counts and wait opportunities. No target names or completion-time guarantee."
+  },
   "core/audit/rules.py::_run_semgrep_rule": {
     "count": 10,
     "kind": "literal",
@@ -1256,6 +1296,11 @@
   "core/audit/uninit_detector.py::_COPY_SINK_NAMES": {
     "count": 10,
     "kind": "literal"
+  },
+  "core/audit/unsigned_update.py::check_unsigned_update_wrap": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Nested source-operation result schema for unary update witness: coordinates, operation/prefix, operand/types, storage/promoted width/sign and premises; integer_update delegates."
   },
   "core/audit/validate_bridge.py::_extract_verdict_history": {
     "count": 13,
@@ -1656,6 +1701,11 @@
     "kind": "literal",
     "note": "Private pytest record-fixture bookkeeping for native pruning-reader ownership: owned paths/descriptors, injected setup/read/cleanup errors, wrapper/close counters and replacement-descriptor tracking. Yielded only to tests in this module; not a production record schema, target/API vocabulary, learned name list or detection vocabulary. Root-level test_ placement is included by the current directory-based runtime-universe rule."
   },
+  "core/labeled_attempts/test_stage_ownership.py::state": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Private test-only resource/fault ledger used by injected open/write/close/link seams, with final/tmp/live and fault controls. Not a runtime detector name corpus; exact row exception only, no test-path blanket exclusion."
+  },
   "core/labeled_attempts/test_store.py::bad_blob": {
     "count": 11,
     "kind": "literal"
@@ -1873,9 +1923,9 @@
     "note": "Portable finding schema populated from SARIF: occurrence/source identity, rule namespace, location, scanner severity, suppression and dataflow evidence. Values come from the parsed document; these literal keys are a serialization contract, not target API names."
   },
   "core/reporting/adapters.py::failures": {
-    "count": 11,
+    "count": 12,
     "kind": "literal",
-    "note": "Closed scanner-accounting field names inspected by apply_scan_metrics to preserve failed, partial or incomplete execution in reports. These producer schema keys must match recorded scan metrics; they do not classify function names."
+    "note": "Closed scanner-accounting field names inspected by apply_scan_metrics to preserve failed, partial or incomplete execution in reports. These producer schema keys must match recorded scan metrics; they do not classify function names. Reviewed current producer/consumer contract: Closed scan-metrics failure/partial field manifest consumed by apply_scan_metrics; any present limitation prevents report from asserting complete successful scan. Existing note preserved."
   },
   "core/reporting/adapters.py::normalized": {
     "count": 14,
@@ -1956,6 +2006,16 @@
     "kind": "literal",
     "note": "Closed security allowlist of fixed system developer shims eligible for parent-side xcrun metadata preparation; target-derived names must never expand this list. Compilation remains sandboxed."
   },
+  "core/sandbox/activity.py::record_execution": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Closed sandbox_info posture-field projection into bounded parent receipt; consumed by activity report and integrity/coverage accounting. Not arbitrary target API recognition."
+  },
+  "core/sandbox/activity.py::report": {
+    "count": 12,
+    "kind": "literal",
+    "note": "Versioned activity report schema for event digest/counts, budget subset and explicit incomplete coverage/integrity; _fields/verify_report bind it and report consumers expose limits."
+  },
   "core/sandbox/context.py::_NETWORKED_ALLOWED_KWARGS": {
     "count": 19,
     "kind": "literal"
@@ -1990,8 +2050,9 @@
     "note": "Fixed context-map runtime_observation serialization schema: binary/command/time, nonce trust and capture-limit metadata, observed paths/connections and derived correlations. These are output protocol field names, not a function-name vocabulary; completeness and trust fields must remain available alongside correlations."
   },
   "core/sandbox/profiles.py::_SANDBOX_KWARGS": {
-    "count": 34,
-    "kind": "literal"
+    "count": 35,
+    "kind": "literal",
+    "note": "Closed sandbox()-level keyword routing schema with existing signature-parity contract; distinguishes context setup from per-call settings, including job_budget. Add missing semantic note rather than count-only update."
   },
   "core/sandbox/proxy.py::_KNOWN_DOH_PROVIDERS": {
     "count": 12,
@@ -2045,6 +2106,11 @@
     "count": 12,
     "kind": "literal",
     "note": "syscall-level escape primitive keywords for post-run denial triage; matched only against seccomp-type denial cmd fields to classify escape-attempt signatures"
+  },
+  "core/sandbox/telemetry_mac.py::fields": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Exact ten proxy-event fields hashed by proxy_activity_fields and verified by activity consumer. This is a signed projection contract; retain order-independent sorted object encoding and missing-field nulls."
   },
   "core/sandbox/tracer.py::_MUTATION_PATH_ARGS": {
     "count": 23,

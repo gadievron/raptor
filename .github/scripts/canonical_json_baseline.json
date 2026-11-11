@@ -91,6 +91,15 @@
   },
   "raw_dumps_in_canonical_module:packages/sca/refresh_typosquat_lists.py:refresh_all": {
    "note": "unchanged-detection byte compare: the freshly-rendered blob is compared against the previously-written file to decide updated-vs-unchanged, so the emitted byte form (indent=2, stdlib) is the change detector itself — frozen"
+  },
+  "dumps_flows_to_hash:core/sandbox/job_budget.py:receipt_fields": {
+   "note": "Purpose-separated sandbox job receipt MAC preimage: exclude only mac, sort keys, ensure_ascii=True, compact separators and allow_nan=False before ASCII SHA256. Watcher signing and activity verification use the same receipt_fields contract; replacing its byte form would invalidate saved receipts."
+  },
+  "dumps_flows_to_hash:core/sandbox/telemetry_mac.py:allowed_activity_fields": {
+   "note": "Allowed-policy activity MAC digest over ordered records: sorted object keys, ensure_ascii=True, stdlib spaced separators and allow_nan=False. List order remains significant; kind and run separate this token from proxy and job receipts. Frozen saved-token byte form, not display JSON."
+  },
+  "dumps_flows_to_hash:core/sandbox/telemetry_mac.py:proxy_activity_fields": {
+   "note": "Proxy activity MAC digest over the exact selected event fields, absent fields represented by null: sorted keys, ensure_ascii=True, stdlib spaced separators and allow_nan=False. Producer and activity verifier share this frozen byte form, separated by kind and run; generic canonicalisation would change saved-token bytes."
   }
  }
 }

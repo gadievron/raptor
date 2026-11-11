@@ -50,17 +50,17 @@ class PreparedOverflowContext:
     contracts: Mapping[str, SMTContractAdapter]
 
 
-def _text(value: object) -> bool:
+def _nonempty_text(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
 def _target_valid(target: object) -> bool:
     return (isinstance(target, PreparedTargetBinding)
-            and all(_text(value) for value in (
+            and all(_nonempty_text(value) for value in (
                 target.unit_id, target.target_snapshot_id, target.build_identity))
             and target.representation == "source"
             and target.applicability_domain == "source-language"
-            and all(isinstance(value, tuple) and all(_text(item) for item in value)
+            and all(isinstance(value, tuple) and all(_nonempty_text(item) for item in value)
                     for value in (target.dependencies, target.assumptions, target.correspondence_ids))
             and bool(target.dependencies))
 
@@ -122,7 +122,7 @@ def prepare_overflow_claim_context(
     if not _current_matches(current_prepared, target, anchor):
         return PreparationUnavailable("current-prepared-inputs-mismatch")
     if (not isinstance(revision, ClaimRevision) or not isinstance(scope, VerificationScope)
-            or not all(_text(value) for value in (scope.file, scope.function, scope.hypothesis))
+            or not all(_nonempty_text(value) for value in (scope.file, scope.function, scope.hypothesis))
             or type(scope.line_start) is not int or scope.line_start < 1
             or not scope.has_claim or not revision.matches_occurrence(
                 file=scope.file, function=scope.function, line_start=scope.line_start,
@@ -206,8 +206,8 @@ def prepare_overflow_claim_context(
         if (prepared != admission or not isinstance(event, FactEvent)
                 or event.context != context or event.obligation != OBLIGATION
                 or event.execution != "completed" or event.complete is not True
-                or not _text(event.request_id) or event.request_id != event.executed_request_id
-                or not _text(event.raw_reference) or not validates(actual)):
+                or not _nonempty_text(event.request_id) or event.request_id != event.executed_request_id
+                or not _nonempty_text(event.raw_reference) or not validates(actual)):
             return None
         execution = actual.details.get("smt_execution")
         if (not isinstance(execution, dict) or execution.get("identity_status") != "matched"

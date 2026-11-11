@@ -319,7 +319,7 @@ class Job:
                     raise OSError(errno.EIO, 'cgroup control read-back mismatch: ' + name)
             if self.run_dir is not None:
                 from . import evidence, telemetry_mac
-                self.receipt_handle = evidence.EvidenceFile.open(self.run_dir, RECEIPTS_FILE)
+                self.receipt_handle = evidence.EvidenceFile.open(self.run_dir, RECEIPTS_FILE)  # raw-open: pinned O_WRONLY append writer, not a receipt reader.
                 self.signer = telemetry_mac.prepare_signer()
             self._start_watcher()
             self.record.update(status='prepared', effective=dict(budget.controls),
