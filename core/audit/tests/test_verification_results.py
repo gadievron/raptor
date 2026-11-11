@@ -132,6 +132,8 @@ def test_an_explicit_refutation_is_not_erased_by_an_unrelated_failed_probe():
     assert len(result.refutations(**SCOPE)) == 1
 
 
+# This receipt check executes the real Semgrep engine for both outcomes.
+@pytest.mark.slow
 @pytest.mark.parametrize("guarded", [False, True])
 def test_live_semgrep_verdict_reaches_ihv_with_its_receipt(tmp_path, monkeypatch, guarded):
     from packages.semgrep.runner import is_available
