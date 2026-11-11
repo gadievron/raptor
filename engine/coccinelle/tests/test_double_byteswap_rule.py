@@ -1,7 +1,7 @@
 """Fixture tests for the double_byteswap rule.
 
-Only a same-width, same-byte-order-family nested pair is a no-op
-identity. Cross-family (BE wire data to LE) and mixed-width nesting
+Same-width, same-byte-order-family pairs are review candidates.
+They can narrow a wider input or intentionally check a round trip. Cross-family (BE wire data to LE) and mixed-width nesting
 perform real conversions and must stay silent.
 """
 
@@ -94,3 +94,36 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+def test_input_width_and_roundtrip_intent_require_review(tmp_path):
+    import json
+
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    source = '\n'.join([
+        'typedef unsigned short uint16_t;',
+        'typedef unsigned int uint32_t;',
+        'uint32_t narrow(uint32_t x) {',
+        ' return ntohs(htons(x));', '}',
+        'int roundtrip(uint16_t x) {',
+        ' return ntohs(htons(x)) == x;', '}',
+        'uint32_t cross(uint32_t x) {',
+        ' return cpu_to_le32(be32_to_cpu(x));', '}',
+        'uint32_t mixed(uint16_t x) {',
+        ' return htonl(ntohs(x));', '}', ''])
+    target = tmp_path / 'width.c'
+    target.write_text(source)
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(target), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Byte-order width and intent candidates',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted(row['line'] for row in rows) == [4, 7]
+    assert all(row['rule'] == 'double_byteswap' for row in rows)
+    assert all('review input width and conversion intent' in row['message'] for row in rows)

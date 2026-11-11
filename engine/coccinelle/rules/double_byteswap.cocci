@@ -1,12 +1,11 @@
 // double_byteswap.cocci — Detect double byte-order conversion that
 // cancels out (mathematical identity).
 //
-// htons(htons(x)) == x, ntohl(htonl(x)) == x, etc. The inner swap
-// converts to network order; the outer converts back to host order
-// (or vice versa). The result is the original value, meaning no
-// conversion actually happened. This is always a logic error —
-// the programmer either wanted a single conversion or confused
-// which direction they were converting.
+// Same-width inverse conversions cancel byte ordering within their fixed-width
+// domain. A wider original expression can narrow at the inner call, so the
+// result need not equal that original value. Round-trip comparisons can also
+// deliberately check the conversion property. Review input width and intent
+// before classifying a nested pair as a logic error.
 //
 // A nested pair is only an identity when BOTH calls operate on the
 // same width and the same byte-order family (network/big-endian,
@@ -17,9 +16,8 @@
 // identity pairs in the reporting script below.
 //
 // CWE-683: Function Call With Incorrect Order of Arguments
-// Zero-FP: a same-width, same-family double swap is a mathematical
-// identity, never intentional.
-// @role: verification
+// The syntactic pair alone does not prove mistaken conversion intent.
+// @role: detection
 
 @double_swap@
 identifier swap1 = {htons, htonl, ntohs, ntohl,
@@ -66,7 +64,8 @@ def _classify(name):
 
     Every helper is its own inverse (a fixed-width byte swap, or the
     identity on machines already in the target order), so two nested
-    calls cancel exactly when family and width both match. 'be' covers
+    calls cancel within the helper domain when family and width both match.
+    This does not prove that the original expression fits that width. 'be' covers
     the POSIX network functions too — network order IS big-endian.
     """
     n = name.lstrip("_")
@@ -94,6 +93,6 @@ if _f1 is not None and (_f1, _w1) == (_f2, _w2):
       "file":  p[0].file,
       "line":  int(p[0].line),
       "col":   int(p[0].column),
-      "message": "%s(%s(x)) — double byte-swap is a no-op identity, no conversion actually happens (CWE-683)" % (swap1, swap2)
+      "message": "%s(%s(x)) — review input width and conversion intent for a possible redundant byte-order conversion (CWE-683)" % (swap1, swap2)
     }
     print("COCCIRESULT:" + json.dumps(msg))

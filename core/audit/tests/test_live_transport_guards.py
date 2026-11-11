@@ -1807,6 +1807,11 @@ class TestSemgrepSurfaceFences:
 
 
 class TestCoccinelleSurfaceFences:
+    def test_byteswap_candidate_fixture_is_guarded(self):
+        calls = _function_call_map("../../../engine/coccinelle/tests/test_double_byteswap_rule.py")
+        assert _callers_of(calls, "run") == set()
+        assert _callers_of(calls, "run_pinned_subprocess") == {"test_input_width_and_roundtrip_intent_require_review"}
+
     def test_format_provenance_candidate_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_format_string_rule.py")
         assert _callers_of(calls, "run") == {"_run_rule"}
