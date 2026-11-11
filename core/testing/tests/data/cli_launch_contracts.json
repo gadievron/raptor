@@ -20,7 +20,7 @@
     ".github/scripts/ci_push_base.py": "91b75aa8f86c3b0005ace501fc8f2dade9b6da924dbdc08954f5253736f67ebd",
     ".github/scripts/contact_gate.py": "be4c01577ccde2b41b8412ab6d1d054ae7650f30a6f694be1b0238169d69bfee",
     ".github/scripts/corpus_label_scope.py": "cb6dff502a9c41fbf08cf9d0bd7f3dd67ad11cadf366f730502a6284932e6d9a",
-    ".github/scripts/dockerhub_scope.py": "ee0bbb5d95e5ac157d4abc84b0e7c5006d8afe9701b53b15f36a85cc459136d3",
+    ".github/scripts/dockerhub_scope.py": "ffeaa6afb59cbbc5a3975af92476278ec7af51448570219532a48761d49fa074",
     ".github/scripts/prepare_sbom.py": "8641b72b402627da862bf9bcc7ecb7b0e5093cb6a0297108bedf506a8d4daae2",
     ".github/scripts/retry_macos_allocation.py": "3f1952152ca21e688982311b446dfbcbf6fac4e093e159196ca767edfad249a4",
     ".github/scripts/review_partition_closure.py": "25e7682810b7583c1c02512f6a44fc3d2308e40d66132ab991b9c88f5dac0e08",
@@ -38,8 +38,8 @@
     ".github/scripts/tests/test_check_transcript_seam.py": "97a681a1bc1373209bc7645afc0539b0856af143e05d665d053c65a0cd50bf1a",
     ".github/scripts/tests/test_check_vocab_lists.py": "fa11d04a8a68973e555f814a072013d5dacbb0e2aa2d5ab87182cad9a64a61e7",
     ".github/scripts/tests/test_check_workflow_pipefail.py": "cc67731c301cc2e65f80e79b8310d38e29541479616f5e4a6c3eac2a008aa06a",
-    ".github/scripts/tests/test_ci_cache_key.py": "abaa7e7ef74cb24e33b040528b69d279ca9f8471375c2a0b89cfeb80ec3c841c",
-    ".github/scripts/tests/test_ci_publish_scope.py": "f8cdd681048914ad2d567d371c1d71608b13b9d0a4e7d5ee1604fbe8093c7ac8",
+    ".github/scripts/tests/test_ci_cache_key.py": "31350fd18794e5551f537aac993a064993377801dcb7eda357af453070ae1895",
+    ".github/scripts/tests/test_ci_publish_scope.py": "56b701a787ccef8d44bc84cfce05f8f3fe42517fcb1aebc3013901c76b2e0301",
     ".github/scripts/tests/test_ci_push_base.py": "7bb71bca602e7626ae2b0b8f2535a02d73ee508708adfaeb7aba85661c7ad891",
     ".github/scripts/tests/test_compile_checked_bytecode.py": "d82fa182984cc3f175a4360b7451fdd8ada02823edf9e424309e427622afdd93",
     ".github/scripts/tests/test_contact_gate.py": "8ed383b1ce20c9b9f4e7a3fcfc655a46c7be17e97ab2fc22a03b82af803ed55a",
@@ -94,7 +94,7 @@
     ".github/tests/test_libexec_marker_coverage.py": "1b8edb7c59470af018902fa688f7e5e192d3d9d0f90617fc084dab03510cfb19",
     ".github/tests/test_macos_workflow_scope.py": "2967e68863e7897d07f1f3a56f80c9d635d1223f5a857e6796969b6983865f2a",
     ".github/tests/test_native_build_inventory.py": "0f26c2c34877fcd6814c3024c9dc9ad3b3eda4f4bbc75acf476d32b703b8c74e",
-    ".github/tests/test_nightly_apt_window.py": "54b46d5b1af9e1274a2a05bd5dc61c0a28611aa57c07677d6d39bcde75cd5391",
+    ".github/tests/test_nightly_apt_window.py": "cda151460d95450c19ed38cf9c0bc092b2eb54b9f6e99229b55e926f72d04bd6",
     ".github/tests/test_nightly_marker_selection.py": "1a6124e77778f84b0044ea2106b97c9fe8e3b17fb41ac149ac5feb444129ddda",
     ".github/tests/test_nightly_semgrep_routing.py": "3729182f9c987062442e57a036ad7a35a3e30c5ae4863d54a5aa0745b1703318",
     ".github/tests/test_npm_license_reference.py": "cf8d3df8eb94638eabea99dd2252665d5ddfd3341a253e4f1e2381b531dd8b17",
@@ -122,7 +122,7 @@
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
     ".github/tests/test_scan_restart_identity.py": "91073d4a33c48713d0453835179214a313c7ff547d12a941b7361f04ad878485",
     ".github/tests/test_scheduled_ci_provisioning.py": "af3463ce1f2f8fcf3287899ea150e7aa2fb137494f05480fa3fc71c66b25e123",
-    ".github/tests/test_setup_venv_cache.py": "dc52903f8aa99b4f1b5a3073f9990dc5f8af7318670ee5450ca55e2dc63807a8",
+    ".github/tests/test_setup_venv_cache.py": "9dd83d7323f397227c5df53d1ff23a4c49205245e8c38651e64e20bed01242df",
     ".github/tests/test_static_boundary_contracts.py": "c85fa61c51f66c2bd85e8d85b43f5c73eb7096b4577cc877ee8a579023d3882c",
     ".github/tests/test_symlink_hop_bound.py": "f031725cd5dfeb073b6885a1d53e079022c069571aeab4f4006f5df1fd6a99ff",
     ".github/tests/test_test_impact.py": "00c5342ea68d19cb91ab0f1014e5559a06e86ca1af6c13ff4ad2186d3f98e2ad",
@@ -132,7 +132,7 @@
     ".github/tests/test_wall_budget_marker.py": "ee0b97df7553b2962c235233c5709a395e30c3a08df3556715bc7c514e56d1be",
     ".github/tests/test_wrapper_fixture_collection.py": "672db7e98b81f2f1215cbef8dcdbf6c783b19f401f7f3cbd1dd3aedb351ae421",
     ".github/tests/test_wrapper_runner_parallelism.py": "8f246a531a6fbbee1e6272a99bc48fcfa6a3e48c2833f759d70653a05fe939c2",
-    ".github/tests/test_wrapper_workflow_setup.py": "6d7e619693fd2902405bccaaa37ee410b697a0f2095d022d53ed6ddd098f3b49",
+    ".github/tests/test_wrapper_workflow_setup.py": "dcc63a535ea01feb0186f44c2dbf6b6938773c57afd2d275e94e74ae72c78ab9",
     "conftest.py": "fd9094a6c3660b2da276f4f7c4d07877a5f4ea28219095e3f98550fb8d3c4d21",
     "core/analysis/tests/test_binary_oracle.py": "75f3c5acc7b52adfd5811fbe8d6360dce56b315128855ba6f2be916f62acd5f4",
     "core/analysis/tests/test_binary_oracle_autodetect.py": "d904a18148c4e074694d6bbd9f35a555656f3e56e24b2ce0977453604c7b0534",
@@ -517,7 +517,7 @@
     "core/sandbox/tests/test_fork_safe_warn.py": "2e042124b0e201cc50b8bd3aeed712e88eb4216e7223a5df8674b0e45724ad39",
     "core/sandbox/tests/test_fork_safe_warn_sites.py": "6a3e89f49804616f32c89fc33ef6695b78f20f1e20cd5936ea4a615babfef0bf",
     "core/sandbox/tests/test_fork_warning_filter.py": "dafcf4c59c8170e85dc65f49bda2dfb34b7a97f4746995f5fe43708d934df28c",
-    "core/sandbox/tests/test_fresh_procfs_contract.py": "8838ee6476bbe2a9b14006bdc6937aa5cd46c0c9f7f24ed3bbcbe57f6c523635",
+    "core/sandbox/tests/test_fresh_procfs_contract.py": "ce10863bb9bb246895e36976cbe9cb831e5008ede85de22c305e0ebdfdcfd7f6",
     "core/sandbox/tests/test_helper_contracts.py": "b1661b5eb6475632b15414a6f09cdb0fa5fd340c611a73c74012c9d8d6e22bba",
     "core/sandbox/tests/test_host_response_reliability.py": "90ea3f674153adfda518ce06b1cca8aac720681a362b265ac5ffa3fc2a88ab18",
     "core/sandbox/tests/test_host_startup_cleanup.py": "aafcab09f34f0ed7d39623afac1ffcd087d1f41b8898949c03fc313108fac0fb",
@@ -1133,7 +1133,7 @@
     "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
     "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
     "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b",
-    ".github/tests/test_ubuntu_apt_fallback.py": "8cf728907b0d540a5a968872af3f70ee4832d3e77ad431816c9bc031465427ce"
+    ".github/tests/test_ubuntu_apt_fallback.py": "2b7e2dd4697c5d5144f56b2fe2901f12969edd641e3fa9af68c559ee08af73a6"
   },
   "sites": [
     {
@@ -7087,14 +7087,6 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": ".github/tests/test_wrapper_workflow_setup.py:test_native_setup_refuses_package_manager_and_prefix_failures: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
-    },
-    {
-      "path": ".github/tests/test_wrapper_workflow_setup.py",
-      "scope": "test_python_parser_dependencies_include_elf_worker_and_preserve_failures",
-      "signature": "d7da63ecf625bfecf5270e47cd76ec406cc12ee72570ec889c410d8dda7c0118",
-      "count": 1,
-      "contract": "non-cli-probe",
-      "purpose": ".github/tests/test_wrapper_workflow_setup.py:test_python_parser_dependencies_include_elf_worker_and_preserve_failures: external tool or library/OS probe; exact command/environment source is pinned, and this category is not a claim of standalone launch isolation."
     },
     {
       "path": ".github/tests/test_wrapper_workflow_setup.py",
@@ -23811,10 +23803,10 @@
     {
       "path": "core/sandbox/tests/test_fresh_procfs_contract.py",
       "scope": "test_agent_credentials_scrubbed_from_chain_environ",
-      "signature": "3d1602df7418279920903cc9b05365b5442bc9217db1a04a3390671561f905bc",
+      "signature": "2e96b0236f68a1eedbad902e6b09651ea41662d77582f0de518de766290529c6",
       "count": 1,
       "contract": "non-cli-probe",
-      "purpose": "core/sandbox/tests/test_fresh_procfs_contract.py:test_agent_credentials_scrubbed_from_chain_environ: delegates through reviewed helper(s) _drive_run_in_subprocess; producer source and this exact caller are pinned."
+      "purpose": "Owned sandbox driver and synthetic credential decoys; payload reports its own user namespace, observer rejects namespace-transition samples and judges only that reachable namespace. Real credential-value and retained-name assertions remain."
     },
     {
       "path": "core/sandbox/tests/test_fresh_procfs_contract.py",
@@ -46887,6 +46879,54 @@
       "count": 1,
       "contract": "non-cli-probe",
       "purpose": ".github/tests/test_ubuntu_apt_fallback.py:test_playwright_dependency_install_inherits_each_scoped_config: Literal provisioning helper copy uses owned OS-release/keyring/temp fixtures and executable APT/dpkg/Python stand-ins; no real package manager, sudo, network or host settings."
+    },
+    {
+      "path": ".github/tests/test_setup_venv_cache.py",
+      "scope": "test_native_rebuild_installs_parser_requirements_before_it_can_be_saved",
+      "signature": "b730767d9d5beac344352a3ed0e322d475981bd1bd40f7fd43b7a25960a239e2",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "literal rebuild shell uses test-owned uv executable and activate script; package manifest and cache-save failure ordering checked without actual install"
+    },
+    {
+      "path": ".github/tests/test_ubuntu_apt_fallback.py",
+      "scope": "test_combined_browser_and_parser_install_share_one_refresh_per_route",
+      "signature": "0245b955135ea3825931e37235eefa54613347b4a8b2816e211b88da67aeeacc",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "existing owned fake APT/Python harness; verifies signed scoped index reuse, fallback and refusal"
+    },
+    {
+      "path": ".github/tests/test_ubuntu_apt_fallback.py",
+      "scope": "test_combined_playwright_update_warning_uses_independent_fallback",
+      "signature": "bbd1fb7da2e370e31b9baae7fbefbaf81f4cb962d4fb33af874b92085739ce06",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "same owned harness models warning-only partial refresh and fallback; no real package manager"
+    },
+    {
+      "path": ".github/tests/test_wrapper_workflow_setup.py",
+      "scope": "test_cached_python_parser_tools_cover_elf_worker_and_refuse_missing_tool",
+      "signature": "d7da63ecf625bfecf5270e47cd76ec406cc12ee72570ec889c410d8dda7c0118",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "literal workflow body with owned file-backed ROPgadget stub, no installer, verifies PATH and missing executable refusal"
+    },
+    {
+      "path": ".github/tests/test_wrapper_workflow_setup.py",
+      "scope": "test_linux_browser_and_parser_packages_share_the_signed_helper",
+      "signature": "d7da63ecf625bfecf5270e47cd76ec406cc12ee72570ec889c410d8dda7c0118",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "literal workflow body with owned sudo recorder, selected package vector and interpreter path retained"
+    },
+    {
+      "path": ".github/tests/test_wrapper_workflow_setup.py",
+      "scope": "test_userns_setup_refreshes_archives_only_for_missing_uidmap",
+      "signature": "1c74e91238b87110172797905db497f2ec0c11849959a2b34b90c5ba96eec48f",
+      "count": 1,
+      "contract": "non-cli-probe",
+      "purpose": "literal action body with owned dpkg-query/sudo stand-ins; conditional install and existing sysctl command ordering only, no host change"
     }
   ],
   "shell_routers": {
