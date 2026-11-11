@@ -95,7 +95,7 @@ def test_sarif_failure_preserves_the_report_and_quick_view(tmp_path, monkeypatch
     assert "Captured findings: 1" in capsys.readouterr().out
 
 
-def test_exports_cannot_replace_a_committed_generation(tmp_path):
+def test_exports_cannot_replace_a_committed_generation(tmp_path, capsys):
     from core.reporting.writer import load_committed_report
     source = _findings_file(tmp_path, [_vuln_row()])
     assert render.main([str(source), "--no-sarif"]) == 0
@@ -103,7 +103,11 @@ def test_exports_cannot_replace_a_committed_generation(tmp_path):
     destination = tmp_path / ".reporting" / manifest["generation"] / "report.md"
     original = destination.read_bytes()
     assert render.main([str(source), "--out-sarif", str(destination)]) == 2
-    assert render.main([str(source), "--no-sarif", "--report-output", str(destination)]) == 1
+    capsys.readouterr()
+    with pytest.raises(SystemExit) as error:
+        render.main([str(source), "--no-sarif", "--report-output", str(destination)])
+    assert error.value.code == 2
+    assert "immutable reporting generation" in capsys.readouterr().err
     assert destination.read_bytes() == original
 
 
