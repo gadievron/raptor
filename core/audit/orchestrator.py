@@ -11663,6 +11663,7 @@ def _run_audit_body(
             None,
             start_time,
             sarif_cache,
+            knowledge_runtime=knowledge_runtime,
         )
     except Exception:
         logger.debug("error retry pass failed", exc_info=True)
@@ -15375,6 +15376,8 @@ def _retry_error_outcomes(
     _llm_client: Any,
     start_time: float,
     _sarif_cache: Any,
+    *,
+    knowledge_runtime: Any = None,
 ) -> OrchestratorResult:
     """Retry recoverable error outcomes (json_parse, truncation,
     api_error, timeout). Truncation and timeout retries strip the
@@ -15389,6 +15392,34 @@ def _retry_error_outcomes(
         if o.status == "error" and o.error_class in _RECOVERABLE_ERROR_CLASSES
     ]
     if not error_outcomes:
+        return result
+
+    if knowledge_runtime is not None:
+        # Failed calls do not yet expose a transient original-input scope.
+        # Rebuilding context here cannot establish that binding, and this
+        # late pass cannot bypass the run's closed continuation owner.
+        # Retain the errors and their accounting until owned recovery can
+        # reserve and durably publish against the original failed inputs.
+        for outcome in error_outcomes:
+            details = dict(outcome.review_result or {})
+            details["review_recovery"] = {
+                "status": "deferred",
+                "reason": "original_failed_input_scope_unavailable",
+            }
+            outcome.review_result = details
+            try:
+                append_audit_log(config.out_dir, {
+                    "action": "error_recovery_deferred", "file": outcome.file,
+                    "function": outcome.function, "line_start": outcome.line,
+                    "reason": "original_failed_input_scope_unavailable",
+                    "status": "deferred", "adjudication": "unverified",
+                })
+            except Exception:
+                logger.warning("could not record error recovery deferral", exc_info=True)
+        logger.info(
+            "Deferred %d error recoveries: original failed-input scope unavailable",
+            len(error_outcomes),
+        )
         return result
 
     # Environment gate before each retry dispatch: the tick pauses on
