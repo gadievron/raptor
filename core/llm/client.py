@@ -1489,6 +1489,7 @@ class LLMClient:
     """Unified LLM client with multi-provider support and fallback."""
     _attempt_accounting_protocol = 1
     _attempt_admission_protocol = 1
+    _run_deadline_protocol = 1
 
 
     # Lazily-created per-run accounting attributes (created on first use
@@ -1568,6 +1569,7 @@ class LLMClient:
         # plus a run-start timestamp for the wall-clock deadline. All
         # guarded by _stats_lock.
         self._run_start: float | None = None
+        self._bound_run_deadline: float | None = None
         self._governed_calls = 0
         self._governed_tokens = 0
         # Entries whose provenance token was PRESENT but invalid — a
@@ -3265,6 +3267,26 @@ class LLMClient:
             self._attempt_recovery_gap = "prepared_failure_signal_unavailable"
             return False
 
+    def bind_run_deadline(self, deadline_monotonic: float) -> None:
+        """Tighten the process-local absolute deadline supplied by the run owner.
+
+        The owner binds this before owned dispatch. Monotonic timestamps
+        are not persisted across processes. This stops
+        fresh attempts and bounds SDK phases, rather than promising hard
+        elapsed-time cancellation of an operation already in flight.
+        """
+        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+            raise ValueError("run deadline must be a finite monotonic timestamp")
+        try:
+            deadline = float(deadline_monotonic)
+        except OverflowError:
+            raise ValueError("run deadline must be a finite monotonic timestamp") from None
+        if not math.isfinite(deadline):
+            raise ValueError("run deadline must be a finite monotonic timestamp")
+        with self._stats_lock:
+            prior = getattr(self, "_bound_run_deadline", None)
+            self._bound_run_deadline = deadline if prior is None else min(prior, deadline)
+
     def _clamp_prepared_timeout(self, request, stage_timeout=None) -> None:
         """Bound SDK phase timeouts; this is not a hard elapsed-time limit."""
         limits = []
@@ -3274,6 +3296,12 @@ class LLMClient:
                 raise LLMCallAdmissionRefused("prepared request stage timeout is invalid")
             limits.append(float(stage_timeout))
         with self._stats_lock:
+            deadline = getattr(self, "_bound_run_deadline", None)
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LLMGovernorExceededError("resource governor: run deadline reached before dispatch")
+                limits.append(remaining)
             maximum, started = self.config.max_seconds_per_scan, self._run_start
             if maximum is not None and started is not None:
                 remaining = maximum - (time.monotonic() - started)
@@ -3424,7 +3452,8 @@ class LLMClient:
         max_seconds = getattr(cfg, "max_seconds_per_scan", None)
         max_calls = getattr(cfg, "max_calls_per_scan", None)
         max_tokens = getattr(cfg, "max_tokens_per_scan", None)
-        if max_seconds is None and max_calls is None and max_tokens is None:
+        deadline = getattr(self, "_bound_run_deadline", None)
+        if max_seconds is None and max_calls is None and max_tokens is None and deadline is None:
             return  # governor off — no overhead on the common path
 
         # getattr defaults: clients built via ``LLMClient.__new__`` (the
@@ -3432,6 +3461,9 @@ class LLMClient:
         # skips __init__) never ran the counter init. The governor must
         # not crash on them — it stays inert until a real run sets limits.
         with self._stats_lock:
+            deadline = getattr(self, "_bound_run_deadline", None)
+            if deadline is not None and time.monotonic() >= deadline:
+                raise LLMGovernorExceededError("resource governor: run deadline reached before dispatch")
             if max_seconds is not None:
                 run_start = getattr(self, "_run_start", None)
                 if run_start is None:
