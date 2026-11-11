@@ -1,5 +1,8 @@
 """Controls for binding prerequisites, not proof admission."""
 
+import hashlib
+from dataclasses import replace
+
 import pytest
 
 from core.audit.claims import ClaimRevision
@@ -13,7 +16,7 @@ from core.audit.smt_claim_contracts import smt_claim_binding_rejection
 def records():
     hypothesis = {"mechanism": "A scoped claim", "cwe": "CWE-125"}
     revision = ClaimRevision(hypothesis, pass_id="pipeline-pass", file="unit.c", function="Read", line_start=1)
-    source = SourceIdentity("a" * 64, (1, 2, 3, 4, 5))
+    source = SourceIdentity(hashlib.sha256(b"int Read(void) { return 8; }\n").hexdigest(), (1, 2, 3, 4, 5))
     scope = VerificationScope("unit.c", "Read", 1, hypothesis["mechanism"], source)
     return hypothesis, revision, scope
 
@@ -99,7 +102,9 @@ def test_refutation_source_is_required_and_current(source_kind, reason):
 def adapter_case():
     from types import SimpleNamespace
     from core.audit.claim_adjudication import ClaimContext, ClaimContract, FactEvent
-    from core.audit.smt_claim_contracts import SMTContractAdapter
+    from core.audit.smt_claim_contracts import (
+        PreparedSMTAdmission, PreparedSMTAnchor, SMTContractAdapter, SMTValidatedConclusion,
+    )
     from core.audit.sweep import SweepResult
 
     hypothesis, revision, scope = records()
@@ -115,6 +120,24 @@ def adapter_case():
                          details={"value": 8, "limit": 7, "smt_execution": {
                              "request_id": event.request_id, "executed_request_id": event.executed_request_id,
                              "identity_status": "matched", "scope": "worker-invocation-only"}})
+    prepared = PreparedSMTAdmission(context, "unit-1", "snapshot-1", "build-lp64", "pipeline-pass",
+                                    scope.hypothesis, (PreparedSMTAnchor(
+                                        scope.file, scope.source_identity,
+                                        b"int Read(void) { return 8; }\n", 0, 28,
+                                        b"int Read(void) { return 8; }"),),
+                                    "admitted", "fixture-exact-conclusion-v1")
+    validated = SMTValidatedConclusion(prepared, event.request_id, event.executed_request_id,
+                                       event.raw_reference, "mechanical_observation",
+                                       "registered-worker-invocation", "bounded-fixture-arithmetic",
+                                       prepared.conclusion_signature)
+
+    def validate_prepared(admission, actual_result, actual_event):
+        # Pipeline-owned fixture registration checks complete prepared inputs.
+        if (admission == prepared and actual_result.rule_id == result.rule_id
+                and actual_event.context == event.context):
+            return validated
+        return None
+
     calls = []
 
     def validate(claim, actual_result, actual_context, obligation):
@@ -128,7 +151,9 @@ def adapter_case():
 
     return SimpleNamespace(record=record, revision=revision, scope=scope, context=context,
                            contract=contract, event=event, result=result, calls=calls,
-                           registration=SMTContractAdapter(contract, validate))
+                           prepared=prepared, validated=validated,
+                           registration=SMTContractAdapter(contract, validate, validate_prepared,
+                                                           frozenset({"bounded-fixture-arithmetic"})))
 
 
 def adapt(case, **overrides):
@@ -136,7 +161,8 @@ def adapt(case, **overrides):
 
     arguments = dict(event=case.event, expected_context=case.context,
                      expected_scope=case.scope, expected_revision=case.revision,
-                     result=case.result, contracts={case.context.contract: case.registration})
+                     result=case.result, contracts={case.context.contract: case.registration},
+                     prepared_admission=case.prepared)
     arguments.update(overrides)
     return adapt_smt_claim_fact(case.record, **arguments)
 
@@ -208,10 +234,9 @@ def test_model_authored_contract_dictionary_is_not_a_registration(adapter_case):
 
 
 def test_registered_validator_boolean_is_not_a_semantic_fact(adapter_case):
-    from core.audit.smt_claim_contracts import SMTContractAdapter
 
     case = adapter_case
-    registration = SMTContractAdapter(case.contract, lambda *args: True)
+    registration = replace(case.registration, validate_conclusion=lambda *args: True)
     assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
 
 
@@ -225,17 +250,16 @@ def test_result_content_must_satisfy_the_registered_validator(adapter_case):
 
 def test_registered_negative_coverage_and_existing_nonrefuting_policy_are_both_required(adapter_case):
     from dataclasses import replace
-    from core.audit.smt_claim_contracts import SMTContractAdapter
 
     case = adapter_case
-    registration = SMTContractAdapter(case.contract, lambda *args: "contradicts_fact")
+    registration = replace(case.registration, validate_conclusion=lambda *args: "contradicts_fact")
     contracts = {case.context.contract: registration}
     assert adapt(case, contracts=contracts).semantic == "contradicts_fact"
     # Existing source-array safety checks do not refute a whole claim.
     result = replace(case.result, rule_id="smt:check-array-bounds", outcome="refuted")
     assert adapt(case, result=result, contracts=contracts).semantic == "unknown"
     no_negative = replace(case.contract, negative_obligations=frozenset())
-    registration = SMTContractAdapter(no_negative, lambda *args: "contradicts_fact")
+    registration = replace(case.registration, contract=no_negative, validate_conclusion=lambda *args: "contradicts_fact")
     assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
 
 
@@ -253,11 +277,10 @@ def test_fully_current_stronger_conclusion_has_no_coverage_under_the_old_contrac
     fact = adapt_smt_claim_fact(record, event=event, expected_context=context, expected_scope=scope,
                                expected_revision=revision, result=case.result,
                                contracts={context.contract: case.registration})
-    assert fact.semantic == "unknown" and len(case.calls) == 1
+    assert fact.semantic == "unknown" and not case.calls
 
 
 def test_validator_failure_cannot_supply_a_fact(adapter_case):
-    from core.audit.smt_claim_contracts import SMTContractAdapter
 
     case = adapter_case
     calls = []
@@ -266,7 +289,7 @@ def test_validator_failure_cannot_supply_a_fact(adapter_case):
         calls.append(args)
         raise RuntimeError("validator failure")
 
-    registration = SMTContractAdapter(case.contract, failed)
+    registration = replace(case.registration, validate_conclusion=failed)
     assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
     assert len(calls) == 1
 
@@ -325,3 +348,55 @@ def test_result_requires_a_parent_bound_execution_receipt(adapter_case, receipt)
     case = adapter_case
     result = replace(case.result, details={**case.result.details, "smt_execution": receipt})
     assert adapt(case, result=result).semantic == "unknown" and not case.calls
+
+
+def test_partial_context_without_prepared_admission_cannot_support(adapter_case):
+    case = adapter_case
+    # Existing context/IDs/obligations lack prepared anchors and full conclusion.
+    assert adapt(case, prepared_admission=None).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("field,value", [
+    ("statement", "different meaning"), ("unit_id", "other-unit"),
+    ("target_snapshot_id", "other-snapshot"), ("build_identity", "other-build"),
+    ("origin_pass_id", "other-pass"), ("processing_status", "proposed"),
+    ("conclusion_signature", "different-conclusion"), ("anchors", ()),
+])
+def test_changed_prepared_claim_cannot_reuse_registered_validation(adapter_case, field, value):
+    case = adapter_case
+    fact = adapt(case, prepared_admission=replace(case.prepared, **{field: value}))
+    assert fact.semantic == "unknown" and not case.calls
+
+
+@pytest.mark.parametrize("change", [
+    {"byte_start": 1}, {"byte_end": 999}, {"byte_start": True},
+    {"expected_span": b"invented span"}, {"file": "../unit.c"},
+    {"prepared_content": b"changed source"},
+])
+def test_invalid_exact_anchor_never_reaches_support_validator(adapter_case, change):
+    case = adapter_case
+    anchor = replace(case.prepared.anchors[0], **change)
+    assert adapt(case, prepared_admission=replace(case.prepared, anchors=(anchor,))).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("change", [
+    {"validated_conclusion_signature": "echoed-old-conclusion"},
+    {"producer_kind": "reviewer_judgment"}, {"execution_scope": "model-asserted"},
+    {"effect_scope": "whole-program"}, {"request_id": "other-request"},
+    {"executed_request_id": "other-request"}, {"raw_reference": "other-result"},
+])
+def test_registered_validation_must_bind_conclusion_and_execution(adapter_case, change):
+    case = adapter_case
+    registration = replace(case.registration, validate_prepared_admission=lambda *args: replace(case.validated, **change))
+    assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("returned", [True, "supports_fact", {"complete": True}, None])
+def test_untyped_admission_validator_output_grants_no_coverage(adapter_case, returned):
+    case = adapter_case
+    registration = replace(case.registration, validate_prepared_admission=lambda *args: returned)
+    assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
+    assert not case.calls
