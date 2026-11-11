@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from core.coverage.tests.summary_cli_support import CLI, run_cli
 
 # Review-grade marks are operator-tier: tests exercising them drive the
@@ -218,6 +220,10 @@ def test_mark_with_zero_key_inventory_stays_unvalidated(tmp_path):
     assert "unmatched" not in res.stdout
     rec = json.loads((d / "coverage-llm.json").read_text())
     assert _pairs(rec) == [("a.c", "f1")]
+    from core.coverage.journal import load_entries
+    assert not load_entries(d)
+    assert "journaled" not in res.stdout
+    assert not (tmp_path / "review-journal-index.json").exists()
 
 
 def test_mark_items_key_supersedes_legacy_functions(tmp_path):
@@ -250,6 +256,63 @@ def test_mark_without_project_context_stays_record_only(tmp_path):
     assert not (tmp_path / "review-journal-index.json").exists()
     rec = json.loads((d / "coverage-llm.json").read_text())
     assert _pairs(rec) == [("a.c", "f1")]
+
+
+def _standalone_fixture(tmp_path):
+    project, run = _project_fixture(tmp_path)
+    inventory = project / "checklist.json"
+    (run / "checklist.json").write_bytes(inventory.read_bytes())
+    inventory.unlink()
+    return run
+
+
+def test_standalone_operator_mark_and_unmark_use_run_journal(tmp_path):
+    from core.audit.gaps import compute_gaps
+    from core.coverage import journal_mac
+    from core.coverage.journal import load_entries
+    from core.coverage.record import load_records
+
+    run = _standalone_fixture(tmp_path)
+    assert not (run.parent / "checklist.json").exists()
+    result = _run(str(run), "--mark", "a.c:f1", operator=True)
+    assert result.returncode == 0, result.stderr
+    assert "journaled to run journal" in result.stdout
+    entries = load_entries(run, fresh=True)
+    assert len(entries) == 1
+    row = entries[0]
+    assert (row.file, row.function, row.producer, row.model) == ("a.c", "f1", "mark", "operator")
+    assert row.source_hash and "[mark-context]" in row.body
+    assert journal_mac.entry_provenance(row) == journal_mac.ROW_VERIFIED
+    checklist = json.loads((run / "checklist.json").read_text())
+    assert not compute_gaps(checklist, list(load_records(run)), out_dir=run)
+    assert _run(str(run), "--mark", "a.c:f1", operator=True).returncode == 0
+    assert len(load_entries(run, fresh=True)) == 1
+
+    withdrawn = _run(str(run), "--unmark", "a.c:f1", operator=True)
+    assert withdrawn.returncode == 0, withdrawn.stderr
+    entries = load_entries(run, fresh=True)
+    assert [entry.verdict for entry in entries] == ["clean", "error"]
+    assert all(journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED for entry in entries)
+    assert {gap["name"] for gap in compute_gaps(checklist, list(load_records(run)), out_dir=run)} == {"f1"}
+    assert not (run.parent / "review-journal-index.json").exists()
+    assert not (run / "review-journal-index.json").exists()
+
+
+@pytest.mark.parametrize("operator, flags", [(True, ("--map-grade",)), (False, ())])
+def test_standalone_map_and_agent_marks_do_not_gain_review_credit(tmp_path, operator, flags):
+    from core.audit.gaps import compute_gaps
+    from core.coverage.journal import load_entries
+    from core.coverage.record import load_records
+
+    run = _standalone_fixture(tmp_path)
+    result = _run(str(run), "--mark", "a.c:f1", *flags, operator=operator)
+    assert result.returncode == 0, result.stderr
+    assert "examined (map-grade)" in result.stdout
+    assert not load_entries(run)
+    assert not (run / "coverage-llm.json").exists()
+    checklist = json.loads((run / "checklist.json").read_text())
+    assert {gap["name"] for gap in compute_gaps(checklist, list(load_records(run)), out_dir=run)} == {"f1"}
+    assert not (run.parent / "review-journal-index.json").exists()
 
 
 def test_journaled_mark_suppresses_audit_gap(tmp_path):

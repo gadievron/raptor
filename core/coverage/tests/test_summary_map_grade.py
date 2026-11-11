@@ -88,8 +88,29 @@ def test_review_mark_still_deduplicates_gap(tmp_path):
     """The other direction: a genuine review assertion (plain --mark)
     keeps suppressing the function from the review plan."""
     run = _run_dir(tmp_path)
+    assert not (run.parent / "checklist.json").exists()
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "a.c").write_text("\n".join(
+        ["int f1(void) {"] + ["  return 1;"] * 18 + ["}"]
+        + [""] * 9 + ["int f2(void) {"] + ["  return 2;"] * 29 + ["}"]
+    ) + "\n")
+    checklist = json.loads((run / "checklist.json").read_text())
+    checklist["target_path"] = str(target)
+    (run / "checklist.json").write_text(json.dumps(checklist))
     assert _run(str(run), "--mark", "a.c:f1",
                 operator=True).returncode == 0
+
+    from core.coverage import journal_mac
+    from core.coverage.journal import load_entries
+
+    entries = load_entries(run)
+    assert [(entry.file, entry.function, entry.producer, entry.model) for entry in entries] == [
+        ("a.c", "f1", "mark", "operator"),
+    ]
+    assert entries[0].source_hash
+    assert journal_mac.entry_provenance(entries[0]) == journal_mac.ROW_VERIFIED
+    assert not (run.parent / "review-journal-index.json").exists()
 
     gaps_view = _run(str(run), "--gaps")
     assert "a.c:f1" not in gaps_view.stdout
@@ -101,7 +122,7 @@ def test_review_mark_still_deduplicates_gap(tmp_path):
         from core.audit.gaps import compute_gaps
         from core.coverage.record import load_records
         checklist = json.loads((run / "checklist.json").read_text())
-        gaps = compute_gaps(checklist, list(load_records(run)))
+        gaps = compute_gaps(checklist, list(load_records(run)), out_dir=run)
     assert {g["name"] for g in gaps} == {"f2"}
 
 
