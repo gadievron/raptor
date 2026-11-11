@@ -993,6 +993,45 @@ class TestDarkRecordSurfaces:
     import either — neither surface has any re-adjudication route.
     """
 
+    @staticmethod
+    def _legacy_projection_entry(target, **over):
+        """Construct projectable history, never strip a bound current review.
+
+        These rows exercise the existence-only Store/builder substrate. They
+        do not establish current C-reference admission or whole-claim proof.
+        """
+        fields = {
+            "ts": now_iso(), "run_id": "run1", "file": "auth.c",
+            "function": "check_pw", "verdict": "clean",
+            "source_hash": hash_span(target / "auth.c", 1, 5),
+            "line_start": 1, "line_end": 5,
+            "strategies": _current_strategies(), "model": "model-a",
+            "body": "legacy projection review body",
+        }
+        fields.update(over)
+        entry = ReviewJournalEntry(**fields)
+        assert not entry.source_hash.startswith("src:ctx")
+        assert entry.review_claims is None
+        return entry
+
+    @staticmethod
+    def _project_index(tmp_path, *entries):
+        """Use the actual append/MAC and index producers for Store imports."""
+        from core.coverage import journal_mac
+        from core.coverage.journal import load_entries
+
+        project = tmp_path / "projection-project"
+        run = project / "run1"
+        run.mkdir(parents=True, exist_ok=True)
+        for entry in entries:
+            append_entry(run, entry)
+        loaded = load_entries(run, fresh=True)
+        assert len(loaded) == len(entries)
+        assert all(journal_mac.entry_provenance(entry) == journal_mac.ROW_VERIFIED
+                   for entry in loaded)
+        merge_into_index(project, run)
+        return project
+
     def _record_gaps(self, tmp_path, status):
         target = _write_target(tmp_path)
         from core.coverage import journal_mac
@@ -1026,19 +1065,14 @@ class TestDarkRecordSurfaces:
     ])
     def test_store_import_skips_dark_rows(self, tmp_path, verdict,
                                           marked):
-        from unittest import mock
-
         from core.coverage.importer import import_journal
         from core.coverage.store import CoverageStore
 
         target = _write_target(tmp_path)
-        entry = _entry(target, verdict=verdict)
+        entry = self._legacy_projection_entry(target, verdict=verdict)
         store = CoverageStore(tmp_path / "coverage.json")
-        with mock.patch(
-            "core.coverage.journal.load_index",
-            return_value={entry.key: entry},
-        ):
-            marks = import_journal(store, tmp_path, _checklist(target))
+        project = self._project_index(tmp_path, entry)
+        marks = import_journal(store, project, _checklist(target))
         assert marks == marked, verdict
         assert bool(
             store.tool_coverage_of_range("auth.c", 1, 5)
@@ -1048,19 +1082,14 @@ class TestDarkRecordSurfaces:
         # An edge-contract row keys on the CALLER: marking its full
         # range would vanish a never-reviewed function from every
         # store-derived gap view (the entry.key invariant).
-        from unittest import mock
-
         from core.coverage.importer import import_journal
         from core.coverage.store import CoverageStore
 
         target = _write_target(tmp_path)
-        entry = _entry(target, edge_callee="lib.c:callee")
+        entry = self._legacy_projection_entry(target, edge_callee="lib.c:callee")
         store = CoverageStore(tmp_path / "coverage.json")
-        with mock.patch(
-            "core.coverage.journal.load_index",
-            return_value={entry.key: entry},
-        ):
-            marks = import_journal(store, tmp_path, _checklist(target))
+        project = self._project_index(tmp_path, entry)
+        marks = import_journal(store, project, _checklist(target))
         assert marks == 0
         assert not store.tool_coverage_of_range("auth.c", 1, 5)
 
@@ -1084,7 +1113,7 @@ class TestDarkRecordSurfaces:
     def test_builder_screens_unresolved_rows(self, tmp_path, verdict):
         target = _write_target(tmp_path)
         record = self._build_record(
-            tmp_path, _entry(target, verdict=verdict))
+            tmp_path, self._legacy_projection_entry(target, verdict=verdict))
         # No earner → no coverage rows, but the unresolved counts
         # stay visible in journal_statuses (a record of "this run
         # carried unresolved work", never a mark).
@@ -1095,17 +1124,17 @@ class TestDarkRecordSurfaces:
     def test_builder_screens_edge_rows(self, tmp_path):
         target = _write_target(tmp_path)
         record = self._build_record(
-            tmp_path, _entry(target, edge_callee="lib.c:callee"))
+            tmp_path, self._legacy_projection_entry(target, edge_callee="lib.c:callee"))
         assert record is None
 
     def test_builder_keeps_earners_beside_screened_rows(self, tmp_path):
         target = _write_target(tmp_path)
         record = self._build_record(
             tmp_path,
-            _entry(target, verdict="clean"),
-            _entry(target, function="f_dark", verdict="dark"),
-            _entry(target, function="f_err", verdict="error"),
-            _entry(target, function="f_edge",
+            self._legacy_projection_entry(target, verdict="clean"),
+            self._legacy_projection_entry(target, function="f_dark", verdict="dark"),
+            self._legacy_projection_entry(target, function="f_err", verdict="error"),
+            self._legacy_projection_entry(target, function="f_edge",
                    edge_callee="lib.c:callee"),
         )
         assert record is not None
@@ -1123,12 +1152,13 @@ class TestDarkRecordSurfaces:
         # A Reflexion correction — not the seed row — determines the
         # recorded status (the seed's first-seen-wins buried it).
         target = _write_target(tmp_path)
-        record = self._build_record(
-            tmp_path,
-            _entry(target, verdict="suspicious"),
-            _entry(target, verdict="clean",
-                   body="[resolution] corrective entry"),
-        )
+        seed = self._legacy_projection_entry(
+            target, verdict="suspicious", ts="2026-11-11T00:00:00.000001Z")
+        correction = self._legacy_projection_entry(
+            target, verdict="clean", ts="2026-11-11T00:00:00.000002Z",
+            body="[resolution] corrective entry")
+        assert seed.ts < correction.ts
+        record = self._build_record(tmp_path, seed, correction)
         assert record is not None
         (fa,) = record["functions_analysed"]
         assert fa["status"] == "clean"
@@ -1142,8 +1172,10 @@ class TestDarkRecordSurfaces:
         target = _write_target(tmp_path)
         record = self._build_record(
             tmp_path,
-            _entry(target, verdict="clean"),
-            _entry(target, verdict="error"),
+            self._legacy_projection_entry(
+                target, verdict="clean", ts="2026-11-11T00:00:00.000001Z"),
+            self._legacy_projection_entry(
+                target, verdict="error", ts="2026-11-11T00:00:00.000002Z"),
         )
         assert record is not None
         assert record["functions_analysed"] == []
@@ -1157,9 +1189,9 @@ class TestDarkRecordSurfaces:
         target = _write_target(tmp_path)
         record = self._build_record(
             tmp_path,
-            _entry(target, verdict="clean"),
-            _entry(target, function="f_dark", verdict="dark"),
-            _entry(target, function="f_edge",
+            self._legacy_projection_entry(target, verdict="clean"),
+            self._legacy_projection_entry(target, function="f_dark", verdict="dark"),
+            self._legacy_projection_entry(target, function="f_edge",
                    edge_callee="lib.c:callee"),
         )
         assert _build_covered_set([record]) == {"auth.c:check_pw"}
@@ -1200,6 +1232,89 @@ class TestDarkRecordSurfaces:
         assert bool(
             store.tool_coverage_of_range("auth.c", 1, 5)
         ) is bool(marked), status
+
+
+    def test_current_bound_review_stays_journal_only_with_current_credit(
+            self, tmp_path):
+        from core.audit.gaps import _build_covered_set
+        from core.coverage import journal_mac
+        from core.coverage.importer import import_journal
+        from core.coverage.journal import load_entries
+        from core.coverage.record import build_from_journal
+        from core.coverage.store import CoverageStore
+
+        target = _write_target(tmp_path)
+        entry = _entry(target, verdict="clean")
+        assert entry.source_hash.startswith("src:ctx")
+        assert "source_inputs" in entry.review_claims
+        project = self._project_index(tmp_path, entry)
+        run = project / "run1"
+        loaded = load_entries(run, fresh=True)
+        assert journal_mac.entry_provenance(loaded[0]) == journal_mac.ROW_VERIFIED
+        record = build_from_journal(run)
+        assert record is not None
+        assert record["functions_analysed"] == []
+        assert record["journal_statuses"] == {"clean": 1}
+        store = CoverageStore(tmp_path / "bound-coverage.json")
+        assert import_journal(store, project, _checklist(target)) == 0
+        assert not store.tool_coverage_of_range("auth.c", 1, 5)
+        assert _build_covered_set([record]) == set()
+        # The actual current journal, not the lossy projection, earns credit.
+        assert "auth.c:check_pw" not in _gap_keys(compute_gaps(
+            _checklist(target), [record], out_dir=run))
+
+    def test_current_bound_source_change_reopens_without_restamping(
+            self, tmp_path):
+        from core.coverage.importer import import_journal
+        from core.coverage.journal import journal_shard_paths
+        from core.coverage.record import build_from_journal
+        from core.coverage.store import CoverageStore
+
+        target = _write_target(tmp_path)
+        entry = _entry(target, verdict="clean")
+        stamp = entry.source_hash
+        project = self._project_index(tmp_path, entry)
+        run = project / "run1"
+        before = {path.name: path.read_bytes()
+                  for path in journal_shard_paths(run)}
+        assert before
+        record = build_from_journal(run)
+        assert "auth.c:check_pw" not in _gap_keys(compute_gaps(
+            _checklist(target), [record], out_dir=run))
+        (target / "auth.c").write_text(
+            _SOURCE.replace("return -1;", "return -2;"), encoding="utf-8")
+        assert "auth.c:check_pw" in _gap_keys(compute_gaps(
+            _checklist(target), [record], out_dir=run))
+        assert entry.source_hash == stamp
+        assert {path.name: path.read_bytes()
+                for path in journal_shard_paths(run)} == before
+        retained = build_from_journal(run)
+        assert retained is not None
+        assert retained["functions_analysed"] == []
+        assert retained["journal_statuses"] == {"clean": 1}
+        store = CoverageStore(tmp_path / "changed-coverage.json")
+        assert import_journal(store, project, _checklist(target)) == 0
+        assert not store.tool_coverage_of_range("auth.c", 1, 5)
+
+    def test_current_bound_correction_retains_latest_status_without_projection(
+            self, tmp_path):
+        target = _write_target(tmp_path)
+        seed = _entry(target, verdict="suspicious",
+                      ts="2026-11-11T00:00:00.000001Z")
+        correction = _entry(target, verdict="clean",
+                            ts="2026-11-11T00:00:00.000002Z",
+                            body="[resolution] corrective entry")
+        assert seed.ts < correction.ts
+        assert seed.source_hash.startswith("src:ctx")
+        assert correction.source_hash.startswith("src:ctx")
+        record = self._build_record(tmp_path, seed, correction)
+        assert record is not None
+        assert record["functions_analysed"] == []
+        assert record["journal_statuses"] == {"clean": 1}
+        run = tmp_path / "builder-run"
+        assert latest_entries(run, fresh=True)["auth.c:check_pw"].verdict == "clean"
+        assert "auth.c:check_pw" not in _gap_keys(compute_gaps(
+            _checklist(target), [record], out_dir=run))
 
 
 class TestOwnRunFoldSpendRefusal:
