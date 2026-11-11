@@ -899,12 +899,12 @@ class AuditKnowledgeRuntime:
                         delivered.add(row["request_id"])
         with self._lock:
             external_deliveries = deepcopy(self._external_deliveries.get(reservation.packet.pass_id, ()))
-        for assessment in external_deliveries:
-            for row in assessment:
-                if isinstance(row, dict) and row.get("context_id") in reservation.packet.external_context_ids:
-                    rows.append({"field": "external_context_delivery", **row})
-                    if row.get("delivered") is True:
-                        delivered.add(row["context_id"])
+        for external_assessment in external_deliveries:
+            for external_row in external_assessment:
+                if isinstance(external_row, dict) and external_row.get("context_id") in reservation.packet.external_context_ids:
+                    rows.append({"field": "external_context_delivery", **external_row})
+                    if external_row.get("delivered") is True:
+                        delivered.add(external_row["context_id"])
         with self._lock:
             self._events.append({"event": "review_prompt_context", "pass_id": reservation.packet.pass_id,
                                  "records": rows, "renderer_observed": bool(rows),
