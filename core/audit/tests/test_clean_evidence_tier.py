@@ -98,14 +98,16 @@ def test_model_dictionary_cannot_supply_negative_authority(clean_case, tmp_path)
     assert outcome.compute_tier(target_path=tmp_path) == "speculative"
 
 
-def test_commit_supplies_target_for_clean_tier(clean_case, tmp_path, monkeypatch):
+def test_commit_supplies_target_for_clean_tier(clean_case, tmp_path):
     outcome, receipt = clean_case
     outcome.claim_refutations = (receipt,)
     out = tmp_path / "out"
     out.mkdir()
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=out)
-    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", lambda **kwargs: None)
-    orch._commit_outcome(config, outcome, {"file": outcome.file, "name": outcome.function, "line_start": 1})
+    acknowledgement = orch._commit_outcome(
+        config, outcome, {"file": outcome.file, "name": outcome.function, "line_start": 1},
+    )
+    assert acknowledgement is not None
     assert outcome.verification_tier == "tool_backed"
 
 
@@ -119,3 +121,16 @@ def test_collector_supplies_target_for_clean_tier(clean_case, tmp_path):
     collector = Collector(out_dir=out, target_path=tmp_path)
     collector.submit(outcome, {"file": outcome.file, "name": outcome.function, "line_start": 1})
     assert outcome.verification_tier == "tool_backed"
+
+
+def test_unacknowledged_commit_cannot_raise_clean_tier(clean_case, tmp_path, monkeypatch):
+    outcome, receipt = clean_case
+    outcome.claim_refutations = (receipt,)
+    out = tmp_path / "out"
+    out.mkdir()
+    config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=out)
+    monkeypatch.setattr("core.audit.collector.append_journal_for_outcome", lambda **kwargs: None)
+    assert orch._commit_outcome(
+        config, outcome, {"file": outcome.file, "name": outcome.function, "line_start": 1},
+    ) is None
+    assert outcome.verification_tier == "speculative"

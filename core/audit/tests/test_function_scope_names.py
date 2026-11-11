@@ -22,8 +22,9 @@ def parser():
     pytest.param('int f(int a){int x, *y, z[3]; return a;}',
                  {'a', 'x', 'y', 'z'}, {'a'}, id='multiple-declarators'),
     pytest.param('int f(int (*cb)(int arg)){int (*local)(int inner); return 0;}',
-                 {'cb', 'arg', 'local', 'inner'}, {'cb', 'arg', 'inner'}, id='nested-parameters'),
-    pytest.param('int f(int a){int local; return', {'a', 'local'}, {'a'}, id='recovery'),
+                 {'cb', 'local'}, {'cb'}, id='nested-prototype-parameters-excluded'),
+    # Incomplete parse has no function definition/formal-parameter owner.
+    pytest.param('int f(int a){int local; return', {'local'}, set(), id='recovery-without-function-definition'),
 ])
 def test_exact_sets(parser, source, locals_, parameters):
     expected = frozenset(locals_), frozenset(parameters)

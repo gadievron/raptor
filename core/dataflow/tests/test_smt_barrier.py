@@ -3467,20 +3467,32 @@ def test_chain_class_body_global_rebind_kills():
 
 
 def test_chain_class_body_plain_binding_stays_class_scoped():
-    """Two-direction: WITHOUT the declaration a class-body binding is
-    a class attribute — the enclosing chain member survives."""
+    """Class attributes do not rebind a captured function-local value."""
+    import ast as _ast_mod
+    tree = _ast_mod.parse(
+        "def handle():\n"
+        "    x = request.args.get('x')\n"
+        "    if not re.match(r'^[a-z]+$', x):\n"
+        "        raise ValueError\n"
+        "    class C:\n"
+        "        x = request.args.get('raw')\n"
+        "    open(x)\n"
+    )
+    assert sb._python_chain_reaches_sink(tree, "x", 3, 7, "    open(x)") is True
+
+
+def test_chain_class_definition_does_not_freeze_external_module_slot():
+    """Executing a class may mutate external slots even without a global statement."""
     import ast as _ast_mod
     tree = _ast_mod.parse(
         "x = request.args.get('x')\n"
-        "if not re.match(r'^[a-z]+$', x):\n"        # line 2
+        "if not re.match(r'^[a-z]+$', x):\n"
         "    raise ValueError\n"
-        "class C:\n"                                 # line 4
-        "    x = request.args.get('raw')\n"          # line 5
-        "open(x)\n"                           # line 6
+        "class C:\n"
+        "    x = request.args.get('raw')\n"
+        "open(x)\n"
     )
-    assert sb._python_chain_reaches_sink(
-        tree, "x", 2, 6, "open(x)",
-    ) is True
+    assert sb._python_chain_reaches_sink(tree, "x", 2, 6, "open(x)") is False
 
 
 # ---------------------------------------------------------------------------
