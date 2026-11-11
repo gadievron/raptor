@@ -13,6 +13,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
+from types import SimpleNamespace
 
 # Path setup MUST precede every core.* import — pre-fix the
 # core.smt_solver imports sat ABOVE the insert, so direct CLI
@@ -758,6 +759,53 @@ class DataflowValidator:
             self.logger.debug("Path condition extraction failed: %s", e)
             return [], {}
 
+    def _record_charset_models(
+        self, dataflow: DataflowPath, models: list[dict], out_dir: Path | None,
+    ) -> None:
+        """Retain conditional models without issuing claim or source authority."""
+        if out_dir is None or not models:
+            return
+        try:
+            from core.audit.check_trace import record_check_observation
+
+            paths = [dataflow, *dataflow.alternatives]
+            for model in models:
+                path = paths[model["path_index"]]
+                # Only the producer's location is known. Function, claim
+                # lineage and file-version bindings remain unavailable.
+                scope = SimpleNamespace(
+                    scope=(model["validator_file"], "", model["validator_line"], ""),
+                    source_identity=None,
+                )
+                request = {
+                    "operation": "charset-language-exclusion",
+                    "rule_id": dataflow.rule_id,
+                    "path_index": model["path_index"],
+                    "source": {"file": path.source.file_path, "line": path.source.line},
+                    "sink": {"file": path.sink.file_path, "line": path.sink.line},
+                    "kind": model["kind"], "pattern": model["pattern"],
+                    "sink_classes": list(model["sink_classes"]),
+                    "source_input_sha256": model.get("source_input_sha256"),
+                }
+                record_check_observation(
+                    out_dir, scope, tool="smt", verdict="inconclusive",
+                    rule_id="smt:conditional-charset-model", reason=model["reasoning"],
+                    request=request,
+                    result=SimpleNamespace(
+                        outcome="inconclusive", raw_output=deepcopy(model),
+                        details={
+                            "scope": "conditional-charset-language-model",
+                            "source_bound": False,
+                            "unverified_source_premises": [
+                                "sink_interpretation", "source_execution_semantics",
+                            ],
+                            "assumptions": {"accepted_charset_model": deepcopy(request)},
+                        },
+                    ),
+                )
+        except Exception:
+            self.logger.warning("Could not retain conditional charset observation", exc_info=True)
+
     def _injection_prescreen(
         self,
         dataflow: DataflowPath,
@@ -765,12 +813,14 @@ class DataflowValidator:
         *,
         diagnostics: list[dict] | None = None,
         diagnostic_quality: dict | None = None,
+        observation_out_dir: Path | None = None,
     ) -> DataflowValidation | None:
-        """Run the string-theory prescreen over ALL of the result's
-        paths; materialise the source-bound prescreen verdict on
-        refutation, None otherwise. Failures degrade to None — the
-        prescreen must never block the normal validation flow. Optional
-        diagnostic_quality describes collection, never proof completeness.
+        """Collect conditional string models over the result's paths.
+
+        Charset observations do not establish source-effect refutation and
+        ordinary review continues. Optional observation recording and slice
+        collection never confer proof authority. Recording failures must
+        not block that validation flow.
         """
         reported_models: int | None = None
         initial_count = len(diagnostics) if diagnostics is not None else 0
@@ -787,6 +837,7 @@ class DataflowValidator:
             if verdict is None:
                 return None
             if not verdict.refuted:
+                self._record_charset_models(dataflow, verdict.evidence, observation_out_dir)
                 if diagnostics is not None:
                     reported_models = len(verdict.diagnostics)
                     diagnostics.extend(deepcopy(verdict.diagnostics))
@@ -847,7 +898,8 @@ class DataflowValidator:
     def validate_dataflow_path(
         self,
         dataflow: DataflowPath,
-        repo_path: Path
+        repo_path: Path,
+        *, observation_out_dir: Path | None = None,
     ) -> DataflowValidation:
         """Validate source flow, retaining optional predicate-model diagnostics.
 
@@ -865,20 +917,22 @@ class DataflowValidator:
         from core.reporting.formatting import display_rule_id
         self.logger.info("Validating dataflow path: %s", display_rule_id(dataflow.rule_id))
 
-        # Zero-LLM injection prescreen: when every (codeFlow,
-        # threadFlow) path of an injection-class finding crosses a
-        # liftable charset validator whose accepted language provably
-        # excludes the sink's danger characters (Z3 regex-intersection
-        # emptiness — the smt_barrier proof applied to live findings),
-        # retain its source-bound prescreen contract: confidence-capped
-        # non-exploitable with the barrier evidence attached, before
-        # any LLM call. No signal → normal flow, nothing dropped.
+        # Charset exclusion is a conditional language model, not sink
+        # interpretation. Retain optional observations, then continue normal
+        # validation rather than deriving a source-effect verdict from it.
         slice_diagnostics: list[dict] = []
         slice_diagnostic_quality: dict = {}
-        prescreen = self._injection_prescreen(
-            dataflow, repo_path, diagnostics=slice_diagnostics,
-            diagnostic_quality=slice_diagnostic_quality,
-        )
+        if observation_out_dir is None:
+            prescreen = self._injection_prescreen(
+                dataflow, repo_path, diagnostics=slice_diagnostics,
+                diagnostic_quality=slice_diagnostic_quality,
+            )
+        else:
+            prescreen = self._injection_prescreen(
+                dataflow, repo_path, diagnostics=slice_diagnostics,
+                diagnostic_quality=slice_diagnostic_quality,
+                observation_out_dir=observation_out_dir,
+            )
         if prescreen is not None:
             return prescreen
 
@@ -1160,7 +1214,8 @@ class DataflowValidator:
     def validate_finding(
         self,
         sarif_result: dict,
-        repo_path: Path
+        repo_path: Path,
+        *, observation_out_dir: Path | None = None,
     ) -> DataflowValidation | None:
         """
         Validate a SARIF finding if it contains dataflow.
@@ -1180,7 +1235,9 @@ class DataflowValidator:
             return None
 
         # Validate the path
-        return self.validate_dataflow_path(dataflow, repo_path)
+        if observation_out_dir is None:
+            return self.validate_dataflow_path(dataflow, repo_path)
+        return self.validate_dataflow_path(dataflow, repo_path, observation_out_dir=observation_out_dir)
 
 
 def main() -> None:

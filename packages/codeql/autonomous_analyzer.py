@@ -1274,7 +1274,8 @@ class AutonomousCodeQLAnalyzer:
             self.logger.info("Validating dataflow path...")
             dataflow_validation = self.dataflow_validator.validate_finding(
                 sarif_result,
-                repo_path
+                repo_path,
+                observation_out_dir=out_dir,
             )
 
             # Generate visualizations
