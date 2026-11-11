@@ -23,6 +23,7 @@ import threading
 import time
 from collections import OrderedDict
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 from uuid import uuid4
 
@@ -917,6 +918,8 @@ def _failure_disposition(error: Exception) -> str:
 def _reported_failure_cost(error: Exception) -> float | None:
     """Validated attempt-local billing marker, including a reported zero."""
     for exc in _exception_chain(error):
+        if getattr(exc, "_llm_usage_reported", None) is False:
+            return None
         raw = getattr(exc, "billed_cost_usd", None)
         if raw is None or isinstance(raw, bool):
             continue
@@ -940,6 +943,8 @@ def _billed_failure_usage(error: Exception) -> tuple[float, int, int]:
     reached generation genuinely cost nothing (input-side billing on
     refused/errored requests is not surfaced by the SDKs)."""
     for e in _exception_chain(error):
+        if getattr(e, "_llm_usage_reported", None) is False:
+            return 0.0, 0, 0
         cost = getattr(e, "billed_cost_usd", None)
         if cost is not None:
             try:
@@ -1548,6 +1553,12 @@ class LLMClient:
         self.providers: dict[str, LLMProvider] = {}
         self.total_cost = 0.0
         self._inflight_budget_reserve = 0.0
+        self._prepared_resource_reservations: dict[str, dict[str, Any]] = {}
+        self._prepared_admission_enabled = False
+        self._admission_started = False
+        self._attempt_recovery_gap = None
+        self._pending_usage_reservations: dict[str, dict[str, Any]] = {}
+        self._settled_pending_usage: dict[str, tuple] = {}
         self.request_count = 0
         self.cache_hits = 0
         # Non-dollar resource governor state (see LLMConfig
@@ -2648,6 +2659,10 @@ class LLMClient:
             row["reservation_usd"]
             for row in getattr(self, "_pending_usage_reservations", {}).values()
         )
+        if getattr(self, "_prepared_admission_enabled", False):
+            active = sum(row["usd"] for row in self._prepared_resource_reservations.values()
+                         if row["tracking"])
+            return max(total + active + pending, provider)
         return max(total, provider) + pending
 
     def hold_budget_reserve(self, amount: float) -> float:
@@ -2935,11 +2950,29 @@ class LLMClient:
             self._governed_calls += len(pending) + len(reported)
             self._governed_tokens += sum(r["tokens_total"] for r in reported)
             self._settled_pending_usage = {
-                r["attempt_id"]: ((r["cost_usd"], r["tokens_in"], r["tokens_out"]), r)
+                r["attempt_id"]: ((r["cost_usd"], r["tokens_in"], r["tokens_out"], r["tokens_total"]), r)
                 for r in reported
             }
 
-    def _persist_attempt_admission(self, reservation: float, **identity) -> None:
+    def enable_prepared_admission(self) -> None:
+        """Require a supported prepared envelope for this audit client."""
+        with self._stats_lock:
+            if getattr(self, "_admission_started", False):
+                raise ValueError("prepared admission must be enabled before dispatch")
+            if not hasattr(self, "_prepared_resource_reservations"):
+                self._prepared_resource_reservations = {}
+            self._prepared_admission_enabled = True
+            if any(row.get("reservation_kind") != "prepared"
+                   for row in getattr(self, "_pending_usage_reservations", {}).values()):
+                self._attempt_recovery_gap = "prior_attempt_has_no_prepared_bound"
+
+    def _reserved_tokens_locked(self) -> int:
+        return sum(row["tokens"] for row in getattr(self, "_prepared_resource_reservations", {}).values()) + sum(
+            row.get("reservation_tokens", 0)
+            for row in getattr(self, "_pending_usage_reservations", {}).values())
+
+    def _persist_attempt_admission(self, reservation: float, *, rollback_budget: bool = True,
+                                   **identity) -> None:
         store = getattr(self, "_attempt_reservation_store", None)
         if store is None:
             return
@@ -2948,30 +2981,37 @@ class LLMClient:
                                 "billing_state": "unknown"}):
                 raise ValueError("attempt admission already exists")
         except Exception as error:
-            self._release_budget(reservation)
+            if rollback_budget:
+                self._release_budget(reservation)
             self._attempt_recovery_gap = "attempt_admission_not_committed"
             raise LLMBudgetExceededError("attempt accounting admission unavailable") from error
 
     def _persist_attempt_usage(self, attempt_id: str, *, cost_usd: float | None,
                                tokens_in: int = 0, tokens_out: int = 0,
-                               tokens_total: int | None = None) -> None:
+                               tokens_total: int | None = None, outcome_event: str | None = None) -> None:
         store = getattr(self, "_attempt_reservation_store", None)
         if store is None:
             return
         try:
-            store.finish(attempt_id, cost_usd=cost_usd,
-                         tokens_in=tokens_in, tokens_out=tokens_out, tokens_total=tokens_total)
-            if cost_usd is None:
-                row = next(r for r in store.pending() if r["attempt_id"] == attempt_id)
-                with self._stats_lock:
+            with self._stats_lock:
+                store.finish(attempt_id, cost_usd=cost_usd,
+                             tokens_in=tokens_in, tokens_out=tokens_out, tokens_total=tokens_total,
+                             outcome_event=outcome_event)
+                if store.gap:
+                    self._attempt_recovery_gap = store.gap
+                if cost_usd is None and attempt_id not in self._settled_pending_usage:
+                    row = next((r for r in store.pending() if r["attempt_id"] == attempt_id), None)
                     pending = getattr(self, "_pending_usage_reservations", None)
                     if pending is None:
                         pending = self._pending_usage_reservations = {}
-                    pending[attempt_id] = row
-        except Exception:
+                    if row is not None:
+                        pending[attempt_id] = row
+        except BaseException as error:
             # A completed producer keeps its outcome and booked usage, but
             # another dispatch cannot spend through incomplete durable state.
             self._attempt_recovery_gap = "attempt_usage_not_committed"
+            if not isinstance(error, Exception):
+                raise
             logger.warning("attempt accounting usage could not be committed", exc_info=True)
 
     def _fail_budget_attempt(
@@ -3018,41 +3058,99 @@ class LLMClient:
             self._attempt_recovery_gap = "attempt_failure_not_committed"
         return started
 
+    def _commit_identified_usage(self, row: dict[str, Any], receipt: tuple,
+                                 hold: dict[str, Any] | None = None) -> bool:
+        """Apply one receipt, restoring the complete in-memory view on cancellation."""
+        with self._stats_lock:
+            attempt_id = row["attempt_id"]
+            old_settled = self._settled_pending_usage
+            previous = old_settled.get(attempt_id)
+            if previous is not None:
+                if previous[0] != receipt:
+                    raise ValueError("conflicting reported attempt usage")
+                return False
+            old_pending = self._pending_usage_reservations
+            old_active = self._prepared_resource_reservations
+            old_cost, old_tokens = self.total_cost, self._governed_tokens
+            next_pending = dict(old_pending)
+            next_pending.pop(attempt_id, None)
+            next_settled = {**old_settled, attempt_id: (receipt, row)}
+            next_active = dict(old_active)
+            next_cost = old_cost + receipt[0]
+            old_flags = (hold.get("active"), hold.get("settled")) if hold is not None else None
+            try:
+                self._prepared_resource_reservations = next_active
+                self.total_cost = next_cost
+                self._record_governed_tokens(receipt[3])
+                if hold is not None:
+                    self._release_prepared_active(hold)
+                else:
+                    next_active.pop(attempt_id, None)
+                self._pending_usage_reservations = next_pending
+                self._settled_pending_usage = next_settled
+                if hold is not None:
+                    hold["settled"] = True
+            except BaseException:
+                self.total_cost, self._governed_tokens = old_cost, old_tokens
+                self._pending_usage_reservations = old_pending
+                self._settled_pending_usage = old_settled
+                self._prepared_resource_reservations = old_active
+                if hold is not None:
+                    hold["active"], hold["settled"] = old_flags
+                raise
+            return True
+
     def reconcile_pending_usage(self, attempt_id: str, *, cost_usd: float,
-                                tokens_in: int = 0, tokens_out: int = 0) -> bool:
+                                tokens_in: int = 0, tokens_out: int = 0,
+                                tokens_total: int | None = None) -> bool:
         """Apply one trusted late usage receipt without recharging replay."""
         cost = float(cost_usd)
         if isinstance(cost_usd, bool) or not math.isfinite(cost) or cost < 0:
             raise ValueError("invalid reported attempt cost")
         if any(type(value) is not int or value < 0 for value in (tokens_in, tokens_out)):
             raise ValueError("invalid reported attempt tokens")
-        receipt = (cost, tokens_in, tokens_out)
+        total = tokens_in + tokens_out if tokens_total is None else tokens_total
+        if type(total) is not int or total < tokens_in + tokens_out:
+            raise ValueError("invalid reported attempt token total")
+        receipt = (cost, tokens_in, tokens_out, total)
         with self._stats_lock:
             settled = getattr(self, "_settled_pending_usage", None)
             if settled is None:
                 settled = self._settled_pending_usage = {}
             if attempt_id in settled:
                 previous_receipt, row = settled[attempt_id]
+                if row.get("reservation_kind") == "prepared" and tokens_total is None:
+                    raise ValueError("prepared usage requires an explicit token total")
+                if row.get("reservation_kind") != "prepared" and tokens_total is None and previous_receipt[:3] == receipt[:3]:
+                    total = previous_receipt[3] if len(previous_receipt) > 3 else row.get("tokens_total", total)
+                    receipt = (cost, tokens_in, tokens_out, total)
+                    previous_receipt = (*previous_receipt[:3], total)
                 if previous_receipt != receipt:
                     raise ValueError("conflicting reported attempt usage")
                 applied = False
             else:
                 pending = getattr(self, "_pending_usage_reservations", {})
                 row = dict(pending[attempt_id])
+                if row.get("reservation_kind") == "prepared" and tokens_total is None:
+                    raise ValueError("prepared usage requires an explicit token total")
                 store = getattr(self, "_attempt_reservation_store", None)
                 if store is not None:
                     try:
                         store.finish(attempt_id, cost_usd=cost,
-                                     tokens_in=tokens_in, tokens_out=tokens_out)
+                                     tokens_in=tokens_in, tokens_out=tokens_out, tokens_total=total,
+                                     outcome_event=row.get("outcome_event"))
                     except Exception:
                         if store.gap:
                             self._attempt_recovery_gap = store.gap
                         raise
-                self.total_cost += cost
-                self._record_governed_tokens(tokens_in + tokens_out)
-                settled[attempt_id] = (receipt, row)
-                del pending[attempt_id]
-                applied = True
+                    if store.gap:
+                        self._attempt_recovery_gap = store.gap
+                applied = self._commit_identified_usage(row, receipt)
+                if row.get("reservation_kind") == "prepared" and (
+                    total > row["reservation_tokens"]
+                    or row["reservation_usd"] > 0 and cost > row["reservation_usd"]
+                ):
+                    self._attempt_recovery_gap = "prepared_usage_exceeded_reservation"
         from core.llm.telemetry import current_sink, emit
         sink = current_sink()
         previous: dict[str, Any] = {}
@@ -3065,11 +3163,189 @@ class LLMClient:
             # Accounting is settled; an optional observer cannot undo it.
             # Replayed receipts retry publication without charging again.
             logger.debug("late usage projection unavailable", exc_info=True)
-        emit(**{**previous, **row, "event": "attempt_failed",
-                "billing_state": "reported", "reservation_usd": 0.0,
+        emit(**{**previous, **row, "event": row.get("outcome_event", previous.get("event", "attempt_failed")),
+                "billing_state": "reported", "reservation_usd": 0.0, "reservation_tokens": 0,
                 "cost_usd": cost, "tokens_in": tokens_in, "tokens_out": tokens_out,
+                "tokens_total": total,
                 "usage_revision": 1})
         return applied
+
+    def _release_prepared_active(self, hold: dict[str, Any]) -> None:
+        with self._stats_lock:
+            self._prepared_resource_reservations.pop(hold["identity"]["attempt_id"], None)
+            hold["active"] = False
+
+    def _acquire_prepared_budget(self, quote, identity: dict[str, Any], hold: dict[str, Any]) -> None:
+        tracking = self.config.enable_cost_tracking
+        hold.update(identity=identity, usd=quote.reservation_usd, tokens=quote.reservation_tokens,
+                    tracking=tracking, active=False, committed=False)
+        resource = {"usd": quote.reservation_usd, "tokens": quote.reservation_tokens, "tracking": tracking}
+        with self._stats_lock:
+            if getattr(self, "_attempt_recovery_gap", None):
+                raise LLMBudgetExceededError("attempt accounting admission is incomplete")
+            maximum = self.config.max_seconds_per_scan
+            if maximum is not None and self._run_start is not None and time.monotonic() - self._run_start >= maximum:
+                raise LLMGovernorExceededError("resource governor: wall-clock limit reached before dispatch")
+            maximum = self.config.max_tokens_per_scan
+            if maximum is not None and self._governed_tokens + self._reserved_tokens_locked() + quote.reservation_tokens > maximum:
+                raise LLMGovernorExceededError("resource governor: permitted tokens exceed remaining token limit")
+            if tracking and self._effective_spent_locked() + quote.reservation_usd > self._effective_cap_locked():
+                raise LLMBudgetExceededError("LLM budget exceeded: permitted request cost exceeds remaining budget")
+            attempt_id = identity["attempt_id"]
+            if attempt_id in self._prepared_resource_reservations:
+                raise LLMCallAdmissionRefused("model attempt already has an admission hold")
+            self._prepared_resource_reservations[attempt_id] = resource
+            hold["active"] = True
+
+    def _pend_prepared_usage(self, hold: dict[str, Any], *, outcome_event: str = "attempt_failed") -> None:
+        identity = hold["identity"]
+        row = {**identity, "reservation_usd": hold["usd"], "reservation_tokens": hold["tokens"],
+               "reservation_kind": "prepared", "billing_state": "unknown", "outcome_event": outcome_event}
+        with self._stats_lock:
+            self._pending_usage_reservations = getattr(self, "_pending_usage_reservations", {})
+            self._pending_usage_reservations[identity["attempt_id"]] = row
+            self._release_prepared_active(hold)
+            hold["settled"] = True
+        self._persist_attempt_usage(identity["attempt_id"], cost_usd=None, outcome_event=outcome_event)
+
+    def _settle_prepared_usage(self, hold: dict[str, Any], *, cost: float,
+                               tokens_in: int, tokens_out: int, tokens_total: int,
+                               outcome_event: str = "call") -> None:
+        identity = hold["identity"]
+        row = {**identity, "reservation_usd": hold["usd"], "reservation_tokens": hold["tokens"],
+               "reservation_kind": "prepared", "billing_state": "reported", "outcome_event": outcome_event}
+        self._commit_identified_usage(row, (cost, tokens_in, tokens_out, tokens_total), hold)
+        with self._stats_lock:
+            if tokens_total > hold["tokens"] or hold["tracking"] and cost > hold["usd"]:
+                self._attempt_recovery_gap = "prepared_usage_exceeded_reservation"
+        self._persist_attempt_usage(identity["attempt_id"], cost_usd=cost,
+            tokens_in=tokens_in, tokens_out=tokens_out, tokens_total=tokens_total, outcome_event=outcome_event)
+
+    @staticmethod
+    def _prepared_failure_usage(error: BaseException):
+        for item in _exception_chain(error):
+            reported = getattr(item, "_llm_usage_reported", None)
+            if reported is False:
+                return None
+            if reported is True:
+                cost = _reported_failure_cost(error)
+                _, tin, tout = _billed_failure_usage(error)
+                total = getattr(item, "billed_tokens_total", None)
+                if cost is not None and type(total) is int and total >= tin + tout >= 0:
+                    return cost, tin, tout, total
+                return None
+        return None
+
+    def _fail_prepared_attempt(self, hold: dict[str, Any], error: BaseException) -> bool:
+        hold["failure_handled"] = True
+        state = hold.get("state")
+        identity = hold.get("identity")
+        if identity is None:
+            return False
+        with self._stats_lock:
+            if identity["attempt_id"] not in self._prepared_resource_reservations:
+                return False
+        if state is None or not state.admitted:
+            self._release_prepared_active(hold)
+            if hold.get("committed"):
+                self._persist_attempt_usage(hold["identity"]["attempt_id"], cost_usd=0,
+                                            tokens_in=0, tokens_out=0, tokens_total=0)
+            return False
+        usage = self._prepared_failure_usage(error)
+        if usage is None:
+            self._pend_prepared_usage(hold)
+        else:
+            cost, tin, tout, total = usage
+            self._settle_prepared_usage(hold, cost=cost, tokens_in=tin, tokens_out=tout, tokens_total=total,
+                                        outcome_event="attempt_failed")
+        try:
+            from core.llm.dispatcher.client import take_upstream_response_started
+            return take_upstream_response_started()
+        except BaseException:
+            self._attempt_recovery_gap = "prepared_failure_signal_unavailable"
+            return False
+
+    def _dispatch_prepared_attempt(self, provider, method: str, args: tuple,
+                                    kwargs: dict[str, Any], identity: dict[str, Any],
+                                    hold: dict[str, Any]):
+        hold.update(active=False, settled=False, failure_handled=False, committed=False,
+                    identity=identity, usd=0.0, tokens=0, tracking=False)
+        if getattr(provider, "_prepared_wire_admission_protocol", None) != 1:
+            raise LLMCallAdmissionRefused("prepared resource admission is unavailable for this provider")
+        from .prepared_admission import prepared_attempt
+        from .prepared_budget import quote_prepared_request
+
+        def admit(request):
+            try:
+                quote = quote_prepared_request(request, provider, track_cost=self.config.enable_cost_tracking)
+                self._acquire_prepared_budget(quote, identity, hold)
+                try:
+                    self._persist_attempt_admission(hold["usd"], rollback_budget=False, **identity,
+                        reservation_tokens=hold["tokens"], reservation_kind="prepared")
+                    hold["committed"] = True
+                except BaseException:
+                    self._attempt_recovery_gap = "prepared_admission_not_committed"
+                    try:
+                        self._release_prepared_active(hold)
+                    except BaseException:
+                        pass
+                    raise
+            except (LLMBudgetExceededError, LLMCallAdmissionRefused) as refusal:
+                hold["refusal"] = refusal
+                raise
+
+        primary = None
+        try:
+            with prepared_attempt(admit) as state:
+                hold["state"] = state
+                try:
+                    result = getattr(provider, method)(*args, **{**kwargs, "_governed_wire_token": state.token})
+                except BaseException as error:
+                    primary = error
+                    raise
+                if not state.admitted:
+                    self._attempt_recovery_gap = "prepared_admission_not_observed"
+                    raise LLMBudgetExceededError("prepared resource admission was not observed")
+        except BaseException as error:
+            chosen = primary if primary is not None else error
+            try:
+                hold["response_started"] = self._fail_prepared_attempt(hold, chosen)
+            except BaseException:
+                self._attempt_recovery_gap = "prepared_failure_not_reconciled"
+            refusal = hold.get("refusal")
+            if refusal is None:
+                for item in _exception_chain(chosen):
+                    if isinstance(item, (LLMBudgetExceededError, LLMCallAdmissionRefused)):
+                        refusal = item
+                        break
+                    if isinstance(item, (SchemaUnknownFieldError, json.JSONDecodeError)) or type(item).__name__ == "ValidationError":
+                        break
+            if refusal is not None:
+                raise refusal from None
+            if chosen is not error:
+                raise chosen from None
+            raise
+        return result, hold["usd"]
+
+    @staticmethod
+    def _prepared_token_total(response) -> int | None:
+        values = [getattr(response, key, None) for key in ("tokens_used", "input_tokens", "output_tokens")]
+        if any(type(value) is not int or value < 0 for value in values):
+            return None
+        return max(values[0], values[1] + values[2])
+
+    def _guard_prepared_failure(self, hold: dict[str, Any]) -> None:
+        primary = sys.exc_info()[1] or hold.get("outer_error")
+        identity = hold.get("identity")
+        if primary is None or identity is None or hold.get("failure_handled"):
+            return
+        with self._stats_lock:
+            active = identity["attempt_id"] in self._prepared_resource_reservations
+        if active:
+            try:
+                self._fail_prepared_attempt(hold, primary)
+            except BaseException:
+                self._attempt_recovery_gap = "prepared_failure_not_reconciled"
 
     def _check_governor(self) -> None:
         """Enforce the non-dollar resource caps (wall-clock deadline,
@@ -3095,6 +3371,8 @@ class LLMClient:
         if getattr(self, "_attempt_recovery_gap", None):
             raise LLMBudgetExceededError("attempt accounting recovery incomplete: "
                                         + str(self._attempt_recovery_gap))
+        with self._stats_lock:
+            self._admission_started = True
         cfg = self.config
         max_seconds = getattr(cfg, "max_seconds_per_scan", None)
         max_calls = getattr(cfg, "max_calls_per_scan", None)
@@ -3120,7 +3398,7 @@ class LLMClient:
                         f"--max-seconds or LLMConfig(max_seconds_per_scan=…)."
                     )
             if (max_tokens is not None
-                    and getattr(self, "_governed_tokens", 0) >= max_tokens):
+                    and getattr(self, "_governed_tokens", 0) + self._reserved_tokens_locked() >= max_tokens):
                 raise LLMGovernorExceededError(
                     f"resource governor: token limit reached "
                     f"({getattr(self, '_governed_tokens', 0)} >= {max_tokens} "
@@ -3181,7 +3459,7 @@ class LLMClient:
         # loop drivers keep iterating instead of seeing the uniform
         # terminal LLMBudgetExceededError their stop contract keys on.
         # Exhaustion means STOP, not "limp through cache hits".
-        if not self._check_budget():
+        if not self._check_budget(0.0 if getattr(self, "_prepared_admission_enabled", False) else 0.1):
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
                 + _budget_remedy(self.config.max_cost_per_scan)
@@ -3220,6 +3498,7 @@ class LLMClient:
         )
         accounting_call_id = uuid4().hex
         accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        kwargs.pop("_governed_wire_token", None)
         if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
             raise TypeError("attempt admission must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
@@ -3373,6 +3652,7 @@ class LLMClient:
                     # THIS attempt's failure (hookless transports have
                     # no request-hook reset of their own).
                     _clear_attempt_spend_signal()
+                    prepared_hold: dict[str, Any] = {"outer_error": None}
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO: the prior attempt's
@@ -3403,35 +3683,39 @@ class LLMClient:
                         if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                             raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
-                        reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
-                        if not self._acquire_budget(reservation):
-                            msg = (
-                                f"LLM budget exceeded: ${self.total_cost:.4f} spent "
-                                f"+ ${reservation:.4f} estimated > "
-                                f"${self.config.max_cost_per_scan:.4f} limit. "
-                                + _budget_remedy(self.config.max_cost_per_scan)
-                            )
-                            raise LLMBudgetExceededError(msg)
+                        prepared_mode = getattr(self, "_prepared_admission_enabled", False)
+                        identity = dict(call_id=accounting_call_id, attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
+                            call_class=call_class, provider=model.provider, model=model.model_name)
                         # monotonic() — wall clock can jump under NTP/DST,
                         # producing negative durations or fake-fast calls.
                         t_start = time.monotonic()
-                        self._persist_attempt_admission(reservation,
-                            call_id=accounting_call_id, attempt_id=accounting_attempt_id,
-                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
-                            call_class=call_class, provider=model.provider, model=model.model_name)
-                        try:
-                            response = provider.generate(prompt, system_prompt, **kwargs)
-                        except Exception as error:
-                            attempt_response_started = self._fail_budget_attempt(
-                                reservation, error, call_id=accounting_call_id,
-                                attempt_id=accounting_attempt_id, call_class=call_class,
-                                provider=model.provider, model=model.model_name,
-                                work_id=accounting_work_id,
-                                beneficiaries=accounting_beneficiaries,
-                            )
-                            raise
+                        if prepared_mode:
+                            response, reservation = self._dispatch_prepared_attempt(provider, "generate",
+                                (prompt, system_prompt), kwargs, identity, prepared_hold)
+                        else:
+                            reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
+                            if not self._acquire_budget(reservation):
+                                msg = (
+                                    f"LLM budget exceeded: ${self.total_cost:.4f} spent "
+                                    f"+ ${reservation:.4f} estimated > "
+                                    f"${self.config.max_cost_per_scan:.4f} limit. "
+                                    + _budget_remedy(self.config.max_cost_per_scan))
+                                raise LLMBudgetExceededError(msg)
+                            self._persist_attempt_admission(reservation, **identity)
+                            try:
+                                response = provider.generate(prompt, system_prompt, **kwargs)
+                            except Exception as error:
+                                attempt_response_started = self._fail_budget_attempt(reservation, error, **identity)
+                                raise
                         duration = time.monotonic() - t_start
-                        self._record_governed_tokens(response.tokens_used)
+                        prepared_total = self._prepared_token_total(response) if prepared_mode else None
+                        prepared_known = prepared_mode and response.usage_reported is True and prepared_total is not None
+                        if prepared_mode and not prepared_known:
+                            self._pend_prepared_usage(prepared_hold, outcome_event="call")
+                            response = replace(response, cost=0.0, tokens_used=0, input_tokens=0,
+                                               output_tokens=0, cache_read_tokens=0, cache_write_tokens=0,
+                                               thinking_tokens=0, usage_reported=False)
 
                         # Reconcile: cancel the reservation pre-debit and
                         # add the actual cost. Net effect on total_cost
@@ -3445,21 +3729,29 @@ class LLMClient:
                         # comparison for the rest of the run.
                         from core.llm.cost import sanitize_cost
                         cost_actual = sanitize_cost(response.cost)
+                        if prepared_known:
+                            self._settle_prepared_usage(prepared_hold, cost=cost_actual,
+                                tokens_in=response.input_tokens, tokens_out=response.output_tokens,
+                                tokens_total=prepared_total)
+                        elif not prepared_mode:
+                            self._record_governed_tokens(response.tokens_used)
                         with self._stats_lock:
-                            if self.config.enable_cost_tracking:
+                            if not prepared_mode and self.config.enable_cost_tracking:
                                 self.total_cost += cost_actual - reservation
                                 self._inflight_budget_reserve = max(
                                     0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
-                            else:
+                            elif not prepared_mode:
                                 self.total_cost += cost_actual
                             self.request_count += 1
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_actual
-                        self._note_call_cost(call_class, cost_actual)
-                        self._persist_attempt_usage(accounting_attempt_id, cost_usd=cost_actual,
-                            tokens_in=getattr(response, "input_tokens", 0),
-                            tokens_out=getattr(response, "output_tokens", 0),
-                            tokens_total=response.tokens_used)
+                        if not prepared_mode or prepared_known:
+                            self._note_call_cost(call_class, cost_actual)
+                        if not prepared_mode:
+                            self._persist_attempt_usage(accounting_attempt_id, cost_usd=cost_actual,
+                                tokens_in=getattr(response, "input_tokens", 0),
+                                tokens_out=getattr(response, "output_tokens", 0),
+                                tokens_total=response.tokens_used)
 
                         # Cache response
                         self._save_to_cache(cache_key, response)
@@ -3471,19 +3763,24 @@ class LLMClient:
                             response.resolved_model,
                             "primary" if model_idx == 0 else "fallback",
                         )
-                        self._record_usage(
-                            model.model_name,
-                            cost=response.cost,
-                            tokens=response.tokens_used,
-                            input_tokens=response.input_tokens,
-                            output_tokens=response.output_tokens,
-                            duration_s=duration,
-                        )
+                        if not prepared_mode or prepared_known:
+                            self._record_usage(
+                                model.model_name,
+                                cost=response.cost,
+                                tokens=response.tokens_used,
+                                input_tokens=response.input_tokens,
+                                output_tokens=response.output_tokens,
+                                duration_s=duration,
+                            )
 
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             request_cache_key=_telemetry_cache_key(cache_key),
                             event="call",
+                            billing_state="unknown" if prepared_mode and not prepared_known else "reported",
+                            reservation_usd=reservation if prepared_mode and not prepared_known else 0.0,
+                            reservation_tokens=prepared_hold.get("tokens", 0) if prepared_mode and not prepared_known else 0,
+                            tokens_total=response.tokens_used,
                             disposition="ok",
                             call_class=call_class,
                             provider=model.provider.lower(),
@@ -3525,7 +3822,8 @@ class LLMClient:
 
                         return response
 
-                    except (LLMBudgetExceededError, LLMCallAdmissionRefused):
+                    except (LLMBudgetExceededError, LLMCallAdmissionRefused) as error:
+                        prepared_hold["outer_error"] = error
                         # Budget exhaustion is TERMINAL for the run
                         # (see the class docstring): re-raise so
                         # callers catching by type actually see it.
@@ -3537,6 +3835,8 @@ class LLMClient:
                         # contract.
                         raise
                     except Exception as e:  # noqa: BLE001
+                        prepared_hold["outer_error"] = e
+                        attempt_response_started = prepared_hold.get("response_started", attempt_response_started)
                         last_error = e
 
                         if getattr(e, "status_code", None) == 429:
@@ -3649,7 +3949,7 @@ class LLMClient:
                         _paid_cost, _paid_in, _paid_out = (
                             _billed_failure_usage(e)
                         )
-                        if _paid_in + _paid_out > 0:
+                        if _paid_in + _paid_out > 0 and not prepared_hold.get("failure_handled") and not prepared_hold.get("settled"):
                             self._record_governed_tokens(_paid_in + _paid_out)
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
@@ -3716,6 +4016,8 @@ class LLMClient:
                             delay = min(self.config.retry_delay * (2 ** attempt), 30)
                             logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
+                    finally:
+                        self._guard_prepared_failure(prepared_hold)
 
                 logger.warning(
                     "%s/%s: giving up after %d failed attempt(s), "
@@ -3835,7 +4137,7 @@ class LLMClient:
         # loop drivers keep iterating instead of seeing the uniform
         # terminal LLMBudgetExceededError their stop contract keys on.
         # Exhaustion means STOP, not "limp through cache hits".
-        if not self._check_budget():
+        if not self._check_budget(0.0 if getattr(self, "_prepared_admission_enabled", False) else 0.1):
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
                 + _budget_remedy(self.config.max_cost_per_scan)
@@ -3861,6 +4163,7 @@ class LLMClient:
         )
         accounting_call_id = uuid4().hex
         accounting_attempt_admission = kwargs.pop("accounting_attempt_admission", None)
+        kwargs.pop("_governed_wire_token", None)
         if accounting_attempt_admission is not None and not callable(accounting_attempt_admission):
             raise TypeError("attempt admission must be callable")
         accounting_work_id = str(kwargs.pop("accounting_work_id", None) or accounting_call_id)
@@ -4031,6 +4334,7 @@ class LLMClient:
                     # THIS attempt's failure (hookless transports have
                     # no request-hook reset of their own).
                     _clear_attempt_spend_signal()
+                    prepared_hold: dict[str, Any] = {"outer_error": None}
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO — see ``generate`` above
@@ -4047,8 +4351,12 @@ class LLMClient:
                         if accounting_attempt_admission is not None and accounting_attempt_admission() is not True:
                             raise LLMCallAdmissionRefused("owned model attempt refused")
                         self._check_governor()
-                        reservation = self._attempt_cost_reservation(call_class, provider, kwargs)
-                        if not self._acquire_budget(reservation):
+                        prepared_mode = getattr(self, "_prepared_admission_enabled", False)
+                        identity = dict(call_id=accounting_call_id, attempt_id=accounting_attempt_id,
+                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
+                            call_class=call_class, provider=model.provider, model=model.model_name)
+                        reservation = 0.0 if prepared_mode else self._attempt_cost_reservation(call_class, provider, kwargs)
+                        if not prepared_mode and not self._acquire_budget(reservation):
                             msg = (
                                 f"LLM budget exceeded: ${self.total_cost:.4f} spent "
                                 f"+ ${reservation:.4f} estimated > "
@@ -4076,26 +4384,19 @@ class LLMClient:
 
                         # monotonic() — wall clock can jump under NTP/DST.
                         t_start = time.monotonic()
-                        self._persist_attempt_admission(reservation,
-                            call_id=accounting_call_id, attempt_id=accounting_attempt_id,
-                            work_id=accounting_work_id, beneficiaries=accounting_beneficiaries,
-                            call_class=call_class, provider=model.provider, model=model.model_name)
-                        try:
-                            provider_kwargs = dict(kwargs)
-                            if isinstance(provider, LLMProvider):
-                                provider_kwargs["_governed_single_attempt"] = True
-                            result_tuple = provider.generate_structured(
-                                prompt, schema, system_prompt, **provider_kwargs,
-                            )
-                        except Exception as error:
-                            attempt_response_started = self._fail_budget_attempt(
-                                reservation, error, call_id=accounting_call_id,
-                                attempt_id=accounting_attempt_id, call_class=call_class,
-                                provider=model.provider, model=model.model_name,
-                                work_id=accounting_work_id,
-                                beneficiaries=accounting_beneficiaries,
-                            )
-                            raise
+                        provider_kwargs = dict(kwargs)
+                        if isinstance(provider, LLMProvider):
+                            provider_kwargs["_governed_single_attempt"] = True
+                        if prepared_mode:
+                            result_tuple, reservation = self._dispatch_prepared_attempt(provider, "generate_structured",
+                                (prompt, schema, system_prompt), provider_kwargs, identity, prepared_hold)
+                        else:
+                            self._persist_attempt_admission(reservation, **identity)
+                            try:
+                                result_tuple = provider.generate_structured(prompt, schema, system_prompt, **provider_kwargs)
+                            except Exception as error:
+                                attempt_response_started = self._fail_budget_attempt(reservation, error, **identity)
+                                raise
                         duration = time.monotonic() - t_start
 
                         # Calculate cost delta
@@ -4133,7 +4434,10 @@ class LLMClient:
                             getattr(result_tuple, "cost", 0.0) or 0.0)
                         _pc_tokens = int(
                             getattr(result_tuple, "tokens_used", 0) or 0)
-                        if _pc_cost > 0 or _pc_tokens > 0:
+                        _pc_reported = getattr(result_tuple, "usage_reported", None) is True
+                        prepared_total = self._prepared_token_total(result_tuple) if prepared_mode else None
+                        prepared_known = prepared_mode and _pc_reported and prepared_total is not None
+                        if _pc_reported or _pc_cost > 0 or _pc_tokens > 0:
                             cost_delta = _pc_cost
                             tokens_delta = _pc_tokens
                             in_delta = int(getattr(
@@ -4144,10 +4448,17 @@ class LLMClient:
                                 result_tuple, "cache_read_tokens", 0) or 0)
                             cwrite_delta = int(getattr(
                                 result_tuple, "cache_write_tokens", 0) or 0)
+                        if prepared_mode and not prepared_known:
+                            cost_delta = 0.0
+                            tokens_delta = in_delta = out_delta = cread_delta = cwrite_delta = 0
+                            self._pend_prepared_usage(prepared_hold, outcome_event="call")
+                        elif prepared_known:
+                            tokens_delta = prepared_total
 
                         # Govern the same per-call usage selected for accounting,
                         # not a shared counter delta from concurrent calls.
-                        self._record_governed_tokens(tokens_delta)
+                        if not prepared_mode:
+                            self._record_governed_tokens(tokens_delta)
 
                         # Reconcile reservation → actual. Skip the
                         # reservation cancel when cost-tracking is
@@ -4156,20 +4467,25 @@ class LLMClient:
                         # ledger defence as ``generate``.
                         from core.llm.cost import sanitize_cost
                         cost_delta = sanitize_cost(cost_delta)
+                        if prepared_known:
+                            self._settle_prepared_usage(prepared_hold, cost=cost_delta,
+                                tokens_in=in_delta, tokens_out=out_delta, tokens_total=tokens_delta)
                         with self._stats_lock:
-                            if self.config.enable_cost_tracking:
+                            if not prepared_mode and self.config.enable_cost_tracking:
                                 self.total_cost += cost_delta - reservation
                                 self._inflight_budget_reserve = max(
                                     0.0, getattr(self, "_inflight_budget_reserve", 0.0) - reservation)
-                            else:
+                            elif not prepared_mode:
                                 self.total_cost += cost_delta
                             self.request_count += 1
                             if task_type:
                                 self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_delta
-                        self._note_call_cost(call_class, cost_delta)
-                        self._persist_attempt_usage(accounting_attempt_id,
-                            cost_usd=cost_delta if _pc_cost > 0 or _pc_tokens > 0 else None,
-                            tokens_in=in_delta, tokens_out=out_delta, tokens_total=tokens_delta)
+                        if not prepared_mode or prepared_known:
+                            self._note_call_cost(call_class, cost_delta)
+                        if not prepared_mode:
+                            self._persist_attempt_usage(accounting_attempt_id,
+                                cost_usd=cost_delta if _pc_reported or _pc_cost > 0 or _pc_tokens > 0 else None,
+                                tokens_in=in_delta, tokens_out=out_delta, tokens_total=tokens_delta)
 
                         logger.debug("Structured generation successful: %s/%s (tokens: %s, cost: $%.4f, duration: %.1fs)", model.provider, model.model_name, tokens_delta, cost_delta, duration)
 
@@ -4217,6 +4533,7 @@ class LLMClient:
                             output_tokens=out_delta,
                             cache_read_tokens=cread_delta,
                             cache_write_tokens=cwrite_delta,
+                            usage_reported=prepared_known if prepared_mode else getattr(result_tuple, "usage_reported", None),
                         )
                         self._record_fired_model(
                             model.provider, model.model_name, resolved,
@@ -4234,7 +4551,11 @@ class LLMClient:
                         _t_emit(
                             request_cache_key=_telemetry_cache_key(cache_key),
                             event="call",
-                            billing_state=("reported" if _pc_cost > 0 or _pc_tokens > 0 else "estimated"),
+                            billing_state=("unknown" if prepared_mode and not prepared_known else
+                                           "reported" if _pc_reported or _pc_cost > 0 or _pc_tokens > 0 else "estimated"),
+                            reservation_usd=reservation if prepared_mode and not prepared_known else 0.0,
+                            reservation_tokens=prepared_hold.get("tokens", 0) if prepared_mode and not prepared_known else 0,
+                            tokens_total=tokens_delta,
                             disposition="ok",
                             call_class=call_class,
                             provider=model.provider.lower(),
@@ -4277,12 +4598,15 @@ class LLMClient:
                             )
                         return structured_response
 
-                    except (LLMBudgetExceededError, LLMCallAdmissionRefused):
+                    except (LLMBudgetExceededError, LLMCallAdmissionRefused) as error:
+                        prepared_hold["outer_error"] = error
                         # Terminal for the run — re-raise past the
                         # blanket handler so typed callers see it.
                         # See ``generate`` above for the rationale.
                         raise
                     except Exception as e:  # noqa: BLE001
+                        prepared_hold["outer_error"] = e
+                        attempt_response_started = prepared_hold.get("response_started", attempt_response_started)
                         last_error = e
                         # Schema reliability signal — only record the model as
                         # schema-failing when the error class points at a
@@ -4380,7 +4704,7 @@ class LLMClient:
                         _paid_cost, _paid_in, _paid_out = (
                             _billed_failure_usage(e)
                         )
-                        if _paid_in + _paid_out > 0:
+                        if _paid_in + _paid_out > 0 and not prepared_hold.get("failure_handled") and not prepared_hold.get("settled"):
                             self._record_governed_tokens(_paid_in + _paid_out)
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
@@ -4446,6 +4770,8 @@ class LLMClient:
                             delay = min(self.config.retry_delay * (2 ** attempt), 30)
                             logger.debug("Retrying in %ss...", delay)
                             time.sleep(delay)
+                    finally:
+                        self._guard_prepared_failure(prepared_hold)
 
                 logger.warning(
                     "%s/%s: structured generation giving up after %d "
@@ -4544,6 +4870,18 @@ class LLMClient:
                 ),
                 "providers": provider_stats,
                 "task_type_costs": dict(self.task_type_costs),
+                "prepared_resource_admission": {
+                    "enabled": getattr(self, "_prepared_admission_enabled", False),
+                    "usd_tracking": self.config.enable_cost_tracking,
+                    "inflight_reserved_tokens": sum(row["tokens"] for row in
+                        getattr(self, "_prepared_resource_reservations", {}).values()),
+                    "pending_reserved_tokens": sum(row.get("reservation_tokens", 0) for row in
+                        getattr(self, "_pending_usage_reservations", {}).values()),
+                    "inflight_reserved_usd": sum(row["usd"] for row in
+                        getattr(self, "_prepared_resource_reservations", {}).values() if row["tracking"]),
+                    "pending_reserved_usd": sum(row["reservation_usd"] for row in
+                        getattr(self, "_pending_usage_reservations", {}).values()),
+                },
                 "attempt_accounting_recovery": {
                     "status": ("incomplete" if getattr(self, "_attempt_recovery_gap", None)
                                else "ready" if getattr(self, "_attempt_reservation_store", None) is not None

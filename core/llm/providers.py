@@ -101,6 +101,8 @@ def _attach_billed_usage(
     cost_usd: float,
     tokens_in: int,
     tokens_out: int,
+    tokens_total: int | None = None,
+    usage_reported: bool | None = None,
 ) -> None:
     """Stamp what a FAILED attempt already paid onto the exception.
 
@@ -116,9 +118,17 @@ def _attach_billed_usage(
     Attribute names are read chain-walked, so wrappers that re-raise
     ``from`` the original keep the attribution.
     """
+    if usage_reported is not None:
+        err._llm_usage_reported = usage_reported  # type: ignore[attr-defined]
+    if usage_reported is False:
+        return
+    total = int(tokens_in or 0) + int(tokens_out or 0) if tokens_total is None else tokens_total
+    if type(total) is not int or total < int(tokens_in or 0) + int(tokens_out or 0):
+        raise ValueError("invalid reported attempt token total")
     err.billed_cost_usd = float(cost_usd or 0.0)  # type: ignore[attr-defined]
     err.billed_tokens_in = int(tokens_in or 0)  # type: ignore[attr-defined]
     err.billed_tokens_out = int(tokens_out or 0)  # type: ignore[attr-defined]
+    err.billed_tokens_total = total  # type: ignore[attr-defined]
 
 
 def _instructor_truncation_stop(exc: Exception) -> str | None:
@@ -333,6 +343,7 @@ class LLMResponse:
     # "gemini-2.5-pro-002"). None when the provider doesn't surface it — the
     # provenance manifest then records the alias only, never a guess.
     resolved_model: str | None = None
+    usage_reported: bool | None = None
 
 
 @dataclass
@@ -361,6 +372,7 @@ class StructuredResponse:
     cache_write_tokens: int = 0
     # Concrete model snapshot the provider served (see LLMResponse.resolved_model).
     resolved_model: str | None = None
+    usage_reported: bool | None = None
 
     def __iter__(self):
         """Allow unpacking as 2-tuple for backwards compatibility."""
@@ -371,6 +383,56 @@ class StructuredResponse:
         2-tuple compatibility unpack yields, without relying on
         ``__iter__`` at the call site."""
         return (self.result, self.raw)
+
+
+def _prepared_wire_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Carry the owned attempt to its request hook, never in the body."""
+    token = kwargs.get("_governed_wire_token")
+    if token is None:
+        return {}
+    if not isinstance(token, str) or not token:
+        raise TypeError("prepared model attempt token must be a nonempty string")
+    from .prepared_admission import WIRE_HEADER
+    return {"extra_headers": {WIRE_HEADER: token}}
+
+
+def _sdk_usage_reported(usage: Any, input_field: str, output_field: str) -> bool:
+    """Missing or malformed SDK usage is distinct from a reported zero."""
+    if usage is None:
+        return False
+    try:
+        values = [getattr(usage, key, None) for key in (input_field, output_field)]
+        if any(type(value) is not int or value < 0 for value in values):
+            return False
+        for key in ("thinking_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = getattr(usage, key, None)
+            if value is not None and (type(value) is not int or value < 0):
+                return False
+        expected_total = sum(values)
+        if input_field == "input_tokens":
+            expected_total += sum(getattr(usage, key, 0) or 0 for key in (
+                "thinking_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        else:
+            for details_name, count_name, bound in (
+                ("prompt_tokens_details", "cached_tokens", values[0]),
+                ("completion_tokens_details", "reasoning_tokens", values[1]),
+            ):
+                details = getattr(usage, details_name, None)
+                count = getattr(details, count_name, None)
+                if count is not None and (type(count) is not int or not 0 <= count <= bound):
+                    return False
+        total = getattr(usage, "total_tokens", None)
+        if total is not None and (type(total) is not int or total < expected_total):
+            return False
+        for detail_key, count_key in (("completion_tokens_details", "reasoning_tokens"),
+                                      ("prompt_tokens_details", "cached_tokens")):
+            detail = getattr(usage, detail_key, None)
+            value = getattr(detail, count_key, None)
+            if value is not None and (type(value) is not int or value < 0):
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def extract_resolved_model(raw: Any) -> str | None:
@@ -887,7 +949,11 @@ class LLMProvider(ABC):
         try:
             completion = getattr(exc, "last_completion", None)
             usage = getattr(completion, "usage", None)
-            if usage is None:
+            openai_usage = getattr(usage, "prompt_tokens", None) is not None
+            input_field, output_field = (("prompt_tokens", "completion_tokens") if openai_usage
+                                         else ("input_tokens", "output_tokens"))
+            if not _sdk_usage_reported(usage, input_field, output_field):
+                exc._llm_usage_reported = False
                 return
             input_tokens = getattr(usage, "prompt_tokens", None)
             if input_tokens is None:
@@ -897,19 +963,27 @@ class LLMProvider(ABC):
                 output_tokens = getattr(usage, "output_tokens", 0)
             input_tokens = int(input_tokens or 0)
             output_tokens = int(output_tokens or 0)
-            if input_tokens <= 0 and output_tokens <= 0:
+            thinking_tokens = 0 if openai_usage else int(getattr(usage, "thinking_tokens", 0) or 0)
+            cache_read = 0 if openai_usage else int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            cache_write = 0 if openai_usage else int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            total = input_tokens + output_tokens + thinking_tokens + cache_read + cache_write
+            if total <= 0:
+                _attach_billed_usage(exc, cost_usd=0, tokens_in=0, tokens_out=0,
+                                     tokens_total=0, usage_reported=True)
                 return
-            cost = self._calculate_cost_split(input_tokens, output_tokens, 0)
+            cost = self._calculate_cost_split(input_tokens, output_tokens, thinking_tokens,
+                cache_read_tokens=cache_read, cache_write_tokens=cache_write)
             self.track_usage(
-                input_tokens + output_tokens, cost,
+                total, cost,
                 input_tokens, output_tokens, duration,
+                cache_read_tokens=cache_read, cache_write_tokens=cache_write,
             )
             # Per-attempt attribution for the telemetry row — the
             # ledger booking above is aggregate-only and cannot say
             # WHICH call class paid (see _attach_billed_usage).
             _attach_billed_usage(
                 exc, cost_usd=cost, tokens_in=input_tokens,
-                tokens_out=output_tokens,
+                tokens_out=output_tokens + thinking_tokens, tokens_total=total, usage_reported=True,
             )
         except Exception as book_exc:  # noqa: BLE001 — best-effort booking
             logger.debug(
@@ -921,6 +995,7 @@ class LLMProvider(ABC):
                              timeout_s: float | None = None,
                              max_tokens: int | None = None,
                              temperature: float | None = None,
+                             _governed_wire_token: str | None = None,
                              ) -> StructuredResponse:
         """
         Universal fallback: ask for JSON in the prompt, validate
@@ -951,6 +1026,8 @@ class LLMProvider(ABC):
             gen_kwargs["max_tokens"] = max_tokens
         if temperature is not None:
             gen_kwargs["temperature"] = temperature
+        if _governed_wire_token is not None:
+            gen_kwargs["_governed_wire_token"] = _governed_wire_token
         response = self.generate(prompt, augmented_system, **gen_kwargs)
         if response.finish_reason in ("max_tokens", "length"):
             # RuntimeError, not json.JSONDecodeError: the client's
@@ -977,6 +1054,8 @@ class LLMProvider(ABC):
                     (getattr(response, "output_tokens", 0) or 0)
                     + (getattr(response, "thinking_tokens", 0) or 0)
                 ),
+                usage_reported=getattr(response, "usage_reported", None),
+                tokens_total=response.tokens_used,
             )
             raise err
         try:
@@ -1009,8 +1088,19 @@ class LLMProvider(ABC):
                 cache_read_tokens=response.cache_read_tokens,
                 cache_write_tokens=response.cache_write_tokens,
                 resolved_model=response.resolved_model,
+                usage_reported=getattr(response, "usage_reported", None),
             )
         except Exception as e:
+            try:
+                _attach_billed_usage(
+                    e, cost_usd=response.cost, tokens_in=response.input_tokens,
+                    tokens_out=response.output_tokens + response.thinking_tokens,
+                    usage_reported=getattr(response, "usage_reported", None),
+                    tokens_total=response.tokens_used,
+                )
+            except BaseException:
+                # Secondary bookkeeping cannot replace the parse failure.
+                pass
             # Pre-fix the logger interpolated `e` directly into the
             # log line. For `pydantic.ValidationError` (the typical
             # failure here), the exception message embeds the
@@ -1587,6 +1677,8 @@ class OpenAICompatibleProvider(LLMProvider):
     Gemini (via OpenAI compat), Mistral, etc.
     """
 
+    _prepared_wire_admission_protocol = 1
+
     def __init__(self, config: ModelConfig) -> None:
         super().__init__(config)
         if not OPENAI_SDK_AVAILABLE:
@@ -1683,6 +1775,7 @@ class OpenAICompatibleProvider(LLMProvider):
         try:
             t_start = time.monotonic()
             response = self.client.chat.completions.create(
+                **_prepared_wire_kwargs(kwargs),
                 model=self.config.model_name,
                 messages=messages,
                 **_openai_sampling_kwargs(
@@ -1762,6 +1855,7 @@ class OpenAICompatibleProvider(LLMProvider):
                 duration=duration,
                 cache_read_tokens=cache_read_tokens,
                 resolved_model=extract_resolved_model(response),
+                usage_reported=_sdk_usage_reported(response.usage, "prompt_tokens", "completion_tokens"),
             )
 
         except Exception as e:
@@ -1812,6 +1906,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
                 t_start = time.monotonic()
                 result, completion = self.instructor_client.chat.completions.create_with_completion(
+                    **_prepared_wire_kwargs(kwargs),
                     **({"max_retries": 1} if governed else {}),
                     model=self.config.model_name,
                     response_model=pydantic_model,
@@ -1865,6 +1960,7 @@ class OpenAICompatibleProvider(LLMProvider):
                     output_tokens=output_tokens,
                     cache_read_tokens=cache_read_tokens,
                     resolved_model=extract_resolved_model(completion),
+                    usage_reported=_sdk_usage_reported(completion.usage, "prompt_tokens", "completion_tokens"),
                 )
 
             except Exception as e:
@@ -1896,6 +1992,8 @@ class OpenAICompatibleProvider(LLMProvider):
             timeout_s=kwargs.get("timeout_s"),
             max_tokens=kwargs.get("max_tokens"),
             temperature=kwargs.get("temperature"),
+            **({"_governed_wire_token": kwargs["_governed_wire_token"]}
+               if kwargs.get("_governed_wire_token") is not None else {}),
         )
 
     # ------------------------------------------------------------------
@@ -2744,6 +2842,8 @@ class AnthropicProvider(LLMProvider):
     and token counting.
     """
 
+    _prepared_wire_admission_protocol = 1
+
     def __init__(self, config: ModelConfig) -> None:
         super().__init__(config)
         if not ANTHROPIC_SDK_AVAILABLE:
@@ -2814,6 +2914,7 @@ class AnthropicProvider(LLMProvider):
         messages = [{"role": "user", "content": prompt}]
 
         create_kwargs = {
+            **_prepared_wire_kwargs(kwargs),
             "model": self.config.model_name,
             "messages": messages,
             "max_tokens": kwargs.get("max_tokens", self.config.max_tokens),
@@ -2880,7 +2981,7 @@ class AnthropicProvider(LLMProvider):
                 thinking_tokens = getattr(response.usage, 'thinking_tokens', 0) or 0
                 cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
                 cache_write_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
-            tokens_used = input_tokens + output_tokens + thinking_tokens
+            tokens_used = input_tokens + output_tokens + thinking_tokens + cache_read_tokens + cache_write_tokens
             cost = self._calculate_cost_split(
                 input_tokens, output_tokens, thinking_tokens,
                 cache_read_tokens=cache_read_tokens,
@@ -2908,6 +3009,8 @@ class AnthropicProvider(LLMProvider):
                 _attach_billed_usage(
                     err, cost_usd=cost, tokens_in=input_tokens,
                     tokens_out=output_tokens + thinking_tokens,
+                    tokens_total=tokens_used,
+                    usage_reported=_sdk_usage_reported(response.usage, "input_tokens", "output_tokens"),
                 )
                 raise err
 
@@ -3007,6 +3110,7 @@ class AnthropicProvider(LLMProvider):
                 cache_read_tokens=cache_read_tokens,
                 cache_write_tokens=cache_write_tokens,
                 resolved_model=extract_resolved_model(response),
+                usage_reported=_sdk_usage_reported(response.usage, "input_tokens", "output_tokens"),
             )
 
         except Exception as e:
@@ -3070,6 +3174,7 @@ class AnthropicProvider(LLMProvider):
                 messages = [{"role": "user", "content": prompt}]
 
                 create_kwargs = {
+                    **_prepared_wire_kwargs(kwargs),
                     "model": self.config.model_name,
                     "response_model": pydantic_model,
                     "messages": messages,
@@ -3123,7 +3228,7 @@ class AnthropicProvider(LLMProvider):
                     thinking_tokens = getattr(completion.usage, 'thinking_tokens', 0) or 0
                     cache_read_tokens = getattr(completion.usage, 'cache_read_input_tokens', 0) or 0
                     cache_write_tokens = getattr(completion.usage, 'cache_creation_input_tokens', 0) or 0
-                tokens_used = input_tokens + output_tokens + thinking_tokens
+                tokens_used = input_tokens + output_tokens + thinking_tokens + cache_read_tokens + cache_write_tokens
                 cost = self._calculate_cost_split(
                     input_tokens, output_tokens, thinking_tokens,
                     cache_read_tokens=cache_read_tokens,
@@ -3156,6 +3261,7 @@ class AnthropicProvider(LLMProvider):
                     cache_read_tokens=cache_read_tokens,
                     cache_write_tokens=cache_write_tokens,
                     resolved_model=extract_resolved_model(completion),
+                    usage_reported=_sdk_usage_reported(completion.usage, "input_tokens", "output_tokens"),
                 )
 
             except Exception as e:
@@ -3228,6 +3334,8 @@ class AnthropicProvider(LLMProvider):
             timeout_s=kwargs.get("timeout_s"),
             max_tokens=kwargs.get("max_tokens"),
             temperature=kwargs.get("temperature"),
+            **({"_governed_wire_token": kwargs["_governed_wire_token"]}
+               if kwargs.get("_governed_wire_token") is not None else {}),
         )
 
     # ------------------------------------------------------------------
