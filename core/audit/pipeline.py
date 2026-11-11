@@ -372,6 +372,7 @@ def _make_llm_client(opts: AuditPipelineOpts):
             store = AttemptReservations(opts.out_dir, resume=resumed,
                 prior_known_usd=opts.prior_booked_spend_usd)
             client.bind_attempt_reservations(store, prior_known_usd=opts.prior_booked_spend_usd)
+            client.enable_prepared_admission()
     _ensure_dispatcher_route(client, models, run_dir=opts.out_dir)
     return client, models, primary_model
 

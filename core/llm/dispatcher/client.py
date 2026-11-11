@@ -423,6 +423,8 @@ def _make_httpx_client(
     longer than the dispatcher's token TTL keep dispatching instead
     of 401-ing mid-run. Set ``RAPTOR_LLM_TOKEN_RENEW=0`` to opt out.
     """
+    from core.llm.prepared_admission import admit_prepared_request
+
     transport = httpx.HTTPTransport(uds=socket_path)
     request_timeout = timeout if timeout is not None else 60.0
     return httpx.Client(
@@ -435,7 +437,7 @@ def _make_httpx_client(
         # hooks, so an out-of-band renewal can never clobber the
         # state of the main request it precedes.
         event_hooks={
-            "request": [_reset_attempt_state],
+            "request": [_reset_attempt_state, admit_prepared_request],
             "response": [_note_attempt_state],
         },
     )

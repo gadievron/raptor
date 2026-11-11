@@ -754,12 +754,14 @@ def sdk_http_client(
     ``RAPTOR_HTTP2_SHARDS`` / ``RAPTOR_HTTP2_SHARD_FAIL_THRESHOLD`` /
     ``RAPTOR_HTTP2_SHARD_MAX_AGE_S``.
     """
+    from .prepared_admission import admit_prepared_request
+
     client_kwargs: dict[str, Any] = {
         "timeout": timeout,
         "trust_env": trust_env,
         "limits": pool_limits(),
         "http2": http2_enabled(),
-        "event_hooks": response_event_hooks(),
+        "event_hooks": {**response_event_hooks(), "request": [admit_prepared_request]},
     }
     # Pre-initialised so the degrade warning below can scope itself
     # even when the failure happens at (or before) count resolution.

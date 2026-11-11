@@ -73,6 +73,13 @@ def _admission(value: object) -> dict[str, Any]:
         raise ValueError("invalid_attempt_beneficiaries")
     result["beneficiaries"] = list(dict.fromkeys(beneficiaries))
     result["reservation_usd"] = _amount(value.get("reservation_usd"))
+    result["reservation_tokens"] = _tokens(value.get("reservation_tokens", 0))
+    kind = value.get("reservation_kind", "estimate")
+    if not isinstance(kind, str) or kind not in {"estimate", "prepared"}:
+        raise ValueError("invalid_attempt_reservation_kind")
+    if kind == "prepared" and result["reservation_tokens"] <= 0:
+        raise ValueError("invalid_prepared_token_reservation")
+    result["reservation_kind"] = kind
     return result
 
 
@@ -198,9 +205,16 @@ class AttemptReservations:
             else:
                 if previous is None or _admission(previous) != admission:
                     raise ValueError("mismatched_attempt_recovery_transition")
+                outcome = row.get("outcome_event", previous.get("outcome_event"))
+                if outcome is not None and (not isinstance(outcome, str) or outcome not in {"call", "attempt_failed"}):
+                    raise ValueError("invalid_attempt_outcome_event")
+                if previous.get("outcome_event") is not None and outcome != previous["outcome_event"]:
+                    raise ValueError("conflicting_attempt_outcome_event")
                 if stage == "unknown":
                     if previous["billing_state"] == "reported":
                         raise ValueError("reported_attempt_became_unknown")
+                    if outcome is not None:
+                        previous["outcome_event"] = outcome
                 elif stage == "reported":
                     receipt = _receipt(row.get("cost_usd"), row.get("tokens_in"),
                                        row.get("tokens_out"), row.get("tokens_total"))
@@ -213,6 +227,15 @@ class AttemptReservations:
                         if not math.isfinite(total):
                             raise ValueError("invalid_attempt_total")
                         self._rows[attempt_id] = {**admission, **receipt, "billing_state": "reported"}
+                        if outcome is not None:
+                            self._rows[attempt_id]["outcome_event"] = outcome
+                        if admission["reservation_kind"] == "prepared" and (
+                            receipt["tokens_total"] > admission["reservation_tokens"]
+                            or admission["reservation_usd"] > 0 and receipt["cost_usd"] > admission["reservation_usd"]
+                        ):
+                            # Keep the actual receipt, while refusing further
+                            # admissions under the violated envelope contract.
+                            self.gap = "prepared_usage_exceeded_reservation"
                 else:
                     raise ValueError("invalid_attempt_recovery_stage")
             self._stages[attempt_id] = stage
@@ -220,7 +243,8 @@ class AttemptReservations:
         self._sequence = sequence
 
     def _append(self, stage: str, **fields: Any) -> None:
-        self._require_ready()
+        if not (self.gap == "prepared_usage_exceeded_reservation" and stage in {"unknown", "reported"}):
+            self._require_ready()
         row = {"action": _ACTION, "schema_version": 1, "identity": self.identity,
                "run_binding": self._binding, "sequence": self._sequence + 1,
                "stage": stage, **fields}
@@ -267,17 +291,24 @@ class AttemptReservations:
 
     def finish(self, attempt_id: str, *, cost_usd: float | None,
                tokens_in: int = 0, tokens_out: int = 0,
-               tokens_total: int | None = None) -> bool:
+               tokens_total: int | None = None, outcome_event: str | None = None) -> bool:
         with self._lock:
-            self._require_ready()
+            if self.gap != "prepared_usage_exceeded_reservation":
+                self._require_ready()
             previous = self._rows.get(attempt_id)
             if previous is None:
                 self.gap = "unknown_attempt_transition"
                 raise ValueError(self.gap)
+            if outcome_event is not None and (not isinstance(outcome_event, str) or outcome_event not in {"call", "attempt_failed"}):
+                raise ValueError("invalid_attempt_outcome_event")
+            outcome = outcome_event or previous.get("outcome_event")
+            if previous.get("outcome_event") is not None and outcome != previous["outcome_event"]:
+                raise ValueError("conflicting_attempt_outcome_event")
+            outcome_fields = {"outcome_event": outcome} if outcome is not None else {}
             if cost_usd is None:
                 if previous["billing_state"] == "reported" or self._stages[attempt_id] == "unknown":
                     return False
-                self._append("unknown", attempt=_admission(previous))
+                self._append("unknown", attempt=_admission(previous), **outcome_fields)
                 return True
             receipt = _receipt(cost_usd, tokens_in, tokens_out, tokens_total)
             if previous.get("prior_floor_overlap_unknown") and receipt["cost_usd"] > 0:
@@ -287,7 +318,7 @@ class AttemptReservations:
                     self.gap = "conflicting_attempt_usage"
                     raise ValueError(self.gap)
                 return False
-            self._append("reported", attempt=_admission(previous), **receipt)
+            self._append("reported", attempt=_admission(previous), **receipt, **outcome_fields)
             try:
                 persist_spend_floor(self.out_dir, self.known_spend_usd)
             except (OSError, TypeError, ValueError):
