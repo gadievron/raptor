@@ -291,7 +291,10 @@ def _artifact_outputs(product: BuildProduct):
             except FileNotFoundError:
                 continue
             except BaseException:
-                logger.warning("Partial build artifact retained at %s", path, exc_info=True)
+                try:
+                    logger.warning("Partial build artifact retained at %s", path, exc_info=True)
+                except BaseException:
+                    pass
         product.artifacts.clear()
         product.checksums.clear()
         raise
