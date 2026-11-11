@@ -106,6 +106,9 @@ def adapter_case():
         PreparedSMTAdmission, PreparedSMTAnchor, SMTContractAdapter, SMTValidatedConclusion,
     )
     from core.audit.sweep import SweepResult
+    from core.audit.claim_support_contracts import (
+        PreparedTargetBinding, ConclusionSignature, ExecutedSupportBinding,
+    )
 
     hypothesis, revision, scope = records()
     record = ClaimVerification(hypothesis, ("smt:check-overflow",), binding=scope, claim_revision=revision)
@@ -126,10 +129,19 @@ def adapter_case():
                                         b"int Read(void) { return 8; }\n", 0, 28,
                                         b"int Read(void) { return 8; }"),),
                                     "admitted", "fixture-exact-conclusion-v1")
+    target = PreparedTargetBinding(prepared.unit_id, prepared.target_snapshot_id, prepared.build_identity,
+                                   context.dependencies, context.assumptions, "source", "fixture-source-arithmetic")
+    conclusion = ConclusionSignature(scope.hypothesis, "bounded-arithmetic-witness",
+                                     "bounded-fixture-arithmetic", ("exact integer domain",))
+    prepared = replace(prepared, target_binding=target, requested_conclusion=conclusion)
+    identity = ("mechanical_observation", contract.adapter, contract.version,
+                "inert-witness-validator", "v1", "registered-worker-invocation")
+    support = ExecutedSupportBinding(target, event.request_id, event.executed_request_id,
+                                     event.raw_reference, *identity, "supports_fact", conclusion)
     validated = SMTValidatedConclusion(prepared, event.request_id, event.executed_request_id,
                                        event.raw_reference, "mechanical_observation",
                                        "registered-worker-invocation", "bounded-fixture-arithmetic",
-                                       prepared.conclusion_signature)
+                                       prepared.conclusion_signature, support)
 
     def validate_prepared(admission, actual_result, actual_event):
         # Pipeline-owned fixture registration checks complete prepared inputs.
@@ -151,9 +163,11 @@ def adapter_case():
 
     return SimpleNamespace(record=record, revision=revision, scope=scope, context=context,
                            contract=contract, event=event, result=result, calls=calls,
-                           prepared=prepared, validated=validated,
+                           prepared=prepared, validated=validated, target=target, conclusion=conclusion,
                            registration=SMTContractAdapter(contract, validate, validate_prepared,
-                                                           frozenset({"bounded-fixture-arithmetic"})))
+                                                           frozenset({"bounded-fixture-arithmetic"}), identity,
+                                                           frozenset({"bounded-arithmetic-witness"}),
+                                                           frozenset({"bounded-arithmetic-witness"})))
 
 
 def adapt(case, **overrides):
@@ -162,7 +176,8 @@ def adapt(case, **overrides):
     arguments = dict(event=case.event, expected_context=case.context,
                      expected_scope=case.scope, expected_revision=case.revision,
                      result=case.result, contracts={case.context.contract: case.registration},
-                     prepared_admission=case.prepared)
+                     prepared_admission=case.prepared, expected_target=case.target,
+                     expected_conclusion=case.conclusion)
     arguments.update(overrides)
     return adapt_smt_claim_fact(case.record, **arguments)
 
@@ -253,6 +268,9 @@ def test_registered_negative_coverage_and_existing_nonrefuting_policy_are_both_r
 
     case = adapter_case
     registration = replace(case.registration, validate_conclusion=lambda *args: "contradicts_fact")
+    negative = replace(case.validated, executed_support=replace(case.validated.executed_support,
+                                                               semantic="contradicts_fact"))
+    registration = replace(registration, validate_prepared_admission=lambda *args: negative)
     contracts = {case.context.contract: registration}
     assert adapt(case, contracts=contracts).semantic == "contradicts_fact"
     # Existing source-array safety checks do not refute a whole claim.
@@ -400,3 +418,51 @@ def test_untyped_admission_validator_output_grants_no_coverage(adapter_case, ret
     registration = replace(case.registration, validate_prepared_admission=lambda *args: returned)
     assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
     assert not case.calls
+
+
+def test_prepared_envelope_without_independent_current_shared_binding_is_unknown(adapter_case):
+    case = adapter_case
+    assert adapt(case, expected_target=None).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("field,value", [
+    ("build_identity", "new-build"), ("unit_id", "other-unit"),
+    ("target_snapshot_id", "other-snapshot"), ("dependencies", ("new-header",)),
+    ("assumptions", ("stronger-precondition",)), ("representation", "binary"),
+    ("applicability_domain", "different-domain"), ("correspondence_ids", ("other-map",)),
+])
+def test_independent_current_target_cannot_be_copied_from_old_admission(adapter_case, field, value):
+    case = adapter_case
+    assert adapt(case, expected_target=replace(case.target, **{field: value})).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("field,value", [
+    ("statement", "stronger whole-program assertion"), ("conclusion_kind", "exploitability"),
+    ("effect_scope", "all-paths"), ("conditions", ("additional condition",)),
+])
+def test_independent_requested_conclusion_rejects_old_signature(adapter_case, field, value):
+    case = adapter_case
+    assert adapt(case, expected_conclusion=replace(case.conclusion, **{field: value})).semantic == "unknown"
+    assert not case.calls
+
+
+@pytest.mark.parametrize("field,value", [
+    ("request_id", "other-request"), ("executed_request_id", "other-execution"),
+    ("raw_reference", "other-result"), ("producer_kind", "reviewer_judgment"),
+    ("producer_id", "model-authored"), ("producer_version", "other-version"),
+    ("validator_id", "unregistered"), ("validator_version", "other-version"),
+    ("execution_scope", "supplied-model"), ("semantic", "contradicts_fact"),
+])
+def test_canonical_executed_binding_requires_registered_identity(adapter_case, field, value):
+    case = adapter_case
+    changed = replace(case.validated, executed_support=replace(case.validated.executed_support, **{field: value}))
+    registration = replace(case.registration, validate_prepared_admission=lambda *args: changed)
+    assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
+
+
+def test_missing_canonical_executed_binding_remains_unknown(adapter_case):
+    case = adapter_case
+    registration = replace(case.registration, validate_prepared_admission=lambda *args: replace(case.validated, executed_support=None))
+    assert adapt(case, contracts={case.context.contract: registration}).semantic == "unknown"
