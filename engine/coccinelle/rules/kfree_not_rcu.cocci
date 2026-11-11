@@ -24,14 +24,13 @@ position p1, p2;
 )
 // These synchronization/callback exclusions are coverage filters, not
 // proof of a matching reader domain, unpublication or deferred ownership.
-// In particular, a callback barrier need not wait for a new grace period.
+// Callback barriers are not exclusions: waiting for queued callbacks alone
+// need not establish a grace period for this object.
   ... when != synchronize_rcu(...)
       when != synchronize_rcu_expedited(...)
       when != synchronize_net(...)
       when != synchronize_srcu(...)
       when != synchronize_srcu_expedited(...)
-      when != rcu_barrier(...)
-      when != srcu_barrier(...)
       when != kfree_rcu(ptr, ...)
       when != call_rcu(&ptr->member, ...)
       when != call_srcu(..., &ptr->member, ...)

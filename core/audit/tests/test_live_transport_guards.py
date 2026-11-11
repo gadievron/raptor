@@ -1810,7 +1810,10 @@ class TestCoccinelleSurfaceFences:
     def test_rcu_lifetime_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_kfree_not_rcu_rule.py")
         assert _callers_of(calls, "run") == set()
-        assert _callers_of(calls, "run_pinned_subprocess") == {"test_publication_expression_requires_lifetime_evidence"}
+        assert _callers_of(calls, "run_pinned_subprocess") == {
+            "test_publication_expression_requires_lifetime_evidence",
+            "test_callback_barriers_do_not_hide_immediate_plain_free",
+        }
 
     def test_stack_lifetime_fixture_is_guarded(self):
         calls = _function_call_map("../../../engine/coccinelle/tests/test_stack_addr_escape_rule.py")
