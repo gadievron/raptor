@@ -24,6 +24,7 @@ from packages.frida.active import (
 
 import pytest
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 @pytest.fixture(autouse=True)
@@ -632,6 +633,7 @@ class TestSandboxedProbeEnvHygiene:
         # The interpreter probe would import through the shell's
         # PYTHONPATH / PYTHONSTARTUP (the codeql version-probe idiom).
         from packages.frida import sandboxed
+        from core.security import python_probe
 
         py = tmp_path / "python3"
         py.write_text("#!/bin/sh\n")
@@ -642,12 +644,16 @@ class TestSandboxedProbeEnvHygiene:
             seen["env"] = kw.get("env")
             return SimpleNamespace(returncode=1, stdout="", stderr="")
 
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        probe = module_function_view(python_probe)
+        patch_module_attribute(monkeypatch, probe, "subprocess", "run", fake_run)
         monkeypatch.setenv("PYTHONPATH", "/evil")
         monkeypatch.setenv("PYTHONSTARTUP", "/evil/rc.py")
         patch_module_attribute(monkeypatch, sandboxed, 'sys', "executable", str(py))
 
-        sandboxed._find_frida_site()
+        with scoped_function_imports(
+            sandboxed, ("_find_frida_site",), {"core.security.python_probe": probe},
+        ):
+            sandboxed._find_frida_site()
 
         env = seen.get("env")
         assert env is not None, "probe ran with inherited environment"
