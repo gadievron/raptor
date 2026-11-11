@@ -4,6 +4,8 @@ Neither grouping is declared intended. A witness proves only that the actual
 source condition and the reported alternative differ at an admitted entry.
 """
 
+from collections import Counter
+
 from core.smt_solver import DEFAULT_TIMEOUT_MS, ge, gt, le, lt, mk_val, z3, z3_available
 from core.smt_solver.csem import cast
 from core.smt_solver.session import check_solver, new_solver, query_budget
@@ -35,10 +37,12 @@ def grouping_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _body, nodes = frame
+    shapes = [shape for node in nodes
+              if (shape := _shape(node, data, language, integer_abi)) is not None]
+    occurrences = Counter(shape[1:] for shape in shapes)
     rows = []
-    for node in nodes:
-        shape = _shape(node, data, language, integer_abi)
-        if not _supported(shape):
+    for shape in shapes:
+        if not _supported(shape) or occurrences[shape[1:]] != 1:
             continue
         target, name, left, op, right = shape
         # Explicitly grouping the inner comparison is deliberate syntax;
