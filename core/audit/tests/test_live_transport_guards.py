@@ -1813,6 +1813,7 @@ class TestCoccinelleSurfaceFences:
         assert _callers_of(calls, "run_pinned_subprocess") == {
             "test_socket_inheritance_requires_context_and_coverage",
             "test_socket_flags_require_exact_surviving_symbol",
+            "test_postcall_setter_requires_cloexec_symbol",
             "_socket_batch_execute",
             "test_socket_flag_filter_keeps_production_batching",
         }

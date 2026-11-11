@@ -148,7 +148,7 @@ class TestNegatives:
         assert results[0]["rule"] == "socket_no_cloexec"
 
 
-@pytest.mark.parametrize('api,variant,expected', [('socket', 'closed', 1), ('socket', 'cleared', 0), ('socket', 'substring', 1), ('accept', 'closed', 1), ('accept', 'cleared', 0)])
+@pytest.mark.parametrize('api,variant,expected', [('socket', 'closed', 1), ('socket', 'cleared', 1), ('socket', 'substring', 1), ('accept', 'closed', 1), ('accept', 'cleared', 1)])
 def test_socket_inheritance_requires_context_and_coverage(tmp_path, monkeypatch, api, variant, expected):
     from core.audit.sweep import (
         is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
@@ -279,3 +279,49 @@ def test_socket_flag_filter_keeps_production_batching(tmp_path):
     assert all(result.returncode == 0 and not result.errors for result in results.values()), results
     assert len(results['socket_no_cloexec'].matches) == 1
     assert len(results['open_creat_no_mode'].matches) == 1
+
+
+def test_postcall_setter_requires_cloexec_symbol(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    setters = [
+        ('FD_CLOEXEC', False),
+        ('FD_CLOEXEC | flags', False),
+        ('flags | FD_CLOEXEC', False),
+        ('FD_CLOEXEC | (flags & MASK)', False),
+        ('0', True),
+        ('MY_FD_CLOEXEC', True),
+        ('FD_CLOEXEC & 0', True),
+        ('flags & FD_CLOEXEC', True),
+        ('(FD_CLOEXEC | flags) & 0', True),
+    ]
+    lines = ['struct conn { int fd; };']
+    expected = []
+    for api in ('socket', 'accept'):
+        creation = 'socket(AF_INET, SOCK_STREAM, 0)' if api == 'socket' else 'accept(0, 0, 0)'
+        for binding in ('declaration', 'assignment', 'field'):
+            for flags, report in setters:
+                lines += [f'int setter_{len(lines)}(struct conn *c, int flags) {{']
+                if binding == 'assignment':
+                    lines += ['int fd;']
+                receiver = 'c->fd' if binding == 'field' else 'fd'
+                declaration = 'int ' if binding == 'declaration' else ''
+                lines += [f'{declaration}{receiver} = {creation};']
+                call_line = len(lines)
+                lines += [f'fcntl({receiver}, F_SETFD, {flags});',
+                          f'return {receiver};', '}']
+                if report:
+                    expected.append((call_line, api + '_no_cloexec'))
+    source = tmp_path / 'setters.c'
+    source.write_text('\n'.join(lines) + '\n')
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(source), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Socket descriptor setter flag syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted((row['line'], row['rule']) for row in rows) == expected
