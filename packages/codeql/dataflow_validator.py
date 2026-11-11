@@ -10,7 +10,7 @@ import re
 import sys
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
 from types import SimpleNamespace
@@ -760,7 +760,7 @@ class DataflowValidator:
             return [], {}
 
     def _record_charset_models(
-        self, dataflow: DataflowPath, models: list[dict], out_dir: Path | None,
+        self, models: list[dict], out_dir: Path | None, request_context: dict,
     ) -> None:
         """Retain conditional models without issuing claim or source authority."""
         if out_dir is None or not models:
@@ -768,9 +768,8 @@ class DataflowValidator:
         try:
             from core.audit.check_trace import record_check_observation
 
-            paths = [dataflow, *dataflow.alternatives]
             for model in models:
-                path = paths[model["path_index"]]
+                path = request_context["paths"][model["path_index"]]
                 # Only the producer's location is known. Function, claim
                 # lineage and file-version bindings remain unavailable.
                 scope = SimpleNamespace(
@@ -779,10 +778,10 @@ class DataflowValidator:
                 )
                 request = {
                     "operation": "charset-language-exclusion",
-                    "rule_id": dataflow.rule_id,
+                    "rule_id": request_context["rule_id"],
                     "path_index": model["path_index"],
-                    "source": {"file": path.source.file_path, "line": path.source.line},
-                    "sink": {"file": path.sink.file_path, "line": path.sink.line},
+                    "source": deepcopy(path["source"]),
+                    "sink": deepcopy(path["sink"]),
                     "kind": model["kind"], "pattern": model["pattern"],
                     "sink_classes": list(model["sink_classes"]),
                     "source_input_sha256": model.get("source_input_sha256"),
@@ -826,18 +825,47 @@ class DataflowValidator:
         initial_count = len(diagnostics) if diagnostics is not None else 0
         try:
             from core.dataflow.injection_prescreen import (
+                MAX_PRESCREEN_PATHS,
+                MAX_PRESCREEN_STEPS,
                 prescreen_finding,
                 snapshot_stats,
             )
+            rule_id = dataflow.rule_id
+            paths = [dataflow, *dataflow.alternatives]
+            request_context: dict = {}
+            if observation_out_dir is not None:
+                # Copy only bounded path inputs, not nested alternatives or
+                # a caller-owned object graph. These are also the inputs
+                # submitted to the producer, so later caller mutation cannot
+                # relabel the recorded request.
+                if len(paths) > MAX_PRESCREEN_PATHS:
+                    return None
+                captured_paths = []
+                for path in paths:
+                    steps = path.intermediate_steps[:MAX_PRESCREEN_STEPS + 1]
+                    if len(steps) > MAX_PRESCREEN_STEPS:
+                        return None
+                    captured_paths.append(replace(
+                        path, source=replace(path.source), sink=replace(path.sink),
+                        intermediate_steps=[replace(step) for step in steps], alternatives=[],
+                    ))
+                paths = captured_paths
+                request_context = {
+                    "rule_id": rule_id,
+                    "paths": [{
+                        "source": {"file": path.source.file_path, "line": path.source.line},
+                        "sink": {"file": path.sink.file_path, "line": path.sink.line},
+                    } for path in paths],
+                }
             verdict = prescreen_finding(
-                paths=[dataflow, *dataflow.alternatives],
+                paths=paths,
                 repo_root=repo_path,
-                rule_id=dataflow.rule_id,
+                rule_id=rule_id,
             )
             if verdict is None:
                 return None
             if not verdict.refuted:
-                self._record_charset_models(dataflow, verdict.evidence, observation_out_dir)
+                self._record_charset_models(verdict.evidence, observation_out_dir, request_context)
                 if diagnostics is not None:
                     reported_models = len(verdict.diagnostics)
                     diagnostics.extend(deepcopy(verdict.diagnostics))
