@@ -56,3 +56,14 @@ def test_legacy_severity_summary_remains_supported(harness):
         findings=[{"severity": "critical"}], report_md="| Critical | 1 |\n",
     )
     assert harness["_parity_check"](art) == (True, "")
+
+
+def test_legacy_findings_table_without_suppression_column_remains_supported(harness):
+    header = "| Ref | Tool | Rule | Location | Status | Scanner level | Security severity | Scanner security score |"
+    rows = [f"| {ref} | sca | recorded | owned | Recorded | — | {severity} | — |"
+            for ref, severity in (("F00001", "critical"), ("F00002", "medium"),
+                                  ("F00003", "high"), ("F00004", "critical"), ("F00005", "info"))]
+    art = harness["_ScanArtifacts"](
+        findings=_rows(), report_md="\n".join([header, "|---|---|---|---|---|---|---|---|", *rows]),
+    )
+    assert harness["_parity_check"](art) == (True, "")
