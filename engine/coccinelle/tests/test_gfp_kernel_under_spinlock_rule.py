@@ -68,3 +68,64 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+_ALLOCATOR_CALLS = [
+    pytest.param("kmalloc(64, GFP_KERNEL)", id="kmalloc"),
+    pytest.param("kzalloc(64, GFP_KERNEL)", id="kzalloc"),
+    pytest.param("kvmalloc(64, GFP_KERNEL)", id="kvmalloc"),
+    pytest.param("kcalloc(2, 8, GFP_KERNEL)", id="kcalloc"),
+    pytest.param("krealloc(old, 64, GFP_KERNEL)", id="krealloc"),
+    pytest.param("kmalloc_array(2, 8, GFP_KERNEL)", id="kmalloc-array"),
+]
+
+
+@pytest.mark.parametrize("allocation", _ALLOCATOR_CALLS)
+def test_allocator_flags_at_declared_position(tmp_path, allocation):
+    results = _run_rule(tmp_path, f"""\
+        void reserve(struct ctx *c, void *old)
+        {{
+            spin_lock(&c->lock);
+            c->buf = {allocation};
+            spin_unlock(&c->lock);
+        }}
+    """)
+    assert [(row["rule"], row["line"]) for row in results] == [
+        ("gfp_kernel_under_spinlock", 4),
+    ]
+
+
+@pytest.mark.parametrize("allocation", _ALLOCATOR_CALLS)
+def test_each_allocator_after_unlock_is_quiet(tmp_path, allocation):
+    results = _run_rule(tmp_path, f"""\
+        void reserve(struct ctx *c, void *old)
+        {{
+            spin_lock(&c->lock);
+            spin_unlock(&c->lock);
+            c->buf = {allocation};
+        }}
+    """)
+    assert results == []
+
+
+@pytest.mark.parametrize("allocation", [
+    pytest.param("kmalloc(GFP_KERNEL, GFP_ATOMIC)", id="kmalloc-size"),
+    pytest.param("kzalloc(GFP_KERNEL, GFP_ATOMIC)", id="kzalloc-size"),
+    pytest.param("kcalloc(GFP_KERNEL, 8, GFP_ATOMIC)", id="kcalloc-count"),
+    pytest.param("kcalloc(2, GFP_KERNEL, GFP_ATOMIC)", id="kcalloc-size"),
+    pytest.param("krealloc(old, GFP_KERNEL, GFP_ATOMIC)", id="krealloc-size"),
+    pytest.param("kmalloc_array(GFP_KERNEL, 8, GFP_ATOMIC)", id="array-count"),
+    pytest.param("kmalloc_array(2, GFP_KERNEL, GFP_ATOMIC)", id="array-size"),
+])
+def test_size_and_count_arguments_are_not_allocation_flags(tmp_path, allocation):
+    # These are inert syntax controls. kvmalloc is deliberately excluded:
+    # its API does not support GFP_ATOMIC or GFP_NOWAIT allocation flags.
+    results = _run_rule(tmp_path, f"""\
+        void reserve(struct ctx *c, void *old)
+        {{
+            spin_lock(&c->lock);
+            c->buf = {allocation};
+            spin_unlock(&c->lock);
+        }}
+    """)
+    assert results == []
