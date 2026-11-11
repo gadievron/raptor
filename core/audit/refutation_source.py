@@ -8,6 +8,7 @@ from pathlib import Path
 from core.paths import confine
 from core.source import open_regular_beneath
 from core.source.lines import join_lf_slice
+from core.source.streams import preserving_stream_error
 
 
 # Whole-file hashing keeps edits outside the excerpt from preserving a
@@ -42,7 +43,7 @@ def capture_source_identity(root, file, *, excerpt=None, line_start=0) -> Source
         stream = open_regular_beneath(base, path.relative_to(base), "rb")
         if stream is None:
             return None
-        with stream:
+        with preserving_stream_error(stream):
             before = os.fstat(stream.fileno())
             if before.st_size > MAX_SOURCE_BYTES:
                 return None
