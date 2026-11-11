@@ -151,3 +151,88 @@ def test_original_callee_source_drift_rejects_after_invocation(owned):
     assert result.outcomes[0] is prior
     assert result.total_cost_usd == .25
     assert not runtime._active
+
+
+def test_knowledge_and_callee_share_two_continuation_rounds(owned):
+    from core.concepts.subject_study import SubjectExplanation, SubjectMaterial, SubjectPacket
+
+    _, cfg, runtime, _, _, result, prior, callee = owned
+    ctx = {"file": "caller.py", "function": "caller", "line_start": 1,
+           "line_end": 2, "source": SOURCE, "language": "python"}
+    calls = []
+
+    class KnowledgeClient:
+        def generate_structured(self, prompt, schema, **kwargs):
+            calls.append(prompt)
+            response = {"status": "clean", "body": "Still provisional",
+                        "relies_on": [{"callee": "callee", "assumption": "checks value"}]}
+            if len(calls) == 1:
+                response["reading_list"] = [{"subject": "caller", "resolution": "identifier",
+                                             "context": "role of this supplied function"}]
+            return StructuredResponse(result=response, raw="", cost=.25, model="scripted")
+
+    review = make_review_fn(KnowledgeClient(), escalate_clean=False)
+    owned_review = runtime.wrap_review(review)
+    initial = owned_review(dict(ctx), cfg)
+    initial.line = 1
+    result.outcomes[0] = initial
+    request, = runtime.requests()
+    packet = runtime.bindings.bind(SubjectPacket((), (
+        SubjectMaterial("caller-material", "caller.py", 1, "caller", SOURCE.rstrip(), False),)))
+    assert len(packet.materials) == 1
+    answer = SubjectExplanation(request.request_id, "partial", "Returns the supplied value.",
+                                "Caller validation is not established.",
+                                packet.materials, packet.materials)
+    runtime.record_source_answers((answer,))
+    first, = runtime.ready_continuations(admission=lambda: True)
+    assert first.packet.explanations == (answer,)
+    enriched = dict(ctx)
+    assert runtime.enrich_context(enriched, first)
+    owned_review(enriched, cfg)
+    assert runtime.complete(first, enriched, published_status="clean")
+    assert answer.explanation in calls[1]
+
+    # A real callee helper dispatch is the second shared continuation. A clean
+    # result preserves eligibility, allowing the third attempt to test the cap
+    # rather than merely finding no clean caller to revisit.
+    def callee_pass():
+        return orch._callee_contract_requeue(result, cfg, review, checklist={}, context_map=None,
+            fuzz_coverage=None, evidence_index={}, knowledge_runtime=runtime)
+
+    assert callee_pass() == 0
+    assert len(calls) == 3
+    assert "Advisory prior callee assessment" in calls[2]
+    assert result.outcomes[0].status == "clean"
+    assert not runtime._active
+    callee.hypothesis = "A distinct advisory assessment requiring another look"
+    assert callee_pass() == 0
+    assert len(calls) == 3
+    events = runtime.events()
+    assert len([e for e in events if e["event"] == "continuation_reserved"]) == 2
+    offered = [e for e in events if e["event"] == "context_delta_offered"]
+    assert len(offered) == 2 and offered[0]["context_id"] != offered[1]["context_id"]
+    assert not runtime._active
+    assert prior is not result.outcomes[0]
+
+
+def test_valid_callee_review_publishes_after_durable_acknowledgement(owned):
+    from core.coverage.journal import load_entries
+
+    _, cfg, runtime, client, review, result, prior, _ = owned
+    cfg.out_dir.mkdir()
+    checklist = {"files": [{"path": "caller.py", "items": [
+        {"name": "caller", "line_start": 1, "line_end": 2}]}]}
+    assert orch._callee_contract_requeue(result, cfg, review, checklist=checklist,
+        context_map=None, fuzz_coverage=None, evidence_index={}, knowledge_runtime=runtime) == 1
+    assert client.calls == 1
+    assert result.outcomes[0] is not prior
+    assert result.outcomes[0].status == "suspicious"
+    assert result.clean == 0 and result.suspicious == 2
+    assert result.total_cost_usd == .25
+    entry, = load_entries(cfg.out_dir)
+    assert (entry.file, entry.function, entry.line_start, entry.verdict) == (
+        "caller.py", "caller", 1, "suspicious")
+    completed = [e for e in runtime.events() if e["event"] == "continuation_completed"]
+    assert len(completed) == 1 and completed[0]["published_status"] == "suspicious"
+    assert completed[0]["delivered_request_ids"]
+    assert not runtime._active
