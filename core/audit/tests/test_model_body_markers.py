@@ -1774,6 +1774,11 @@ PINNED_REVIEW_RESULT_WRITES: dict = {
      "value-expression", "590cd925cae38590"):
         "deepcopy(_l2_selected.review_result): owned selected or held review "
         "copy; classified keys retained and the held claim keeps its own stamp",
+    ("core/audit/orchestrator.py", "_retry_error_outcomes",
+     "value-expression", "13284f31acbdad0b"):
+        "dict(outcome.review_result or {}): owned existing failed assessment copy; "
+        "only pipeline-owned review_recovery deferred-processing metadata added, "
+        "without accepting a new verdict, delivery receipt or checker authority",
     # Name convention: ``primary`` / ``rr`` bound to a value the scanner
     # cannot resolve, where no review_result key is written (a read-only
     # review dict, or an unrelated value).
@@ -1942,3 +1947,14 @@ class TestAgentRecordCliRecordsUnchanged:
         assert r.returncode == 1
         assert gate in r.stderr
         assert rows == []
+
+
+def test_new_processing_and_delivery_fields_are_pipeline_owned_only():
+    from core.audit.evidence_grade import drop_pipeline_owned
+
+    owned = {"external_context_delivery", "publication_failure", "review_recovery"}
+    assert owned <= PIPELINE_OWNED_REVIEW_KEYS
+    novel = {"novel_semantic_concern": {"statement": "Requires manual review"}}
+    forged = {**novel, **{key: {"complete": True, "delivered": True} for key in owned}}
+    assert drop_pipeline_owned(forged) == novel
+    assert forged["external_context_delivery"]["delivered"] is True

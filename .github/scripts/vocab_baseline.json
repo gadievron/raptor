@@ -674,9 +674,9 @@
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 78,
+    "count": 81,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced.",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced. Reviewed additions: external_context_delivery is an invocation-owned post-fit delivery receipt; publication_failure and review_recovery are pipeline-owned publication/recovery processing diagnostics. Model-supplied copies of these three fields are dropped before pipeline-owned values are inserted; novel semantic concerns remain model-authored and unverified.",
     "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
@@ -1787,6 +1787,11 @@
     "count": 15,
     "kind": "literal",
     "note": "measurement-record field manifest for the transport-churn harness's JSON output (persistence schema keys in the summary dict, not a learned name vocabulary; stays in lockstep with _drive's return literal)"
+  },
+  "core/llm/telemetry.py::keys": {
+    "count": 15,
+    "kind": "literal",
+    "note": "closed attempt-usage fingerprint schema: stable attempt/call/work identity, producer, billing, token, reservation and usage-revision fields compared by TelemetrySink; delivery time and beneficiary associations are deliberately excluded from financial usage identity. Covered by test_usage_fingerprint_schema.py; not a learned target-name vocabulary"
   },
   "core/llm/tool_use/types.py::TerminationReason": {
     "count": 14,

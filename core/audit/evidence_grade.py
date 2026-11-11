@@ -725,6 +725,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "caller_evidence", "chain", "claim_review_delivery",
     "caller_context_delivery", "claim_material_deferred",
     "language_reference_delivery", "source_study_delivery", "review_input_scope",
+    "external_context_delivery", "publication_failure", "review_recovery",
     "confidence", "consistency_receipts", "context_reduced",
     "cost_usd", "cross_entry_receipt", "cross_entry_rendered",
     "duration_s", "file", "function", "merge_decision",

@@ -14470,6 +14470,7 @@ def _retain_initial_publication_failure(result, config, outcome, gap) -> ReviewO
         status="error", error_class="publication", body="Review journal acknowledgement unavailable",
         model=outcome.model, cost_usd=outcome.cost_usd, duration_s=outcome.duration_s,
         review_result={"publication_failure": failure},
+        review_input_scope=outcome.review_input_scope,
     )
 
 
