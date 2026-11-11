@@ -21,12 +21,17 @@ def build_document(report: ReplayReport) -> ReportDocument:
             limited.add(label)
         return text[:64]
 
+    def rate(value: float) -> str:
+        if report.total_findings_with_panel <= report.n_no_recorded_verdict:
+            return "unavailable (no comparable recorded verdicts)"
+        return f"{value:.1%}"
+
     metrics = {"Sources": len(report.sources), "Panel records": report.total_panels,
                "Findings with usable panel": report.total_findings_with_panel,
                "Distinct models": len(report.distinct_models), "Distinct decision classes": len(report.distinct_decision_classes)}
     blocks = [Block("table", title="Headline metrics", columns=["Metric", "Value"], rows=[
-        ["Flip rate", f"{report.flip_rate:.1%}"], ["Flips to exploitable", f"{report.flip_to_exploitable_rate:.1%}"],
-        ["Flips to NOT exploitable", f"{report.flip_to_not_exploitable_rate:.1%}"],
+        ["Flip rate", rate(report.flip_rate)], ["Flips to exploitable", rate(report.flip_to_exploitable_rate)],
+        ["Flips to NOT exploitable", rate(report.flip_to_not_exploitable_rate)],
         ["Findings with no recorded verdict (excluded from flip rates)", report.n_no_recorded_verdict]])]
     if report.distinct_models:
         blocks.append(Block("table", title="Recorded models", columns=["Model"],

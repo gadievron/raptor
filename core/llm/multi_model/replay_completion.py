@@ -40,11 +40,17 @@ def complete(report: ReplayReport, options: ReportOptions | None, native_output:
     from .replay_document import build_document
     sources = [Path(path) for path in report.sources]
     root = prepare(options, sources, native_output)
+
+    def rate(value: float) -> float | str:
+        if report.total_findings_with_panel <= report.n_no_recorded_verdict:
+            return "unavailable (no comparable recorded verdicts)"
+        return value
+
     metrics = {"Source reports": len(report.sources), "Panel records": report.total_panels,
                "Findings with usable panel": report.total_findings_with_panel,
                "No recorded verdict (excluded from flip rates)": report.n_no_recorded_verdict,
-               "Flip rate": report.flip_rate, "Flips to exploitable rate": report.flip_to_exploitable_rate,
-               "Flips to not-exploitable rate": report.flip_to_not_exploitable_rate}
+               "Flip rate": rate(report.flip_rate), "Flips to exploitable rate": rate(report.flip_to_exploitable_rate),
+               "Flips to not-exploitable rate": rate(report.flip_to_not_exploitable_rate)}
     context = ReportContext("panel-replay", "unknown", target="recorded panel corpus", state="completed",
                             diagnostics=["Offline estimator comparison only; rendering neither validates findings nor changes recorded verdicts.",
                                          "No historical run identity or execution coverage is inferred. Findings without a recorded verdict are excluded from flip-rate denominators."],
