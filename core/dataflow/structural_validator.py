@@ -39,7 +39,7 @@ from core.inventory.call_graph import (
     extract_call_graph_rust,
 )
 from core.inventory.languages import detect_language
-from core.source import read_text_capped
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes, read_text_capped
 from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
@@ -169,7 +169,7 @@ def _resolve_file(step: dict, repo_path: Path) -> Path | None:
     return None
 
 
-def _read_file_content(path: Path) -> str | None:
+def _read_file_content(path: Path, repo_path: Path | None = None) -> str | None:
     """Read file content with the shared size cap, None on failure.
 
     Step files are SARIF-named paths into the scanned (untrusted)
@@ -180,6 +180,15 @@ def _read_file_content(path: Path) -> str | None:
     validation rather than supplying altered source to the parser.
     """
     try:
+        if repo_path is not None:
+            # Anchor runtime reads beneath the analysed root at open time.
+            # UTF-8 needs at most four bytes per character; retain the
+            # existing character budget after the bounded byte read.
+            raw = read_contained_bytes(repo_path, path, 4 * DEFAULT_MAX_SOURCE_CHARS)
+            if raw is None or raw[1]:
+                return None
+            content = raw[0].decode("utf-8")
+            return content if len(content) <= DEFAULT_MAX_SOURCE_CHARS else None
         got = read_text_capped(path, errors="strict", newline="")
     except UnicodeDecodeError:
         return None
@@ -593,7 +602,7 @@ def validate_structurally(
 
         cache_key = str(resolved)
         if cache_key not in file_cache:
-            content = _read_file_content(resolved)
+            content = _read_file_content(resolved, repo_path)
             lang = language or detect_language(str(resolved))
             graph = _extract_graph(content, lang) if content and lang else None
             file_cache[cache_key] = (content, lang, graph)
@@ -663,7 +672,7 @@ def validate_structurally(
             next_func = None
             next_func_resolved = True
             if next_resolved and str(next_resolved) not in file_cache:
-                next_content = _read_file_content(next_resolved)
+                next_content = _read_file_content(next_resolved, repo_path)
                 next_lang = language or detect_language(str(next_resolved))
                 next_graph = _extract_graph(next_content, next_lang) if next_content and next_lang else None
                 file_cache[str(next_resolved)] = (next_content, next_lang, next_graph)
