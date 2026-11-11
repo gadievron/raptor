@@ -18,9 +18,9 @@ _STATES = frozenset({"candidate", "unresolved", "supported", "refuted", "conflic
 
 def load_claim_presentation(out_dir: Path) -> dict | None:
     path = out_dir / _SHADOW_FILE
-    if not path.exists() and not path.is_symlink():
-        return None
     unavailable = {"mode": "unavailable", "authoritative": False, "artifact": _SHADOW_FILE}
+    if not path.exists() and not path.is_symlink():
+        return {**unavailable, "artifact": None}
     payload = load_json(path, max_bytes=_MAX_BYTES)
     if (not isinstance(payload, dict) or type(payload.get("schema_version")) is not int
             or payload["schema_version"] != 1 or payload.get("mode") != "shadow"
@@ -44,10 +44,10 @@ def load_claim_presentation(out_dir: Path) -> dict | None:
         if (not isinstance(reason, str) or len(reason) > 500 or not isinstance(missing, list)
                 or any(not isinstance(item, str) or len(item) > 128 for item in missing)):
             return unavailable
-        # The supplied publisher does not provide either dimension. In
-        # particular, supported/confirmed text cannot fill in assurance.
+        # Preserve only supplied dimensions; supported/confirmed text
+        # cannot fill in an absent assessment basis or assurance grade.
         rows.append({"claim_id": claim_id, "revision_id": revision_id, "state": state,
-                     "assessment_basis": None, "assurance": None, "reason": reason,
+                     "reason": reason,
                      "missing_obligations": missing[:20], "obligations_omitted": max(0, len(missing) - 20)})
     return {"mode": "shadow", "authoritative": False, "artifact": _SHADOW_FILE,
             "policy_version": policy, "claim_count": len(claims), "claims": rows,
@@ -66,8 +66,8 @@ def claim_presentation_blocks(report: dict) -> list[Block]:
         "Assessment basis and assurance grade were not recorded; both remain unavailable. "
         "Clean means no current finding was established in the completed review's scope, never proved safe. "
         "Error, skipped and deferred work describe processing or coverage, not safety conclusions.")),
-        Block("table", columns=["Claim", "Revision", "Shadow state", "Assessment basis", "Assurance", "Recorded limitations"],
-              rows=[[row["claim_id"], row["revision_id"], row["state"], "Unavailable", "Unavailable",
+        Block("table", columns=["Claim", "Revision", "Shadow state", "Recorded limitations"],
+              rows=[[row["claim_id"], row["revision_id"], row["state"],
                      _limitation(row)] for row in record["claims"]])]
     if record["claims_omitted"]:
         children.append(Block("paragraph", text=f"Showing {len(record['claims'])} of {record['claim_count']} claims; complete recorded shadow remains in {_SHADOW_FILE}."))
