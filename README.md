@@ -190,11 +190,11 @@ container. The image digest pins the tools environment separately from RAPTOR:
 ```bash
 git clone --branch v3.1.0 https://github.com/gadievron/raptor.git
 cd raptor
-docker pull docker.io/danielcuthbert/raptor:latest@sha256:79fdfbfe829f1094e707ef6a008165a5b913d0625b600f3c3d3f85e024561248
+docker pull docker.io/danielcuthbert/raptor:latest@sha256:cf06c38f917bb32f2d87800c20954ff7f4e52453d9ce5c68e3ad5a6ff1873a5e
 docker run -it \
   -v "$PWD:/workspaces/raptor" \
   -v "/path/to/target-folder:/workspaces/target" \
-  docker.io/danielcuthbert/raptor:latest@sha256:79fdfbfe829f1094e707ef6a008165a5b913d0625b600f3c3d3f85e024561248
+  docker.io/danielcuthbert/raptor:latest@sha256:cf06c38f917bb32f2d87800c20954ff7f4e52453d9ce5c68e3ad5a6ff1873a5e
 ```
 
 Replace the target path with your own, or omit that mount. For an existing
