@@ -581,3 +581,100 @@ def test_prepared_timeout_rechecks_window_after_durable_admission(sdk_clients, t
         b.state["handler"] = bounded
         b.client.generate("captured", timeout_s=17.0)
         assert len(b.state["requests"]) == 1
+
+
+def test_absolute_deadline_does_not_restart_at_first_model_attempt(sdk_clients, monkeypatch):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients()
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: 200.0)
+    b.client.config.max_seconds_per_scan = 30.0
+    b.client.bind_run_deadline(201.0)
+    def bounded(request):
+        assert all(0 <= value <= 1.0 for value in request.extensions["timeout"].values())
+    b.state["handler"] = bounded
+    _generate(b)
+    assert len(b.state["requests"]) == 1
+
+
+def test_expired_absolute_deadline_refuses_first_model_attempt(sdk_clients, monkeypatch):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients()
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: 202.0)
+    b.client.bind_run_deadline(201.0)
+    with pytest.raises(LLMGovernorExceededError, match="run deadline"):
+        _generate(b)
+    assert b.state["requests"] == [] and b.client._governed_calls == 0
+    assert b.client.reported_spend_usd == 0 and b.client.pending_usage_reservations == []
+
+
+def test_rebinding_absolute_deadline_cannot_extend_allowance(sdk_clients, monkeypatch):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients()
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: 200.0)
+    b.client.bind_run_deadline(201.0)
+    b.client.bind_run_deadline(211.0)
+    assert b.client._bound_run_deadline == 201.0
+    b.client.bind_run_deadline(199.0)
+    with pytest.raises(LLMGovernorExceededError, match="run deadline"):
+        _generate(b)
+    assert b.state["requests"] == []
+
+
+@pytest.mark.parametrize("invalid", [True, False, None, float("nan"), float("inf"), -float("inf"), 10 ** 1000], ids=["true", "false", "none", "nan", "infinity", "negative-infinity", "huge-int"])
+def test_absolute_deadline_protocol_rejects_invalid_bound_without_dispatch(sdk_clients, invalid):
+    b = sdk_clients()
+    assert type(b.client._run_deadline_protocol) is int and b.client._run_deadline_protocol == 1
+    with pytest.raises(ValueError, match="finite monotonic"):
+        b.client.bind_run_deadline(invalid)
+    assert b.client._bound_run_deadline is None and b.state["requests"] == []
+
+
+@pytest.mark.parametrize("after_commit", [200.75, 202.0], ids=["remaining", "expired"])
+def test_absolute_deadline_rechecked_after_durable_admission(sdk_clients, tmp_path, monkeypatch, after_commit):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients(run_dir=tmp_path / "run")
+    now = [200.0]
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: now[0])
+    b.client.bind_run_deadline(201.0)
+    store = b.client._attempt_reservation_store
+    original = store.admit
+    def commit(row):
+        result = original(row)
+        now[0] = after_commit
+        return result
+    monkeypatch.setattr(store, "admit", commit)
+    if after_commit >= 201.0:
+        with pytest.raises(LLMGovernorExceededError, match="run deadline"):
+            _generate(b)
+        assert b.state["requests"] == [] and b.client.reported_spend_usd == 0
+        assert b.client.pending_usage_reservations == [] and store.pending() == []
+        row, = store.reported()
+        assert row["cost_usd"] == row["tokens_total"] == 0
+    else:
+        def bounded(request):
+            assert all(0 <= value <= 201.0 - after_commit for value in request.extensions["timeout"].values())
+        b.state["handler"] = bounded
+        _generate(b)
+        assert len(b.state["requests"]) == 1
+
+
+def test_absolute_deadline_keeps_usage_from_an_already_dispatched_call(sdk_clients, monkeypatch):
+    import core.llm.client as consumer
+    from core.testing.module_bindings import patch_module_attribute
+    b = sdk_clients()
+    now = [200.0]
+    patch_module_attribute(monkeypatch, consumer, "time", "monotonic", lambda: now[0])
+    b.client.bind_run_deadline(201.0)
+    def completes_after_deadline(request):
+        now[0] = 202.0
+    b.state["handler"] = completes_after_deadline
+    response = _generate(b)
+    assert b.client.reported_spend_usd == pytest.approx(response.cost)
+    assert response.cost > 0 and b.client._governed_tokens == response.tokens_used == 6
+    with pytest.raises(LLMGovernorExceededError, match="run deadline"):
+        _generate(b, prompt="later")
+    assert len(b.state["requests"]) == 1 and b.client.pending_usage_reservations == []
