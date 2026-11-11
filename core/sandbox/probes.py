@@ -389,7 +389,7 @@ def check_unshare_engages(unshare_flags) -> tuple:
               non-zero (the rootless-podman/nested-userns case). Cached.
               The caller fails loud on this.
       None  — the probe itself could not RUN (timeout under fork/memory
-              pressure, transient OSError). NOT an engagement verdict and
+              pressure, signal termination, transient OSError). NOT an engagement verdict and
               NOT cached. The caller must NOT fail loud on this — a 5s
               timeout on a trivial `unshare true` means the box is
               overloaded, not that namespaces are unavailable; aborting a
@@ -436,6 +436,8 @@ def check_unshare_engages(unshare_flags) -> tuple:
         # we do NOT cache it, so the next call re-probes. A genuine
         # deterministic refusal returns a non-zero returncode below (False).
         return (None, f"engagement probe could not run: {e}")
+    if proc.returncode < 0:
+        return (None, f"engagement probe terminated by signal {-proc.returncode}")
     if proc.returncode == 0:
         result = (True, "")
     else:
