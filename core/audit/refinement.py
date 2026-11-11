@@ -533,6 +533,7 @@ def dispatch_suggestion(
             )
             if keyed:
                 rule_path, rule_keyword = keyed
+                failed = False
                 try:
                     result = _dispatch_semgrep(
                         rule_path, outcome, ctx, config,
@@ -541,9 +542,16 @@ def dispatch_suggestion(
                     if result:
                         results.append(result)
                         return results
+                except BaseException:
+                    failed = True
+                    raise
                 finally:
-                    with contextlib.suppress(OSError):
-                        os.unlink(rule_path)
+                    try:
+                        with contextlib.suppress(OSError):
+                            os.unlink(rule_path)
+                    except BaseException:
+                        if not failed:
+                            raise
 
     except ImportError:
         logger.debug("hypothesis_mapping import failed", exc_info=True)
