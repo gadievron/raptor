@@ -9795,6 +9795,7 @@ def _run_audit_body(
             collector=collector,
             study_queue=study_queue,
             should_abort=is_sigterm_requested,
+            deadline_monotonic=config.run_deadline_monotonic,
         )
     except Exception:  # noqa: BLE001 — hygiene must never cost the run
         logger.debug("journal quiescer init failed", exc_info=True)
