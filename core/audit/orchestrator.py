@@ -29494,6 +29494,14 @@ def _promote_suspicious_one(
             language=_inventory_language_hint(config, outcome.file),
             llm_client=getattr(config, "llm_budget_client", None),
         )
+        # Availability checks never transfer generated rules to a runner.
+        for _rc_entry in _rc_chain:
+            _rc_cfg = _rc_entry.get("config") or {}
+            _rc_rule = _rc_cfg.get("rule") or ""
+            if (_rc_entry.get("type") == "semgrep" and _rc_cfg.get("keyword")
+                    and os.path.basename(_rc_rule).startswith("audit_sweep_")):
+                with contextlib.suppress(OSError):
+                    os.unlink(_rc_rule)
         if _rc_chain and all(
             entry.get("type") == "sanwit" for entry in _rc_chain
         ):
