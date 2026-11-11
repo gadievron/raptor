@@ -120,17 +120,6 @@ class TestNegatives:
         """)
         assert results == []
 
-    def test_rcu_barrier_does_not_fire(self, tmp_path):
-        results = _run_rule(tmp_path, """\
-            void ok(struct cfg **head, struct cfg *newc)
-            {
-                rcu_assign_pointer(*head, newc);
-                rcu_barrier();
-                kfree(newc);
-            }
-        """)
-        assert results == []
-
     def test_call_rcu_handoff_does_not_fire(self, tmp_path):
         # Current callback exclusion suppresses even a later plain free;
         # queueing alone is not proof that this immediate free is safe.
@@ -146,7 +135,7 @@ class TestNegatives:
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize('variant,expected', [('direct', 1), ('rebound', 1), ('barrier', 0), ('srcu', 0), ('retire_wait', 0)])
+@pytest.mark.parametrize('variant,expected', [('direct', 1), ('rebound', 1), ('barrier', 1), ('srcu', 0), ('retire_wait', 0)])
 def test_publication_expression_requires_lifetime_evidence(tmp_path, monkeypatch, variant, expected):
     from core.audit.sweep import (
         is_confirm_only_coccinelle_rule, run_coccinelle_file_sweep, scope_coccinelle_result,
@@ -200,3 +189,37 @@ def test_publication_expression_requires_lifetime_evidence(tmp_path, monkeypatch
     assert scoped.matches == [] and scoped.outcome == 'inconclusive'
     assert scoped.details['confirm_only']
     assert len(result.matches) == expected
+
+
+@pytest.mark.slow
+def test_callback_barriers_do_not_hide_immediate_plain_free(tmp_path):
+    from core.audit.tests._live_transport import run_pinned_subprocess
+    from core.config import RaptorConfig
+
+    lines = ['struct cfg { int node; };']
+    expected = []
+    for publish in ('rcu_assign_pointer(*head, p);', 'hlist_add_head_rcu(&p->node, h);'):
+        for release in ('kfree(p);', 'vfree(p);'):
+            for barrier in ('rcu_barrier();', 'srcu_barrier(ss);'):
+                lines += [f'void barrier_{len(lines)}(struct cfg **head, struct cfg *p, struct srcu_struct *ss, struct hlist_head *h) {{',
+                          publish]
+                publication_line = len(lines)
+                lines += [barrier, release, '}']
+                expected.append((len(lines)-1, publication_line))
+    for release in ('kfree(p);', 'vfree(p);'):
+        lines += [f'void matching_wait_{len(lines)}(struct cfg **head, struct cfg *p) {{',
+                  'rcu_assign_pointer(*head, p);', 'rcu_assign_pointer(*head, 0);',
+                  'synchronize_rcu();', release, '}']
+    source = tmp_path / 'barriers.c'
+    source.write_text('\n'.join(lines) + '\n')
+    proc = run_pinned_subprocess(
+        ['spatch', '--sp-file', str(_RULE), str(source), '--no-show-diff', '--no-includes'],
+        timeout=45, context='Callback barrier and matching grace-period syntax',
+        env=RaptorConfig.get_safe_env(), skip_signals=(9,),
+    )
+    assert proc.returncode == 0, proc.stderr
+    rows = [json.loads(line.removeprefix('COCCIRESULT:'))
+            for stream in (proc.stdout, proc.stderr) for line in stream.splitlines()
+            if line.startswith('COCCIRESULT:')]
+    assert sorted((row['line'], row['rcu_line']) for row in rows) == expected
+    assert all(row['rule'] == 'kfree_not_rcu' for row in rows)
