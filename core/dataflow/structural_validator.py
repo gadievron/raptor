@@ -180,7 +180,7 @@ def _read_file_content(path: Path) -> str | None:
     validation rather than supplying altered source to the parser.
     """
     try:
-        got = read_text_capped(path, errors="strict")
+        got = read_text_capped(path, errors="strict", newline="")
     except UnicodeDecodeError:
         return None
     if got is None or got[1]:
@@ -198,6 +198,10 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
     broken and refute the finding with high confidence; an environment
     gap must stay inconclusive, not become a suppression.
     """
+    # Python AST treats bare CR as a newline, unlike scanner coordinates.
+    # Decline those graph spans rather than associating them with LF rows.
+    if language == "python" and "\r" in content.replace("\r\n", ""):
+        return None
     extractor = _EXTRACTORS.get(language)
     if extractor is None:
         return None
