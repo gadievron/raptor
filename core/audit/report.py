@@ -134,6 +134,7 @@ def generate_report(
     *,
     target_path: Path | None = None,
     final_status: str | None = None,
+    processing_limitations: list[str] | None = None,
 ) -> dict[str, Any]:
     """Generate the final audit report.
 
@@ -164,6 +165,17 @@ def generate_report(
         completeness["resumable"] = final_status in _RESUMABLE_STATUSES
         if final_status == "completed":
             completeness["partial"] = bool(completeness.get("missing"))
+    # Preserve durable assessments while disclosing explicit retention failures.
+    # Apply after the terminal-status override can reset partial.
+    allowed_limitations = (
+        "new dark verification pass results (persistence failed)",
+        "new differential verification pass results (persistence failed)",
+    )
+    if isinstance(processing_limitations, list):
+        labels = [label for label in allowed_limitations if label in processing_limitations]
+        if labels:
+            completeness["missing"] = list(dict.fromkeys([*completeness.get("missing", []), *labels]))
+            completeness["partial"] = True
     segments = _load_segments(out_dir)
 
     audit_data = _load_review_state(out_dir)
