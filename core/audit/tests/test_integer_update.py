@@ -73,3 +73,12 @@ def test_unknown_is_inconclusive(monkeypatch,call):
 def test_forged_model_cannot_grant_a_fault(monkeypatch):
     monkeypatch.setattr(subject,'format_vars',lambda *a,**kw:{'Value':0})
     assert check('int Update(int Value){return ++Value;}')['violation'] is None
+
+
+@pytest.mark.parametrize("body,expected", [('Value++;Value++;', []), ('Value++;Value++;Other++;', [('Other', '++', False)]), ('Value++;++Value;', [('Value', '++', False), ('Value', '++', True)]), ('Value++;Value--;', [('Value', '++', False), ('Value', '--', False)]), ('Value++;return Value++;', [])], ids=['duplicate', 'other-operand', 'fixity', 'operator', 'return-occurrence'])
+def test_discovery_preserves_only_unambiguous_update_objectives(body, expected):
+    from core.audit import integer_update as subject
+
+    source = "int Read(int Value,int Other){" + body + "return 0;}"
+    rows = subject.update_candidates(source, language="c", integer_abi="lp64")
+    assert [row[1:4] for row in rows] == expected
