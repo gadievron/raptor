@@ -315,7 +315,7 @@ def run_executor_sync(
             ec.max_workers,
         )
         loop = asyncio.new_event_loop()
-        primary = None
+        primary_error = None
         try:
             stats = loop.run_until_complete(
                 _run_async(
@@ -341,13 +341,13 @@ def run_executor_sync(
                 ),
             )
         except BaseException as exc:
-            primary = exc
+            primary_error = exc
             raise
         finally:
             try:
                 loop.close()
             except BaseException:
-                if primary is None:
+                if primary_error is None:
                     raise
         return stats
 
@@ -657,7 +657,7 @@ async def _run_async(
     if owns_throttle:
         cooldown = read_throttle_cooldown_s()
         throttle = AdaptiveThrottle(ec.max_workers, cooldown_s=cooldown)
-    primary = None
+    primary_error = None
     try:
         return await _run_async_body(
             graph, review_fn, shared, config, result, ec, throttle,
@@ -679,7 +679,7 @@ async def _run_async(
             quiescer=quiescer,
         )
     except BaseException as exc:
-        primary = exc
+        primary_error = exc
         raise
     finally:
         try:
@@ -694,7 +694,7 @@ async def _run_async(
                 if owns_throttle and throttle is not None:
                     throttle.close()
         except BaseException:
-            if primary is None:
+            if primary_error is None:
                 raise
 
 
