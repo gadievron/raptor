@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 # Provision signed Ubuntu dependencies with bounded independent mirror fallback.
 set -euo pipefail
-mode=${1:?expected packages or playwright}
+mode=${1:?expected packages, playwright or packages-playwright}
 shift
 case "$mode" in
   packages) (($#)) || exit 64 ;;
   playwright) [[ $# == 1 && $1 == /* && -x $1 ]] || exit 64 ;;
+  packages-playwright)
+    [[ $# -ge 2 && $1 == /* && -x $1 ]] || exit 64
+    playwright_python=$1
+    shift
+    ;;
   *) exit 64 ;;
 esac
 # Read the running Ubuntu release: do not turn a resolute runner into noble.
@@ -43,9 +48,22 @@ Acquire::Retries "2";
 Acquire::AllowInsecureRepositories "false";
 Acquire::AllowDowngradeToInsecureRepositories "false";
 APT::Get::AllowUnauthenticated "false";
+APT::Update::Error-Mode "any";
 APT
   export APT_CONFIG=$stage_dir/apt.conf
   printf 'Ubuntu dependency setup: stage=%s release=%s archive=%s\n' "$stage" "$VERSION_CODENAME" "$archive" >&2
+  if [[ $mode == packages-playwright ]]; then
+    # Playwright refreshes the indexes itself. Reuse that successful refresh
+    # for the parser tools instead of provisioning the same archive twice.
+    # Error-Mode in APT_CONFIG makes its own update fail on incomplete indexes.
+    if "$playwright_python" -m playwright install-deps chromium; then
+      if apt-get install -y --no-install-recommends -- "$@"; then exit 0; else status=$?; fi
+    else
+      status=$?
+    fi
+    printf 'Ubuntu dependency setup: stage=%s combined install failed status=%s\n' "$stage" "$status" >&2
+    continue
+  fi
   if apt-get -o APT::Update::Error-Mode=any update; then
     if [[ $mode == packages ]]; then
       if apt-get install -y --no-install-recommends -- "$@"; then exit 0; else status=$?; fi

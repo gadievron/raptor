@@ -97,6 +97,70 @@ def test_missing_locked_inputs_do_not_produce_a_usable_key(repo):
         key(repo)
 
 
+def test_optional_requirements_bind_the_complete_environment_and_leave_other_profiles_alone(repo):
+    manifest = repo / 'parser requirements.txt'
+    baseline = key(repo)
+    manifest.write_text('# Native parser layer\npwntools==4.15.0\n')
+    first = key(repo, requirements_file=manifest.name)
+    assert first != baseline
+    assert key(repo) == baseline
+    manifest.write_text('pwntools==4.15.1\n')
+    assert key(repo, requirements_file=manifest.name) != first
+    assert key(repo) == baseline
+
+
+def test_optional_requirements_path_is_part_of_the_install_identity(repo):
+    for name in ('first.txt', 'second.txt'):
+        (repo / name).write_text('capstone==5.0.6\n')
+    assert key(repo, requirements_file='first.txt') != key(repo, requirements_file='second.txt')
+    assert key(repo, requirements_file='') == key(repo)
+
+
+@pytest.mark.parametrize('body', [
+    '-r child.txt\n', '-c constraints.txt\n', '--index-url https://example.invalid/simple\n',
+    'package @ https://example.invalid/package.whl\n', 'package>=1.0\n',
+    'package==1.*\n', 'package==1.0; python_version < "3.15"\n',
+    '# No actual pins\n',
+], ids=['include', 'constraint', 'index', 'remote', 'range', 'wildcard', 'marker', 'empty'])
+def test_unfingerprinted_requirement_inputs_are_refused_before_restore(repo, body):
+    (repo / 'requirements.txt').write_text(body)
+    with pytest.raises(ValueError, match='requirements file'):
+        key(repo, requirements_file='requirements.txt')
+
+
+def test_requirements_missing_or_outside_the_checkout_cannot_produce_a_key(repo, tmp_path):
+    with pytest.raises(OSError):
+        key(repo, requirements_file='missing.txt')
+    outside = tmp_path.parent / (tmp_path.name + '-requirements.txt')
+    outside.write_text('package==1.0\n')
+    try:
+        for name in (str(outside), '../' + outside.name):
+            with pytest.raises(ValueError, match='relative to the checkout'):
+                key(repo, requirements_file=name)
+        (repo / 'link.txt').symlink_to(outside)
+        with pytest.raises(ValueError, match='escapes the checkout'):
+            key(repo, requirements_file='link.txt')
+    finally:
+        outside.unlink()
+
+
+def test_cli_passes_the_selected_requirements_manifest_into_the_identity(repo, monkeypatch):
+    (repo / 'requirements.txt').write_text('capstone==5.0.6\n')
+    monkeypatch.chdir(repo)
+    monkeypatch.setattr(cache, 'host_identity', lambda: deepcopy(HOST))
+    monkeypatch.setattr(cache, 'interpreter_identity', lambda: deepcopy(PYTHON))
+    monkeypatch.setenv('VENV_CACHE_PREFIX', 'venv')
+    monkeypatch.setenv('VENV_CACHE_EXPORT_ARGS', '')
+    monkeypatch.setenv('VENV_CACHE_INSTALL_METHOD', 'export')
+    monkeypatch.setenv('VENV_PATH', '.venv')
+    monkeypatch.setenv('VENV_CACHE_REQUIREMENTS_FILE', 'requirements.txt')
+    output = repo / 'output'
+    monkeypatch.setenv('GITHUB_OUTPUT', str(output))
+    assert cache.main([]) == 0
+    values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+    assert values['key'] == key(repo, requirements_file='requirements.txt')
+
+
 @pytest.fixture
 def tool_repo(repo):
     location = repo / '.github/scripts/codeql-cli.json'

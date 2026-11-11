@@ -78,6 +78,7 @@ def repo(tmp_path):
     ('.github/scripts/check_node_release.py', True),
     ('.github/scripts/write_sbom_checksums.py', True),
     ('.github/scripts/check_uv_provenance.py', True),
+    ('.github/scripts/with-ubuntu-apt.sh', True),
     ('packages/sca/sbom_inventory/uv_provenance.py', True),
 ])
 def test_image_inputs_not_audit_or_test_changes(repo, name, expected):

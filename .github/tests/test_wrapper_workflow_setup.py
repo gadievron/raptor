@@ -36,6 +36,11 @@ def _tools(tmp_path):
         name = pathlib.Path(sys.argv[0]).name
         with open(os.environ['SETUP_CALLS'], 'a') as output:
             output.write(json.dumps([name, *sys.argv[1:]]) + '\\n')
+        if name == 'dpkg-query':
+            if os.environ.get('UIDMAP_INSTALLED') == 'true':
+                print('install ok installed')
+                raise SystemExit(0)
+            raise SystemExit(1)
         if name == 'brew' and sys.argv[1] == '--prefix':
             if sys.argv[2] == os.environ.get('FAIL_BREW_PREFIX'):
                 raise SystemExit(29)
@@ -43,7 +48,7 @@ def _tools(tmp_path):
         if name == os.environ.get('FAIL_TOOL'):
             raise SystemExit(29)
     ''')
-    for name in ('sudo', 'brew', 'uv', 'gem', 'ROPgadget'):
+    for name in ('sudo', 'brew', 'uv', 'gem', 'ROPgadget', 'dpkg-query'):
         target = toolbin / name
         target.write_text(script)
         target.chmod(0o700)
@@ -58,7 +63,8 @@ def _tools(tmp_path):
 @pytest.mark.parametrize('radare,gadgets', list(itertools.product([False, True], repeat=2)),
                          ids=['base', 'gadgets', 'radare', 'all-tools'])
 def test_native_setup_installs_only_selected_tool_groups(tmp_path, platform, radare, gadgets):
-    step = _step('Install ' + platform + ' parser tools')
+    step = _step('Install Linux parser tools and Chromium dependencies' if platform == 'Linux'
+                 else 'Install macOS parser tools')
     condition = f"if: runner.os == '{platform}'"
     if platform == 'macOS':
         condition += " && toJSON(matrix.families) != '[]'"
@@ -67,7 +73,7 @@ def test_native_setup_installs_only_selected_tool_groups(tmp_path, platform, rad
     assert "NEEDS_GADGETS: ${{ contains(matrix.families, 'gadget-parsers') }}" in step
     assert 'timeout-minutes: 8' in step
     env = _tools(tmp_path)
-    env.update(NEEDS_RADARE2=str(radare).lower(), NEEDS_GADGETS=str(gadgets).lower())
+    env.update(NEEDS_RADARE2=str(radare).lower(), NEEDS_GADGETS=str(gadgets).lower(), NEEDS_BROWSER='false')
     result = subprocess.run(['bash', '-c', _command(step)], env=env, cwd=tmp_path,
                             capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -91,9 +97,10 @@ def test_native_setup_installs_only_selected_tool_groups(tmp_path, platform, rad
     ('macOS', '', 'ruby'), ('macOS', '', 'binutils'),
 ], ids=['apt', 'brew-install', 'ruby-prefix', 'binutils-prefix'])
 def test_native_setup_refuses_package_manager_and_prefix_failures(tmp_path, platform, failure, prefix):
-    step = _step('Install ' + platform + ' parser tools')
+    step = _step('Install Linux parser tools and Chromium dependencies' if platform == 'Linux'
+                 else 'Install macOS parser tools')
     env = _tools(tmp_path)
-    env.update(NEEDS_RADARE2='true', NEEDS_GADGETS='true',
+    env.update(NEEDS_RADARE2='true', NEEDS_GADGETS='true', NEEDS_BROWSER='false',
                FAIL_TOOL=failure, FAIL_BREW_PREFIX=prefix)
     result = subprocess.run(['bash', '-c', _command(step)], env=env, cwd=tmp_path,
                             capture_output=True, text=True, timeout=10)
@@ -102,20 +109,42 @@ def test_native_setup_refuses_package_manager_and_prefix_failures(tmp_path, plat
         assert not Path(env['GITHUB_PATH']).exists()
 
 
-@pytest.mark.parametrize('failure', ['', 'uv'], ids=['pass', 'python-install-failure'])
-def test_python_parser_dependencies_include_elf_worker_and_preserve_failures(tmp_path, failure):
-    step = _step('Install Python parser dependencies')
+@pytest.mark.parametrize('missing', [False, True], ids=['cached-tool', 'missing-tool'])
+def test_cached_python_parser_tools_cover_elf_worker_and_refuse_missing_tool(tmp_path, missing):
+    step = _step('Expose cached Python parser tools')
     assert "if: contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')" in step
-    assert 'timeout-minutes: 8' in step
+    assert 'uv pip install' not in _command(step)
     env = _tools(tmp_path)
-    env['FAIL_TOOL'] = failure
+    env['VENV_PATH'] = '.venv'
+    tool = tmp_path / '.venv/bin/ROPgadget'
+    tool.parent.mkdir(parents=True)
+    if not missing:
+        tool.write_text('#!/bin/sh\nexit 0\n')
+        tool.chmod(0o700)
     result = subprocess.run(['bash', '-c', _command(step)], env=env, cwd=tmp_path,
                             capture_output=True, text=True, timeout=10)
-    assert result.returncode == (29 if failure else 0), result.stdout + result.stderr
+    assert result.returncode == (1 if missing else 0), result.stdout + result.stderr
+    assert not Path(env['SETUP_CALLS']).exists()
+    if missing:
+        assert not Path(env['GITHUB_PATH']).exists()
+    else:
+        assert Path(env['GITHUB_PATH']).read_text().strip() == str(tmp_path / '.venv/bin')
+
+
+@pytest.mark.parametrize('radare,gadgets', list(itertools.product([False, True], repeat=2)),
+                         ids=['browser', 'browser-gadgets', 'browser-radare', 'all-tools'])
+def test_linux_browser_and_parser_packages_share_the_signed_helper(tmp_path, radare, gadgets):
+    step = _step('Install Linux parser tools and Chromium dependencies')
+    env = _tools(tmp_path)
+    env.update(NEEDS_RADARE2=str(radare).lower(), NEEDS_GADGETS=str(gadgets).lower(),
+               NEEDS_BROWSER='true', VENV_PATH='.venv')
+    result = subprocess.run(['bash', '-c', _command(step)], env=env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    packages = ['binutils', 'libseccomp2'] + (['radare2'] if radare else []) + (['ruby'] if gadgets else [])
     calls = [json.loads(line) for line in Path(env['SETUP_CALLS']).read_text().splitlines()]
-    assert calls[0] == ['uv', 'pip', 'install', '--python', str(tmp_path / 'bin/python'),
-                        '-r', '.github/scripts/requirements-sandbox-wrappers.txt']
-    assert len(calls) == 1
+    assert calls == [['sudo', 'bash', '.github/scripts/with-ubuntu-apt.sh', 'packages-playwright',
+                      str(tmp_path / '.venv/bin/python'), *packages]]
 
 
 @pytest.mark.parametrize('failure', ['', 'gem'], ids=['pass', 'ruby-install-failure'])
@@ -173,7 +202,10 @@ def test_parser_build_cache_uses_installed_requirements_only_when_needed(platfor
             patterns.append(value)
     assert 'uv.lock' in patterns
     needed = bool({'gadget-parsers', 'elf-worker'} & set(families))
-    installed = re.search(r' -r (\S+)', _command(_step('Install Python parser dependencies')))[1]
+    manifest = re.search(r'(?m)^          requirements-file: (.+)$', workflow)[1]
+    selected = _cache_expression(manifest, platform, families)
+    installed = '.github/scripts/requirements-sandbox-wrappers.txt'
+    assert selected == (installed if needed else '')
     assert (installed in patterns) is needed
     assert {'uv.lock', 'pyproject.toml', 'uv.toml'} <= set(patterns)
     assert len(patterns) == (4 if needed else 3)
@@ -183,3 +215,22 @@ def test_parser_build_cache_uses_installed_requirements_only_when_needed(platfor
     assert len(pins) == 3
     assert all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*==[0-9.]+', pin) for pin in pins)
     assert {pin.split('==')[0].lower() for pin in pins} == {'pwntools', 'ropgadget', 'capstone'}
+
+
+@pytest.mark.parametrize('installed,failure', [(True, ''), (False, ''), (False, 'sudo')],
+                         ids=['warm-no-archive', 'missing-signed-fallback', 'install-failure'])
+def test_userns_setup_refreshes_archives_only_for_missing_uidmap(tmp_path, installed, failure):
+    action = (ROOT / '.github/actions/enable-userns/action.yml').read_text()
+    command = textwrap.dedent(action.split('      run: |\n', 1)[1])
+    env = _tools(tmp_path)
+    env.update(UIDMAP_INSTALLED=str(installed).lower(), FAIL_TOOL=failure)
+    result = subprocess.run(['bash', '-eo', 'pipefail', '-c', command], env=env, cwd=tmp_path,
+                            capture_output=True, text=True, timeout=10)
+    assert result.returncode == (29 if failure else 0), result.stdout + result.stderr
+    calls = [json.loads(line) for line in Path(env['SETUP_CALLS']).read_text().splitlines()]
+    assert calls[0] == ['dpkg-query', '-W', '-f=${Status}', 'uidmap']
+    archive = ['sudo', 'bash', '.github/scripts/with-ubuntu-apt.sh', 'packages', 'uidmap']
+    policy = ['sudo', 'sysctl', '-w', 'kernel.apparmor_restrict_unprivileged_userns=0']
+    assert (archive in calls) is (not installed)
+    assert (policy in calls) is (not failure)
+    assert len(calls) == (2 if installed or failure else 3)
