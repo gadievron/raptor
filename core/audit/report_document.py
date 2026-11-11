@@ -48,8 +48,10 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
         metadata["Functions reviewed"] = f"{reviewed:,} of {total:,} ({reviewed * 100 / total:.1f}%)"
     completeness = report.get("completeness") or {}
     diagnostics = _completeness_lines(report) + format_residue_lines(report)
+    presentation_diagnostics = []
     if len(findings) > MAX_FINDINGS:
-        diagnostics.append(f"Finding presentation truncated to {MAX_FINDINGS} of {len(findings)}; complete domain report retained in report-context.json.")
+        presentation_diagnostics.append(f"Finding presentation truncated to {MAX_FINDINGS} of {len(findings)}; complete domain report retained in report-context.json.")
+    diagnostics.extend(presentation_diagnostics)
     artifacts = [{"path": str(out_dir / name)} for name in ("audit-report.json", "findings.json", "findings-graded.json", ".raptor-run.json")]
     if report.get("knowledge_processing") is not None:
         artifacts.append({"path": str(out_dir / "knowledge-results.json")})
@@ -134,5 +136,6 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
     blocks.extend(claim_presentation_blocks(report))
     summary = build_operator_summary(context)
     return context, ReportDocument("Audit Report", "audit", context.snapshot_id, metadata=metadata, blocks=blocks,
+                                   diagnostics=presentation_diagnostics,
                                    extensions={"raptor.summary": summary.to_dict(), "raptor.artifacts": artifacts,
                                                "raptor.references": {alias: ref for alias, ref in references.values()}})
