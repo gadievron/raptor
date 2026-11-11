@@ -269,7 +269,10 @@ def _image_cleanup(build_id: str):
             try:
                 action()
             except BaseException as exc:
-                logger.warning("Build image cleanup failed for %s", build_id, exc_info=True)
+                try:
+                    logger.warning("Build image cleanup failed for %s", build_id, exc_info=True)
+                except BaseException:
+                    pass
                 if first_error is None:
                     first_error = exc
         if first_error is not None and not failed:
