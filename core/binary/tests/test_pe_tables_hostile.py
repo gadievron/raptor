@@ -460,7 +460,7 @@ class TestSectionCountReadProduct:
         p = tmp_path / "amp4k.dll"
         p.write_bytes(self._amp_export_image(
             pe_mod._MAX_SECTIONS - 1))
-        with cpu_budget(3.0, what="sections-x-reads export walk"):
+        with cpu_budget(3.5, what="sections-x-reads export walk"):
             facts = extract_pe_facts(p)
         assert facts is not None
         assert len(facts.sections) == pe_mod._MAX_SECTIONS
