@@ -10311,6 +10311,7 @@ def _run_audit_body(
             discovered_evidence=discovered_evidence,
             joern_server=joern_server,
             max_workers=resolved_workers,
+            knowledge_runtime=knowledge_runtime,
         )
         _pass_ledger.end_phase()
         logger.debug("exited _iterative_re_review")
@@ -28386,6 +28387,7 @@ def _iterative_re_review(
     discovered_evidence: dict[str, Any] | None = None,
     joern_server=None,
     max_workers: int = 1,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
 ) -> OrchestratorResult:
     """Re-review callers of findings with propagated knowledge.
 
@@ -28401,6 +28403,23 @@ def _iterative_re_review(
     previous iteration's findings).
     """
     if not config.propagate_constraints:
+        return result
+
+    if knowledge_runtime is not None:
+        for _iteration in range(5):
+            previous = {id(outcome) for outcome in result.outcomes}
+            changed = _callee_contract_requeue(
+                result, config, review_fn, checklist=checklist, context_map=context_map,
+                fuzz_coverage=fuzz_coverage, evidence_index=evidence_index or {},
+                discovered_evidence=discovered_evidence, start_time=start_time,
+                max_workers=max_workers, knowledge_runtime=knowledge_runtime)
+            for outcome in result.outcomes:
+                if id(outcome) not in previous and outcome.review_result:
+                    constraints = _extract_and_propagate(
+                        outcome, constraints, checklist, entry_points, prop_config,
+                        tier_counters=result.tier_counters)
+            if not changed:
+                break
         return result
 
     reviewed_outcomes = {f"{o.file}:{o.function}": o for o in result.outcomes}
@@ -35145,8 +35164,10 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                 env_gate()
             if _check_budget(config, start_time, result):
                 break
-            scope = callee.review_input_scope
-            if scope is not None and not scope.current(config.target_path):
+            contributors = callee if isinstance(callee, tuple) else (callee,)
+            scopes = tuple(item.review_input_scope for item in contributors
+                           if item.review_input_scope is not None)
+            if any(not scope.current(config.target_path) for scope in scopes):
                 continue
             from .ready_review_context import offer_ready_joern_context
             offer_ready_joern_context(runtime, ctx, gap, ready_joern_gaps, evidence_index or {})
@@ -35177,7 +35198,7 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                 runtime.fail(reservation, "callee_context_not_delivered", ctx=ctx)
                 settled = True
                 continue
-            if scope is not None and not scope.current(config.target_path):
+            if any(not scope.current(config.target_path) for scope in scopes):
                 runtime.fail(reservation, "callee_source_changed", ctx=ctx)
                 settled = True
                 continue
@@ -35213,6 +35234,53 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
     return published
 
 
+def _requeue_ready_callee_assessments(
+    result, config, review_fn, *, checklist, context_map, fuzz_coverage, evidence_index,
+    discovered_evidence, start_time, runtime, ready_joern_gaps=(),
+):
+    """Build one current relation/assessment union regardless of triggering stage."""
+    from collections import Counter
+    from .callee_assessment_context import build_callee_assessment_bundle
+
+    outcomes = tuple(result.outcomes)
+    occurrences = Counter((item.file, item.function, item.line) for item in outcomes)
+    prepared = []
+    for caller in outcomes:
+        if caller.status != "clean":
+            continue
+        occurrence = (caller.file, caller.function, caller.line)
+        if occurrences[occurrence] != 1:
+            continue
+        bundle = build_callee_assessment_bundle(
+            caller, outcomes, inventory=config.inventory, context_map=context_map,
+            include_graph=config.propagate_constraints, target_root=config.target_path)
+        if bundle is None:
+            continue
+        matches = [(path, item) for path, _info, item in _iter_checklist_items(checklist)
+                   if (path, item.get("name")) == (caller.file, caller.function)
+                   and (not caller.line or item.get("line_start", 0) == caller.line)]
+        if len(matches) > 1:
+            continue
+        if matches:
+            path, item = matches[0]
+            gap = {**item, "file": path}
+        else:
+            path = caller.file
+            gap = {"file": path, "name": caller.function, "line_start": caller.line}
+        ctx = _build_context(config, gap, checklist, context_map, evidence_index,
+                             discovered_evidence=discovered_evidence)
+        if not gap.get("line_end") and type(ctx.get("line_end")) is int:
+            gap["line_end"] = ctx["line_end"]
+        if fuzz_coverage:
+            ctx["fuzz_coverage"] = _fuzz_coverage_for(fuzz_coverage, path, gap["name"])
+        ctx["callee_contract_violation"] = bundle.payload
+        prepared.append((len(prepared), gap, caller, ctx, bundle.contributors))
+    return _run_callee_continuations(
+        result, config, review_fn, prepared, runtime,
+        env_gate=_make_dispatch_gate(config), start_time=start_time,
+        ready_joern_gaps=ready_joern_gaps, evidence_index=evidence_index)
+
+
 def _callee_contract_requeue(
     result: OrchestratorResult,
     config: OrchestratorConfig,
@@ -35239,6 +35307,13 @@ def _callee_contract_requeue(
 
     Returns the count of callers re-reviewed.
     """
+    if knowledge_runtime is not None:
+        return _requeue_ready_callee_assessments(
+            result, config, review_fn, checklist=checklist, context_map=context_map,
+            fuzz_coverage=fuzz_coverage, evidence_index=evidence_index,
+            discovered_evidence=discovered_evidence, start_time=start_time,
+            runtime=knowledge_runtime, ready_joern_gaps=ready_joern_gaps)
+
     def resolve_callee(name, dep):
         matches = [o for o in result.outcomes
                    if name in (o.function, f"{o.file}:{o.function}",
@@ -35328,12 +35403,6 @@ def _callee_contract_requeue(
     # rails polls below: tick (pause/probe) first, then the rails —
     # a conclusion surfaces through _check_budget.
     _env_gate = _make_dispatch_gate(config)
-
-    if knowledge_runtime is not None:
-        return _run_callee_continuations(
-            result, config, review_fn, prepared, knowledge_runtime,
-            env_gate=_env_gate, start_time=start_time,
-            ready_joern_gaps=ready_joern_gaps, evidence_index=evidence_index)
 
     def _do_review(item):
         idx, _gap, _prior, ctx, _callee = item

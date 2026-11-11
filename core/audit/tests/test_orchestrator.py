@@ -4397,7 +4397,7 @@ class TestJoernLiveQuery:
 class TestIterativeReReview:
     """Re-review callers of findings with propagated callee knowledge."""
 
-    def test_caller_re_reviewed_when_callee_found_vulnerable(self, tmp_path: Path):
+    def test_caller_re_reviewed_when_callee_found_vulnerable(self, tmp_path: Path, monkeypatch):
         """When callee is found vulnerable, its callers are re-reviewed
         with the callee finding injected as context."""
         target = tmp_path / "target"
@@ -4443,48 +4443,35 @@ class TestIterativeReReview:
 
         call_log = []
 
+        from core.audit import orchestrator as orch
+        from core.audit.llm_review import make_review_fn
+        from core.llm.providers import StructuredResponse
+
+        current = {}
+        class Client:
+            def is_budget_exhausted(self):
+                return False
+
+            def generate_structured(self, prompt, schema, **kwargs):
+                ctx = current["ctx"]
+                concern = ctx["function"] == "dangerous" or bool(ctx.get("callee_contract_violation"))
+                return StructuredResponse(result={
+                    "status": "suspicious" if concern else "clean",
+                    "body": "Possible unvalidated input propagation" if concern else "Provisional independent assessment",
+                    "hypothesis": "Unresolved input validation concern" if concern else "",
+                }, raw="", cost=0, model="scripted")
+
+        client = Client()
+        rendered = make_review_fn(client, escalate_clean=False)
+        monkeypatch.setattr(orch, "_run_llm_client", lambda cfg: client)
+
         def review_fn(ctx, config):
-            has_callee_findings = bool(ctx.get("callee_findings"))
-            call_log.append({
-                "function": ctx["function"],
-                "has_callee_findings": has_callee_findings,
-            })
-            if ctx["function"] == "dangerous":
-                return ReviewOutcome(
-                    file=ctx["file"],
-                    function=ctx["function"],
-                    status="finding",
-                    body="strcpy overflow",
-                    hypothesis="buffer overflow via strcpy(local, buf)",
-                    evidence_tool="prefilter:unbounded-strcpy",
-                    review_result={
-                        "status": "finding",
-                        "body": "strcpy overflow",
-                        "hypothesis": "buffer overflow via strcpy(local, buf)",
-                        "evidence_tool": "prefilter:unbounded-strcpy",
-                    },
-                )
-            if has_callee_findings:
-                return ReviewOutcome(
-                    file=ctx["file"],
-                    function=ctx["function"],
-                    status="finding",
-                    body="passes unvalidated input to vulnerable dangerous()",
-                    hypothesis="process proxies attacker input to strcpy overflow",
-                    evidence_tool="prefilter:unbounded-strcpy",
-                    review_result={
-                        "status": "finding",
-                        "body": "passes unvalidated input to vulnerable dangerous()",
-                        "hypothesis": "process proxies attacker input",
-                        "evidence_tool": "prefilter:unbounded-strcpy",
-                    },
-                )
-            return ReviewOutcome(
-                file=ctx["file"],
-                function=ctx["function"],
-                status="clean",
-                body="nothing remarkable",
-            )
+            current["ctx"] = ctx
+            call_log.append({"function": ctx["function"],
+                             "has_callee_context": bool(ctx.get("callee_contract_violation"))})
+            return rendered(ctx, config)
+
+        review_fn._knowledge_observed_client_contract = True
 
         config = _review_contract_config(
             # hermetic: findings survive to post-loop — without the pin,
@@ -4493,16 +4480,16 @@ class TestIterativeReReview:
             validate=False,
             target_path=target, out_dir=out, resume=False,
             sweep_validate_findings=False, batch_sloc_threshold=0,
-            propagate_constraints=True,
+            propagate_constraints=True, llm_budget_client=client, triage=False,
             prefilter=False, max_refinements=0,
         )
         result = run_orchestrator(config, review_fn)
 
-        re_reviews = [c for c in call_log if c["has_callee_findings"]]
-        assert len(re_reviews) >= 1, f"expected re-review with callee_findings, got {call_log}"
+        re_reviews = [c for c in call_log if c["has_callee_context"]]
+        assert len(re_reviews) == 1, f"expected one shared callee-context review, got {call_log}"
         assert re_reviews[0]["function"] == "process"
 
-        assert result.findings >= 2
+        assert result.suspicious >= 2
 
     @pytest.mark.usefixtures("_no_layer_disagreement_review")
     def test_no_re_review_when_no_findings(self, tmp_path: Path):
