@@ -17,7 +17,8 @@ def test_truncated_source_cannot_refute_later_call(tmp_path, monkeypatch):
     assert control.evidence[0]["call_link_to_next"] is True
 
     reader = sv.read_text_capped
-    monkeypatch.setattr(sv, "read_text_capped", lambda file: reader(file, max_chars=len(prefix)))
+    monkeypatch.setattr(sv, "read_text_capped",
+                        lambda file, **kwargs: reader(file, max_chars=len(prefix), **kwargs))
     assert sv.read_text_capped(tmp_path / "app.py") == (prefix, True)
     result = sv.validate_structurally(path, tmp_path, language="python")
     assert result.verdict == "inconclusive"

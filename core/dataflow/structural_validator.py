@@ -176,9 +176,13 @@ def _read_file_content(path: Path) -> str | None:
     repo — a planted multi-hundred-MB file must not be materialised
     whole per finding. A valid prefix can omit a later call while
     retaining both endpoint functions, so it cannot establish that
-    a call edge is absent. Truncated reads decline validation.
+    a call edge is absent. Truncated or invalid UTF-8 reads decline
+    validation rather than supplying altered source to the parser.
     """
-    got = read_text_capped(path)
+    try:
+        got = read_text_capped(path, errors="strict")
+    except UnicodeDecodeError:
+        return None
     if got is None or got[1]:
         return None
     return got[0]
