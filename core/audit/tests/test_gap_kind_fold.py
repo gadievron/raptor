@@ -11,6 +11,7 @@ suppression and reuse semantics.
 from __future__ import annotations
 
 from core.audit.gaps import compute_gaps
+from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
@@ -51,14 +52,17 @@ def _checklist(target):
     }
 
 
-def _entry(*, producer, run_id, verdict="clean", source_hash="", ts=None):
+def _entry(*, producer, run_id, verdict="clean", source_hash="", ts=None, target=None):
+    fields = {"source_hash": source_hash}
+    if target is not None:
+        fields = current_foundation_fields(target, "auth.c", 1, 5)
     return ReviewJournalEntry(
         ts=ts or now_iso(),
         run_id=run_id,
         file="auth.c",
         function="check_pw",
         verdict=verdict,
-        source_hash=source_hash,
+        **fields,
         line_start=1,
         line_end=5,
         producer=producer,
@@ -135,7 +139,7 @@ class TestFunctionGradeKeepsSemantics:
         stored = hash_span(target / "auth.c", 1, 5)
         project = _project_with(
             tmp_path,
-            _entry(producer="audit", run_id="run1", source_hash=stored),
+            _entry(producer="audit", run_id="run1", source_hash=stored, target=target),
         )
         gaps = compute_gaps(_checklist(target), [], project_dir=project)
         assert "auth.c:check_pw" not in _gap_keys(gaps)
@@ -149,7 +153,7 @@ class TestFunctionGradeKeepsSemantics:
         target = _write_target(tmp_path)
         stored = hash_span(target / "auth.c", 1, 5)
         audit = _entry(
-            producer="audit", run_id="run1", source_hash=stored,
+            producer="audit", run_id="run1", source_hash=stored, target=target,
         )
         newer = _entry(
             producer="agentic", run_id="run1", verdict="suspicious",
@@ -165,6 +169,6 @@ class TestFunctionGradeKeepsSemantics:
         target = _write_target(tmp_path)
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        append_entry(out_dir, _entry(producer="audit", run_id="run1"))
+        append_entry(out_dir, _entry(producer="audit", run_id="run1", target=target))
         gaps = compute_gaps(_checklist(target), [], out_dir=out_dir)
         assert "auth.c:check_pw" not in _gap_keys(gaps)

@@ -949,16 +949,36 @@ class TestRereviewResolution:
         ) == set()
 
 
+def _covered_rereview_target(tmp_path):
+    """A covered C site needs its current signed review as well as projections."""
+    from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
+    from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
+
+    target = tmp_path / "target"
+    (target / "src").mkdir(parents=True)
+    lines = ["// owned preamble"] * 4 + ["int check_pw(void) {"]
+    lines += ["    // reviewed body"] * 23 + ["    return 0;", "}"]
+    (target / "src" / "auth.c").write_text("\n".join(lines) + "\n")
+    checklist = _rereview_checklist()
+    checklist["target_path"] = str(target)
+    out_dir = tmp_path / "current-review"
+    append_entry(out_dir, ReviewJournalEntry(ts=now_iso(), run_id="current",
+        file="src/auth.c", function="check_pw", verdict="clean", line_start=5,
+        line_end=30, **current_foundation_fields(target, "src/auth.c", 5, 30)))
+    return checklist, out_dir
+
+
 class TestRereviewGapSeam:
     """compute_gaps(seed_rereview_keys=...): covered seeded keys are
     un-suppressed and marked; everything else byte-identical."""
 
-    def test_covered_function_unsuppressed_and_marked(self):
+    def test_covered_function_unsuppressed_and_marked(self, tmp_path):
+        checklist, out_dir = _covered_rereview_target(tmp_path)
         from core.audit.gaps import compute_gaps
         from core.coverage.journal import make_function_key
         key = make_function_key("src/auth.c", "check_pw")
         gaps = compute_gaps(
-            _rereview_checklist(), _covering_records(),
+            checklist, _covering_records(), out_dir=out_dir,
             seed_rereview_keys={key},
         )
         scheduled = [g for g in gaps if g.get("seed_rereview")]
@@ -970,12 +990,13 @@ class TestRereviewGapSeam:
         assert gap["strategies"]
         assert "priority" in gap
 
-    def test_other_covered_functions_stay_suppressed(self):
+    def test_other_covered_functions_stay_suppressed(self, tmp_path):
+        checklist, out_dir = _covered_rereview_target(tmp_path)
         from core.audit.gaps import compute_gaps
         from core.coverage.journal import make_function_key
         key = make_function_key("src/auth.c", "check_pw")
         gaps = compute_gaps(
-            _rereview_checklist(), _covering_records(),
+            checklist, _covering_records(), out_dir=out_dir,
             seed_rereview_keys={key},
         )
         names = {g["name"] for g in gaps}
@@ -992,13 +1013,14 @@ class TestRereviewGapSeam:
         gap = next(g for g in gaps if g["name"] == "check_pw")
         assert "seed_rereview" not in gap
 
-    def test_flag_off_covered_stays_suppressed_regression_pin(self):
+    def test_flag_off_covered_stays_suppressed_regression_pin(self, tmp_path):
         # Today's behaviour, pinned: without the flag a fully-covered
         # checklist computes zero gaps — the structured no-op the
         # flag exists to fix must STAY the default.
+        checklist, out_dir = _covered_rereview_target(tmp_path)
         from core.audit.gaps import compute_gaps
         assert compute_gaps(
-            _rereview_checklist(), _covering_records(),
+            checklist, _covering_records(), out_dir=out_dir,
         ) == []
 
     def test_reuse_import_refused_for_scheduled_key(self, monkeypatch):

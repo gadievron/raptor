@@ -185,21 +185,49 @@ def _gap_keys(gaps: list[dict]) -> set[str]:
 
 
 class TestFoldRoundTrip:
-    """A window-stamped None-geometry row verifies in the fold when
-    the source is unchanged (no permanent re-review) and resurfaces
-    when the body changes (the staleness the stamp exists to catch)."""
+    """Legacy window hashes remain observations, not current admission."""
 
     def test_unchanged_none_row_stays_covered(self, tmp_path: Path):
+        """Legacy raw-window equality does not establish bounded current admission."""
         from core.audit.gaps import compute_gaps
         target = _target(tmp_path)
         stored = _compute_hash(target, "a.c", _HEADER_LINE, None)
         project = _project_with_entry(tmp_path, stored)
         gaps = compute_gaps(_checklist(target), [], project_dir=project)
-        assert "a.c:handler" not in _gap_keys(gaps), (
-            "the fold must hash the same window the stamp covered — "
-            "hashing the normalised single line makes every "
-            "window-stamped row permanent drift"
+        assert "a.c:handler" in _gap_keys(gaps)
+
+    def test_separate_bounded_current_review_stays_covered(self, tmp_path: Path):
+        """A distinct measured C producer has real current admission.
+
+        The legacy unclosed 120-line input above remains untouched. Raw None
+        inventory is not asserted admissible: the current reader requires the
+        pipeline's bounded span. Pure read/hash controls cover that raw window.
+        """
+        from core.audit.gaps import compute_gaps
+        from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
+
+        target = tmp_path / "bounded-target"
+        target.mkdir()
+        (target / "healthy.c").write_text(
+            "int healthy(int value) {\n    return value + 1;\n}\n", encoding="utf-8")
+        project = tmp_path / "bounded-project"
+        run = project / "run1"
+        run.mkdir(parents=True)
+        entry = ReviewJournalEntry(
+            ts=now_iso(), run_id="run1", file="healthy.c", function="healthy",
+            verdict="clean", line_start=1, line_end=3,
+            **current_foundation_fields(target, "healthy.c", 1, 3),
         )
+        assert entry.review_claims["reference_inputs"]
+        append_entry(run, entry)
+        merge_into_index(project, run)
+        checklist = {"target_path": str(target), "files": [{
+            "path": "healthy.c", "language": "c", "items": [{
+                "name": "healthy", "kind": "function", "line_start": 1, "line_end": 3,
+            }],
+        }]}
+        gaps = compute_gaps(checklist, [], project_dir=project)
+        assert "healthy.c:healthy" not in _gap_keys(gaps)
 
     def test_body_edit_inside_window_resurfaces(self, tmp_path: Path):
         from core.audit.gaps import compute_gaps

@@ -20,6 +20,7 @@ import pytest
 
 from core.audit.gaps import _verify_entries_fold, compute_gaps
 from core.audit.strategy import strategies_from_item
+from core.audit.tests.reuse_foundation_fixtures import current_review_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
@@ -80,8 +81,7 @@ def _entry(target, **over):
         "model": "model-a",
         "body": "review body",
     }
-    fields.update(over)
-    return ReviewJournalEntry(**fields)
+    return ReviewJournalEntry(**current_review_fields(target, fields, over))
 
 
 # Both mechanically-minted row kinds: pattern-scan echoes and the

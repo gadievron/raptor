@@ -36,6 +36,7 @@ from core.audit.orchestrator import (
     _retry_error_outcomes,
     run_orchestrator,
 )
+from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
@@ -360,8 +361,15 @@ class TestErrorVerdictsStayGapEligible:
         checklist = json.loads((out / "checklist.json").read_text())
         items = checklist["files"][0]["items"]
 
+        from dataclasses import replace
+
+        checklist["target_path"] = str(_target)
         append_entry(out, self._entry(names[0], "error", items[0]))
-        append_entry(out, self._entry(names[1], "clean", items[1]))
+        # The clean peer is a current review; the error row remains retryable.
+        clean = replace(self._entry(names[1], "clean", items[1]),
+                        **current_foundation_fields(_target, "src/big.c",
+                            items[1]["line_start"], items[1]["line_end"]))
+        append_entry(out, clean)
 
         gaps = compute_gaps(checklist, [], out_dir=out)
         gap_names = {g["name"] for g in gaps}

@@ -16,6 +16,7 @@ from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
 from core.audit.record import _compute_hash
 from core.audit.strategy import strategies_from_item
 from core.audit.verdict_reuse import import_reused_verdicts, outcome_from_entry
+from core.audit.tests.reuse_foundation_fixtures import current_review_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
@@ -98,8 +99,7 @@ def _entry(target, **over):
         "model": "model-a",
         "body": "prior review body",
     }
-    fields.update(over)
-    return ReviewJournalEntry(**fields)
+    return ReviewJournalEntry(**current_review_fields(target, fields, over))
 
 
 def _project_with(tmp_path, entry):
@@ -154,7 +154,7 @@ class TestFoldReuseEligibility:
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_legacy_entry_without_hash_suppressed_not_reused(self, tmp_path):
-        # No hash evidence → historical silent suppression, no import.
+        """Authentic legacy hashless history cannot establish current coverage."""
         target = _write_target(tmp_path)
         project = _project_with(tmp_path, _entry(target, source_hash=""))
         sink: dict = {}
@@ -163,7 +163,7 @@ class TestFoldReuseEligibility:
             reuse_sink=sink,
         )
         assert sink == {}
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_provisional_row_resurfaces_with_reuse_on(self, tmp_path):
         """A provisional (unfinalized cadence-tick) finding row is not
@@ -368,8 +368,10 @@ class TestReuseBlockedStats:
         project = tmp_path / "project"
         prior_dir = project / "run0"
         prior_dir.mkdir(parents=True)
-        append_entry(prior_dir, _entry(target, model="model-b",
-                                       run_id="run0"))
+        prior = _entry(target, model="model-b", run_id="run0",
+                       ts="2000-01-01T00:00:00Z")
+        assert prior.ts < entry.ts
+        append_entry(prior_dir, prior)
         merge_into_index(project, prior_dir)
 
         stats: dict = {}
@@ -425,9 +427,27 @@ class TestCorrectiveStrategyBackfill:
 
     def test_corrective_empty_row_reuses_via_same_run_sibling(
             self, tmp_path):
+        """Legacy None-end corrective history remains visible for fresh review."""
         target = _write_target(tmp_path)
         original = _entry(target, verdict="suspicious")
         corrective = self._corrective(target)   # later ts, same run
+        project = self._project_with_history(
+            tmp_path, original, corrective)
+        sink: dict = {}
+        gaps = compute_gaps(
+            _checklist(target), [], project_dir=project,
+            reuse_sink=sink, current_model="model-a",
+        )
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_corrective_empty_row_reuses_via_same_run_sibling_measured_current(
+            self, tmp_path):
+        """Separately measured current history preserves the strategy contract."""
+        target = _write_target(tmp_path)
+        original = _entry(target, verdict="suspicious")
+        corrective = self._corrective(target, line_end=5,
+            source_hash=hash_span(target / "auth.c", 1, 5))   # later ts, same run
         project = self._project_with_history(
             tmp_path, original, corrective)
         sink: dict = {}
@@ -462,6 +482,27 @@ class TestCorrectiveStrategyBackfill:
         assert "auth.c:check_pw" not in _gap_keys(gaps)
 
     def test_strategy_regression_still_refused(self, tmp_path):
+        """Legacy None-end corrective history remains visible for fresh review."""
+        target = _write_target(tmp_path)
+        original = _entry(
+            target, verdict="suspicious",
+            strategies=[*_current_strategies(), "some_retired_strategy"],
+        )
+        corrective = self._corrective(target)
+        project = self._project_with_history(
+            tmp_path, original, corrective)
+        stats: dict = {}
+        sink: dict = {}
+        gaps = compute_gaps(
+            _checklist(target), [], project_dir=project,
+            reuse_sink=sink, current_model="model-a",
+            reuse_stats=stats,
+        )
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_strategy_regression_still_refused_measured_current(self, tmp_path):
+        """Separately measured current history preserves the strategy contract."""
         # The sibling proves the review was briefed with a SUPERSET of
         # what current inference produces (a strategy was retired or
         # its inputs regressed): materially different briefing — the
@@ -471,7 +512,8 @@ class TestCorrectiveStrategyBackfill:
             target, verdict="suspicious",
             strategies=[*_current_strategies(), "some_retired_strategy"],
         )
-        corrective = self._corrective(target)
+        corrective = self._corrective(target, line_end=5,
+            source_hash=hash_span(target / "auth.c", 1, 5))
         project = self._project_with_history(
             tmp_path, original, corrective)
         stats: dict = {}
@@ -519,6 +561,27 @@ class TestCorrectiveStrategyBackfill:
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_mechanical_echo_sibling_never_donates(self, tmp_path):
+        """Legacy None-end corrective history remains visible for fresh review."""
+        target = _write_target(tmp_path)
+        original = _entry(target, verdict="suspicious")
+        echo = _entry(
+            target, verdict="suspicious",
+            strategies=["post-loop-mechanical"],
+            body="[mechanical] pattern hit", line_end=None,
+        )
+        corrective = self._corrective(target)
+        project = self._project_with_history(
+            tmp_path, original, echo, corrective)
+        sink: dict = {}
+        gaps = compute_gaps(
+            _checklist(target), [], project_dir=project,
+            reuse_sink=sink, current_model="model-a",
+        )
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+
+    def test_mechanical_echo_sibling_never_donates_measured_current(self, tmp_path):
+        """Separately measured current history preserves the strategy contract."""
         # When a post-loop pattern hit triggered the correction, the
         # newest populated row at the site is the mechanical echo —
         # its ``post-loop-mechanical`` tag is a row-kind marker, not
@@ -530,9 +593,10 @@ class TestCorrectiveStrategyBackfill:
         echo = _entry(
             target, verdict="suspicious",
             strategies=["post-loop-mechanical"],
-            body="[mechanical] pattern hit", line_end=None,
+            body="[mechanical] pattern hit", line_end=5,
         )
-        corrective = self._corrective(target)
+        corrective = self._corrective(target, line_end=5,
+            source_hash=hash_span(target / "auth.c", 1, 5))
         project = self._project_with_history(
             tmp_path, original, echo, corrective)
         sink: dict = {}
@@ -1351,12 +1415,7 @@ class TestSliceStampReuse:
     def test_moved_function_with_unchanged_slice_still_reuses(
         self, tmp_path,
     ):
-        """The reuse-preserving half of the verified-span semantics:
-        a moved-but-unchanged function whose slice recomputed at its
-        CURRENT span is still byte-identical (the new concept is
-        strategy-relevant but never SELECTS into check_pw's slice)
-        keeps its $0 reuse — the span fix must not turn every moved
-        function into a re-review."""
+        """Legacy or moved binding is refused; narrow hash/window preconditions remain."""
         target = _write_target(tmp_path)
         project = tmp_path / "project"
         _write_domain_model(project, concepts=[])
@@ -1370,8 +1429,8 @@ class TestSliceStampReuse:
         self._regenerate_model(project, [_AUTH_CONCEPT])
         sink: dict = {}
         gaps = self._moved_gaps(target, project, sink)
-        assert "auth.c:check_pw" in sink
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     @staticmethod
     def _none_end_item(line_start: int) -> dict:
@@ -1415,16 +1474,7 @@ class TestSliceStampReuse:
     def test_unmoved_row_without_line_end_keeps_reuse_via_raw_window(
         self, tmp_path,
     ):
-        """Reuse-preserving half of the raw-window semantics: a row
-        whose checklist item carries no line_end was stamped over the
-        fallback read window (the raw None the writer hands the
-        renderer), and its source hash covers that same window.
-        When the function has NOT moved and the model
-        gained nothing that selects into that window, the recompute
-        must read the SAME fallback window — recomputing over the
-        single normalised line would select nothing where the stamp's
-        window selected the body-matching concept, mismatch the
-        stamp, and re-buy a verdict whose briefing is unchanged."""
+        """Legacy or moved binding is refused; narrow hash/window preconditions remain."""
         target = _write_target(tmp_path)
         project = tmp_path / "project"
         # The concept selects into check_pw's slice via BODY tokens
@@ -1454,8 +1504,8 @@ class TestSliceStampReuse:
         self._clear_model_cache()
         sink: dict = {}
         gaps = self._none_end_gaps(target, project, sink, 1)
-        assert "auth.c:check_pw" in sink
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert sink == {}
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_moved_function_without_line_end_recomputes_full_window(
         self, tmp_path,
@@ -1498,16 +1548,7 @@ class TestSliceStampReuse:
     def test_sibling_row_without_line_end_keeps_reuse_at_recorded_site(
         self, tmp_path,
     ):
-        """Same-named items (macro redefinitions, C++ overloads,
-        prototype + definition) share one file:function key but live
-        at different sites, and only the FIRST occurrence owns the
-        key's current-span slot. A row for a LATER site verifies at
-        its own recorded span, so the raw read window must come from
-        the ENTRY (its line_end, None included), not from the
-        first occurrence's slot: normalising the recorded span to a
-        single line would select nothing where the stamp's fallback
-        window selected the body-matching concept, mismatch the
-        stamp, and re-buy an unchanged review."""
+        """Legacy or moved binding is refused; narrow hash/window preconditions remain."""
         target = _write_target(tmp_path)
         pad = "".join(f"/* pad {i} */\n" for i in range(1, 6))
         # Two same-named definitions: lines 1-5 and lines 11-15.
@@ -1550,10 +1591,10 @@ class TestSliceStampReuse:
             out_dir=project / "run2",
             reuse_sink=sink, current_model="model-a",
         )
-        assert "auth.c:check_pw" in sink
+        assert sink == {}
         # The never-reviewed FIRST site surfaces as a gap (correct —
-        # one row reviews one site); the reviewed sibling must not.
-        assert 11 not in {g["line_start"] for g in gaps}
+        # one row reviews one site); the unadmitted sibling also stays visible.
+        assert {g["line_start"] for g in gaps} == {1, 11}
 
     # Selects ONLY via tokens on the neighbour lines directly after
     # check_pw's measured span (throttle/lockout/bruteforce, lines
@@ -1713,15 +1754,7 @@ class TestSliceStampReuse:
     def test_first_listed_same_named_item_never_speaks_for_the_site(
         self, tmp_path,
     ):
-        """Per-site window comparison: the raw line_end a recorded
-        site is checked against must come from the checklist item AT
-        that site, never from the same-named occurrence that owns
-        the key's first-occurrence slots. Here a measured same-named
-        definition is listed FIRST while the reviewed site carries
-        no line_end — comparing the entry's raw None against the
-        decoy's measured end would refuse the short-circuit and
-        re-buy an unchanged review that the per-site comparison
-        keeps at $0."""
+        """Legacy or moved binding is refused; narrow hash/window preconditions remain."""
         target = tmp_path / "target"
         target.mkdir(exist_ok=True)
         pad = "".join(f"/* pad {i} */\n" for i in range(1, 6))
@@ -1768,8 +1801,49 @@ class TestSliceStampReuse:
             out_dir=project / "run2",
             reuse_sink=sink, current_model="model-a",
         )
-        assert "auth.c:check_pw" in sink
-        assert 1 not in {g["line_start"] for g in gaps}
+        assert sink == {}
+        assert {g["line_start"] for g in gaps} == {1, 11}
+
+    def _measured_second_site(self, tmp_path, *, decoy_first):
+        """Only an independently measured second site earns coverage."""
+        from core.audit.context import domain_slice_hash_for
+
+        target = _write_target(tmp_path)
+        pad = "".join(f"/* pad {i} */\n" for i in range(1, 6))
+        (target / "auth.c").write_text(_SOURCE + pad + _SOURCE, encoding="utf-8")
+        project = tmp_path / "project"
+        _write_domain_model(project, concepts=[self._SOURCE_ONLY_CONCEPT])
+        self._clear_model_cache()
+        stamp = domain_slice_hash_for(
+            project / "run2", target, "auth.c", "check_pw", 11, 15)
+        assert stamp is not None
+        reviewed = dict(_ITEM, line_start=11, line_end=15)
+        entry = _entry(
+            target, line_start=11, line_end=15,
+            strategies=sorted(strategies_from_item(dict(reviewed), "auth.c")),
+            domain_model_hash="00000000", domain_slice_hash=stamp,
+        )
+        assert entry.review_claims["reference_inputs"]
+        _project_with(tmp_path, entry)
+        self._clear_model_cache()
+        items = [dict(_ITEM), reviewed] if decoy_first else [reviewed, dict(_ITEM)]
+        checklist = {"target_path": str(target), "files": [{
+            "path": "auth.c", "language": "c", "items": items,
+        }]}
+        sink: dict = {}
+        gaps = compute_gaps(
+            checklist, [], project_dir=project, out_dir=project / "run2",
+            reuse_sink=sink, current_model="model-a",
+        )
+        assert sink["auth.c:check_pw"].line_start == 11
+        assert sink["auth.c:check_pw"].verdict == "clean"
+        assert {g["line_start"] for g in gaps} == {1}
+
+    def test_measured_current_sibling_reuses_only_recorded_site(self, tmp_path):
+        self._measured_second_site(tmp_path, decoy_first=False)
+
+    def test_measured_current_second_site_reuses_with_first_decoy(self, tmp_path):
+        self._measured_second_site(tmp_path, decoy_first=True)
 
     def test_truncated_stamp_prefix_never_short_circuits(self, tmp_path):
         """Full-string equality pin: a stamp that is a strict PREFIX

@@ -3,6 +3,7 @@
 import pytest
 
 from core.audit.gaps import _reuse_block_class, _reuse_ineligibility
+from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
 from core.audit.tests.test_verdict_reuse import _entry, _write_target
 
 pytestmark = pytest.mark.usefixtures("overflow_disproof_unit_worker")
@@ -84,7 +85,6 @@ def test_real_journal_cannot_reuse_lp64_disproof_under_another_abi(tmp_path, ver
     from core.audit.strategy import strategies_from_item
     from core.audit.tests.test_verdict_reuse import _gap_keys, _project_with
     from core.coverage.journal import ReviewJournalEntry, _INDEX_SLIM_MIN_BYTES, load_index, now_iso
-    from core.staleness import hash_span
 
     proof = source_overflow_demotion_reason(HYPOTHESIS, ABI_SOURCE, file_path='record.c',
                                             function_name='Read', integer_abi='lp64')
@@ -103,7 +103,7 @@ def test_real_journal_cannot_reuse_lp64_disproof_under_another_abi(tmp_path, ver
         body += ' source proof context' * (_INDEX_SLIM_MIN_BYTES // 10 + 1)
     entry = ReviewJournalEntry(ts=now_iso(), run_id='run1', file='record.c', function='Read',
                                verdict=verdict, body=body, clean_basis='verdict', model='model-a',
-                               source_hash=hash_span(target / 'record.c', 1, 1), line_start=1, line_end=1,
+                               **current_foundation_fields(target, 'record.c', 1, 1), line_start=1, line_end=1,
                                strategies=sorted(strategies_from_item(item, 'record.c')))
     project = _project_with(tmp_path, entry)
     stored = load_index(project)['record.c:Read']

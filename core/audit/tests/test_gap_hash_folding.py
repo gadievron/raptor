@@ -3,16 +3,17 @@
 Prior-run reviews (project journal index) only suppress a gap when
 the journaled ``source_hash`` still matches the function's current
 source. A changed function resurfaces as a gap; unchanged ones stay
-covered; unverifiable entries (missing hash, missing source) keep the
-historical suppression behaviour.
+covered; unverifiable or stale historical entries resurface under current admission.
 """
 
 from __future__ import annotations
 
 from core.audit.gaps import compute_gaps
+from core.audit.tests.reuse_foundation_fixtures import current_foundation_fields
 from core.coverage.journal import (
     ReviewJournalEntry,
     append_entry,
+    latest_entries,
     merge_into_index,
     now_iso,
 )
@@ -65,13 +66,18 @@ def _project_with_entry(tmp_path, source_hash):
     project = tmp_path / "project"
     run_dir = project / "run1"
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Keep explicit missing/stale/short hashes as legacy refusal controls.
+    fields = {"source_hash": source_hash}
+    target = tmp_path / "target"
+    if source_hash and source_hash == hash_span(target / "auth.c", 1, 5):
+        fields = current_foundation_fields(target, "auth.c", 1, 5)
     append_entry(run_dir, ReviewJournalEntry(
         ts=now_iso(),
         run_id="run1",
         file="auth.c",
         function="check_pw",
         verdict="clean",
-        source_hash=source_hash,
+        **fields,
         line_start=1,
         line_end=5,
     ))
@@ -128,21 +134,18 @@ class TestHashAwareFolding:
         assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_missing_hash_keeps_current_behaviour_covered(self, tmp_path):
-        # Documented choice: entries without a source_hash (legacy
-        # journals, hash-computation failures at review time) carry no
-        # drift evidence. Treating them as changed would resurface
-        # every legacy review at once — so they STAY covered.
-        # Post journal-MAC: this leniency applies to VERIFIED rows
-        # only (the fixture appends through append_entry, which
-        # stamps); an UNSTAMPED empty-hash row resurfaces — see
-        # test_journal_fold_provenance.
+        """Current admission refuses incomplete or stale historical binding."""
         target = _write_target(tmp_path)
         project = _project_with_entry(tmp_path, "")
+        from core.coverage.journal_mac import entry_provenance
+        historical = latest_entries(project / "run1")["auth.c:check_pw"]
+        assert historical.source_hash == ""
+        assert entry_provenance(historical) == "verified"
 
         gaps = compute_gaps(
             _checklist(target), [], project_dir=project,
         )
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_missing_source_file_resurfaces_as_gap(self, tmp_path):
         # Checklist references the file but it is gone from disk:
@@ -193,7 +196,7 @@ class TestHashAwareFolding:
                 file=file,
                 function="check_pw",
                 verdict="clean",
-                source_hash=source_hash,
+                **current_foundation_fields(target, file, 1, 5),
                 line_start=1,
                 line_end=5,
             ))
@@ -222,6 +225,7 @@ class TestHashAwareFolding:
         )
 
     def test_no_target_path_keeps_covered(self, tmp_path):
+        """Current admission refuses incomplete or stale historical binding."""
         target = _write_target(tmp_path)
         stored = hash_span(target / "auth.c", 1, 5)
         project = _project_with_entry(tmp_path, stored)
@@ -230,9 +234,8 @@ class TestHashAwareFolding:
         checklist = _checklist(target)
         checklist.pop("target_path")
         gaps = compute_gaps(checklist, [], project_dir=project)
-        # Without a target path the hash cannot be recomputed — the
-        # entry keeps its historical suppression.
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        # No trusted current target is available to admit the old row.
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
     def test_error_verdicts_still_not_folded(self, tmp_path):
         target = _write_target(tmp_path)
@@ -270,9 +273,7 @@ class TestHashAwareFolding:
         assert _gap_keys(gaps) == {"other.c:unrelated"}
 
     def test_moved_function_hashes_at_current_span(self, tmp_path):
-        # The function body is unchanged but shifted down the file:
-        # the fold must hash the CURRENT checklist span, not the
-        # journaled one.
+        """Current admission refuses incomplete or stale historical binding."""
         target = _write_target(tmp_path)
         stored = hash_span(target / "auth.c", 1, 5)
         project = _project_with_entry(tmp_path, stored)
@@ -285,8 +286,9 @@ class TestHashAwareFolding:
         checklist["files"][0]["items"][0]["line_start"] = 2
         checklist["files"][0]["items"][0]["line_end"] = 6
 
+        assert hash_span(target / "auth.c", 2, 6) == stored
         gaps = compute_gaps(checklist, [], project_dir=project)
-        assert "auth.c:check_pw" not in _gap_keys(gaps)
+        assert "auth.c:check_pw" in _gap_keys(gaps)
 
 
 _TWO_SITE_SOURCE = """\
@@ -315,7 +317,7 @@ class TestCrossRunSameNamedSites:
                 ts=now_iso(), run_id="run1",
                 file="conf.c", function="SSHINT",
                 verdict="clean",
-                source_hash=hash_span(target / "conf.c", line, line),
+                **current_foundation_fields(target, "conf.c", line, line),
                 line_start=line, line_end=line,
                 producer="audit",
             ))
