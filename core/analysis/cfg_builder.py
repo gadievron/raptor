@@ -754,6 +754,8 @@ class _PythonCFGBuilder:
         # condition). Both are pre-allocated as the loop is set up so
         # any inner ``break`` / ``continue`` has somewhere to attach.
         self._loop_stack: list[tuple[PyCFGNode, PyCFGNode]] = []
+        # Original abrupt destinations are also possible after finally.
+        self._abrupt_edges: list[tuple[PyCFGNode, PyCFGNode]] = []
         self._branch_guards: list[BranchGuard[PyCFGNode]] = []
         # AST columns count UTF-8 bytes. Cache lines once, rather than
         # repeatedly splitting the whole file for each condition.
@@ -865,11 +867,13 @@ class _PythonCFGBuilder:
             node = self._new_node("stmt", stmt)
             self._link_many(incoming, node)
             self._link(node, self.exit)
+            self._abrupt_edges.append((node, self.exit))
             return []   # nothing flows past a return
         if isinstance(stmt, ast.Raise):
             node = self._new_node("stmt", stmt)
             self._link_many(incoming, node)
             self._link(node, self.exit)
+            self._abrupt_edges.append((node, self.exit))
             return []
         if isinstance(stmt, ast.Break):
             if not self._loop_stack:
@@ -881,6 +885,7 @@ class _PythonCFGBuilder:
             node = self._new_node("stmt", stmt, label=f"break (line {stmt.lineno})")
             self._link_many(incoming, node)
             self._link(node, break_target)
+            self._abrupt_edges.append((node, break_target))
             return []
         if isinstance(stmt, ast.Continue):
             if not self._loop_stack:
@@ -889,6 +894,7 @@ class _PythonCFGBuilder:
             node = self._new_node("stmt", stmt, label=f"continue (line {stmt.lineno})")
             self._link_many(incoming, node)
             self._link(node, cont_target)
+            self._abrupt_edges.append((node, cont_target))
             return []
         if hasattr(ast, "Match") and isinstance(stmt, ast.Match):
             return self._build_match(stmt, incoming)
@@ -1069,6 +1075,8 @@ class _PythonCFGBuilder:
         # is preserved by being more permissive about reachability.)
         # finally always runs; the model is that body_out, handler_out,
         # and the exceptional paths all converge at finally's entry.
+        protected_start = len(self._all_nodes)
+        abrupt_start = len(self._abrupt_edges)
         body_out = self._build_stmts(stmt.body, incoming)
         handler_outs: list[PyCFGNode] = []
         for handler in stmt.handlers:
@@ -1113,7 +1121,28 @@ class _PythonCFGBuilder:
         # ``finalbody``: every other path merges here
         merge_in = else_out + handler_outs
         if stmt.finalbody:
-            return self._build_stmts(stmt.finalbody, merge_in)
+            protected = self._all_nodes[protected_start:]
+            protected_set = set(protected)
+            destinations = list(dict.fromkeys(
+                destination for source, destination in self._abrupt_edges[abrupt_start:]
+                if source in protected_set and destination not in protected_set
+            ))
+            # Exceptions can leave a statement before its definitions take
+            # effect. Include incoming states as well as protected nodes;
+            # abrupt exits must not leave cleanup sinks unreachable.
+            final_in = list(dict.fromkeys([*merge_in, *incoming, *protected]))
+            final_out = self._build_stmts(stmt.finalbody, final_in)
+            # Keep original abrupt edges and normal fallthrough as extra
+            # paths: this is an overapproximation, not exact unwinding or
+            # proof that cleanup dominates exit. A pending exception can
+            # also leave after cleanup; outgoing edges expose those tail
+            # states to an enclosing handler's conservative fanout.
+            if self.exit not in destinations:
+                destinations.append(self.exit)
+            for tail in final_out:
+                for destination in destinations:
+                    self._link(tail, destination)
+            return final_out
         return merge_in
 
     def _build_with(
