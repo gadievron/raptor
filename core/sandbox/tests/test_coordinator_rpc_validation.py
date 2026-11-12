@@ -15,6 +15,8 @@ thread, leaving ``returncode=None`` with no error string.
 import io
 import json
 
+import pytest
+
 from core.sandbox import netns_coordinator as _nc
 
 
@@ -162,6 +164,26 @@ def test_main_join_bound_uses_shared_default_without_timeout_s(monkeypatch):
     assert exit_code is None
     assert join_timeouts == [_nc._DEFAULT_CHILD_TIMEOUT_S + 1.0]
     assert len(responses) == 1
+
+
+@pytest.mark.parametrize("field", ["target-timeout", "listen-timeout"])
+@pytest.mark.parametrize("value", [10 ** 400, "not-a-number"], ids=["overflow", "invalid"])
+def test_main_numeric_conversion_failure_is_a_structured_refusal(monkeypatch, field, value):
+    request = {
+        "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+    }
+    if field == "target-timeout":
+        request["target"]["timeout_s"] = value
+    else:
+        request["wait_listen_timeout_s"] = value
+    errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
+    assert exit_code == 2
+    assert responses == []
+    assert joins == []
+    assert len(errors) == 1
+    assert errors[0][0] == "bad_request"
+    assert "numeric field" in errors[0][1]
 
 
 # --------------------------------------------------------------------------
