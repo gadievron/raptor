@@ -1215,17 +1215,11 @@ def _is_contract_delegation(lower: str) -> bool:
 
 
 def _refutation_grounded(h: dict) -> bool:
-    """True when a refuted hypothesis's refutation is GROUNDED.
+    """Whether model counter text is locally scoped and non-delegated.
 
-    Grounded means the model backed the refutation with a counter it
-    verified against the reviewed function itself: ``counter`` text is
-    present, scoped ``counter_scope == "local"``, and not mere
-    contract delegation ("the caller must ensure..." defeats nothing
-    locally). A missing counter, a ``cross_function`` scope (the
-    refuting claim lives in code the review never examined), or a
-    delegated contract is an UNGROUNDED refutation — it may not erase
-    the suspicion by itself; the claim routes to verification instead
-    (verify the refuting claim, don't distrust the clean).
+    This routing heuristic does not verify the text against source or
+    admit a negative fact. Neither it nor the deepen context grants
+    refutation or withdrawal authority.
     """
     counter = str(h.get("counter") or "").strip()
     if not counter:
@@ -1634,103 +1628,54 @@ def make_review_fn(
                 for h in hypotheses
             )
             if all_refuted:
-                # Grounding gate: self-refutation demotes only when
-                # every refutation is grounded (local, non-delegated
-                # counter — _refutation_grounded). An ungrounded
-                # refutation is an unverified claim; withholding keeps
-                # the verdict suspicious so the existing verification
-                # lane (deepen re-review / end-of-run resolution)
-                # adjudicates it instead of the model erasing its own
-                # suspicion by assertion. The deepen pass IS that
-                # lane: a full-context re-review that still refutes
-                # everything closes the loop and demotes with its own
-                # provenance stamp.
-                ungrounded = [
-                    h for h in hypotheses if not _refutation_grounded(h)
-                ]
-                withhold_reason = ""
-                if ctx.get("deepen"):
-                    # Deepen exempts ONLY the ungrounded-refutation
-                    # leg: the full-context re-review is itself the
-                    # verification lane for grounding. The
-                    # counter-escalation floor below still applies —
-                    # a deepen response whose own compelling counter
-                    # machine-raised the verdict may not un-raise it
-                    # with the same response's refutation record.
-                    ungrounded = []
+                # These counters are model judgments, including when the
+                # model calls them local or the pass is a deepen review.
+                # Preserve the assessment until the existing admission or
+                # explicit source-bound withdrawal path adjudicates it.
+                ungrounded = [h for h in hypotheses if not _refutation_grounded(h)]
+                reason = "explicit-withdrawal-required"
+                withhold_reason = (
+                    "model-local counter text is not an admitted refutation "
+                    "or an explicit source-bound withdrawal"
+                )
                 if ungrounded:
+                    reason = "ungrounded"
                     withhold_reason = (
                         f"{len(ungrounded)} of {len(hypotheses)} "
                         "refutation(s) carry no grounded local counter"
                     )
-                    result["all_refuted_demotion_withheld"] = "ungrounded"
-                elif counter_escalated:
-                    # Counter-escalation evidence floor: this
-                    # suspicious is machine-raised off the review's
-                    # own counter-hypothesis (the model concluded
-                    # clean). The same response's refutation record
-                    # may not un-raise it — only a verification-grade
-                    # receipt may. Sanitized per "+"-part so a raw
-                    # model claim can never satisfy the floor.
+                if counter_escalated:
                     from .evidence_grade import is_verification_evidence
                     sanitized_ev = "+".join(
                         p for p in (
                             _normalize_evidence_tool(part.strip())
-                            for part in str(
-                                result.get("evidence_tool") or "",
-                            ).split("+")
+                            for part in str(result.get("evidence_tool") or "").split("+")
                         ) if p
                     )
                     if not is_verification_evidence(sanitized_ev):
+                        reason = "counter-escalation-floor"
                         withhold_reason = (
                             "the verdict is a counter-escalation with "
                             "no verification-grade receipt"
                         )
-                        result["all_refuted_demotion_withheld"] = (
-                            "counter-escalation-floor"
-                        )
-                if withhold_reason:
-                    marker = (
-                        "[withheld all-refuted demotion: every "
-                        "hypothesis below is marked refuted, but "
-                        f"{withhold_reason} — verdict stays suspicious "
-                        "pending verification]\n\n"
-                    )
-                    body = result.get("body") or ""
-                    if body.startswith("[counter-hypothesis escalation:"):
-                        # The escalation marker must stay FIRST (the
-                        # machine-raised provenance check reads the
-                        # body prefix on journal-rebuilt outcomes) —
-                        # splice the withhold marker after it.
-                        head, sep, tail = body.partition("\n\n")
-                        result["body"] = head + sep + marker + tail
-                    else:
-                        result["body"] = marker + body
-                    logger.info(
-                        "all-refuted demotion withheld %s:%s: %s",
-                        ctx["file"], ctx["function"], withhold_reason,
-                    )
+                result["all_refuted_demotion_withheld"] = reason
+                marker = (
+                    "[withheld all-refuted demotion: every "
+                    "hypothesis below is marked refuted, but "
+                    f"{withhold_reason} — verdict stays suspicious "
+                    "pending adjudication]\n\n"
+                )
+                body = result.get("body") or ""
+                if body.startswith("[counter-hypothesis escalation:"):
+                    # Keep machine-raised escalation provenance first.
+                    head, sep, tail = body.partition("\n\n")
+                    result["body"] = head + sep + marker + tail
                 else:
-                    status = "clean"
-                    result["status"] = status
-                    result["all_refuted_demotion"] = True
-                    result["all_refuted_grounding"] = (
-                        "deepen-verified" if ctx.get("deepen") else "local"
-                    )
-                    # Keep the journal body consistent with the stored
-                    # verdict (the prose may still argue suspicion).
-                    result["body"] = (
-                        "[all-refuted demotion: every hypothesis below "
-                        "was refuted by the review itself — verdict "
-                        "recorded as clean]\n\n" + (result.get("body") or "")
-                    )
-                    logger.info(
-                        "all-refuted demotion %s:%s: %d hypotheses "
-                        "refuted%s",
-                        ctx["file"], ctx["function"], len(hypotheses),
-                        " (overrode counter-escalation)"
-                        if counter_escalated else "",
-                    )
+                    result["body"] = marker + body
+                logger.info(
+                    "all-refuted demotion withheld %s:%s: %s",
+                    ctx["file"], ctx["function"], withhold_reason,
+                )
 
         raw_ev = result.get("evidence_tool") or ""
         evidence_tool = _normalize_evidence_tool(raw_ev)

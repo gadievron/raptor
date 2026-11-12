@@ -371,12 +371,11 @@ class TestReviewPathStampsFlag:
 
 
 class TestDeepenCounterEscalationFloor:
-    """The counter-escalation floor applies inside deepen too: deepen
-    exempts only the ungrounded-refutation leg of the all-refuted
-    demotion. A deepen response whose own compelling counter
-    machine-raised the verdict may not un-raise it with the same
-    response's refutation record — only a verification-grade receipt
-    may."""
+    """Deepen counterarguments retain the existing escalation floor.
+
+    Additional context does not admit the model's counterargument as
+    a negative fact or an explicit source-bound withdrawal.
+    """
 
     _COMPELLING_COUNTER = (
         "A caller could pass a capacity larger than the actual "
@@ -428,13 +427,11 @@ class TestDeepenCounterEscalationFloor:
         assert outcome.body.startswith("[counter-hypothesis escalation:")
         assert "[withheld all-refuted demotion:" in outcome.body
 
-    def test_deepen_unescalated_ungrounded_refutations_still_demote(
+    def test_deepen_unescalated_ungrounded_refutations_require_adjudication(
         self, tmp_path: Path,
     ):
-        # The blessed lane: a model-emitted suspicious whose deepen
-        # re-review refutes everything demotes even when the
-        # refutations carry no grounded local counter — deepen IS the
-        # verification lane for grounding.
+        # More context does not turn a model label into a negative
+        # observation or an explicit source-bound withdrawal.
         from core.audit.llm_review import make_review_fn
         from core.audit.tests.test_llm_review import FakeLLMClient
 
@@ -451,10 +448,10 @@ class TestDeepenCounterEscalationFloor:
         outcome = review_fn(
             self._deepen_ctx(), _make_toolless_config(tmp_path),
         )
-        assert outcome.status == "clean"
-        assert outcome.review_result["all_refuted_demotion"] is True
-        assert outcome.review_result["all_refuted_grounding"] \
-            == "deepen-verified"
+        assert outcome.status == "suspicious"
+        assert outcome.review_result["all_refuted_demotion_withheld"] == "ungrounded"
+        assert "all_refuted_demotion" not in outcome.review_result
+        assert "all_refuted_grounding" not in outcome.review_result
 
 
 class TestAntiSelfRefutationRows:

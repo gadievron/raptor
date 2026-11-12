@@ -2846,7 +2846,7 @@ class TestSelfContradictionDemotion:
             hypotheses=hypotheses, evidence_tool=evidence,
         )
 
-    def test_all_refuted_suspicious_demoted(self):
+    def test_all_refuted_suspicious_requires_explicit_withdrawal(self):
         from core.audit.orchestrator import (
             OrchestratorResult,
             _demote_self_contradictions,
@@ -2865,10 +2865,11 @@ class TestSelfContradictionDemotion:
         result.outcomes = [outcome]
         result.suspicious = 1
         _demote_self_contradictions(result)
-        assert result.outcomes[0].status == "clean"
-        assert result.suspicious == 0
-        assert result.clean == 1
-        assert "[self-contradiction:" in result.outcomes[0].body
+        assert result.outcomes[0] is outcome
+        assert outcome.status == "suspicious"
+        assert result.suspicious == 1
+        assert result.clean == 0
+        assert outcome.review_result["all_refuted_demotion_withheld"] == "explicit-withdrawal-required"
 
     def test_ungrounded_all_refuted_not_demoted(self):
         # Refutations with no counter (or a non-local / delegated one)

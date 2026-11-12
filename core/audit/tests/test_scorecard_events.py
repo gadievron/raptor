@@ -654,7 +654,7 @@ class TestFailSoftWiring:
 class TestPostLoopPassEmission:
     """Functional binding of the callable post-loop emission sites."""
 
-    def test_self_contradiction_demotion_buffers_event(self) -> None:
+    def test_self_contradiction_diagnostic_buffers_event(self) -> None:
         from core.audit.orchestrator import (
             OrchestratorResult,
             ReviewOutcome,
@@ -679,7 +679,7 @@ class TestPostLoopPassEmission:
         ))
         result.suspicious = 1
         _demote_self_contradictions(result)
-        assert result.outcomes[0].status == "clean"
+        assert result.outcomes[0].status == "suspicious"
         assert len(result.scorecard_events) == 1
         ev = result.scorecard_events[0]
         assert ev["event_type"] == "self_consistency"

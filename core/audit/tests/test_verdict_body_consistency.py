@@ -4,8 +4,7 @@ Observed field failure: a journal record carried verdict=suspicious
 while its body ended "Verdict: clean" — the counter-hypothesis
 escalation flipped the status after the prose was generated and never
 annotated the text, leaving the operator to guess which to trust.
-Every in-review status flip (counter escalation, all-refuted
-demotion) now stamps a gate marker at
+Status flips and withheld model refutations stamp a gate marker at
 the top of the body. Also covers the loud-once fix-history skip on
 non-git targets. Hermetic — LLM stubbed.
 """
@@ -76,7 +75,7 @@ class TestBodyAnnotatedOnStatusFlips:
         # The original prose is preserved below the marker.
         assert "Verdict: clean." in outcome.body
 
-    def test_all_refuted_demotion_stamps_body(self):
+    def test_model_refutation_stamps_withheld_adjudication(self):
         outcome = _review({
             "status": "suspicious",
             "body": "Possible overflow at line 10.",
@@ -91,9 +90,10 @@ class TestBodyAnnotatedOnStatusFlips:
                  "counter_scope": "local"},
             ],
         })
-        assert outcome.status == "clean"
-        assert outcome.body.startswith("[all-refuted demotion:")
-        assert outcome.review_result["all_refuted_grounding"] == "local"
+        assert outcome.status == "suspicious"
+        assert outcome.body.startswith("[withheld all-refuted demotion:")
+        assert outcome.review_result["all_refuted_demotion_withheld"] == "explicit-withdrawal-required"
+        assert "all_refuted_grounding" not in outcome.review_result
 
     def test_rationale_consistency_check_flips_nothing(self):
         # The rationale-consistency check never changes a verdict: a finding whose
@@ -130,14 +130,14 @@ class TestBodyAnnotatedOnStatusFlips:
 
 
 class TestAllRefutedGrounding:
-    """The all-refuted demotion fires only on GROUNDED refutations.
+    """Model refutations remain unverified pending admitted adjudication.
 
     A refutation with no counter, a cross_function counter, or a
     contract-delegating counter is an unverified claim — the verdict
     stays suspicious (with a visible withhold marker) so verification
     adjudicates it instead of the model erasing its own suspicion by
-    assertion. The deepen pass is the verification lane: its own
-    all-refuted conclusion demotes with a provenance stamp.
+    assertion. A deepen pass also requires admitted adjudication or
+    explicit source-bound withdrawal, rather than a provenance label.
     """
 
     def test_missing_counter_withholds_demotion(self):
@@ -224,9 +224,8 @@ class TestAllRefutedGrounding:
         head, _, tail = outcome.body.partition("\n\n")
         assert tail.startswith("[withheld all-refuted demotion:")
 
-    def test_deepen_all_refuted_demotes_with_provenance(self):
-        # The deepen pass IS the verification lane — its own
-        # all-refuted conclusion closes the loop and demotes, stamped.
+    def test_deepen_model_refutation_withholds_adjudication(self):
+        # A deepen context does not admit a negative fact or withdrawal.
         outcome = _review({
             "status": "suspicious",
             "body": "Possible overflow at line 10.",
@@ -234,10 +233,10 @@ class TestAllRefutedGrounding:
                 {"mechanism": "overflow via n", "confidence": "refuted"},
             ],
         }, ctx_extra={"deepen": True})
-        assert outcome.status == "clean"
-        assert outcome.body.startswith("[all-refuted demotion:")
-        assert outcome.review_result[
-            "all_refuted_grounding"] == "deepen-verified"
+        assert outcome.status == "suspicious"
+        assert outcome.body.startswith("[withheld all-refuted demotion:")
+        assert outcome.review_result["all_refuted_demotion_withheld"] == "ungrounded"
+        assert "all_refuted_grounding" not in outcome.review_result
 
 
 class TestFixHistorySkipIsLoud:
