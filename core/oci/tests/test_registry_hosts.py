@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import pytest
 
+from core.oci import registry_hosts
+from core.testing.module_bindings import patch_module_attribute
+
 from core.oci.image_ref import parse_image_ref
 from core.oci.registry_hosts import registry_hosts_for
 
@@ -392,10 +395,9 @@ def _aaaa_record(addr: str, port: int = 443):
 def test_resolved_loopback_refused(monkeypatch):
     """A hostname whose A record answers 127.0.0.1 (rebinding /
     private DNS) is refused at resolution time."""
-    import socket
     from core.oci.registry_hosts import validate_resolved_registry_addresses
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_a_record("127.0.0.1")],
     )
     with pytest.raises(ValueError, match="rebinding|not globally routable"):
@@ -405,10 +407,9 @@ def test_resolved_loopback_refused(monkeypatch):
 def test_resolved_nat64_metadata_refused(monkeypatch):
     """An AAAA answer of 64:ff9b::a9fe:a9fe is is_global=True but
     embeds 169.254.169.254 — the embedded v4 policy must fire."""
-    import socket
     from core.oci.registry_hosts import validate_resolved_registry_addresses
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_aaaa_record("64:ff9b::a9fe:a9fe")],
     )
     with pytest.raises(ValueError, match="rebinding|not globally routable"):
@@ -418,10 +419,9 @@ def test_resolved_nat64_metadata_refused(monkeypatch):
 def test_resolved_any_bad_address_refuses(monkeypatch):
     """ANY non-global answer refuses, even alongside global ones —
     the attacker controls answer ordering."""
-    import socket
     from core.oci.registry_hosts import validate_resolved_registry_addresses
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_a_record("8.8.8.8"),
                          _a_record("192.168.1.1")],
     )
@@ -430,10 +430,9 @@ def test_resolved_any_bad_address_refuses(monkeypatch):
 
 
 def test_resolved_all_global_passes(monkeypatch):
-    import socket
     from core.oci.registry_hosts import validate_resolved_registry_addresses
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_a_record("8.8.8.8"),
                          _aaaa_record("2606:4700::6810:85e5")],
     )
@@ -449,7 +448,7 @@ def test_unresolvable_host_refused(monkeypatch):
     def _boom(*a, **k):
         raise socket.gaierror(-2, "Name or service not known")
 
-    monkeypatch.setattr(socket, "getaddrinfo", _boom)
+    patch_module_attribute(monkeypatch, registry_hosts, "socket", "getaddrinfo", _boom)
     with pytest.raises(ValueError, match="cannot resolve"):
         validate_resolved_registry_addresses("innocent.example")
 
@@ -457,13 +456,12 @@ def test_unresolvable_host_refused(monkeypatch):
 def test_resolution_gate_ip_literal_skips_dns(monkeypatch):
     """IP-literal registries never touch the resolver — the literal
     policy applies directly (and refuses non-global)."""
-    import socket
     from core.oci.registry_hosts import validate_resolved_registry_addresses
 
     def _no_dns(*a, **k):
         raise AssertionError("getaddrinfo must not be called for literals")
 
-    monkeypatch.setattr(socket, "getaddrinfo", _no_dns)
+    patch_module_attribute(monkeypatch, registry_hosts, "socket", "getaddrinfo", _no_dns)
     validate_resolved_registry_addresses("8.8.8.8:5000")
     with pytest.raises(ValueError, match="SSRF|not\\b.*routable"):
         validate_resolved_registry_addresses("127.1:5000")
@@ -473,15 +471,14 @@ def test_client_refuses_registry_resolving_to_loopback(monkeypatch):
     """The OCI client re-validates resolved addresses before ANY
     request bytes leave — a rebinding registry never sees a TCP
     connect, not even the first manifest HEAD."""
-    import socket
     from core.oci.client import OciRegistryClient, RegistryError
 
     class _NoHttp:
         def request(self, *a, **k):
             raise AssertionError("HTTP request must not be issued")
 
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_a_record("127.0.0.1")],
     )
     client = OciRegistryClient(http=_NoHttp())
@@ -492,15 +489,14 @@ def test_client_refuses_registry_resolving_to_loopback(monkeypatch):
 
 
 def test_client_refuses_registry_resolving_to_nat64_metadata(monkeypatch):
-    import socket
     from core.oci.client import OciRegistryClient, RegistryError
 
     class _NoHttp:
         def request(self, *a, **k):
             raise AssertionError("HTTP request must not be issued")
 
-    monkeypatch.setattr(
-        socket, "getaddrinfo",
+    patch_module_attribute(
+        monkeypatch, registry_hosts, "socket", "getaddrinfo",
         lambda *a, **k: [_aaaa_record("64:ff9b::a9fe:a9fe")],
     )
     client = OciRegistryClient(http=_NoHttp())

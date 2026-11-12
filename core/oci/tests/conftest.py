@@ -5,9 +5,8 @@ resolves to (``validate_resolved_registry_addresses``, DNS-rebinding
 defence) before issuing any request. Tests are hermetic — no real
 DNS — so resolution is stubbed to a fixed globally-routable address
 by default. Tests that exercise the resolution gate itself
-monkeypatch ``socket.getaddrinfo`` with their own answers (a
-test-local ``monkeypatch.setattr`` runs after this autouse fixture
-and wins).
+install their own consumer-local socket lookup after this
+autouse fixture, preserving the shared socket module.
 """
 
 from __future__ import annotations
@@ -15,6 +14,9 @@ from __future__ import annotations
 import socket
 
 import pytest
+
+from core.oci import registry_hosts
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +34,7 @@ def _stub_getaddrinfo(monkeypatch):
             "", ("8.8.8.8", port or 443),
         )]
 
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    patch_module_attribute(monkeypatch, registry_hosts, "socket", "getaddrinfo", fake_getaddrinfo)
 
 
 @pytest.fixture(autouse=True)
