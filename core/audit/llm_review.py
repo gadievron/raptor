@@ -1425,6 +1425,8 @@ def make_review_fn(
         ctx: dict[str, Any],
         config: OrchestratorConfig,
     ) -> ReviewOutcome:
+        from .review_availability import require_binary_implementation
+        require_binary_implementation(ctx)
         budget = _prompt_budget(ctx, effective_system_prompt)
         # The callback belongs to THIS invocation. A shared context dictionary
         # can be formatted concurrently by panel members with different caps.
