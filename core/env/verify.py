@@ -217,6 +217,7 @@ def _http_exchange(
     watchdog = threading.Timer(timeout_seconds * 2, _watchdog_shutdown)
     watchdog.daemon = True
     watchdog.start()
+    failed = True
     try:
         conn.request(method, path, body=body, headers=headers or {})
         resp = conn.getresponse()
@@ -239,7 +240,9 @@ def _http_exchange(
                 f"exchange exceeded the {timeout_seconds * 2:g}s wall "
                 "watchdog (peer dripped the status/header phase)"
             )
-        return resp.status, b"".join(chunks)
+        result = resp.status, b"".join(chunks)
+        failed = False
+        return result
     except (OSError, http.client.HTTPException) as exc:
         if watchdog_fired.is_set():
             raise TimeoutError(
@@ -249,7 +252,11 @@ def _http_exchange(
         raise
     finally:
         watchdog.cancel()
-        conn.close()
+        try:
+            conn.close()
+        except BaseException:
+            if not failed:
+                raise
 
 
 def _url_for(host_ip: str, host_port: int, path: str) -> str:
