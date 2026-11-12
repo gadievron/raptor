@@ -425,6 +425,22 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     return result
 
 
+def _lambda_assignment_names(node: ast.Lambda) -> frozenset[str]:
+    """Body walruses are local; nested lambda defaults use this frame."""
+    names: set[str] = set()
+    pending: list[ast.AST] = [node.body]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, ast.Lambda):
+            pending.extend(item.args.defaults)
+            pending.extend(default for default in item.args.kw_defaults if default is not None)
+            continue  # the nested body owns its own assignment expressions
+        if isinstance(item, ast.NamedExpr) and isinstance(item.target, ast.Name):
+            names.add(item.target.id)
+        pending.extend(ast.iter_child_nodes(item))
+    return frozenset(names)
+
+
 def _walk_symbols(
     root: ast.AST,
 ) -> tuple[frozenset[str], frozenset[str]]:
@@ -476,7 +492,7 @@ def _walk_symbols(
             # Lambda params are lambda-local; the body's free names
             # are loads in the enclosing scope. Add params to
             # comp_local for the body walk.
-            lambda_locals = set(comp_local)
+            lambda_locals = set(comp_local) | set(_lambda_assignment_names(node))
             for arg in node.args.args:
                 lambda_locals.add(arg.arg)
             for arg in node.args.posonlyargs:
