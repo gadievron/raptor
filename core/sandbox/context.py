@@ -4744,8 +4744,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                   or c.startswith(_home_prefix + os.sep))
                              or _under_declared_tool_dir(c))
                     ]
-                    if _kept:
-                        _scrubbed["PATH"] = os.pathsep.join(_kept)
+                    # An empty PATH searches cwd; use exec's default search
+                    # when every inherited entry was removed instead.
+                    _scrubbed["PATH"] = os.pathsep.join(_kept) or os.defpath
                     # PATH-divergence gate. The home-scrub above can
                     # change what a BARE command name resolves to: the
                     # caller's shell would run the venv/toolchain copy
