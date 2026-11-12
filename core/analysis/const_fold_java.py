@@ -1199,6 +1199,17 @@ def _make_point_resolver(rd, index: JavaConstIndex, array_resolver=None,
             visiting.discard(key)
             if val is _REFUSE:
                 return _REFUSE
+            if isinstance(val, _JavaChar):
+                # A char RHS may widen to int/long at assignment. Without
+                # that conversion model, retain it only for a declaration
+                # which proves char (including var inferred from the RHS).
+                declarator = rhs.parent
+                declaration = (declarator.parent if declarator is not None
+                               and declarator.type == "variable_declarator" else None)
+                target_type = (declaration.child_by_field_name("type")
+                               if declaration is not None else None)
+                if target_type is None or target_type.text not in (b"char", b"var"):
+                    return _REFUSE
             values.append(val)
         first = values[0]
         for v in values[1:]:
