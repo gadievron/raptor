@@ -102,7 +102,12 @@ def register_requests(review: object, origin: KnowledgeOrigin) -> KnowledgeBatch
                 continue
             subject = _bounded_field_text(item, "subject" if kind == "target_study" else "topic", 96 if kind == "target_study" else 512)
             context = _bounded_field_text(item, "context" if kind == "target_study" else "needed_for", 1000, required=False)
-            priority = item.get("priority", "normal")
+            # Structured decoders materialise omitted optional properties as
+            # None. Keep their existing omission defaults, without repairing
+            # malformed required text or unknown enum values.
+            priority = item.get("priority")
+            if priority is None:
+                priority = "normal"
             if subject is None or context is None or not isinstance(priority, str) or priority not in _PRIORITIES:
                 refuse("invalid_request_fields")
                 continue
@@ -121,7 +126,8 @@ def register_requests(review: object, origin: KnowledgeOrigin) -> KnowledgeBatch
                     refuse("invalid_identifier_subject")
                     continue
             else:
-                entry_id = _bounded_field_text(item, "entry_id", 96, required=False)
+                entry_id = ("" if item.get("entry_id") is None else
+                            _bounded_field_text(item, "entry_id", 96, required=False))
                 if entry_id is None:
                     refuse("invalid_reference_id")
                     continue
