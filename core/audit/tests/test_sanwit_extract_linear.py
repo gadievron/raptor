@@ -32,6 +32,7 @@ shipped spellings measure single-digit milliseconds.
 
 from __future__ import annotations
 
+import gc
 import re
 import time
 from typing import Callable, TypeVar
@@ -53,9 +54,35 @@ _T = TypeVar("_T")
 
 
 def _timed(fn: Callable[[], _T]) -> tuple[_T, float]:
-    start = time.process_time()
-    result = fn()
-    return result, time.process_time() - start
+    gc_cpu = 0.0
+    gc_started = 0.0
+
+    def collection(phase: str, info: dict[str, int]) -> None:
+        nonlocal gc_cpu, gc_started
+        if phase == "start":
+            gc_started = time.process_time()
+        else:
+            gc_cpu += time.process_time() - gc_started
+
+    gc.callbacks.append(collection)
+    try:
+        thread_start = time.thread_time()
+        start = time.process_time()
+        result = fn()
+        elapsed = time.process_time() - start
+        thread_elapsed = time.thread_time() - thread_start
+    finally:
+        gc.callbacks.remove(collection)
+    if elapsed >= _CPU_BOUND_S:
+        # Preserve the failing bound and its full process-CPU bill. A shuffled
+        # worker can also bill unrelated threads or collection of earlier heap
+        # objects; report those costs without subtracting or suppressing them.
+        print(
+            f"sanwit timing overrun: process_cpu={elapsed:.6f}s "
+            f"thread_cpu={thread_elapsed:.6f}s gc_cpu={gc_cpu:.6f}s "
+            f"gc_thresholds={gc.get_threshold()}"
+        )
+    return result, elapsed
 
 
 class TestBodyDepthHeaderLinear:
