@@ -9674,7 +9674,6 @@ def _run_audit_body(
         config.target_path, study_queue,
         deadline=(config.run_deadline_monotonic if config.run_deadline_monotonic is not None
                   else start_time + config.max_seconds if config.max_seconds else float("inf")),
-        max_model_calls=6 * knowledge_panel_width,
         caller_inventory=(config.inventory if isinstance(config.inventory, dict) else checklist),
     )
     knowledge_gaps: dict[int, tuple[dict, Any, Any]] = {}
