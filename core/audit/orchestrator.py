@@ -32954,25 +32954,16 @@ def _promote_smt_clean(
 
 
 def _demote_self_contradictions(result: OrchestratorResult) -> None:
-    """Demote suspicious outcomes where every hypothesis is refuted.
+    """Record a model consistency diagnostic without changing adjudication.
 
-    When the LLM marks all hypotheses as refuted yet still returns
-    'suspicious' with no tool evidence, the verdict is self-
-    contradictory.  Verified safe: all corpus TPs with no evidence
-    have at least one unrefuted hypothesis.
-
-    Grounding gate (mirrors the in-review all-refuted block): the
-    demotion fires only when every refutation is grounded in a local,
-    non-delegated counter. Outcomes the review already withheld
-    (``all_refuted_demotion_withheld``) and machine-raised
-    counter-escalations stay suspicious — their refutations are
-    unverified claims routed to the verification lane, and this
-    post-loop net must not silently erase what the in-review gate
-    deliberately kept alive.
+    A local counter and a refuted confidence label are reviewer output,
+    not admitted defeating facts or explicit source-bound withdrawals.
+    Preserve the canonical assessment and its scope while retaining the
+    existing scorecard diagnostic once.
     """
     from .evidence_grade import is_tool_evidence
     from .llm_review import _refutation_grounded
-    for i, outcome in enumerate(result.outcomes):
+    for outcome in result.outcomes:
         if outcome.status != "suspicious":
             continue
         # Truthiness let "llm-claimed:X" (the LLM's own assertion)
@@ -33006,24 +32997,8 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
         if not all(_refutation_grounded(h) for h in hypotheses):
             continue
 
-        result.outcomes[i] = ReviewOutcome(
-            file=outcome.file,
-            function=outcome.function,
-            status="clean",
-            body=f"[self-contradiction: all {len(hypotheses)} hypotheses refuted]\n\n{outcome.body}",
-            hypothesis=outcome.hypothesis,
-            hypotheses=outcome.hypotheses,
-            evidence_tool="",
-            cost_usd=outcome.cost_usd,
-            model=outcome.model,
-            duration_s=outcome.duration_s,
-            review_result=outcome.review_result,
-            review_input_scope=outcome.review_input_scope,
-            line=outcome.line,
-        )
-        with result._lock:
-            result.suspicious -= 1
-            result.clean += 1
+        outcome.review_result = {**rr,
+                                 "all_refuted_demotion_withheld": "explicit-withdrawal-required"}
         # Graded adjudication: the verdict contradicted the model's
         # own hypothesis record (consistency axis, not correctness).
         _sc_record_self_consistency(
@@ -33034,7 +33009,7 @@ def _demote_self_contradictions(result: OrchestratorResult) -> None:
             ),
         )
         logger.info(
-            "self-contradiction demotion: %s:%s — all %d hypotheses refuted",
+            "self-contradiction retained for adjudication: %s:%s — %d model-refuted hypotheses",
             outcome.file, outcome.function, len(hypotheses),
         )
 

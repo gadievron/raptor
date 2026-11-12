@@ -1,6 +1,6 @@
 """Finite contract for manual review-record copies in the orchestrator.
 
-These are the fifteen current direct copies, independently of the separate
+These are the fourteen current direct copies, independently of the separate
 nine-site tools_errored census. Panel dictionaries are separate producers:
 the owner rebuilds their combined live scope after merging members.
 """
@@ -20,7 +20,6 @@ _EXPECTED_COPIES = {
     ("_hold_smt_promotion", 0): "outcome.review_input_scope",
     ("_promote_clean_refuted", 0): "_l2_selected.review_input_scope",
     ("_dispatch_secondary_hypotheses", 0): "outcome.review_input_scope",
-    ("_demote_self_contradictions", 0): "outcome.review_input_scope",
     ("_demote_absent_promotions", 0): "outcome.review_input_scope",
     ("_promote_outcome", 0): "outcome.review_input_scope",
     ("_resolve_gate_demoted", 0): "outcome.review_input_scope",
@@ -77,7 +76,7 @@ def _violations(tree):
 
 def test_manual_review_copies_keep_their_actual_source_scope():
     tree = ast.parse(_ORCHESTRATOR.read_text())
-    assert len(_EXPECTED_COPIES) == 15
+    assert len(_EXPECTED_COPIES) == 14
     assert _violations(tree) == set()
 
 
