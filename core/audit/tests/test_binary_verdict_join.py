@@ -6,8 +6,7 @@ dead-code gate and _apply_reachability_gate could demote a LIVE
 function because a dead namesake in another TU carried the "absent"
 verdict. When the enriched inventory exists, both gates route through
 core.analysis.reachability.binary_oracle_absent (path + line
-disambiguated, full-tier gated); the flat map stays as the
-no-inventory fallback.
+disambiguated, full-tier gated); the flat map remains classification data without suppression authority.
 """
 
 from __future__ import annotations
@@ -61,9 +60,9 @@ class TestBinaryAbsentVerdictJoin:
         assert _binary_absent_verdict(cfg, "b.c", "f", 12) is False
         assert _binary_absent_verdict(cfg, "a.c", "f", 12) is True
 
-    def test_flat_map_remains_no_inventory_fallback(self, tmp_path):
+    def test_flat_map_without_inventory_cannot_suppress(self, tmp_path):
         cfg = _config(tmp_path, with_inventory=False)
-        assert _binary_absent_verdict(cfg, "b.c", "f", 12) is True
+        assert _binary_absent_verdict(cfg, "b.c", "f", 12) is False
 
 
 class TestReachabilityGateJoin:

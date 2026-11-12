@@ -4860,18 +4860,12 @@ def _binary_absent_gap_keys(
     config: OrchestratorConfig,
     context_map: dict[str, Any] | None,
 ) -> set[str]:
-    """file:function keys the binary oracle proves absent.
+    """Return occurrence-joined absence keys from the enriched inventory.
 
-    Suppression-earning only: when an enriched inventory is available
-    the chokepoint helper ``core.analysis.reachability.
-    binary_oracle_absent`` decides (full-DWARF tier on EVERY
-    contributing binary, multi-binary alive-in-any combined upstream);
-    otherwise the pre-extracted ``config.binary_verdicts`` map is used
-    (``extract_verdicts`` already withholds absent without a full-tier
-    contributor). Binary trust (git-untracked provenance, source-
-    coverage floor) is enforced upstream where the verdicts are
-    produced. Header files and context-map entry points are exempt —
-    mirrors the G7 dead-code gate.
+    A flat name map is retained classification data, not a source occurrence
+    or build-correspondence record. It cannot authorise skipping a namesake.
+    Header and entry-point exemptions remain conservative additional guards.
+    The enriched adapter retains its own admission requirements.
     """
     keys: set[str] = set()
     inventory = next(
@@ -4881,7 +4875,7 @@ def _binary_absent_gap_keys(
         ),
         None,
     )
-    if inventory is None and not config.binary_verdicts:
+    if inventory is None:
         return keys
 
     absent_fn = None
@@ -4913,8 +4907,6 @@ def _binary_absent_gap_keys(
                 )
             except Exception:  # noqa: BLE001
                 is_absent = False
-        elif config.binary_verdicts:
-            is_absent = config.binary_verdicts.get(name, "") == "absent"
         if is_absent:
             keys.add(key)
     return keys
@@ -20118,16 +20110,10 @@ def _binary_absent_verdict(
     name: str,
     line: int = 0,
 ) -> bool:
-    """Absent verdict for the review-time gates (G7, reachability).
+    """Use the enriched occurrence join for review-time absence gates.
 
-    Prefers the file+line join over the enriched inventory
-    (``core.analysis.reachability.binary_oracle_absent``) — the flat
-    name-keyed ``config.binary_verdicts`` map collapses same-named
-    static functions across translation units, so a LIVE function
-    could be demoted because a dead namesake in another TU carried
-    the verdict. The flat map remains the no-inventory fallback
-    (``extract_verdicts`` already withholds ``absent`` without a
-    full-tier contributor).
+    The flat name map cannot identify a translation unit or source occurrence.
+    Keep it as classification data without granting it suppression authority.
     """
     inventory = config.inventory
     if isinstance(inventory, dict) and inventory.get("binary_oracle"):
@@ -20142,8 +20128,6 @@ def _binary_absent_verdict(
                 file_path, name, exc_info=True,
             )
             return False
-    if config.binary_verdicts:
-        return config.binary_verdicts.get(name, "") == "absent"
     return False
 
 

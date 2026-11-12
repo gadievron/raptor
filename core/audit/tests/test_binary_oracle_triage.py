@@ -165,10 +165,11 @@ class TestBinaryAbsentGapKeys:
         keys = _binary_absent_gap_keys([_gap()], None, config, context_map)
         assert keys == set()
 
-    def test_verdict_map_fallback(self, tmp_path):
+    def test_unbound_verdict_map_withheld(self, tmp_path):
         config = _config(tmp_path, binary_verdicts={"foo": "absent"})
         keys = _binary_absent_gap_keys([_gap()], None, config, None)
-        assert keys == {"a.c:foo"}
+        assert keys == set()
+        assert config.binary_verdicts == {"foo": "absent"}
 
     def test_no_oracle_data_no_keys(self, tmp_path):
         config = _config(tmp_path)
@@ -236,7 +237,7 @@ def _promoted_outcome(file="a.c", function="foo", evidence_tool="semgrep:x"):
 
 class TestDemoteAbsentPromotions:
     def test_promotion_demoted_with_receipt(self, tmp_path):
-        config = _config(tmp_path, binary_verdicts={"foo": "absent"})
+        config = _config(tmp_path, inventory=_enriched_inventory())
         result = OrchestratorResult()
         result.outcomes.append(_promoted_outcome())
         result.findings = 1
@@ -259,7 +260,7 @@ class TestDemoteAbsentPromotions:
 
     def test_runtime_evidence_vetoes_demotion(self, tmp_path):
         """Chokepoint precedence: runtime evidence beats a stale absent."""
-        config = _config(tmp_path, binary_verdicts={"foo": "absent"})
+        config = _config(tmp_path, inventory=_enriched_inventory())
         result = OrchestratorResult()
         result.outcomes.append(
             _promoted_outcome(evidence_tool="dynamic:crash")
@@ -283,7 +284,7 @@ class TestDemoteAbsentPromotions:
         assert result.outcomes[0].status == "finding"
 
     def test_unpromoted_findings_untouched(self, tmp_path):
-        config = _config(tmp_path, binary_verdicts={"foo": "absent"})
+        config = _config(tmp_path, inventory=_enriched_inventory())
         result = OrchestratorResult()
         o = ReviewOutcome(
             file="a.c", function="foo", status="finding",
@@ -321,7 +322,7 @@ class TestDemoteAbsentPromotionLanes:
         return o
 
     def _demote(self, tmp_path, body):
-        config = _config(tmp_path, binary_verdicts={"foo": "absent"})
+        config = _config(tmp_path, inventory=_enriched_inventory())
         result = OrchestratorResult()
         result.outcomes.append(self._body_outcome(body))
         result.findings = 1
