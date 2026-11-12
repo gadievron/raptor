@@ -19,6 +19,7 @@ from __future__ import annotations
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -84,6 +85,58 @@ def _reset_sandbox_probe_caches(monkeypatch):
             monkeypatch.undo()
 
 
+_resolver_exec_context: ModuleType | None = None
+
+
+@pytest.fixture(autouse=True)
+def _isolate_resolver_exec_patches(monkeypatch, _reset_sandbox_probe_caches):
+    """Keep resolver transports private while retaining untrusted entry policy."""
+    from core.sandbox import context
+    from core.testing.module_bindings import patch_module_attribute
+    from core.testing.module_views import module_function_view, scoped_function_imports
+    from packages.sca import resolvers
+
+    def missing_transport(*args, **kwargs):
+        raise AssertionError("resolver fixture did not install an owned transport")
+
+    consumers = [resolvers, *(
+        getattr(resolvers, "_" + name) for name in (
+            "npm", "pip", "gomod", "yarn", "pnpm", "poetry", "cargo",
+            "gradle", "maven", "bundler", "nuget", "composer",
+        )
+    )]
+    original_run = resolvers._run
+    private_subprocess = ModuleType(subprocess.__name__)
+    vars(private_subprocess).update(vars(subprocess))
+    private_subprocess.run = missing_transport
+    private_context = module_function_view(context)
+    private_context.run = missing_transport
+    # These unit tests exercise resolver arguments, not host confinement.
+    # Model unavailable capabilities under the directory's existing explicit
+    # degraded-mode opt-in, without native probes or positive host claims.
+    private_context.check_net_available = lambda: False
+    private_context.check_seatbelt_available = lambda: False
+    with pytest.MonkeyPatch.context() as owner:
+        patch_module_attribute(owner, private_context, "_seccomp",
+                               "check_seccomp_available", lambda: False)
+        owner.setitem(globals(), "subprocess", private_subprocess)
+        owner.setitem(globals(), "_resolver_exec_context", private_context)
+        for consumer in consumers:
+            if hasattr(consumer, "subprocess"):
+                owner.setattr(consumer, "subprocess", private_subprocess)
+        with scoped_function_imports(
+            resolvers, ("_run",), {"core.sandbox.context": private_context},
+        ):
+            for consumer in consumers[1:]:
+                if getattr(consumer, "_run", None) is original_run:
+                    owner.setattr(consumer, "_run", resolvers._run)
+            try:
+                yield private_context
+            finally:
+                # Remove body-installed mocks before restoring borrowed views.
+                monkeypatch.undo()
+
+
 # ---------------------------------------------------------------------------
 # subprocess fake
 # ---------------------------------------------------------------------------
@@ -117,27 +170,14 @@ def _patch_exec(
     monkeypatch: pytest.MonkeyPatch,
     fake_run: Callable[..., subprocess.CompletedProcess],
 ) -> None:
-    """Install ``fake_run`` at BOTH exec seams a resolver can reach:
+    """Install availability and sandbox fakes in the fixture's private views.
 
-    * bare ``subprocess.run`` — the unsandboxed ``_check_tool``
-      availability probes;
-    * ``core.sandbox.context.run`` — the resolver's documented seam
-      for the actual tool invocation (``_run`` routes every resolver
-      subprocess through :func:`core.sandbox.run`).
-
-    Stubbing only ``subprocess.run`` (the pre-2026-08 shape) reached
-    the tool call by accident: the real sandbox pipeline executed and
-    its *fallback* exec happened to be ``subprocess.run``. When the
-    no-pid-namespace timeout path moved to a ``Popen``-based
-    teardown-first wrapper, the stub was bypassed and the REAL
-    npm/go/sh ran in CI — real network attempts, real /tmp writes
-    under sandbox constraints. Patching the sandbox seam keeps these
-    unit tests hermetic regardless of how the sandbox executes
-    internally.
+    The real untrusted entry wrappers retain argument and policy checks;
+    only their terminal runner is replaced. Shared subprocess and sandbox
+    modules remain available to unrelated callers.
     """
-    from core.sandbox import context as _ctx
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(_ctx, "run", fake_run)
+    monkeypatch.setattr(_resolver_exec_context, "run", fake_run)
 
 
 def _patch_run(monkeypatch, plan: list):
@@ -754,7 +794,7 @@ def test_get_resolver_picks_maven_for_pom_only(tmp_path):
 # ---------------------------------------------------------------------------
 
 def _capture_sandbox_call(monkeypatch):
-    """Replace ``core.sandbox.context.run`` with a recorder that captures
+    """Replace the fixture-private sandbox runner with a recorder that captures
     every kwarg the resolver passes through ``_run`` and returns a
     canned successful CompletedProcess.
 
@@ -775,9 +815,8 @@ def _capture_sandbox_call(monkeypatch):
         captured.append((list(cmd), dict(kwargs)))
         return _FakeProc(returncode=0, stdout="", stderr="")
 
-    from core.sandbox import context as _ctx
     from packages.sca.resolvers import _proxy_hosts as _ph
-    monkeypatch.setattr(_ctx, "run", fake_sandbox_run)
+    monkeypatch.setattr(_resolver_exec_context, "run", fake_sandbox_run)
     monkeypatch.setattr(_ph, "_calibrated_profile", lambda *a, **k: None)
     return captured
 
