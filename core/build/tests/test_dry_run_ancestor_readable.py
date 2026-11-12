@@ -11,10 +11,43 @@ retry can never fix, burning a paid dispatch per run.
 
 from __future__ import annotations
 
+import builtins
+import tempfile
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
+from core.build import build_detector
 from core.build.build_detector import BuildDetector
+from core.testing.module_views import module_function_view
+
+
+@pytest.fixture
+def _owned_grant_temp_root(monkeypatch):
+    private_tempfile = module_function_view(tempfile)
+    inherited_import = builtins.__import__
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "tempfile" and level == 0:
+            return private_tempfile
+        return inherited_import(name, globals, locals, fromlist, level)
+
+    owner = module_function_view(
+        build_detector,
+        bindings={
+            "_discover": BuildDetector._discover_ancestor_includes,
+            "_refusal": BuildDetector._ancestor_include_refusal,
+        },
+        import_hook=import_local,
+    )
+
+    class ScopedDetector(BuildDetector):
+        _discover_ancestor_includes = owner._discover
+        _ancestor_include_refusal = staticmethod(owner._refusal)
+
+    monkeypatch.setitem(globals(), "BuildDetector", ScopedDetector)
+    return private_tempfile
 
 
 def _fake_run_capture(captured: dict):
@@ -276,10 +309,11 @@ class TestGrantReVetSharesDiscoveryPredicates:
             '#include <api.h>\nint main(void){return 0;}\n')
         return proj, inc, src
 
-    def test_discovery_to_grant_swap_is_refused(self, tmp_path, monkeypatch):
+    def test_discovery_to_grant_swap_is_refused(
+        self, tmp_path, monkeypatch, _owned_grant_temp_root,
+    ):
         import os
         import shutil
-        import tempfile
 
         # The shared temp root, simulated like the sibling
         # discovery-side suite does; the target sits at
@@ -290,7 +324,7 @@ class TestGrantReVetSharesDiscoveryPredicates:
         poison = fake_tmp / "include"
         poison.mkdir(parents=True)
         (poison / "poison.h").write_text("// header")
-        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
+        monkeypatch.setattr(_owned_grant_temp_root, "gettempdir", lambda: str(fake_tmp))
 
         proj, inc, src = self._swap_target(fake_tmp)
         detector = BuildDetector(src)
