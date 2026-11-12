@@ -31,15 +31,25 @@ from core.audit.disasm_xcheck import (
     run_disasm_xcheck,
 )
 from core.testing.module_state import isolated_module_state
+from core.testing.module_views import scoped_function_imports
 
 
 
 @pytest.fixture(autouse=True)
-def _fresh_channel_state():
-    with isolated_module_state(dx, {
+def _fresh_channel_state(monkeypatch):
+    with (
+        isolated_module_state(dx, {
             "_SPAWN_COUNTS": type(dx._SPAWN_COUNTS)(),
-            "_WINDOW_MEMO": dx.BoundedMemo(64)}, lock=dx._SPAWN_LOCK):
-        yield
+            "_WINDOW_MEMO": dx.BoundedMemo(64)}, lock=dx._SPAWN_LOCK),
+        scoped_function_imports(dx, ("_extract_window",), {"shutil": shutil}) as imports,
+        pytest.MonkeyPatch.context() as scope,
+    ):
+        scope.setitem(globals(), "shutil", imports.shutil)
+        try:
+            yield
+        finally:
+            # Body overrides must unwind before their private bindings retire.
+            monkeypatch.undo()
 
 
 # ---------------------------------------------------------------------------
