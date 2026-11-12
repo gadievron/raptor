@@ -11,10 +11,42 @@ routinely extracted to ``/tmp/<dir>/``).
 
 from __future__ import annotations
 
+import builtins
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from core.build import build_detector
 from core.build.build_detector import BuildDetector
+from core.testing.module_views import module_function_view
+
+
+@pytest.fixture(autouse=True)
+def _owned_temp_root_lookup(monkeypatch):
+    private_tempfile = module_function_view(tempfile)
+    inherited_import = builtins.__import__
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "tempfile" and level == 0:
+            return private_tempfile
+        return inherited_import(name, globals, locals, fromlist, level)
+
+    owner = module_function_view(
+        build_detector,
+        bindings={
+            "_discover": BuildDetector._discover_ancestor_includes,
+            "_refusal": BuildDetector._ancestor_include_refusal,
+        },
+        import_hook=import_local,
+    )
+
+    class ScopedDetector(BuildDetector):
+        _discover_ancestor_includes = owner._discover
+        _ancestor_include_refusal = staticmethod(owner._refusal)
+
+    monkeypatch.setitem(globals(), "BuildDetector", ScopedDetector)
+    monkeypatch.setitem(globals(), "tempfile", private_tempfile)
 
 
 def _make_include(root: Path) -> None:
