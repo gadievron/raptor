@@ -69,6 +69,7 @@ import yaml
 from core.container.proc import docker_child_env, run_cli
 from core.run.scratch import keepalive_register, keepalive_unregister, scratch_dir
 from core.source import open_regular_beneath
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -326,11 +327,11 @@ def _copy_staging_tree(source_dir: Path, staging: Path) -> None:
         stream = open_regular_beneath(source_dir, rel, "rb")
         if stream is None:
             raise ComposeError(f"compose source changed or is not a readable regular file: {source}")
-        with stream:
+        with preserving_stream_error(stream):
             before = os.fstat(stream.fileno())
             if before.st_size > _STAGING_MAX_BYTES - copied:
                 raise ComposeError(f"compose copy exceeds {_STAGING_MAX_BYTES}-byte staging budget")
-            with open(destination, "xb") as output:
+            with preserving_stream_error(open(destination, "xb")) as output:
                 while True:
                     remaining = _STAGING_MAX_BYTES - copied
                     chunk = stream.read(min(1024 * 1024, remaining + 1))
