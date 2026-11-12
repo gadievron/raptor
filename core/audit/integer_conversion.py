@@ -64,6 +64,13 @@ def _frame(source, abi, language):
             'function_definition', 'lambda_expression', 'generic_expression',
         }:
             return None
+        if node.type == 'sizeof_expression':
+            pending = list(node.named_children)
+            while pending:
+                item = pending.pop()
+                if item.type in {'array_declarator', 'abstract_array_declarator'}:
+                    return None  # VLA extents may execute despite sizeof
+                pending.extend(item.named_children)
         stack.extend(reversed(node.named_children))
     return data, body, nodes
 
