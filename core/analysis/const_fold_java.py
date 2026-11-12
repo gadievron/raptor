@@ -67,8 +67,10 @@ class _JavaChar(str):
     """A folded UTF-16 character, distinct from a Java String value."""
 
 
-def _character_conversion_is_identity(value: Any, target_type: bytes | None) -> bool:
-    """Character boundaries refuse numeric conversion rather than guess it."""
+def _constant_conversion_is_identity(value: Any, target_type: bytes | None) -> bool:
+    """Declared boundaries must stay within the folder's value model."""
+    if target_type in (b"float", b"double"):
+        return False  # Floating-point values and operations are not modelled.
     if target_type == b"char":
         return isinstance(value, _JavaChar)
     if isinstance(value, _JavaChar):
@@ -1215,7 +1217,7 @@ def _make_point_resolver(rd, index: JavaConstIndex, array_resolver=None,
                            and declarator.type == "variable_declarator" else None)
             target_type = (declaration.child_by_field_name("type")
                            if declaration is not None else None)
-            if not _character_conversion_is_identity(
+            if not _constant_conversion_is_identity(
                     val, target_type.text if target_type is not None else None):
                 return _REFUSE
             values.append(val)

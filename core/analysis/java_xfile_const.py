@@ -310,7 +310,7 @@ class XFileConst:
         """Fold with identifiers resolving ONLY to static-final fields
         of the same class — parameters and locals refuse."""
         from core.analysis.const_fold_java import (
-            REFUSE, _character_conversion_is_identity, _member_value_names_at, fold_expr,
+            REFUSE, _constant_conversion_is_identity, _member_value_names_at, fold_expr,
         )
 
         def resolve_name(name: str, d: int) -> Any:
@@ -332,7 +332,8 @@ class XFileConst:
                           xfile_resolver=self,
                           shadowed_receiver_names=shadowed_names | _member_value_names_at(node))
         # A field initializer and a return expression cross declared-type
-        # boundaries. Their RHS values alone do not prove char conversion.
+        # boundaries. Their RHS values alone do not establish a supported
+        # assignment or return conversion.
         parent = node.parent
         declaration = None
         if parent is not None and parent.type == "variable_declarator":
@@ -344,7 +345,7 @@ class XFileConst:
                 declaration = body.parent
         target_type = (declaration.child_by_field_name("type")
                        if declaration is not None else None)
-        if not _character_conversion_is_identity(
+        if not _constant_conversion_is_identity(
                 value, target_type.text if target_type is not None else None):
             return REFUSE
         return value
