@@ -972,9 +972,12 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
             return _REFUSE
         return receiver.strip()
     if method in ("toLowerCase", "toUpperCase"):
-        # Zero-arg only, ASCII only: the default-locale overload is
-        # locale-dependent (the Turkish-I trap) — non-ASCII refuses.
+        # Zero-arg conversion uses the target's unknown default locale.
+        # Turkish/Azeri mappings affect ASCII I/i as well as non-ASCII.
         if folded_args or not receiver.isascii():
+            return _REFUSE
+        sensitive = "I" if method == "toLowerCase" else "i"
+        if sensitive in receiver:
             return _REFUSE
         return (receiver.lower() if method == "toLowerCase"
                 else receiver.upper())
