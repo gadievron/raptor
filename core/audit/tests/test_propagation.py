@@ -510,26 +510,46 @@ class TestAdversarialFixes:
 
 
 class TestBinaryOracleIntegration:
-    # binary_verdicts is keyed by BARE function name — the producer
-    # (core.analysis.binary_oracle.extract_verdicts) emits
-    # {function: verdict}, and every other consumer reads it bare. A
-    # file:function key here could never hit the map, so the resolver
-    # was dead on every real run.
-    def test_absent_function_refuted(self):
+    def test_absent_classification_cannot_bypass_depth_limit_or_refute(self, monkeypatch):
+        import core.audit.propagation as propagation
         c = _constraint()
+        previous_status = c.status
         config = PropagationConfig(
-            max_depth=5,
+            max_depth=0,
             binary_verdicts={"parse_header": "absent"},
         )
+        def forbidden(*args, **kwargs):
+            raise AssertionError("depth-zero propagation must not dispatch a resolver")
+        for name in ("_try_taint_approx_resolve", "_try_taint_summary_resolve",
+                     "_try_joern_resolve", "_try_joern_dominance_resolve",
+                     "try_codeql_resolve", "try_coccinelle_resolve"):
+            monkeypatch.setattr(propagation, name, forbidden)
         result = propagate_one_hop(
-            c,
-            checklist=_checklist(),
-            entry_points=set(),
-            config=config,
+            c, checklist=_checklist(), entry_points=set(), config=config,
         )
-        assert result.resolved
-        assert result.resolution == "refuted"
-        assert result.resolver_used == "binary_oracle"
+        assert result.resolved and result.resolution == "depth_limited"
+        assert result.resolver_used != "binary_oracle"
+        assert result.constraint is c and c.status == previous_status
+        assert config.binary_verdicts == {"parse_header": "absent"}
+        assert result.depth_probe is not None
+
+    def test_absent_classification_does_not_hide_independent_support(self, monkeypatch):
+        import core.audit.propagation as propagation
+        c = _constraint()
+        # Existing evidence-consumer fixture; no taint backend executes here.
+        approx = _FakeTaintApprox(params=["buf", "len"], dangerous_flows={1: [("memcpy", 3)]})
+        rec = EvidenceRecord(file=c.file, function=c.function, taint_approx=approx)
+        config = PropagationConfig(max_depth=1, binary_verdicts={c.function: "absent"},
+                                   evidence_index={f"{c.file}:{c.function}": rec})
+        def forbidden(*args, **kwargs):
+            raise AssertionError("existing admitted evidence must resolve before later backends")
+        for name in ("_try_taint_summary_resolve", "_try_joern_resolve",
+                     "_try_joern_dominance_resolve", "try_codeql_resolve", "try_coccinelle_resolve"):
+            monkeypatch.setattr(propagation, name, forbidden)
+        result = propagate_one_hop(c, checklist=_checklist(), entry_points=set(), config=config)
+        assert result.resolved and result.resolution == "confirmed"
+        assert result.resolver_used == "taint_approx" and result.constraint is c
+        assert config.binary_verdicts == {c.function: "absent"}
 
     def test_file_function_key_never_matches(self):
         # Producer-shape pin: a map keyed the OLD (file:function) way

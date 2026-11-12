@@ -956,21 +956,9 @@ def propagate_one_hop(
     Tries mechanical resolvers first, falls back to tree-sitter
     heuristic scoring for LLM review scheduling.
     """
-    if config.binary_verdicts:
-        # Bare function name: the producer (binary_oracle
-        # extract_verdicts) keys the map ``{function: verdict}``, and
-        # every other consumer (orchestrator dead-code gate, absent-
-        # promotion demoter) reads it bare — a ``file:function`` key
-        # here could never hit, so the binary-oracle resolver was dead.
-        verdict = config.binary_verdicts.get(constraint.function)
-        if verdict == "absent":
-            return PropagationResult(
-                constraint=constraint,
-                resolved=True,
-                resolution="refuted",
-                resolver_used="binary_oracle",
-            )
-
+    # Binary verdict maps retain build-specific classifier context. A bare
+    # function name has neither source occurrence nor build correspondence,
+    # so it cannot refute this constraint or bypass the propagation ceiling.
     if current_depth >= config.max_depth:
         line = find_function_line(
             checklist, constraint.file, constraint.function,
