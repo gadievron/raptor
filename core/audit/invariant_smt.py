@@ -163,6 +163,26 @@ class InvariantPreservationResult:
 # ── expression parsing ──────────────────────────────────────────────
 
 
+_ALTERNATIVE_OPERATOR = r"(?:not|compl|and|or|bitand|bitor|xor|not_eq|and_eq|or_eq|xor_eq)"
+_ALTERNATIVE_HEAD = re.compile(_ALTERNATIVE_OPERATOR + r"\b")
+_ALTERNATIVE_TAIL = re.compile(r"(?<![\w.>])" + _ALTERNATIVE_OPERATOR + r"\s*$")
+
+
+def _alternative_operator_prefix(text):
+    match = _ALTERNATIVE_HEAD.match(text)
+    # A complete comparison may legitimately name a C/math identifier
+    # `not` or `and`; no operator word was discarded in that case.
+    return match is not None and re.match(r"\s*(?:<=|>=|==|!=|<|>)", text[match.end():]) is None
+
+
+def _alternative_operator_suffix(text):
+    match = _ALTERNATIVE_TAIL.search(text)
+    if match is None:
+        return False
+    before = text[:match.start()].rstrip()
+    return not before or before[-1] not in "<>=!"
+
+
 def _invariant_candidate_segments(text):
     """Keep multiline expression context attached to its comparison.
 
@@ -175,6 +195,7 @@ def _invariant_candidate_segments(text):
         lines = statement.splitlines()
         significant = [line.strip() for line in lines if line.strip()]
         if any(left[-1] in "([!~.=<>+*/%&|^-," or right[0] in "()[]!~.=<>+*/%&|^-,"
+               or _alternative_operator_suffix(left) or _alternative_operator_prefix(right)
                for left, right in zip(significant, significant[1:])):
             continue
         yield from lines
@@ -217,6 +238,10 @@ def extract_invariants(*texts: str) -> list[str]:
             if ((before and before[-1] in "()[]+*/%&|^~!.><-=,?")
                     or (after and after[0] in "()[]+*/%&|^><-=!?:,")):
                 continue
+            if _alternative_operator_suffix(before) or _alternative_operator_prefix(after):
+                continue
+            if rhs_raw.strip() in {"not", "compl"} and after and (after[0].isalnum() or after[0] == "_"):
+                continue  # do not keep only a unary operator as a new variable
             numeric_tail = re.search(r"(?<![\w.])[0-9]+$", rhs_raw) is not None
             if ((after.startswith(".") and (numeric_tail or re.match(r"\.\s*\w", after)))
                     or (end < len(segment) and segment[end] == "'" and numeric_tail)):
