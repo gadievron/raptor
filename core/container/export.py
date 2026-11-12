@@ -165,6 +165,8 @@ def extract_rootfs_tar(
                 if count > max_entry_count:
                     raise RootfsQuotaExceeded(
                         f"rootfs tar exceeds {max_entry_count} entries; refusing")
+                if member.size < 0:
+                    raise tarfile.ReadError("negative member size in rootfs tar")
                 total_bytes += member.size
                 if total_bytes > max_total_bytes:
                     raise RootfsQuotaExceeded(
