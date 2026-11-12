@@ -77,6 +77,7 @@ class AuditKnowledgeRuntime:
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
         self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
         self._live_input_errors: set[str] = set()
+        self._binary_review_scopes: dict[tuple[str, str], object] = {}
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
         self._written_events: dict[str, int] = {}
@@ -177,6 +178,12 @@ class AuditKnowledgeRuntime:
             supplied_binary = ctx.get("_binary_module_snapshot")
             binary_snapshot = supplied_binary if isinstance(supplied_binary, BinaryModuleSnapshot) else None
             binary_target = ctx.get("target_path")
+            from .binary_review_scope import capture_binary_publication_scope
+            binary_scope = (capture_binary_publication_scope(ctx, binary_snapshot)
+                            if binary_snapshot is not None else None)
+            if binary_snapshot is not None and binary_scope is None:
+                from .knowledge_calls import KnowledgeCallRefused
+                raise KnowledgeCallRefused("binary_occurrence_unavailable")
             captured = self._origin(ctx)
             key = self._key(captured)
             with self._lock:
@@ -230,6 +237,11 @@ class AuditKnowledgeRuntime:
             # Pipeline-owned: a model cannot supply the original source stamp.
             outcome.review_result = dict(outcome.review_result or {})
             history = begin_review(origin, attempt_id)
+            if binary_scope is not None:
+                outcome.binary_publication_scope = binary_scope
+                outcome.review_result["binary_review_binding"] = binary_scope.record()
+                with self._lock:
+                    self._binary_review_scopes[(origin.pass_id, attempt_id)] = binary_scope
             # This is descriptive attribution to the actual completed
             # renderer invocation, never proof authority or current freshness.
             if (getattr(review_fn, "_knowledge_observed_client_contract", None) is True
@@ -431,6 +443,10 @@ class AuditKnowledgeRuntime:
         """Attach the combined pass scope after panel reconstruction."""
         from .review_claims import read_history
 
+        from core.inventory.binary_builder import BINARY_PATH_PREFIX
+        if outcome.file.startswith(BINARY_PATH_PREFIX):
+            self._bind_binary_publication_scope(outcome)
+            return
         line = outcome.line or 0
         if type(line) is not int or line <= 0:
             history = read_history((outcome.review_result or {}).get("review_claims"))
@@ -446,6 +462,44 @@ class AuditKnowledgeRuntime:
             reservation = self._active_units.get((outcome.file, outcome.function, line))
         if reservation is not None:
             outcome.review_input_scope = self.publication_input_scope(reservation, outcome)
+
+    def _bind_binary_publication_scope(self, outcome) -> None:
+        """Restore only original owner-held scopes after panel reconstruction."""
+        from .binary_review_scope import BinaryReviewPublicationScope
+        from .review_claims import read_history
+
+        result = dict(outcome.review_result or {})
+        history = read_history(result.get("review_claims"))
+        reviews = []
+        if history is not None:
+            if isinstance(history.get("review"), dict):
+                reviews.append(history["review"])
+            reviews.extend(intake["review"] for intake in history["intakes"]
+                           if isinstance(intake.get("review"), dict))
+        scopes: list[BinaryReviewPublicationScope] = []
+        with self._lock:
+            for review in reviews:
+                origin = review.get("origin")
+                if (not isinstance(origin, dict) or (origin.get("file"), origin.get("function"))
+                        != (outcome.file, outcome.function)):
+                    scopes = []
+                    break
+                pass_id, attempt_id = origin.get("pass_id"), review.get("attempt_id")
+                if (not isinstance(pass_id, str) or not pass_id
+                        or not isinstance(attempt_id, str) or not attempt_id
+                        or type(origin.get("line_start")) is not int or origin.get("line_start") != 0
+                        or origin.get("source_identity") is not None):
+                    scopes = []
+                    break
+                scope = self._binary_review_scopes.get((pass_id, attempt_id))
+                if not isinstance(scope, BinaryReviewPublicationScope):
+                    scopes = []
+                    break
+                scopes.append(scope)
+        admitted = bool(scopes) and all(scope == scopes[0] and scope.current(self.target_root) for scope in scopes)
+        outcome.binary_publication_scope = scopes[0] if admitted else None
+        result["binary_review_binding"] = scopes[0].record() if admitted else None
+        outcome.review_result = result
 
     def source_roots(self) -> dict[str, Path]:
         return self.bindings.registered_roots()

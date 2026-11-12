@@ -300,6 +300,7 @@ if TYPE_CHECKING:
     from .knowledge_requests import KnowledgeRequest
     from .knowledge_runtime import AuditKnowledgeRuntime, KnowledgeReservation
     from .review_input_scope import ReviewInputScope
+    from .binary_review_scope import BinaryReviewPublicationScope
 
 from .integer_abi import IntegerABIInput, integer_abi_record as _integer_abi_record, integer_abi_key as _integer_abi_key
 
@@ -1393,6 +1394,7 @@ class ReviewOutcome:
     # this field; generic whole-outcome asdict serialisation is unsupported.
     # None on cold imports: JSON must never reconstruct live admission.
     review_input_scope: ReviewInputScope | None = field(default=None, repr=False, compare=False)
+    binary_publication_scope: BinaryReviewPublicationScope | None = field(default=None, repr=False, compare=False)
 
     _CONFIRMED_EVIDENCE = frozenset({
         "dark_verify:sanitizer-violation", "dynamic:crash", "frida:runtime",
@@ -9745,6 +9747,8 @@ def _run_audit_body(
                         "No implementation view was available for this binary unit; review deferred",
                     "binary_module_changed_or_unavailable":
                         "Binary module changed or became unavailable; review deferred",
+                    "binary_occurrence_unavailable":
+                        "Binary occurrence could not be bound to its module; review deferred",
                 }.get(refusal.reason, "Knowledge review allowance exhausted"))
                 return ReviewOutcome(gap["file"], gap["name"], "deferred",
                                      reason, line=gap.get("line_start", 0))
@@ -14493,6 +14497,7 @@ def _retain_initial_publication_failure(result, config, outcome, gap) -> ReviewO
         model=outcome.model, cost_usd=outcome.cost_usd, duration_s=outcome.duration_s,
         review_result={"publication_failure": failure},
         review_input_scope=outcome.review_input_scope,
+        binary_publication_scope=outcome.binary_publication_scope,
     )
 
 
@@ -15311,6 +15316,7 @@ def _multi_pass_review(
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
         review_input_scope=outcome.review_input_scope,
+        binary_publication_scope=outcome.binary_publication_scope,
     )
 
 
@@ -20226,6 +20232,7 @@ def _apply_reachability_gate(
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
                 review_input_scope=outcome.review_input_scope,
+                binary_publication_scope=outcome.binary_publication_scope,
                 line=outcome.line,
             )
 
@@ -20252,6 +20259,7 @@ def _apply_reachability_gate(
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
             review_input_scope=outcome.review_input_scope,
+            binary_publication_scope=outcome.binary_publication_scope,
             line=outcome.line,
         )
 
@@ -26220,6 +26228,7 @@ def _sweep_validate(
                     duration_s=outcome.duration_s,
                     review_result=outcome.review_result,
                     review_input_scope=outcome.review_input_scope,
+                    binary_publication_scope=outcome.binary_publication_scope,
                     line=outcome.line,
                 )
                 if outcome.review_result:
@@ -30736,6 +30745,7 @@ def _promote_suspicious_preconditions(
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
             review_input_scope=outcome.review_input_scope,
+            binary_publication_scope=outcome.binary_publication_scope,
             line=outcome.line,
         )
         promoted.tools_dispatched = (
@@ -31402,6 +31412,7 @@ def _hold_smt_promotion(
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
         review_input_scope=outcome.review_input_scope,
+        binary_publication_scope=outcome.binary_publication_scope,
         line=outcome.line,
     )
     held.claim_refutations = outcome.claim_refutations
@@ -31830,6 +31841,7 @@ def _promote_clean_refuted(
                 duration_s=outcome.duration_s,
                 review_result=deepcopy(_l2_selected.review_result),
                 review_input_scope=_l2_selected.review_input_scope,
+                binary_publication_scope=_l2_selected.binary_publication_scope,
                 line=outcome.line,
             )
             rescued.tools_dispatched = _l2_selected.tools_dispatched
@@ -32156,6 +32168,7 @@ def _dispatch_secondary_hypotheses(
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
                 review_input_scope=outcome.review_input_scope,
+                binary_publication_scope=outcome.binary_publication_scope,
                 line=outcome.line,
             )
             rescued.tools_dispatched = outcome.tools_dispatched
@@ -33237,6 +33250,7 @@ def _demote_absent_promotions(
             duration_s=outcome.duration_s,
             review_result=outcome.review_result,
             review_input_scope=outcome.review_input_scope,
+            binary_publication_scope=outcome.binary_publication_scope,
             line=outcome.line,
         )
         demoted.tools_dispatched = outcome.tools_dispatched
@@ -33323,6 +33337,7 @@ def _promote_outcome(
         duration_s=outcome.duration_s,
         review_result=review,
         review_input_scope=outcome.review_input_scope,
+        binary_publication_scope=outcome.binary_publication_scope,
         line=outcome.line,
     )
     promoted.tools_dispatched = outcome.tools_dispatched
@@ -33893,6 +33908,7 @@ def _resolve_gate_demoted(
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
                 review_input_scope=outcome.review_input_scope,
+                binary_publication_scope=outcome.binary_publication_scope,
                 line=outcome.line,
             )
             resolved.claim_refutations = outcome.claim_refutations
@@ -33929,6 +33945,7 @@ def _resolve_gate_demoted(
                 duration_s=outcome.duration_s,
                 review_result=outcome.review_result,
                 review_input_scope=outcome.review_input_scope,
+                binary_publication_scope=outcome.binary_publication_scope,
                 line=outcome.line,
             )
             resolved.claim_refutations = outcome.claim_refutations
@@ -34968,6 +34985,7 @@ def _demote_outcome(outcome: ReviewOutcome, reason: str) -> ReviewOutcome:
         duration_s=outcome.duration_s,
         review_result=outcome.review_result,
         review_input_scope=outcome.review_input_scope,
+        binary_publication_scope=outcome.binary_publication_scope,
         line=outcome.line,
     )
     demoted.tools_dispatched = outcome.tools_dispatched

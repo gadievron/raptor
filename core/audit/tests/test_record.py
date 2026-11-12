@@ -150,7 +150,7 @@ class TestBinaryItemHash:
         h = binary_item_hash(
             self._FILE_ENTRY, {"address": 0x401000, "size": 32},
         )
-        assert h == f"bin:{'a' * 12}:401000:20"
+        assert h == f"bin:{'a' * 64}:401000:20"
 
     def test_hex_string_address_coerced(self):
         # Checklists round-trip through JSON and other producers; a
@@ -160,7 +160,7 @@ class TestBinaryItemHash:
         h = binary_item_hash(
             self._FILE_ENTRY, {"address": "0x401000", "size": "32"},
         )
-        assert h == f"bin:{'a' * 12}:401000:20"
+        assert h == f"bin:{'a' * 64}:401000:20"
 
     def test_junk_address_returns_none(self):
         # Missing hash only widens review — never an exception.

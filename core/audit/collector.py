@@ -351,7 +351,28 @@ def append_journal_for_outcome(
     from .reference_inputs import reference_inputs_current, review_context_digest
     from .review_input_scope import ReviewInputScope
 
+    from .binary_review_scope import BinaryReviewPublicationScope
+    binary_scope = getattr(outcome, "binary_publication_scope", None)
     initial_review = getattr(outcome, "review_result", None) or {}
+    has_binary_binding = "binary_review_binding" in initial_review
+    binary_record = initial_review.get("binary_review_binding")
+    if binary_scope is not None or has_binary_binding:
+        if (not isinstance(binary_scope, BinaryReviewPublicationScope)
+                or not has_binary_binding or binary_record != binary_scope.record()):
+            logger.warning("journal binary review lost its live module binding")
+            return None
+
+    def binary_current():
+        review = getattr(outcome, "review_result", None) or {}
+        if binary_scope is None:
+            return (not has_binary_binding and "binary_review_binding" not in review
+                    and getattr(outcome, "binary_publication_scope", None) is None)
+        return (getattr(outcome, "binary_publication_scope", None) is binary_scope
+                and review.get("binary_review_binding") == binary_scope.record()
+                and binary_scope.matches(outcome, gap) and binary_scope.current(target_path))
+
+    if not binary_current():
+        return None
     raw_history = initial_review.get("review_claims")
     history = read_history(raw_history)
     has_context_inputs = isinstance(raw_history, dict) and "source_inputs" in raw_history
@@ -573,6 +594,8 @@ def append_journal_for_outcome(
     except Exception:
         logger.debug("source hash computation failed for %s", outcome.file, exc_info=True)
 
+    if (not binary_current() or (binary_scope is not None and source_hash != binary_scope.anchor())):
+        return None
     if not context_current():
         return None
     if verification_scope is not None and not binding_current(after_hash=True):
@@ -926,7 +949,7 @@ def append_journal_for_outcome(
             if outcome.status == "clean" else None
         ),
     )
-    if not context_current():
+    if not context_current() or not binary_current():
         return None
     try:
         append_entry(out_dir, entry)
@@ -941,11 +964,22 @@ def append_journal_for_outcome(
 
 def journal_acknowledges_outcome(acknowledgement, outcome, gap) -> bool:
     """Require the exact occurrence and verdict acknowledged by the writer."""
-    return (isinstance(acknowledgement, ReviewJournalEntry)
+    matched = (isinstance(acknowledgement, ReviewJournalEntry)
             and (acknowledgement.file, acknowledgement.function, acknowledgement.line_start,
                  acknowledgement.line_end, acknowledgement.verdict) == (
                 outcome.file, outcome.function, gap.get("line_start", 0),
                 gap.get("line_end"), outcome.status))
+    if not matched:
+        return False
+    from .binary_review_scope import BinaryReviewPublicationScope
+    scope = getattr(outcome, "binary_publication_scope", None)
+    review = getattr(outcome, "review_result", None) or {}
+    if scope is None and "binary_review_binding" not in review:
+        return True
+    return (isinstance(scope, BinaryReviewPublicationScope)
+            and review.get("binary_review_binding") == scope.record()
+            and scope.matches(outcome, gap) and scope.current(scope.module.path)
+            and acknowledgement.source_hash == scope.anchor())
 
 
 @dataclass
