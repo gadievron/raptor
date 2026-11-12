@@ -30,7 +30,7 @@ from .run_memo import BoundedMemo
 
 logger = logging.getLogger(__name__)
 
-#: Cached (path, mtime) → REDatabase so a gap loop over hundreds of
+#: Cached physical JSON file version → REDatabase so a gap loop over hundreds of
 #: functions parses the JSON once. Bounded + thread-safe with
 #: per-key in-flight collapse — concurrent review workers raced the
 #: previous bare dict's check-then-set into duplicate parses.
@@ -457,7 +457,11 @@ from core.json.utils import (  # noqa: E402
 
 
 def load_redb(redb_path: Path):
-    """Load an REDatabase from disk, cached on (path, mtime).
+    """Load an REDatabase cached by physical artefact version and read budget.
+
+    A write with restored mtime or a replaced inode invalidates parsed reuse.
+    This memo key does not establish extraction or build correspondence, nor
+    make the underlying bounded JSON read an immutable snapshot.
 
     Size-gated (:data:`_MAX_REDB_BYTES`): an over-budget file raises
     :class:`~core.json.utils.JsonBudgetExceededError` (a ``ValueError``,
@@ -466,10 +470,9 @@ def load_redb(redb_path: Path):
     from core.json import load_json_bounded
     from packages.ghidra.model import REDatabase
 
-    key = (
-        str(Path(redb_path).resolve()),
-        Path(redb_path).stat().st_mtime_ns,
-    )
+    path = Path(redb_path)
+    version = _binary_content_version(path.stat())
+    key = (str(path.resolve()), *version, _MAX_REDB_BYTES)
     db, _cached = _REDB_MEMO.get_or_compute(
         key,
         lambda: REDatabase.from_dict(
