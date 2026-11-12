@@ -1,12 +1,15 @@
 """Build scratch ownership starts at creation and ends after consumer use."""
 
+import builtins
 import os
 import tempfile
+from types import MethodType
 
 import pytest
 
 from core.build import build_detector as bd
 from core.testing.restricted_tree import restricted_tree
+from core.testing.module_views import module_function_view
 
 
 import core.build.build_detector as _os_fault_consumer
@@ -39,7 +42,22 @@ def test_creation_and_transfer_failures_leave_no_artifacts(
         raise failure
 
     if stage == "script_create":
-        monkeypatch.setattr(tempfile, "mkstemp", fail)
+        private_tempfile = module_function_view(tempfile, bindings={"mkstemp": fail})
+        inherited_import = builtins.__import__
+
+        def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "tempfile" and level == 0:
+                return private_tempfile
+            return inherited_import(name, globals, locals, fromlist, level)
+
+        owner = module_function_view(
+            bd,
+            bindings={"_synthesise": bd.BuildDetector.synthesise_build_command},
+            import_hook=import_local,
+        )
+        monkeypatch.setitem(
+            vars(detector), "synthesise_build_command", MethodType(owner._synthesise, detector),
+        )
     elif stage == "script_close":
         close = os.close
 
