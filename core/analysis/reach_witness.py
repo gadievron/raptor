@@ -167,21 +167,22 @@ VERDICTS: dict[str, VerdictSpec] = {
             "(if False / #[cfg(any())]); never binds"),
     ),
     "binary_oracle_absent": VerdictSpec(
-        Reachability.UNREACHABLE, WitnessKind.BINARY_ORACLE_ABSENT,
-        Soundness.SOUND, earns_suppression=True,
+        Reachability.UNCERTAIN, WitnessKind.BINARY_ORACLE_ABSENT,
+        Soundness.HEURISTIC, earns_suppression=False,
         summary=(
-            "classifier verdict ``absent`` on the analysed binary — "
-            "neither a standalone symbol nor an inlined-subroutine "
-            "instance was found at classification time"),
+            "classifier observation on the selected binary: no standalone "
+            "symbol or inlined-subroutine instance was found; source/build "
+            "correspondence and extraction completeness are not established"),
         blocker_template=(
-            "reachability:binary_oracle_absent — entry function {fq} has no "
-            "symbol and no inlined-subroutine instance in the analysed binary "
-            "(--binary); the compiler/linker eliminated it from this build"),
+            "reachability:binary_oracle_absent — no symbol or inlined instance "
+            "was observed for {fq} in the selected binary; this does not prove "
+            "the reviewed source occurrence unreachable"),
         prompt_verdict=(
-            "Verdict: BINARY_ORACLE_ABSENT — function eliminated from the "
-            "analysed binary by --gc-sections / DCE; no symbol present and no "
-            "inlined-subroutine instance survives. Build-specific (this "
-            "binary's build_id); not a universal source claim"),
+            "Observation: BINARY_ORACLE_ABSENT — no symbol or inlined instance "
+            "was found in the analysed binary. Matching binary bytes or a "
+            "build ID does not establish source/build correspondence or "
+            "complete extraction. Retain as build-specific context, not a "
+            "source-safety or unreachability proof"),
     ),
     "build_excluded": VerdictSpec(
         Reachability.UNREACHABLE, WitnessKind.BUILD_EXCLUDED,

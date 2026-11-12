@@ -43,12 +43,12 @@ def test_may_suppress_is_safe_by_default_for_everything():
 
 
 def test_binary_oracle_absent_witness_resolves_end_to_end():
-    """End-to-end: a function with ``metadata.binary_oracle.classification
-    == 'absent'`` AND a non-empty ``binaries`` list (every entry
-    full-tier) resolves to a SOUND, suppress-eligible witness via
-    ``resolve_reachability``. Phase 2 wire: binary_oracle data on the
-    inventory → reachability witness → /validate demoter picks up via
-    ``may_suppress``."""
+    """Full-tier absence remains visible without proving source deadness.
+
+    Binary classification and build ID alone do not establish the reviewed
+    source/build correspondence or extraction completeness. The witness stays
+    available for review, but even forced corpus membership cannot suppress.
+    """
     inv = {"files": [{
         "path": "lib.c", "language": "c",
         "items": [{"name": "dead_helper", "kind": "function",
@@ -65,22 +65,21 @@ def test_binary_oracle_absent_witness_resolves_end_to_end():
                    }}}],
     }]}
     rv = resolve_reachability(inv, "lib.c", "dead_helper", 10, "lib")
-    assert rv.status is Reachability.UNREACHABLE
+    assert rv.status is Reachability.UNCERTAIN
     assert rv.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
-    assert rv.witness.soundness is Soundness.SOUND
-    # Suppression behavior: not earned by default (empty set) — earned
-    # when the consumer passes STRUCTURALLY_SUPPRESSIBLE_KINDS.
+    assert rv.witness.soundness is Soundness.HEURISTIC
     assert rv.may_suppress() is False
-    assert rv.may_suppress(_EARNED) is True
+    assert rv.may_suppress(_EARNED) is False
+    assert rv.may_suppress(frozenset({WitnessKind.BINARY_ORACLE_ABSENT})) is False
 
 
 def test_binary_oracle_absent_refuses_when_no_tier_evidence():
     """Adversarial review P0-C-4: a legacy / partial inventory whose
     ``binary_oracle`` block is missing ``binaries`` (or has an empty
     list, or has any non-full-tier entry) MUST NOT earn suppression.
-    The SOUND witness is conditional on full-DWARF evidence; without
-    it the function falls through to the rest of the precedence
-    chain rather than silently suppressing a real finding."""
+    Without that observation coverage the accessor falls through to the
+    rest of the precedence chain; full-tier coverage itself still does not
+    establish source/build correspondence or suppression authority."""
     base_item = {"name": "f", "kind": "function", "line_start": 1}
 
     # (a) ``binaries`` key absent — legacy single-binary writer.
@@ -137,7 +136,7 @@ def test_binary_oracle_absent_line_disambiguates_name_collisions():
     # the dead namesake's verdict.
     rv = resolve_reachability(inv, "lib.c", "helper", 42, "lib")
     assert rv.witness.kind is not WitnessKind.BINARY_ORACLE_ABSENT
-    # Sanity: the dead namesake (line=10) IS suppressible.
+    # The classified-absent namesake still retains its own observation.
     rv_dead = resolve_reachability(inv, "lib.c", "helper", 10, "lib")
     assert rv_dead.witness.kind is WitnessKind.BINARY_ORACLE_ABSENT
 
@@ -354,8 +353,8 @@ def test_to_priority_reason_preserves_legacy_strings():
 def test_only_earned_sound_kinds_can_ever_be_suppress_eligible():
     # Lock the FN-safety surface: even with EVERY kind in the earned set,
     # only the SOUND + earns_suppression witnesses can suppress — nothing
-    # else, in any combination. Set grew when binary_oracle_absent landed
-    # (Inc 3d earned suppression via the precision corpus).
+    # else, in any combination. Empirical binary absence cannot enter this
+    # set merely because a corpus recorded no false suppressions.
     all_kinds = frozenset(WitnessKind)
     suppressible = {
         v for v in (
@@ -367,7 +366,7 @@ def test_only_earned_sound_kinds_can_ever_be_suppress_eligible():
         if verdict_from_classification(v).may_suppress(all_kinds)
     }
     assert suppressible == {
-        "module_aborts", "lexical_dead", "binary_oracle_absent",
+        "module_aborts", "lexical_dead",
     }
     # Grew again 2026-08-19: sanitizer_dominated earned suppression
     # (operator-approved flip; zero-false-suppress corpus clean at flip
@@ -375,7 +374,6 @@ def test_only_earned_sound_kinds_can_ever_be_suppress_eligible():
     assert STRUCTURALLY_SUPPRESSIBLE_KINDS == {
         WitnessKind.MODULE_ABORTS,
         WitnessKind.LEXICAL_DEAD,
-        WitnessKind.BINARY_ORACLE_ABSENT,
         WitnessKind.SANITIZER_CUT,
     }
 
@@ -437,8 +435,8 @@ def test_resolve_reachability_end_to_end():
 def test_structurally_suppressible_derived_from_table():
     # The suppressible set is DERIVED from VERDICTS[*].earns_suppression,
     # not hand-maintained. Pin the expected membership so a stray
-    # earns_suppression flip is caught. Grew when binary_oracle_absent
-    # earned the right via the Inc 3 precision corpus.
+    # earns_suppression flip is caught. Binary absence remains excluded:
+    # classifier performance does not establish source/build correspondence.
     from core.analysis.reach_witness import (
         STRUCTURALLY_SUPPRESSIBLE_KINDS, WitnessKind,
     )
@@ -448,7 +446,6 @@ def test_structurally_suppressible_derived_from_table():
     assert STRUCTURALLY_SUPPRESSIBLE_KINDS == frozenset({
         WitnessKind.MODULE_ABORTS,
         WitnessKind.LEXICAL_DEAD,
-        WitnessKind.BINARY_ORACLE_ABSENT,
         WitnessKind.SANITIZER_CUT,
     })
 
