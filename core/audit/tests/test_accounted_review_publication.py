@@ -16,9 +16,10 @@ from core.llm.tests.test_prepared_attempt_reservation import sdk_clients as sdk_
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("journal_failure,omit_options", [(False, False), (True, False), (False, True)],
-                         ids=["published", "journal-refused", "optional-omissions"])
-def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeypatch, sdk_clients, journal_failure, omit_options):
+@pytest.mark.parametrize("journal_failure,omit_options,source_race",
+                         [(False, False, False), (True, False, False), (False, True, False), (False, False, True)],
+                         ids=["published", "journal-refused", "optional-omissions", "source-restored"])
+def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeypatch, sdk_clients, journal_failure, omit_options, source_race):
     # This boundary is the real ready graph, Runtime and SDK request hook.
     # Optional detector/server/study work is outside this direct-review case.
     monkeypatch.setattr(orchestrator, "_run_mechanical_detectors", lambda *a, **k: ({}, set()))
@@ -60,6 +61,11 @@ def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeyp
         rows = [r for r in load_verified_audit_log(out) if r.get("stage") == "admitted"]
         assert len(rows) == len(bundle.state["requests"])
         admitted_before_wire.append(rows[-1]["attempt"])
+        if source_race and len(bundle.state["requests"]) == 2:
+            # Real bytes return to their original digest, but the owned
+            # physical source observation must remain invalidated.
+            path.write_text(source + "/* changed during request */\n")
+            path.write_text(source)
 
     bundle.state["handler"] = check_prepared_admission
     bundle.state["transform"] = response
@@ -97,11 +103,11 @@ def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeyp
     reserved = [e for e in history["events"] if e["event"] == "continuation_reserved"]
     assert len(reserved) == 1
     pass_id = reserved[0]["pass_id"]
-    if journal_failure:
+    if journal_failure or source_race:
         assert completed == []
         failures = [e for e in history["events"] if e["event"] == "continuation_failed"]
         assert len(failures) == 1 and failures[0]["pass_id"] == pass_id
-        assert failures[0]["reason"] == "candidate_journal_write_failed"
+        assert failures[0]["reason"] == ("source_changed" if source_race else "candidate_journal_write_failed")
     else:
         assert len(completed) == 1
         assert completed[0]["published_status"] == "clean"
@@ -121,7 +127,7 @@ def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeyp
     assert bundle.client.reported_spend_usd > 0
     assert result.total_cost_usd == pytest.approx(bundle.client.reported_spend_usd)
     entries = load_entries(out)
-    assert len(entries) == (1 if journal_failure else 2)
+    assert len(entries) == (1 if journal_failure or source_race else 2)
     # A clean continuation adds delivered context/history; it does not
     # replace the previous assessment merely because another call ran.
     assert result.outcomes[0].body == payloads[0]["body"]
@@ -130,7 +136,7 @@ def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeyp
     reviews = [i["review"] for i in history_rows["intakes"] if i.get("review")]
     if history_rows.get("review"):
         reviews.append(history_rows["review"])
-    assert (pass_id in {r["origin"]["pass_id"] for r in reviews}) is (not journal_failure)
+    assert (pass_id in {r["origin"]["pass_id"] for r in reviews}) is (not (journal_failure or source_race))
     from core.audit.source_anchor import parse_source_anchor
     assert parse_source_anchor(entries[-1].source_hash)[0] == hashlib.sha256(source.encode()).hexdigest()
     costs = json.loads((out / "cost-breakdown.json").read_text())
