@@ -214,3 +214,40 @@ def test_recorded_unit_fields_are_escaped_by_the_actual_portable_renderer():
     assert "\n# injected heading" not in markdown
     assert "<img src=x>" not in markdown
     assert "a&#124;" in markdown
+
+
+@pytest.mark.parametrize("clean_basis", ["verdict", "gate_resolved"])
+def test_scoped_basis_requires_matching_selected_clean_classification(recorded, tmp_path, clean_basis):
+    from core.audit.refutation_assessment_basis import record_refutation_basis
+    from core.audit.verification_results import ClaimRefutation, ProbeOutcome
+    _, _, origin, entry = recorded
+    # Signed consumer fixture only: no checker semantics or execution proved.
+    hypothesis = "the enumerated prior concern"
+    receipt = ClaimRefutation(origin.file, origin.function, origin.line_start, hypothesis,
+        (ProbeOutcome("fixture", "refuted", "fixture:scoped", "Scoped consumer fixture"),),
+        origin.source_identity)
+    history = record_refutation_basis(entry.review_claims, origin=origin,
+        attempt_id=entry.review_claims["review"]["attempt_id"], hypotheses=[hypothesis], receipts=[receipt])
+    assert history is not None
+    destination = tmp_path / clean_basis / "run"
+    destination.mkdir(parents=True)
+    append_entry(destination, replace(entry, review_claims=history, clean_basis=clean_basis))
+    loaded, = load_entries(destination, fresh=True)
+    assert journal_mac.entry_provenance(loaded) == journal_mac.ROW_VERIFIED
+    assert loaded.run_path == str(destination.resolve())
+    basis = journal_assessment_basis(loaded, destination)
+    if clean_basis == "verdict":
+        assert basis is None
+    else:
+        assert basis is not None and basis["basis"] == "enumerated_claims_refuted"
+        assert basis["refutations"]["hypotheses"] == [hypothesis]
+        summary = assessment_basis_summary({"functions_analysed": [{"file": loaded.file,
+            "function": loaded.function, "line_start": loaded.line_start, "status": "clean",
+            "assessment_basis": basis}]})
+        assert summary is not None and summary["recorded"] == 1
+        blocks = assessment_basis_blocks({"assessment_bases": summary})
+        document = ReportDocument("Fixture", "audit", "fixture", blocks=blocks)
+        markdown = get_renderer("markdown").render(document).content.decode()
+        assert "Scoped refutations of enumerated claims" in markdown
+        assert "does not establish" in markdown and "mechanical assurance" in markdown
+    assert loaded.verdict == entry.verdict == "clean"

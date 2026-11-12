@@ -19,7 +19,7 @@ from core.testing.audit_shutdown import isolated_audit_shutdown
 
 @pytest.mark.parametrize("fault", ["none", "no_withdrawal", "wrong_id", "unknown_caller", "source_changed",
                                   "journal_unacknowledged", "history_ack_stripped", "mechanical_support",
-                                  "scoped_refutation", "independent_concern", "pending_reference",
+                                  "scoped_refutation", "independent_concern", "pending_reference", "refutation_basis_cancelled",
                                   "validation_cancelled", "before_commit", "after_commit",
                                   "advisory_after_commit", "advisory_competing_writer"])
 def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_path, monkeypatch, fault):
@@ -53,7 +53,7 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
         def generate_structured(self, prompt, schema, **kwargs):
             calls.append(prompt)
             payload = {"status": "clean", "body": "The signedness premise was mistaken.", "hypothesis": ""}
-            if fault not in {"no_withdrawal", "scoped_refutation", "independent_concern", "pending_reference",
+            if fault not in {"no_withdrawal", "scoped_refutation", "independent_concern", "pending_reference", "refutation_basis_cancelled",
                               "advisory_after_commit", "advisory_competing_writer"}:
                 assert "claim_withdrawals" in schema["properties"]
                 assert reference["revision_id"] in prompt
@@ -88,7 +88,7 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
 
         monkeypatch.setattr(collector, "append_journal_for_outcome", stripped)
     reviewer = make_review_fn(Client(), escalate_clean=False)
-    if fault in {"scoped_refutation", "independent_concern", "pending_reference",
+    if fault in {"scoped_refutation", "independent_concern", "pending_reference", "refutation_basis_cancelled",
                  "advisory_after_commit", "advisory_competing_writer"}:
         from core.audit.refutation_source import capture_source_identity
         from core.audit.verification_results import ClaimRefutation, ProbeOutcome
@@ -113,6 +113,11 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
         def cancel_validation(*args):
             raise abort
         monkeypatch.setattr(orch, "_model_withdrawal_assessment", cancel_validation)
+    elif fault == "refutation_basis_cancelled":
+        import core.audit.refutation_assessment_basis as basis_recorder
+        def cancel_basis(*args, **kwargs):
+            raise abort
+        monkeypatch.setattr(basis_recorder, "record_refutation_basis", cancel_basis)
     elif fault == "before_commit":
         def cancel_append(**kwargs):
             raise abort
@@ -144,7 +149,7 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
 
     try:
         if fault in {"validation_cancelled", "before_commit", "after_commit",
-                     "advisory_after_commit", "advisory_competing_writer"}:
+                     "advisory_after_commit", "advisory_competing_writer", "refutation_basis_cancelled"}:
             with pytest.raises(KeyboardInterrupt) as caught:
                 run()
             assert caught.value is abort
@@ -160,6 +165,13 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
             if fault == "scoped_refutation":
                 assert result.outcomes[0].clean_basis == "gate_resolved"
                 assert len(result.outcomes[0].claim_refutations) == 1
+                from core.audit.assessment_basis_reporting import journal_assessment_basis
+                scoped_basis = journal_assessment_basis(entry, out)
+                assert scoped_basis is not None
+                assert scoped_basis["basis"] == "enumerated_claims_refuted"
+                assert scoped_basis["scope"] == "historical_review_only"
+                assert scoped_basis["refutations"]["hypotheses"] == [prior.hypothesis]
+                assert scoped_basis["refutations"]["records"][0]["checks"][0]["verdict"] == "refuted"
             else:
                 assert entry.review_claims["assessment_basis"] == "model_judgment_withdrawal"
                 assert entry.review_claims["withdrawal_decisions"]["accepted"][0]["adjudication"] == "model_withdrawn"
@@ -195,6 +207,9 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
                     assert failures[-1]["reason"] == "deepen_advisory_publication_cancelled"
             else:
                 assert current is prior
+                if fault == "refutation_basis_cancelled":
+                    failures = [e for e in runtime.events() if e["event"] == "continuation_failed"]
+                    assert len(failures) == 1 and failures[0]["reason"] == "deepen_publication_incomplete"
                 if fault != "history_ack_stripped":
                     assert load_entries(out, fresh=True) == []
     finally:

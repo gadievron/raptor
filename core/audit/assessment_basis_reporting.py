@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from core.coverage import journal_mac
-from core.coverage.journal import CLEAN_BASIS_VERDICT, entry_producer, is_mechanical_echo
+from core.coverage.journal import CLEAN_BASIS_GATE_RESOLVED, CLEAN_BASIS_VERDICT, entry_producer, is_mechanical_echo
 from core.reporting.document import Block
 
 from .assessment_basis import read_assessment_basis
@@ -21,6 +21,7 @@ ROLE = "historical_review_basis_not_assurance"
 MAX_DISPLAYED = 100
 _LABELS = {"model_judgment": "Model judgement",
            "model_judgment_withdrawal": "Explicit model withdrawal",
+           "enumerated_claims_refuted": "Scoped refutations of enumerated claims",
            "unavailable": "Unavailable (not recorded or unbound)"}
 
 
@@ -38,8 +39,6 @@ def journal_assessment_basis(entry: Any, out_dir: Path) -> dict[str, Any] | None
     # A later scoped-refutation or silence gate can keep the same status
     # while changing the selected assessment's basis. Do not describe it
     # as model-only by borrowing a historical contributing review.
-    if entry.verdict == "clean" and entry.clean_basis != CLEAN_BASIS_VERDICT:
-        return None
     history = read_history(entry.review_claims)
     review = history.get("review") if history is not None else None
     origin = review.get("origin") if isinstance(review, dict) else None
@@ -49,6 +48,11 @@ def journal_assessment_basis(entry: Any, out_dir: Path) -> dict[str, Any] | None
     if not isinstance(pass_id, str):
         return None
     basis = read_assessment_basis(history, pass_id=pass_id, status=entry.verdict)
+    if entry.verdict == "clean":
+        expected_clean_basis = (CLEAN_BASIS_GATE_RESOLVED
+            if basis is not None and basis["basis"] == "enumerated_claims_refuted" else CLEAN_BASIS_VERDICT)
+        if entry.clean_basis != expected_clean_basis:
+            return None
     anchor = parse_source_anchor(entry.source_hash)
     if (basis is None or anchor is None
             or (origin.get("file"), origin.get("function"), origin.get("line_start"), origin.get("line_end"))
