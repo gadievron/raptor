@@ -28,9 +28,12 @@ import pytest
 def _hermetic_resolution(monkeypatch, tmp_path):
     import core.llm.config as cfg
     import core.llm.detection as det
-    from core.testing.llm_state import isolated_llm_resolution
+    from core.testing.llm_state import isolated_llm_resolution, scoped_claudecode_discovery
 
-    with isolated_llm_resolution(cfg, det):
+    with (
+        isolated_llm_resolution(cfg, det),
+        scoped_claudecode_discovery(cfg, det) as imports,
+    ):
         try:
             from core.config import RaptorConfig
             for var in RaptorConfig.LLM_API_KEY_VARS:
@@ -50,31 +53,30 @@ def _hermetic_resolution(monkeypatch, tmp_path):
                 "RAPTOR_CC_PROBE_CACHE", str(tmp_path / "cc-probe.json"),
             )
             monkeypatch.setattr(cfg, "_get_available_ollama_models", lambda: [])
-            yield
+            yield imports
         finally:
             monkeypatch.undo()
 
 
-def _claude_on_path(monkeypatch):
-    import shutil
-    real_which = shutil.which
+def _claude_on_path(monkeypatch, imports):
+    real_which = imports.shutil.which
 
     def fake_which(cmd, *a, **k):
         if cmd == "claude":
             return "/usr/local/bin/claude"
         return real_which(cmd, *a, **k)
 
-    monkeypatch.setattr(shutil, "which", fake_which)
+    monkeypatch.setattr(imports.shutil, "which", fake_which)
 
 
 class TestClaudecodeRoutePreserved:
 
     def test_no_bedrock_entry_resolves_claudecode_session_default(
-        self, monkeypatch,
+        self, monkeypatch, _hermetic_resolution,
     ):
         """Route 1 baseline: nothing configured, claude CLI on PATH →
         claudecode/session-default, exactly today's behaviour."""
-        _claude_on_path(monkeypatch)
+        _claude_on_path(monkeypatch, _hermetic_resolution)
         from core.llm.config import (
             CLAUDECODE_SESSION_MODEL,
             _get_default_primary_model,
@@ -85,13 +87,13 @@ class TestClaudecodeRoutePreserved:
         assert mc.model_name == CLAUDECODE_SESSION_MODEL
 
     def test_ambient_routing_family_does_not_change_the_fallback(
-        self, monkeypatch,
+        self, monkeypatch, _hermetic_resolution,
     ):
         """The env family that get_llm_env now carries into children
         must not flip selection: with no Bedrock entry / bearer /
         RAPTOR_BEDROCK_* signal, resolution is byte-identical to the
         family-free environment."""
-        _claude_on_path(monkeypatch)
+        _claude_on_path(monkeypatch, _hermetic_resolution)
         monkeypatch.setenv("AWS_PROFILE", "some-profile")
         monkeypatch.setenv("AWS_REGION", "us-east-1")
         monkeypatch.setenv("ANTHROPIC_MODEL",
