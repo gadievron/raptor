@@ -139,7 +139,7 @@ def reaching_defs(cfg: Any) -> ReachingDefs:
 
     def _node_defs(n: Any) -> frozenset[str]:
         explicit: frozenset[str] = getattr(n, "defs", frozenset())
-        if n is entry and params:
+        if n == entry and params:
             return frozenset(set(explicit) | set(params))
         return explicit
 
