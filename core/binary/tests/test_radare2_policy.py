@@ -1,4 +1,5 @@
 """The interactive wrapper applies the same policy as other hostile parsers."""
+import builtins
 from pathlib import Path
 import runpy
 import subprocess
@@ -6,7 +7,10 @@ import sys
 
 import pytest
 
+from core.testing.module_views import module_function_view
+
 WRAPPER = Path(__file__).resolve().parents[3] / 'libexec/raptor-r2-sandboxed'
+_WRAPPER_GLOBALS = None
 
 
 @pytest.fixture
@@ -24,7 +28,20 @@ def launch(tmp_path, monkeypatch):
     tool.write_text('#!/bin/sh\nexit 0\n')
     tool.chmod(0o700)
     original = shutil.which
-    monkeypatch.setattr(shutil, 'which', lambda name, *a, **k: str(tool) if name == 'r2' else original(name, *a, **k))
+    def which(name, *args, **kwargs):
+        return str(tool) if name == 'r2' else original(name, *args, **kwargs)
+
+    private_shutil = module_function_view(shutil, bindings={'which': which})
+    inherited_import = builtins.__import__
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == 'shutil' and level == 0:
+            return private_shutil
+        return inherited_import(name, globals, locals, fromlist, level)
+
+    private_builtins = dict(vars(builtins), __import__=import_local)
+    monkeypatch.setitem(globals(), '_WRAPPER_GLOBALS', {'__builtins__': private_builtins})
+    monkeypatch.setattr(sys, 'path', sys.path.copy())
     monkeypatch.setenv('_RAPTOR_TRUSTED', '1')
     monkeypatch.setenv('OUTPUT_DIR', str(output))
     monkeypatch.delenv('R2_TARGET_DIR', raising=False)
@@ -58,7 +75,7 @@ def test_full_policy_and_stdio_are_preserved(launch, monkeypatch, fresh):
         return subprocess.CompletedProcess(command, 0)
     monkeypatch.setattr(sandbox, 'run', run)
     with pytest.raises(SystemExit) as exc:
-        runpy.run_path(str(WRAPPER), run_name='__main__')
+        runpy.run_path(str(WRAPPER), init_globals=_WRAPPER_GLOBALS, run_name='__main__')
     assert exc.value.code == 0 and len(calls) == 1
 
 
@@ -72,7 +89,7 @@ def test_isolation_refusal_exits_before_parser(launch, monkeypatch, capsys, kind
         raise error('owned refusal \x1b[2J', **kwargs)
     monkeypatch.setattr(sandbox, 'run', refuse)
     with pytest.raises(SystemExit) as exc:
-        runpy.run_path(str(WRAPPER), run_name='__main__')
+        runpy.run_path(str(WRAPPER), init_globals=_WRAPPER_GLOBALS, run_name='__main__')
     assert exc.value.code == 101
     stderr = capsys.readouterr().err
     assert 'owned refusal' in stderr and '\x1b' not in stderr
@@ -83,7 +100,7 @@ def test_target_hint_cannot_widen_reads(launch, monkeypatch, capsys):
     monkeypatch.setenv('R2_TARGET_DIR', str(binary.parent.parent))
     monkeypatch.setattr(sandbox, 'run', lambda *a, **k: pytest.fail('parser started'))
     with pytest.raises(SystemExit) as exc:
-        runpy.run_path(str(WRAPPER), run_name='__main__')
+        runpy.run_path(str(WRAPPER), init_globals=_WRAPPER_GLOBALS, run_name='__main__')
     assert exc.value.code == 103
     assert 'must match' in capsys.readouterr().err
 
@@ -94,5 +111,5 @@ def test_loose_input_cannot_admit_home(launch, monkeypatch):
     monkeypatch.setattr(python_paths, '_home_roots', lambda: (binary.parent,))
     monkeypatch.setattr(sandbox, 'run', lambda *a, **k: pytest.fail('parser started'))
     with pytest.raises(SystemExit) as exc:
-        runpy.run_path(str(WRAPPER), run_name='__main__')
+        runpy.run_path(str(WRAPPER), init_globals=_WRAPPER_GLOBALS, run_name='__main__')
     assert exc.value.code == 101
