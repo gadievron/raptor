@@ -53,8 +53,8 @@ def limit_result(result, cap: int) -> None:
 
 
 class _TextCaptureMetadata(Protocol):
-    # Text-mode Popen supplies these attributes at runtime; its stubs omit
-    # them. Binary capture does not enter this decoding path.
+    # Text-mode pipe wrappers resolve special encodings such as "locale".
+    # Binary capture does not enter this decoding path.
     encoding: str
     errors: str | None
 
@@ -127,14 +127,12 @@ class BoundedCommunicator:
             raw = bytes(self._buffers[label])
             value: bytes | str = raw
             if text:
-                proc = cast(_TextCaptureMetadata, self.proc)
-                # Popen retains None for the default error policy. Preserve
-                # that value for codecs even though the factory stub is narrower.
+                stream = cast(_TextCaptureMetadata, getattr(self.proc, label))
                 decoder_factory = cast(
                     Callable[[str | None], codecs.IncrementalDecoder],
-                    codecs.getincrementaldecoder(proc.encoding),
+                    codecs.getincrementaldecoder(stream.encoding),
                 )
-                decoder = decoder_factory(proc.errors)
+                decoder = decoder_factory(stream.errors)
                 # A cap can split a valid encoded character. Keep the complete
                 # decoded prefix; an untruncated malformed stream still errors.
                 value = decoder.decode(raw, final=not self._truncated[label])
