@@ -209,6 +209,24 @@ def _collect_local_scopes(
     return out
 
 
+def _conversion_sensitive_names(root: Node) -> frozenset[str]:
+    """File-wide refusal mask; same-name ambiguity never grants a type."""
+    names: set[str] = set()
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in ("variable_declarator", "formal_parameter",
+                         "enhanced_for_statement", "resource"):
+            name = node.child_by_field_name("name")
+            declaration = node.parent if node.type == "variable_declarator" else node
+            target = declaration.child_by_field_name("type") if declaration is not None else None
+            if name is not None and target is not None \
+                    and target.text in (b"char", b"float", b"double"):
+                names.add(cast(bytes, name.text).decode())
+        pending.extend(node.named_children)
+    return frozenset(names)
+
+
 class JavaConstIndex:
     """Per-file index of simple definitions: (line, name) → RHS node.
 
@@ -282,6 +300,7 @@ class JavaConstIndex:
         except Exception:  # noqa: BLE001
             return
         self._scopes = _collect_local_scopes(tree.root_node)
+        conversion_sensitive = _conversion_sensitive_names(tree.root_node)
         lo, hi = line_span
         stack = [tree.root_node]
         while stack:
@@ -361,6 +380,13 @@ class JavaConstIndex:
                 if params is not None and params.type == "identifier":
                     self._note_unindexed_definer(n, params)
             stack.extend(n.children)
+        # Later writes do not retain a declared target type. Known char /
+        # floating names therefore cannot borrow their RHS's value kind.
+        # File-wide name ambiguity only removes evidence; it grants none.
+        for key, rhs in tuple(self._defs.items()):
+            if key[1] in conversion_sensitive and rhs.parent is not None \
+                    and rhs.parent.type == "assignment_expression":
+                del self._defs[key]
         self.ok = True
 
     def _note_unindexed_definer(self, construct: Node, name_node: Node) -> None:
