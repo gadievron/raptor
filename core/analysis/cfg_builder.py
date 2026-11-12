@@ -75,8 +75,9 @@ class CallSite:
 
     ``assigned_names`` is the frozenset of LHS names this call's
     return value flows to. Non-empty only when the call IS the
-    direct RHS of an ``Assign`` / ``AugAssign`` / ``AnnAssign``;
-    nested calls (``y = wrap(f(x))`` — the inner ``f(x)``) have
+    direct RHS of an ``Assign`` / ``AnnAssign``. Augmented assignments
+    combine it with the prior target value and carry no fresh-return
+    identity; nested calls (``y = wrap(f(x))`` — the inner ``f(x)``) have
     empty ``assigned_names`` because their return value flows
     into ``wrap``, not into ``y``.
 
@@ -378,9 +379,10 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     """Map ``id(call_node) → assigned LHS names`` for calls whose
     return value is captured into a fresh LHS name at this stmt.
 
-    Covers ``Assign`` (any LHS shape), ``AugAssign`` (target is
-    always a ``Name`` / ``Subscript`` / ``Attribute``; only ``Name``
-    rebinds), ``AnnAssign`` with a value. ``y, z = f(), g()`` pairs
+    Covers ``Assign`` (any LHS shape) and ``AnnAssign`` with a value.
+    Augmented assignments combine the call's return with the previous
+    target value, so they do not establish return-value identity.
+    ``y, z = f(), g()`` pairs
     each Tuple LHS element with the same-position Tuple RHS Call.
     Nested calls and non-call RHS expressions get no entry.
     """
@@ -410,11 +412,6 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
                 for rhs_elt in stmt.value.elts:
                     if isinstance(rhs_elt, ast.Call):
                         result[id(rhs_elt)] = all_lhs
-    elif isinstance(stmt, ast.AugAssign):
-        if isinstance(stmt.target, ast.Name) and isinstance(
-            stmt.value, ast.Call,
-        ):
-            result[id(stmt.value)] = frozenset({stmt.target.id})
     elif isinstance(stmt, ast.AnnAssign):
         if (
             isinstance(stmt.target, ast.Name)
