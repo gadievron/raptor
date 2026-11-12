@@ -15,6 +15,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 _NEVER = ("-", "#####", "=====")
 _SOURCE_RE = re.compile(r"Source:(.*)")
 
@@ -29,7 +31,7 @@ def _read_report_text(path: Path) -> str | None:
     """Bounded read for a coverage artifact; None when unreadable or
     over the byte budget (skipped like any malformed input)."""
     try:
-        with path.open("rb") as fh:
+        with preserving_stream_error(path.open("rb")) as fh:
             raw = fh.read(_MAX_REPORT_BYTES + 1)
     except OSError:
         return None
