@@ -412,10 +412,14 @@ def _timeout_snapshot(failure, proc, out=None, err=None) -> None:
         return
     for attr, candidate in (("output", out), ("stderr", err)):
         current = getattr(failure, attr)
-        if isinstance(candidate, str):
-            candidate = candidate.encode(proc.encoding or "utf-8", proc.errors or "strict")
-        if isinstance(current, str):
-            current = current.encode(proc.encoding or "utf-8", proc.errors or "strict")
+        if isinstance(candidate, str) or isinstance(current, str):
+            stream = getattr(proc, "stdout" if attr == "output" else "stderr", None)
+            encoding = getattr(stream, "encoding", None) or proc.encoding or "utf-8"
+            errors = getattr(stream, "errors", None) or proc.errors or "strict"
+            if isinstance(candidate, str):
+                candidate = candidate.encode(encoding, errors)
+            if isinstance(current, str):
+                current = current.encode(encoding, errors)
         if candidate is not None and (current is None or candidate.startswith(current)):
             current = candidate
         setattr(failure, attr, current)
