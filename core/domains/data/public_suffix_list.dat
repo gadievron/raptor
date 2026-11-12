@@ -5,8 +5,8 @@
 // Please pull this list from, and only from https://publicsuffix.org/list/public_suffix_list.dat,
 // rather than any other VCS sites. Pulling from any other URL is not guaranteed to be supported.
 
-// VERSION: 2026-10-31_14-17-28_UTC
-// COMMIT: 73f8cc701c084fe07d888ec552b2f0b53281a674
+// VERSION: 2026-11-11_17-18-20_UTC
+// COMMIT: 529030148729033bc6c30dbb05753b805a7d2155
 
 // Instructions on pulling and using this list can be found at https://publicsuffix.org/list/.
 
@@ -6369,9 +6369,13 @@ net.vi
 org.vi
 
 // vn : https://vnnic.vn/en/domain-name-vn/domain-name/cctldvn
+// https://vnnic.vn/sites/default/files/vn.cctld.domains.txt
+// Submitted by registry <dnsabuse-support@vnnic.vn> 2026-10-05
 vn
 ac.vn
+ad.vn
 ai.vn
+ap.vn
 biz.vn
 com.vn
 edu.vn
@@ -6383,6 +6387,7 @@ int.vn
 io.vn
 name.vn
 net.vn
+on.vn
 org.vn
 pro.vn
 
@@ -11270,6 +11275,10 @@ ltd.ua
 a2hosted.com
 cpserver.com
 
+// abyme : https://abyme.studio
+// Submitted by Richard Mathieson <psl@abyme.studio>
+abyme.dev
+
 // ActiveTrail : https://www.activetrail.biz/
 // Submitted by Ofer Kalaora <postmaster@activetrail.com>
 activetrail.biz
@@ -12388,10 +12397,6 @@ claude.app
 claudeusercontent.com
 frame.claudeusercontent.com
 
-// Anysphere Inc : https://cursor.com
-// Submitted by Benson Liu <security@cursor.com>
-*.cursorusercontent.com
-
 // Apigee : https://apigee.com/
 // Submitted by Apigee Security Team <security@apigee.com>
 apigee.io
@@ -12537,6 +12542,10 @@ bnr.la
 // Submitted by Andy Ortlieb <aortlieb@atlassian.com>
 bitbucket.io
 
+// Bitgate, Inc. : https://ship.page
+// Submitted by Bitgate, Inc. <abuse@bitgate.com>
+ship.place
+
 // Blackbaud, Inc. : https://www.blackbaud.com
 // Submitted by Paul Crowder <paul.crowder@blackbaud.com>
 blackbaudcdn.net
@@ -12544,6 +12553,10 @@ blackbaudcdn.net
 // Blatech : http://www.blatech.net
 // Submitted by Luke Bratch <luke@bratch.co.uk>
 of.je
+
+// BlitzWorks : https://blitz.cloud
+// Submitted by BlitzWorks <hallo@blitzworks.io>
+prod.page
 
 // Block, Inc. : https://block.xyz
 // Submitted by Jonathan Boice <security@block.xyz>
@@ -12602,6 +12615,10 @@ radio.fm
 // Submitted by Merlin Zhao <devops@bubble.io>
 cdn.bubble.io
 bubbleapps.io
+
+// Butterfly Effect Pte. Ltd. : https://manus.im
+// Submitted by Manus Security Team <security@manus.ai>
+manus.space
 
 // bwCloud-OS : https://bwcloud-os.de/
 // Submitted by Klara Mall <dns@bwcloud-os.de>
@@ -12772,6 +12789,10 @@ objects.lpg.cloudscale.ch
 objects.rma.cloudscale.ch
 lpg.objectstorage.ch
 rma.objectstorage.ch
+
+// Cloudzyro Ltd : https://cloudzyro.com
+// Submitted by Kofi Agyem <psl@cloudzyro.com>
+cloudzyro.app
 
 // Clovyr : https://clovyr.io
 // Submitted by Patrick Nielsen <patrick@clovyr.io>
@@ -13045,6 +13066,10 @@ dnshome.it
 dyn.now
 heimdns.online
 ddns.wtf
+
+// Docs Flowy : https://docsflowy.com
+// Submitted by Haykel Maaoui <hello@docsflowy.com>
+docsflowy.site
 
 // DotArai : https://www.dotarai.com/
 // Submitted by Atsadawat Netcharadsang <atsadawat@dotarai.co.th>
@@ -14003,6 +14028,10 @@ goupile.fr
 // Submitted by Richard Baker <richard.baker@digital.cabinet-office.gov.uk>
 pymnt.uk
 
+// Government of Germany : https://dachmarke.gov.de/
+// Submitted by Digitale Dachmarke <support@dachmarke.gov.de>
+gov.de
+
 // Government of the Netherlands : https://www.government.nl
 // Submitted by <domeinnaam@minaz.nl>
 gov.nl
@@ -14542,6 +14571,10 @@ co.technology
 linkyard-cloud.ch
 linkyard.cloud
 
+// Linkyhost : https://www.linkyhost.com
+// Submitted by Linkyhost Support <support@linkyhost.com>
+linkyhost.page
+
 // Linode : https://linode.com
 // Submitted by <security@linode.com>
 members.linode.com
@@ -14591,6 +14624,7 @@ lohmus.me
 // Lovable : https://lovable.dev
 // Submitted by Fabian Hedin <security@lovable.dev>
 lovable.app
+auth.lovable.app
 lovableproject.com
 lovable.run
 lovable.sh
@@ -14875,6 +14909,12 @@ mkm.fan
 mocha.app
 mochausercontent.com
 mocha-sandbox.dev
+
+// Modelence : https://modelence.com/
+// Submitted by Modelence Security <security@modelence.com>
+modelence.app
+cloud.modelence.app
+sandbox.modelence.app
 
 // MODX Systems LLC : https://modx.com
 // Submitted by Elizabeth Southwell <elizabeth@modx.com>
@@ -15318,6 +15358,10 @@ ox.rs
 // Submitted by Charly Coste <changaco@changaco.oy.lc>
 oy.lc
 
+// Page Lemon : https://pagelemon.com
+// Submitted by Aporia Research Ltd <hi@pagelemon.com>
+pagelemon.dev
+
 // Pagefog : https://pagefog.com/
 // Submitted by Derek Myers <derek@pagefog.com>
 pgfog.com
@@ -15538,6 +15582,10 @@ ravpage.co.il
 readthedocs-hosted.com
 readthedocs.io
 
+// ReadWriteExecute, Inc : https://www.rwx.com
+// Submitted by Dan Manges <security@rwx.com>
+rwx.run
+
 // Red Hat, Inc. OpenShift : https://openshift.redhat.com/
 // Submitted by Tim Kramer <tkramer@rhcloud.com>
 rhcloud.com
@@ -15717,6 +15765,11 @@ sakura.tv
 // Submitted by Asheesh Laroia <asheesh@sandstorm.io>
 sandcats.io
 
+// Sanity Inc. : https://www.sanity.io/
+// Submitted by Josh Ellis <security@sanity.io>
+sanity.run
+sanity.studio
+
 // Sav.com, LLC : https://marketing.sav.com/
 // Submitted by Mukul Kudegave <mukul@sav.com>
 sav.case
@@ -15885,6 +15938,10 @@ vipsinaapp.com
 // Submitted by Skylar Challand <support@siteleaf.com>
 siteleaf.net
 
+// Sliplane GmbH : https://sliplane.io
+// Submitted by Jonas Scholz <support@sliplane.io>
+sliplane.app
+
 // Small Technology Foundation : https://small-tech.org
 // Submitted by Aral Balkan <aral@small-tech.org>
 small-web.org
@@ -15946,6 +16003,13 @@ my.at
 my.de
 *.nxa.eu
 nx.gw
+
+// SpaceXSI : https://x.ai/
+// Submitted by Benson Liu <security@x.ai>
+*.apps.grok.bot
+*.pages.grok.bot
+*.cursorusercontent.com
+grok.me
 
 // Spawnbase : https://spawnbase.ai
 // Submitted by Alexander Zuev <security@spawnbase.ai>
@@ -16336,6 +16400,10 @@ now.sh
 // Submitted by Danko Aleksejevs <danko@very.lv>
 2038.io
 
+// VibeKit : https://vibekit.bot/
+// Submitted by Brian Boisjoli <info@vibekit.bot>
+vibekit.page
+
 // Virtual-Info : https://www.virtual-info.info/
 // Submitted by Adnan RIHAN <hostmaster@v-info.info>
 v-info.info
@@ -16477,10 +16545,6 @@ weeklylottery.org.uk
 // Submitted by Brandon DuRette <brandon.durette@wpengine.com>
 wpenginepowered.com
 js.wpenginepowered.com
-
-// xAI : https://x.ai/
-// Submitted by Asim Shrestha <security@x.ai>
-grok.me
 
 // XenonCloud GbR : https://xenoncloud.net
 // Submitted by Julian Uphoff <publicsuffixlist@xenoncloud.net>
