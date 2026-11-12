@@ -178,9 +178,9 @@ def test_e2e_explicit_binary_flag_path(_synthetic_target_built) -> None:
         inv, "lib.c", "dead_helper", dead_line, "lib")
     assert verdict_dead == "binary_oracle_absent"
 
-    # Verdict resolves to a may_suppress=True witness.
+    # Classification remains recorded without source-suppression authority.
     spec = verdict_from_classification(verdict_dead)
-    assert spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is True
+    assert spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS) is False
 
 
 @pytest.mark.slow
@@ -209,16 +209,14 @@ def test_e2e_chokepoint_helper_full_flow(_synthetic_target_built) -> None:
     dead_line = _dead_helper_line(inv)
     alive_line = _alive_helper_line(inv)
 
-    # Decision on the DEAD function — should suppress.
+    # A classified-absent function remains a build observation, not a source proof.
     decision = check_suppress(
         checklist=inv,
         file_path="lib.c", function_name="dead_helper", line=dead_line,
         repo_root=project,
     )
-    assert decision is not None
-    verdict, reason = decision
-    assert verdict == "binary_oracle_absent"
-    assert "dead_helper" in reason
+    assert decision is None
+    assert binary_oracle_absent(inv, "lib.c", "dead_helper", dead_line) is True
 
     # Decision on the LIVE function — must NOT suppress.
     decision = check_suppress(

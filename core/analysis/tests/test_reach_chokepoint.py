@@ -94,9 +94,7 @@ def test_path_to_module_no_extension_returns_none() -> None:
 def _checklist_with_absent_function(
     file_path: str, name: str, line: int = 1,
 ) -> dict:
-    """Build a minimal checklist where the (file, name) function has
-    a SOUND binary_oracle absent verdict (tier=full, binaries non-
-    empty) — the chokepoint should suppress."""
+    """A classifier observation without source/build correspondence."""
     return {"files": [{
         "path": file_path, "language": "c",
         "items": [{
@@ -109,7 +107,14 @@ def _checklist_with_absent_function(
     }]}
 
 
-def test_check_suppress_fires_on_absent_full_tier(tmp_path: Path) -> None:
+def _checklist_with_lexically_dead_function(file_path: str, name: str, line: int = 1) -> dict:
+    # Consumer fixture for the existing structural predicate; no execution claim.
+    return {"files": [{"path": file_path, "language": "c", "items": [{
+        "name": name, "kind": "function", "line_start": line, "lexical_dead": True,
+    }]}]}
+
+
+def test_check_suppress_withholds_unproven_absent_full_tier(tmp_path: Path) -> None:
     checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
@@ -118,14 +123,11 @@ def test_check_suppress_fires_on_absent_full_tier(tmp_path: Path) -> None:
         line=5,
         repo_root=tmp_path,
     )
-    assert decision is not None
-    verdict, reason = decision
-    assert verdict == "binary_oracle_absent"
-    assert "Reachability chokepoint" in reason
+    assert decision is None
 
 
 def test_check_suppress_respects_manual_override(tmp_path: Path) -> None:
-    checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
+    checklist = _checklist_with_lexically_dead_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
         file_path="src/util.c",
@@ -140,7 +142,7 @@ def test_check_suppress_respects_manual_override(tmp_path: Path) -> None:
 def test_check_suppress_respects_allow_unreachable(
     tmp_path: Path,
 ) -> None:
-    checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
+    checklist = _checklist_with_lexically_dead_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
         file_path="src/util.c",
@@ -159,7 +161,7 @@ def test_check_suppress_handles_absolute_finding_path(
     absolute paths; the chokepoint MUST normalise via the shared
     helper, not pass the absolute path verbatim to the inventory
     lookup (which would miss every time)."""
-    checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
+    checklist = _checklist_with_lexically_dead_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
         file_path=str(tmp_path / "src" / "util.c"),  # ABSOLUTE
@@ -168,13 +170,13 @@ def test_check_suppress_handles_absolute_finding_path(
         repo_root=tmp_path,
     )
     assert decision is not None
-    assert decision[0] == "binary_oracle_absent"
+    assert decision[0] == "lexical_dead"
 
 
 def test_check_suppress_handles_file_uri_finding_path(
     tmp_path: Path,
 ) -> None:
-    checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
+    checklist = _checklist_with_lexically_dead_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
         file_path=f"file://{tmp_path}/src/util.c",
@@ -192,7 +194,7 @@ def test_check_suppress_string_false_manual_override_is_not_truthy(
     treated as truthy (Python ``bool("false")`` is True). Otherwise an
     emitter writing ``"manual_override": "false"`` would accidentally
     bypass the chokepoint."""
-    checklist = _checklist_with_absent_function("src/util.c", "helper", 5)
+    checklist = _checklist_with_lexically_dead_function("src/util.c", "helper", 5)
     decision = check_suppress(
         checklist=checklist,
         file_path="src/util.c",
