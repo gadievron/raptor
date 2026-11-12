@@ -1371,9 +1371,7 @@ def test_yarn_env_overlays_safe_env(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(yarn_mod, "_run", _fake_run)
     monkeypatch.setattr(yarn_mod, "_check_tool", lambda *a, **k: True)
-    monkeypatch.setattr(
-        yarn_mod.YarnResolver, "_detect_major_version",
-        lambda self=None: 3, raising=False)
+    monkeypatch.setattr(yarn_mod, "_detect_major_version", lambda: 3)
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     (tmp_path / "yarn.lock").write_text("", encoding="utf-8")
     resolver = yarn_mod.YarnResolver()
