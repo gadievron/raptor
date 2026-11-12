@@ -317,6 +317,8 @@ def extract_files_from_tar(
             if max_entry_count is not None and count > max_entry_count:
                 msg = f"tar exceeds {max_entry_count} entries (bomb-shape); refusing"
                 raise TarEntryCountExceeded(msg)
+            if member.size < 0:
+                raise TarReadError("negative tar member size")
             if max_total_bytes is not None:
                 # Count the header-declared size of EVERY member —
                 # including ones the safety filter or selector will
