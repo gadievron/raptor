@@ -868,7 +868,16 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
                     return TAINT_FREE
             return _REFUSE
         branch = "consequence" if cond else "alternative"
-        return _fold(node.child_by_field_name(branch), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
+        value = _fold(node.child_by_field_name(branch), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
+        if _is_int(value) or isinstance(value, _JavaChar):
+            # Numeric conditional types depend on BOTH arms, even when
+            # the condition is constant. Refuse unmodelled promotion or
+            # narrowing rather than expose the selected RHS unchanged.
+            other = "alternative" if cond else "consequence"
+            other_value = _fold(node.child_by_field_name(other), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
+            if type(other_value) is not type(value):
+                return _REFUSE
+        return value
     return _REFUSE
 
 
