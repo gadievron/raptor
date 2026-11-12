@@ -22,6 +22,7 @@ from core.json.jsonl import _append_jsonl_bytes
 from core.run.metadata import load_run_metadata
 from core.run.report_identity import valid_identity
 from core.run.resume import persist_spend_floor
+from core.source.streams import preserving_stream_error
 
 from . import record
 
@@ -138,7 +139,7 @@ class AttemptReservations:
                 fd = open_hardened_read(path)
             except FileNotFoundError:
                 continue
-            with os.fdopen(fd, "rb") as stream:
+            with preserving_stream_error(os.fdopen(fd, "rb")) as stream:
                 remaining = os.fstat(stream.fileno()).st_size
                 if remaining > record._AUDIT_LOG_MAX_BYTES:
                     raise ValueError("incomplete_attempt_recovery_trail")
