@@ -27831,6 +27831,8 @@ def _deepen_suspicious(
             if prior_outcome.hypothesis:
                 ctx["prior_verdict"]["hypothesis"] = prior_outcome.hypothesis
 
+        from .review_claims import read_history
+        ctx["prior_review_claims"] = read_history((prior_outcome.review_result or {}).get("review_claims"))
         prior_hyps = _prior_hypotheses_for(prior_outcome)
         if prior_hyps:
             ctx["prior_hypotheses"] = prior_hyps
@@ -27941,22 +27943,47 @@ def _deepen_suspicious(
                     continuation_owner.fail(idx, "deepen_context_or_source_not_admissible")
                     continue
 
-            # Accept the deepen verdict when it's non-clean, OR when
-            # the clean came from a structured demotion (all-refuted)
-            # rather than a bare LLM flip-flop. The review-time
-            # rationale-consistency check is no basis: prose heuristics
-            # never change a verdict, they only annotate.
-            # A reduced-context prior is never dominated: a full-context
-            # clean genuinely supersedes a clean formed with stripped
-            # context (and clears the context_reduced tag).
-            _rr = outcome.review_result or {}
-            _structured_demotion = bool(_rr.get("all_refuted_demotion"))
+            # Reconsideration cannot erase prior claims through a model
+            # flag or merely because the previous context was reduced.
+            # Reuse the same scoped-negative and explicit-withdrawal
+            # admission as the study continuation, without granting proof
+            # authority to a source-grounded model judgment.
+            withdrawing = (outcome.status == "clean"
+                           and prior_outcome.status in ("finding", "suspicious"))
+            clean_adjudicated = not withdrawing
+            remaining_concerns = False
+            if withdrawing:
+                current_source = capture_source_identity(config.target_path, prior_outcome.file)
+                prior_claims = [h["mechanism"] for h in _extract_all_hypotheses(prior_outcome)]
+                if prior_outcome.hypothesis and prior_outcome.hypothesis not in prior_claims:
+                    prior_claims.append(prior_outcome.hypothesis)
+                same_occurrence = (outcome.file, outcome.function, outcome.line) == (
+                    prior_outcome.file, prior_outcome.function, prior_outcome.line)
+                refuted_prior = same_occurrence and claims_refuted(
+                    outcome, prior_claims, source_identity=current_source, claim_outcome=prior_outcome)
+                try:
+                    withdrawal = _model_withdrawal_assessment(config, prior_outcome, outcome, current_source)
+                except BaseException:
+                    if continuation_owner is None:
+                        with result._lock:
+                            result.total_cost_usd += outcome.cost_usd
+                    else:
+                        continuation_owner.fail(idx, "withdrawal_validation_cancelled")
+                    raise
+                fresh_review = outcome.review_result or {}
+                remaining_concerns = bool(_extract_all_hypotheses(outcome))
+                knowledge_pending = any(fresh_review.get(field) for field in (
+                    "reading_list", "language_reference_requests", "caller_context_requests"))
+                clean_adjudicated = (same_occurrence and not remaining_concerns and not knowledge_pending
+                    and (refuted_prior or withdrawal["admissible"] is True)
+                    and not _is_verification_evidence_for_gate(prior_outcome))
+                if clean_adjudicated and refuted_prior and not withdrawal["admissible"]:
+                    outcome.clean_basis = "gate_resolved"
+                if not clean_adjudicated:
+                    prior_outcome.review_result = {**(prior_outcome.review_result or {}),
+                        "demotion_referee": "prior claims retained: " + withdrawal["reason"]}
             _referee_holds = _deepen_demotion_refereed(prior_outcome, outcome)
-            _deepen_dominated = (
-                outcome.status == "clean"
-                and not prior_outcome.context_reduced
-                and not _structured_demotion
-            )
+            _deepen_dominated = outcome.status == "clean" and not clean_adjudicated
 
             if _referee_holds:
                 # The rejected deepen call still spent real money.
@@ -27991,13 +28018,34 @@ def _deepen_suspicious(
                     with result._lock:
                         result.total_cost_usd += outcome.cost_usd
                 logger.info(
-                    "deepen [%d/%d] %s:%s: stayed %s (clean without structured basis)",
+                    "deepen [%d/%d] %s:%s: stayed %s (prior claims not withdrawn or refuted)",
                     idx,
                     len(targets),
                     gap["file"],
                     gap["name"],
                     prior_outcome.status,
                 )
+                if continuation_owner is not None:
+                    advisory = replace(outcome, status="suspicious") if remaining_concerns else outcome
+                    prepared_candidates: list[ReviewOutcome] = []
+                    try:
+                        disposition = _publish_study_candidates(
+                            config, result, continuation_owner.runtime, continuation_owner.reservation(idx),
+                            prior_outcome, advisory, gap, candidate_sink=prepared_candidates.append)
+                    except BaseException:
+                        with result._lock:
+                            committed_candidate = next((candidate for candidate in prepared_candidates
+                                if any(current is candidate for current in result.outcomes)), None)
+                        if committed_candidate is not None:
+                            continuation_owner.complete(idx, committed_candidate.status)
+                        else:
+                            continuation_owner.fail(idx, "deepen_advisory_publication_cancelled")
+                        raise
+                    if disposition == "published":
+                        continuation_owner.complete(idx, prior_outcome.status)
+                    else:
+                        continuation_owner.fail(idx, "deepen_claim_withdrawal_not_admitted")
+                continue
             else:
                 if outcome.status in ("finding", "suspicious"):
                     if config.immediate_verify:
@@ -28083,9 +28131,18 @@ def _deepen_suspicious(
                     if not continuation_owner.can_publish(idx):
                         continuation_owner.fail(idx, "deepen_source_changed_before_publication")
                         continue
-                    disposition = _publish_study_outcome(
-                        config, result, continuation_owner.runtime, continuation_owner.reservation(idx),
-                        prior_outcome, outcome, gap)
+                    try:
+                        disposition = _publish_study_outcome(
+                            config, result, continuation_owner.runtime, continuation_owner.reservation(idx),
+                            prior_outcome, outcome, gap)
+                    except BaseException:
+                        with result._lock:
+                            committed = any(current is outcome for current in result.outcomes)
+                        if committed:
+                            continuation_owner.complete(idx, outcome.status)
+                        else:
+                            continuation_owner.fail(idx, "deepen_publication_cancelled")
+                        raise
                     if disposition != "published":
                         continuation_owner.fail(idx, disposition)
                         continue
@@ -35818,6 +35875,7 @@ def _publish_study_candidates(
     config: OrchestratorConfig, result: OrchestratorResult,
     runtime: "AuditKnowledgeRuntime", reservation: "KnowledgeReservation",
     prior: ReviewOutcome, fresh: ReviewOutcome, gap: dict[str, Any],
+    *, candidate_sink: Callable[[ReviewOutcome], None] | None = None,
 ) -> str:
     """Keep canonical ownership through the existing journal writer's acknowledgement."""
     from .collector import append_journal_for_outcome
@@ -35848,6 +35906,11 @@ def _publish_study_candidates(
                             or input_scope is None):
             return "study_context_input_scope_unavailable"
         candidate.review_input_scope = input_scope
+        # Capture exact object identity before a write can commit. This is
+        # not an ACK: cancellation recovery must still find this object in
+        # canonical state, which is assigned only after the checked ACK.
+        if candidate_sink is not None:
+            candidate_sink(candidate)
         acknowledgement = append_journal_for_outcome(
             out_dir=config.out_dir, target_path=config.target_path,
             source_roots=runtime.source_roots(),

@@ -686,9 +686,9 @@ class TestDeepenIncludesProvisional:
         )
 
         assert deepened == ["pf"]  # provisional deepened; settled not
-        assert result.findings == 1
-        assert result.clean == 1
-        # The deepen verdict superseded the provisional object entirely.
-        assert all(
-            not getattr(o, "provisional", False) for o in result.outcomes
-        )
+        # Selection still offers the provisional concern a re-review,
+        # but a legacy boolean cannot withdraw its claim or source scope.
+        assert result.findings == 2
+        assert result.clean == 0
+        assert result.outcomes == [provisional, settled]
+        assert "prior claims retained" in provisional.review_result["demotion_referee"]
