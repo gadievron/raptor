@@ -360,18 +360,22 @@ def _arg_surface_names(call: ast.Call) -> frozenset[str]:
 def _assign_target_names(target: ast.AST) -> frozenset[str]:
     """Collect ``Store``-context bare names from one assignment target.
 
-    Handles ``Name``, ``Tuple``, ``List``. ``Subscript`` and
-    ``Attribute`` targets mutate a base name without rebinding it;
-    their base name is recorded as a def via :func:`_walk_symbols`
-    (the LHS subtree is walked there too) rather than here, because
-    here we are computing "names the call's return flows to" — a
-    subscript or attribute target doesn't capture the return as a
-    fresh name.
+    Handles ``Name``, ``Tuple``, ``List`` and ``Starred`` binding
+    positions. Attribute/subscript targets do not capture the return
+    as a fresh bare name. Their evaluated expressions may contain
+    walruses, but those names receive their own RHS, not this call's
+    return value. The symbol walk records those definitions separately.
     """
     names: set[str] = set()
-    for child in ast.walk(target):
+    pending = [target]
+    while pending:
+        child = pending.pop()
         if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
             names.add(child.id)
+        elif isinstance(child, (ast.Tuple, ast.List)):
+            pending.extend(child.elts)
+        elif isinstance(child, ast.Starred):
+            pending.append(child.value)
     return frozenset(names)
 
 
