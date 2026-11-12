@@ -3825,6 +3825,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     "are supplied but different. Pass one or the other.")
             kwargs["text"] = bool(kwargs["universal_newlines"])
 
+        if kwargs.get("encoding") == "locale":
+            import locale
+            kwargs["encoding"] = locale.getencoding()
+
         # Reject sandbox kwargs — they'd be silently ignored otherwise and
         # callers would wrongly assume per-call overrides took effect.
         misused = _SANDBOX_KWARGS & kwargs.keys()
