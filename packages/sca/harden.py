@@ -1461,6 +1461,10 @@ def _run_self_test(
     # call in ``finally`` stays on the default profile: strict's
     # abort is a BaseException, which would escape the cleanup's
     # ``except Exception`` and mask the self-test verdict.
+    # Landlock's writable_paths cannot override the mount view's read-only
+    # target. Bind .git itself as the writable output for metadata operations;
+    # keep the source tree read-only and grant only the owned scratch alongside
+    # it. The sandbox's fake HOME and diagnostic files also stay inside .git.
     target_git_dir = str(target / ".git")
     try:
         # ``git stash create`` materialises the working tree (including
@@ -1472,8 +1476,8 @@ def _run_self_test(
         stash = run_untrusted(
             ["git", "stash", "create"],
             target=str(target),
-            output=str(tmp_root),
-            writable_paths=[target_git_dir],
+            output=target_git_dir,
+            writable_paths=[str(tmp_root), target_git_dir],
             cwd=str(target),
             capture_output=True, text=True, timeout=30,
             caller_label="sca-harden-self-test/git-stash",
@@ -1500,8 +1504,8 @@ def _run_self_test(
             ["git", "worktree", "add", "--detach", str(worktree),
               worktree_ref],
             target=str(target),
-            output=str(tmp_root),
-            writable_paths=[target_git_dir],
+            output=target_git_dir,
+            writable_paths=[str(tmp_root), target_git_dir],
             cwd=str(target),
             capture_output=True, text=True, timeout=120,
             caller_label="sca-harden-self-test/git-worktree-add",
@@ -1587,8 +1591,8 @@ def _run_self_test(
                     ["git", "worktree", "remove", "--force",
                      str(worktree)],
                     target=str(target),
-                    output=str(tmp_root),
-                    writable_paths=[target_git_dir],
+                    output=target_git_dir,
+                    writable_paths=[str(tmp_root), target_git_dir],
                     cwd=str(target),
                     capture_output=True, text=True, timeout=60,
                     caller_label="sca-harden-self-test/git-worktree-remove",

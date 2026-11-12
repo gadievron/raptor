@@ -150,6 +150,23 @@ def test_self_test_routes_git_calls_through_run_untrusted(
             "sca-harden-self-test/"
         ), f"caller_label missing on {r['cmd']!r}"
 
+    # A Landlock grant cannot override the mount lane's read-only target.
+    # The three calls mutating repository metadata need .git as the RW
+    # output bind, never the source tree. Scratch remains a separate grant.
+    for call in recorded:
+        if call["cmd"][:2] == ["git", "apply"]:
+            assert call["target"] == call["output"]
+        else:
+            assert call["target"] == str(target)
+            assert call["output"] == target_git
+            assert str(target) not in call["writable_paths"]
+            scratch = Path(call["writable_paths"][0])
+            assert scratch != target and scratch != target / ".git"
+            assert scratch / "wt" == Path(recorded[1]["cmd"][4])
+        assert call.get("fake_home", True) is True
+        if call["cmd"][:3] != ["git", "worktree", "remove"]:
+            assert call["profile"] == "strict"
+
     # ``git apply -`` should receive the patch via stdin, NOT as a
     # path argument. The sandbox can't read the path (out_dir is
     # outside both target and tmp_root).
