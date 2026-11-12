@@ -617,7 +617,11 @@ def main() -> None:
     # Fail-closed isolation floor: a hostile-code profile with no
     # filesystem boundary is refused before either child starts.
     for role, spec in (("target", target_spec), ("exploit", exploit_spec)):
-        problem = _spec_isolation_problem(role, spec)
+        try:
+            problem = _spec_isolation_problem(role, spec)
+        except TypeError as exc:
+            _emit_error("bad_request", f"invalid {role} profile: {exc}")
+            sys.exit(2)
         if problem is not None:
             _emit_error("unbounded_hostile_spec", problem)
             sys.exit(2)

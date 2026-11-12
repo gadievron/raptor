@@ -186,6 +186,23 @@ def test_main_numeric_conversion_failure_is_a_structured_refusal(monkeypatch, fi
     assert "numeric field" in errors[0][1]
 
 
+@pytest.mark.parametrize("role", ["target", "exploit"])
+@pytest.mark.parametrize("profile", [[], {}], ids=["list", "object"])
+def test_main_unhashable_profile_is_a_structured_refusal(monkeypatch, role, profile):
+    request = {
+        "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+    }
+    request[role]["profile"] = profile
+    errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
+    assert exit_code == 2
+    assert responses == []
+    assert joins == []
+    assert len(errors) == 1
+    assert errors[0][0] == "bad_request"
+    assert role in errors[0][1]
+
+
 # --------------------------------------------------------------------------
 # Fail-closed isolation floor: a child spec that runs HOSTILE code
 # (profile target_run — also the default when a spec omits profile)
