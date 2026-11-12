@@ -80,8 +80,12 @@ def _build_one_source(source: str, out_dir: Path, http: Any) -> BuildResult:
     if fn is None:
         return BuildResult(source=source, written=False,
                            error=f"unknown source {source!r}", record_count=0)
+    logger.info("sca.calibration: %s started", source)
     try:
-        return fn(out_dir, http)
+        result = fn(out_dir, http)
+        status = "FAILED" if result.error else ("updated" if result.written else "unchanged")
+        logger.info("sca.calibration: %s %s (%d records)", source, status, result.record_count)
+        return result
     except Exception as e:                              # noqa: BLE001
         # Defensive: an individual source breaking shouldn't abort the rest.
         logger.warning("sca.calibration: %s build failed: %s", source, e,
