@@ -970,7 +970,7 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
         # receivers rather than model the difference from str.strip.
         if folded_args or not receiver.isascii():
             return _REFUSE
-        return receiver.strip()
+        return receiver.strip("".join(chr(code) for code in range(0x21)))
     if method in ("toLowerCase", "toUpperCase"):
         # Zero-arg conversion uses the target's unknown default locale.
         # Turkish/Azeri mappings affect ASCII I/i as well as non-ASCII.
