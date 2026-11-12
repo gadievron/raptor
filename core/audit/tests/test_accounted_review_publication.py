@@ -16,8 +16,9 @@ from core.llm.tests.test_prepared_attempt_reservation import sdk_clients as sdk_
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("journal_failure", [False, True], ids=["published", "journal-refused"])
-def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeypatch, sdk_clients, journal_failure):
+@pytest.mark.parametrize("journal_failure,omit_options", [(False, False), (True, False), (False, True)],
+                         ids=["published", "journal-refused", "optional-omissions"])
+def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeypatch, sdk_clients, journal_failure, omit_options):
     # This boundary is the real ready graph, Runtime and SDK request hook.
     # Optional detector/server/study work is outside this direct-review case.
     monkeypatch.setattr(orchestrator, "_run_mechanical_detectors", lambda *a, **k: ({}, set()))
@@ -38,6 +39,11 @@ def test_sdk_charge_and_continuation_share_durable_review_pass(tmp_path, monkeyp
             {"topic": "integer shifts", "entry_id": "c.integer-shift", "needed_for": "Interpret shift preconditions", "priority": "normal"}]},
         {"status": "clean", "body": "Reviewed with delivered shift reference", "language_reference_requests": []},
     ]
+
+    if omit_options:
+        request = payloads[0]["language_reference_requests"][0]
+        del request["entry_id"]
+        del request["priority"]
 
     def response(row):
         payload = payloads[len(bundle.state["requests"]) - 1]
