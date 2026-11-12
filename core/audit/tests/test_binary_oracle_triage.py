@@ -1,11 +1,8 @@
-"""Binary-oracle absent-suppression at audit hypothesis-triage.
+"""Audit consumes binary absence as context, not source suppression proof.
 
-The oracle chokepoint already serves /agentic, /codeql, /validate and
-/understand; these tests pin its consumption at audit triage: absent
-functions (full-DWARF tier only) are skipped or hard-deprioritised
-before hypothesis/synthesis budget is spent, promotions inside absent
-functions are demoted with the verdict as mechanical evidence, and
-every suppression leaves a suppressions.jsonl record.
+Pure triage/priority flag contracts remain independently covered below. The
+production key generator withholds those flags for classifier-only observations,
+and static promotions retain their findings without a suppression receipt.
 """
 
 from __future__ import annotations
@@ -131,10 +128,13 @@ class TestPriorityDemotion:
 
 
 class TestBinaryAbsentGapKeys:
-    def test_full_tier_absent_earns_key(self, tmp_path):
+    def test_full_tier_absent_without_correspondence_withholds_key(self, tmp_path):
         config = _config(tmp_path, inventory=_enriched_inventory())
+        from core.analysis.reachability import binary_oracle_absent
+        assert binary_oracle_absent(config.inventory, "a.c", "foo", 10) is True
         keys = _binary_absent_gap_keys([_gap()], None, config, None)
-        assert keys == {"a.c:foo"}
+        assert keys == set()
+        assert config.inventory == _enriched_inventory()
 
     def test_symbol_only_tier_never_earns(self, tmp_path):
         """Chokepoint tier gating: symbol-only absent never suppresses."""
@@ -236,27 +236,22 @@ def _promoted_outcome(file="a.c", function="foo", evidence_tool="semgrep:x"):
 
 
 class TestDemoteAbsentPromotions:
-    def test_promotion_demoted_with_receipt(self, tmp_path):
+    def test_promotion_retained_without_source_correspondence(self, tmp_path):
         config = _config(tmp_path, inventory=_enriched_inventory())
         result = OrchestratorResult()
-        result.outcomes.append(_promoted_outcome())
+        original = _promoted_outcome()
+        result.outcomes.append(original)
         result.findings = 1
 
         n = _demote_absent_promotions(result, config)
-        assert n == 1
-        demoted = result.outcomes[0]
-        assert demoted.status == "dormant"
-        assert "binary-oracle demotion" in demoted.body
-        assert result.findings == 0
-        assert result.dormant == 1
-        # Mechanical evidence attached to the review result.
-        chain = demoted.review_result["evidence_chain"]
-        assert chain[0]["source"] == "mechanical:binary_oracle"
-        # Audit trail written.
-        records = _read_suppressions(config.out_dir)
-        assert len(records) == 1
-        assert records[0]["verdict"] == "binary_oracle_absent"
-        assert records[0]["stage"] == "promotion-demotion"
+        assert n == 0
+        assert result.outcomes[0] is original
+        assert original.status == "finding"
+        assert "binary-oracle demotion" not in original.body
+        assert (result.findings, result.dormant) == (1, 0)
+        assert "evidence_chain" not in original.review_result
+        assert _read_suppressions(config.out_dir) == []
+        assert config.inventory == _enriched_inventory()
 
     def test_runtime_evidence_vetoes_demotion(self, tmp_path):
         """Chokepoint precedence: runtime evidence beats a stale absent."""
@@ -305,9 +300,10 @@ class TestDemoteAbsentPromotions:
 
 
 class TestDemoteAbsentPromotionLanes:
-    """All three static-promotion lanes are demotable in absent
-    functions: sweep, precondition-verified, and secondary-hypothesis
-    — none prove the compiler kept the code."""
+    """Classifier absence cannot withdraw any static-promotion lane's finding.
+
+    These observations do not establish complete source/build correspondence.
+    """
 
     def _body_outcome(self, body):
         o = ReviewOutcome(
@@ -329,27 +325,31 @@ class TestDemoteAbsentPromotionLanes:
         n = _demote_absent_promotions(result, config)
         return n, result
 
-    def test_precondition_verified_lane_demoted(self, tmp_path):
+    def test_precondition_verified_lane_retained(self, tmp_path):
         n, result = self._demote(
             tmp_path,
             "[precondition-verified via precondition:value_range] All 2 "
             "stated precondition(s) verified\n\noverflow",
         )
-        assert n == 1
-        assert result.outcomes[0].status == "dormant"
+        assert n == 0
+        assert result.outcomes[0].status == "finding"
+        assert (result.findings, result.dormant) == (1, 0)
+        assert _read_suppressions(tmp_path / "out") == []
 
-    def test_secondary_hypothesis_lane_demoted(self, tmp_path):
+    def test_secondary_hypothesis_lane_retained(self, tmp_path):
         n, result = self._demote(
             tmp_path,
             "[secondary-hypothesis-confirmed via smt:check-overflow] "
             "claim\n\noverflow",
         )
-        assert n == 1
-        assert result.outcomes[0].status == "dormant"
+        assert n == 0
+        assert result.outcomes[0].status == "finding"
+        assert (result.findings, result.dormant) == (1, 0)
+        assert _read_suppressions(tmp_path / "out") == []
 
     def test_llm_native_finding_untouched(self, tmp_path):
-        # A finding NOT minted by a static promotion lane keeps its
-        # status — this pass only demotes pattern-proved promotions.
+        # Native reviewer findings also keep their status; classifier
+        # absence cannot supply a source-scope refutation.
         n, result = self._demote(
             tmp_path, "plain reviewer-written finding body",
         )

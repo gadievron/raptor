@@ -1,12 +1,8 @@
-"""Review-time binary-oracle gates use the file+line join, not the flat map.
+"""Binary classification joins remain observations without suppression authority.
 
-config.binary_verdicts is a flat {name: verdict} map — it collapses
-same-named static functions across translation units, so the G7
-dead-code gate and _apply_reachability_gate could demote a LIVE
-function because a dead namesake in another TU carried the "absent"
-verdict. When the enriched inventory exists, both gates route through
-core.analysis.reachability.binary_oracle_absent (path + line
-disambiguated, full-tier gated); the flat map remains classification data without suppression authority.
+Enriched inventories distinguish same-named source occurrences. That join and
+full debug coverage still do not establish complete source/build correspondence;
+neither enriched classification nor a flat name map clears a source finding.
 """
 
 from __future__ import annotations
@@ -57,8 +53,12 @@ def _config(tmp_path: Path, with_inventory: bool) -> OrchestratorConfig:
 class TestBinaryAbsentVerdictJoin:
     def test_live_namesake_not_absent_with_inventory(self, tmp_path):
         cfg = _config(tmp_path, with_inventory=True)
+        from core.analysis.reachability import binary_oracle_absent
+        # The underlying occurrence join keeps the two observations distinct.
+        assert binary_oracle_absent(cfg.inventory, "b.c", "f", 12) is False
+        assert binary_oracle_absent(cfg.inventory, "a.c", "f", 12) is True
         assert _binary_absent_verdict(cfg, "b.c", "f", 12) is False
-        assert _binary_absent_verdict(cfg, "a.c", "f", 12) is True
+        assert _binary_absent_verdict(cfg, "a.c", "f", 12) is False
 
     def test_flat_map_without_inventory_cannot_suppress(self, tmp_path):
         cfg = _config(tmp_path, with_inventory=False)
@@ -85,9 +85,11 @@ class TestReachabilityGateJoin:
         )
         assert out.status == "finding"
 
-    def test_dead_tu_finding_still_demotes(self, tmp_path):
+    def test_classified_absent_tu_finding_survives_without_correspondence(self, tmp_path):
         cfg = _config(tmp_path, with_inventory=True)
+        original = self._outcome("a.c")
         out = _apply_reachability_gate(
-            self._outcome("a.c"), self._ctx(), set(), cfg,
+            original, self._ctx(), set(), cfg,
         )
-        assert out.status == "dormant"
+        assert out is original and out.status == "finding"
+        assert cfg.inventory == _inventory()

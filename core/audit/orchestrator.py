@@ -4854,6 +4854,16 @@ def review_one_function(
 _HEADER_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
 
 
+def _binary_absence_suppression_allowed() -> bool:
+    """Classifier coverage is not source/build correspondence authority."""
+    from core.analysis.reach_witness import (
+        STRUCTURALLY_SUPPRESSIBLE_KINDS, verdict_from_classification,
+    )
+    return verdict_from_classification("binary_oracle_absent").may_suppress(
+        STRUCTURALLY_SUPPRESSIBLE_KINDS,
+    )
+
+
 def _binary_absent_gap_keys(
     gaps: list[dict[str, Any]],
     checklist: dict[str, Any] | None,
@@ -4865,9 +4875,13 @@ def _binary_absent_gap_keys(
     A flat name map is retained classification data, not a source occurrence
     or build-correspondence record. It cannot authorise skipping a namesake.
     Header and entry-point exemptions remain conservative additional guards.
-    The enriched adapter retains its own admission requirements.
+    Even an occurrence-joined classifier observation must pass the shared
+    witness authority gate; full debug coverage alone does not establish
+    complete source/build correspondence.
     """
     keys: set[str] = set()
+    if not _binary_absence_suppression_allowed():
+        return keys
     inventory = next(
         (
             c for c in (config.inventory, checklist)
@@ -20115,6 +20129,8 @@ def _binary_absent_verdict(
     The flat name map cannot identify a translation unit or source occurrence.
     Keep it as classification data without granting it suppression authority.
     """
+    if not _binary_absence_suppression_allowed():
+        return False
     inventory = config.inventory
     if isinstance(inventory, dict) and inventory.get("binary_oracle"):
         try:
@@ -20137,18 +20153,12 @@ def _apply_reachability_gate(
     entry_points: set,
     config: OrchestratorConfig,
 ) -> ReviewOutcome:
-    """Conservative post-review gate: demote findings only on hard evidence.
+    """Apply the existing post-review reachability policies.
 
-    Err toward false positives (keeping findings) rather than false negatives
-    (suppressing real bugs). Only demotes when there is mechanical proof that
-    the finding cannot be triggered.
-
-    Demotion rules (all must have strong evidence):
-      1. Dead code: function has no callers AND is not an entry point
-         AND binary oracle says "absent" → dormant
-      2. Dead code (source-only): no callers AND not an entry point
-         AND not on any flow path → suspicious (not dormant — source
-         analysis alone isn't proof)
+    Binary dormancy requires admission through the shared witness gate.
+    Classifier absence alone has no source/build correspondence contract and
+    cannot enter that branch. The separate source-only heuristic can retain
+    a suspicious concern; it does not establish source unreachability.
     """
     key = f"{outcome.file}:{outcome.function}"
     role_ctx = ctx.get("role_context", {})
@@ -33129,16 +33139,13 @@ def _demote_absent_promotions(
     result: OrchestratorResult,
     config: OrchestratorConfig,
 ) -> int:
-    """Demote sweep-promoted findings inside oracle-absent functions.
+    """Retain static promotions unless binary suppression is admitted.
 
-    A static sweep promotion (semgrep/cocci/joern/SMT) proves the code
-    pattern exists, not that the code runs — the binary oracle's
-    full-DWARF absent verdict is mechanical proof the compiler removed
-    the function. Runtime-confirmed evidence (dark-verify witness,
-    dynamic crash, frida, imported /validate runtime) vetoes the
-    demotion — chokepoint precedence: runtime evidence beats a stale
-    absent verdict. Each demotion carries the verdict as mechanical
-    evidence and one suppressions.jsonl record.
+    The shared witness gate currently withholds classifier-only absence:
+    full debug coverage does not establish complete source/build correspondence.
+    Existing observations and source findings remain intact. If a future
+    independently admitted witness permits this adapter, runtime evidence still
+    vetoes withdrawal and every actual demotion requires its audit record.
     """
     if not (config.binary_verdicts or (
         isinstance(config.inventory, dict)
