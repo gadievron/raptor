@@ -386,9 +386,10 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     Covers ``Assign`` (any LHS shape) and ``AnnAssign`` with a value.
     Augmented assignments combine the call's return with the previous
     target value, so they do not establish return-value identity.
-    ``y, z = f(), g()`` pairs
-    each Tuple LHS element with the same-position Tuple RHS Call.
-    Nested calls and non-call RHS expressions get no entry.
+    ``y, z = f(), g()`` pairs plain tuple/list targets with same-position
+    Tuple RHS calls only when cardinalities match and neither side has
+    starred expansion. Unknown positions, nested calls and non-call RHS
+    expressions get no entry.
     """
     result: dict[int, frozenset[str]] = {}
     if isinstance(stmt, ast.Assign):
@@ -399,23 +400,21 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
         if isinstance(stmt.value, ast.Call):
             result[id(stmt.value)] = all_lhs
         elif isinstance(stmt.value, ast.Tuple):
-            # Best-effort position-matched attribution for paired
-            # Tuple LHS / Tuple RHS. Mixed shapes fall back to "all
-            # LHS names" for each Call element.
-            tuple_targets = [
-                t for t in stmt.targets if isinstance(t, ast.Tuple)
+            # Grant only established positions. Starred expansion or
+            # mixed cardinalities cannot give every target one call's value.
+            sequence_targets = [
+                t for t in stmt.targets if isinstance(t, (ast.Tuple, ast.List))
             ]
-            if tuple_targets and len(tuple_targets[0].elts) == len(stmt.value.elts):
+            if (sequence_targets
+                    and len(sequence_targets[0].elts) == len(stmt.value.elts)
+                    and not any(isinstance(e, ast.Starred)
+                                for e in [*sequence_targets[0].elts, *stmt.value.elts])):
                 for lhs_elt, rhs_elt in zip(
-                    tuple_targets[0].elts, stmt.value.elts,
+                    sequence_targets[0].elts, stmt.value.elts,
                     strict=True,
                 ):
                     if isinstance(rhs_elt, ast.Call):
                         result[id(rhs_elt)] = _assign_target_names(lhs_elt)
-            else:
-                for rhs_elt in stmt.value.elts:
-                    if isinstance(rhs_elt, ast.Call):
-                        result[id(rhs_elt)] = all_lhs
     elif isinstance(stmt, ast.AnnAssign):
         if (
             isinstance(stmt.target, ast.Name)
