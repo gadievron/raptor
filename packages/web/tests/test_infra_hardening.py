@@ -5,6 +5,7 @@ summary's raw data-plane channel. No network."""
 
 from __future__ import annotations
 
+import builtins
 import ipaddress
 import socket
 from pathlib import Path
@@ -14,7 +15,29 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.testing.wallclock import cpu_budget
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view
 from packages.web.execution_policy import WebExecutionPolicy, WebPolicyError
+
+
+@pytest.fixture
+def _private_host_lookup():
+    from packages.web import external_validators
+
+    private_socket = module_function_view(socket)
+    inherited_import = builtins.__import__
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "socket" and level == 0:
+            return private_socket
+        return inherited_import(name, globals, locals, fromlist, level)
+
+    owner = module_function_view(
+        external_validators,
+        bindings={"_private_host": external_validators.ExternalValidatorRunner._is_private_host},
+        import_hook=import_local,
+    )
+    return owner._private_host, private_socket
 
 
 # -- browser origin gate ------------------------------------------------------
@@ -194,16 +217,15 @@ def test_reveal_secrets_skips_the_transcript_scrub(tmp_path):
     assert runner.reveal_secrets is True
 
 
-def test_private_host_recognizes_hostnames_by_resolution(monkeypatch):
-    from packages.web.external_validators import ExternalValidatorRunner
+def test_private_host_recognizes_hostnames_by_resolution(monkeypatch, _private_host_lookup):
+    is_private, lookup = _private_host_lookup
 
     def fake_getaddrinfo(host, port, **kwargs):
         addr = {"intranet.corp": "10.1.2.3", "public.example": "8.8.8.8"}[host]
         ipaddress.ip_address(addr)
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (addr, 0))]
 
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    is_private = ExternalValidatorRunner._is_private_host
+    monkeypatch.setattr(lookup, "getaddrinfo", fake_getaddrinfo)
     assert is_private("http://intranet.corp:8080/") is True
     assert is_private("https://public.example/") is False
     assert is_private("http://127.0.0.1/") is True
@@ -215,13 +237,13 @@ def test_hostname_colliding_with_block_wording_is_resolved_not_blocked(monkeypat
     substring match on our own error text: a hostname containing
     'non-global' used to be re-raised as a blocked IP instead of being
     DNS-resolved and validated."""
-    from packages.web.client import WebClient
+    from packages.web import client as web_client
 
     def fake_getaddrinfo(host, port, **kwargs):
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
 
-    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    client = WebClient("http://non-global-widgets.example")
+    patch_module_attribute(monkeypatch, web_client, "socket", "getaddrinfo", fake_getaddrinfo)
+    client = web_client.WebClient("http://non-global-widgets.example")
     pinned = client._resolve_and_validate("http://non-global-widgets.example/")
     assert pinned is not None
     hostname, _port, addrs = pinned
