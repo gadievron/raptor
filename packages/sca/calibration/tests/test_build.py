@@ -856,3 +856,45 @@ def test_edb_csv_fetched_once_across_derived_builders(
     assert all(r.error is None for r in results), results
     edb_fetches = [u for u in calls if u.endswith("files_exploits.csv")]
     assert len(edb_fetches) == 1
+
+
+@pytest.mark.parametrize('written', [False, True])
+def test_source_progress_starts_before_fetch(tmp_path, monkeypatch, caplog, written):
+    import logging
+
+    expected = build.BuildResult('kev', written, None, 7)
+    caplog.set_level(logging.INFO, logger=build.__name__)
+
+    def fetch(out_dir, http):
+        assert 'kev started' in caplog.text
+        assert '7 records' not in caplog.text
+        return expected
+
+    monkeypatch.setattr(build, '_build_kev', fetch)
+    result = build._build_one_source('kev', tmp_path, object())
+    assert result is expected
+    status = 'updated' if written else 'unchanged'
+    assert f'kev {status} (7 records)' in caplog.text
+
+
+@pytest.mark.parametrize('verbose', [False, True])
+def test_build_cli_configures_progress_logging(tmp_path, monkeypatch, capsys, verbose):
+    import logging
+    import runpy
+    import sys
+
+    import core.logging
+    import packages.sca.calibration as calibration
+
+    levels = []
+    monkeypatch.setattr(core.logging, 'configure_cli_logging', levels.append)
+    monkeypatch.setattr(calibration, 'build_corpus', lambda **kw: [
+        build.BuildResult('kev', False, None, 7),
+    ])
+    monkeypatch.setattr(sys, 'path', list(sys.path))
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'raptor-sca-build-corpus'
+    monkeypatch.setattr(sys, 'argv', [str(script), '--out', str(tmp_path)] + (['-v'] if verbose else []))
+    cli = runpy.run_path(str(script))
+    assert cli['main']() == 0
+    assert levels == [logging.INFO if verbose else logging.WARNING]
+    assert 'kev unchanged (7 records)' in capsys.readouterr().out
