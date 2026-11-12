@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import logging
 import re
+from unicodedata import category as _unicode_category
 from dataclasses import dataclass, field
 from core.source.lines import split_lines
 from typing import Any
@@ -183,6 +184,16 @@ def _alternative_operator_suffix(text):
     return not before or before[-1] not in "<>=!"
 
 
+def _invariant_token_continuation(char):
+    return char.isalnum() or char == "_" or _unicode_category(char) in {"Mn", "Mc", "Me", "Cf"}
+
+
+def _invariant_math_operator(char):
+    # Unicode mathematical syntax is not part of the supported expression
+    # grammar. It cannot be discarded as if it were surrounding prose.
+    return _unicode_category(char) == "Sm"
+
+
 def _invariant_candidate_segments(text):
     """Keep multiline expression context attached to its comparison.
 
@@ -196,6 +207,7 @@ def _invariant_candidate_segments(text):
         significant = [line.strip() for line in lines if line.strip()]
         if any(left[-1] in "([!~.=<>+*/%&|^-," or right[0] in "()[]!~.=<>+*/%&|^-,"
                or _alternative_operator_suffix(left) or _alternative_operator_prefix(right)
+               or _invariant_math_operator(left[-1]) or _invariant_math_operator(right[0])
                for left, right in zip(significant, significant[1:])):
             continue
         yield from lines
@@ -231,12 +243,15 @@ def extract_invariants(*texts: str) -> list[str]:
             # The bounded matching window must not turn a long source token
             # or an unsupported literal suffix into a different identifier
             # or integer. Inspect actual neighbors outside that window too.
-            if ((start and (segment[start - 1].isalnum() or segment[start - 1] == "_"))
-                    or (end < len(segment) and (segment[end].isalnum() or segment[end] == "_"))):
+            if ((start and _invariant_token_continuation(segment[start - 1]))
+                    or (end < len(segment) and _invariant_token_continuation(segment[end]))):
                 continue
             before, after = segment[:start].rstrip(), segment[end:].lstrip()
             if ((before and before[-1] in "()[]+*/%&|^~!.><-=,?")
                     or (after and after[0] in "()[]+*/%&|^><-=!?:,")):
+                continue
+            if ((before and _invariant_math_operator(before[-1]))
+                    or (after and _invariant_math_operator(after[0]))):
                 continue
             if _alternative_operator_suffix(before) or _alternative_operator_prefix(after):
                 continue
