@@ -113,10 +113,13 @@ def test_scope_field_is_transient_and_appended_after_existing_positional_fields(
     from core.audit.orchestrator import ReviewOutcome
 
     definitions = fields(ReviewOutcome)
-    assert definitions[-2].name == "weaknesses"
-    field = definitions[-1]
+    assert definitions[-3].name == "weaknesses"
+    field = definitions[-2]
     assert field.name == "review_input_scope" and field.default is None
     assert field.repr is False and field.compare is False
+    binary = definitions[-1]
+    assert binary.name == "binary_publication_scope" and binary.default is None
+    assert binary.repr is False and binary.compare is False
 
 
 def _assert_orchestrator_writers_use_current_trusted_roots(tree):

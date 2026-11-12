@@ -468,7 +468,7 @@ class TestBinaryStaleness:
         fe = {"sha256": "ab" * 32}
         item = {"address": 0x1000, "size": 0x40}
         h = binary_item_hash(fe, item)
-        assert h == f"bin:{'ab' * 6}:1000:40"
+        assert h == f"bin:{'ab' * 32}:1000:40"
         # different binary content → different hash
         assert binary_item_hash({"sha256": "cd" * 32}, item) != h
         # moved function → different hash

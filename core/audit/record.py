@@ -590,8 +590,10 @@ def _compute_hash(
 def binary_item_hash(file_entry: dict, item: dict) -> str | None:
     """Staleness anchor for a binary checklist item.
 
-    Binds the review to the BINARY's content (the file entry's
-    sha256, stamped at checklist build) and the function's
+    Binds the review to the BINARY's full content digest (the file entry's
+    sha256, stamped at checklist build). Older truncated anchors no longer
+    match a full-digest checklist anchor. This identity is not build closure
+    or extraction correspondence. It also binds the function's
     address/size — a rebuilt binary or a moved/resized function
     invalidates the review instead of silently suppressing it.
     Self-describing ``bin:`` prefix so the journal fold can route it.
@@ -611,7 +613,7 @@ def binary_item_hash(file_entry: dict, item: dict) -> str | None:
     size = _as_int(size)
     if addr is None or size is None:
         return None
-    return f"bin:{sha[:12]}:{addr:x}:{size:x}"
+    return f"bin:{sha}:{addr:x}:{size:x}"
 
 
 def _as_int(value: Any) -> int | None:
