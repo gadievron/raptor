@@ -14,7 +14,8 @@ Tracking rules, deliberately syntactic and total (mirroring
 :mod:`core.analysis.java_array_escape`):
 
 * A collection is **tracked** when it is a local declared ONCE with a
-  fresh, argument-free ``new`` of an allowlisted concrete type
+  fresh, argument-free ``new`` of an unshadowed ``java.util`` concrete
+  type, identified by an explicit import or fully qualified spelling
   (``HashMap``/``Hashtable``/``LinkedHashMap``/``TreeMap`` →
   map-kind; ``ArrayList``/``LinkedList``/``Vector`` → list-kind; a
   copy-constructor ``new HashMap<>(other)`` imports unknown state and
@@ -282,16 +283,27 @@ def _enclosing_block_end(n) -> int:
     return -1
 
 
-def _fresh_collection_kind(value) -> str | None:
-    """``"map"`` / ``"list"`` when ``value`` is an argument-free fresh
-    ``new`` of an allowlisted concrete type; None otherwise."""
+def _fresh_collection_kind(value, resolver) -> str | None:
+    """Kind of an exact, unshadowed, argument-free ``java.util`` creation."""
     v = _unwrap(value)
     if v is None or v.type != _OBJECT_CREATION:
         return None
-    if any(c.type == "class_body" for c in v.children):
-        return None                       # anonymous subclass
-    ty = _text(v.child_by_field_name("type"))
-    ty = ty.split("<", 1)[0].strip().split(".")[-1]
+    if any(c.type in ("class_body", ".") for c in v.children):
+        return None                       # anonymous / enclosing-instance creation
+    type_node = v.child_by_field_name("type")
+    if type_node is not None and type_node.type == "generic_type":
+        bases = [c for c in type_node.named_children if c.type != "type_arguments"]
+        if len(bases) != 1:
+            return None
+        type_node = bases[0]
+    ty = _text(type_node).strip()
+    head, separator, tail = ty.partition(".")
+    if not ty or head in resolver.type_shadows:
+        return None
+    qualified = resolver.types.get(head, head) + separator + tail
+    ty = qualified.rsplit(".", 1)[-1]
+    if qualified != "java.util." + ty:
+        return None                       # basename / wildcard is not identity
     args = v.child_by_field_name("arguments")
     n_args = len([c for c in args.children if c.is_named]) \
         if args is not None else 0
@@ -462,7 +474,7 @@ def build_local_collection_index(
                 ln = line_of(n)
                 key = (ln, lhs)
                 idx._lhs_writers[key] = idx._lhs_writers.get(key, 0) + 1
-                kind = _fresh_collection_kind(value) if value is not None \
+                kind = _fresh_collection_kind(value, idx._resolver) if value is not None \
                     else None
                 if kind is not None:
                     # Second fresh declaration of the same name is
