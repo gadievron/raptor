@@ -212,3 +212,21 @@ def test_actual_repeated_review_adapter_preserves_owned_binary_scope(owned_binar
     assert outcome.binary_publication_scope is not None
     assert outcome.binary_publication_scope.module == prior.binary_publication_scope.module
     assert Collector(out_dir=out, target_path=target, run_id=out.name).submit(outcome, gap) is not None
+
+
+def test_binary_scope_reconstruction_keeps_caller_and_registry_records_isolated(owned_binary_review):
+    from copy import deepcopy
+    from core.audit.orchestrator import ReviewOutcome, _outcome_to_panel_result
+    target, out, gap, outcome, runtime, original = owned_binary_review
+    raw = _outcome_to_panel_result(outcome, "captured")
+    before = deepcopy(raw)
+    reconstructed = ReviewOutcome(outcome.file, outcome.function, outcome.status, outcome.body,
+                                  review_result=raw)
+    runtime.bind_review_input_scope(reconstructed)
+    assert reconstructed.review_result is not raw
+    assert reconstructed.binary_publication_scope is outcome.binary_publication_scope
+    assert raw == before
+    reconstructed.review_result["binary_review_binding"]["module_sha256"] = "0" * 64
+    assert raw == before
+    assert outcome.binary_publication_scope.record()["module_sha256"] == hashlib.sha256(original).hexdigest()
+    assert Collector(out_dir=out, target_path=target, run_id=out.name).submit(reconstructed, gap) is None

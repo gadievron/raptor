@@ -468,8 +468,8 @@ class AuditKnowledgeRuntime:
         from .binary_review_scope import BinaryReviewPublicationScope
         from .review_claims import read_history
 
-        result = dict(outcome.review_result or {})
-        history = read_history(result.get("review_claims"))
+        review_result = dict(outcome.review_result or {})
+        history = read_history(review_result.get("review_claims"))
         reviews = []
         if history is not None:
             if isinstance(history.get("review"), dict):
@@ -498,8 +498,8 @@ class AuditKnowledgeRuntime:
                 scopes.append(scope)
         admitted = bool(scopes) and all(scope == scopes[0] and scope.current(self.target_root) for scope in scopes)
         outcome.binary_publication_scope = scopes[0] if admitted else None
-        result["binary_review_binding"] = scopes[0].record() if admitted else None
-        outcome.review_result = result
+        review_result["binary_review_binding"] = scopes[0].record() if admitted else None
+        outcome.review_result = review_result
 
     def source_roots(self) -> dict[str, Path]:
         return self.bindings.registered_roots()
