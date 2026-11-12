@@ -1046,12 +1046,10 @@ def _load_redb_for(
     out_dir: Path | None, target_path: Path,
 ) -> Any | None:
     try:
-        from .binary_context import find_redb, load_redb
+        from .binary_context import find_redb_snapshot
 
-        redb_path = find_redb(out_dir, target_path)
-        if redb_path is None:
-            return None
-        return load_redb(redb_path)
+        selected = find_redb_snapshot(out_dir, target_path)
+        return selected[1] if selected is not None else None
     except Exception:  # noqa: BLE001 — resolution is best-effort
         logger.debug("disasm_xcheck redb load failed", exc_info=True)
         return None

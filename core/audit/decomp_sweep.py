@@ -383,8 +383,7 @@ def _locate_or_build_tree(
     Reuses the decomp-tree convention binary ``--study`` established
     (``<out_dir>/decomp-tree`` + ``decomp-map.json``); builds it from
     the run's re-database via the existing
-    :func:`core.audit.binary_context.find_redb` /
-    :func:`~core.audit.binary_context.load_redb` +
+    :func:`core.audit.binary_context.find_redb_snapshot` +
     :func:`packages.ghidra.decomp_tree.write_decomp_tree` machinery
     when absent.
 
@@ -401,7 +400,7 @@ def _locate_or_build_tree(
     """
     import packages.ghidra.decomp_tree as _dt
 
-    from .binary_context import find_redb, load_redb
+    from .binary_context import find_redb_snapshot
 
     root = Path(out_dir) / "decomp-tree"
     # (1) Existing tree: accepted only when its sidecar records a
@@ -424,21 +423,21 @@ def _locate_or_build_tree(
                 _esc(key or "(none)", 120),
             )
 
-    redb_path = find_redb(out_dir, target_path)
-    if redb_path is None:
+    try:
+        selected = find_redb_snapshot(out_dir, target_path)
+    except (OSError, ValueError, KeyError) as exc:
+        return None, None, (
+            f"re-database selection unavailable ({_esc(exc, 200)}) "
+            "— decomp-tree sweep cannot run"
+        )
+    if selected is None:
         return None, None, (
             "no decomp-tree and no re-database for this run — import "
             "the binary first (raptor-ghidra import --decompile-all, "
             "raptor-ghidra attach, or a binary --study pass) and "
             "re-run the audit"
         )
-    try:
-        db = load_redb(redb_path)
-    except (OSError, ValueError, KeyError) as exc:
-        return None, None, (
-            f"re-database at {redb_path} unreadable "
-            f"({_esc(exc, 200)}) — decomp-tree sweep cannot run"
-        )
+    redb_path, db = selected
     # (2a) Identity gate, exact: the database's own binary key must
     # be one of the run's binary checklist keys. find_redb also
     # searches the PARENT directory (shared pipeline dirs), so a
