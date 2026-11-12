@@ -55,6 +55,7 @@ from typing import Any, NamedTuple
 # the front door shares its exact constants so a value that anchors
 # here always parses there.
 from core.binary.addrmap import _ANCHOR_HEX_LEN, _HEX_RUN_RE
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +155,7 @@ def content_identity(
     """
     p = Path(path)
     try:
-        with p.open("rb") as fh:
+        with preserving_stream_error(p.open("rb")) as fh:
             head = fh.read(4)
     except OSError:
         return None
