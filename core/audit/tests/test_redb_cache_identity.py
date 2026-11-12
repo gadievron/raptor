@@ -539,21 +539,21 @@ class TestTargetHashMemo:
         cand = _write_redb(run, binf, sha256_file(binf))
 
         calls = {"n": 0}
-        real = core_hash.sha256_file
+        real = core_hash.sha256_fileobj
 
         def counting(path, *a, **kw):
             calls["n"] += 1
             return real(path, *a, **kw)
 
-        monkeypatch.setattr(core_hash, "sha256_file", counting)
+        monkeypatch.setattr(core_hash, "sha256_fileobj", counting)
         assert find_redb(run, binf) == cand
         assert find_redb(run, binf) == cand
         assert calls["n"] == 1
 
     def test_swapped_binary_rehashes_fresh(self, tmp_path):
         """TOCTOU-at-find preserved across the memo: a swap that
-        changes mtime/size misses the stat-stamped key and re-hashes
-        (a same-mtime+same-size forgery is the documented residual)."""
+        changes mtime/size misses the physical-version key and re-hashes.
+        Restored-mtime and inode replacements have separate controls."""
         binf = _make_binary(tmp_path / "prog", b"\x7fELF-v1")
         run = tmp_path / "run"
         cand = _write_redb(run, binf, sha256_file(binf))

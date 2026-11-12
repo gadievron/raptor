@@ -16,10 +16,12 @@ from a scanned repo.
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import threading
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, cast
 
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
 from core.source.lines import splitlines_prefix
@@ -34,17 +36,10 @@ logger = logging.getLogger(__name__)
 #: previous bare dict's check-then-set into duplicate parses.
 _REDB_MEMO: "BoundedMemo[Any]" = BoundedMemo(32)
 
-#: Target-binary content hashes, keyed on (resolved path, mtime_ns,
-#: size). :func:`find_redb` runs once per reviewed function (via
-#: assemble_context and the deepen loop), and hashing a large target
-#: on every accept-path call re-paid the full read each time. The
-#: stat stamp in the key preserves the TOCTOU-at-find property: a
-#: binary swapped between calls (different mtime or size) misses the
-#: memo and re-hashes fresh. Residual (documented): a swap that
-#: preserves BOTH mtime_ns and size serves the stale hash for the
-#: rest of the run — that takes a deliberate timestamp-forging,
-#: size-preserving writer; the per-call rehash this memo retires
-#: (~one full target read per reviewed function) is the trade.
+#: Target-binary content hashes keyed by path and complete physical version.
+#: Stable repeated lookups reuse a digest; inode replacement or a write with
+#: restored mtime invalidates it. Reads check the opened descriptor and path
+#: before reuse. These checks do not create an immutable binary/build snapshot.
 _TARGET_SHA_MEMO: "BoundedMemo[str]" = BoundedMemo(32)
 
 #: One sandboxed GhidraServer per analysed binary, booted lazily the
@@ -217,16 +212,11 @@ def find_redb(
                 "stem-keyed",
             ))
 
-    # The target's content hash is computed at most once per call,
-    # only when some candidate actually carries a stamp, and served
-    # from the stat-stamped memo across calls (find_redb runs per
-    # reviewed function).
-    sha_cell: list[str | None] = []
-
+    # Revalidate the physical target version for every candidate. The shared
+    # memo avoids repeated hashing while stable; a per-call digest cell would
+    # miss a target replacement between two candidate identity checks.
     def _target_sha() -> str | None:
-        if not sha_cell:
-            sha_cell.append(_target_content_sha(Path(target_path)))  # type: ignore[arg-type]
-        return sha_cell[0]
+        return _target_content_sha(Path(target_path)) if target_path is not None else None
 
     for cand, kind in candidates:
         if not cand.is_file():
@@ -238,25 +228,48 @@ def find_redb(
     return None
 
 
-def _target_content_sha(target: Path) -> str | None:
-    """The target binary's sha256, memoized on (resolved path,
-    mtime_ns, size).
+def _binary_content_version(st: os.stat_result) -> tuple[int, ...]:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
-    ``None`` when the target cannot be statted or read — the caller
-    falls through to path/slot evidence. Failures are never memoized
-    (a transient read error must not poison later calls); see
-    :data:`_TARGET_SHA_MEMO` for the same-mtime+same-size residual.
+
+def _target_content_sha(target: Path) -> str | None:
+    """Hash a stable regular descriptor or reuse its exact physical version.
+
+    Unavailable or changing reads remain unknown and are not cached as a
+    successful computation. A final path check also guards cache hits. This is
+    a before/after check, not immutable extraction or build correspondence.
     """
     try:
-        st = target.stat()
-        key = (str(target.resolve()), st.st_mtime_ns, st.st_size)
-    except OSError:
+        before = target.stat()
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        resolved = target.resolve()
+        version = _binary_content_version(before)
+        key = (str(resolved), *version)
+    except (OSError, RuntimeError):
         return None
+
+    def compute() -> str:
+        from core.hash import sha256_fileobj
+        from core.source import open_regular
+        from core.source.streams import preserving_stream_error
+
+        stream = open_regular(resolved, "rb")
+        if stream is None:
+            raise OSError("binary content unavailable")
+        with preserving_stream_error(stream):
+            if _binary_content_version(os.fstat(stream.fileno())) != version:
+                raise OSError("binary changed before content read")
+            digest = sha256_fileobj(cast(BinaryIO, stream))
+            if (_binary_content_version(os.fstat(stream.fileno())) != version
+                    or _binary_content_version(target.stat()) != version):
+                raise OSError("binary changed during content read")
+        return digest
+
     try:
-        from core.hash import sha256_file
-        sha, _cached = _TARGET_SHA_MEMO.get_or_compute(
-            key, lambda: sha256_file(target),
-        )
+        sha, _cached = _TARGET_SHA_MEMO.get_or_compute(key, compute)
+        if _binary_content_version(target.stat()) != version:
+            return None
     except OSError:
         return None
     return sha
@@ -328,14 +341,15 @@ def _accept_redb(
     if not (isinstance(stamp, str) and stamp):
         stamp = None
 
-    if stamp and target.suffix != ".gpr" and target.is_file():
+    if stamp and target.suffix != ".gpr":
         actual = target_sha()
-        if actual is not None:
-            if actual == stamp:
-                return True
-            return _skip(
-                "recorded binary_sha256 does not match the target's "
-                "current content (rebuilt or different binary)")
+        if actual is None:
+            return _skip("recorded binary_sha256 cannot be checked against stable target content")
+        if actual == stamp:
+            return True
+        return _skip(
+            "recorded binary_sha256 does not match the target's "
+            "current content (rebuilt or different binary)")
 
     if recorded:
         from core.security.log_sanitisation import escape_nonprintable
