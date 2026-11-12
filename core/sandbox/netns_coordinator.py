@@ -70,6 +70,7 @@ import ctypes.util
 import errno
 import fcntl
 import json
+import math
 import socket
 import struct
 import threading
@@ -612,6 +613,10 @@ def main() -> None:
             "bad_request",
             f"numeric field in request not coercible: {exc}",
         )
+        sys.exit(2)
+
+    if not math.isfinite(wait_timeout) or not math.isfinite(target_timeout):
+        _emit_error("bad_request", "request timeouts must be finite")
         sys.exit(2)
 
     # Fail-closed isolation floor: a hostile-code profile with no
