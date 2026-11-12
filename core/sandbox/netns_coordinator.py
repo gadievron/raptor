@@ -607,7 +607,7 @@ def main() -> None:
         target_timeout = float(
             target_spec.get("timeout_s", _DEFAULT_CHILD_TIMEOUT_S)
         )
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         _emit_error(
             "bad_request",
             f"numeric field in request not coercible: {exc}",
