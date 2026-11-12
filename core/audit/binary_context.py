@@ -166,6 +166,7 @@ def find_redb(
     target_path: Path | None,
     *,
     validate: bool = True,
+    _snapshot_sink: Callable[[Path, Any], None] | None = None,
 ) -> Path | None:
     """Locate the run's re-database.json.
 
@@ -223,9 +224,27 @@ def find_redb(
             continue
         if not validate or target_path is None:
             return cand
-        if _accept_redb(cand, Path(target_path), kind, _target_sha):
+        def retain(database: Any, *, candidate: Path = cand) -> None:
+            if _snapshot_sink is not None:
+                _snapshot_sink(candidate, database)
+        if _accept_redb(cand, Path(target_path), kind, _target_sha, _snapshot_sink=retain):
             return cand
     return None
+
+
+def find_redb_snapshot(out_dir: Path | None, target_path: Path) -> tuple[Path, Any] | None:
+    """Retain the parsed value actually selected by the existing identity gate.
+
+    This is data capture, not a freshness or extraction receipt. Consumers use
+    this object rather than reopening a path that may now name another file.
+    Legacy identity-unknown context handling remains explicit in the gate.
+    """
+    retained: list[tuple[Path, Any]] = []
+    selected = find_redb(out_dir, target_path,
+        _snapshot_sink=lambda path, database: retained.append((path, database)))
+    if not retained or retained[-1][0] != selected:
+        return None
+    return retained[-1]
 
 
 def _binary_content_version(st: os.stat_result) -> tuple[int, ...]:
@@ -280,6 +299,8 @@ def _accept_redb(
     target: Path,
     kind: str,
     target_sha: Callable[[], str | None],
+    *,
+    _snapshot_sink: Callable[[Any], None] | None = None,
 ) -> bool:
     """Identity gate for one existing re-database.json candidate.
 
@@ -299,26 +320,14 @@ def _accept_redb(
        exactly where a foreign binary's cache lives and is never
        accepted without verifiable identity.
 
-    An UNREADABLE candidate (malformed/oversized) is accepted:
-    identity is unknowable here and every consumer already owns a
-    load-error path for this exact file — the pre-validation
-    contract (hand the path back, let the caller's handling fire)
-    is the least surprising behaviour.
+    Unreadable, malformed, oversized or changing candidates cannot establish
+    identity. Refuse them and continue looking; a later unchecked reload must
+    not turn a transient error into acceptance of a replacement database.
     """
-    try:
-        db = load_redb(cand)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
-        # TypeError/AttributeError: a planted cache with wrong-TYPED
-        # fields (functions: 5, functions: [3], ...) raises these out
-        # of REDatabase.from_dict — the same unknowable-identity
-        # class as malformed JSON, and letting them escape violated
-        # the never-a-hard-error contract on every consumer path.
-        return True
-
     def _skip(why: str) -> bool:
         from core.security.log_sanitisation import escape_nonprintable
         logger.warning(
-            "binary-cache: SKIPPING stale/foreign %s — %s (run target: "
+            "binary-cache: SKIPPING unverified %s — %s (run target: "
             "%s); falling through toward re-import",
             # The candidate path is escaped too: the stem-keyed slot
             # embeds the target-repo-chosen binary stem, so raw
@@ -327,6 +336,18 @@ def _accept_redb(
             escape_nonprintable(str(target)[:300]),
         )
         return False
+
+    try:
+        db = load_redb(cand)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        # Returning an unvalidated path for a later load would let a
+        # replacement bypass this identity gate after a transient parse error.
+        return _skip("analysis cache could not be validated; identity unavailable")
+
+    def _accepted() -> bool:
+        if _snapshot_sink is not None:
+            _snapshot_sink(db)
+        return True
 
     # Type-gated (belt and braces with REDatabase.from_dict's own
     # gate): a wrong-typed binary_path in a planted cache must fall
@@ -346,7 +367,7 @@ def _accept_redb(
         if actual is None:
             return _skip("recorded binary_sha256 cannot be checked against stable target content")
         if actual == stamp:
-            return True
+            return _accepted()
         return _skip(
             "recorded binary_sha256 does not match the target's "
             "current content (rebuilt or different binary)")
@@ -355,14 +376,14 @@ def _accept_redb(
         from core.security.log_sanitisation import escape_nonprintable
         verdict = _same_recorded_binary(Path(recorded), target)
         if verdict is True:
-            return True
+            return _accepted()
         if verdict is False:
             return _skip(
                 "database records a different binary "
                 f"({escape_nonprintable(str(recorded)[:300])})")
 
     if kind in ("run", "stem-keyed"):
-        return True
+        return _accepted()
     return _skip(
         "no verifiable binary identity in a shared cache location")
 
@@ -457,28 +478,43 @@ from core.json.utils import (  # noqa: E402
 
 
 def load_redb(redb_path: Path):
-    """Load an REDatabase cached by physical artefact version and read budget.
+    """Load a bounded analysis artefact through one version-checked descriptor.
 
-    A write with restored mtime or a replaced inode invalidates parsed reuse.
-    This memo key does not establish extraction or build correspondence, nor
-    make the underlying bounded JSON read an immutable snapshot.
-
-    Size-gated (:data:`_MAX_REDB_BYTES`): an over-budget file raises
-    :class:`~core.json.utils.JsonBudgetExceededError` (a ``ValueError``,
-    so existing malformed-input handlers degrade the same way).
+    Stable reads reuse the parsed object. File changes or unavailable reads
+    raise rather than supplying data under a different physical cache version.
+    This before/after guard does not create immutable extraction or build facts.
     """
-    from core.json import load_json_bounded
+    from core.json import load_json_stream_bounded
+    from core.source import open_regular
+    from core.source.streams import preserving_stream_error
     from packages.ghidra.model import REDatabase
 
     path = Path(redb_path)
     version = _binary_content_version(path.stat())
-    key = (str(path.resolve()), *version, _MAX_REDB_BYTES)
-    db, _cached = _REDB_MEMO.get_or_compute(
-        key,
-        lambda: REDatabase.from_dict(
-            load_json_bounded(redb_path, max_bytes=_MAX_REDB_BYTES)
-        ),
-    )
+    try:
+        resolved = path.resolve()
+    except RuntimeError as exc:
+        raise OSError("analysis JSON path unavailable") from exc
+    limit = _MAX_REDB_BYTES
+    key = (str(resolved), *version, limit)
+
+    def compute():
+        stream = open_regular(resolved, "rb")
+        if stream is None:
+            raise OSError("analysis JSON unavailable")
+        with preserving_stream_error(stream):
+            if _binary_content_version(os.fstat(stream.fileno())) != version:
+                raise OSError("analysis JSON changed before read")
+            document = load_json_stream_bounded(cast(BinaryIO, stream), max_bytes=limit)
+            database = REDatabase.from_dict(document)
+            if (_binary_content_version(os.fstat(stream.fileno())) != version
+                    or _binary_content_version(path.stat()) != version):
+                raise OSError("analysis JSON changed during read")
+        return database
+
+    db, _cached = _REDB_MEMO.get_or_compute(key, compute)
+    if _binary_content_version(path.stat()) != version:
+        raise OSError("analysis JSON changed during cache lookup")
     return db
 
 
@@ -500,14 +536,12 @@ def assemble_binary_context(
     or is located via :func:`find_redb`.
     """
     if db is None:
-        redb_path = find_redb(out_dir, target_path)
-        if redb_path is not None:
-            try:
-                db = load_redb(redb_path)
-            except (OSError, ValueError, KeyError):
-                logger.warning(
-                    "could not load %s", redb_path, exc_info=True,
-                )
+        try:
+            selected = find_redb_snapshot(out_dir, target_path)
+            if selected is not None:
+                _redb_path, db = selected
+        except (OSError, ValueError, KeyError):
+            logger.warning("could not select analysis cache", exc_info=True)
 
     item = _find_item(checklist, file_path, function_name)
     address = (item or {}).get("address")

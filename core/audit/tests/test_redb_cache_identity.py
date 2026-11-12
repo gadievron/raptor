@@ -238,19 +238,18 @@ class TestBaseParity:
 
         assert find_redb(run, None) == cand
 
-    def test_unreadable_candidate_returned_for_caller_error_path(
+    def test_unreadable_candidate_cannot_establish_identity(
         self, tmp_path,
     ):
-        """A candidate that cannot be parsed has unknowable identity;
-        every consumer already owns a load-error path for this file —
-        the path is handed back so that handling fires unchanged."""
+        """A later reload must not bypass identity after a parse failure."""
         binf = _make_binary(tmp_path / "prog", b"\x7fELF")
         run = tmp_path / "run"
         run.mkdir()
         cand = run / "re-database.json"
         cand.write_text("{not json")
 
-        assert find_redb(run, binf) == cand
+        assert find_redb(run, binf) is None
+        assert cand.read_text() == "{not json"
 
     def test_validate_false_is_probe_only(self, tmp_path):
         """The checklist-timeout scaler's cheap path: existence probes
@@ -451,19 +450,18 @@ class TestWrongTypedCacheFields:
         "junk", [5, [3], "zzz", {"a": {}}, [["nested"]]],
         ids=["int", "list-of-int", "str", "dict", "nested-list"],
     )
-    def test_wrong_typed_functions_candidate_returned(
+    def test_wrong_typed_functions_cannot_establish_identity(
         self, tmp_path, junk,
     ):
-        """A functions field that cannot even load is the malformed-
-        JSON class: identity unknowable, path handed back so every
-        consumer's own load-error handling fires (BASE parity)."""
+        """Malformed model data cannot turn a later reload into admission."""
         binf = _make_binary(tmp_path / "bins" / "prog", b"\x7fELF")
         run = tmp_path / "run"
         cand = _write_raw(run, {"source_tool": "r2",
                                 "binary_path": str(binf),
                                 "functions": junk, "metadata": {}})
 
-        assert find_redb(run, binf) == cand
+        assert find_redb(run, binf) is None
+        assert json.loads(cand.read_text())["functions"] == junk
 
 
 class TestHazardConvergence:
