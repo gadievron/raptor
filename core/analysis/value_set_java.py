@@ -24,8 +24,9 @@ interpreter must never out-clever its own aliasing model, and the
 false-suppression direction is exactly a store the scan missed.
 
 Hard bounds: array literals over ``_MAX_ELEMENTS`` refuse; elements
-must fold literal-only (identifier elements refuse); the index must
-fold to an in-range integer. Every refusal returns
+must fold literal-only (identifier elements refuse); known element
+conversions outside the scalar model refuse; the index must fold to
+an in-range integer. Every refusal returns
 :data:`~core.analysis.const_fold_java.REFUSE` — never a guess.
 """
 
@@ -108,6 +109,36 @@ def _initializer_elements(value_node) -> list | None:
     return [c for c in init.children if c.is_named]
 
 
+def _initializer_conversions_supported(declarator, value, elements) -> bool:
+    """Refuse known element conversions the literal-value model omits."""
+    declaration = declarator.parent
+    types = [declaration.child_by_field_name("type")] if declaration is not None else []
+    if value is not None and value.type == _ARRAY_CREATION:
+        types.append(value.child_by_field_name("type"))
+    for target in types:
+        while target is not None and target.type == "array_type":
+            target = target.child_by_field_name("element")
+        kind = target.text if target is not None else None
+        if kind in (b"float", b"double", b"Character", b"java.lang.Character"):
+            return False
+        if kind == b"char":
+            # Literal char identity needs no numeric narrowing model.
+            for element in elements:
+                while element.type == "parenthesized_expression" and len(element.named_children) == 1:
+                    element = element.named_children[0]
+                if element.type != "character_literal":
+                    return False
+        elif kind in (b"byte", b"short", b"int", b"long",
+                      b"Byte", b"Short", b"Integer", b"Long",
+                      b"java.lang.Byte", b"java.lang.Short",
+                      b"java.lang.Integer", b"java.lang.Long"):
+            for element in elements:
+                folded = fold_expr(element, lambda _name, _depth: REFUSE)
+                if isinstance(folded, bool) or not isinstance(folded, int):
+                    return False
+    return True
+
+
 class ArrayTableIndex:
     """Per-file index of constant-table candidates (see module doc)."""
 
@@ -152,6 +183,8 @@ class ArrayTableIndex:
                         # Non-private FIELD: a cross-file element
                         # store is invisible to the file-scoped
                         # occurrence pass — refuse.
+                        self._refused.add(name)
+                    elif not _initializer_conversions_supported(n, value, elements):
                         self._refused.add(name)
                     else:
                         self._elements[name] = elements
