@@ -309,7 +309,9 @@ class XFileConst:
                          shadowed_names: frozenset[str] = frozenset()) -> Any:
         """Fold with identifiers resolving ONLY to static-final fields
         of the same class — parameters and locals refuse."""
-        from core.analysis.const_fold_java import REFUSE, _member_value_names_at, fold_expr
+        from core.analysis.const_fold_java import (
+            REFUSE, _character_conversion_is_identity, _member_value_names_at, fold_expr,
+        )
 
         def resolve_name(name: str, d: int) -> Any:
             if d > _MAX_FIELD_DEPTH or name in shadowed_names:
@@ -325,10 +327,27 @@ class XFileConst:
         # the cross-file context: a getProperty in a static-final
         # initializer gets the same tree-wide setProperty proof as an
         # inline read (without it, USERDIR-style fields would refuse).
-        return fold_expr(node, resolve_name,
-                         allow_taint_free=allow_taint_free,
-                         xfile_resolver=self,
-                         shadowed_receiver_names=shadowed_names | _member_value_names_at(node))
+        value = fold_expr(node, resolve_name,
+                          allow_taint_free=allow_taint_free,
+                          xfile_resolver=self,
+                          shadowed_receiver_names=shadowed_names | _member_value_names_at(node))
+        # A field initializer and a return expression cross declared-type
+        # boundaries. Their RHS values alone do not prove char conversion.
+        parent = node.parent
+        declaration = None
+        if parent is not None and parent.type == "variable_declarator":
+            declaration = parent.parent
+        elif parent is not None and parent.type == "return_statement":
+            body = parent.parent
+            if body is not None and body.parent is not None \
+                    and body.parent.type == "method_declaration":
+                declaration = body.parent
+        target_type = (declaration.child_by_field_name("type")
+                       if declaration is not None else None)
+        if not _character_conversion_is_identity(
+                value, target_type.text if target_type is not None else None):
+            return REFUSE
+        return value
 
     # ---- public resolutions ---------------------------------------------
 
