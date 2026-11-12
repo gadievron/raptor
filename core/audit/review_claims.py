@@ -112,6 +112,18 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
     if intake["omitted_count"]:
         history["complete"] = False
         history["omissions"].append("candidate-limit-or-unserialisable")
+    # Intake does not issue a new review assessment or choose a contributor.
+    # Preserve only an already bound, unambiguous recorded basis.
+    review = history.get("review")
+    if previous is not None and isinstance(review, dict):
+        from .assessment_basis import read_assessment_basis
+        origin = review.get("origin")
+        pass_id = origin.get("pass_id") if isinstance(origin, dict) else None
+        assessment_status = review.get("assessment_status")
+        if isinstance(pass_id, str) and isinstance(assessment_status, str):
+            basis = read_assessment_basis(previous, pass_id=pass_id, status=assessment_status)
+            if basis is not None:
+                history["assessment_basis"] = basis["basis"]
     return history
 
 

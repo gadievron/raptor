@@ -267,6 +267,10 @@ def generate_report(
         # reflect whatever the journal holds.
         "completeness": completeness,
     }
+    from .assessment_basis_reporting import assessment_basis_summary
+    assessment_bases = assessment_basis_summary(audit_data)
+    if assessment_bases is not None:
+        report["assessment_bases"] = assessment_bases
     if segments:
         report["segments"] = segments
     if not_attempted_count:
@@ -790,7 +794,7 @@ def _load_review_state(out_dir: Path) -> dict[str, Any]:
     functions: list[dict[str, Any]] = []
     files_examined: set = set()
     for entry in entries:
-        functions.append({
+        record: dict[str, Any] = {
             "file": entry.file,
             "function": entry.function,
             "line_start": entry.line_start or 0,
@@ -808,7 +812,12 @@ def _load_review_state(out_dir: Path) -> dict[str, Any]:
             # reviews — carry the marker so stats can state one
             # counting rule instead of silently inflating "reviewed".
             "mechanical": _is_mechanical_echo(entry),
-        })
+        }
+        from .assessment_basis_reporting import journal_assessment_basis
+        basis = journal_assessment_basis(entry, out_dir)
+        if basis is not None:
+            record["assessment_basis"] = basis
+        functions.append(record)
         if entry.file:
             files_examined.add(entry.file)
     return {

@@ -163,6 +163,11 @@ def test_deepen_claim_withdrawal_requires_current_identity_and_publication(tmp_p
             else:
                 assert entry.review_claims["assessment_basis"] == "model_judgment_withdrawal"
                 assert entry.review_claims["withdrawal_decisions"]["accepted"][0]["adjudication"] == "model_withdrawn"
+                from core.audit.assessment_basis_reporting import journal_assessment_basis
+                recorded_basis = journal_assessment_basis(entry, out)
+                assert recorded_basis is not None
+                assert recorded_basis["basis"] == "model_judgment_withdrawal"
+                assert recorded_basis["scope"] == "historical_review_only"
             assert entry.evidence_tools == []
             assert len(completed) == 1 and completed[0]["published_status"] == "clean"
         else:

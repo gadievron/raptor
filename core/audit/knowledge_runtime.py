@@ -223,6 +223,16 @@ class AuditKnowledgeRuntime:
             # Pipeline-owned: a model cannot supply the original source stamp.
             outcome.review_result = dict(outcome.review_result or {})
             history = begin_review(origin, attempt_id)
+            # This is descriptive attribution to the actual completed
+            # renderer invocation, never proof authority or current freshness.
+            if (getattr(review_fn, "_knowledge_observed_client_contract", None) is True
+                    and outcome.review_result.get("status") == outcome.status
+                    and outcome.review_result.get("counter_escalated") is not True):
+                from .assessment_basis import record_assessment_basis
+                recorded = record_assessment_basis(history, origin=origin,
+                    attempt_id=attempt_id, status=outcome.status)
+                if recorded is not None:
+                    history = recorded
             if "caller_context_delivery" in outcome.review_result:
                 from .review_context_inputs import context_inputs_from_delivery
                 dependencies = context_inputs_from_delivery(outcome.review_result["caller_context_delivery"], origin)

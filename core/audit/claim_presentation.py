@@ -61,10 +61,13 @@ def claim_presentation_blocks(report: dict) -> list[Block]:
     if record.get("mode") != "shadow":
         return [Block("paragraph", title="Claim adjudication unavailable",
                       text="The saved shadow projection is unavailable; legacy assessments are unchanged.")]
+    bases = report.get("assessment_bases")
+    basis_notice = ("Reviewer basis is recorded separately; this shadow does not establish claim assurance. "
+                    if isinstance(bases, dict) and type(bases.get("recorded")) is int and bases["recorded"] > 0 else
+                    "Assessment basis and assurance grade were not recorded; both remain unavailable. ")
     children = [Block("paragraph", text=(
         "Shadow comparison only. These states do not replace legacy assessments or establish mechanical verification. "
-        "Assessment basis and assurance grade were not recorded; both remain unavailable. "
-        "Clean means no current finding was established in the completed review's scope, never proved safe. "
+        + basis_notice + "Clean means no current finding was established in the completed review's scope, never proved safe. "
         "Error, skipped and deferred work describe processing or coverage, not safety conclusions.")),
         Block("table", columns=["Claim", "Revision", "Shadow state", "Recorded limitations"],
               rows=[[row["claim_id"], row["revision_id"], row["state"],
