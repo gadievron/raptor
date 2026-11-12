@@ -3160,6 +3160,10 @@ def review_one_function(
         discovered_evidence=discovered_evidence,
         blind=config.blind_first_pass,
     )
+    # A name/address placeholder is coverage-unavailable input, not an
+    # implementation to spend a reviewer attempt on (including custom hooks).
+    from .review_availability import require_binary_implementation
+    require_binary_implementation(ctx)
 
     _fp_priors_injected = bool(_sage_fp_priors) and not config.blind_first_pass
     if _fp_priors_injected:
@@ -9733,11 +9737,14 @@ def _run_audit_body(
                 if siblings is not None:
                     kwargs["batch_context"] = siblings
                 return review_one_function(gap, *args, knowledge_runtime=knowledge_runtime, **kwargs)
-            except KnowledgeCallRefused:
+            except KnowledgeCallRefused as refusal:
                 # Refusal is local to this unit. No completed verdict is
                 # committed and the run/environment rails remain unchanged.
+                reason = ("No implementation view was available for this binary unit; review deferred"
+                          if refusal.reason == "binary_implementation_unavailable" else
+                          "Knowledge review allowance exhausted")
                 return ReviewOutcome(gap["file"], gap["name"], "deferred",
-                                     "Knowledge review allowance exhausted", line=gap.get("line_start", 0))
+                                     reason, line=gap.get("line_start", 0))
         reservation = owned[1]
         try:
             _re_review_study_enriched(
