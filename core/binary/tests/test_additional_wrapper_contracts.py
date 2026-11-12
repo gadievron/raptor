@@ -1,19 +1,44 @@
 """Owned fixtures exercise small parser adapters without installed vendors."""
+from contextlib import ExitStack, contextmanager
+import shutil
 import subprocess
+import sys
 
 import pytest
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
+
+
+@contextmanager
+def _parser_discovery(adapter):
+    with ExitStack() as stack:
+        patch = stack.enter_context(pytest.MonkeyPatch.context())
+        def fake_which(name, **kwargs):
+            return '/usr/bin/' + name
+        if adapter == 'capabilities':
+            from core.audit import capabilities
+            patch_module_attribute(patch, capabilities, 'shutil', 'which', fake_which)
+        elif adapter == 'addr2line':
+            from core.orchestration import frida_validation_bridge as bridge
+            imports = stack.enter_context(scoped_function_imports(
+                bridge, ('_addr2line_batch',), {'shutil': shutil},
+            ))
+            patch_module_attribute(patch, imports, 'shutil', 'which', fake_which)
+        elif adapter == 'scanner':
+            patch.setattr(sys, 'path', sys.path.copy())
+            import importlib
+            scanner = importlib.import_module('packages.static-analysis.scanner')
+            patch_module_attribute(patch, scanner, 'shutil', 'which', fake_which)
+        yield
 
 
 @pytest.mark.parametrize('adapter', ['autodetect', 'capabilities', 'addr2line', 'ebpf', 'ghidra', 'scanner', 'objdump'])
 def test_small_parser_adapter_reaches_sandbox(tmp_path, monkeypatch, adapter):
     from core import sandbox
-    import shutil
     binary = tmp_path / 'owned'
     binary.write_bytes(b'\x7fELF' + b'\0' * 64)
-    monkeypatch.setattr(shutil, 'which', lambda name, **kwargs: '/usr/bin/' + name)
     seen = []
     def run(command, **options):
         seen.append(options)
@@ -30,32 +55,33 @@ def test_small_parser_adapter_reaches_sandbox(tmp_path, monkeypatch, adapter):
         stdout = '.debug_info\nDW_TAG_compile_unit\n' if adapter in ('autodetect', 'capabilities') else 'owned.c:9\n'
         return subprocess.CompletedProcess(command, 0, stdout, '')
     monkeypatch.setattr(sandbox, 'run', run)
-    if adapter == 'autodetect':
-        from core.analysis.binary_oracle_autodetect import _has_dwarf
-        assert _has_dwarf(binary)
-    elif adapter == 'capabilities':
-        from core.audit.capabilities import _has_dwarf
-        assert _has_dwarf(binary)
-    elif adapter == 'addr2line':
-        from core.orchestration.frida_validation_bridge import _addr2line_batch
-        assert _addr2line_batch(binary, [16]) == {16: 'owned.c:9'}
-    elif adapter == 'ghidra':
-        from packages.ghidra import headless, ebpf_probe
-        monkeypatch.setattr(headless, '_find_headless', lambda: '/usr/bin/analyzeHeadless')
-        monkeypatch.setattr(headless, '_install_read_paths', lambda *a: [str(tmp_path)])
-        ebpf_probe.ghidra_decode([], tmp_path / 'work')
-    elif adapter == 'objdump':
-        from packages.ghidra.objdump_import import _run_binutil
-        assert _run_binutil(['/usr/bin/objdump', '-d', str(binary)], binary).returncode == 0
-    elif adapter == 'scanner':
-        import importlib
-        module = importlib.import_module('packages.static-analysis.scanner')
-        assert module.run(['/usr/bin/semgrep', '--version'], target=str(tmp_path),
-                          output=str(tmp_path), fake_home=True)[0] == 0
-    else:
-        from packages.binary_analysis.corpus_profile import _run_bpf_objdump
-        assert _run_bpf_objdump('/usr/bin/llvm-objdump', b'\x95' + b'\0' * 7)
-    assert len(seen) == 1
+    with _parser_discovery(adapter):
+        if adapter == 'autodetect':
+            from core.analysis.binary_oracle_autodetect import _has_dwarf
+            assert _has_dwarf(binary)
+        elif adapter == 'capabilities':
+            from core.audit.capabilities import _has_dwarf
+            assert _has_dwarf(binary)
+        elif adapter == 'addr2line':
+            from core.orchestration.frida_validation_bridge import _addr2line_batch
+            assert _addr2line_batch(binary, [16]) == {16: 'owned.c:9'}
+        elif adapter == 'ghidra':
+            from packages.ghidra import headless, ebpf_probe
+            monkeypatch.setattr(headless, '_find_headless', lambda: '/usr/bin/analyzeHeadless')
+            monkeypatch.setattr(headless, '_install_read_paths', lambda *a: [str(tmp_path)])
+            ebpf_probe.ghidra_decode([], tmp_path / 'work')
+        elif adapter == 'objdump':
+            from packages.ghidra.objdump_import import _run_binutil
+            assert _run_binutil(['/usr/bin/objdump', '-d', str(binary)], binary).returncode == 0
+        elif adapter == 'scanner':
+            import importlib
+            module = importlib.import_module('packages.static-analysis.scanner')
+            assert module.run(['/usr/bin/semgrep', '--version'], target=str(tmp_path),
+                              output=str(tmp_path), fake_home=True)[0] == 0
+        else:
+            from packages.binary_analysis.corpus_profile import _run_bpf_objdump
+            assert _run_bpf_objdump('/usr/bin/llvm-objdump', b'\x95' + b'\0' * 7)
+        assert len(seen) == 1
 
 
 def test_corpus_workload_dispatches_owned_build_through_sandbox(tmp_path, monkeypatch):
