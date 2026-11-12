@@ -27973,6 +27973,18 @@ def _deepen_suspicious(
                     and not _is_verification_evidence_for_gate(prior_outcome))
                 if clean_adjudicated and refuted_prior and not withdrawal["admissible"]:
                     outcome.clean_basis = "gate_resolved"
+                    # Record the exact enumerated receipts only after the
+                    # existing source/material admission above; this is a
+                    # historical basis, not checker or whole-function assurance.
+                    history = (outcome.review_result or {}).get("review_claims")
+                    review_record = history.get("review") if isinstance(history, dict) else None
+                    attempt_id = review_record.get("attempt_id") if isinstance(review_record, dict) else None
+                    if outcome.review_input_scope is not None and isinstance(attempt_id, str):
+                        from .refutation_assessment_basis import record_refutation_basis
+                        recorded = record_refutation_basis(history, origin=outcome.review_input_scope.origin,
+                            attempt_id=attempt_id, hypotheses=prior_claims, receipts=outcome.claim_refutations)
+                        if recorded is not None:
+                            outcome.review_result = {**(outcome.review_result or {}), "review_claims": recorded}
                 if not clean_adjudicated:
                     prior_outcome.review_result = {**(prior_outcome.review_result or {}),
                         "demotion_referee": "prior claims retained: " + withdrawal["reason"]}

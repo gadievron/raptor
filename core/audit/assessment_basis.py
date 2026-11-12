@@ -1,6 +1,6 @@
 """Record a review's descriptive basis without granting evidence authority.
 
-The caller owns the completed model invocation or admitted explicit withdrawal.
+The caller owns the completed model invocation or admitted withdrawal/refutation.
 These helpers bind its record to the existing review history; they do not prove
 that event occurred, validate current source, or establish mechanical assurance.
 """
@@ -12,8 +12,9 @@ from typing import Any, Literal
 from .knowledge_requests import KnowledgeOrigin
 from .review_claims import read_history
 
-AssessmentBasis = Literal["model_judgment", "model_judgment_withdrawal"]
-_BASES = frozenset(("model_judgment", "model_judgment_withdrawal"))
+AssessmentBasis = Literal["model_judgment", "model_judgment_withdrawal", "enumerated_claims_refuted"]
+_BASES = frozenset(("model_judgment", "model_judgment_withdrawal", "enumerated_claims_refuted"))
+_CLEAN_BASES = frozenset(("model_judgment_withdrawal", "enumerated_claims_refuted"))
 _STATUSES = frozenset(("clean", "suspicious", "finding", "dormant", "dark"))
 
 
@@ -66,7 +67,8 @@ def _single_review(history: dict) -> dict[str, Any] | None:
             if bound is None or not _same_review(bound, review):
                 return None
             if any(field in bound and bound[field] != review.get(field)
-                   for field in ("assessment_basis", "assessment_status")):
+                   for field in ("assessment_basis", "assessment_status",
+                                 "assessment_hypotheses", "assessment_refutations")):
                 return None
     return review
 
@@ -78,13 +80,13 @@ def record_assessment_basis(
     """Copy a pipeline-issued basis onto its exact existing review record.
 
     Call only after the actual producer completes or the existing withdrawal
-    validator accepts. Shape checks and matching do not authenticate a model
+    or scoped-refutation validator accepts. Shape checks do not authenticate a model
     response or a caller-supplied admission flag. Error/unknown callbacks and
     histories without a single bound source observation stay unavailable.
     """
     if (not isinstance(origin, KnowledgeOrigin) or not isinstance(basis, str) or basis not in _BASES
             or not isinstance(status, str) or status not in _STATUSES
-            or basis == "model_judgment_withdrawal" and status != "clean"):
+            or basis in _CLEAN_BASES and status != "clean"):
         return None
     history = read_history(value)
     if history is None:
@@ -104,10 +106,10 @@ def record_assessment_basis(
         if (not isinstance(old_basis, str) or old_basis not in _BASES
                 or not isinstance(old_status, str) or old_status not in _STATUSES or old_status != status
                 or old_basis != basis and not (
-                    old_basis == "model_judgment" and basis == "model_judgment_withdrawal" and status == "clean")):
+                    old_basis == "model_judgment" and basis in _CLEAN_BASES and status == "clean")):
             return None
     if (previous is not None and (not isinstance(previous, str) or previous not in _BASES)
-            or previous == "model_judgment_withdrawal" and basis != previous):
+            or previous in _CLEAN_BASES and basis != previous):
         return None
     history["assessment_basis"] = basis
     review["assessment_basis"] = basis
@@ -135,8 +137,17 @@ def read_assessment_basis(value: object, *, pass_id: str, status: str) -> dict[s
             or not isinstance(status, str) or status not in _STATUSES
             or review.get("assessment_status") != status
             or review["origin"]["pass_id"] != pass_id
-            or basis == "model_judgment_withdrawal" and status != "clean"):
+            or basis in _CLEAN_BASES and status != "clean"):
         return None
-    return {"basis": basis, "status": status, "pass_id": pass_id,
-            "attempt_id": review["attempt_id"], "origin": review["origin"],
-            "scope": "historical_review_only"}
+    result: dict[str, Any] = {"basis": basis, "status": status, "pass_id": pass_id,
+              "attempt_id": review["attempt_id"], "origin": review["origin"],
+              "scope": "historical_review_only"}
+    if basis == "enumerated_claims_refuted":
+        from .refutation_assessment_basis import read_refutation_basis
+        refutations = read_refutation_basis(review)
+        if refutations is None:
+            return None
+        result["refutations"] = refutations
+    elif "assessment_hypotheses" in review or "assessment_refutations" in review:
+        return None
+    return result
