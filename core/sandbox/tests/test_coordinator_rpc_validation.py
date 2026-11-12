@@ -203,6 +203,41 @@ def test_main_unhashable_profile_is_a_structured_refusal(monkeypatch, role, prof
     assert role in errors[0][1]
 
 
+@pytest.mark.parametrize("field", ["target-timeout", "listen-timeout"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_main_nonfinite_deadline_is_refused(monkeypatch, field, value):
+    request = {
+        "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+    }
+    if field == "target-timeout":
+        request["target"]["timeout_s"] = value
+    else:
+        request["wait_listen_timeout_s"] = value
+    errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
+    assert exit_code == 2
+    assert responses == []
+    assert joins == []
+    assert len(errors) == 1
+    assert errors[0][0] == "bad_request"
+    assert "finite" in errors[0][1]
+
+
+@pytest.mark.parametrize("timeout", [-1, 0, 0.25])
+def test_main_preserves_finite_deadline_values(monkeypatch, timeout):
+    request = {
+        "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out",
+                   "timeout_s": timeout},
+        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+        "wait_listen_timeout_s": timeout,
+    }
+    errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
+    assert errors == []
+    assert exit_code is None
+    assert len(responses) == 1
+    assert joins == [timeout + 1.0]
+
+
 # --------------------------------------------------------------------------
 # Fail-closed isolation floor: a child spec that runs HOSTILE code
 # (profile target_run — also the default when a spec omits profile)
