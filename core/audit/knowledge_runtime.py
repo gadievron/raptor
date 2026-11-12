@@ -170,6 +170,13 @@ class AuditKnowledgeRuntime:
 
         @wraps(review_fn)
         def review(ctx, config):
+            from .binary_review_scope import BinaryModuleSnapshot
+            from .review_availability import require_binary_implementation
+
+            require_binary_implementation(ctx)
+            supplied_binary = ctx.get("_binary_module_snapshot")
+            binary_snapshot = supplied_binary if isinstance(supplied_binary, BinaryModuleSnapshot) else None
+            binary_target = ctx.get("target_path")
             captured = self._origin(ctx)
             key = self._key(captured)
             with self._lock:
@@ -290,6 +297,11 @@ class AuditKnowledgeRuntime:
             # Retain this invocation's fitting, including explicit omissions.
             # This is disclosure only; continuation credit uses owned receipts.
             reference_fitting = outcome.review_result.get("language_reference_delivery")
+            # Retain the original pre-call binding. A callback cannot refresh
+            # changed bytes by replacing its context's transient snapshot.
+            binary_current = binary_snapshot is None or (
+                ctx.get("_binary_module_snapshot") is binary_snapshot
+                and ctx.get("target_path") == binary_target and binary_snapshot.current())
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
                     "pass_id": origin.pass_id, "status": outcome.status,
@@ -299,7 +311,17 @@ class AuditKnowledgeRuntime:
                     "model": outcome.model, "cost_usd": outcome.cost_usd,
                     **({"language_reference_delivery": deepcopy(reference_fitting)}
                        if isinstance(reference_fitting, list) else {}),
-                    "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity})
+                    "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity,
+                    **({"binary_module_unchanged_after_call": binary_current} if binary_snapshot is not None else {})})
+            if not binary_current:
+                from .knowledge_calls import KnowledgeCallRefused
+
+                with self._lock:
+                    self._events.append({"event": "review_input_invalidated", "attempt_id": attempt_id,
+                        "pass_id": origin.pass_id, "domain": "binary", "phase": "post_call",
+                        "reason": "binary_module_changed_or_unavailable"})
+                self.notify()
+                raise KnowledgeCallRefused("binary_module_changed_or_unavailable")
             self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
             self._register_caller_requests(origin, outcome.review_result)
             self.notify()
