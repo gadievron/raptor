@@ -19,6 +19,8 @@ from core.source.streams import preserving_stream_error
 
 _NEVER = ("-", "#####", "=====")
 _SOURCE_RE = re.compile(r"Source:(.*)")
+_COUNT_RE = re.compile(r"(?P<number>[0-9]+(?:\.[0-9]+)?)(?P<unit>[kMGTPEZY])?\*?")
+_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 # Coverage artifacts scale with the instrumented tree — same budget
 # class as the sibling coverage_py parser (_MAX_REPORT_BYTES there).
@@ -89,14 +91,15 @@ def _parse_one_gcov(gcov_file: Path, out: dict[str, set[int]]) -> None:
             continue
         if not count_s or count_s in _NEVER:
             continue
-        # Executed: a plain count > 0, OR a human-readable count (`1.2k`, gcov
-        # `-H`) which gcov only emits for non-zero counts. `-`/`#####`/`=====`
-        # (handled above) are the only "not executed" markers.
-        try:
-            if int(count_s) <= 0:
-                continue
-        except ValueError:
-            pass                               # human-readable non-zero count
+        # GCC emits integers, optional partial-execution '*', and -H
+        # counts with k/M/... suffixes (integer or decimal mantissas).
+        # Colour options wrap the count in SGR escapes, including zero.
+        token = _SGR_RE.sub("", count_s).strip()
+        count = _COUNT_RE.fullmatch(token)
+        if (count is None
+                or ("." in count["number"] and not count["unit"])
+                or not any(char in "123456789" for char in count["number"])):
+            continue
         lines.add(lineno)
     _flush()
 
