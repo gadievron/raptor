@@ -829,6 +829,13 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
         if op in ("==", "!=") and not _eq_semantics_are_value(
                 left_node, right_node, left, right):
             return _REFUSE
+        if op == "+":
+            # Two char literals undergo numeric promotion, not String
+            # concatenation. Their Python str representation loses that
+            # distinction; numeric char arithmetic is not modelled here.
+            operands = (_paren_unwrap(left_node), _paren_unwrap(right_node))
+            if all(n is not None and n.type == "character_literal" for n in operands):
+                return _REFUSE
         return _fold_binop(op, left, right)  # type: ignore[arg-type]
     if t == "ternary_expression":
         cond = _fold(node.child_by_field_name("condition"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)  # type: ignore[arg-type]
