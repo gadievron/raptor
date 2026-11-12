@@ -14,8 +14,31 @@ import socket
 
 import pytest
 
+from core.oci import registry_hosts
+from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
+
 from core.oci.client import OciRegistryClient, RegistryError
 from core.oci.image_ref import parse_image_ref
+
+
+@pytest.fixture
+def _inert_proxy_extension(monkeypatch):
+    from core.oci import client
+    from core.sandbox import proxy
+
+    extensions = []
+    monkeypatch.setattr(client, "_cdn_hosts_extended", set())
+    with scoped_function_imports(
+        client, ("_extend_proxy_for_cdn_host",), {"core.sandbox.proxy": proxy},
+    ) as imports:
+        def extend(hosts):
+            extensions.append(tuple(hosts))
+
+        patch_module_attribute(
+            monkeypatch, imports, "core.sandbox.proxy", "get_proxy", extend,
+        )
+        yield extensions
 
 _BODY = b"layer-bytes" * 64
 _DIGEST = "sha256:" + hashlib.sha256(_BODY).hexdigest()
@@ -97,7 +120,7 @@ def _seed_registry_auth(client: OciRegistryClient) -> None:
     client._last_challenge["docker.io"] = key
 
 
-def test_offsite_redirect_followed_and_auth_confined() -> None:
+def test_offsite_redirect_followed_and_auth_confined(_inert_proxy_extension) -> None:
     http = _StubHttp({
         _REGISTRY_URL: [_StubResponse(
             307, headers={"Location": _CDN_URL},
@@ -153,7 +176,7 @@ def test_hop_budget_enforced() -> None:
         b"".join(client.stream_blob(_ref(), _DIGEST))
 
 
-def test_offsite_hop_is_terminal_and_empty_body_is_loud() -> None:
+def test_offsite_hop_is_terminal_and_empty_body_is_loud(_inert_proxy_extension) -> None:
     """The CDN hop cannot expose a further redirect's status — a
     misbehaving chain surfaces as the named empty-body error, not a
     silent zero-byte blob."""
@@ -216,7 +239,7 @@ def test_redirect_target_held_to_address_policy(monkeypatch) -> None:
             "", (addr, port or 443),
         )]
 
-    monkeypatch.setattr(socket, "getaddrinfo", split_getaddrinfo)
+    patch_module_attribute(monkeypatch, registry_hosts, "socket", "getaddrinfo", split_getaddrinfo)
     http = _StubHttp({
         _REGISTRY_URL: [_StubResponse(
             307, headers={"Location": _CDN_URL},
@@ -242,7 +265,7 @@ def test_redirect_target_ip_literal_policy(monkeypatch) -> None:
         b"".join(client.stream_blob(_ref(), _DIGEST))
 
 
-def test_cdn_error_carries_status_detail() -> None:
+def test_cdn_error_carries_status_detail(_inert_proxy_extension) -> None:
     """A CDN-side failure names the status and the blob context."""
     http = _StubHttp({
         _REGISTRY_URL: [_StubResponse(
