@@ -3851,6 +3851,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # owner when this kwarg is present. Other platform lanes retain
         # a result-size clamp at the dispatch chokepoint.
         _max_capture_bytes = kwargs.pop("max_capture_bytes", None)
+        if _max_capture_bytes is not None:
+            # Refuse invalid limits before any executor can run the command.
+            _max_capture_bytes = max(0, int(_max_capture_bytes))
 
         # Audit-mode + missing output= handling. Two distinct cases:
         #
