@@ -611,6 +611,14 @@ def _extract_statement_payload(
         d, u = _walk_symbols(root)
         defs |= d
         uses |= u
+    # These bind names stored as strings, not Name(Store) children.
+    # Nested bodies remain excluded; only the statement's own binding is added.
+    if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        defs.add(stmt.name)
+    elif isinstance(stmt, ast.Import):
+        defs.update(alias.asname or alias.name.split(".", 1)[0] for alias in stmt.names)
+    elif isinstance(stmt, ast.ImportFrom):
+        defs.update(alias.asname or alias.name for alias in stmt.names if alias.name != "*")
     # AugAssign target is both def and use even when AST gives it
     # Store ctx (the read of the prior value is implicit).
     if isinstance(stmt, ast.AugAssign) and isinstance(stmt.target, ast.Name):
