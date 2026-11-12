@@ -1,4 +1,6 @@
 """Source-bound division faults with one affine denominator expression."""
+from collections import Counter
+
 from .integer_conversion import _frame
 from .array_index import source_index
 from .arithmetic_operation import _unwrap
@@ -57,10 +59,11 @@ def affine_division_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
+    shapes = [shape for node in nodes if (shape := _shape(node, data)) is not None]
+    occurrences = Counter((shape[2], shape[3], shape[4]) for shape in shapes)
     result = []
-    for node in nodes:
-        shape = _shape(node, data)
-        if shape is None:
+    for shape in shapes:
+        if occurrences[(shape[2], shape[3], shape[4])] != 1:
             continue
         target, _, numerator, (count, op, offset), operator = shape
         count_binding = model_for_integer_terms(target, data, [count], (), integer_abi, language=language)
