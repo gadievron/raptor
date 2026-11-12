@@ -106,12 +106,12 @@ def _text(n) -> str:
 
 def _decoded_string_literal(n) -> str | None:
     """Decoded value of a plain string literal; None for anything
-    else (escape-carrying literals refuse — mis-decoding a key would
-    conflate two distinct elements)."""
+    else (text blocks and escape-carrying literals refuse — an
+    incorrect key value can split writes to the same runtime element)."""
     if n is None or n.type != _STRING_LITERAL:
         return None
     raw = _text(n)
-    if len(raw) < 2 or "\\" in raw:
+    if len(raw) < 2 or "\\" in raw or raw.startswith('"""'):
         return None
     return raw[1:-1]
 
