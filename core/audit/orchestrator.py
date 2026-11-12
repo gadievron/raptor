@@ -35777,6 +35777,13 @@ def _model_withdrawal_assessment(config, prior, fresh, current_source):
     assert current_history is not None
     current_history["withdrawal_decisions"] = report
     current_history["assessment_basis"] = "model_judgment_withdrawal"
+    if fresh.review_input_scope is not None:
+        from .assessment_basis import record_assessment_basis
+        recorded = record_assessment_basis(current_history, origin=fresh.review_input_scope.origin,
+            attempt_id=origin_record.get("attempt_id"), status=fresh.status,
+            basis="model_judgment_withdrawal")
+        if recorded is not None:
+            current_history = recorded
     bounded = read_history(current_history)
     if bounded is None:
         return {**report, "admissible": False, "reason": "decision_history_payload_limit"}

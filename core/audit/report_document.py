@@ -133,6 +133,8 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
     reads = report.get("unrecorded_reads", [])
     if reads:
         blocks.extend(result_blocks(reads, title=f"Unrecorded reads ({sum(len(u['functions']) for u in reads)} functions in {len(reads)} files)"))
+    from .assessment_basis_reporting import assessment_basis_blocks
+    blocks.extend(assessment_basis_blocks(report))
     blocks.extend(claim_presentation_blocks(report))
     summary = build_operator_summary(context)
     return context, ReportDocument("Audit Report", "audit", context.snapshot_id, metadata=metadata, blocks=blocks,
