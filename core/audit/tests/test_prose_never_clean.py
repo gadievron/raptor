@@ -641,9 +641,8 @@ def _run_deepen(monkeypatch, tmp_path, prior, review):
 
 class TestDeepenTrustsNoProseBasis:
     """The deepen re-review must not accept a clean on the strength of prose or
-    of retired rationale flags; only the structured all-refuted demotion counts
-    as a basis. Otherwise a second review could overturn a suspicious verdict
-    on wording alone."""
+    of retired rationale flags or an all-refuted label. Prior claims need
+    admitted scoped refutation or explicit source-bound withdrawal."""
 
     @pytest.mark.parametrize("refuted", [False, True],
                              ids=["no-record", "all-refuted"])
@@ -699,16 +698,11 @@ class TestDeepenTrustsNoProseBasis:
         assert kept[0] is prior
         assert prior.status == "suspicious"
 
-    def test_all_refuted_demotion_is_the_structured_basis(
+    def test_all_refuted_boolean_does_not_adjudicate_prior_claims(
         self, monkeypatch, tmp_path,
     ):
-        # Control for the flag tests above: the one structured basis
-        # deepen still trusts. A deepen clean carrying it supersedes a
-        # probe-less prior; the same clean without it is dominated.
-        """The all-refuted demotion is the one structured basis deepen still
-        trusts: with it a deepen clean replaces a prior with no tool backing,
-        and without it the prior stays. This control shows the flag tests above
-        fail for the right reason."""
+        # A legacy boolean carries no current claim identity or
+        # source-bound withdrawal. Both proposals retain the prior.
         def run(rr):
             prior = _deepen_outcome("a.c", "foo")
 
@@ -722,7 +716,7 @@ class TestDeepenTrustsNoProseBasis:
             assert len(kept) == 1
             return kept[0].status
 
-        assert run({"all_refuted_demotion": True}) == "clean"
+        assert run({"all_refuted_demotion": True}) == "suspicious"
         assert run({}) == "suspicious"
 
     @pytest.mark.parametrize("flag", [
