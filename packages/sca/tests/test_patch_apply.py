@@ -22,6 +22,8 @@ from typing import List
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.sca import patch_apply
 from packages.sca.patch_apply import apply_patch_to_target
 
 
@@ -160,7 +162,7 @@ def test_apply_routes_through_run_untrusted(
             "must route through core.sandbox.context.run_untrusted"
         )
 
-    monkeypatch.setattr(subprocess, "run", raising_run)
+    patch_module_attribute(monkeypatch, patch_apply, "subprocess", "run", raising_run)
 
     rc = apply_patch_to_target(tmp_path, patch)
     assert rc == 0
