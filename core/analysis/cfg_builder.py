@@ -466,6 +466,13 @@ def _walk_symbols(
                 _walk(node.elt, local_scope)
             return
         if isinstance(node, ast.Lambda):
+            # Defaults execute in the enclosing scope before the lambda's
+            # parameters exist, including defaults that rebind a name.
+            for default in node.args.defaults:
+                _walk(default, comp_local)
+            for default in node.args.kw_defaults:
+                if default is not None:
+                    _walk(default, comp_local)
             # Lambda params are lambda-local; the body's free names
             # are loads in the enclosing scope. Add params to
             # comp_local for the body walk.
