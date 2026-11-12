@@ -34,8 +34,10 @@ import math
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from itertools import batched
 from pathlib import Path
 from typing import Any
 
@@ -60,7 +62,9 @@ class BuildResult:
     record_count: int
 
 
-def _build_one_source(source: str, out_dir: Path, http: Any) -> BuildResult:
+def _build_one_source(
+    source: str, out_dir: Path, http: Any, *, osv_jobs: int = 8,
+) -> BuildResult:
     """Run one source's fetcher, never raising — failures (and unknown
     sources) come back as a ``BuildResult`` with ``error`` set.
 
@@ -82,7 +86,10 @@ def _build_one_source(source: str, out_dir: Path, http: Any) -> BuildResult:
                            error=f"unknown source {source!r}", record_count=0)
     logger.info("sca.calibration: %s started", source)
     try:
-        result = fn(out_dir, http)
+        result = (
+            _build_osv_evidence(out_dir, http, jobs=osv_jobs)
+            if source == "osv_evidence" else fn(out_dir, http)
+        )
         status = "FAILED" if result.error else ("updated" if result.written else "unchanged")
         logger.info("sca.calibration: %s %s (%d records)", source, status, result.record_count)
         return result
@@ -133,6 +140,9 @@ def build_corpus(
         sources = ["kev", "epss", "exploitdb", "metasploit",
                    "github_poc", "osv_evidence", "vulnrichment"]
 
+    # An explicit sequential request also serializes per-CVE lookups.
+    # Auto mode with just the OSV source still benefits from bounded overlap.
+    osv_jobs = 1 if jobs == 1 else 8
     if jobs <= 0:
         jobs = min(len(sources), 8) or 1
 
@@ -147,7 +157,7 @@ def build_corpus(
     results: list[BuildResult | None] = [None] * len(sources)
     if jobs <= 1 or len(sources) <= 1:
         for i, source in enumerate(sources):
-            results[i] = _build_one_source(source, out_dir, http)
+            results[i] = _build_one_source(source, out_dir, http, osv_jobs=osv_jobs)
     else:
         with ThreadPoolExecutor(max_workers=jobs) as pool:
             fut_to_idx = {
@@ -634,7 +644,9 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
     )
 
 
-def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
+def _build_osv_evidence(
+    out_dir: Path, http: Any, *, jobs: int = 8,
+) -> BuildResult:
     """Walk OSV records for every CVE present in the
     ``project_samples/`` corpus and emit a CVE-keyed signal of
     ``EVIDENCE`` references that point to known exploit-hosting
@@ -664,9 +676,9 @@ def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
 
     **Scope:** corpus-only. OSV doesn't expose a CVE listing
     endpoint, so the universe of queryable CVEs is bounded by what
-    our scans actually surface. Walking the existing 27k-entry
-    signal union would be 27k OSV calls (~45 min); walking the
-    corpus's surfaced CVEs is typically ~150-500 calls.
+    our scans actually surface. Large corpora can still contain tens
+    of thousands of CVEs; lookups overlap in bounded groups of eight
+    without sampling or truncating that set.
 
     **Empty result is acceptable:** if no project_samples directory
     exists yet (fresh checkout, pre-collect), record_count=0 and
@@ -703,15 +715,27 @@ def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
                 if isinstance(cve, str) and cve.startswith("CVE-"):
                     cve_set.add(cve)
 
+    def lookup(cve: str) -> tuple[str, bool, Any]:
+        try:
+            return cve, True, http.get_json(f"{OSV_BASE}/vulns/{cve}")
+        except Exception:                                   # noqa: BLE001
+            # Preserve the per-CVE failure policy (404, 5xx, timeout).
+            return cve, False, None
+
+    def lookups() -> Iterator[tuple[str, bool, Any]]:
+        # Corpus growth made the old sequential walk tens of thousands of
+        # round trips. Share the existing thread-safe HTTP client, but keep
+        # both active requests and queued results bounded to eight. Folding
+        # in sorted input order preserves deterministic signal output.
+        workers = max(1, min(jobs, 8))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for batch in batched(sorted(cve_set), workers):
+                yield from pool.map(lookup, batch)
+
     signals: dict[str, dict[str, Any]] = {}
     queried = 0
-    for cve in sorted(cve_set):
-        try:
-            data = http.get_json(f"{OSV_BASE}/vulns/{cve}")
-        except Exception:                                   # noqa: BLE001
-            # Per-CVE failures (404, 5xx, timeout) shouldn't abort
-            # the whole build. Missing CVEs in OSV simply don't get
-            # an EVIDENCE signal.
+    for cve, ok, data in lookups():
+        if not ok:
             continue
         queried += 1
         if not isinstance(data, dict):

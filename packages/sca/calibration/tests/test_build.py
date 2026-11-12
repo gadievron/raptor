@@ -898,3 +898,71 @@ def test_build_cli_configures_progress_logging(tmp_path, monkeypatch, capsys, ve
     assert cli['main']() == 0
     assert levels == [logging.INFO if verbose else logging.WARNING]
     assert 'kev unchanged (7 records)' in capsys.readouterr().out
+
+
+def test_osv_corpus_lookups_are_bounded_parallel_and_complete(tmp_path):
+    import threading
+
+    cves = [f"CVE-2024-{i}" for i in range(1, 18)]
+    samples = tmp_path / "project_samples"
+    samples.mkdir()
+    (samples / "owned.json").write_text(json.dumps({
+        "findings": [{"advisory": {"aliases": cves, "cves": cves}}],
+    }))
+    barrier = threading.Barrier(8)
+    lock = threading.Lock()
+    active = 0
+    peak = 0
+    calls = []
+
+    class CapturedHttp:
+        def get_json(self, url):
+            nonlocal active, peak
+            cve = url.rsplit("/", 1)[-1]
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                calls.append(cve)
+                position = len(calls)
+            try:
+                # Two full eight-request groups must overlap; the last
+                # singleton has no barrier. The sequential preimage breaks
+                # the first barrier rather than hanging the regression.
+                if position <= 16:
+                    barrier.wait(timeout=2)
+                if cve == cves[1]:
+                    raise OSError("captured missing advisory")
+                if cve == cves[2]:
+                    return []  # Successful response, malformed shape.
+                kind = "ADVISORY" if cve == cves[3] else "EVIDENCE"
+                return {"references": [{
+                    "type": kind, "url": "https://exploit-db.com/exploits/99",
+                }]}
+            finally:
+                with lock:
+                    active -= 1
+
+    result = _build_osv_evidence(tmp_path, CapturedHttp())
+    data = json.loads((tmp_path / "osv_evidence_signals.json").read_text())
+    assert peak == 8
+    assert active == 0
+    assert len(calls) == len(cves) and set(calls) == set(cves)
+    assert data["_source"]["cves_in_corpus"] == 17
+    assert data["_source"]["cves_queried"] == 16
+    assert data["_source"]["cves_with_exploit_host_url"] == 14
+    assert set(data["signals"]) == set(cves) - set(cves[1:4])
+    assert result.record_count == 14
+
+
+@pytest.mark.parametrize('jobs, expected', [(0, 8), (1, 1)])
+def test_osv_auto_overlap_honors_explicit_sequential_mode(tmp_path, monkeypatch, jobs, expected):
+    calls = []
+
+    def fetch(out_dir, http, *, jobs):
+        calls.append(jobs)
+        return build.BuildResult('osv_evidence', False, None, 0)
+
+    monkeypatch.setattr(build, '_build_osv_evidence', fetch)
+    result = build_corpus(out_dir=tmp_path, http=object(), sources=['osv_evidence'], jobs=jobs)
+    assert calls == [expected]
+    assert result == [build.BuildResult('osv_evidence', False, None, 0)]
