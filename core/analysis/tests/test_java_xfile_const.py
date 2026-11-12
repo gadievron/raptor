@@ -120,7 +120,8 @@ class TestStringOps:
 
     def test_case_ops_ascii_only(self):
         assert _fold('"MiXeD".toLowerCase()') == "mixed"
-        assert _fold('"MiXeD".toUpperCase()') == "MIXED"
+        assert _fold('"MiXeD".toUpperCase()') is REFUSE  # default locale may map i to U+0130
+        assert _fold('"MeXeD".toUpperCase()') == "MEXED"
 
     def test_case_op_with_locale_arg_refuses(self):
         assert _fold('"A".toLowerCase(java.util.Locale.US)') is REFUSE
