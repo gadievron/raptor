@@ -69,8 +69,9 @@ class _JavaChar(str):
 
 def _constant_conversion_is_identity(value: Any, target_type: bytes | None) -> bool:
     """Declared boundaries must stay within the folder's value model."""
-    if target_type in (b"float", b"double"):
-        return False  # Floating-point values and operations are not modelled.
+    if target_type in (b"float", b"double", b"Character", b"java.lang.Character"):
+        # Floating-point and boxed-character conversions are not modelled.
+        return False
     if target_type == b"char":
         return isinstance(value, _JavaChar)
     if isinstance(value, _JavaChar):
@@ -221,7 +222,8 @@ def _conversion_sensitive_names(root: Node) -> frozenset[str]:
             declaration = node.parent if node.type == "variable_declarator" else node
             target = declaration.child_by_field_name("type") if declaration is not None else None
             if name is not None and target is not None \
-                    and target.text in (b"char", b"float", b"double"):
+                    and target.text in (b"char", b"float", b"double",
+                                        b"Character", b"java.lang.Character"):
                 names.add(cast(bytes, name.text).decode())
         pending.extend(node.named_children)
     return frozenset(names)
