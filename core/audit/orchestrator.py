@@ -9740,9 +9740,12 @@ def _run_audit_body(
             except KnowledgeCallRefused as refusal:
                 # Refusal is local to this unit. No completed verdict is
                 # committed and the run/environment rails remain unchanged.
-                reason = ("No implementation view was available for this binary unit; review deferred"
-                          if refusal.reason == "binary_implementation_unavailable" else
-                          "Knowledge review allowance exhausted")
+                reason = ({
+                    "binary_implementation_unavailable":
+                        "No implementation view was available for this binary unit; review deferred",
+                    "binary_module_changed_or_unavailable":
+                        "Binary module changed or became unavailable; review deferred",
+                }.get(refusal.reason, "Knowledge review allowance exhausted"))
                 return ReviewOutcome(gap["file"], gap["name"], "deferred",
                                      reason, line=gap.get("line_start", 0))
         reservation = owned[1]

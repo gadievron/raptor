@@ -32,3 +32,13 @@ def require_binary_implementation(ctx: dict[str, Any]) -> None:
     if (not isinstance(representation, str) or representation not in _IMPLEMENTATION_VIEWS
             or not isinstance(source, str) or not source.strip()):
         raise KnowledgeCallRefused("binary_implementation_unavailable")
+    from pathlib import Path
+
+    from .binary_review_scope import BinaryModuleSnapshot
+
+    snapshot = ctx.get("_binary_module_snapshot")
+    target = ctx.get("target_path")
+    if (not isinstance(snapshot, BinaryModuleSnapshot)
+            or not isinstance(target, str) or Path(target).absolute() != snapshot.path
+            or not snapshot.current()):
+        raise KnowledgeCallRefused("binary_module_changed_or_unavailable")

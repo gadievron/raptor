@@ -535,6 +535,9 @@ def assemble_binary_context(
     shape; ``db`` may be passed directly (tests, callers holding one)
     or is located via :func:`find_redb`.
     """
+    from .binary_review_scope import capture_binary_module
+
+    module_snapshot = capture_binary_module(target_path)
     if db is None:
         try:
             selected = find_redb_snapshot(out_dir, target_path)
@@ -684,6 +687,10 @@ def assemble_binary_context(
     except Exception:
         logger.warning("prompt defence failed", exc_info=True)
 
+    # Keep the original physical version through assembly. Never recapture a
+    # changed module as if it produced the implementation view already read.
+    ctx["_binary_module_snapshot"] = (module_snapshot if module_snapshot is not None
+                                      and module_snapshot.current() else None)
     return ctx
 
 
