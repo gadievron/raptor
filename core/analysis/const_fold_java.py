@@ -63,6 +63,10 @@ _MAX_DEPTH = 8
 _INT_MIN = -(2 ** 31)
 _INT_MAX = 2 ** 31 - 1
 
+class _JavaChar(str):
+    """A folded UTF-16 character, distinct from a Java String value."""
+
+
 # Sentinel distinguishing "folds to None (null literal)" from "refuses".
 _REFUSE = object()
 
@@ -734,13 +738,13 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
     if t == "null_literal":
         return None
     if t == "character_literal":
-        # Java char, represented as a 1-char str: switch labels and
-        # charAt results then compare under one convention. Escaped
+        # Preserve char identity through name/field resolution; addition
+        # of two characters must not use String concatenation. Escaped
         # chars refuse.
         raw = node.text.decode()  # type: ignore[union-attr]
         if len(raw) != 3 or "\\" in raw:
             return _REFUSE
-        return raw[1:-1]
+        return _JavaChar(raw[1:-1])
     if t == "method_invocation":
         # The taint-free System-read producer runs BEFORE the config
         # resolver: System.getProperty/getenv is never a
@@ -934,7 +938,7 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
         if isinstance(v, (str, int, bool)) and v is not None:
             if isinstance(v, bool):
                 return "true" if v else "false"
-            return v if isinstance(v, str) else str(v)
+            return str(v)
         return _REFUSE
     if method not in _PURE_STRING_METHODS:
         return _REFUSE
@@ -1014,7 +1018,7 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
             return _REFUSE
         if not (0 <= idx < len(receiver)):
             return _REFUSE
-        return receiver[idx]
+        return _JavaChar(receiver[idx])
     return _REFUSE
 
 
@@ -1106,6 +1110,8 @@ def _eq_semantics_are_value(left_node: Node | None, right_node: Node | None,
 
 def _fold_binop(op: str, left: Any, right: Any) -> Any:
     if op == "+" and isinstance(left, str) and isinstance(right, str):
+        if isinstance(left, _JavaChar) and isinstance(right, _JavaChar):
+            return _REFUSE  # Numeric promotion, outside the modelled subset.
         return left + right
     if _is_int(left) and _is_int(right):
         if op in ("+", "-", "*"):
@@ -1448,5 +1454,5 @@ def all_definers_constant(
         return None
     return (
         f"every reaching definer of the sink argument folds to the "
-        f"same compile-time {type(value).__name__} constant"
+        f"same compile-time {'char' if isinstance(value, _JavaChar) else type(value).__name__} constant"
     )
