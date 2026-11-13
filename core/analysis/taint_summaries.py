@@ -260,19 +260,28 @@ _UNKNOWN_CALLABLES = frozenset({
 })
 
 
-def _generator_writes_enclosing_frame(node: ast.GeneratorExp) -> bool:
-    """Deferred walruses can rewrite the enclosing frame on consumption."""
-    pending: list[ast.AST] = [node.elt]
+def _comprehension_writes_enclosing_frame(
+    node: ast.GeneratorExp | ast.ListComp | ast.SetComp | ast.DictComp,
+) -> bool:
+    """Iteration can skip payloads, filters and later iterable expressions."""
+    roots: list[ast.AST] = (
+        [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+    )
     for index, generator in enumerate(node.generators):
         if index:
-            pending.append(generator.iter)
-        pending.extend(generator.ifs)
+            roots.append(generator.iter)
+        roots.extend(generator.ifs)
+    return _expression_roots_write_enclosing_frame(roots)
+
+
+def _expression_roots_write_enclosing_frame(roots: list[ast.AST]) -> bool:
+    pending = list(roots)
     while pending:
         child = pending.pop()
         if isinstance(child, ast.NamedExpr):
             return True
         if isinstance(child, ast.Lambda):
-            # Defaults run in the generator's frame; its body owns a
+            # Defaults run in the surrounding frame; the body owns a
             # separate local binding even when that body has a walrus.
             pending.extend(child.args.defaults)
             pending.extend(d for d in child.args.kw_defaults if d is not None)
@@ -296,8 +305,20 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
             continue
         if isinstance(node, (ast.Yield, ast.YieldFrom)):
             return "generator iteration outputs are not modelled"
-        if isinstance(node, ast.GeneratorExp) and _generator_writes_enclosing_frame(node):
+        if isinstance(node, ast.GeneratorExp) and _comprehension_writes_enclosing_frame(node):
             return "generator defers an enclosing-frame assignment"
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
+            if _comprehension_writes_enclosing_frame(node):
+                return "comprehension conditionally assigns an enclosing-frame name"
+        if isinstance(node, ast.IfExp):
+            if _expression_roots_write_enclosing_frame([node.body, node.orelse]):
+                return "expression conditionally assigns an enclosing-frame name"
+        if isinstance(node, ast.BoolOp):
+            if _expression_roots_write_enclosing_frame(node.values[1:]):
+                return "expression conditionally assigns an enclosing-frame name"
+        if isinstance(node, ast.Compare):
+            if _expression_roots_write_enclosing_frame(node.comparators[1:]):
+                return "expression conditionally assigns an enclosing-frame name"
         pending.extend(ast.iter_child_nodes(node))
     return None
 
@@ -313,6 +334,9 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
+    * An optional assignment expression in a conditional expression,
+      short-circuit operand, chained comparison or eager comprehension: it may not overwrite
+      the incoming local value.
     * A generator function: iteration output is not a normal return value.
     * A generator expression with a deferred assignment expression: its
       enclosing-frame writes depend on consumption, which is not modelled.

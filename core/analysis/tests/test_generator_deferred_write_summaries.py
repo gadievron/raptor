@@ -32,7 +32,7 @@ def test_deferred_enclosing_writes_refuse_a_known_summary(body):
 @pytest.mark.parametrize("expression", [
     "(item for item in rows)",
     "((lambda: (tmp := 0)) for item in rows)",
-    "[(tmp := item) for item in rows]",
+    "[item for item in rows]",
 ])
 def test_other_generator_and_eager_comprehension_forms_keep_existing_summary(expression):
     result = summary(f"tmp = raw\ndelayed = {expression}\nreturn raw")
@@ -67,3 +67,9 @@ def test_lambda_body_generator_stays_in_its_own_frame():
     result = summary("tmp = raw\nnested = lambda: ((tmp := 0) for item in rows)\nreturn tmp")
     assert not result.summary_unknown
     assert (0, "", -1) in result.return_effects
+
+
+def test_eager_comprehension_outer_write_now_refuses_even_with_unrelated_return():
+    result = summary("tmp = raw\ndelayed = [(tmp := item) for item in rows]\nreturn raw")
+    assert result.summary_unknown
+    assert result.summary_unknown_reason == "comprehension conditionally assigns an enclosing-frame name"
