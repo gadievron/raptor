@@ -109,6 +109,7 @@ if TYPE_CHECKING:
 # packed/encrypted verdict) travels with it; any change to that
 # posture is amended THERE, beside is_packed.
 from core.binary.elf import _shannon_entropy
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -813,7 +814,7 @@ def is_pe(path: Path | str) -> bool:
     :func:`core.binary.elf.is_elf`).
     """
     try:
-        with open(path, "rb") as f:
+        with preserving_stream_error(open(path, "rb")) as f:
             if f.read(2) != _MZ_MAGIC:
                 return False
             file_size = os.fstat(f.fileno()).st_size
