@@ -896,6 +896,36 @@ def module_dynamic_namespace(
     saved_namespace_dict_values: set[str] = set()
     namespace_dict_value_cache: dict[ast.AST, bool] = {}
 
+    def literal_member_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        sliced = False
+        while isinstance(value, ast.Subscript) and isinstance(value.slice, ast.Slice):
+            sliced = True
+            value = value.value
+        if sliced and not isinstance(value, (ast.Tuple, ast.List)):
+            return None
+        if isinstance(value, ast.Dict):
+            return tuple(item for key, item in zip(value.keys, value.values) if key is not None)
+        if isinstance(value, (ast.Tuple, ast.List)):
+            return tuple(item for item in value.elts if not isinstance(item, ast.Starred))
+        return None
+
+    def literal_member_result_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        if isinstance(value, ast.Subscript):
+            if isinstance(value.slice, ast.Slice):
+                # A sequence slice returns a container, not an element.
+                return None
+            return literal_member_values(value.value)
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and not value.keywords):
+            receiver = value.func.value
+            if ((value.func.attr == "get" and isinstance(receiver, ast.Dict)
+                 and len(value.args) in {1, 2})
+                    or (value.func.attr == "__getitem__" and len(value.args) == 1)):
+                members = literal_member_values(receiver)
+                if members is not None:
+                    return (*members, *value.args[1:])
+        return None
+
     def possible_namespace_dict_value(value: ast.AST) -> bool:
         pending_values = [(value, False)]
         while pending_values:
@@ -914,7 +944,10 @@ def module_dynamic_namespace(
                         and cursor.args[1].value == "__dict__"):
                     namespace_dict_value_cache[cursor] = True
                     continue
-            if isinstance(cursor, ast.NamedExpr):
+            literal_members = literal_member_result_values(cursor)
+            if literal_members is not None:
+                children = literal_members
+            elif isinstance(cursor, ast.NamedExpr):
                 children = (cursor.value,)
             elif isinstance(cursor, ast.IfExp):
                 children = (cursor.body, cursor.orelse)
@@ -1019,9 +1052,12 @@ def module_dynamic_namespace(
                                                and isinstance(key.value, str)
                                                and key.value in original_import_roots)
                 continue
+            literal_members = literal_member_result_values(cursor)
             copied_namespace = (namespace_copy_receiver(cursor.value)
                                 if isinstance(cursor, ast.Subscript) else None)
-            if copied_namespace is not None:
+            if literal_members is not None:
+                children = literal_members
+            elif copied_namespace is not None:
                 children = (copied_namespace,)
             elif isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
                 children = (cursor.value,)
