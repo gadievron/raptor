@@ -1136,59 +1136,65 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
-    list_operation_cache: dict[ast.AST, tuple[ast.AST, ...] | None] = {}
+    collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
-    def literal_list_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+    def literal_collection_operation(value: ast.AST) -> tuple[type[ast.AST] | None, tuple[ast.AST, ...]]:
         pending = [(value, False)]
         while pending:
             cursor, expanded = pending.pop()
-            if cursor in list_operation_cache:
+            if cursor in collection_operation_cache:
                 continue
+            kind = None
+            sources = ()
             if isinstance(cursor, ast.List):
-                # A literal List is an origin anchor with no operation edges.
-                list_operation_cache[cursor] = ()
+                kind = ast.List
+            elif isinstance(cursor, ast.Set):
+                kind = ast.Set
             elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
                   and isinstance(cursor.left, ast.List) and isinstance(cursor.right, ast.List)
                   and type(cursor.left) is type(cursor.right)):
-                list_operation_cache[cursor] = (cursor.left, cursor.right)
+                kind, sources = ast.List, (cursor.left, cursor.right)
             elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
-                sources = None
                 for source, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
                     if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
                             and type(count.value) is int and count.value > 0):
-                        sources = (source,)
+                        kind, sources = ast.List, (source,)
                         break
-                list_operation_cache[cursor] = sources
+            elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.left, ast.Set)
+                  and isinstance(cursor.right, ast.Set)):
+                if isinstance(cursor.op, (ast.BitOr, ast.BitXor)):
+                    kind, sources = ast.Set, (cursor.left, cursor.right)
+                elif isinstance(cursor.op, (ast.BitAnd, ast.Sub)):
+                    kind, sources = ast.Set, (cursor.left,)
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
                 source = cursor.func.value
-                if expanded:
-                    list_operation_cache[cursor] = ((source,) if list_operation_cache[source] is not None
-                                                    else None)
-                else:
+                if not expanded:
                     pending.append((cursor, True))
                     pending.append((source, False))
-            else:
-                list_operation_cache[cursor] = None
-        return list_operation_cache[value]
+                    continue
+                kind = collection_operation_cache[source][0]
+                if kind is not None:
+                    sources = (source,)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
+                  and isinstance(cursor.func.value, ast.Set) and not cursor.keywords
+                  and all(isinstance(item, ast.Set) for item in cursor.args)
+                  and (cursor.func.attr != "symmetric_difference" or len(cursor.args) == 1)):
+                kind = ast.Set
+                sources = ((cursor.func.value, *cursor.args)
+                           if cursor.func.attr in {"union", "symmetric_difference"}
+                           else (cursor.func.value,))
+            collection_operation_cache[cursor] = (kind, sources)
+        return collection_operation_cache[value]
+
+    def literal_list_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        kind, sources = literal_collection_operation(value)
+        return sources if kind is ast.List else None
 
     def literal_set_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
-        if (isinstance(value, ast.BinOp) and isinstance(value.left, ast.Set)
-                and isinstance(value.right, ast.Set)):
-            if isinstance(value.op, (ast.BitOr, ast.BitXor)):
-                return (value.left, value.right)
-            if isinstance(value.op, (ast.BitAnd, ast.Sub)):
-                return (value.left,)
-        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                and value.func.attr in {"copy", "union", "difference", "intersection", "symmetric_difference"}
-                and isinstance(value.func.value, ast.Set) and not value.keywords
-                and all(isinstance(item, ast.Set) for item in value.args)
-                and (value.func.attr != "copy" or not value.args)
-                and (value.func.attr != "symmetric_difference" or len(value.args) == 1)):
-            return ((value.func.value, *value.args)
-                    if value.func.attr in {"union", "symmetric_difference"}
-                    else (value.func.value,))
-        return None
+        kind, sources = literal_collection_operation(value)
+        return sources if kind is ast.Set else None
 
     sequence_iteration_cache: dict[ast.AST, tuple[bool, tuple[ast.AST, ...]] | None] = {}
 
