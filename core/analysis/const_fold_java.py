@@ -301,6 +301,8 @@ class JavaConstIndex:
             tree = parser.parse(source_text.encode("utf-8"))
         except Exception:  # noqa: BLE001
             return
+        if tree.root_node.has_error:
+            return  # Incomplete definitions cannot establish a constant value.
         self._scopes = _collect_local_scopes(tree.root_node)
         conversion_sensitive = _conversion_sensitive_names(tree.root_node)
         lo, hi = line_span
