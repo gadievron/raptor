@@ -811,6 +811,7 @@ def module_dynamic_namespace(
             )
 
     imap = module_import_map(tree)
+    import_roots = set(imap)
     sys_aliases = {r for r, src in imap.items() if src == "sys"}
     modules_aliases = {
         r for r, src in imap.items()
@@ -822,11 +823,16 @@ def module_dynamic_namespace(
     # Scope/name ambiguity only removes namespace trust.
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
+            import_roots.update(alias.asname or alias.name.split(".", 1)[0]
+                                for alias in node.names)
             sys_aliases.update(alias.asname or alias.name for alias in node.names
                                if alias.name == "sys")
-        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
-            modules_aliases.update(alias.asname or alias.name for alias in node.names
-                                   if alias.name == "modules")
+        elif isinstance(node, ast.ImportFrom):
+            import_roots.update(alias.asname or alias.name for alias in node.names
+                                if alias.name != "*")
+            if node.module == "sys":
+                modules_aliases.update(alias.asname or alias.name for alias in node.names
+                                       if alias.name == "modules")
 
     def _module_reachable(node: ast.AST) -> bool:
         child = node
@@ -862,6 +868,13 @@ def module_dynamic_namespace(
             if not isinstance(func, ast.Name):
                 continue
             fname = func.id
+            if fname in ("setattr", "delattr") and node.args:
+                receiver = _attribute_chain(node.args[0])
+                if receiver and receiver[0] in import_roots:
+                    # Imported objects can share the trusted module's
+                    # callable namespace, including through import aliases.
+                    whole = True
+                continue
             if fname in ("exec", "eval"):
                 if len(node.args) >= 2 or _module_reachable(node):
                     whole = True
