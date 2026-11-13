@@ -141,10 +141,13 @@ class TestStudyQueuePauseProtocol:
 
         t = threading.Thread(target=_finish_batch, daemon=True)
         start = time.monotonic()
-        t.start()
-        assert sq.wait_quiescent(10.0) is True
-        assert time.monotonic() - start < 5.0
-        t.join(timeout=5.0)
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads((t,), release=lambda: None, timeout=5.0):
+            t.start()
+            assert sq.wait_quiescent(10.0) is True
+            assert time.monotonic() - start < 5.0
+            t.join(timeout=5.0)
 
     def test_consumer_done_is_quiescent_without_pause(self) -> None:
         sq = StudyQueue()
