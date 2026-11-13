@@ -774,11 +774,15 @@ def _recv_until(proc, terminator, per_recv_timeout: float,
             buf.extend(chunk)
         return bytes(buf)
     if terminator == "newline":
-        while b"\n" not in buf and len(buf) < cap:
+        while len(buf) < cap:
             chunk = _read_bounded(min(4096, cap - len(buf)))
             if chunk is None or not chunk:
                 break
             buf.extend(chunk)
+            # Earlier chunks contained no newline. Search only new bytes,
+            # retaining the existing whole-chunk receive semantics.
+            if b"\n" in chunk:
+                break
         return bytes(buf)
     while len(buf) < cap:
         chunk = _read_bounded(min(4096, cap - len(buf)))
