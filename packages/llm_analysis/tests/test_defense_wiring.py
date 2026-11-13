@@ -226,6 +226,8 @@ class TestNonceTracking:
         assert nonce in user_msg
 
     def test_nonce_thread_safety(self):
+        from core.testing.threads import retiring_threads
+
         task = AnalysisTask()
         nonces = set()
         lock = threading.Lock()
@@ -242,10 +244,11 @@ class TestNonceTracking:
 
         threads = [threading.Thread(target=build_and_collect, args=(f"F{i}",))
                    for i in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=30):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert not errors
         assert len(nonces) >= 2  # at least some distinct nonces
