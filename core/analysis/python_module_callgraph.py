@@ -927,9 +927,16 @@ def module_dynamic_namespace(
         elif isinstance(statement, ast.NamedExpr):
             targets = [statement.target]
             value = statement.value
+        elif isinstance(statement, ast.For) and isinstance(statement.iter, (ast.Tuple, ast.List)):
+            targets = [statement.target]
+            value = statement.iter
         else:
             continue
-        pending = [(target, value) for target in targets]
+        if isinstance(statement, ast.For):
+            pending = [(statement.target, item) for item in statement.iter.elts
+                       if not isinstance(item, ast.Starred)]
+        else:
+            pending = [(target, value) for target in targets]
         while pending:
             target, value = pending.pop()
             if isinstance(target, (ast.Tuple, ast.List)):
