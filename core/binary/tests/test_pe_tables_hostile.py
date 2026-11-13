@@ -257,6 +257,8 @@ class TestRealCapBoundaries:
         exp = facts.exports
         assert exp is not None
         assert exp.walked_function_count == cap
+        assert len(exp.ordinal_only) == cap
+        assert exp.forwarder_count == 0
         assert "export_functions_capped" not in exp.caps_hit
 
     def test_export_functions_one_past_the_real_cap(self, tmp_path):
@@ -274,6 +276,8 @@ class TestRealCapBoundaries:
         assert exp is not None
         assert exp.declared_function_count == cap + 1
         assert exp.walked_function_count == cap
+        assert len(exp.ordinal_only) == cap
+        assert exp.forwarder_count == 0
         assert "export_functions_capped" in exp.caps_hit
 
     def test_import_thunks_per_dll_at_the_real_cap_boundary(
@@ -625,7 +629,7 @@ class TestCpuTimeWorstShape:
 def _export_flood_image(n_slots: int) -> bytes:
     """An export table with ``n_slots`` real (nonzero, non-
     forwarder) function slots and no names."""
-    slots = [0x1000 + 4 * i for i in range(n_slots)]
+    slots = [0x1000 + 4 * (i % 16) for i in range(n_slots)]
     edata, exp_dir = build_export_section(slots, [], va=0x5000)
     return build_pe(PeSpec(secs=[
         Sec(name=b".text", va=0x1000, data=b"\xcc" * 0x40),
