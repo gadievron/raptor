@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from core.paths import confine
-from core.sarif.parser import ArtifactUriResolver, sarif_uri_path
+from core.sarif.parser import ArtifactUriResolver, _result_rule_id, get_result_rule, sarif_uri_path
 from core.source import read_text_capped, split_lines
 
 logger = logging.getLogger(__name__)
@@ -219,6 +219,8 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
                 continue
 
             rule_id = result.get("ruleId")
+            if not isinstance(rule_id, str) or not rule_id:
+                rule_id = _result_rule_id(result, get_result_rule(run, result))
             info = extract_nosemgrep(
                 Path(abs_path), line, _lines=lines,
                 rule_id=rule_id if isinstance(rule_id, str) else "",
