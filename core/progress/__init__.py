@@ -266,14 +266,17 @@ class HackerProgress:
             # up in stderr but is easy to miss when the progress
             # output is the last visible thing.
             try:
-                exc_repr = repr(exc_val) if exc_val is not None else exc_type.__name__
-            except Exception:
-                exc_repr = "<unrepresentable exception>"
-            clear = "\r\033[K" if self._tty else ""
-            sys.stderr.write(
-                f"{clear}{self._CROSS} {self.operation} failed: {exc_repr}\n"
-            )
-            sys.stderr.flush()
+                try:
+                    exc_repr = repr(exc_val) if exc_val is not None else exc_type.__name__
+                except Exception:
+                    exc_repr = "<unrepresentable exception>"
+                clear = "\r\033[K" if self._tty else ""
+                sys.stderr.write(
+                    f"{clear}{self._CROSS} {self.operation} failed: {exc_repr}\n"
+                )
+                sys.stderr.flush()
+            except BaseException:
+                pass  # Diagnostics must not replace the active body error.
         return False
 
 
