@@ -460,3 +460,30 @@ def test_all_queries_incompatible_never_analyzes(runner, tmp_path, monkeypatch):
     assert not result.success
     assert len(result.skipped_rules) == 1
     assert result.sarif_path is None
+
+
+@pytest.mark.parametrize('row', [None, 'not-a-result', [], 1, True])
+def test_nonobject_result_row_cannot_be_counted_as_a_finding(tmp_path, row):
+    path = tmp_path / 'invalid-row.sarif'
+    path.write_text(json.dumps({'runs': [{'results': [{'ruleId': 'owned/rule'}, row]}]}))
+    parser = object.__new__(QueryRunner)
+    assert parser._count_sarif_findings(path) is None
+
+
+def test_rc0_with_nonobject_result_row_is_not_clean_success(runner, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr(runner, '_codeql_version', lambda: '2.26.1')
+
+    def write_report(command):
+        Path(_sarif_out_path(command)).write_text(json.dumps({'runs': [{
+            'tool': {'driver': {'name': 'codeql', 'rules': []}},
+            'results': [None],
+        }]}))
+
+    monkeypatch.setattr('core.sandbox.run', _fake_sandbox(write_report))
+    result = runner.run_suite(tmp_path / 'db', 'python', tmp_path / 'out')
+    assert not result.success
+    assert result.findings_count == 0
+    assert result.sarif_path is None
+    assert result.errors
