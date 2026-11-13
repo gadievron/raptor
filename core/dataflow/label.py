@@ -120,7 +120,7 @@ class LifecyclePrecondition:
         )
 
 
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_ISO_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 
 
 # Strict from_dict checks — shared with the sibling value modules via
@@ -160,7 +160,7 @@ class GroundTruth:
         _require_nonempty("GroundTruth.finding_id", self.finding_id)
         _require_nonempty("GroundTruth.rationale", self.rationale)
         _require_nonempty("GroundTruth.labeler", self.labeler)
-        if not _ISO_DATE_RE.match(self.labeled_at or ""):
+        if not isinstance(self.labeled_at, str) or not _ISO_DATE_RE.fullmatch(self.labeled_at):
             msg = (
                 f"GroundTruth.labeled_at must be ISO YYYY-MM-DD, "
                 f"got {self.labeled_at!r}"
