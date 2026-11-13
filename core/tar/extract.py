@@ -231,6 +231,14 @@ def _budgeted_tarinfo(budget: int, consumed: dict[str, int]) -> type:
                     f"tar sparse stored data exceeds {budget} bytes; refusing")
             return result
 
+        def _proc_gnusparse_10(self, member, pax_headers, tarobj):
+            source = tarobj.fileobj
+            tarobj.fileobj = _SparseMetadataReader(source)
+            try:
+                return super()._proc_gnusparse_10(member, pax_headers, tarobj)
+            finally:
+                tarobj.fileobj = source
+
         def _proc_member(self, tarobj):
             if self.type in _METADATA_MEMBER_TYPES:
                 consumed["total"] += tarfile.BLOCKSIZE + self._block(
