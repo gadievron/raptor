@@ -23,16 +23,17 @@ rules:
       tags: ["security", "deserialisation", "xmldecoder"]
 
   # ---------------------------------------------------------------------------
-  # Java — SnakeYAML with the default constructor instantiates arbitrary
-  # classes from !!com.example.Type tags. new Yaml(new SafeConstructor(...))
-  # is the safe form and is excluded.
+  # Java — constructor spelling is a review candidate: acceptance of
+  # custom Java tags depends on the SnakeYAML version and loader policy.
+  # Explicit SafeConstructor spellings are excluded from this narrow rule.
   # ---------------------------------------------------------------------------
   - id: raptor.deserialisation.java.snakeyaml-unsafe-constructor
     message: >-
-      SnakeYAML constructed without SafeConstructor deserialises arbitrary
-      Java types from YAML tags — remote code execution on
-      attacker-controlled documents. Use new Yaml(new SafeConstructor(new
-      LoaderOptions())).
+      Review this SnakeYAML constructor's version and loader policy before
+      parsing untrusted YAML. Permissive Java tag handling can instantiate
+      attacker-chosen types; constructor spelling alone does not establish
+      that tags are accepted. Restrict allowed tags and types, for example
+      with SafeConstructor and suitable LoaderOptions.
     languages: [java, kotlin]
     severity: HIGH
     patterns:
