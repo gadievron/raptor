@@ -57,8 +57,8 @@ def test_implicit_only_file_avoids_unused_coordinate_tables(tmp_path):
     source = '#if defined(FEATURE)\nenum state { READY, RUNNING, DONE };\n#endif\n' * 20000
     (tmp_path / 'a.c').write_text(source)
     cr._scan_definitions(tmp_path)
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         definitions = cr._scan_definitions(tmp_path)
         _, peak = tracemalloc.get_traced_memory()
     finally:
