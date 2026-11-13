@@ -74,7 +74,8 @@ def test_missing_optional_fields_preserve_defaults():
     loaded = cal.SandboxProfile.from_json(json.dumps(required))
     assert loaded.proxy_hosts == []
     assert loaded.connect_targets == []
-    assert loaded.cache_version == cal._CACHE_VERSION
+    # An omitted version remains legacy; it cannot claim current admission.
+    assert loaded.cache_version == 1
 
 
 def test_corrupt_field_is_a_cache_miss(tmp_path, monkeypatch):

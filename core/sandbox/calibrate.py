@@ -75,7 +75,8 @@ logger = logging.getLogger(__name__)
 # attacker can read+write either way, but discouraging cross-user
 # bleed reduces the surface for misconfigured shared homedirs
 # (e.g. tmpfs /home setups in CI).
-_CACHE_VERSION = 1
+# Earlier records did not require trusted, loss-free observations.
+_CACHE_VERSION = 2
 # Match the observation reader's total input ceiling. Cache entries are
 # normally much smaller, but damaged artifacts must not be unbounded.
 _MAX_CACHE_BYTES = 64 * 1024 * 1024
@@ -200,6 +201,8 @@ class SandboxProfile:
                 raise TypeError("SandboxProfile connection has invalid field types")
             connects.append(ConnectTarget(**target))
         d["connect_targets"] = connects
+        # A missing version cannot promote a legacy record into this epoch.
+        d.setdefault("cache_version", 1)
         return cls(**d)
 
 
@@ -397,6 +400,12 @@ def _spawn_probe(
             sandbox_info=result.sandbox_info,  # type: ignore[attr-defined]
             current_run=True,
         )
+        if not observed.nonce_trusted:
+            raise RuntimeError(
+                "calibration observation is untrusted; profile was not cached")
+        if observed.capture_incomplete or observed.budget_truncated:
+            raise RuntimeError(
+                "calibration observation is incomplete; profile was not cached")
 
         # Hostnames from the proxy event log (which records the
         # CONNECT target by name regardless of allow/deny). De-dup
