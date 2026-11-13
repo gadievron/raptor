@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from core.audit import dynamic_sweep as _dynamic
+from core.testing.module_bindings import mock_module_attribute
+
 from core.audit.dynamic_sweep import (
     DynamicSweepResult,
     _has_sanitizer_output,
@@ -291,7 +294,7 @@ class TestHarnessContainment:
         config = FakeConfig(target_path=str(tmp_path))
         with mock.patch("core.sandbox.run_untrusted",
                         side_effect=SandboxSetupError("no ns")), \
-             mock.patch("subprocess.run") as bare:
+             mock_module_attribute(_dynamic, "subprocess", "run") as bare:
             result = _run_c_harness(outcome, {}, config, time.monotonic())
         assert result is not None
         assert result.ran is False
@@ -311,7 +314,7 @@ class TestHarnessContainment:
         config = FakeConfig(target_path=str(tmp_path))
         with mock.patch("core.sandbox.run_untrusted",
                         side_effect=SandboxSetupError("no ns")), \
-             mock.patch("subprocess.run") as bare:
+             mock_module_attribute(_dynamic, "subprocess", "run") as bare:
             result = _run_python_harness(outcome, {}, config, time.monotonic())
         assert result is not None
         assert result.ran is False
