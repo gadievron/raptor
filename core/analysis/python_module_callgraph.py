@@ -852,6 +852,19 @@ def module_dynamic_namespace(
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
+        if isinstance(node, (ast.Attribute, ast.Subscript)) \
+                and isinstance(node.ctx, (ast.Store, ast.Del)):
+            parent = parents.get(node)
+            annotation_only = (isinstance(parent, ast.AnnAssign)
+                               and parent.target is node and parent.value is None)
+            if not annotation_only:
+                receiver: ast.AST = node
+                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                    receiver = receiver.value
+                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                    # Direct imported-object mutations can rewrite a shared
+                    # callable namespace without rebinding its import name.
+                    whole = True
         if isinstance(node, ast.ImportFrom):
             if any(alias.name == "*" for alias in node.names):
                 whole = True
