@@ -25,8 +25,8 @@ def test_marker_free_source_has_bounded_temporary_allocation(extension):
     if tracemalloc.is_tracing():
         pytest.skip('requires isolated allocation tracing')
     source = 'ordinary_call(argument);\n' * 50000
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = sanitized_view_with_status(source, 'a.' + extension)
         _, peak = tracemalloc.get_traced_memory()
     finally:
