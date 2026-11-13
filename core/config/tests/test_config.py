@@ -1,6 +1,8 @@
 """Tests for core.config.RaptorConfig."""
 
+from contextlib import contextmanager
 import os
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -29,7 +31,23 @@ import pytest
 # to sys.path before any test module imports. The bare
 # `from core.config import RaptorConfig` works without the
 # manual insert. Drop the mutation.
+from core import config as _config
 from core.config import RaptorConfig
+from core.testing.module_views import module_function_view, scoped_function_imports
+
+
+@contextmanager
+def _version_runner(**kwargs):
+    view = module_function_view(_config, bindings={
+        "_owned_version": RaptorConfig.effective_version.__func__,
+    })
+    with (
+        scoped_function_imports(view, ("_owned_version",),
+                                {"subprocess": subprocess}) as imports,
+        patch.object(imports.subprocess, "run", **kwargs) as runner,
+        patch.object(RaptorConfig, "effective_version", classmethod(view._owned_version)),
+    ):
+        yield runner
 
 
 class TestEffectiveVersion:
@@ -37,20 +55,17 @@ class TestEffectiveVersion:
 
     def test_falls_back_to_VERSION_on_git_error(self):
         """Any git failure (binary absent, not a repo) → baked VERSION."""
-        import subprocess
-        with patch.object(subprocess, "run", side_effect=OSError("no git")):
+        with _version_runner(side_effect=OSError("no git")):
             assert RaptorConfig.effective_version() == RaptorConfig.VERSION
 
     def test_falls_back_to_VERSION_on_nonzero_exit(self):
-        import subprocess
         from types import SimpleNamespace
         fake = SimpleNamespace(returncode=128, stdout="", stderr="fatal")
-        with patch.object(subprocess, "run", return_value=fake):
+        with _version_runner(return_value=fake):
             assert RaptorConfig.effective_version() == RaptorConfig.VERSION
 
     def test_uses_git_describe_and_strips_leading_v(self):
         """In a checkout, derive from describe (leading 'v' stripped)."""
-        import subprocess
         from pathlib import Path
         from types import SimpleNamespace
 
@@ -59,7 +74,7 @@ class TestEffectiveVersion:
             pytest.skip("not a git checkout")
         fake = SimpleNamespace(returncode=0, stdout="v3.0.0-5-gabc1234\n",
                                stderr="")
-        with patch.object(subprocess, "run", return_value=fake):
+        with _version_runner(return_value=fake):
             assert RaptorConfig.effective_version() == "3.0.0-5-gabc1234"
 
 
