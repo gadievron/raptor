@@ -40,6 +40,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 # Names retained on the normalized record per list (sections /
@@ -154,7 +156,7 @@ def extract_format_facts(
     """
     p = Path(path)
     try:
-        with p.open("rb") as f:
+        with preserving_stream_error(p.open("rb")) as f:
             magic = f.read(4)
         size_bytes = p.stat().st_size
     except OSError:
