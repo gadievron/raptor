@@ -30,6 +30,9 @@ import pytest
 
 from core.testing.logging_state import isolated_cli_logging
 
+from packages.sca import _scan_args
+from core.testing.module_views import module_function_view
+
 from packages.sca._scan_args import (
     add_scan_args,
     apply_no_llm_umbrella,
@@ -170,9 +173,9 @@ class TestResolveRepoTrust:
                 raise ImportError(f"blocked for test: {name}")
             return real_import(name, *a, **kw)
 
-        monkeypatch.setattr(builtins, "__import__", _blocking_import)
+        private = module_function_view(_scan_args, import_hook=_blocking_import)
         args = self._args(trust=True)
-        assert resolve_repo_trust(args) is True
+        assert private.resolve_repo_trust(args) is True
         assert args.trust_repo is True
 
 
