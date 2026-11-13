@@ -52,6 +52,8 @@ def test_transition_during_serialization_prevents_stale_append(tmp_path, monkeyp
 
 
 def test_threaded_transition_does_not_append_to_new_run_handle(tmp_path, monkeypatch):
+    from core.testing.threads import retiring_threads
+
     first, second = tmp_path / 'first', tmp_path / 'second'
     first.mkdir()
     second.mkdir()
@@ -74,14 +76,15 @@ def test_threaded_transition_does_not_append_to_new_run_handle(tmp_path, monkeyp
 
     monkeypatch.setattr(summary, 'dumps_artifact', serialize)
     worker = threading.Thread(target=record)
-    worker.start()
-    try:
-        assert entered.wait(timeout=5)
-        summary.set_active_run_dir(second)
-        summary.record_denial('current command', 1, 'write')
-    finally:
-        release.set()
-        worker.join(timeout=5)
+    with retiring_threads((worker,), release=release.set, timeout=5):
+        worker.start()
+        try:
+            assert entered.wait(timeout=5)
+            summary.set_active_run_dir(second)
+            summary.record_denial('current command', 1, 'write')
+        finally:
+            release.set()
+            worker.join(timeout=5)
     assert not worker.is_alive()
     assert not errors
     assert summary._denial_count == 1
