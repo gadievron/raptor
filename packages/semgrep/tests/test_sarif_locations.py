@@ -166,3 +166,32 @@ def test_repeated_locations_share_run_resolvers_and_empty_runs_do_not_build_them
     assert findings[0].file == findings[-1].file == 'src/app.c'
     assert findings[-1].level == 'error'
     assert calls == {'rule': expected_rules, 'uri': 1}
+
+
+@pytest.mark.parametrize('usable', [1, 2])
+def test_rule_index_allocation_requires_repeated_usable_results(monkeypatch, usable):
+    from core.sarif import parser
+
+    original = parser.ResultRuleResolver
+    indexed = []
+
+    def resolver(run):
+        indexed.append(len(run['tool']['driver']['rules']))
+        return original(run)
+
+    monkeypatch.setattr(parser, 'ResultRuleResolver', resolver)
+    result = _result(ruleId='indexed-rule')
+    del result['ruleIndex']
+    run = _run(result)
+    run['tool']['driver']['rules'].extend({'id': f'other-{i}'} for i in range(2000))
+    run['results'] = [None, {}, *[dict(result) for _ in range(usable)], 'malformed']
+    before = json.dumps(run, sort_keys=True)
+    errors = []
+
+    findings = parse_sarif_data({'runs': [run]}, errors=errors)
+
+    assert len(findings) == usable
+    assert all((f.rule_id, f.level, f.file) == ('indexed-rule', 'error', 'src/app.c') for f in findings)
+    assert errors == ['SARIF contains 3 malformed entry/entries']
+    assert json.dumps(run, sort_keys=True) == before
+    assert indexed == ([] if usable == 1 else [2001])

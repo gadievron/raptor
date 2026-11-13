@@ -266,6 +266,11 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
         if not isinstance(results, list):
             malformed += 1
             continue
+        # One usable lookup cannot amortize a full descriptor index. Ignore
+        # malformed siblings for this decision; the loop still diagnoses them.
+        usable_results = (result for result in results if isinstance(result, dict) and result)
+        next(usable_results, None)
+        multiple_results = next(usable_results, None) is not None
         for result in results:
             if not isinstance(result, dict) or not result:
                 malformed += 1
@@ -274,9 +279,9 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
                 if uri_resolver is None:
                     uri_resolver = ArtifactUriResolver(run)
                 index = result.get("ruleIndex")
-                if "rule" not in result and type(index) is int and index >= 0:
-                    # Indexed driver references validate directly; indexing the
-                    # entire rule table cannot speed up these constant-time reads.
+                if not multiple_results or ("rule" not in result and type(index) is int and index >= 0):
+                    # Single lookups do not amortize an index; indexed driver
+                    # references already validate directly in constant time.
                     rule = get_result_rule(run, result)
                 else:
                     if rule_resolver is None:
