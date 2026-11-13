@@ -1238,15 +1238,21 @@ class TestUpdateStatusConcurrency(unittest.TestCase):
             barrier = threading.Barrier(2)
 
             def hit(status):
-                barrier.wait(timeout=10)
+                try:
+                    barrier.wait(timeout=10)
+                except threading.BrokenBarrierError:
+                    return
                 _update_status(run_dir, status)
 
             t1 = threading.Thread(target=hit, args=(STATUS_COMPLETED,))
             t2 = threading.Thread(target=hit, args=(STATUS_FAILED,))
-            t1.start()
-            t2.start()
-            t1.join(timeout=30)
-            t2.join(timeout=30)
+            from core.testing.threads import retiring_threads
+
+            with retiring_threads([t1, t2], release=barrier.abort, timeout=30):
+                t1.start()
+                t2.start()
+                t1.join(timeout=30)
+                t2.join(timeout=30)
 
             meta = load_json(run_dir / RUN_METADATA_FILE)
             self.assertIn(meta["status"], (STATUS_COMPLETED, STATUS_FAILED))
