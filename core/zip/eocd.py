@@ -52,6 +52,8 @@ import struct
 from pathlib import Path
 from typing import BinaryIO, NamedTuple, cast
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -218,7 +220,7 @@ def _peek_from_path(zip_path: Path) -> EocdSummary | None:
 
     read_len = min(size, _EOCD_SEARCH_BYTES)
     try:
-        with zip_path.open("rb") as fh:
+        with preserving_stream_error(zip_path.open("rb")) as fh:
             fh.seek(size - read_len)
             tail = fh.read(read_len)
             return _parse_eocd(tail, total_size=size, fh=fh)
