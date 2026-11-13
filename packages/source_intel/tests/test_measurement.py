@@ -444,7 +444,7 @@ def harness(monkeypatch):
     import ...``), so the patch must land on the source module, not
     on ``M``.
     """
-    _RecordingLLMClient.calls = []
+    monkeypatch.setattr(_RecordingLLMClient, "calls", [])
     import core.llm.client as llm_client_mod
     monkeypatch.setattr(llm_client_mod, "LLMClient", _RecordingLLMClient)
 
