@@ -21,7 +21,9 @@ processes are involved.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
+import time
 import threading
 import unittest
 from pathlib import Path
@@ -31,6 +33,8 @@ from unittest.mock import patch
 from core.json import load_json, save_json
 from core.project.oplock import OpLockContention, ProjectRunContention
 from core.project.project import ProjectManager
+from core.run import metadata
+from core.testing.module_views import module_function_view, scoped_function_imports
 from core.run.metadata import (
     RUN_METADATA_FILE,
     _live_conflicting_run,
@@ -236,7 +240,16 @@ class StartRunGateTest(RunContentionBase):
         with retiring_threads([timer], release=timer.cancel, timeout=5):
             timer.start()
             out = self.project_out / "agentic_20260102_000000"
-            with patch("time.sleep"):  # collapse the 2s poll interval
+            view = module_function_view(metadata, bindings={
+                "_owned_gate": metadata._project_run_gate.__wrapped__,
+            })
+            with (
+                scoped_function_imports(view, ("_owned_gate",), {"time": time}) as imports,
+                patch.object(imports.time, "sleep"),  # collapse only the gate's poll
+                patch.object(metadata, "_project_run_gate", contextmanager(view._owned_gate)),
+                # Git availability is incidental to this contention test.
+                patch("core.run.provenance._git", return_value=None),
+            ):
                 start_run(out, "agentic", wait_for_project=True)
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "running")
