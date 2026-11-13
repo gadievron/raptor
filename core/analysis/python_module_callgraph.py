@@ -1023,9 +1023,24 @@ def module_dynamic_namespace(
 
     def literal_dictionary_keys(value: ast.AST) -> tuple[ast.AST, ...] | None:
         dictionary = selected_literal_value(value)
-        if isinstance(dictionary, ast.Dict):
-            return tuple(key for key in dictionary.keys if key is not None)
-        return None
+        if not isinstance(dictionary, ast.Dict):
+            return None
+        pending = [dictionary]
+        seen = set()
+        keys = []
+        while pending:
+            cursor = pending.pop()
+            if cursor in seen:
+                continue
+            seen.add(cursor)
+            for key, item in zip(cursor.keys, cursor.values):
+                if key is not None:
+                    keys.append(key)
+                else:
+                    source = selected_literal_value(item)
+                    if isinstance(source, ast.Dict):
+                        pending.append(source)
+        return tuple(keys)
 
     def literal_dictionary_view_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
         if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute)
