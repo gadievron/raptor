@@ -8,6 +8,8 @@ applies verdicts under ``result._lock``, and returns handled ids so
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+
 import threading
 from pathlib import Path
 from typing import Any
@@ -110,19 +112,21 @@ class TestSubmitDarkProbes:
                   side_effect=_fake_parse_witness_response, create=True),
             patch("core.audit.orchestrator.language_for_file",
                   return_value="c", create=True),
+            ExitStack() as cleanup,
         ):
             outcomes, futures, executor = _submit_dark_probes_early(
                 result, _config(tmp_path),
                 llm_client=lambda p, s: "response",
                 include_diagnostics=True,
             )
-        assert len(outcomes) == 2
-        assert len(futures) == 2
-        assert executor is not None
-        # Clean up
-        for f in futures:
-            f.result(timeout=5)
-        executor.shutdown(wait=True)
+            if executor is not None:
+                cleanup.callback(executor.shutdown, wait=True)
+            assert len(outcomes) == 2
+            assert len(futures) == 2
+            assert executor is not None
+            # Collect results while the callback dependencies remain owned.
+            for f in futures:
+                f.result(timeout=5)
 
 
 class TestDrainDarkProbes:
