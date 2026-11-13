@@ -608,6 +608,9 @@ def main() -> None:
         target_timeout = float(
             target_spec.get("timeout_s", _DEFAULT_CHILD_TIMEOUT_S)
         )
+        exploit_timeout = float(
+            exploit_spec.get("timeout_s", _DEFAULT_CHILD_TIMEOUT_S)
+        )
     except (TypeError, ValueError, OverflowError) as exc:
         _emit_error(
             "bad_request",
@@ -615,7 +618,8 @@ def main() -> None:
         )
         sys.exit(2)
 
-    if not math.isfinite(wait_timeout) or not math.isfinite(target_timeout):
+    if not all(math.isfinite(value) for value in (
+            wait_timeout, target_timeout, exploit_timeout)):
         _emit_error("bad_request", "request timeouts must be finite")
         sys.exit(2)
 
