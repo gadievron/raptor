@@ -25,6 +25,7 @@ records that accumulate across runs, and a findings file compatible with
 - [Usage](#usage)
 - [Pipeline](#pipeline)
 - [Execution Model](#execution-model)
+- [Additional context](#additional-context-and-follow-up-reviews)
 - [Strategies](#strategies)
 - [Tool Menu](#tool-menu)
 - [Gates](#gates)
@@ -110,6 +111,36 @@ of target code. Binary reviews also compare relevant decompiler claims with
 machine-code evidence where supported. Unsupported architectures or incomplete
 binary evidence remain limitations rather than evidence of safety.
 
+
+### Additional context and follow-up reviews
+
+A reviewer can request a language rule, a target-source definition or recorded
+binary context when the supplied material is insufficient. Language-reference
+lookup reads a local reference library. Target-source explanations use the
+existing study budget and retain the source fragments supplied to that study.
+These contexts do not confirm or refute a security concern.
+
+Requests for the same reviewed function can share a bounded knowledge
+follow-up. Repeating a request or asking another question does not reset its review
+allowance. A panel needs capacity for its configured reviewers; exhausted
+budgets, unknown call counts or unavailable context can leave the request
+deferred. Deferred work is not a completed review.
+
+The report distinguishes context that was available from context fitted into a
+completed review prompt. Prompt inclusion does not show that the provider
+accepted it or that the model used it. Partial explanations and omitted
+material remain visible as limitations.
+
+For binaries, recovered types and pseudocode are descriptions of the recorded
+representation. Field layouts, signedness and calling relationships can be
+incomplete or inferred. The review does not invent source declarations or
+source locations to fill those gaps.
+
+These bounded knowledge follow-ups retain their original input identities
+through publication. A stale result remains in history with its consumed cost,
+while the earlier assessment is retained. Restoring identical bytes does not
+refresh an invalidated live binding. These checks do not make the target
+filesystem immutable.
 
 ## Strategies
 
