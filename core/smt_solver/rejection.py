@@ -260,6 +260,10 @@ def propagate(text: str, sub: Rejection) -> Rejection:
     return Rejection(text, sub.kind, detail, sub.hint)
 
 
+# This bounds diagnostic rendering only; profile admission is unchanged.
+_MAX_RENDERED_RANGE_BITS = 4096
+
+
 def parse_literal_value(
     tok: str,
     profile: BVProfile,
@@ -349,24 +353,31 @@ def parse_literal_value(
     # at int32. This split restores hex support while keeping the
     # decimal sign-discipline.
     if is_hex or not profile.signed:
-        upper_exclusive = 1 << profile.width
-        lower_inclusive = 0  # hex + unsigned reject negatives
+        outside_range = v < 0 or v.bit_length() > profile.width
     else:
-        upper_exclusive = 1 << (profile.width - 1)
-        # Signed two's-complement range is asymmetric: ``int8`` covers
-        # ``-128..127`` (lower bound is ``-2^(width-1)``, upper is
-        # ``2^(width-1) - 1``). A decimal `-128` at int8 must be
-        # accepted; `-129` rejected.
-        lower_inclusive = -(1 << (profile.width - 1))
-    if v >= upper_exclusive or v < lower_inclusive:
+        # Complementing negatives retains the asymmetric signed minimum.
+        magnitude_bits = v.bit_length() if v >= 0 else (~v).bit_length()
+        outside_range = magnitude_bits >= profile.width
+    if outside_range:
         if is_hex:
             range_desc = f"{profile.width}-bit range"
         else:
             range_desc = f"{profile.describe()} range"
+        if profile.width <= _MAX_RENDERED_RANGE_BITS:
+            if is_hex or not profile.signed:
+                lower_inclusive, upper_exclusive = 0, 1 << profile.width
+            else:
+                upper_exclusive = 1 << (profile.width - 1)
+                lower_inclusive = -upper_exclusive
+            range_bounds = f"{lower_inclusive:#x}..{upper_exclusive - 1:#x}"
+        elif is_hex or not profile.signed:
+            range_bounds = f"0x0..(2**{profile.width})-1"
+        else:
+            range_bounds = f"-(2**{profile.width - 1})..(2**{profile.width - 1})-1"
         return Rejection(
             text, RejectionKind.LITERAL_OUT_OF_RANGE,
             f"value {v:#x} (from token {tok!r}) outside {range_desc} "
-            f"({lower_inclusive:#x}..{upper_exclusive - 1:#x})",
+            f"({range_bounds})",
         )
     return v
 
