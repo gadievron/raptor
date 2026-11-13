@@ -1175,11 +1175,19 @@ def module_dynamic_namespace(
                 if all(collection_operation_cache[operand][0] is ast.List for operand in operands):
                     kind, sources = ast.List, operands
             elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
+                repeated = None
                 for source, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
-                    if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
+                    if (isinstance(count, ast.Constant)
                             and type(count.value) is int and count.value > 0):
-                        kind, sources = ast.List, (source,)
+                        repeated = source
                         break
+                if repeated is not None:
+                    if not expanded:
+                        pending.append((cursor, True))
+                        pending.append((repeated, False))
+                        continue
+                    if collection_operation_cache[repeated][0] is ast.List:
+                        kind, sources = ast.List, (repeated,)
             elif (isinstance(cursor, ast.BinOp)
                   and isinstance(cursor.op, (ast.BitOr, ast.BitXor, ast.BitAnd, ast.Sub))):
                 operands = (cursor.left, cursor.right)
