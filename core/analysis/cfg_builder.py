@@ -278,6 +278,13 @@ def _statement_expr_roots(stmt: ast.stmt) -> list[ast.AST]:
     symbol-aware extractor stay in lockstep on what "statement-level"
     means.
     """
+    if isinstance(stmt, ast.AnnAssign):
+        # These nodes belong to a function body: local annotations are
+        # never evaluated. Without an RHS a bare name is not rebound,
+        # while attribute/subscript target expressions still evaluate.
+        if stmt.value is not None:
+            return [stmt.target, stmt.value]
+        return [] if isinstance(stmt.target, ast.Name) else [stmt.target]
     if isinstance(stmt, ast.If):
         return [stmt.test]
     if isinstance(stmt, ast.While):
@@ -607,7 +614,7 @@ def _extract_statement_payload(
     # special-case defs that aren't captured by Store-ctx Name walk:
     #   For.target — already Store-ctx, picked up by _walk_symbols
     #   With.items[].optional_vars — already Store-ctx
-    #   AnnAssign.target without value — Store-ctx
+    #   AnnAssign.target with value — Store-ctx
     defs: set[str] = set()
     uses: set[str] = set()
     for root in expr_roots:
