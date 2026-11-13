@@ -81,9 +81,9 @@ def test_missing_runs_key_handled():
     assert d.baseline_count == 0
 
 
-def test_null_runs_handled():
-    d = diff_sarif_data({"runs": None}, {"runs": None})
-    assert d.baseline_count == 0
+def test_null_runs_refused():
+    with pytest.raises(ValueError, match="runs must be an array"):
+        diff_sarif_data({"runs": None}, {"runs": None})
 
 
 def test_runs_with_no_results_key_handled():
