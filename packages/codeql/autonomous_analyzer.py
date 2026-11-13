@@ -483,12 +483,15 @@ class AutonomousCodeQLAnalyzer:
 
         # Extract location
         locations = result.get("locations", [])
-        location = locations[0] if locations else {}
-        physical_loc = location.get("physicalLocation") or {}
-        region = physical_loc.get("region") or {}
-        artifact = physical_loc.get("artifactLocation") or {}
+        location = _as_dict(locations[0]) if isinstance(locations, list) and locations else {}
+        physical_loc = _as_dict(location.get("physicalLocation"))
+        region = _as_dict(physical_loc.get("region"))
+        artifact = _as_dict(physical_loc.get("artifactLocation"))
         start_line = max(0, _coerce_line(region.get("startLine")) or 0)
         end_line = max(start_line, _coerce_line(region.get("endLine")) or start_line) if start_line else 0
+        snippet = _as_dict(region.get("snippet")).get("text")
+        if not isinstance(snippet, str):
+            snippet = ""
 
         # Extract CWE. Pre-fix `for tag in tags: if tag.startswith(...)`
         # raised AttributeError when SARIF emitters produced
@@ -529,7 +532,7 @@ class AutonomousCodeQLAnalyzer:
             file_path=sarif_uri_path(ArtifactUriResolver(run).resolve(artifact)) or "",
             start_line=start_line,
             end_line=end_line,
-            snippet=(region.get("snippet") or {}).get("text", ""),
+            snippet=snippet,
             cwe=cwe,
             has_dataflow=has_dataflow,
             dataflow_path_count=dataflow_path_count
