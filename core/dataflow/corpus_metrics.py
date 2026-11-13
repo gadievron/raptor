@@ -135,11 +135,11 @@ def render(m: Metrics) -> str:
     tp_total = m.tp + m.fn
     fp_total = m.fp + m.tn
     lines.append(
-        f"  True positives:  {tp_total}  "
+        f"  Classified true-positive labels:  {tp_total}  "
         f"(validator-confirmed: {m.tp}, missed: {m.fn})"
     )
     lines.append(
-        f"  False positives: {fp_total}  "
+        f"  Classified false-positive labels: {fp_total}  "
         f"(suppressed: {m.tn}, leaked: {m.fp})"
     )
     lines.append(f"  Uncertain:       {m.uncertain}")
@@ -159,7 +159,7 @@ def render(m: Metrics) -> str:
         else "  F1:        undefined"
     )
     lines.append("")
-    lines.append("FP category distribution:")
+    lines.append("FP category distribution (including uncertain verdicts):")
     if not m.fp_categories:
         lines.append("  (no labelled FPs in corpus)")
     else:
