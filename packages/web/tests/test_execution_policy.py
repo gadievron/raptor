@@ -84,6 +84,8 @@ def test_client_records_authorized_requests_in_policy_audit(tmp_path):
 
 
 def test_audit_recording_is_atomic_under_concurrent_authorizers():
+    from core.testing.threads import retiring_threads
+
     # The common-paths thread pool authorizes concurrently; unlocked
     # Counter/deque mutation in _record lost audit-telemetry counts.
     import threading
@@ -102,9 +104,10 @@ def test_audit_recording_is_atomic_under_concurrent_authorizers():
             )
 
     threads = [threading.Thread(target=_authorize_many) for _ in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=30)
+    with retiring_threads(threads, release=lambda: None, timeout=30):
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
 
     assert policy.report()["summary"]["total_actions"] == 4000
