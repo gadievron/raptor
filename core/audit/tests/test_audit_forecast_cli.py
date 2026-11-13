@@ -9,6 +9,7 @@ path would have spent money.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
 import json
 import subprocess
 import sys
@@ -19,7 +20,24 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_views import scoped_function_imports
+
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture()
+def _private_finalize_run(monkeypatch):
+    with ExitStack() as scopes:
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("_finalize_run",), {"subprocess": subprocess},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def _load_cli():
@@ -169,7 +187,7 @@ def test_forecast_without_inventory_fails_loudly(cli_env, capsys):
 
 
 def test_finalize_run_records_forecast_vs_actual(tmp_path, monkeypatch,
-                                                 capsys):
+                                                 capsys, _private_finalize_run):
     """Completion tail: a run that started with a forecast pairs it
     with the ledger — report block, calibration record, console line."""
     mod = _load_cli()
@@ -207,9 +225,8 @@ def test_finalize_run_records_forecast_vs_actual(tmp_path, monkeypatch,
         return out / "audit-report.json"
 
     monkeypatch.setattr(report_mod, "write_report", fake_write)
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    _private_finalize_run(
+        mod, lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
 
     result = SimpleNamespace(
         terminated_by="complete", total_duration_s=10.0, reviewed=2,
@@ -334,7 +351,7 @@ def test_all_foreign_prior_index_prices_cold(cli_env, capsys):
     assert doc["seed_rereview_mass"] == 0
 
 
-def _finalize_env(tmp_path, monkeypatch):
+def _finalize_env(tmp_path, monkeypatch, _private_finalize_run):
     """Shared _finalize_run harness: stubbed report module + lifecycle."""
     mod = _load_cli()
     out_dir = tmp_path / "run-1"
@@ -350,9 +367,8 @@ def _finalize_env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         report_mod, "write_report",
         lambda report, out: out / "audit-report.json")
-    monkeypatch.setattr(
-        subprocess, "run",
-        lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    _private_finalize_run(
+        mod, lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
     result = SimpleNamespace(
         terminated_by="complete", total_duration_s=10.0, reviewed=2,
         findings=0, suspicious=1, clean=1, errors=0,
@@ -363,11 +379,11 @@ def _finalize_env(tmp_path, monkeypatch):
 
 
 def test_finalize_run_tolerates_partial_forecast(tmp_path, monkeypatch,
-                                                 capsys):
+                                                 capsys, _private_finalize_run):
     """A parseable-but-partial forecast.json (valid dict, no usd keys)
     must not fail a fully-paid run at the calibration print seam — the
     line degrades to visible $? markers and the run completes."""
-    mod, out_dir, result = _finalize_env(tmp_path, monkeypatch)
+    mod, out_dir, result = _finalize_env(tmp_path, monkeypatch, _private_finalize_run)
     (out_dir / "forecast.json").write_text(json.dumps(
         {"outcome": "pre_run"}))
     rc = mod._finalize_run(out_dir, result, "")
@@ -379,10 +395,10 @@ def test_finalize_run_tolerates_partial_forecast(tmp_path, monkeypatch,
 
 
 def test_finalize_run_contains_calibration_line_crash(tmp_path, monkeypatch,
-                                                      capsys):
+                                                      capsys, _private_finalize_run):
     """Belt behind the tolerant formatter: even a formatter exception
     must not escape the completion tail after the report is written."""
-    mod, out_dir, result = _finalize_env(tmp_path, monkeypatch)
+    mod, out_dir, result = _finalize_env(tmp_path, monkeypatch, _private_finalize_run)
     from core.audit.forecast import forecast_audit_cost, save_forecast
     fc = forecast_audit_cost(
         slocs=[50, 50],
