@@ -5,9 +5,24 @@ import contextlib
 import sys
 
 
-def retire_parent_resources(*callbacks: Callable[[], object]) -> None:
-    """Attempt every owner without replacing an operation already unwinding."""
-    original = sys.exc_info()[1]
+class _ActiveException:
+    pass
+
+
+_ACTIVE_EXCEPTION = _ActiveException()
+
+
+def retire_parent_resources(
+    *callbacks: Callable[[], object],
+    primary_error: BaseException | None | _ActiveException = _ACTIVE_EXCEPTION,
+) -> None:
+    """Attempt every owner, preserving an active or explicitly owned failure.
+
+    Explicit None identifies local success even inside a caller's except block.
+    Omitting primary_error retains the active-exception behaviour for callers
+    already retiring inside their own exception handler.
+    """
+    original = sys.exc_info()[1] if isinstance(primary_error, _ActiveException) else primary_error
     failures = []
     for callback in callbacks:
         try:
