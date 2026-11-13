@@ -39,8 +39,8 @@ def test_ordered_queries_avoid_a_file_sized_line_index():
     if tracemalloc.is_tracing():
         pytest.skip('requires isolated allocation tracing')
     source = 'x\n' * 100000
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         lookup = _definition_line_lookup(source)
         result = lookup(len(source))
         _, peak = tracemalloc.get_traced_memory()
