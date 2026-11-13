@@ -17,11 +17,14 @@ cannot be manufactured by an unprivileged test on a bare host).
 
 import errno
 import os
+import platform
 from unittest import mock
 
 import pytest
 
 from core.sandbox import mount_ns
+from core.testing.module_bindings import mock_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="POSIX-only")
 
@@ -92,10 +95,14 @@ def test_recursive_sealing_failure_propagates():
 
 @pytest.mark.parametrize("result", [0, -1])
 def test_recursive_system_bind_seals_every_mount_without_clearing_flags(result):
-    with mock.patch.object(mount_ns, "_mount") as mount, \
-            mock.patch.object(mount_ns._libc, "syscall", return_value=result) as syscall, \
-            mock.patch("platform.machine", return_value="x86_64"), \
-            mock.patch.object(mount_ns.ctypes, "get_errno", return_value=errno.EPERM):
+    with (
+        scoped_function_imports(mount_ns, ("_recursive_bind_system_ro",),
+                                {"platform": platform}) as imports,
+        mock.patch.object(mount_ns, "_mount") as mount,
+        mock.patch.object(mount_ns._libc, "syscall", return_value=result) as syscall,
+        mock.patch.object(imports.platform, "machine", return_value="x86_64"),
+        mock_module_attribute(mount_ns, "ctypes", "get_errno", return_value=errno.EPERM),
+    ):
         if result:
             with pytest.raises(OSError, match="read-only sealing failed"):
                 mount_ns._recursive_bind_system_ro("/usr", "/private/usr")
