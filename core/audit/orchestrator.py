@@ -4666,6 +4666,7 @@ def review_one_function(
 
     # Mandatory journal acknowledgement precedes shared publication and
     # chain/constraint propagation. Optional telemetry is not this ACK.
+    source_publication_scope = outcome.review_input_scope
     acknowledgement = None
     try:
         if collector is not None:
@@ -4674,7 +4675,8 @@ def review_one_function(
             acknowledgement = _commit_outcome(config, outcome, gap)
     except Exception:
         logger.warning("initial publication failed for %s:%s", gap["file"], gap["name"], exc_info=True)
-    if not _initial_publication_acknowledged(acknowledgement, outcome, gap):
+    if not _initial_publication_acknowledged(acknowledgement, outcome, gap,
+            target_path=config.target_path, source_scope=source_publication_scope):
         rejected = _retain_initial_publication_failure(result, config, outcome, gap)
         if _prior_outcome is not None:
             with result._lock:
@@ -14470,11 +14472,28 @@ def _review_source_roots(config: OrchestratorConfig) -> dict[str, Path]:
     return roots
 
 
-def _initial_publication_acknowledged(acknowledgement, outcome, gap) -> bool:
-    """Only the mandatory journal writer can acknowledge this assessment."""
+def _initial_publication_acknowledged(
+    acknowledgement, outcome, gap, *, target_path, source_scope,
+) -> bool:
+    """Require the writer's ACK and the original live source input binding."""
     from .collector import journal_acknowledges_outcome
+    from .review_claims import read_history
+    from .review_input_scope import ReviewInputScope
 
-    return journal_acknowledges_outcome(acknowledgement, outcome, gap)
+    if not journal_acknowledges_outcome(acknowledgement, outcome, gap):
+        return False
+    raw = (outcome.review_result or {}).get("review_claims")
+    declared_inputs = isinstance(raw, dict) and "source_inputs" in raw
+    scope = outcome.review_input_scope
+    if source_scope is None and scope is None and not declared_inputs:
+        return True
+    history = read_history(raw)
+    return (isinstance(source_scope, ReviewInputScope) and scope is source_scope
+            and history is not None and acknowledgement.review_claims == history
+            and source_scope.matches(file=outcome.file, function=outcome.function,
+                                     line_start=gap.get("line_start", 0),
+                                     source_inputs=history.get("source_inputs"))
+            and source_scope.current(target_path))
 
 
 
