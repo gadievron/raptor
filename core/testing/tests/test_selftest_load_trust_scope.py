@@ -21,11 +21,13 @@ def test_actual_fixture_limits_trust_to_loader(tmp_path, trust, alias, mode):
     script = native.SCRIPT
     missing = object()
     entered = []
+    directory = None if trust is None else "" if trust == "" else "caller-root"
     error = KeyboardInterrupt if 'interrupt' in mode else RuntimeError
     stub = tmp_path / 'owned_loader.py'
     stub.write_text(
         "import os, sys\n"
         "assert os.environ['_RAPTOR_TRUSTED'] == '1'\n"
+        "os.environ['RAPTOR_DIR'] = 'owned-loader-root'\n"
         "sys.path.append('owned-loader-entry')\n"
         "loaded = True\n"
     )
@@ -35,6 +37,7 @@ def test_actual_fixture_limits_trust_to_loader(tmp_path, trust, alias, mode):
             assert os.environ['_RAPTOR_TRUSTED'] == '1'
             super().exec_module(module)
             assert module.loaded is True
+            assert os.environ["RAPTOR_DIR"] == "owned-loader-root"
             entered.append(module)
             if mode.startswith('load-'):
                 raise error('owned load failure')
@@ -44,6 +47,10 @@ def test_actual_fixture_limits_trust_to_loader(tmp_path, trust, alias, mode):
             owner.delenv('_RAPTOR_TRUSTED', raising=False)
         else:
             owner.setenv('_RAPTOR_TRUSTED', trust)
+        if directory is None:
+            owner.delenv("RAPTOR_DIR", raising=False)
+        else:
+            owner.setenv("RAPTOR_DIR", directory)
         if alias == 'absent':
             owner.delitem(sys.modules, 'raptor_self_test', raising=False)
         else:
@@ -64,6 +71,8 @@ def test_actual_fixture_limits_trust_to_loader(tmp_path, trust, alias, mode):
                 assert sys.modules['raptor_self_test'] is module
                 assert os.environ.get('_RAPTOR_TRUSTED') == trust
                 assert ('_RAPTOR_TRUSTED' in os.environ) is (trust is not None)
+                assert os.environ.get('RAPTOR_DIR') == directory
+                assert ('RAPTOR_DIR' in os.environ) is (directory is not None)
                 assert sys.path is path and sys.path == contents
                 expected = (pytest.raises(error, match='owned body failure')
                             if mode.startswith('body-') else nullcontext())
@@ -76,6 +85,8 @@ def test_actual_fixture_limits_trust_to_loader(tmp_path, trust, alias, mode):
         assert sys.modules.get('raptor_self_test', missing) is inherited
         assert os.environ.get('_RAPTOR_TRUSTED') == trust
         assert ('_RAPTOR_TRUSTED' in os.environ) is (trust is not None)
+        assert os.environ.get('RAPTOR_DIR') == directory
+        assert ('RAPTOR_DIR' in os.environ) is (directory is not None)
         assert sys.path is path and sys.path == contents
         assert importlib.machinery.SourceFileLoader is loader
     assert native.importlib is namespace
