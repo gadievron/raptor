@@ -1181,7 +1181,15 @@ def _source_heading(ctx: dict[str, Any]) -> str:
         addr = ctx.get("address")
         rep = ctx.get("representation", "decompilation")
         loc = f" at {addr:#x}" if isinstance(addr, int) else ""
-        return f"\n### Source ({rep}{loc})"
+        heading = f"\n### Source ({rep}{loc})"
+        if rep == "decompilation":
+            heading += (
+                "\nRecovered pseudocode is an approximate analysis view, not original source. "
+                "Recovered types and control flow may omit effects or paths. "
+                "Source-language rules alone do not establish binary execution consequences "
+                "without an explicit correspondence contract."
+            )
+        return heading
     return f"\n### Source (lines {ctx['line_start']}-{ctx.get('line_end', '?')})"
 
 
