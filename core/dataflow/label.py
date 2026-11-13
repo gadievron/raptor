@@ -96,6 +96,8 @@ class LifecyclePrecondition:
         if not isinstance(self.read_site_lacks_guard, bool):
             msg = "LifecyclePrecondition.read_site_lacks_guard must be bool"
             raise ValueError(msg)
+        if self.notes is not None and not isinstance(self.notes, str):
+            raise ValueError("LifecyclePrecondition.notes must be a string or null")
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -160,6 +162,9 @@ class GroundTruth:
         _require_nonempty("GroundTruth.finding_id", self.finding_id)
         _require_nonempty("GroundTruth.rationale", self.rationale)
         _require_nonempty("GroundTruth.labeler", self.labeler)
+        if (self.lifecycle_precondition is not None
+                and not isinstance(self.lifecycle_precondition, LifecyclePrecondition)):
+            raise ValueError("GroundTruth.lifecycle_precondition must be LifecyclePrecondition or null")
         if not isinstance(self.labeled_at, str) or not _ISO_DATE_RE.fullmatch(self.labeled_at):
             msg = (
                 f"GroundTruth.labeled_at must be ISO YYYY-MM-DD, "
