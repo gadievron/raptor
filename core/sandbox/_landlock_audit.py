@@ -254,6 +254,9 @@ def _redirect_devnull_stdin() -> None:
     """Replace inherited stdin before the audit child can execute."""
     devnull = os.open("/dev/null", os.O_RDONLY)
     if devnull == 0:
+        # open() creates a non-inheritable descriptor. There is no dup2
+        # onto a different number to clear CLOEXEC on this alias path.
+        os.set_inheritable(devnull, True)
         return
     try:
         os.dup2(devnull, 0)
