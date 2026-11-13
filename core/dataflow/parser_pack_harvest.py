@@ -127,9 +127,12 @@ def load_sources(path: Path) -> list[HarvestSource]:
     sources = []
     for item in raw.get("sources", []):
         library = item.get("library")
-        patterns = tuple(
-            p for p in item.get("api_patterns", []) if isinstance(p, str)
-        )
+        raw_patterns = item.get("api_patterns", [])
+        if not isinstance(raw_patterns, list) or any(
+            not isinstance(p, str) or not p for p in raw_patterns
+        ):
+            raise ValueError("source api_patterns must be an array of non-empty strings")
+        patterns = tuple(raw_patterns)
         if not (isinstance(library, str) and library and patterns):
             msg = f"source entry needs 'library' + 'api_patterns': {item!r}"
             raise ValueError(msg)
