@@ -594,8 +594,10 @@ def append_journal_for_outcome(
     except Exception:
         logger.debug("source hash computation failed for %s", outcome.file, exc_info=True)
 
-    if (not binary_current() or (binary_scope is not None and source_hash != binary_scope.anchor())):
+    if (not binary_current() or (binary_scope is not None and source_hash != binary_scope.module_anchor())):
         return None
+    if binary_scope is not None:
+        source_hash = binary_scope.anchor()
     if not context_current():
         return None
     if verification_scope is not None and not binding_current(after_hash=True):

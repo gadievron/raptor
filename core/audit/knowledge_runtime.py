@@ -82,6 +82,9 @@ class AuditKnowledgeRuntime:
         self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
         self._live_input_errors: set[str] = set()
         self._binary_review_scopes: dict[tuple[str, str], tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin]] = {}
+        self._binary_cycle_scopes: dict[tuple[str, str, int], tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin]] = {}
+        self._binary_context_records: dict[str, list[dict]] = {}
+        self._binary_context_origins: dict[str, BinaryKnowledgeOrigin] = {}
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
         self._written_events: dict[str, int] = {}
@@ -324,6 +327,27 @@ class AuditKnowledgeRuntime:
                         and getattr(review_fn, "_knowledge_observed_client_contract", None) is True):
                     with self._lock:
                         self._external_deliveries.setdefault(reservation.packet.pass_id, []).append(deepcopy(external))
+            if reservation is not None and isinstance(origin, BinaryKnowledgeOrigin):
+                from .binary_context_inputs import capture_binary_context_inputs, binary_context_record_digest
+                external = outcome.review_result.get("external_context_delivery")
+                record = (capture_binary_context_inputs(ctx, origin, external)
+                          if getattr(review_fn, "_knowledge_observed_client_contract", None) is True else None)
+                digest = binary_context_record_digest(record)
+                expected = set(reservation.packet.external_context_ids)
+                retained = {row["context_id"] for row in record["contexts"]} if record is not None else set()
+                if record is None or digest is None or retained != expected or binary_scope is None:
+                    with self._lock:
+                        self._live_input_errors.add(reservation.packet.pass_id)
+                else:
+                    history["binary_inputs"] = record
+                    outcome.review_result["review_claims"] = history
+                    bound = replace(binary_scope, context_digest=digest)
+                    outcome.binary_publication_scope = bound
+                    outcome.review_result["binary_review_binding"] = bound.record()
+                    with self._lock:
+                        self._binary_review_scopes[(origin.pass_id, attempt_id)] = (bound, origin)
+                        self._binary_context_records.setdefault(origin.pass_id, []).append(deepcopy(record))
+                        self._binary_context_origins[origin.pass_id] = origin
             # Retain this invocation's fitting, including explicit omissions.
             # This is disclosure only; continuation credit uses owned receipts.
             reference_fitting = outcome.review_result.get("language_reference_delivery")
@@ -332,6 +356,12 @@ class AuditKnowledgeRuntime:
             binary_current = binary_snapshot is None or (
                 ctx.get("_binary_module_snapshot") is binary_snapshot
                 and ctx.get("target_path") == binary_target and binary_snapshot.current())
+            binary_view_current = True
+            if binary_snapshot is not None:
+                try:
+                    binary_view_current = self._same_snapshot(self._origin(ctx), origin)
+                except (KeyError, TypeError, ValueError, UnicodeError):
+                    binary_view_current = False
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
                     "pass_id": origin.pass_id, "status": outcome.status,
@@ -342,16 +372,24 @@ class AuditKnowledgeRuntime:
                     **({"language_reference_delivery": deepcopy(reference_fitting)}
                        if isinstance(reference_fitting, list) else {}),
                     "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity,
-                    **({"binary_module_unchanged_after_call": binary_current} if binary_snapshot is not None else {})})
-            if not binary_current:
+                    **({"binary_module_unchanged_after_call": binary_current,
+                        "binary_view_unchanged_after_call": binary_view_current} if binary_snapshot is not None else {})})
+            if not binary_current or not binary_view_current:
                 from .knowledge_calls import KnowledgeCallRefused
 
+                reason = "binary_module_changed_or_unavailable" if not binary_current else "binary_view_changed_or_unavailable"
                 with self._lock:
+                    # Paid attribution survives in events, but a failed call
+                    # must never become a scheduling owner after view restore.
+                    self._binary_review_scopes.pop((origin.pass_id, attempt_id), None)
+                    if reservation is not None:
+                        self._live_input_errors.add(reservation.packet.pass_id)
+                        self._binary_context_records.pop(reservation.packet.pass_id, None)
+                        self._binary_context_origins.pop(reservation.packet.pass_id, None)
                     self._events.append({"event": "review_input_invalidated", "attempt_id": attempt_id,
-                        "pass_id": origin.pass_id, "domain": "binary", "phase": "post_call",
-                        "reason": "binary_module_changed_or_unavailable"})
+                        "pass_id": origin.pass_id, "domain": "binary", "phase": "post_call", "reason": reason})
                 self.notify()
-                raise KnowledgeCallRefused("binary_module_changed_or_unavailable")
+                raise KnowledgeCallRefused(reason)
             self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
             self._register_caller_requests(origin, outcome.review_result)
             self.notify()
@@ -830,6 +868,53 @@ class AuditKnowledgeRuntime:
                 ready.append(reservation)
         return tuple(ready)
 
+    def _current_binary_cycle_input(self, origin: BinaryKnowledgeOrigin):
+        with self._lock:
+            owned = self._binary_cycle_scopes.get(self._key(origin))
+        if owned is None:
+            return None
+        scope, original = owned
+        return (origin.binary_identity if self._same_snapshot(origin, original)
+                and scope.current(self.target_root) else None)
+
+    def publication_binary_scope(self, reservation: KnowledgeReservation, outcome):
+        """Bind exact historical contributors only to their original live owner."""
+        from .binary_context_inputs import binary_context_record_digest
+        from .review_claims import read_history
+        from core.json import dumps_canonical
+
+        if not isinstance(reservation.origin, BinaryKnowledgeOrigin) or not self.can_publish(reservation):
+            return None
+        history = read_history((outcome.review_result or {}).get("review_claims"))
+        record = history.get("binary_inputs") if history is not None else None
+        digest = binary_context_record_digest(record)
+        if digest is None or not isinstance(record, dict):
+            return None
+        if "inputs" in record:
+            if record.get("complete") is not True:
+                return None
+            members = record["inputs"]
+        else:
+            members = [record]
+        with self._lock:
+            owned = self._binary_cycle_scopes.get(self._key(reservation.origin))
+            allowed = {dumps_canonical(row) for pass_id, rows in self._binary_context_records.items()
+                       if pass_id in self._binary_context_origins
+                       and self._same_snapshot(self._binary_context_origins[pass_id], reservation.origin)
+                       for row in rows}
+            fresh = {dumps_canonical(row) for row in self._binary_context_records.get(reservation.packet.pass_id, ())}
+            fresh_scopes = [scope for (pass_id, _attempt), (scope, original) in self._binary_review_scopes.items()
+                            if pass_id == reservation.packet.pass_id
+                            and self._same_snapshot(original, reservation.origin)]
+        encoded = {dumps_canonical(row) for row in members}
+        if (owned is None or not encoded or not encoded <= allowed or not fresh or not fresh <= encoded
+                or not fresh_scopes or not all(scope.current(self.target_root) for scope in fresh_scopes)):
+            return None
+        scope, original = owned
+        if not self._same_snapshot(original, reservation.origin) or not scope.current(self.target_root):
+            return None
+        return replace(fresh_scopes[0], context_digest=digest)
+
     def offer_context_delta(self, ctx: dict, *, kind: str, version: str) -> bool:
         """Offer an exact pipeline-owned rendered-input version, not a claim."""
         from .continuation_context import context_spec
@@ -839,7 +924,19 @@ class AuditKnowledgeRuntime:
             return False
         origin = self._origin(ctx)
         key = self._key(origin)
-        if origin.source_identity is None:
+        binary_owned = None
+        if isinstance(origin, BinaryKnowledgeOrigin):
+            if kind != "disagreement":
+                return False
+            with self._lock:
+                binary_owned = next(((scope, original) for scope, original in self._binary_review_scopes.values()
+                    if self._same_snapshot(origin, original)), None)
+            if binary_owned is None or not binary_owned[0].current(self.target_root):
+                return False
+            # Empty-request initial passes still need their original owned
+            # observation. Never create a fresh binary epoch on a late offer.
+            origin = binary_owned[1]
+        elif origin.source_identity is None:
             return False
         with self._lock:
             if self._closed:
@@ -851,6 +948,8 @@ class AuditKnowledgeRuntime:
                 self._cycles[key] = cycle
             if not self._same_snapshot(origin, cycle.origin):
                 return False
+            if binary_owned is not None:
+                self._binary_cycle_scopes.setdefault(key, binary_owned)
             self._context_deltas[(key, spec["context_id"])] = spec
         offered = cycle.context_delta(spec["context_id"], now=monotonic(), kind=kind)
         if offered:
@@ -887,6 +986,8 @@ class AuditKnowledgeRuntime:
             self._reserving.add(key)
         try:
             packet = cycle.reserve(now=now, current_source=capture_source_identity(self.target_root, key[0]),
+                                   current_binary=(self._current_binary_cycle_input(cycle.origin)
+                                       if isinstance(cycle.origin, BinaryKnowledgeOrigin) else None),
                                    admission=admission, all_model_calls=calls, required_calls=required_calls,
                                    required_context_ids=required_context_ids)
             if packet is None:
@@ -945,6 +1046,15 @@ class AuditKnowledgeRuntime:
         if not self._owned_reservation(reservation):
             return False
         origin = reservation.origin
+        if isinstance(origin, BinaryKnowledgeOrigin):
+            with self._lock:
+                invalid = reservation.packet.pass_id in self._live_input_errors
+                fresh_scopes = [scope for (pass_id, _attempt), (scope, original) in self._binary_review_scopes.items()
+                                if pass_id == reservation.packet.pass_id and self._same_snapshot(original, origin)]
+            return (not invalid and self._current_binary_cycle_input(origin) is not None
+                    and all(scope.current(self.target_root) for scope in fresh_scopes)
+                    and not reservation.packet.references and not reservation.packet.explanations
+                    and not reservation.packet.caller_contexts and bool(reservation.packet.external_context_ids))
         current = capture_source_identity(self.target_root, origin.file)
         reason = ""
         if origin.source_identity is None or current != origin.source_identity:
