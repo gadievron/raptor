@@ -1202,6 +1202,9 @@ def module_dynamic_namespace(
         sequence = selected_literal_copy_receiver(value)
         if isinstance(sequence, ast.List):
             return sequence
+        selected = selected_literal_value(value)
+        if selected is not None:
+            value = selected
         while (isinstance(value, ast.NamedExpr)
                or (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
                    and value.func.attr == "copy" and not value.args and not value.keywords)):
