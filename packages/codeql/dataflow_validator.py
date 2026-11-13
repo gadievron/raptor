@@ -218,7 +218,7 @@ class DataflowValidation:
     NOT as a not-exploitable verdict: ``is_exploitable=False`` with
     ``error`` set carries no evidential weight.
     """
-    is_exploitable: bool
+    is_exploitable: bool | None
     confidence: float  # 0.0-1.0
     sanitizers_effective: bool
     bypass_possible: bool
@@ -235,6 +235,10 @@ class DataflowValidation:
     smt_paths_checked: int = 1
     # Optional mathematical diagnostics; never a source reachability proof.
     smt_diagnostics: dict | None = None
+
+    def __post_init__(self) -> None:
+        if self.is_exploitable is not None and not isinstance(self.is_exploitable, bool):
+            raise ValueError("is_exploitable must be a boolean or None for abstention")
 
 
 PATH_CONDITIONS_SCHEMA = {
