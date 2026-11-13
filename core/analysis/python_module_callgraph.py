@@ -955,10 +955,13 @@ def module_dynamic_namespace(
                 continue
             if fname not in ("globals", "vars", "locals"):
                 continue
-            if fname == "locals" and not _module_reachable(node):
-                # A function's locals() cannot rebind module names.
-                continue
+            function_locals = fname == "locals" and not _module_reachable(node)
             parent = parents.get(node)
+            if function_locals and not (
+                    isinstance(parent, ast.Subscript) and parent.value is node
+                    and isinstance(parent.ctx, ast.Load)):
+                # Local mapping bindings cannot rebind module names.
+                continue
             if (isinstance(parent, ast.Subscript)
                     and parent.value is node):
                 if isinstance(parent.ctx, ast.Load):
@@ -991,6 +994,11 @@ def module_dynamic_namespace(
                         cursor = container
                     if not receiver_write:
                         continue
+                if function_locals:
+                    # A local alias can refer to a shared imported object;
+                    # its lookup key does not name the module-global root.
+                    whole = True
+                    continue
                 if fname == "vars" and (node.args or node.keywords):
                     # vars(obj) exposes obj's namespace; its lookup key
                     # does not identify a module-global root to poison.

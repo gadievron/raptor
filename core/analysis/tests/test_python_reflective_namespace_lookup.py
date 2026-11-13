@@ -30,7 +30,7 @@ def test_reflective_global_lookup_write_cannot_preserve_callable_identity():
     ('setattr(other[globals()["root"]],"member",replacement)', (False, frozenset())),
     ('setattr(factory(globals()["root"]),"member",replacement)', (False, frozenset())),
     ('saved=globals()["root"].member', (False, frozenset())),
-    ('def handle():\n    setattr(locals()["root"],"member",replacement)', (False, frozenset())),
+    ('def handle():\n    setattr(locals()["root"],"member",replacement)', (True, frozenset())),
     ('def handle():\n    value: setattr(globals()["root"],"member",replacement)', (False, frozenset())),
 ])
 def test_namespace_receiver_position_and_existing_scope_limits(source, expected):
