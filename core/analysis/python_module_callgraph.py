@@ -910,6 +910,37 @@ def module_dynamic_namespace(
             return node.value
         return None
 
+    # Keep direct saved values of known imported globals visible to the
+    # existing object-mutation checks. This is deliberately one step only.
+    original_import_roots = frozenset(import_roots)
+    saved_import_values: set[str] = set()
+    for statement in ast.walk(tree):
+        if statement in local_annotation_nodes:
+            continue
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
+            targets = [statement.target]
+            value = statement.value
+        else:
+            continue
+        cursor = value
+        while isinstance(cursor, (ast.Attribute, ast.Subscript)):
+            if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
+                    and isinstance(cursor.value.func, ast.Name)
+                    and cursor.value.func.id == "globals"
+                    and not cursor.value.args and not cursor.value.keywords):
+                key = cursor.slice
+                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
+                        and key.value in original_import_roots):
+                    saved_import_values.update(
+                        target.id for target in targets if isinstance(target, ast.Name)
+                    )
+                break
+            cursor = cursor.value
+    import_roots.update(saved_import_values)
+
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
