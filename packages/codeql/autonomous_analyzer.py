@@ -38,7 +38,7 @@ from core.security.prompt_envelope import (
 )
 from core.sarif.parser import (
     ArtifactUriResolver, _as_dict, _coerce_line, _extract_cwe_from_rule, get_result_rule,
-    rule_default_level, sarif_uri_path,
+    _text_value, rule_default_level, sarif_uri_path,
 )
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
@@ -529,7 +529,7 @@ class AutonomousCodeQLAnalyzer:
         return CodeQLFinding(
             rule_id=rule_id,
             rule_name=rule_name,
-            message=(result.get("message") or {}).get("text", ""),
+            message=_text_value(result.get("message")) or "",
             level=result.get("level", rule_default_level(rule) or "warning"),
             file_path=sarif_uri_path(ArtifactUriResolver(run).resolve(artifact)) or "",
             start_line=start_line,
