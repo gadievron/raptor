@@ -1112,6 +1112,11 @@ def module_dynamic_namespace(
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                           and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
                         children = (cursor.func.value,)
+                    elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                          and cursor.func.attr in {"get", "__getitem__"}
+                          and isinstance(selected_literal_value(cursor.func.value),
+                                         (ast.Dict, ast.Tuple, ast.List))):
+                        children = literal_member_result_values(cursor) or ()
                     # Keep graph links rather than duplicating transitive members.
                     sequence_iteration_cache[cursor] = (False, children) if children else None
             descriptor = sequence_iteration_cache[cursor]
