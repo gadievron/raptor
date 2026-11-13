@@ -4825,4 +4825,8 @@ def run_sandboxed(
     # Authoritative setup-failure signal for context.py's decision table
     # (degrade on M/X, fail loud on L/S/U). None ⇒ target execed.
     cp._setup_status = setup_status  # type: ignore[attr-defined]
+    if not text and _capture_any:
+        # The parent can decode the retained prefix using its selected codec
+        # before formatting loss, without interpreting target-printed markers.
+        cp._capture_encoding_limits = (_capture_cap, _truncated[1], _truncated[2])  # type: ignore[attr-defined]
     return cp

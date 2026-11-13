@@ -44,7 +44,7 @@ from ._fake_home import prepare_home as _prepare_fake_home
 from ._pathpin import canonical_bind_path
 from . import seccomp as _seccomp
 from . import state
-from ._capture import BoundedCommunicator, limit_result
+from ._capture import BoundedCommunicator, decode_captured_result, limit_result
 
 # mount.py retained for its standalone tests; no longer imported from
 # context — mount-ns goes through core.sandbox._spawn / mount_ns.
@@ -6431,12 +6431,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 import locale
                                 _codec = kwargs.get("encoding") or locale.getpreferredencoding(False)
                                 _errors = kwargs.get("errors") or "strict"
-                                for _stream in ("stdout", "stderr"):
-                                    _data = getattr(_native_result, _stream)
-                                    if isinstance(_data, bytes):
-                                        _decoded = _data.decode(_codec, _errors)
-                                        setattr(_native_result, _stream,
-                                                _decoded.replace("\r\n", "\n").replace("\r", "\n"))
+                                decode_captured_result(_native_result, _codec, _errors)
                             return _native_result
 
                         def _capture_grant_identities() -> dict[str, tuple]:

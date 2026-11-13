@@ -59,6 +59,36 @@ class _TextCaptureMetadata(Protocol):
     errors: str | None
 
 
+def decode_captured_result(result, encoding: str, errors: str) -> None:
+    """Decode native retained bytes before adding trusted loss annotations.
+
+    The native parent publishes its effective cap and loss flags. Target text
+    that resembles a marker is never recognised as metadata. Older results
+    without that handoff keep ordinary strict decoding semantics.
+    """
+    limits = getattr(result, "_capture_encoding_limits", None)
+    for index, label in enumerate(("stdout", "stderr")):
+        raw = getattr(result, label)
+        if not isinstance(raw, bytes):
+            continue
+        if limits is None:
+            value = raw.decode(encoding, errors)
+        else:
+            cap, truncated = limits[0], limits[index + 1]
+            if truncated:
+                raw = raw[:cap]
+            factory = codecs.getincrementaldecoder(encoding)
+            value = factory(errors).decode(raw, final=not truncated)
+            if not isinstance(value, str):
+                raise LookupError(f"{encoding!r} is not a text encoding")
+        value = value.replace("\r\n", "\n").replace("\r", "\n")
+        if limits is not None:
+            value = clipped_output(value, cap, label, truncated=truncated)
+        setattr(result, label, value)
+    if limits is not None:
+        result._capture_limit_snapshot = (limits[0], result.stdout, result.stderr)
+
+
 class BoundedCommunicator:
     """Drain owned PIPEs while retaining at most cap bytes per output.
 
