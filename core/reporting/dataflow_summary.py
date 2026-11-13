@@ -38,7 +38,7 @@ def render_dataflow_validation_lines(
 
     Returns:
         List of formatted strings ready to print. Empty list when
-        validation didn't run AND no skipped_reason was recorded
+        validation didn't run AND no errors or skipped_reason were recorded
         (caller should print nothing).
 
     Output shape (when populated):
@@ -60,15 +60,18 @@ def render_dataflow_validation_lines(
     n_validated = dv.get("n_validated", 0)
     n_cache_hits = dv.get("n_cache_hits", 0)
     skipped_reason = dv.get("skipped_reason", "")
+    n_errors = dv.get("n_errors", 0)
+    error_line = (f"{indent}Dataflow validation errors: {n_errors}"
+                  if type(n_errors) is int and n_errors > 0 else None)
 
     if not n_validated and not n_cache_hits:
-        # Validation didn't actually run on any finding. Surface the
-        # reason if one was recorded (operator can tell IRIS noticed
-        # but couldn't help — vs the silent "no findings to validate"
-        # case which is genuinely no signal).
-        if skipped_reason:
-            return [sanitise_for_terminal(f"{indent}Dataflow validation skipped: {skipped_reason}", max_len=4000)]
-        return []
+        # No validation result or cache hit was recorded. Keep an explicit
+        # skip reason and per-finding failure count visible; silence still
+        # represents the legacy case with neither results nor diagnostics.
+        notices = [f"{indent}Dataflow validation skipped: {skipped_reason}"] if skipped_reason else []
+        if error_line:
+            notices.append(error_line)
+        return [sanitise_for_terminal(line, max_len=4000) for line in notices]
 
     out: list[str] = []
 
@@ -172,6 +175,9 @@ def render_dataflow_validation_lines(
                 bits.append(f"{n_soft} soft (consensus override)")
             outcome.append(f"applied: {', '.join(bits)}")
         out.append(f"{indent}  downgrades: {' · '.join(outcome)}")
+
+    if error_line:
+        out.append(error_line)
 
     # Both native callers print these lines directly. Escape only the view;
     # captured telemetry remains unchanged for structured report consumers.
