@@ -508,10 +508,13 @@ class TestBroadcastRegistry:
                 errors.append(e)
 
         threads = [threading.Thread(target=signal_many) for _ in range(4)]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
         assert not errors
         assert t.signal_count == 200
 
