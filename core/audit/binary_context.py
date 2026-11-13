@@ -769,14 +769,24 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
 
     Both renderers below used to walk ``db.xrefs`` in full for EVERY
     reviewed function — N functions x X xrefs per gap loop.  Built
-    once per database object and memoised on it (same count-based
-    invalidation discipline as the model's ``_addr_index``: the
-    enrich path appends xrefs).  The memo dies with the db object,
-    so the (path, mtime)-keyed ``_REDB_MEMO`` carries it across the
-    whole run and a changed re-database.json starts fresh.
+    once per unchanged ordered edge set and memoised on the database.
+    Edge identity and routing fields invalidate replacement, mutation and
+    reordering even when the row count stays unchanged. Computing the
+    version is linear in xrefs, without repeating function lookups on a
+    cache hit. This is a best-effort cache check, not an immutable snapshot.
     """
+    from hashlib import sha256
+
+    from core.json import dumps_canonical
+
+    digest = sha256()
+    for xref in db.xrefs:
+        digest.update(dumps_canonical(
+            [id(xref), xref.from_addr, xref.to_addr, xref.kind]).encode("utf-8"))
+        digest.update(b"\n")
+    version = digest.digest()
     cached = getattr(db, "_audit_xref_adjacency", None)
-    if cached is not None and cached[0] == len(db.xrefs):
+    if cached is not None and cached[0] == version:
         return cached[1], cached[2]
     by_callee: dict[Any, list] = {}
     by_caller: dict[Any, list] = {}
@@ -795,7 +805,7 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
                 outgoing = []
                 by_caller[caller.address] = outgoing
             outgoing.append(xref)
-    db._audit_xref_adjacency = (len(db.xrefs), by_callee, by_caller)
+    db._audit_xref_adjacency = (version, by_callee, by_caller)
     return by_callee, by_caller
 
 
