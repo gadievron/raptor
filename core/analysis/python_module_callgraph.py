@@ -1216,10 +1216,14 @@ def module_dynamic_namespace(
         else:
             return None
         pending = [iterator]
+        seen = set()
         members = []
         known_members = False
         while pending:
             cursor = pending.pop()
+            if cursor in seen:
+                continue
+            seen.add(cursor)
             if isinstance(cursor, ast.NamedExpr):
                 pending.append(cursor.value)
             elif isinstance(cursor, ast.Subscript):
