@@ -446,7 +446,7 @@ def _read_line_deadline(fd: int, deadline_s: float) -> bytes | None:
     """Read one newline-terminated line from fd within deadline_s.
 
     Returns the line without the newline, b"" on EOF-before-data, or
-    None on deadline expiry.
+    None on deadline expiry or an unreadable pipe.
     """
     buf = b""
     deadline = time.monotonic() + deadline_s
@@ -460,8 +460,11 @@ def _read_line_deadline(fd: int, deadline_s: float) -> bytes | None:
             continue
         try:
             chunk = os.read(fd, 64)
+        except InterruptedError:
+            continue
         except OSError:
-            return b""
+            # Read failure is not the clean EOF that confirms exec.
+            return None
         if chunk == b"":
             return buf if buf else b""
         buf += chunk
@@ -651,7 +654,7 @@ def _supervisor_main(
                 signal.pidfd_send_signal(b_pidfd, signal.SIGKILL)
             with contextlib.suppress(OSError):
                 os.waitpid(b_pid, 0)
-            detail = (xline or b"exec confirmation timed out").decode(
+            detail = (xline or b"exec confirmation unavailable or timed out").decode(
                 "utf-8", "replace")
             _send_fail(a_sock, "X", detail)
             os._exit(84)
