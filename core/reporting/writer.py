@@ -126,10 +126,11 @@ def _protected(context: ReportContext, output_dir: Path) -> set[Path]:
     for artifact in context.artifacts:
         if not isinstance(artifact, dict):
             raise ValueError("Invalid reporting artifact reference")
-        for reference in (artifact.get("path"), artifact.get("uri")):
+        for name in ("path", "uri"):
+            reference = artifact.get(name)
             if not isinstance(reference, str):
                 continue
-            if "://" in reference:
+            if "://" in reference or (name == "uri" and reference[:5].lower() == "file:"):
                 parts = urlsplit(reference)
                 if parts.scheme != "file" or parts.netloc.lower() not in ("", "localhost"):
                     continue
