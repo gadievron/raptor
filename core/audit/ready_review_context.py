@@ -137,7 +137,7 @@ def collect_ready_review_frames(runtime, result, config, checklist, context_map,
     """
     from collections import defaultdict
     from copy import deepcopy
-    from .callee_assessment_context import build_callee_assessment_bundle
+    from .callee_assessment_context import build_callee_assessment_bundle, snapshot_callee_declarations
     from .callee_review_context import render_callee_context
     from .context import _defend_identifier
     from core.evidence import format_evidence_prose
@@ -146,6 +146,7 @@ def collect_ready_review_frames(runtime, result, config, checklist, context_map,
     # preparation requires its own module/range contract, not decompiler lines.
     if checklist.get("target_kind") == "binary":
         return {}
+    original_declarations = snapshot_callee_declarations(checklist)
     owners = {(request.origin.file, request.origin.function, request.origin.line_start)
               for request in (*runtime.requests(), *runtime.caller_requests())
               if request.origin.source_identity is not None
@@ -174,7 +175,7 @@ def collect_ready_review_frames(runtime, result, config, checklist, context_map,
             continue
         bundle = build_callee_assessment_bundle(prior, outcomes, inventory=config.inventory,
             context_map=context_map, include_graph=config.propagate_constraints,
-            target_root=config.target_path)
+            target_root=config.target_path, original_declarations=original_declarations)
         contributors = bundle.contributors if bundle is not None else ()
         scopes = tuple(item.review_input_scope for item in (prior, *contributors)
                        if item.review_input_scope is not None)
