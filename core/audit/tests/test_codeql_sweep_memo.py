@@ -839,29 +839,30 @@ class TestPerDbAnalyzeSerialization:
         t = threading.Thread(
             target=lambda: results.append(_sweep(tmp_path, query, db)),
         )
-        try:
-            t.start()
-            t.join(timeout=0.5)
-            # Serialized, not collided: the dispatch is waiting on the
-            # mutex, not dead on the codeql lock.
-            assert t.is_alive()
-            assert results == []
-            # The warm-up pre-fills the key, then releases the DB.
-            # Placed directly under the memo's own lock: the waiting
-            # sweep holds this key's in-flight lock, so get_or_compute
-            # here would block on it — in production the warm-up
-            # pre-fills only AFTER releasing the DB mutex, so its
-            # get_or_compute wait resolves (no lock cycle).
-            key = sweep_mod._codeql_memo_key(db, query)
-            with sweep_mod._codeql_memo._lock:
-                sweep_mod._codeql_memo._values[key] = [
-                    _rule_result("cpp/overflow-buffer"),
-                ]
-        finally:
-            lock.release()
-        t.join(timeout=10)
-        assert not t.is_alive()
-        assert results and results[0].outcome == "confirmed"
+        with retiring_threads((t,), release=lambda: None, timeout=10):
+            try:
+                t.start()
+                t.join(timeout=0.5)
+                # Serialized, not collided: the dispatch is waiting on the
+                # mutex, not dead on the codeql lock.
+                assert t.is_alive()
+                assert results == []
+                # The warm-up pre-fills the key, then releases the DB.
+                # Placed directly under the memo's own lock: the waiting
+                # sweep holds this key's in-flight lock, so get_or_compute
+                # here would block on it — in production the warm-up
+                # pre-fills only AFTER releasing the DB mutex, so its
+                # get_or_compute wait resolves (no lock cycle).
+                key = sweep_mod._codeql_memo_key(db, query)
+                with sweep_mod._codeql_memo._lock:
+                    sweep_mod._codeql_memo._values[key] = [
+                        _rule_result("cpp/overflow-buffer"),
+                    ]
+            finally:
+                lock.release()
+            t.join(timeout=10)
+            assert not t.is_alive()
+            assert results and results[0].outcome == "confirmed"
 
     def test_warmup_and_sweep_never_overlap_an_analyze(
         self, tmp_path: Path, monkeypatch,
@@ -897,12 +898,13 @@ class TestPerDbAnalyzeSerialization:
                 str(db), [str(qa), str(qb)],
             ),
         )
-        warm.start()
-        result = _sweep(tmp_path, qa, db)
-        warm.join(timeout=30)
-        assert not warm.is_alive()
-        assert result.outcome != "error"
-        assert active["max"] == 1  # never two analyze on one DB
+        with retiring_threads((warm,), release=lambda: None, timeout=30):
+            warm.start()
+            result = _sweep(tmp_path, qa, db)
+            warm.join(timeout=30)
+            assert not warm.is_alive()
+            assert result.outcome != "error"
+            assert active["max"] == 1  # never two analyze on one DB
 
 
 class TestWarmupStampOrder:
