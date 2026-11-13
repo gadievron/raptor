@@ -48,11 +48,9 @@ SCRIPT = REPO_ROOT / "libexec" / "raptor-self-test"
 
 @pytest.fixture(scope="module")
 def selftest() -> Any:
-    """Import the raptor-self-test script as a module (trust marker set)."""
+    """Import the script with trust scoped only to module execution."""
     absent_module = object()
     prior_module = sys.modules.get("raptor_self_test", absent_module)
-    prior = os.environ.get("_RAPTOR_TRUSTED")
-    os.environ["_RAPTOR_TRUSTED"] = "1"
     try:
         loader = importlib.machinery.SourceFileLoader(
             "raptor_self_test", str(SCRIPT),
@@ -61,7 +59,11 @@ def selftest() -> Any:
         assert spec is not None and spec.loader is not None
         mod = importlib.util.module_from_spec(spec)
         sys.modules["raptor_self_test"] = mod
-        with patch.object(sys, "path", sys.path.copy()):
+        with (
+            pytest.MonkeyPatch.context() as scope,
+            patch.object(sys, "path", sys.path.copy()),
+        ):
+            scope.setenv("_RAPTOR_TRUSTED", "1")
             spec.loader.exec_module(mod)
         yield mod
     finally:
@@ -69,10 +71,6 @@ def selftest() -> Any:
             sys.modules.pop("raptor_self_test", None)
         else:
             sys.modules["raptor_self_test"] = prior_module
-        if prior is None:
-            os.environ.pop("_RAPTOR_TRUSTED", None)
-        else:
-            os.environ["_RAPTOR_TRUSTED"] = prior
 
 
 def _make_ctx(selftest: "ModuleType", scratch: Path) -> Any:
