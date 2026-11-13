@@ -26,7 +26,7 @@ from packages.ghidra.model import REDatabase, REFunction, REXref
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("case", ["healthy", "omitted"])
+@pytest.mark.parametrize("case", ["healthy", "omitted", "changed_assessment"])
 def test_binary_callee_assessment_reaches_main_scheduler(tmp_path, monkeypatch, sdk_clients, case):
     import core.audit.binary_context as context_module
     import core.inventory.binary_builder as builder
@@ -108,6 +108,9 @@ def test_binary_callee_assessment_reaches_main_scheduler(tmp_path, monkeypatch, 
         payload = {"status": "suspicious" if name == "f" else "clean",
                    "body": "Callee may omit an input bound" if name == "f" else
                            "Caller remains provisional; callee advice is not verification."}
+        if name == "caller" and case == "changed_assessment" and len(target_names) == 3:
+            payload.update(status="suspicious",
+                body="Caller may rely on an unverified input bound; concern remains provisional.")
         if name == "caller":
             payload["relies_on"] = [{"callee": "f", "file": entry["path"], "line_start": 0,
                                     "assumption": "callee enforces its input bound"}]
@@ -157,7 +160,7 @@ def test_binary_callee_assessment_reaches_main_scheduler(tmp_path, monkeypatch, 
     assert sorted(target_names[:2]) == ["caller", "f"] and target_names[2] == "caller"
     assert len(observed) == 3
     third_prompt = _user_prompt(bundle.state["requests"][2])
-    if case == "healthy":
+    if case != "omitted":
         assert "Related binary callee assessments" in third_prompt
         assert "Callee may omit an input bound" in third_prompt
         assert not omissions
@@ -216,8 +219,13 @@ def test_binary_callee_assessment_reaches_main_scheduler(tmp_path, monkeypatch, 
     assert inputs["origin"] == origins[2]
     assert [context["kind"] for context in inputs["contexts"]] == ["binary_callee_assessments"]
     canonical_caller, = [outcome for outcome in result.outcomes if outcome.function == "caller"]
-    assert canonical_caller.status == contextual[0].verdict == "clean"
+    assert canonical_caller.status == contextual[0].verdict == (
+        "suspicious" if case == "changed_assessment" else "clean")
     canonical_history = read_history(canonical_caller.review_result["review_claims"])
     assert canonical_history is not None and canonical_history["binary_inputs"] == inputs
-    assert canonical_history["review"] is None
+    if case == "changed_assessment":
+        assert canonical_caller is observed[2]
+        assert canonical_history["review"]["origin"]["pass_id"] == origins[2]["pass_id"]
+    else:
+        assert canonical_history["review"] is None
 
