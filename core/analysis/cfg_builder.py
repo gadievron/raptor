@@ -1148,10 +1148,19 @@ class _PythonCFGBuilder:
     def _build_with(
         self, stmt: ast.With | ast.AsyncWith, incoming: list[PyCFGNode],
     ) -> list[PyCFGNode]:
-        # Model as a sentinel statement for the `with` line + the body.
         header = self._new_node("stmt", stmt)
         self._link_many(incoming, header)
-        return self._build_stmts(stmt.body, [header])
+        body_start = len(self._all_nodes)
+        body_out = self._build_stmts(stmt.body, [header])
+        protected = self._all_nodes[body_start:]
+        after = self._join_node(stmt, f"after-with (line {stmt.lineno})")
+        # Unknown __exit__/__aexit__ may suppress a body exception.
+        # Earlier managers can also suppress failed header bindings, so
+        # retain original incoming states, not just batched header defs.
+        # Original abrupt edges remain: this adds conservative paths,
+        # rather than claiming exact context-manager protocol routing.
+        self._link_many(dict.fromkeys([*incoming, header, *protected, *body_out]), after)
+        return [after]
 
     # ----- driver -----
 
