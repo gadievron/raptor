@@ -408,7 +408,8 @@ def extract_from_files(
     """Extract from multiple files; de-duplicate by ``qualified_name``.
 
     File-read failures are recorded in the returned errors and
-    skipped; the remaining files still contribute candidates.
+    skipped; the remaining files still contribute candidates. Equal names
+    at distinct source locations add an ambiguity diagnostic.
     """
     all_candidates: list[CandidateValidator] = []
     all_errors: list[str] = []
@@ -443,7 +444,13 @@ def extract_from_files(
 
     by_qname: dict[str, CandidateValidator] = {}
     for c in all_candidates:
-        # First-seen wins. Acceptable; downstream LLM doesn't reason
-        # about which file a duplicate name was first defined in.
-        by_qname.setdefault(c.qualified_name, c)
+        # Preserve first-seen dedup, but expose distinct source
+        # observations rather than implying a unique callee binding.
+        first = by_qname.setdefault(c.qualified_name, c)
+        if (first.source_file, first.source_line) != (c.source_file, c.source_line):
+            all_errors.append(
+                f"{c.qualified_name}: ambiguous candidate name at "
+                f"{first.source_file}:{first.source_line} and "
+                f"{c.source_file}:{c.source_line}; no callee binding established"
+            )
     return tuple(by_qname.values()), all_errors
