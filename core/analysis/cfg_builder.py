@@ -336,7 +336,7 @@ def _resolve_callable_name(node: ast.AST) -> str | None:
     if isinstance(node, ast.Attribute):
         base = _resolve_callable_name(node.value)
         if base is None:
-            return node.attr
+            return None
         return f"{base}.{node.attr}"
     return None
 
