@@ -430,8 +430,8 @@ class TestObservePaired:
 
         with patch("packages.frida.available", return_value=True), \
              mock_module_attribute(_mock_owner('packages.frida.active'), 'subprocess', 'Popen', return_value=fake_proc), \
-             patch("os.getpgid", return_value=12345), \
-             patch("os.killpg"):
+             mock_module_attribute(_mock_owner('packages.frida.active'), 'os', 'getpgid', return_value=12345), \
+             mock_module_attribute(_mock_owner('packages.frida.active'), 'os', 'killpg'):
             result = observe_paired(["./server"], out_dir=tmp_path / "out")
         assert result is None
 
