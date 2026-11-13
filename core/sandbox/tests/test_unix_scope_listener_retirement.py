@@ -31,14 +31,19 @@ def test_retired_listener_does_not_ioctl_replacement(request, monkeypatch, opera
 
     patch_module_attribute(monkeypatch, scope, 'fcntl', 'ioctl', ioctl)
     try:
-        if cancel_close:
-            supervisor._closed = CancelledEvent()
-            with pytest.raises(KeyboardInterrupt):
+        try:
+            if cancel_close:
+                supervisor._closed = CancelledEvent()
+                with pytest.raises(KeyboardInterrupt):
+                    supervisor.close()
+            else:
                 supervisor.close()
-        else:
-            supervisor.close()
+        finally:
+            if not supervisor._owns_fd:
+                owned.discard(notify)
         assert supervisor._owns_fd is False
         os.dup2(replacement, notify, inheritable=False)
+        owned.add(notify)
         if operation == 'respond':
             supervisor._respond(7, 0)
         else:
