@@ -1,14 +1,13 @@
-// init_after_register.cocci — Find device/handler registration where
-// struct fields are initialized AFTER the registration call.
+// init_after_register.cocci — Review field writes after registration calls.
 //
-// The pattern: a struct is registered with a subsystem (making it
-// visible to other threads / interrupt handlers), then fields of that
-// struct are assigned. Between registration and the late init, another
-// thread can access the partially-initialized object.
+// Ordering alone does not establish a race. Review registration success,
+// actual publication, object identity, field purpose and synchronisation.
+// A write can be an intentional update rather than missing initialisation.
+// The generic chrdev leg does not link the written object to a registration
+// argument, so unrelated field writes can also be candidates.
 //
-// Covers CWE-908 (use of uninitialized resource) + CWE-362 (race
-// condition): the registration creates a race window where the object
-// is accessible but not fully initialized.
+// CWE-908 / CWE-362 hypotheses require independent evidence of a consumer
+// observing incompletely initialised state.
 //
 // Common in Linux kernel drivers: cdev_add, register_netdev,
 // register_chrdev, platform_device_register, misc_register, etc.
@@ -37,7 +36,7 @@ for _pr, _pi in zip(p_reg, p_init):
     _m = {"file": _pi.file, "line": int(_pi.line), "col": int(_pi.column),
           "line_end": int(_pi.line_end), "col_end": int(_pi.column_end),
           "rule": "init_after_register",
-          "message": "'%s.%s' initialized after cdev_add at line %s — race window" % (dev, fld, _pr.line)}
+          "message": "Candidate: '%s.%s' written after cdev_add at line %s; review object identity, registration success, publication and synchronisation before claiming a race (CWE-908/CWE-362)" % (dev, fld, _pr.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // register_netdev then field assignment
@@ -63,7 +62,7 @@ for _pr, _pi in zip(p_reg, p_init):
     _m = {"file": _pi.file, "line": int(_pi.line), "col": int(_pi.column),
           "line_end": int(_pi.line_end), "col_end": int(_pi.column_end),
           "rule": "init_after_register",
-          "message": "'%s->%s' initialized after register_netdev at line %s — race window" % (dev, fld, _pr.line)}
+          "message": "Candidate: '%s->%s' written after register_netdev at line %s; review object identity, registration success, publication and synchronisation before claiming a race (CWE-908/CWE-362)" % (dev, fld, _pr.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // misc_register then field assignment
@@ -89,7 +88,7 @@ for _pr, _pi in zip(p_reg, p_init):
     _m = {"file": _pi.file, "line": int(_pi.line), "col": int(_pi.column),
           "line_end": int(_pi.line_end), "col_end": int(_pi.column_end),
           "rule": "init_after_register",
-          "message": "'%s.%s' initialized after misc_register at line %s — race window" % (dev, fld, _pr.line)}
+          "message": "Candidate: '%s.%s' written after misc_register at line %s; review object identity, registration success, publication and synchronisation before claiming a race (CWE-908/CWE-362)" % (dev, fld, _pr.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // platform_device_register then field assignment (pointer variant)
@@ -115,7 +114,7 @@ for _pr, _pi in zip(p_reg, p_init):
     _m = {"file": _pi.file, "line": int(_pi.line), "col": int(_pi.column),
           "line_end": int(_pi.line_end), "col_end": int(_pi.column_end),
           "rule": "init_after_register",
-          "message": "'%s->%s' initialized after platform_device_register at line %s — race window" % (pdev, fld, _pr.line)}
+          "message": "Candidate: '%s->%s' written after platform_device_register at line %s; review object identity, registration success, publication and synchronisation before claiming a race (CWE-908/CWE-362)" % (pdev, fld, _pr.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // Generic: register_chrdev_region / alloc_chrdev_region then field init
@@ -145,5 +144,5 @@ for _pr, _pi in zip(p_reg, p_init):
     _m = {"file": _pi.file, "line": int(_pi.line), "col": int(_pi.column),
           "line_end": int(_pi.line_end), "col_end": int(_pi.column_end),
           "rule": "init_after_register",
-          "message": "'%s.%s' initialized after chrdev registration at line %s — race window" % (dev, fld, _pr.line)}
+          "message": "Candidate: '%s.%s' written after chrdev registration at line %s; review object identity, registration success, publication and synchronisation before claiming a race (CWE-908/CWE-362)" % (dev, fld, _pr.line)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
