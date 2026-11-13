@@ -239,13 +239,14 @@ def _serve(handler_cls):
 
     with socketserver.TCPServer(("127.0.0.1", 0), handler_cls) as srv:
         thread = threading.Thread(target=srv.serve_forever, daemon=True)
-        thread.start()
         try:
+            thread.start()
             yield srv
         finally:
-            srv.shutdown()
-            thread.join(timeout=5)
-            assert not thread.is_alive(), "HTTP server thread did not stop"
+            if thread.ident is not None:
+                srv.shutdown()
+                thread.join(timeout=5)
+                assert not thread.is_alive(), "HTTP server thread did not stop"
 
 
 def test_http_exchange_caps_oversize_body() -> None:
