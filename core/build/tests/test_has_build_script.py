@@ -16,6 +16,8 @@ malformed manifest already produced.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+import errno
 import json
 import os
 import threading
@@ -23,6 +25,7 @@ import threading
 import pytest
 
 from core.build.build_detector import BuildDetector
+from core.testing.threads import retiring_threads
 
 _BUILD_MANIFEST = json.dumps({"scripts": {"build": "tsc"}})
 
@@ -76,7 +79,20 @@ class TestHasBuildScriptGate:
             ),
             daemon=True,
         )
-        t.start()
-        t.join(timeout=10)
-        assert not t.is_alive(), "_has_build_script blocked on a FIFO"
-        assert result == [False]
+        with ExitStack() as cleanup:
+            def release_reader():
+                if t.ident is None or not t.is_alive():
+                    return
+                try:
+                    peer = os.open(pkg, os.O_WRONLY | os.O_NONBLOCK)
+                except OSError as exc:
+                    if exc.errno != errno.ENXIO:
+                        raise
+                else:
+                    cleanup.callback(os.close, peer)
+
+            with retiring_threads([t], release=release_reader, timeout=10):
+                t.start()
+                t.join(timeout=10)
+                assert not t.is_alive(), "_has_build_script blocked on a FIFO"
+                assert result == [False]
