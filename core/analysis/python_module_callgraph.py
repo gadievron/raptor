@@ -1202,7 +1202,17 @@ def module_dynamic_namespace(
 
     def literal_member_receiver(value: ast.AST) -> ast.AST | None:
         receiver = selected_literal_copy_receiver(value)
-        return receiver if receiver is not None else literal_list_pop_receiver(value)
+        if receiver is not None:
+            return receiver
+        while isinstance(value, ast.NamedExpr):
+            value = value.value
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id in sequence_copy_names
+                and len(value.args) == 1 and not value.keywords):
+            receiver = selected_literal_copy_receiver(value.args[0])
+            if isinstance(receiver, (ast.Tuple, ast.List)):
+                return receiver
+        return literal_list_pop_receiver(value)
 
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
