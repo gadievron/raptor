@@ -832,18 +832,21 @@ class TestRenamePinRewriteLocked(unittest.TestCase):
 
         with patch.object(fs_lock, "_try_flock_nb", observe_contention):
             thread = threading.Thread(target=rename, name="project-pin-rename-probe", daemon=True)
-            try:
-                thread.start()
-                self.assertTrue(progressed.wait(5), "rename never reached the marker lock")
-                self.assertTrue(blocked.is_set(), f"rename did not encounter marker contention: {errors!r}")
-                self.assertFalse(done.is_set(), "rename completed through a held marker lock")
-                self.assertEqual(load_json(marker).get("project"), "old",
-                                 "pin rewritten through a held marker lock")
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-                if thread.ident is not None:
-                    thread.join(timeout=10)
-                    self.assertFalse(thread.is_alive(), "rename worker did not stop")
+            with retiring_threads(
+                [thread], release=lambda: fcntl.flock(fd, fcntl.LOCK_UN), timeout=10,
+            ):
+                try:
+                    thread.start()
+                    self.assertTrue(progressed.wait(5), "rename never reached the marker lock")
+                    self.assertTrue(blocked.is_set(), f"rename did not encounter marker contention: {errors!r}")
+                    self.assertFalse(done.is_set(), "rename completed through a held marker lock")
+                    self.assertEqual(load_json(marker).get("project"), "old",
+                                     "pin rewritten through a held marker lock")
+                finally:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    if thread.ident is not None:
+                        thread.join(timeout=10)
+                        self.assertFalse(thread.is_alive(), "rename worker did not stop")
         self.assertEqual(errors, [], f"rename worker failed: {errors!r}")
         self.assertTrue(done.is_set(), "rename never completed")
         self.assertEqual(load_json(marker).get("project"), "new")
