@@ -557,14 +557,27 @@ class DataflowValidator:
             message = (result.get("message") or {}).get("text", "")
 
             paths: list[DataflowPath] = []
+            malformed_containers = False
             for flow in code_flows:
-                for thread_flow in (flow.get("threadFlows") or []):
+                if not isinstance(flow, dict):
+                    malformed_containers = True
+                    continue
+                thread_flows = flow.get("threadFlows") or []
+                if not isinstance(thread_flows, list):
+                    malformed_containers = True
+                    continue
+                for thread_flow in thread_flows:
+                    if not isinstance(thread_flow, dict):
+                        malformed_containers = True
+                        continue
                     path = self._path_from_locations(
                         thread_flow.get("locations", []), rule_id, message,
                     )
                     if path is not None:
                         paths.append(path)
 
+            if malformed_containers:
+                self.logger.warning("Skipped malformed SARIF flow containers")
             if not paths:
                 return None
 
