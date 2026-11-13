@@ -526,11 +526,15 @@ class AutonomousCodeQLAnalyzer:
         has_dataflow = len(code_flows) > 0
         dataflow_path_count = len(code_flows)
 
+        level = result.get("level")
+        if not isinstance(level, str):
+            level = rule_default_level(rule) or "warning"
+
         return CodeQLFinding(
             rule_id=rule_id,
             rule_name=rule_name,
             message=_text_value(result.get("message")) or "",
-            level=result.get("level", rule_default_level(rule) or "warning"),
+            level=level,
             file_path=sarif_uri_path(ArtifactUriResolver(run).resolve(artifact)) or "",
             start_line=start_line,
             end_line=end_line,
