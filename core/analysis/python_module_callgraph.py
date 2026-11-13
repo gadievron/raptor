@@ -1145,9 +1145,14 @@ def module_dynamic_namespace(
         return result
 
     def selected_literal_copy_receiver(value: ast.AST) -> ast.AST | None:
-        while (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-               and value.func.attr == "copy" and not value.args and not value.keywords):
-            value = value.func.value
+        while True:
+            if isinstance(value, ast.NamedExpr):
+                value = value.value
+            elif (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                  and value.func.attr == "copy" and not value.args and not value.keywords):
+                value = value.func.value
+            else:
+                break
         return selected_literal_value(value)
 
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
