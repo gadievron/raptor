@@ -153,7 +153,7 @@ class Finding:
     def from_dict(cls, data: Mapping[str, Any]) -> Finding:
         _check_extra_fields("Finding", data, _FINDING_KEYS)
         version = data["schema_version"]
-        if version != SCHEMA_VERSION:
+        if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
             msg = (
                 f"Finding schema_version {version!r} != expected "
                 f"{SCHEMA_VERSION!r}; corpus upgrade required"
