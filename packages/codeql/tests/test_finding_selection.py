@@ -847,3 +847,16 @@ def test_rule_index_cost_depends_on_usable_result_count(tmp_path, monkeypatch, u
     # One usable lookup cannot amortize allocating the full descriptor index.
     assert indexed_rules == ([] if usable == 1 else [2_000 + usable])
     assert json.loads(path.read_text())["runs"][0] == run
+
+
+@pytest.mark.parametrize("value", [True, False], ids=["true-score", "false-score"])
+def test_boolean_scores_cannot_take_the_numeric_analysis_slot(tmp_path, value):
+    boolean = {**_result("boolean", "note"), "exploitability_score": value}
+    numeric = {**_result("numeric", "error"), "exploitability_score": 0.4}
+    path = _write(tmp_path, "boolean-score.sarif", _run(boolean, numeric))
+
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+
+    assert (len(selected), count, duplicates) == (1, 2, 0)
+    assert selected[0].result["ruleId"] == "numeric"
+    assert json.loads(path.read_text())["runs"][0]["results"] == [boolean, numeric]

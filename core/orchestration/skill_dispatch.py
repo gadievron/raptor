@@ -840,6 +840,8 @@ def _safe_score(f: dict) -> float:
     compares False to everything; we'd get non-deterministic truncation.
     """
     raw = f.get("exploitability_score")
+    if isinstance(raw, bool):
+        return 0.0
     try:
         v = float(raw) if raw is not None else 0.0
     except (TypeError, ValueError, OverflowError):

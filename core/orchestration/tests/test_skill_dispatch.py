@@ -520,6 +520,32 @@ class TruncationTests(unittest.TestCase):
         kept = truncate_findings_by_signal(findings, 2)
         self.assertEqual(kept[0]["id"], "num")
 
+    def test_boolean_scores_yield_to_numeric_scores(self):
+        for score in (True, False):
+            with self.subTest(score=score):
+                findings = [
+                    {"id": "boolean", "exploitability_score": score},
+                    {"id": "numeric", "exploitability_score": 0.4},
+                ]
+                kept = truncate_findings_by_signal(findings, 1)
+                self.assertEqual(kept[0]["id"], "numeric")
+
+    def test_boolean_score_does_not_erase_explicit_exploitable_priority(self):
+        findings = [
+            {"id": "numeric", "exploitability_score": 0.9},
+            {"id": "explicit", "is_exploitable": True, "exploitability_score": True},
+        ]
+        kept = truncate_findings_by_signal(findings, 1)
+        self.assertEqual(kept[0]["id"], "explicit")
+
+    def test_numeric_text_retains_score_order(self):
+        findings = [
+            {"id": "lower", "exploitability_score": 0.4},
+            {"id": "text", "exploitability_score": "0.9"},
+        ]
+        kept = truncate_findings_by_signal(findings, 1)
+        self.assertEqual(kept[0]["id"], "text")
+
     def test_signal_free_entries_keep_input_order(self):
         findings = [{"id": i} for i in range(10)]
         kept = truncate_findings_by_signal(findings, 4)
