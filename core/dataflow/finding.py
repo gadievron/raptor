@@ -73,6 +73,10 @@ class Step:
 
     def __post_init__(self) -> None:
         _require_nonempty("Step.file_path", self.file_path)
+        if not isinstance(self.snippet, str):
+            raise ValueError("Step.snippet must be a string")
+        if self.label is not None and not isinstance(self.label, str):
+            raise ValueError("Step.label must be a string or null")
         if isinstance(self.line, bool) or not isinstance(self.line, int) or self.line < 1:
             msg = f"Step.line must be an integer >= 1, got {self.line}"
             raise ValueError(msg)
