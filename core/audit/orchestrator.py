@@ -33732,10 +33732,13 @@ def _rejournal_final_statuses(
         )
     except ImportError:
         return 0
+    def site_line(value) -> int:
+        return value if type(value) is int and value > 0 else 0
+
     try:
         # Two collapses over one journal read: the latest entry per
-        # key (any kind) decides WHETHER the final status drifted and
-        # needs a corrective row; the latest NON-echo entry per key is
+        # occurrence (any kind) decides WHETHER the final status drifted and
+        # needs a corrective row; the latest NON-echo entry per occurrence is
         # the field DONOR. A post-loop mechanical echo is routinely
         # the newest row for exactly the keys being corrected (the
         # echo's verdict IS the drift), and adopting its fields
@@ -33744,16 +33747,22 @@ def _rejournal_final_statuses(
         # consumer then read the function's final verdict as a
         # non-review (dropped from the report's reviewed/clean counts,
         # excluded from gap coverage, refused by cross-run reuse).
-        entries: dict[str, Any] = {}
-        donors: dict[str, Any] = {}
+        entries: dict[tuple[str, int], Any] = {}
+        donors: dict[tuple[str, int], Any] = {}
+        unscoped_echoes: dict[str, Any] = {}
         for e in load_entries(config.out_dir):
-            prev = entries.get(e.key)
+            site = (e.key, site_line(e.line_start))
+            prev = entries.get(site)
             if prev is None or e.ts > prev.ts:
-                entries[e.key] = e
+                entries[site] = e
             if not is_mechanical_echo(e):
-                prev = donors.get(e.key)
+                prev = donors.get(site)
                 if prev is None or e.ts > prev.ts:
-                    donors[e.key] = e
+                    donors[site] = e
+            elif site[1] == 0:
+                prev = unscoped_echoes.get(e.key)
+                if prev is None or e.ts > prev.ts:
+                    unscoped_echoes[e.key] = e
     except Exception:
         logger.debug("re-journal: journal load failed", exc_info=True)
         return 0
@@ -33763,7 +33772,9 @@ def _rejournal_final_statuses(
         if outcome.status == "error":
             continue
         key = make_function_key(outcome.file, outcome.function)
-        prior = entries.get(key)
+        line = site_line(outcome.line)
+        site = (key, line)
+        prior = entries.get(site)
         if prior is None:
             continue
         # A latest row still marked provisional needs a confirming
@@ -33774,7 +33785,15 @@ def _rejournal_final_statuses(
         _confirm_provisional = bool(
             getattr(prior, "provisional", False),
         ) and not getattr(outcome, "provisional", False)
-        if prior.verdict == outcome.status and not _confirm_provisional:
+        # A later line-0 mechanical echo can require refreshing the owned
+        # review even when its own site did not drift. It is only a trigger:
+        # neither its geometry nor another sibling's verdict is a donor.
+        echo = unscoped_echoes.get(key)
+        refresh_echo = (echo is not None and echo.ts > prior.ts
+                        and (echo.verdict != outcome.status
+                             or (getattr(echo, "provisional", False)
+                                 and not getattr(outcome, "provisional", False))))
+        if prior.verdict == outcome.status and not _confirm_provisional and not refresh_echo:
             continue
         # Carry the corrected entry's span AND strategy record
         # forward. The old minimal gap ({"line_start": line})
@@ -33786,18 +33805,14 @@ def _rejournal_final_statuses(
         # evidence to near nothing. The donor is the latest NON-echo
         # row (see the collapse above): the corrective row describes
         # the REVIEW's final status, never the mechanical echo that
-        # triggered the correction. Same-named siblings: only adopt
-        # the donor row's fields when it describes the SAME site —
-        # a mismatched sibling keeps the minimal-gap behaviour
-        # (the collector's sibling-inheritance fallback still fills
-        # strategies when it can).
-        donor = donors.get(key)
-        gap: dict[str, Any] = {"line_start": outcome.line or 0}
-        if donor is not None and (
-                not outcome.line
-                or (donor.line_start or 0) in (0, outcome.line)):
+        # triggered the correction. Status comparisons and field donors
+        # both use the same occurrence. Unknown-line outcomes join only
+        # unknown-line history; they never borrow a known sibling's site.
+        donor = donors.get(site)
+        gap: dict[str, Any] = {"line_start": line}
+        if donor is not None:
             gap = {
-                "line_start": donor.line_start or (outcome.line or 0),
+                "line_start": line,
                 "line_end": donor.line_end,
                 "strategies": list(donor.strategies or []),
             }
