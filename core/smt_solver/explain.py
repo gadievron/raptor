@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 from collections.abc import Mapping
 
-from .availability import z3
+from .availability import Z3_ERRORS, z3
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -115,7 +115,7 @@ def core_names(solver: Any, rev: Mapping[str, str]) -> list[str]:
     names: list[str] = []
     try:
         core = solver.unsat_core()
-    except (z3.Z3Exception, AttributeError):
+    except (*Z3_ERRORS, AttributeError):
         return names
     for label in core:
         name = rev.get(str(label))
