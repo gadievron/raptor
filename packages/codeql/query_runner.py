@@ -1697,7 +1697,7 @@ class QueryRunner:
         """
         from core.sarif.parser import (
             ResultRuleResolver, _as_dict, _normalise_tool_name, _result_rule_id,
-            get_run_execution_diagnostics, get_tool_name, load_sarif, rule_default_level,
+            get_result_rule, get_run_execution_diagnostics, get_tool_name, load_sarif, rule_default_level,
         )
 
         if sarif_data is _SARIF_DATA_UNSET:
@@ -1747,9 +1747,13 @@ class QueryRunner:
                 needs_id = not isinstance(rule_id, str) or not rule_id
                 rule = {}
                 if needs_level or needs_id:
-                    if resolver is None:
-                        resolver = ResultRuleResolver(run)
-                    rule = resolver.resolve(result)
+                    index = result.get("ruleIndex")
+                    if "rule" not in result and type(index) is int and index >= 0:
+                        rule = get_result_rule(run, result)
+                    else:
+                        if resolver is None:
+                            resolver = ResultRuleResolver(run)
+                        rule = resolver.resolve(result)
                     if not rule and ("ruleIndex" in result or "rule" in result):
                         summary["sarif_input_errors"] += 1
                 for key in ("level", "ruleId"):
