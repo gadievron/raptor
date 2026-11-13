@@ -1171,6 +1171,15 @@ def module_dynamic_namespace(
             elif isinstance(container, ast.BoolOp):
                 pending.extend((branch, copied) for branch in container.values)
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Attribute)
+                  and container.func.attr == "popitem" and not container.args and not container.keywords):
+                dictionary = selected_literal_value(container.func.value)
+                if isinstance(dictionary, ast.Dict) and all(key is not None for key in dictionary.keys):
+                    recognised = True
+                    members.extend(dictionary.keys)
+                    members.extend(dictionary.values)
+                elif not copied:
+                    members.append(container)
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Attribute)
                   and container.func.attr == "copy" and not container.args and not container.keywords):
                 pending.append((container.func.value, True))
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
