@@ -1082,7 +1082,8 @@ def module_dynamic_namespace(
                 continue
             seen.add(cursor)
             if cursor not in sequence_iteration_cache:
-                sequence_values = literal_sequence_values(cursor)
+                sequence_values = (tuple(item for item in cursor.elts if not isinstance(item, ast.Starred))
+                                   if isinstance(cursor, ast.Set) else literal_sequence_values(cursor))
                 dictionary_keys = literal_dictionary_keys(cursor)
                 view_values = literal_dictionary_view_values(cursor)
                 values = (sequence_values if sequence_values is not None else
