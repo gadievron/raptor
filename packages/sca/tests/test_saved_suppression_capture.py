@@ -59,7 +59,7 @@ def test_saved_malformed_suppression_is_unavailable_without_replacing_report(tmp
     assert render.main([*argv, "--fail-on-kev"]) == 2
     output = capsys.readouterr()
     assert "suppression status must be a boolean" in output.err
-    assert "Structured report capture failed (ValueError)" in output.out
+    assert "Structured report capture failed (InvalidSuppressionError)" in output.out
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["findings_available"] is False
     assert summary["state"] == "partial"
@@ -82,3 +82,25 @@ def test_malformed_suppression_beyond_detail_cap_refuses(tmp_path, monkeypatch):
     bad["suppressed"] = "yes"
     with pytest.raises(ValueError, match="suppression status must be a boolean"):
         build_sca_document(rows=iter([_vuln_row(), bad]), target=tmp_path, output_dir=tmp_path, deps_analysed=None)
+
+
+@pytest.mark.parametrize("value", ["PRIVATE-SUPPRESSION-VALUE", ""], ids=["text", "empty-text"])
+def test_no_gate_refusal_explains_suppression_without_echoing_value(tmp_path, monkeypatch, capsys, value):
+    from packages.sca import pipeline
+    def no_analysis(*args, **kwargs):
+        pytest.fail("saved render must not analyse dependencies")
+    monkeypatch.setattr(pipeline, "run_sca", no_analysis)
+    row = _vuln_row()
+    row["suppressed"] = value
+    source = tmp_path / "findings.json"
+    source.write_text(json.dumps([row]))
+    original = source.read_bytes()
+    assert render.main([str(source), "--no-sarif", "--report-format", "json"]) == 1
+    output = capsys.readouterr()
+    assert "suppressed must be JSON true or false, or omitted" in output.err
+    assert "PRIVATE-SUPPRESSION-VALUE" not in output.err + output.out
+    assert "wrote json" not in output.out
+    assert not (tmp_path / "report.json").exists()
+    assert not (tmp_path / "reporting-manifest.json").exists()
+    assert json.loads((tmp_path / "summary.json").read_text())["findings_available"] is False
+    assert source.read_bytes() == original

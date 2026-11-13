@@ -11,6 +11,10 @@ from core.reporting.builders import build_document
 from core.reporting.document import Block, Inline, MAX_FINDINGS, ReportContext, StageEnvelope
 
 
+class InvalidSuppressionError(ValueError):
+    """A saved suppression field cannot be projected consistently."""
+
+
 def build_sca_document(*, rows: Iterable[dict], target: Path, output_dir: Path, deps_analysed: int | None,
                        parse_failures=(), project_license: str | None = None,
                        cache_hits: int | None = 0, cache_misses: int | None = 0, cache_evictions: int | None = None, rerender: bool = False,
@@ -25,7 +29,7 @@ def build_sca_document(*, rows: Iterable[dict], target: Path, output_dir: Path, 
             invalid += 1
             continue
         if "suppressed" in row and type(row["suppressed"]) is not bool:
-            raise ValueError("suppression status must be a boolean")
+            raise InvalidSuppressionError("suppression status must be a boolean")
         recorded += 1
         kind = str(row.get("vuln_type", "unknown"))
         counts[kind] += 1
