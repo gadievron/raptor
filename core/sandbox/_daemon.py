@@ -570,6 +570,7 @@ def _render_compose(chunks, recvs):
     """
     import struct as _struct
     out = bytearray()
+    packed_words: dict[int, bytes] = {}
 
     def check_room(size: int) -> None:
         if size > _MAX_SEND_BYTES - len(out):
@@ -596,7 +597,15 @@ def _render_compose(chunks, recvs):
                 )
                 raise IndexError(msg)
             check_room(8)
-            raw = recvs[idx].decode("utf-8", errors="replace").strip()
+            # Validate list indexing even on a cache hit (0.0 must not act
+            # like index 0). Receives stay immutable during this render.
+            received = recvs[idx]
+            word_index = idx if idx >= 0 else len(recvs) + idx
+            packed = packed_words.get(word_index)
+            if packed is not None:
+                out += packed
+                continue
+            raw = received.decode("utf-8", errors="replace").strip()
             tok = raw.split()[0] if raw.split() else ""
             negative = tok.startswith("-")
             if tok[:1] in ("+", "-"):
@@ -627,7 +636,9 @@ def _render_compose(chunks, recvs):
             # With only single separators, 31 trailing characters contain
             # the last 16 digits. Never normalise or parse the whole token.
             value = int(tok[-31:].replace("_", "")[-16:], 16)
-            out += _struct.pack("<Q", (-value if negative else value) & 0xFFFFFFFFFFFFFFFF)
+            packed = _struct.pack("<Q", (-value if negative else value) & 0xFFFFFFFFFFFFFFFF)
+            packed_words[word_index] = packed
+            out += packed
         else:
             msg = f"unknown compose chunk kind: {kind!r}"
             raise ValueError(msg)
