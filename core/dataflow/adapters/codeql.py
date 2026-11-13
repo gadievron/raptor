@@ -109,6 +109,13 @@ def from_sarif_result(
             raise ValueError(f"SARIF {field} must be an object")
         return value
 
+    def text_or_default(value: Any, field: str, default: str) -> str:
+        if value is None:
+            return default
+        if not isinstance(value, str):
+            raise ValueError(f"SARIF {field} must be a string")
+        return value or default
+
     steps: list[Step] = []
     for loc_wrapper in locations:
         if not isinstance(loc_wrapper, Mapping):
@@ -118,15 +125,22 @@ def from_sarif_result(
         region = object_or_empty(physical_loc.get("region"), "region")
         artifact = object_or_empty(physical_loc.get("artifactLocation"), "artifactLocation")
 
-        message_text = object_or_empty(loc.get("message"), "location.message").get("text") or ""
+        message_text = text_or_default(
+            object_or_empty(loc.get("message"), "location.message").get("text"),
+            "location.message.text", "",
+        )
+        column = region.get("startColumn")
         # Explicit null objects retain their empty defaults; malformed
         # scalar objects must use the caller's ValueError refusal path.
         steps.append(
             Step(
                 file_path=artifact.get("uri") or "",
                 line=region.get("startLine") or 0,
-                column=region.get("startColumn") or 0,
-                snippet=object_or_empty(region.get("snippet"), "snippet").get("text") or "",
+                column=0 if column is None else column,
+                snippet=text_or_default(
+                    object_or_empty(region.get("snippet"), "snippet").get("text"),
+                    "snippet.text", "",
+                ),
                 label=message_text or None,
             )
         )
@@ -135,10 +149,10 @@ def from_sarif_result(
     sink = steps[-1]
     intermediate = tuple(steps[1:-1])
 
-    rule_id = result.get("ruleId") or "unknown"
+    rule_id = text_or_default(result.get("ruleId"), "ruleId", "unknown")
     # Explicit null messages retain the documented default.
     message_obj = object_or_empty(result.get("message"), "result.message")
-    message = message_obj.get("text") or "(no message)"
+    message = text_or_default(message_obj.get("text"), "result.message.text", "(no message)")
 
     if finding_id is None:
         finding_id = make_finding_id(rule_id, source, sink, producer=producer)
