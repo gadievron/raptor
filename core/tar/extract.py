@@ -216,12 +216,20 @@ def _budgeted_tarinfo(budget: int, consumed: dict[str, int]) -> type:
 
     class _BudgetedTarInfo(tarfile.TarInfo):
         def _proc_sparse(self, tarobj):
+            stored_size = self.size
             source = tarobj.fileobj
             tarobj.fileobj = _SparseMetadataReader(source)
             try:
-                return super()._proc_sparse(tarobj)
+                result = super()._proc_sparse(tarobj)
             finally:
                 tarobj.fileobj = source
+            # The loop charges logical bytes; also cover any larger stored
+            # span that native iteration must traverse, without double billing.
+            consumed["total"] += max(0, stored_size - self.size)
+            if consumed["total"] > budget:
+                raise TarTotalBytesExceeded(
+                    f"tar sparse stored data exceeds {budget} bytes; refusing")
+            return result
 
         def _proc_member(self, tarobj):
             if self.type in _METADATA_MEMBER_TYPES:
