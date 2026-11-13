@@ -1530,8 +1530,10 @@ def evaluate_finding(
 
     Backward-compatible with Phase 7 callers: omit ``source_symbols``
     and ``sink_arg`` → control-flow-only vertex-cut. Verdict is
-    :data:`VERDICT_SUPPRESS` or :data:`VERDICT_NO_SUPPRESS`; no
-    ``candidate_only`` is emitted because the gate isn't run.
+    determined by the control-flow cut and source-contract eligibility.
+    Unverified source contracts can produce ``candidate_only`` even
+    without value context. This legacy path does not establish a
+    value-bound suppression proof.
 
     ``extra_bindings`` (Phase 14) are inter-procedural synthetic
     sanitizer bindings — typically from
@@ -1559,9 +1561,9 @@ def evaluate_finding(
 
     * :data:`VERDICT_SUPPRESS` — all four hold.
     * :data:`VERDICT_CANDIDATE_ONLY` — control-flow cut over the
-      *full* binding set still holds, but the value-bound subset
-      doesn't cut. The sanitizer is on every path but value binding
-      is unproven. Phase 6 will write this to ``suppressions.jsonl``
+      *full* binding set still holds, but eligible value-bound
+      bindings do not establish suppression. Source-contract or value
+      requirements remain unverified. Phase 6 writes this to ``suppressions.jsonl``
       with ``dropped: false`` so operators can see it.
     * :data:`VERDICT_NO_SUPPRESS` — control-flow cut fails. At least
       one path bypasses every catalog sanitizer.
@@ -1572,7 +1574,8 @@ def evaluate_finding(
     provided, callgraph findings auto-downgrade to
     ``candidate_only`` (if control-flow cut held) or
     ``no_suppress``. Without value context they reach the legacy
-    control-flow path and either suppress or no_suppress as before.
+    control-flow path, where source-contract eligibility still applies
+    and unresolved requirements can produce ``candidate_only``.
     """
     if java_source_text is not None and java_unicode_unverified(java_source_text, language=language):
         return SanitizerCutResult(
