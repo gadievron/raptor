@@ -728,14 +728,17 @@ def assemble_binary_context(
 
 
 def _find_item(checklist, file_path, function_name):
+    selected = None
     for file_entry in (checklist or {}).get("files", []):
         if file_entry.get("path") != file_path:
             continue
         items = file_entry.get("items", file_entry.get("functions", []))
         for item in items or []:
             if item.get("name") == function_name:
-                return item
-    return None
+                if selected is not None:
+                    return None
+                selected = item
+    return selected
 
 
 def _read_binary_source(func, target_path=None, out_dir=None, *, cached_only=False):
