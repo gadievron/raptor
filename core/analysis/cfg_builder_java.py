@@ -505,6 +505,13 @@ def _walk_uses(n, resolver, *, exclude: set | None = None) -> frozenset[str]:
                     base not in resolver.types
                     or resolver.vouches_local(base, cur.start_byte)):
                 out.add(base)
+            obj = cur.child_by_field_name("object")
+            if obj is not None:
+                obj_u = _unwrap_value_expr(obj)
+                if obj_u.type != _IDENT:
+                    # The member identifier is not a local load, but its
+                    # computed receiver still evaluates all input reads.
+                    stack.append(obj_u)
             continue
         stack.extend(c for c in cur.children if c.is_named)
     return frozenset(out)
