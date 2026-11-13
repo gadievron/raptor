@@ -182,3 +182,52 @@ def test_optional_end_coordinate_never_precedes_known_start(end, expected):
     parser = object.__new__(AutonomousCodeQLAnalyzer)
     finding = parser.parse_sarif_finding(result, _run(result))
     assert (finding.start_line, finding.end_line) == (4, expected)
+
+
+@pytest.mark.parametrize('snippet,expected', [
+    (['unavailable'], ''), ('unavailable', ''), ({'text': []}, ''), ({'text': 'owned snippet'}, 'owned snippet'),
+], ids=['array-snippet', 'text-snippet', 'bad-text-field', 'valid-text'])
+def test_optional_snippet_shape_does_not_erase_selected_source(tmp_path, snippet, expected):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    result['locations'][0]['physicalLocation']['region']['snippet'] = snippet
+    run = _run(result)
+    path = _write(tmp_path, 'snippet.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert finding.snippet == expected
+    assert finding.rule_id == result['ruleId']
+    assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
+    assert finding.start_line == result['locations'][0]['physicalLocation']['region']['startLine']
+    assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('field', ['locations', 'primary', 'physicalLocation', 'region', 'artifactLocation'])
+def test_unavailable_primary_location_wrapper_preserves_report_identity(field):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run
+
+    result = _located_result()
+    physical = result['locations'][0]['physicalLocation']
+    file, line = physical['artifactLocation']['uri'], physical['region']['startLine']
+    if field == 'locations':
+        result['locations'] = {'unavailable': True}
+    elif field == 'primary':
+        result['locations'][0] = ['unavailable']
+    elif field == 'physicalLocation':
+        result['locations'][0]['physicalLocation'] = ['unavailable']
+    else:
+        physical[field] = ['unavailable']
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+
+    finding = parser.parse_sarif_finding(result, _run(result))
+
+    assert finding.rule_id == result['ruleId']
+    assert finding.message == result['message']['text']
+    assert finding.file_path == (file if field == 'region' else '')
+    assert finding.start_line == (line if field == 'artifactLocation' else 0)
+    assert finding.snippet == ''
