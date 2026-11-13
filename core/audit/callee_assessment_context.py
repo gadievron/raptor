@@ -5,11 +5,13 @@ Relations and model assessments are advisory inputs, not verification facts.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 import json
 import re
 from typing import Any
+from types import MappingProxyType
 
 MAX_CALLEE_ASSESSMENTS = 16
 MAX_CALLEE_ASSUMPTIONS = 4
@@ -22,6 +24,30 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 class CalleeAssessmentBundle:
     payload: dict[str, Any]
     contributors: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class CalleeDeclarationIndex:
+    aliases: Mapping[str, frozenset[tuple[str, str, int | None]]]
+    occurrences: Mapping[tuple[str, str], frozenset[tuple[str, str, int | None]]]
+
+
+def snapshot_callee_declarations(checklist) -> CalleeDeclarationIndex:
+    """Index original declaration aliases once, without retaining the checklist."""
+    from .shared_state import _snapshot_chain_occurrences
+
+    aliases: dict[str, set[tuple[str, str, int | None]]] = defaultdict(set)
+    occurrences = {}
+    for (file, function), line in _snapshot_chain_occurrences(checklist).items():
+        key = (file, function, line)
+        occurrences[file, function] = frozenset((key,))
+        for alias in (function, f"{file}:{function}"):
+            aliases[alias].add(key)
+        if type(line) is int and line > 0:
+            aliases[f"{file}:{function}:{line}"].add(key)
+    return CalleeDeclarationIndex(
+        MappingProxyType({alias: frozenset(keys) for alias, keys in aliases.items()}),
+        MappingProxyType(occurrences))
 
 
 def _occurrence(outcome):
@@ -53,12 +79,13 @@ def _scope_note(outcome):
 
 
 def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_map=None,
-                                   include_graph=True, target_root=None):
+                                   include_graph=True, target_root=None, original_declarations: CalleeDeclarationIndex | None = None):
     """Build the same currently-ready union regardless of the triggering stage.
 
     Namespace ambiguity is resolved against all canonical outcomes before
-    freshness or readiness filtering. A stale declaration therefore cannot
-    make a different same-name declaration appear uniquely resolved.
+    freshness or readiness filtering. Pipeline callers also supply original
+    declarations, including never-reviewed sites. Neither a stale nor an
+    unreviewed declaration can make another same-name site appear unique.
     """
     grouped = defaultdict(list)
     aliases = defaultdict(set)
@@ -71,7 +98,7 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
         for alias in (function, f"{file}:{function}", f"{file}:{function}:{line}"):
             aliases[alias].add(occurrence)
 
-    limits = Counter()
+    limits: Counter[str] = Counter()
     related = set()
     assumptions = defaultdict(set)
 
@@ -86,6 +113,9 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
             limits[f"unresolved_{source}"] += 1
             return None
         matches = aliases.get(name, set())
+        if original_declarations is not None:
+            # Unknown/duplicate declarations add ambiguity, never readiness.
+            matches = matches | original_declarations.aliases.get(name, frozenset())
         if file is not None:
             matches = {key for key in matches if key[0] == file}
         if line is not None:
@@ -151,6 +181,8 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
 
     if include_graph and use_context_map and isinstance(context_map, dict) and caller_occurrence is not None:
         caller_names = {key for key in grouped if key[:2] == caller_occurrence[:2]}
+        if original_declarations is not None:
+            caller_names |= original_declarations.occurrences.get(caller_occurrence[:2], frozenset())
         edges = context_map.get("call_edges", ())
         if not isinstance(edges, (list, tuple)):
             edges = ()
@@ -172,11 +204,11 @@ def build_callee_assessment_bundle(caller, outcomes, *, inventory=None, context_
             name = edge.get("callee")
             file = edge.get("callee_file")
             line = edge.get("callee_line_start", edge.get("callee_line"))
-            signature = (name, file, line)
-            if all(isinstance(item, (str, int, type(None))) for item in signature):
-                if signature in seen_edges:
+            graph_signature = (name, file, line)
+            if all(isinstance(item, (str, int, type(None))) for item in graph_signature):
+                if graph_signature in seen_edges:
                     continue
-                seen_edges.add(signature)
+                seen_edges.add(graph_signature)
             key = resolve(name, file=file, line=line, source="graph")
             if key is not None:
                 related.add(key)

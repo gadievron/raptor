@@ -35658,8 +35658,9 @@ def _requeue_ready_callee_assessments(
 ):
     """Build one current relation/assessment union regardless of triggering stage."""
     from collections import Counter
-    from .callee_assessment_context import build_callee_assessment_bundle
+    from .callee_assessment_context import build_callee_assessment_bundle, snapshot_callee_declarations
 
+    original_declarations = snapshot_callee_declarations(checklist)
     outcomes = tuple(result.outcomes)
     occurrences = Counter((item.file, item.function, item.line) for item in outcomes)
     prepared = []
@@ -35692,7 +35693,8 @@ def _requeue_ready_callee_assessments(
             continue
         bundle = build_callee_assessment_bundle(
             caller, outcomes, inventory=config.inventory, context_map=context_map,
-            include_graph=config.propagate_constraints, target_root=config.target_path)
+            include_graph=config.propagate_constraints, target_root=config.target_path,
+            original_declarations=original_declarations)
         if bundle is None:
             continue
         matches = [(path, item) for path, _info, item in _iter_checklist_items(checklist)
