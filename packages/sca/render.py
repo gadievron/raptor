@@ -109,16 +109,23 @@ def main(argv: Sequence[str]) -> int:
             print(f"raptor-sca render: SARIF write failed: {_sft(str(exc))}", file=sys.stderr)
             sarif_errors.append("SARIF export failed; the operator summary and requested reports are generated independently.")
     from .reporting import build_sca_document
-    from core.reporting.service import complete_reporting
+    from core.reporting.service import capture_failure_summary, complete_reporting
     try:
-        context, document = build_sca_document(rows=rows, target=target, output_dir=base_dir,
-                                               deps_analysed=None, cache_hits=None, cache_misses=None, rerender=True,
-                                               artifacts=[{"path": str(findings_path)}, {"path": str(sarif_path)}],
-                                               limitations=sarif_errors,
-                                               selection={"source_rows": len(all_rows), "selected_rows": len(rows),
-                                                 "reachability": args.reachability, "only_reachable": args.only_reachable,
-                                                 "hide_not_reachable": args.hide_not_reachable})
-        result = complete_reporting(context, base_dir, document=document, options=options, stream=sys.stdout)
+        try:
+            context, document = build_sca_document(rows=rows, target=target, output_dir=base_dir,
+                                                   deps_analysed=None, cache_hits=None, cache_misses=None, rerender=True,
+                                                   artifacts=[{"path": str(findings_path)}, {"path": str(sarif_path)}],
+                                                   limitations=sarif_errors,
+                                                   selection={"source_rows": len(all_rows), "selected_rows": len(rows),
+                                                     "reachability": args.reachability, "only_reachable": args.only_reachable,
+                                                     "hide_not_reachable": args.hide_not_reachable})
+        except (ValueError, TypeError) as exc:
+            result = capture_failure_summary(
+                "sca", base_dir.name, str(target), base_dir, cause=exc,
+                artifacts=[{"path": str(findings_path)}, {"path": str(sarif_path)}], stream=sys.stdout,
+            )
+        else:
+            result = complete_reporting(context, base_dir, document=document, options=options, stream=sys.stdout)
     except (OSError, ValueError, TypeError) as exc:
         print(f"raptor-sca render: report failed: {_sft(str(exc))}", file=sys.stderr)
         return 1

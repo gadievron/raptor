@@ -24,6 +24,8 @@ def build_sca_document(*, rows: Iterable[dict], target: Path, output_dir: Path, 
         if not isinstance(row, dict):
             invalid += 1
             continue
+        if "suppressed" in row and type(row["suppressed"]) is not bool:
+            raise ValueError("suppression status must be a boolean")
         recorded += 1
         kind = str(row.get("vuln_type", "unknown"))
         counts[kind] += 1
