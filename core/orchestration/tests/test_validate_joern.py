@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.processes import run_in_process_group as _run_memory_process
+
 from core.orchestration.validate_joern import (
     confirm_finding_flow,
     enrich_attack_surface_with_taint,
@@ -332,6 +334,45 @@ class TestIrisSurfaceMerge:
         )
 
 
+
+def _run_taint_enrichment_memory_proof():
+    """Run the fake-server enumeration proof without consuming a caller trace."""
+    from pathlib import Path
+    import subprocess
+    import sys
+    from tempfile import TemporaryDirectory
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.orchestration.tests.test_validate_joern import TestBoundedMaterialisation
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+assert owned.is_dir()
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    TestBoundedMaterialisation().test_cap_bounds_materialisation_memory()
+assert not tracemalloc.is_tracing()
+print("taint-enrichment-memory-proof-ok")
+"""
+    with TemporaryDirectory(prefix="taint-enrichment-memory-") as owned:
+        with standalone_cli_env() as env:
+            result = _run_memory_process(
+                [sys.executable, "-I", "-c", script, str(root), owned],
+                timeout=30, env=env, cwd=root,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == "taint-enrichment-memory-proof-ok", result.stdout
+
+
 class TestBoundedMaterialisation:
     """The cap bounds ENUMERATION cost, not just downstream use.
 
@@ -358,12 +399,18 @@ class TestBoundedMaterialisation:
     def test_cap_bounds_materialisation_memory(self):
         import tracemalloc
 
+        if tracemalloc.is_tracing():
+            _run_taint_enrichment_memory_proof()
+            return
+
         surface = self._dense_surface(1000)
         srv = FakeServer()
-        tracemalloc.start()
-        enrich_attack_surface_with_taint(surface, srv, None, max_pairs=500)
-        _cur, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        try:
+            tracemalloc.start()
+            enrich_attack_surface_with_taint(surface, srv, None, max_pairs=500)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         assert len(srv.exists_queries) <= 500
         assert surface["taint_summary"]["pairs_dropped_over_cap"] == (
             1000 * 1000 - 500)
