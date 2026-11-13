@@ -296,9 +296,12 @@ class TestProbeNoiseFilterThreadScoped:
                             "Detecting build system for other-thread",
                         ),
                     )
-                    t.start()
-                    t.join(timeout=5)
-                    assert not t.is_alive()
+                    from core.testing.threads import retiring_threads
+
+                    with retiring_threads([t], release=lambda: None, timeout=5):
+                        t.start()
+                        t.join(timeout=5)
+                        assert not t.is_alive()
                     # This thread's own chatter stays suppressed.
                     raptor_logger.info(
                         "Detecting build system for this-thread",
