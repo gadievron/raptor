@@ -213,7 +213,7 @@ class ArrayTableIndex:
                 and a.start_byte == b.start_byte
                 and a.end_byte == b.end_byte)
 
-    def _appearance_allowed(self, ident: Node, parent: Node, grandparent: Node,
+    def _appearance_allowed(self, ident: Node, parent: Node | None, grandparent: Node | None,
                             declarator_name_spans) -> bool:
         if parent is None:
             return False
