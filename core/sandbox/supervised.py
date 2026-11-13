@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import array
 import contextlib
+import math
 import ctypes
 import logging
 import os
@@ -1311,6 +1312,8 @@ class SupervisedHandle:
 
         Raises TimeoutError on expiry with the handle state UNCHANGED
         (still waitable, still terminatable)."""
+        if timeout is not None and not math.isfinite(timeout):
+            raise ValueError("timeout must be finite or None")
         deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             with self._lock:
@@ -1689,6 +1692,8 @@ class SupervisedHandle:
         natural exit still corroborates — and escalates — the group.
         Raises SupervisedTeardownError (handle left LIVE) when the
         ladder must refuse or death cannot be verified in time."""
+        if not math.isfinite(grace_s):
+            raise ValueError("grace_s must be finite")
         with self._lock:
             if self._poll_locked() is not None:
                 if self._group_verified:
