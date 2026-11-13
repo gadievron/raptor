@@ -2665,10 +2665,15 @@ def format_context_for_prompt(
         sections.append(PromptSection("fuzz_coverage", "\n".join(fp), 0))
 
     if ctx.get("type_definitions"):
-        tp = ["\n### Type definitions"]
+        binary_types = bool(ctx.get("is_binary"))
+        tp = (["\n### Recovered binary type definitions",
+               "These are recovered/inferred analysis metadata, not source declarations or verification evidence. "
+               "Producer labels do not establish matched debug/source correspondence or executable behaviour. "
+               "Missing offsets, sizes, packing and signedness remain unknown."]
+              if binary_types else ["\n### Type definitions"])
         for td in ctx["type_definitions"]:
             td_name = _defend_identifier(td.get("name", "?"), max_length=128)
-            td_where = _defend_identifier(
+            td_where = "recovered analysis metadata" if binary_types else _defend_identifier(
                 f"{td.get('file', '?')}:{td.get('line', '?')}",
                 max_length=512,
             )
