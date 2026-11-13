@@ -2883,6 +2883,11 @@ def format_context_for_prompt(
     if binary_caller_block:
         sections.append(PromptSection("binary_caller_context", binary_caller_block, 1))
 
+    from .binary_callee_assessments import render_binary_callee_assessment_context
+    binary_callee_block = render_binary_callee_assessment_context(ctx.get("binary_callee_assessment_context"), ctx)
+    if binary_callee_block:
+        sections.append(PromptSection("binary_callee_assessment_context", binary_callee_block, 1))
+
     from .disagreement_review_context import render_disagreement_context
     disagreement_block = render_disagreement_context(
         ctx.get("disagreement_override"), defend_identifier=_defend_identifier,

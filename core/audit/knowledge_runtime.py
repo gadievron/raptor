@@ -621,6 +621,42 @@ class AuditKnowledgeRuntime:
         return (not answers or not any(a.materials for a in answers)
                 or any(self.bindings.admit(a)[0] for a in answers if a.materials))
 
+    def binary_assessment_observation(self, outcome) -> tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin] | None:
+        """Return an original live observation owned by this Runtime only.
+
+        Historical JSON and a supplied scope cannot authenticate a prior review.
+        This read path reuses the panel reconstruction registry checks; it does
+        not admit another call or confer verification authority.
+        """
+        from .review_claims import read_history
+
+        if type(getattr(outcome, "line", None)) is not int or outcome.line != 0:
+            return None
+        self.bind_review_input_scope(outcome)
+        scope = getattr(outcome, "binary_publication_scope", None)
+        if (not isinstance(scope, BinaryReviewPublicationScope)
+                or scope.view_identity is None or scope.view_identity.analysis_sha256 is None):
+            return None
+        result = getattr(outcome, "review_result", None)
+        history = read_history(result.get("review_claims")) if isinstance(result, dict) else None
+        review = history.get("review") if history is not None else None
+        if not isinstance(review, dict):
+            return None
+        origin = review.get("origin")
+        if not isinstance(origin, dict):
+            return None
+        pass_id, attempt_id = origin.get("pass_id"), review.get("attempt_id")
+        if not isinstance(pass_id, str) or not isinstance(attempt_id, str):
+            return None
+        with self._lock:
+            if self._closed:
+                return None
+            owned = self._binary_review_scopes.get((pass_id, attempt_id))
+            if (owned is None or owned[0] is not scope
+                    or owned[1].pass_id in self._live_input_errors):
+                return None
+        return owned if scope.current(self.target_root) else None
+
     def _register_binary_subjects(self, origin: BinaryKnowledgeOrigin, ctx: dict,
                                   batch: KnowledgeBatch) -> None:
         """Keep recovered metadata out of source-study requests and receipts."""
@@ -1114,7 +1150,7 @@ class AuditKnowledgeRuntime:
         binary_owned = None
         external_payload: tuple[str, object] | None = None
         if isinstance(origin, BinaryKnowledgeOrigin):
-            if kind not in ("disagreement", "binary_target_semantics", "binary_callers"):
+            if kind not in ("disagreement", "binary_target_semantics", "binary_callers", "binary_callee_assessments"):
                 return False
             with self._lock:
                 binary_owned = next(((scope, original) for scope, original in self._binary_review_scopes.values()
@@ -1131,6 +1167,12 @@ class AuditKnowledgeRuntime:
                 if not isinstance(value, BinarySubjectContext) or not value.current(ctx):
                     return False
                 payload: object = value
+            elif kind == "binary_callee_assessments":
+                from .binary_callee_assessments import BinaryCalleeAssessmentContext
+                value = ctx.get(field)
+                if not isinstance(value, BinaryCalleeAssessmentContext) or not value.current(ctx):
+                    return False
+                payload = value
             elif kind == "binary_callers":
                 from .binary_callers import BinaryCallerContext
                 value = ctx.get(field)
@@ -1187,12 +1229,20 @@ class AuditKnowledgeRuntime:
             if cycle is None or not self._same_snapshot(origin, cycle.origin):
                 return None
             calls = self._calls.get(key, 0) if key not in self._unknown_calls else None
-            if required_context_id is not None:
-                from .continuation_context import context_spec
-                spec = self._context_deltas.get((key, required_context_id))
-                if (spec is None or
-                        context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec):
+            spec = self._context_deltas.get((key, required_context_id)) if required_context_id is not None else None
+            spec = dict(spec) if spec is not None else None
+        if required_context_id is not None:
+            from .continuation_context import context_spec
+
+            # Rendering can consult original observation/canonical-owner
+            # callbacks. Never invoke those while holding the Runtime lock.
+            if spec is None or context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec:
+                return None
+            with self._lock:
+                if (self._cycles.get(key) is not cycle
+                        or self._context_deltas.get((key, required_context_id)) != spec):
                     return None
+                calls = self._calls.get(key, 0) if key not in self._unknown_calls else None
         return self._reserve_cycle(key, cycle, calls, now=monotonic(),
                                    admission=admission, required_calls=required_calls,
                                    required_context_ids=(() if required_context_id is None else (required_context_id,)))
@@ -1251,6 +1301,11 @@ class AuditKnowledgeRuntime:
                     if not isinstance(payload, BinarySubjectContext) or not payload.current(ctx):
                         return False
                     ctx[field] = payload
+                elif spec["kind"] == "binary_callee_assessments":
+                    from .binary_callee_assessments import BinaryCalleeAssessmentContext
+                    if not isinstance(payload, BinaryCalleeAssessmentContext) or not payload.current(ctx):
+                        return False
+                    ctx[field] = payload
                 elif spec["kind"] == "binary_callers":
                     from .binary_callers import BinaryCallerContext
                     if not isinstance(payload, BinaryCallerContext) or not payload.current(ctx):
@@ -1281,6 +1336,45 @@ class AuditKnowledgeRuntime:
         ctx["caller_context_answers"] = (*reservation.packet.caller_contexts, *missing_answers)
         return True
 
+    def _binary_callee_context_current(self, reservation: KnowledgeReservation,
+                                      fresh_scopes: list[BinaryReviewPublicationScope]) -> bool:
+        """Recheck original advisory contributors, including after journal append.
+
+        Post-dispatch checks use the invocation's retained payload, not a later
+        same-version offer. Callbacks run outside the Runtime lock.
+        """
+        from .binary_callee_assessments import BinaryCalleeAssessmentContext
+        from .continuation_context import context_spec
+
+        key = self._key(reservation.origin)
+        with self._lock:
+            selected = []
+            for context_id in reservation.packet.external_context_ids:
+                spec = self._context_deltas.get((key, context_id))
+                if spec is not None and spec["kind"] == "binary_callee_assessments":
+                    selected.append((dict(spec), self._binary_external_payloads.get((key, context_id))))
+            cycle_input = self._binary_cycle_scopes.get(key)
+        if not selected:
+            return True
+        if cycle_input is None:
+            return False
+        for spec, retained in selected:
+            if retained is None or retained[0] != spec["context_key"]:
+                return False
+            for scope in fresh_scopes or [cycle_input[0]]:
+                original_ctx = scope.view_context
+                if not isinstance(original_ctx, dict):
+                    return False
+                payload = original_ctx.get(spec["context_key"]) if fresh_scopes else retained[1]
+                if not isinstance(payload, BinaryCalleeAssessmentContext):
+                    return False
+                ctx = dict(original_ctx)
+                ctx[spec["context_key"]] = payload
+                if (not payload.current(ctx)
+                        or context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec):
+                    return False
+        return True
+
     def can_publish(self, reservation: KnowledgeReservation) -> bool:
         if not self._owned_reservation(reservation):
             return False
@@ -1291,6 +1385,7 @@ class AuditKnowledgeRuntime:
                 fresh_scopes = [scope for (pass_id, _attempt), (scope, original) in self._binary_review_scopes.items()
                                 if pass_id == reservation.packet.pass_id and self._same_snapshot(original, origin)]
             return (not invalid and self._current_binary_cycle_input(origin) is not None
+                    and self._binary_callee_context_current(reservation, fresh_scopes)
                     and all(scope.current(self.target_root) for scope in fresh_scopes)
                     and not reservation.packet.references and not reservation.packet.explanations
                     and not reservation.packet.caller_contexts and bool(reservation.packet.external_context_ids))
