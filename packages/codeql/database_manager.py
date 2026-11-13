@@ -770,6 +770,8 @@ class DatabaseManager:
         if data is None:
             return None
         try:
+            if not isinstance(data, dict) or type(data.get("success")) is not bool:
+                raise ValueError("database success metadata must be Boolean")
             return DatabaseMetadata.from_dict(data)
         except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
             logger.warning("Failed to load metadata: %s", e)
