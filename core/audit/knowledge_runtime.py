@@ -145,7 +145,9 @@ class AuditKnowledgeRuntime:
             try:
                 from .knowledge_calls import owned_call_scope
                 with owned_call_scope(lambda purpose, method: self._admit_client_key(key, purpose, method),
-                                      validity=self.client_lifetime_valid):
+                                      validity=self.client_lifetime_valid,
+                                      on_unobserved_attempts=lambda: self._mark_call_key_unknown(
+                                          key, "opaque_client_attempts")):
                     return review_one_fn(gap, *args, **kwargs)
             finally:
                 lease.closed.set()
@@ -160,7 +162,9 @@ class AuditKnowledgeRuntime:
         return unit
 
     def mark_call_count_unknown(self, gap: dict, reason: str = "unowned_model_helper") -> None:
-        key = self._gap_key(gap)
+        self._mark_call_key_unknown(self._gap_key(gap), reason)
+
+    def _mark_call_key_unknown(self, key: tuple[str, str, int], reason: str) -> None:
         with self._lock:
             self._unknown_calls.add(key)
             self._events.append({"event": "attempt_count_unknown", "unit": list(key), "reason": reason})
@@ -273,7 +277,9 @@ class AuditKnowledgeRuntime:
                 with owned_call_scope(lambda purpose, method: self.admit_client_call(
                         {"file": origin.file, "name": origin.function, "line_start": origin.line_start}, purpose, method),
                         work_id="review:" + origin.pass_id, beneficiaries=(origin.pass_id,),
-                        validity=self.client_lifetime_valid):
+                        validity=self.client_lifetime_valid,
+                        on_unobserved_attempts=lambda: self._mark_call_key_unknown(
+                            key, "opaque_client_attempts")):
                     outcome = review_fn(ctx, config)
             except BaseException:
                 with self._lock:
