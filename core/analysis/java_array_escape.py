@@ -428,6 +428,13 @@ def build_local_array_index(
             return
         if t == _UPDATE:
             inner = next((c for c in n.children if c.is_named), None)
+            while inner is not None and inner.type == "parenthesized_expression":
+                children = inner.named_children
+                if len(children) != 1:
+                    break
+                inner = children[0]
+            if inner is not None and inner.type == _FIELD_ACCESS:
+                flag(line_of(n), "field_store")
             if inner is not None and inner.type == _ARRAY_ACCESS:
                 record_access(inner, is_write=True, compound=True)
                 return
