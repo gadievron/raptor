@@ -1144,9 +1144,10 @@ def module_dynamic_namespace(
             if isinstance(value.op, (ast.BitAnd, ast.Sub)):
                 return (value.left,)
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                and value.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
+                and value.func.attr in {"copy", "union", "difference", "intersection", "symmetric_difference"}
                 and isinstance(value.func.value, ast.Set) and not value.keywords
                 and all(isinstance(item, ast.Set) for item in value.args)
+                and (value.func.attr != "copy" or not value.args)
                 and (value.func.attr != "symmetric_difference" or len(value.args) == 1)):
             return ((value.func.value, *value.args)
                     if value.func.attr in {"union", "symmetric_difference"}
