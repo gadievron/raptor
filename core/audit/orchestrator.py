@@ -36034,6 +36034,8 @@ def _publish_study_candidates(
                 return "candidate_journal_ack_mismatch"
             if config._verdicts_finalized or result.outcomes[index] is not prior:
                 return "canonical_outcome_changed"
+        elif not runtime.can_publish(reservation):
+            return "source_changed"
         result.outcomes[index] = candidate
     return "published"
 
