@@ -1184,6 +1184,20 @@ def module_dynamic_namespace(
                 literal_copy_receiver_cache[cursor] = None
         return literal_copy_receiver_cache[value]
 
+    def literal_sequence_constructor_source(source: ast.AST) -> ast.Tuple | ast.List | None:
+        while True:
+            receiver = selected_literal_copy_receiver(source)
+            if isinstance(receiver, (ast.Tuple, ast.List)):
+                return receiver
+            if isinstance(source, ast.NamedExpr):
+                source = source.value
+            elif (isinstance(source, ast.Call) and isinstance(source.func, ast.Name)
+                  and source.func.id in sequence_copy_names
+                  and len(source.args) == 1 and not source.keywords):
+                source = source.args[0]
+            else:
+                return None
+
     def literal_list_pop_receiver(value: ast.AST) -> ast.Tuple | ast.List | None:
         sequence = selected_literal_copy_receiver(value)
         if isinstance(sequence, ast.List):
@@ -1195,8 +1209,8 @@ def module_dynamic_namespace(
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
                 and value.func.id in list_constructor_names
                 and len(value.args) == 1 and not value.keywords):
-            sequence = selected_literal_copy_receiver(value.args[0])
-            if isinstance(sequence, (ast.Tuple, ast.List)):
+            sequence = literal_sequence_constructor_source(value.args[0])
+            if sequence is not None:
                 return sequence
         return None
 
@@ -1209,19 +1223,9 @@ def module_dynamic_namespace(
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
                 and value.func.id in sequence_copy_names
                 and len(value.args) == 1 and not value.keywords):
-            source = value.args[0]
-            while True:
-                receiver = selected_literal_copy_receiver(source)
-                if isinstance(receiver, (ast.Tuple, ast.List)):
-                    return receiver
-                if isinstance(source, ast.NamedExpr):
-                    source = source.value
-                elif (isinstance(source, ast.Call) and isinstance(source.func, ast.Name)
-                      and source.func.id in sequence_copy_names
-                      and len(source.args) == 1 and not source.keywords):
-                    source = source.args[0]
-                else:
-                    break
+            receiver = literal_sequence_constructor_source(value.args[0])
+            if receiver is not None:
+                return receiver
         return literal_list_pop_receiver(value)
 
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
