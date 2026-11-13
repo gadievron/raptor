@@ -1176,6 +1176,16 @@ def module_dynamic_namespace(
                 kinds = tuple(collection_operation_cache[operand][0] for operand in operands)
                 if kinds and kinds[0] is not None and all(operand_kind is kinds[0] for operand_kind in kinds):
                     kind, sources = kinds[0], operands
+            elif isinstance(cursor, ast.Subscript) and not isinstance(cursor.slice, ast.Slice):
+                source = selected_literal_value(cursor)
+                if source is not None:
+                    if not expanded:
+                        pending.append((cursor, True))
+                        pending.append((source, False))
+                        continue
+                    kind = collection_operation_cache[source][0]
+                    if kind is not None:
+                        sources = (source,)
             elif (isinstance(cursor, ast.NamedExpr)
                   or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                       and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
