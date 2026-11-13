@@ -68,9 +68,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.ldap.taint.java
     message: >-
-      Untrusted data flows into an LDAP search filter. Use
-      parameterised search filters with javax.naming.directory.SearchControls
-      or escape special LDAP characters before embedding in filter strings.
+      Untrusted data flows into an LDAP search filter. For DirContext,
+      use a fixed filter expression with placeholders and pass values through
+      the search overload's filterArgs array, or escape input as LDAP filter values.
+      SearchControls configures search options; it does not bind filter values.
     languages: [java]
     severity: CRITICAL
     mode: taint
