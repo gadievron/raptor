@@ -9,6 +9,7 @@ from core.llm.multi_model.prompt_helpers import (
     wrap_model_output, _normalize_kind,
 )
 from core.security.prompt_envelope import UntrustedBlock
+from core.testing.threads import retiring_threads
 
 
 class TestWrapModelOutput:
@@ -140,10 +141,11 @@ class TestWrapModelOutput:
                 results.append(block)
 
         threads = [threading.Thread(target=worker, args=(i,)) for i in range(50)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert len(results) == 50
         # All have correct shape; content differentiates them
