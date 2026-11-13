@@ -57,7 +57,9 @@ def test_current_review_queues_source_and_resolves_reference_without_an_extra_ca
     calls = []
 
     class Client:
+        _attempt_admission_protocol = 1
         def generate_structured(self, prompt, schema, **kwargs):
+            assert kwargs.pop("accounting_attempt_admission")() is True
             calls.append(kwargs["task_type"])
             # The initial foundation already supplies promotions/conversions;
             # this fixture exercises a genuinely new local reference lookup.
@@ -99,6 +101,7 @@ def _source_study_case(tmp_path):
     request_ids = []
 
     class Client:
+        _attempt_admission_protocol = 1
         fail_study = False
         _call_cost_history = None
 
@@ -106,6 +109,7 @@ def _source_study_case(tmp_path):
             return False
 
         def generate_structured(self, prompt, schema, **kwargs):
+            assert kwargs.pop("accounting_attempt_admission")() is True
             calls.append(kwargs["task_type"])
             if kwargs["task_type"] == "audit":
                 return StructuredResponse(result={"status": "suspicious", "body": "provisional",
