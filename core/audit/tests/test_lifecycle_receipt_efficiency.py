@@ -42,8 +42,8 @@ def test_receipt_collection_has_bounded_temporary_allocation(local):
     read = FieldRead("a.c", 2, "other", "child")
     census = SimpleNamespace(fields={"alias": FieldRecord("alias", reads=[read] * 20000)})
     span = FunctionSpan("event", 1, len(lines))
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         receipts = (lifecycle._local_post_event_reads(edge, lines, span, 0) if local
                     else lifecycle._post_event_reads(census, edge, "event", 1))
         _, peak = tracemalloc.get_traced_memory()
