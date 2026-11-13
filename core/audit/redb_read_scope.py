@@ -7,24 +7,34 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from hashlib import sha256
-import json
+from math import isfinite
 import os
 from pathlib import Path
 import re
 import stat
 from typing import Any
 
-from core.json import dumps_canonical
+from core.json import iterencode_canonical
 
 
-def _primitive(value: Any) -> bool:
-    if value is None or type(value) in (str, int, float, bool):
-        return True
+def _primitive_snapshot(value: Any) -> Any:
+    """Copy only literal JSON data; the canonical encoder owns this copy."""
+    if value is None or type(value) in (str, int, bool):
+        return value
+    if type(value) is float:
+        if not isfinite(value):
+            raise ValueError("non-finite projection value")
+        return value
     if type(value) is list:
-        return all(_primitive(item) for item in value)
+        return [_primitive_snapshot(item) for item in value]
     if type(value) is dict:
-        return all(type(key) is str and _primitive(item) for key, item in value.items())
-    return False
+        copied: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError("non-string projection key")
+            copied[key] = _primitive_snapshot(item)
+        return copied
+    raise ValueError("non-primitive projection value")
 
 
 def database_projection_digest(database: Any, max_bytes: int) -> str | None:
@@ -33,14 +43,19 @@ def database_projection_digest(database: Any, max_bytes: int) -> str | None:
         return None
     try:
         document = database.to_dict()
-        if type(document) is not dict or not _primitive(document):
+        if type(document) is not dict:
             return None
-        # Validate before canonical JSON's historical default=str conversion.
-        primitive_document = json.loads(json.dumps(document, allow_nan=False))
-        encoded = dumps_canonical(primitive_document).encode("utf-8")
-        if len(encoded) > max_bytes:
-            return None
-        return sha256(encoded).hexdigest()
+        # An owned primitive snapshot prevents late input mutation from
+        # reaching canonical JSON's historical default=str conversion.
+        primitive_document = _primitive_snapshot(document)
+        digest = sha256()
+        size = 0
+        for chunk in iterencode_canonical(primitive_document):
+            size += len(chunk)
+            if size > max_bytes:
+                return None
+            digest.update(chunk)
+        return digest.hexdigest()
     except Exception:
         return None
 
