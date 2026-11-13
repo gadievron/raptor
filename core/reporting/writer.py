@@ -21,6 +21,7 @@ from core.json import load_json
 from core.json.bounded import loads_bounded
 from core.security.capped_read import read_capped
 from core.source.beneath import open_dir_beneath, open_regular_beneath
+from core.source.streams import preserving_stream_error
 from .document import MAX_JSON_BYTES, ReportContext, ReportDocument, digest, encode
 from .options import ReportOptions
 from .output_policy import PERSISTENCE_FILENAMES, check_report_destination as _check_report_destination
@@ -105,7 +106,7 @@ def _read_bytes(path: Path, limit: int = MAX_JSON_BYTES, *, root: Path | None = 
     stream = open_regular_beneath(root, path.relative_to(root), mode="rb")
     if stream is None:
         raise ValueError("Committed reporting path refused")
-    with stream:
+    with preserving_stream_error(stream):
         if os.fstat(stream.fileno()).st_size > limit:
             raise ValueError("Committed reporting file exceeds read limit")
         raw = stream.read(limit + 1)
