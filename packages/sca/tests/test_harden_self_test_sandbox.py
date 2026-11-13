@@ -19,10 +19,11 @@ the required sandbox kwargs.
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 from typing import List
 
+from core.testing.module_bindings import patch_module_attribute
+from packages.sca import harden
 from packages.sca.harden import _run_self_test
 
 
@@ -218,7 +219,7 @@ def test_self_test_does_not_use_unsandboxed_subprocess_run(
         "core.sandbox.context.run_untrusted", fake_run_untrusted,
     )
     monkeypatch.setattr("packages.sca.harden.plan", fake_plan)
-    monkeypatch.setattr(subprocess, "run", raising_run)
+    patch_module_attribute(monkeypatch, harden, "subprocess", "run", raising_run)
 
     rc = _run_self_test(
         target=target,
