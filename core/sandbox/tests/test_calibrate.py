@@ -321,6 +321,9 @@ class _FakeObserved:
         self.paths_written = []
         self.paths_stat = []
         self.connect_targets = connects
+        self.nonce_trusted = True
+        self.capture_incomplete = False
+        self.budget_truncated = False
 
 
 class _FakeResult:
