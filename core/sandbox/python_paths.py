@@ -125,7 +125,7 @@ def python_tool_paths(executable: str) -> list[str]:
     import re
     import shlex
     import shutil
-    from core.source.contained import open_regular
+    from core.source.contained import open_regular, read_text_capped
 
     selected = shutil.which(executable) or executable
     if not os.path.isabs(selected):
@@ -177,18 +177,32 @@ def python_tool_paths(executable: str) -> list[str]:
                     if (match := re.fullmatch(r'python(\d+\.\d+)(?:\.\d+)*', name))), None)
     for prefix in dict.fromkeys((interpreter.parent.parent, interpreter.resolve().parent.parent)):
         configuration = prefix / 'pyvenv.cfg'
+        prefix_version = version
         if configuration.is_file():
             add(configuration)
-        if version:
+            if prefix_version is None:
+                # venv --copies leaves python/python3 as regular files,
+                # so resolving the binary cannot reveal its version.
+                metadata = read_text_capped(configuration, max_chars=4096)
+                if metadata is not None and not metadata[1]:
+                    for line in metadata[0].splitlines():
+                        match = re.fullmatch(
+                            r'version\s*=\s*([0-9]{1,3}\.[0-9]{1,3})\.[0-9]{1,3}',
+                            line.strip(),
+                        )
+                        if match:
+                            prefix_version = match.group(1)
+                            break
+        if prefix_version:
             for library in ('lib', 'lib64'):
-                add(prefix / library / ('python' + version))
+                add(prefix / library / ('python' + prefix_version))
                 # The ELF loader needs the shared runtime beside the stdlib.
                 # Without it a hosted interpreter can silently fall back to a
                 # different system libpython with the same SONAME. Keep these
                 # file grants exact; granting lib/ could expose account data.
-                for filename in (f'libpython{version}.so.1.0',
-                                 f'libpython{version}.so',
-                                 f'libpython{version}.dylib'):
+                for filename in (f'libpython{prefix_version}.so.1.0',
+                                 f'libpython{prefix_version}.so',
+                                 f'libpython{prefix_version}.dylib'):
                     shared = prefix / library / filename
                     if shared.is_file():
                         add(shared)
