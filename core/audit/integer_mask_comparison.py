@@ -9,6 +9,7 @@ from core.smt_solver.witness import format_vars
 
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_operation import _unwrap
+from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_prefix import PrefixIntegerModel
 from .arithmetic_types import common_integer_type, model_for_integer_terms
 from .integer_abi import integer_abi_record, resolve_integer_abi
@@ -20,7 +21,7 @@ from .integer_literals import integer_literal_value, source_integer_atom
 from .integer_witness import source_model_scope, validate_integer_witness
 
 
-def _shape(node, data):
+def _shape(node, data, language):
     """Read the actual comparison tree, preserving C operator precedence."""
     def text(item):
         return data[item.start_byte:item.end_byte].decode() if item is not None else ''
@@ -40,6 +41,11 @@ def _shape(node, data):
     mask_value, value = integer_literal_value(mask_atom), integer_literal_value(value_atom)
     if mask_value is None or value is None or mask_value < 0:
         return None
+    parent = node.parent
+    while parent is not None and parent.type != 'function_definition':
+        if unevaluated_context(parent, data, language):
+            return None
+        parent = parent.parent
     return node, left, text(name), mask_value, value_atom, value, op
 
 
@@ -60,7 +66,7 @@ def _claim(hypothesis, abi, language):
     if len(children) != 1 or children[0].type != 'return_statement':
         return None
     values = [node for node in children[0].named_children if node.type != 'comment']
-    shape = _shape(_unwrap(values[0]), data) if len(values) == 1 else None
+    shape = _shape(_unwrap(values[0]), data, language) if len(values) == 1 else None
     return (shape, requested == 'true') if shape is not None else None
 
 
@@ -70,7 +76,7 @@ def mask_comparison_candidates(source, *, language, integer_abi):
     if frame is None:
         return []
     data, _, nodes = frame
-    shapes = [shape for node in nodes if (shape := _shape(node, data)) is not None]
+    shapes = [shape for node in nodes if (shape := _shape(node, data, language)) is not None]
     occurrences = Counter((shape[2], shape[3], shape[5], shape[6]) for shape in shapes)
     result = []
     for shape in shapes:
@@ -100,7 +106,7 @@ def check_mask_comparison(source, hypothesis, *, language, integer_abi=None):
         return unavailable
     wanted, requested = claim
     data, body, nodes = frame
-    sites = [shape for node in nodes if (shape := _shape(node, data)) is not None
+    sites = [shape for node in nodes if (shape := _shape(node, data, language)) is not None
              and (shape[2], shape[3], shape[5], shape[6]) == (wanted[2], wanted[3], wanted[5], wanted[6])]
     if len(sites) != 1:
         return unavailable
