@@ -1250,6 +1250,7 @@ def module_dynamic_namespace(
                 if (collection_operation_cache[source][0] is ast.Set
                         and all(isinstance(item, (ast.Tuple, ast.Dict))
                                 or collection_operation_cache[item][0] in (ast.List, ast.Set)
+                                or literal_dictionary_view_values(item) is not None
                                 or (isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
                                     and (item.func.id in iterator_wrapper_names
                                          or item.func.id in sequence_copy_names)
