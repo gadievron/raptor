@@ -8,6 +8,8 @@ supervisor-advertised `raptor-audit resume <dir>` refused the directory.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -15,6 +17,8 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
+
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture(autouse=True)
@@ -39,6 +43,21 @@ def _owned_run_locks(monkeypatch):
             handle.release()
 
 
+@pytest.fixture()
+def _private_cli_run(monkeypatch):
+    with ExitStack() as scopes:
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("cmd_run",), {"subprocess": subprocess},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
+
+
 def _load_cli():
     cli_path = str(
         Path(__file__).resolve().parents[3] / "libexec" / "raptor-audit",
@@ -51,7 +70,7 @@ def _load_cli():
     return mod
 
 
-def test_explicit_out_goes_through_lifecycle_start(tmp_path, monkeypatch):
+def test_explicit_out_goes_through_lifecycle_start(tmp_path, monkeypatch, _private_cli_run):
     mod = _load_cli()
     target = tmp_path / "target"
     target.mkdir()
@@ -67,8 +86,7 @@ def test_explicit_out_goes_through_lifecycle_start(tmp_path, monkeypatch):
         # test never reaches the orchestrator.
         return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _private_cli_run(mod, fake_run)
     monkeypatch.setattr(mod, "_lifecycle_fail", lambda *a, **k: None)
 
     args = SimpleNamespace(target=str(target), out=str(out_dir))
@@ -83,7 +101,7 @@ def test_explicit_out_goes_through_lifecycle_start(tmp_path, monkeypatch):
     assert str(out_dir) in start
 
 
-def test_no_out_still_resolves_via_lifecycle(tmp_path, monkeypatch):
+def test_no_out_still_resolves_via_lifecycle(tmp_path, monkeypatch, _private_cli_run):
     mod = _load_cli()
     target = tmp_path / "target"
     target.mkdir()
@@ -97,8 +115,7 @@ def test_no_out_still_resolves_via_lifecycle(tmp_path, monkeypatch):
                 returncode=0, stdout=f"OUTPUT_DIR={resolved}\n", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _private_cli_run(mod, fake_run)
     monkeypatch.setattr(mod, "_lifecycle_fail", lambda *a, **k: None)
 
     rc = mod.cmd_run(SimpleNamespace(target=str(target), out=None))
@@ -119,7 +136,7 @@ def test_no_out_still_resolves_via_lifecycle(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _lifecycle_spy(monkeypatch, mod, out_dir):
+def _lifecycle_spy(monkeypatch, mod, out_dir, _private_cli_run):
     """Stub subprocess.run: record argv, answer lifecycle start with
     OUTPUT_DIR, and fail the first downstream step so the test never
     reaches the orchestrator (existing convention in this file)."""
@@ -132,8 +149,7 @@ def _lifecycle_spy(monkeypatch, mod, out_dir):
                 returncode=0, stdout=f"OUTPUT_DIR={out_dir}\n", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _private_cli_run(mod, fake_run)
     monkeypatch.setattr(mod, "_lifecycle_fail", lambda *a, **k: None)
     return calls
 
@@ -149,12 +165,8 @@ def _project_argv_pair(argv: list[str]) -> str | None:
 def _lifecycle_start(calls: list[list[str]]) -> list[str]:
     """The recorded lifecycle-start argv.
 
-    The spy patches ``subprocess.run`` module-wide, so incidental
-    subprocess calls from machinery cmd_run exercises (the sandbox's
-    user-namespace helper spawn, host-state dependent) can land in
-    ``calls`` BEFORE the lifecycle child — indexing ``calls[0]``
-    asserted on whichever ran first. Select the call under test
-    instead.
+    The recorder is scoped to cmd_run. Select the lifecycle child
+    separately from its recorded checklist-build calls.
     """
     for argv in calls:
         if argv and "raptor-run-lifecycle" in argv[0]:
@@ -162,13 +174,13 @@ def _lifecycle_start(calls: list[list[str]]) -> list[str]:
     raise AssertionError(f"no lifecycle call recorded: {calls!r}")
 
 
-def test_project_pin_forwarded_to_lifecycle_child(tmp_path, monkeypatch):
+def test_project_pin_forwarded_to_lifecycle_child(tmp_path, monkeypatch, _private_cli_run):
     mod = _load_cli()
     target = tmp_path / "target"
     target.mkdir()
     resolved = tmp_path / "resolved-run"
     resolved.mkdir()
-    calls = _lifecycle_spy(monkeypatch, mod, resolved)
+    calls = _lifecycle_spy(monkeypatch, mod, resolved, _private_cli_run)
 
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=None, project="myproj"))
@@ -181,6 +193,7 @@ def test_project_pin_forwarded_to_lifecycle_child(tmp_path, monkeypatch):
 
 def test_explicitly_projectless_dash_forwarded_verbatim(
     tmp_path, monkeypatch,
+    _private_cli_run,
 ):
     # '--project -' is the explicit bound-to-none argv (core/run/pin.py
     # ARGV_NONE) — it must reach the child verbatim, not be dropped as
@@ -190,7 +203,7 @@ def test_explicitly_projectless_dash_forwarded_verbatim(
     target.mkdir()
     resolved = tmp_path / "resolved-run"
     resolved.mkdir()
-    calls = _lifecycle_spy(monkeypatch, mod, resolved)
+    calls = _lifecycle_spy(monkeypatch, mod, resolved, _private_cli_run)
 
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=None, project="-"))
@@ -198,7 +211,7 @@ def test_explicitly_projectless_dash_forwarded_verbatim(
     assert _project_argv_pair(_lifecycle_start(calls)) == "-"
 
 
-def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch):
+def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch, _private_cli_run):
     # Flag not given (args.project is None): the child must keep
     # resolving its own layers — no --project token at all.
     mod = _load_cli()
@@ -206,7 +219,7 @@ def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch):
     target.mkdir()
     resolved = tmp_path / "resolved-run"
     resolved.mkdir()
-    calls = _lifecycle_spy(monkeypatch, mod, resolved)
+    calls = _lifecycle_spy(monkeypatch, mod, resolved, _private_cli_run)
 
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=None, project=None))
@@ -216,6 +229,7 @@ def test_no_project_flag_forwards_nothing(tmp_path, monkeypatch):
 
 def test_project_pin_forwarded_alongside_explicit_out(
     tmp_path, monkeypatch,
+    _private_cli_run,
 ):
     # The --out branch appends to the same lifecycle_cmd — both flags
     # must ride together.
@@ -223,7 +237,7 @@ def test_project_pin_forwarded_alongside_explicit_out(
     target = tmp_path / "target"
     target.mkdir()
     out_dir = tmp_path / "out"
-    calls = _lifecycle_spy(monkeypatch, mod, out_dir)
+    calls = _lifecycle_spy(monkeypatch, mod, out_dir, _private_cli_run)
 
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=str(out_dir), project="myproj"))
@@ -235,6 +249,7 @@ def test_project_pin_forwarded_alongside_explicit_out(
 
 def test_surface_run_project_reaches_lifecycle_child_argv(
     tmp_path, monkeypatch,
+    _private_cli_run,
 ):
     # Full raptor-audit surface: argv → main() → argparse → cmd_run.
     # Proves the run subparser's --project wiring actually reaches the
@@ -245,7 +260,7 @@ def test_surface_run_project_reaches_lifecycle_child_argv(
     target.mkdir()
     resolved = tmp_path / "resolved-run"
     resolved.mkdir()
-    calls = _lifecycle_spy(monkeypatch, mod, resolved)
+    calls = _lifecycle_spy(monkeypatch, mod, resolved, _private_cli_run)
     monkeypatch.setattr(
         sys, "argv",
         ["raptor-audit", "run", str(target),
@@ -280,6 +295,7 @@ def test_surface_run_project_reaches_lifecycle_child_argv(
 
 def test_surface_invalid_project_is_one_line_error(
     tmp_path, monkeypatch, capsys,
+    _private_cli_run,
 ):
     # An invalid --project is a hard error by contract — and it must
     # surface as the lifecycle stub's one-line "ERROR: ..." form with
@@ -290,7 +306,7 @@ def test_surface_invalid_project_is_one_line_error(
     mod = _load_cli()
     target = tmp_path / "target"
     target.mkdir()
-    calls = _lifecycle_spy(monkeypatch, mod, tmp_path / "never-created")
+    calls = _lifecycle_spy(monkeypatch, mod, tmp_path / "never-created", _private_cli_run)
     monkeypatch.setattr(
         sys, "argv",
         ["raptor-audit", "run", str(target), "--project", "../evil"],

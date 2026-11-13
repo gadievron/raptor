@@ -27,7 +27,8 @@ def test_actual_cli_fixture_releases_only_owned_locks(tmp_path, name, failure):
         with expected:
             with pytest.MonkeyPatch.context() as patch:
                 with contextmanager(native._owned_run_locks.__wrapped__)(patch):
-                    getattr(native, name)(tmp_path, patch)
+                    with contextmanager(native._private_cli_run.__wrapped__)(patch) as install:
+                        getattr(native, name)(tmp_path, patch, _private_cli_run=install)
                     owned = [h for h in registry if all(h is not b for b in (*before, borrowed))]
                     assert len(owned) == 1
                     owned_fds = [h.fd for h in owned]
