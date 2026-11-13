@@ -53,8 +53,8 @@ def test_large_region_has_bounded_temporary_allocation():
         pytest.skip("requires isolated allocation tracing")
     source = "x" * (1024 * 1024)
     chars = list(source)
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         _blank_c_region(chars, source, 0, len(source))
         _, peak = tracemalloc.get_traced_memory()
     finally:
