@@ -56,13 +56,6 @@ def _coerce_float(v: Any, default: float = 0.0) -> float:
         return default
 
 
-def _coerce_int(v: Any, default: int = 0) -> int:
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return default
-
-
 SEMANTICS_SQL_ESCAPE = "sql_escape"
 SEMANTICS_HTML_ESCAPE = "html_escape"
 SEMANTICS_URL_ALLOWLIST = "url_allowlist"
@@ -172,8 +165,8 @@ class CandidateValidator:
         if not (0.0 <= self.confidence <= 1.0):
             msg = f"confidence must be in [0, 1], got {self.confidence!r}"
             raise ValueError(msg)
-        if self.source_line < 1:
-            msg = f"source_line must be >= 1, got {self.source_line!r}"
+        if isinstance(self.source_line, bool) or not isinstance(self.source_line, int) or self.source_line < 1:
+            msg = f"source_line must be an integer >= 1, got {self.source_line!r}"
             raise ValueError(msg)
 
     def to_dict(self) -> dict[str, Any]:
@@ -198,7 +191,7 @@ class CandidateValidator:
             semantics_text=data["semantics_text"],
             confidence=_coerce_float(data.get("confidence", 0)),
             source_file=data["source_file"],
-            source_line=_coerce_int(data.get("source_line", 0)),
+            source_line=data.get("source_line", 0),
             extraction_provenance=data["extraction_provenance"],
         )
 
@@ -222,8 +215,8 @@ class StepAnnotation:
     inlined_helpers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.step_index < 0:
-            msg = f"step_index must be >= 0, got {self.step_index!r}"
+        if isinstance(self.step_index, bool) or not isinstance(self.step_index, int) or self.step_index < 0:
+            msg = f"step_index must be an integer >= 0, got {self.step_index!r}"
             raise ValueError(msg)
         for label, value in (
             ("on_path_validators", self.on_path_validators),
@@ -249,7 +242,7 @@ class StepAnnotation:
     def from_dict(cls, data: Mapping[str, Any]) -> StepAnnotation:
         _check_extra_fields("StepAnnotation", data, _STEP_ANNOTATION_KEYS)
         return cls(
-            step_index=_coerce_int(data.get("step_index", 0)),
+            step_index=data.get("step_index", 0),
             on_path_validators=tuple(data.get("on_path_validators", [])),
             variables_referenced=tuple(data.get("variables_referenced", [])),
             inlined_helpers=tuple(data.get("inlined_helpers", [])),
