@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import lru_cache
 from typing import Literal
 
@@ -58,6 +58,15 @@ class ReferenceAnswer:
     # Presentation provenance only, never applicability or delivery authority.
     selection_origin: Literal["requested", "initial"] = "requested"
     selection_kind: Literal["topic", "entry_id"] = "topic"
+    # Labels of supplied material, never a claim about the reviewed target.
+    representation: Literal["language-reference"] = field(default="language-reference", init=False)
+    applicability_domain: Literal["source-language"] = field(default="source-language", init=False)
+    correspondence_ids: tuple[str, ...] = field(default=(), init=False)
+
+    def material_envelope(self) -> dict:
+        """This resolver never issues source/build/module correspondence."""
+        return {"representation": self.representation, "applicability_domain": self.applicability_domain,
+                "correspondence_ids": list(self.correspondence_ids)}
 
 
 _TOKEN = re.compile(r"[a-z0-9_]+")

@@ -146,6 +146,9 @@ def reference_inputs_from_delivery(
             complete = False
             continue
         seen.add(owned_answer.request_id)
+        if any(row.get(key) != value for key, value in owned_answer.material_envelope().items()):
+            complete = False
+            continue
         previous_fitting = fitting.get(owned_answer.request_id)
         if previous_fitting is not None and previous_fitting != row["delivered"]:
             complete = False
