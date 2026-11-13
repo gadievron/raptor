@@ -281,6 +281,25 @@ def _generator_writes_enclosing_frame(node: ast.GeneratorExp) -> bool:
     return False
 
 
+def _has_deferred_generator_write(fn_ast: ast.AST) -> bool:
+    """Visit this frame, including defaults of nested definitions."""
+    if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False  # Synthetic lambda entries use the existing shape refusal.
+    pending: list[ast.AST] = list(fn_ast.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            pending.extend(node.args.defaults)
+            pending.extend(d for d in node.args.kw_defaults if d is not None)
+            if not isinstance(node, ast.Lambda):
+                pending.extend(node.decorator_list)
+            continue
+        if isinstance(node, ast.GeneratorExp) and _generator_writes_enclosing_frame(node):
+            return True
+        pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -304,11 +323,9 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     definitions are summarised separately so their dynamic dispatch
     doesn't poison the outer summary.
     """
+    if _has_deferred_generator_write(fn_ast):
+        return "generator defers an enclosing-frame assignment"
     for node in ast.walk(fn_ast):
-        if (isinstance(node, ast.GeneratorExp)
-                and not _inside_nested_function(node, fn_ast)
-                and _generator_writes_enclosing_frame(node)):
-            return "generator defers an enclosing-frame assignment"
         if isinstance(node, ast.Nonlocal):
             # A nested def's ``nonlocal`` rebinds an ENCLOSING frame —
             # possibly this function's locals — behind the
