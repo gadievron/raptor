@@ -284,6 +284,14 @@ def generate(
 
 
 def write_corpus(pairs: Sequence[tuple[Finding, GroundTruth]], out_dir: Path) -> int:
+    """Write paired records after checking all finding identities."""
+    seen: set[str] = set()
+    for finding, label in pairs:
+        if finding.finding_id != label.finding_id:
+            raise ValueError(f"corpus finding/label id mismatch: {finding.finding_id!r}, {label.finding_id!r}")
+        if finding.finding_id in seen:
+            raise ValueError(f"duplicate corpus finding id: {finding.finding_id!r}")
+        seen.add(finding.finding_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     for finding, label in pairs:
         (out_dir / f"{finding.finding_id}.json").write_text(
