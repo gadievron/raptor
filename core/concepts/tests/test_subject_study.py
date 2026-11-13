@@ -5,6 +5,7 @@ import pytest
 from core.concepts.model import StudyItem
 from core.concepts.study import _RESPONSE_SCHEMA, _run_one_batch
 from core.concepts.subject_study import StudySubject, StudySubjects
+from core.testing.threads import retiring_threads
 
 
 def _subjects():
@@ -180,21 +181,22 @@ def test_explanation_is_available_while_another_study_batch_is_inflight(monkeypa
             errors.append(exc)
 
     worker = threading.Thread(target=work)
-    worker.start()
-    try:
-        assert second_started.wait(5)
-        assert subjects.ready_event.is_set()
-        assert worker.is_alive()
-        updates = subjects.drain_updates()
-        assert len(updates) == 1 and updates[0].status == "partial"
-        assert updates[0].request_id == "owned-request"
-        assert subjects.drain_updates() == ()
-        assert not subjects.ready_event.is_set()
-        assert len(subjects.snapshot()) == 1
-        assert len(calls) == 2
-    finally:
-        release_second.set()
-        worker.join(timeout=5)
+    with retiring_threads([worker], release=release_second.set, timeout=5):
+        worker.start()
+        try:
+            assert second_started.wait(5)
+            assert subjects.ready_event.is_set()
+            assert worker.is_alive()
+            updates = subjects.drain_updates()
+            assert len(updates) == 1 and updates[0].status == "partial"
+            assert updates[0].request_id == "owned-request"
+            assert subjects.drain_updates() == ()
+            assert not subjects.ready_event.is_set()
+            assert len(subjects.snapshot()) == 1
+            assert len(calls) == 2
+        finally:
+            release_second.set()
+            worker.join(timeout=5)
     assert not worker.is_alive()
     assert not errors
     assert len(subjects.drain_updates()) == 1
