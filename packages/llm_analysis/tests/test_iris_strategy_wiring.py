@@ -14,6 +14,8 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_views import module_function_view
+from packages.llm_analysis import dataflow_validation
 from packages.llm_analysis.dataflow_validation import (
     _build_hypothesis,
     _build_strategy_block,
@@ -140,15 +142,15 @@ class TestRobustness:
                 raise ImportError("substrate missing")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", fake_import):
-            finding = {
-                "file_path": "src/x.py", "start_line": 1,
-                "rule_id": "x", "function": "f", "cwe_id": "CWE-89",
-            }
-            h = _build_hypothesis(finding, {}, tmp_path)
-            # No crash, no strategy block, base context intact.
-            assert "Bug-class lenses" not in h.context
-            assert h.target == tmp_path
+        owner = module_function_view(dataflow_validation, import_hook=fake_import)
+        finding = {
+            "file_path": "src/x.py", "start_line": 1,
+            "rule_id": "x", "function": "f", "cwe_id": "CWE-89",
+        }
+        h = owner._build_hypothesis(finding, {}, tmp_path)
+        # No crash, no strategy block, base context intact.
+        assert "Bug-class lenses" not in h.context
+        assert h.target == tmp_path
 
     def test_picker_exception_doesnt_break_validator(self, tmp_path):
 
@@ -191,11 +193,11 @@ class TestStrategyBlockDirect:
                 raise ImportError("substrate missing")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", fake_import):
-            block = _build_strategy_block(
-                cwe="CWE-89", file_path="x", function="f", finding={},
-            )
-            assert block == ""
+        owner = module_function_view(dataflow_validation, import_hook=fake_import)
+        block = owner._build_strategy_block(
+            cwe="CWE-89", file_path="x", function="f", finding={},
+        )
+        assert block == ""
 
     def test_returns_block_with_cwe_pin(self):
         block = _build_strategy_block(
