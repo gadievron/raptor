@@ -296,7 +296,7 @@ def harvest_diff_dir(source: HarvestSource) -> HarvestResult:
         sidecar = path.with_suffix(".json")
         if sidecar.is_file():
             meta = load_json(sidecar, max_bytes=1024 * 1024)
-            if meta is None:
+            if not isinstance(meta, dict):
                 result.errors.append(f"{sidecar.name}: unreadable sidecar")
             else:
                 cve_id = meta.get("cve_id", "")
