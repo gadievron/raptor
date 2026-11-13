@@ -55,8 +55,7 @@ class TestProbeCapability(unittest.TestCase):
         ):
             mock_which.return_value = "/usr/bin/r2"
             # Force ImportError by pretending the module is None
-            with mock_module_registry({"r2pipe": None}), \
-                    patch("builtins.__import__", side_effect=ImportError):
+            with mock_module_registry({"r2pipe": None}):
                 cap = probe_capability()
             self.assertFalse(cap["has_r2pipe"])
             self.assertFalse(cap["available"])
