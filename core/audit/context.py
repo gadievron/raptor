@@ -1231,6 +1231,11 @@ def format_context_for_prompt(
     ctx.pop("language_reference_delivery", None)
     ctx.pop("source_study_delivery", None)
     ctx.pop("caller_context_delivery", None)
+    from copy import deepcopy
+
+    initial_binary_type_context = ({"is_binary": ctx.get("is_binary"),
+                                    "type_definitions": deepcopy(ctx.get("type_definitions"))}
+                                   if ctx.get("is_binary") else None)
 
     from .knowledge_context import (
         admit_complete_reference_reading, context_answers, context_explanations, context_subjects,
@@ -1250,6 +1255,7 @@ def format_context_for_prompt(
 
     def deliver_knowledge_context(kept, *, omission_reason=None):
         from copy import deepcopy
+        from .binary_initial_type_delivery import initial_type_delivery_rows
 
         reference_rows = reference_delivery(
             reference_answers, kept, omission_reason=omission_reason or "reference_too_large",
@@ -1262,6 +1268,9 @@ def format_context_for_prompt(
         # A renderer or callback may overwrite those compatibility fields.
         snapshot = deepcopy({"language_reference_delivery": reference_rows,
                              "source_study_delivery": study_rows})
+        if initial_binary_type_context is not None:
+            snapshot["binary_initial_type_delivery"] = initial_type_delivery_rows(
+                initial_binary_type_context, kept, omission_reason=omission_reason)
         if reference_answers:
             ctx["language_reference_delivery"] = reference_rows
         if study_requests:
@@ -2672,14 +2681,16 @@ def format_context_for_prompt(
             )
         sections.append(PromptSection("fuzz_coverage", "\n".join(fp), 0))
 
-    if ctx.get("type_definitions"):
-        binary_types = bool(ctx.get("is_binary"))
+    type_definitions = (initial_binary_type_context.get("type_definitions")
+                        if initial_binary_type_context is not None else ctx.get("type_definitions"))
+    if type_definitions:
+        binary_types = initial_binary_type_context is not None
         tp = (["\n### Recovered binary type definitions",
                "These are recovered/inferred analysis metadata, not source declarations or verification evidence. "
                "Producer labels do not establish matched debug/source correspondence or executable behaviour. "
                "Missing offsets, sizes, packing and signedness remain unknown."]
               if binary_types else ["\n### Type definitions"])
-        for td in ctx["type_definitions"]:
+        for td in type_definitions:
             td_name = _defend_identifier(td.get("name", "?"), max_length=128)
             td_where = "recovered analysis metadata" if binary_types else _defend_identifier(
                 f"{td.get('file', '?')}:{td.get('line', '?')}",

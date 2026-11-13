@@ -248,6 +248,9 @@ class AuditKnowledgeRuntime:
                 origin = replace(captured, pass_id=reservation.packet.pass_id)
             else:
                 origin = captured
+            from .binary_initial_type_delivery import capture_initial_type_inventory
+            initial_type_inventory = (capture_initial_type_inventory(ctx, origin=origin)
+                                      if isinstance(origin, BinaryKnowledgeOrigin) else None)
             from .reference_foundation import foundation_answers, foundation_required_for_file
             owned_references = reservation.packet.references if reservation is not None else ()
             initial_answers: tuple[ReferenceAnswer, ...] = ()
@@ -402,6 +405,17 @@ class AuditKnowledgeRuntime:
                     binary_view_current = self._same_snapshot(self._origin(ctx), origin)
                 except (KeyError, TypeError, ValueError, UnicodeError):
                     binary_view_current = False
+            initial_binary_types = None
+            if (isinstance(origin, BinaryKnowledgeOrigin) and binary_current and binary_view_current
+                    and getattr(review_fn, "_knowledge_observed_client_contract", None) is True):
+                from .binary_initial_type_delivery import capture_initial_type_delivery
+                initial_binary_types = capture_initial_type_delivery(
+                    outcome.review_result.get("binary_initial_type_delivery"), origin=origin, ctx=ctx,
+                    inventory=initial_type_inventory)
+            if initial_binary_types is not None:
+                outcome.review_result["binary_initial_type_delivery"] = initial_binary_types.records()
+            else:
+                outcome.review_result.pop("binary_initial_type_delivery", None)
             with self._lock:
                 self._events.append({"event": "review_assessment", "attempt_id": attempt_id,
                     "pass_id": origin.pass_id, "status": outcome.status,
@@ -411,6 +425,8 @@ class AuditKnowledgeRuntime:
                     "model": outcome.model, "cost_usd": outcome.cost_usd,
                     **({"language_reference_delivery": deepcopy(reference_fitting)}
                        if isinstance(reference_fitting, list) else {}),
+                    **({"binary_initial_type_delivery": initial_binary_types.records()}
+                       if initial_binary_types is not None else {}),
                     "source_unchanged_after_call": origin.source_identity is not None and current == origin.source_identity,
                     **({"binary_module_unchanged_after_call": binary_current,
                         "binary_view_unchanged_after_call": binary_view_current} if binary_snapshot is not None else {})})
@@ -430,7 +446,8 @@ class AuditKnowledgeRuntime:
                         "pass_id": origin.pass_id, "domain": "binary", "phase": "post_call", "reason": reason})
                 self.notify()
                 raise KnowledgeCallRefused(reason)
-            self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
+            self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest,
+                           initial_binary_types=initial_binary_types, initial_type_inventory=initial_type_inventory)
             self._register_caller_requests(origin, outcome.review_result, ctx=ctx)
             self.notify()
             return outcome
@@ -658,7 +675,7 @@ class AuditKnowledgeRuntime:
         return owned if scope.current(self.target_root) else None
 
     def _register_binary_subjects(self, origin: BinaryKnowledgeOrigin, ctx: dict,
-                                  batch: KnowledgeBatch) -> None:
+                                  batch: KnowledgeBatch, *, initial_delivery=None, initial_inventory=None) -> None:
         """Keep recovered metadata out of source-study requests and receipts."""
         from .binary_subjects import BinarySubjectContext, resolve_binary_subjects
         from .continuation_context import context_version
@@ -707,7 +724,8 @@ class AuditKnowledgeRuntime:
                     self._request_status[request.request_id] = {
                         "state": "deferred", "reason": refusal or "binary_original_input_unavailable"}
             return
-        resolved = resolve_binary_subjects(tuple(targets), ctx, owned)
+        resolved = resolve_binary_subjects(tuple(targets), ctx, owned, initial_delivery=initial_delivery,
+                                          initial_inventory=initial_inventory)
         if resolved is None:
             with self._lock:
                 for request in targets:
@@ -725,7 +743,8 @@ class AuditKnowledgeRuntime:
                     "role": "recovered_binary_type_context_not_evidence"})
         previous = ctx.get("binary_subject_context")
         if isinstance(previous, BinarySubjectContext) and previous.current(ctx):
-            resolved = BinarySubjectContext(origin, owned, (*previous.answers, *resolved.answers))
+            resolved = BinarySubjectContext(origin, owned, (*previous.answers, *resolved.answers),
+                                            (*previous.initial_observations, *resolved.initial_observations))
         rendered = resolved.render()
         if not rendered or not resolved.current(ctx):
             return
@@ -736,10 +755,12 @@ class AuditKnowledgeRuntime:
         offered_ctx["binary_subject_context"] = resolved
         self.offer_context_delta(offered_ctx, kind="binary_target_semantics", version=version)
 
-    def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result, *, delivered_references=None) -> None:
+    def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result, *, delivered_references=None,
+                  initial_binary_types=None, initial_type_inventory=None) -> None:
         batch = register_requests(review_result, origin)
         if isinstance(origin, BinaryKnowledgeOrigin):
-            self._register_binary_subjects(origin, ctx, batch)
+            self._register_binary_subjects(origin, ctx, batch, initial_delivery=initial_binary_types,
+                                            initial_inventory=initial_type_inventory)
             return
         key = self._key(origin)
         current = capture_source_identity(self.target_root, origin.file)

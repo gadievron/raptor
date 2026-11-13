@@ -724,7 +724,7 @@ PIPELINE_OWNED_REVIEW_KEYS: frozenset[str] = frozenset({
     "backlog_drain", "bug_a", "bug_b", "calibrated_downgrade",
     "caller_evidence", "chain", "claim_review_delivery",
     "caller_context_delivery", "claim_material_deferred",
-    "language_reference_delivery", "source_study_delivery", "review_input_scope",
+    "language_reference_delivery", "source_study_delivery", "binary_initial_type_delivery", "review_input_scope",
     "binary_review_binding", "binary_publication_scope",
     "integer_abi_context", "_binary_integer_abi_owner", "binary_subject_context", "binary_caller_context", "binary_callee_assessment_context",
     "external_context_delivery", "publication_failure", "review_recovery",
