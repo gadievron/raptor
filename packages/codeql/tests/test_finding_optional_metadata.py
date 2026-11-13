@@ -51,3 +51,38 @@ def test_selected_finding_keeps_location_when_cwe_properties_are_unavailable(
     assert finding.cwe == expected_cwe
     assert not finding.has_dataflow
     assert json.loads(path.read_text()) == report
+
+
+@pytest.mark.parametrize("properties,target,expected,shared_expected", [
+    pytest.param({}, {"id": "CWE-89", "toolComponent": {"name": "CWE"}},
+                 "CWE-89", "CWE-89", id="prefixed-cwe"),
+    pytest.param({}, {"id": "89", "toolComponent": {"name": "CWE"}},
+                 "CWE-89", "CWE-89", id="numeric-cwe-catalogue"),
+    pytest.param({}, {"id": "89", "toolComponent": {"name": "other"}},
+                 None, None, id="foreign-catalogue"),
+    pytest.param({"tags": ["external/cwe/cwe-078"]},
+                 {"id": "CWE-89", "toolComponent": {"name": "CWE"}},
+                 "CWE-078", "CWE-78", id="existing-tag-priority-and-spelling"),
+])
+def test_relationship_cwe_metadata_reaches_the_selected_finding(
+    tmp_path, properties, target, expected, shared_expected,
+):
+    from core.sarif.parser import parse_sarif_findings
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    run = _run(_located_result(), default="warning")
+    descriptor = run["tool"]["driver"]["rules"][0]
+    descriptor["properties"] = properties
+    descriptor["relationships"] = [{"target": target}]
+    path = _write(tmp_path, "relationships.sarif", run)
+    assert parse_sarif_findings(path)[0]["cwe_id"] == shared_expected
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert finding.cwe == expected
+    assert finding.rule_id == selected[0].result["ruleId"]
+    assert finding.level == "warning"
+    assert json.loads(path.read_text())["runs"][0] == run

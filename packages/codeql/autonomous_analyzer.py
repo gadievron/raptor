@@ -36,7 +36,7 @@ from core.security.prompt_envelope import (
     UntrustedBlock,
     build_prompt,
 )
-from core.sarif.parser import _as_dict, get_result_rule, rule_default_level
+from core.sarif.parser import _as_dict, _extract_cwe_from_rule, get_result_rule, rule_default_level
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
@@ -504,6 +504,10 @@ class AutonomousCodeQLAnalyzer:
                 if isinstance(tag, str) and tag.startswith("external/cwe/cwe-"):
                     cwe = tag.replace("external/cwe/", "").upper()
                     break
+        if cwe is None:
+            # Retain tag priority and spelling; share the existing relationship
+            # parser without admitting other optional property conventions.
+            cwe = _extract_cwe_from_rule({"relationships": rule.get("relationships")})
 
         # Check for dataflow
         code_flows = result.get("codeFlows", [])
