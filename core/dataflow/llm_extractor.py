@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
 _PROMPT_VERSION = "2"
 # Validation changes must invalidate cached responses even without a prompt edit.
-_RESPONSE_SCHEMA_VERSION = 1
+_RESPONSE_SCHEMA_VERSION = 2
 
 _SYSTEM_PROMPT = """\
 You are reviewing one source file for project-specific validator or
