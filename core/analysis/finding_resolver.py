@@ -1365,10 +1365,12 @@ def _resolve_source_cpp(
 def _resolve_sink_cpp(
     cfg: CPPCFG, sink_line: int, sink_arg_hint: str | None,
 ) -> tuple[CPPCFGNode | None, str]:
-    """C / C++ analog of :func:`_resolve_sink`. Same algorithm:
-    locate the CFG node at ``sink_line``, consult its ``call_sites``,
-    pick the hint match or fall back to the outermost call's first
-    bare-name argument (lexicographic for determinism)."""
+    """Resolve the C/C++ sink using its language-specific call ordering.
+
+    A matching upstream argument hint takes precedence. Without a hint,
+    the outermost call must expose exactly one distinct bare-name argument;
+    alphabetical order cannot identify which argument the finding concerns.
+    """
     node = _cpp_node_at_lineno(cfg, sink_line)
     if node is None or not node.call_sites:
         return None, ""
@@ -1377,8 +1379,10 @@ def _resolve_sink_cpp(
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
     outermost = node.call_sites[-1]
+    if len(outermost.arg_names) == 1:
+        return node, next(iter(outermost.arg_names))
     if outermost.arg_names:
-        return node, sorted(outermost.arg_names)[0]
+        return None, ""
     # Fallback: no bare-name argument, but the argument subtrees
     # reference exactly ONE variable (``print(bar.toCharArray())``,
     # ``println("x: " + bar)``) — the sink consumes that variable's
