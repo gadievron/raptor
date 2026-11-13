@@ -36,7 +36,10 @@ from core.security.prompt_envelope import (
     UntrustedBlock,
     build_prompt,
 )
-from core.sarif.parser import _as_dict, _extract_cwe_from_rule, get_result_rule, rule_default_level
+from core.sarif.parser import (
+    ArtifactUriResolver, _as_dict, _extract_cwe_from_rule, get_result_rule,
+    rule_default_level, sarif_uri_path,
+)
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
@@ -521,7 +524,7 @@ class AutonomousCodeQLAnalyzer:
             rule_name=rule_name,
             message=(result.get("message") or {}).get("text", ""),
             level=result.get("level", rule_default_level(rule) or "warning"),
-            file_path=artifact.get("uri", ""),
+            file_path=sarif_uri_path(ArtifactUriResolver(run).resolve(artifact)) or "",
             start_line=region.get("startLine", 0),
             end_line=region.get("endLine") or region.get("startLine", 0),
             snippet=(region.get("snippet") or {}).get("text", ""),
