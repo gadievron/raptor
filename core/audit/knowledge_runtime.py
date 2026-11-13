@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from functools import wraps
 import json
@@ -46,6 +47,12 @@ class KnowledgeReservation:
     packet: KnowledgeContinuation
 
 
+@dataclass(frozen=True)
+class _OwnedUnitLease:
+    key: tuple[str, str, int]
+    closed: Event
+
+
 class AuditKnowledgeRuntime:
     """One audit's knowledge ownership, using its existing study queue.
 
@@ -68,6 +75,8 @@ class AuditKnowledgeRuntime:
         self._required_calls = 1
         self._policy: _CyclePolicy = dict(window=window, max_continuations=max_continuations, max_model_calls=max_model_calls)
         self._busy: dict[tuple[str, str, int], int] = {}
+        self._unit_lease: ContextVar[_OwnedUnitLease | None] = ContextVar(
+            "audit_owned_unit_lease", default=None)
         self._pending_sources: set[str] = set()
         self._request_status: dict[str, dict] = {}
         self._semantic_requests: dict[tuple, str] = {}
@@ -106,7 +115,11 @@ class AuditKnowledgeRuntime:
 
     @staticmethod
     def _gap_key(gap: dict) -> tuple[str, str, int]:
-        return gap.get("file", ""), gap.get("name", gap.get("function", "")), gap.get("line_start", 0)
+        # Match the existing origin factory's unknown-line representation.
+        start = gap.get("line_start", 0)
+        if type(start) is not int or start < 1:
+            start = 0
+        return gap.get("file", ""), gap.get("name", gap.get("function", "")), start
 
     def notify(self) -> None:
         self._wakeup.set()
@@ -127,12 +140,16 @@ class AuditKnowledgeRuntime:
             key = self._gap_key(gap)
             with self._lock:
                 self._busy[key] = self._busy.get(key, 0) + 1
+            lease = _OwnedUnitLease(key, Event())
+            unit_token = self._unit_lease.set(lease)
             try:
                 from .knowledge_calls import owned_call_scope
                 with owned_call_scope(lambda purpose, method: self._admit_client_key(key, purpose, method),
                                       validity=self.client_lifetime_valid):
                     return review_one_fn(gap, *args, **kwargs)
             finally:
+                lease.closed.set()
+                self._unit_lease.reset(unit_token)
                 with self._lock:
                     self._busy[key] -= 1
                     if not self._busy[key]:
@@ -207,6 +224,17 @@ class AuditKnowledgeRuntime:
                 from .knowledge_calls import KnowledgeCallRefused
                 raise KnowledgeCallRefused("binary_view_identity_unavailable")
             key = self._key(captured)
+            lease = self._unit_lease.get()
+            refusal = ("unit_scope_closed" if lease is not None and lease.closed.is_set()
+                       else "review_unit_identity_mismatch" if lease is not None and key != lease.key
+                       else None)
+            if refusal is not None and lease is not None:
+                from .knowledge_calls import KnowledgeCallRefused
+                with self._lock:
+                    self._events.append({"event": "review_unit_refused", "unit": list(lease.key),
+                                         "requested_unit": list(key),
+                                         "reason": refusal})
+                raise KnowledgeCallRefused(refusal)
             with self._lock:
                 reservation = self._active_units.get(key)
             if reservation is not None:
