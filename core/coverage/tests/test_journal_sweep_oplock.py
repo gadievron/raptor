@@ -214,8 +214,11 @@ class TestSweepHoldsOpLock:
         monkeypatch.setattr(oplock, "MUTATOR_GRACE_S", 0.05)
 
         lock_path = project_env.dir / OP_LOCK_NAME
+        from core.testing.threads import retiring_threads
+
+        workers = []
         fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
-        try:
+        with retiring_threads(workers, release=lambda: os.close(fd), timeout=10.0):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             os.write(fd, json.dumps({
                 "pid": os.getpid(), "operation": "run-start:scan",
@@ -235,6 +238,7 @@ class TestSweepHoldsOpLock:
 
             worker = threading.Thread(
                 target=sweep_under_test, daemon=True)
+            workers.append(worker)
             worker.start()
             worker.join(timeout=10.0)
             if worker.is_alive():
@@ -247,8 +251,8 @@ class TestSweepHoldsOpLock:
             assert "locked by another operation" in message
             assert "run-start:scan" in message
             assert not (project_env.dir / INDEX_FILENAME).exists()
-        finally:
-            os.close(fd)
+
+
 
     def test_lock_released_when_a_refusal_raises_inside_it(
         self, project_env,
