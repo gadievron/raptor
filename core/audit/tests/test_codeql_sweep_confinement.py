@@ -39,13 +39,18 @@ from core.audit.sweep import (
     warm_codeql_memo,
 )
 from core.sandbox.errors import SandboxSetupError
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture(autouse=True)
 def _fresh_memo():
-    sweep_mod._reset_codeql_memo()
-    yield
-    sweep_mod._reset_codeql_memo()
+    from core.audit.run_memo import BoundedMemo
+    from core.testing.module_state import isolated_module_state
+
+    with isolated_module_state(sweep_mod, {
+        "_codeql_memo": BoundedMemo(sweep_mod._CODEQL_MEMO_MAX_ENTRIES),
+    }):
+        yield
 
 
 _FAKE_CODEQL = "/home/testuser/.local/bin/codeql"
@@ -60,10 +65,29 @@ def hermetic_codeql_cli(monkeypatch):
     argv through it)."""
     import shutil
 
-    monkeypatch.setattr(
-        shutil, "which",
-        lambda name, *a, **k: _FAKE_CODEQL if name == "codeql" else None,
-    )
+    from functools import partial
+
+    # Keep the once-per-process warning counters on their original namespace.
+    # The import view copies globals afresh for each invocation.
+    for name in (
+        "_warn_codeql_channel_down", "_warn_codeql_warmup_failed",
+        "_note_codeql_dispatch_error", "_note_codeql_dispatch_ok",
+    ):
+        monkeypatch.setattr(sweep_mod, name, partial(getattr(sweep_mod, name)))
+
+    with scoped_function_imports(
+        sweep_mod, ("run_codeql_sweep", "warm_codeql_memo"), {"shutil": shutil},
+    ) as imports:
+        monkeypatch.setattr(
+            imports.shutil, "which",
+            lambda name, *a, **k: _FAKE_CODEQL if name == "codeql" else None,
+        )
+        monkeypatch.setitem(globals(), "run_codeql_sweep", sweep_mod.run_codeql_sweep)
+        monkeypatch.setitem(globals(), "warm_codeql_memo", sweep_mod.warm_codeql_memo)
+        try:
+            yield imports
+        finally:
+            monkeypatch.undo()
 
 
 class _RecordingSandboxRun:
@@ -437,14 +461,12 @@ class TestDispatchConfinement:
 
     def test_missing_cli_keeps_bare_analyze(
         self, tmp_path: Path, monkeypatch,
-        sandbox_recorder: _RecordingSandboxRun,
+        sandbox_recorder: _RecordingSandboxRun, hermetic_codeql_cli,
     ):
         """No CLI on PATH: nothing can execute on either lane, so the
         dispatch keeps the plain analyze() call (missing-tool
         FileNotFoundError contract) instead of a dead sandbox hop."""
-        import shutil
-
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        monkeypatch.setattr(hermetic_codeql_cli.shutil, "which", lambda *a, **k: None)
         db = _make_db(tmp_path)
         query, _pack = _make_pack_query(tmp_path)
         calls: list[dict[str, Any]] = []
