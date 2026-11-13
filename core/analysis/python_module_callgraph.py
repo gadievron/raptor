@@ -802,12 +802,17 @@ def module_dynamic_namespace(
     # decorators or callable names without any ordinary module assignment.
     builtin_namespace_names = {"__builtins__"}
     dynamic_import_names = {"__import__"}
+    reflective_write_names = {"setattr", "delattr"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
             dynamic_import_names.update(
                 alias for alias, target in bindings.items()
                 if target == "importlib" or target.startswith("importlib.")
+            )
+            reflective_write_names.update(
+                alias for alias, target in bindings.items()
+                if target in {"builtins.setattr", "builtins.delattr"}
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -872,6 +877,15 @@ def module_dynamic_namespace(
             return node.func.value.value
         return None
 
+    def reflective_receiver(node: ast.AST) -> ast.AST | None:
+        if not isinstance(node, ast.Call):
+            return None
+        if isinstance(node.func, ast.Name) and node.func.id in reflective_write_names and node.args:
+            return node.args[0]
+        if isinstance(node.func, ast.Attribute) and node.func.attr in {"__setattr__", "__delattr__"}:
+            return node.func.value
+        return None
+
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
@@ -904,26 +918,18 @@ def module_dynamic_namespace(
                 whole = True
         elif isinstance(node, ast.Call):
             func = node.func
-            receiver = namespace_dict_receiver(node)
-            if receiver is not None:
+            for receiver in (namespace_dict_receiver(node), reflective_receiver(node)):
+                if receiver is None:
+                    continue
                 while isinstance(receiver, (ast.Attribute, ast.Subscript)):
                     receiver = receiver.value
                 if isinstance(receiver, ast.Name) and receiver.id in import_roots:
-                    # Dictionary methods can replace imported members with
+                    # These calls can replace imported members with
                     # no Store node or rebinding of the import name.
                     whole = True
             if not isinstance(func, ast.Name):
                 continue
             fname = func.id
-            if fname in ("setattr", "delattr") and node.args:
-                receiver = node.args[0]
-                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                    receiver = receiver.value
-                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
-                    # Imported objects can share the trusted module's
-                    # callable namespace, including through import aliases.
-                    whole = True
-                continue
             if fname in ("exec", "eval"):
                 if len(node.args) >= 2 or _module_reachable(node):
                     whole = True
@@ -947,12 +953,12 @@ def module_dynamic_namespace(
                                 and namespace_dict_receiver(container) is not None):
                             receiver_write = True
                             break
-                        if (isinstance(container, ast.Call)
-                                and isinstance(container.func, ast.Name)
-                                and container.func.id in {"setattr", "delattr"}
-                                and container.args and container.args[0] is cursor):
-                            receiver_write = True
-                            break
+                        if isinstance(container, ast.Call):
+                            receiver = reflective_receiver(container)
+                            if (receiver is cursor
+                                    or (receiver is not None and container.func is cursor)):
+                                receiver_write = True
+                                break
                         if not isinstance(container, (ast.Attribute, ast.Subscript)) \
                                 or container.value is not cursor:
                             break
