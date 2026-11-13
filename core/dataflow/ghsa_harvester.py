@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from contextlib import closing
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from core.run.scratch import scratch_dir
 from core.source.streams import preserving_stream_error
@@ -141,7 +142,17 @@ def _first_commit_ref(adv: dict) -> tuple[str, str, str] | None:
     """Return ``(owner, repo, sha)`` for the first
     ``github.com/.../commit/SHA`` URL in ``references``, or None."""
     for r in adv.get("references", []):
-        m = _COMMIT_RE.search(r.get("url", ""))
+        url = r.get("url", "")
+        if not isinstance(url, str):
+            raise TypeError("reference URL must be a string")
+        try:
+            parsed = urlsplit(url)
+            hostname = parsed.hostname
+        except ValueError:
+            continue
+        if hostname != "github.com":
+            continue
+        m = _COMMIT_RE.match(parsed.netloc + parsed.path)
         if m:
             return m.group(1), m.group(2), m.group(3)
     return None
