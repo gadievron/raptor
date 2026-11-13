@@ -60,9 +60,10 @@ class TestStudyQueue:
             q.enqueue(StudyRequest("q?", "f.c", "fn"))
 
         t = threading.Thread(target=_producer)
-        t.start()
-        batch = q.dequeue_batch(max_items=10, timeout=2.0)
-        t.join()
+        with retiring_threads((t,), release=lambda: None, timeout=5):
+            t.start()
+            batch = q.dequeue_batch(max_items=10, timeout=2.0)
+            t.join()
         assert len(batch) == 1
 
     def test_dequeue_timeout_empty(self):
@@ -83,9 +84,10 @@ class TestStudyQueue:
             q.signal_producer_done()
 
         t = threading.Thread(target=_signal)
-        t.start()
-        batch = q.dequeue_batch(max_items=10, timeout=5.0)
-        t.join()
+        with retiring_threads((t,), release=lambda: None, timeout=5):
+            t.start()
+            batch = q.dequeue_batch(max_items=10, timeout=5.0)
+            t.join()
         assert batch == []
         assert q.is_done()
 
