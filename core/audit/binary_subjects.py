@@ -210,6 +210,40 @@ class BinarySubjectContext:
         return _render(self.answers)
 
 
+def coalesce_binary_subject_contexts(
+    previous: BinarySubjectContext, incoming: BinarySubjectContext, ctx: dict,
+) -> tuple[BinarySubjectContext | None, str]:
+    """Union current observations without evicting an already-ready packet."""
+    try:
+        if ((previous.origin.file, previous.origin.function, previous.origin.binary_identity)
+                != (incoming.origin.file, incoming.origin.function, incoming.origin.binary_identity)
+                or not previous.current(ctx) or not incoming.current(ctx)):
+            return None, "binary_subject_context_changed"
+        answers: dict[str, BinarySubjectAnswer] = {}
+        observations: dict[str, InitialTypeObservation] = {}
+        for value in (previous, incoming):
+            for answer in value.answers:
+                if answer.request_id in answers and answers[answer.request_id] != answer:
+                    return None, "binary_subject_observation_conflict"
+                answers[answer.request_id] = answer
+            for observation in value.initial_observations:
+                request_id = observation[0]
+                if request_id in observations and observations[request_id] != observation:
+                    return None, "binary_subject_observation_conflict"
+                observations[request_id] = observation
+        if not _render(tuple(answers.values())):
+            # Each original answer remains in its producer event. Do not let
+            # alphabetical repacking silently evict undelivered ready facts.
+            return None, "binary_subject_context_budget"
+        retained = tuple(observations.values())
+        bounded = _answers(tuple((answer.request_id, answer.subject) for answer in answers.values()),
+                           ctx, initial_observations=retained)
+        result = BinarySubjectContext(incoming.origin, incoming.scope, bounded, retained)
+        return (result, "") if result.current(ctx) else (None, "binary_subject_context_changed")
+    except (OSError, TypeError, ValueError, UnicodeError, RecursionError, RuntimeError, OverflowError):
+        return None, "binary_subject_context_unavailable"
+
+
 def resolve_binary_subjects(
     requests: tuple[KnowledgeRequest, ...], ctx: dict, scope: BinaryReviewPublicationScope,
     *, initial_delivery: InitialBinaryTypeDelivery | None = None,
