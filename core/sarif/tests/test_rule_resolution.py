@@ -2,6 +2,8 @@
 
 import pytest
 
+from core.testing.processes import run_in_process_group as _run_memory_process
+
 from core.sarif.parser import get_result_rule
 
 
@@ -363,9 +365,60 @@ def test_metrics_rule_counts_match_validated_import_identity(tmp_path, run, refe
     assert metrics['findings_by_severity'][finding['level']] == 1
 
 
+_SARIF_MEMORY_PROFILES = {"location", "partial-fingerprint", "tool-fingerprint", "merge"}
+
+
+def _run_sarif_memory_proof(case):
+    """Keep native identity measurements out of a borrowed tracing session."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    assert case in _SARIF_MEMORY_PROFILES
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.sarif import parser
+from core.sarif.tests import test_rule_resolution as native
+assert not tracemalloc.is_tracing()
+owned, case = Path(sys.argv[2]), sys.argv[3]
+assert case in native._SARIF_MEMORY_PROFILES
+borrowed = parser.load_sarif
+try:
+    with MonkeyPatch.context() as patch:
+        pin_user_state_dirs(patch, owned / "memory-child-state")
+        if case == "merge":
+            native.test_merge_identity_does_not_copy_a_whole_rule_table(patch)
+        else:
+            native.test_established_identity_does_not_copy_unused_result_payload(patch, case)
+finally:
+    assert parser.load_sarif is borrowed
+print("sarif-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), env["TMPDIR"], case],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "sarif-memory-proof-ok", result.stdout
+
+
 @pytest.mark.parametrize('identity', ['location', 'partial-fingerprint', 'tool-fingerprint'])
 def test_established_identity_does_not_copy_unused_result_payload(monkeypatch, identity):
     import tracemalloc
+
+    if tracemalloc.is_tracing():
+        _run_sarif_memory_proof(identity)
+        return
     from pathlib import Path
     import core.sarif.parser as parser
 
@@ -384,8 +437,8 @@ def test_established_identity_does_not_copy_unused_result_payload(monkeypatch, i
     # document is already resident and must not be duplicated for identity.
     monkeypatch.setattr(parser, 'load_sarif', lambda path: report)
     parser.parse_sarif_findings(Path('unused.sarif'))  # Warm imports/caches.
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         findings = parser.parse_sarif_findings(Path('unused.sarif'))
         _, peak = tracemalloc.get_traced_memory()
     finally:
@@ -725,6 +778,10 @@ def test_location_qualified_ids_avoid_existing_ids_and_keep_original_provenance(
 
 def test_merge_identity_does_not_copy_a_whole_rule_table(monkeypatch):
     import tracemalloc
+
+    if tracemalloc.is_tracing():
+        _run_sarif_memory_proof("merge")
+        return
     import core.sarif.parser as parser
 
     rules = [{'id': f'rule-{index}', 'shortDescription': {'text': 'x' * 1024}}
@@ -734,8 +791,8 @@ def test_merge_identity_does_not_copy_a_whole_rule_table(monkeypatch):
                         'results': [result, dict(result)]}]}
     monkeypatch.setattr(parser, 'load_sarif', lambda path: report)
     parser.merge_sarif(['unused.sarif'])
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         merged = parser.merge_sarif(['unused.sarif'])
         _, peak = tracemalloc.get_traced_memory()
     finally:
