@@ -65,13 +65,14 @@ jobs:
 
       # The lockfile itself is the artifact under test: `uv export
       # --locked` fails if uv.lock and pyproject.toml disagree, and the
-      # install fails if any locked wheel refuses the 3.12 floor.
+      # install includes the source grammars exercised by the test subset
+      # and fails if any locked wheel refuses the 3.12 floor.
       - name: Create venv from the lockfile on the floor interpreter
         shell: bash
         run: |
           uv venv --python "$(command -v python3)" "$VENV_PATH"
           source "$VENV_PATH/bin/activate"
-          uv export --locked --no-hashes | uv pip install -r -
+          uv export --locked --extra grammars --no-hashes | uv pip install -r -
 
       # Floor-sensitive runtime modules: the direct typing.Self users
       # (3.11+), the os.unshare-dependent sandbox mount-ns backend

@@ -1,7 +1,5 @@
 """Structural absence evidence requires faithful source text."""
 
-import ast
-
 import pytest
 
 from core.dataflow import structural_validator as sv
@@ -22,9 +20,10 @@ def test_invalid_utf8_is_not_replaced_before_structural_verdict(tmp_path):
 
     invalid = source.replace(b"exact", b"\xff")
     file.write_bytes(invalid)
-    # Parsing bytes is inert; these fixture functions are never executed.
-    with pytest.raises(SyntaxError):
-        ast.parse(invalid)
+    # Some Python versions ignore invalid comment bytes during AST parsing.
+    # Strict decoding establishes the malformed-source fixture consistently.
+    with pytest.raises(UnicodeDecodeError):
+        invalid.decode("utf-8")
     result = sv.validate_structurally(path, tmp_path, language="python")
     assert result.verdict == "inconclusive"
     assert not result.refuted

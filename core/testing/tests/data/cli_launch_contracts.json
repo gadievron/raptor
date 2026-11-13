@@ -121,7 +121,7 @@
     ".github/tests/test_sca_pr_baseline.py": "7d7aa0383c56b1daa53f9312ca260c8bf6fd1ae0333b1923bc61c215907a1196",
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
     ".github/tests/test_scan_restart_identity.py": "91073d4a33c48713d0453835179214a313c7ff547d12a941b7361f04ad878485",
-    ".github/tests/test_scheduled_ci_provisioning.py": "af3463ce1f2f8fcf3287899ea150e7aa2fb137494f05480fa3fc71c66b25e123",
+    ".github/tests/test_scheduled_ci_provisioning.py": "f60b1987b0c7c0e03cabba3490387af0282d2ad7ecdaa5dceae126c5a1eb41dd",
     ".github/tests/test_setup_venv_cache.py": "9dd83d7323f397227c5df53d1ff23a4c49205245e8c38651e64e20bed01242df",
     ".github/tests/test_static_boundary_contracts.py": "c85fa61c51f66c2bd85e8d85b43f5c73eb7096b4577cc877ee8a579023d3882c",
     ".github/tests/test_symlink_hop_bound.py": "f031725cd5dfeb073b6885a1d53e079022c069571aeab4f4006f5df1fd6a99ff",

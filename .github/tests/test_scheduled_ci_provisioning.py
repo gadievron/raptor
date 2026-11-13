@@ -237,7 +237,7 @@ def test_floor_canary_owns_its_inputs_and_keeps_fresh_install_and_same_test_subs
     assert 'RAPTOR_ALLOW_DEGRADED_UNTRUSTED' not in body
     install = named_step(body, 'Create venv from the lockfile on the floor interpreter')
     assert '        shell: bash\n' in install
-    assert 'uv export --locked --no-hashes | uv pip install -r -' in script(install)
+    assert 'uv export --locked --extra grammars --no-hashes | uv pip install -r -' in script(install)
     assert 'uses: ./.github/actions/setup-venv' not in body  # Fresh install is the canary's contract.
     run = script(named_step(body, 'Fast test subset'))
     assert 'python .github/scripts/pytest_workers.py core/inventory core/dataflow' in run
@@ -272,6 +272,8 @@ def test_floor_install_binds_setup_python_and_propagates_failures(tmp_path, fail
             activate.write_text(":\\n")
         elif args[0] == "export":
             print("floor-fixture==1.0")
+            if "--extra" in args and args[args.index("--extra") + 1] == "grammars":
+                print("floor-grammar-fixture==1.0")
     '''))
     uv.chmod(0o755)
     venv = tmp_path / 'environment with spaces'
@@ -287,9 +289,9 @@ def test_floor_install_binds_setup_python_and_propagates_failures(tmp_path, fail
     assert calls[0]['argv'] == ['venv', '--python', str(tools / 'python3'), str(venv)]
     if not failure:
         by_command = {call['argv'][0]: call for call in calls}
-        assert by_command['export']['argv'] == ['export', '--locked', '--no-hashes']
+        assert by_command['export']['argv'] == ['export', '--locked', '--extra', 'grammars', '--no-hashes']
         assert by_command['pip'] == {'argv': ['pip', 'install', '-r', '-'],
-                                     'stdin': 'floor-fixture==1.0\n'}
+                                     'stdin': 'floor-fixture==1.0\nfloor-grammar-fixture==1.0\n'}
 
 
 def test_mypy_remains_a_full_tree_type_check_after_restore():
