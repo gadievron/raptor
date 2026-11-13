@@ -148,3 +148,37 @@ def test_selected_finding_resolves_source_in_its_own_run(tmp_path, artifact, exp
     assert finding.rule_id == result['ruleId']
     assert finding.start_line == result['locations'][0]['physicalLocation']['region']['startLine']
     assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('line', ['not/a/line', True, -1, []])
+def test_unusable_start_coordinate_remains_unknown_in_finding_and_artifact(tmp_path, line):
+    from packages.codeql.autonomous_analyzer import _artifact_safe_id
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    region = result['locations'][0]['physicalLocation']['region']
+    region.update(startLine=line, endLine=9)
+    run = _run(result)
+    path = _write(tmp_path, 'coordinate.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert (finding.start_line, finding.end_line) == (0, 0)
+    assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
+    stem = _artifact_safe_id(finding)
+    assert stem.endswith('_0') and '/' not in stem and '\\' not in stem
+    assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('end,expected', [(None, 4), ([], 4), (3, 4), (9, 9)])
+def test_optional_end_coordinate_never_precedes_known_start(end, expected):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run
+
+    result = _located_result()
+    result['locations'][0]['physicalLocation']['region'].update(startLine=4, endLine=end)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(result, _run(result))
+    assert (finding.start_line, finding.end_line) == (4, expected)

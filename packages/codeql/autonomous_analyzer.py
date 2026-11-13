@@ -37,7 +37,7 @@ from core.security.prompt_envelope import (
     build_prompt,
 )
 from core.sarif.parser import (
-    ArtifactUriResolver, _as_dict, _extract_cwe_from_rule, get_result_rule,
+    ArtifactUriResolver, _as_dict, _coerce_line, _extract_cwe_from_rule, get_result_rule,
     rule_default_level, sarif_uri_path,
 )
 from core.source import read_text_capped
@@ -487,6 +487,8 @@ class AutonomousCodeQLAnalyzer:
         physical_loc = location.get("physicalLocation") or {}
         region = physical_loc.get("region") or {}
         artifact = physical_loc.get("artifactLocation") or {}
+        start_line = max(0, _coerce_line(region.get("startLine")) or 0)
+        end_line = max(start_line, _coerce_line(region.get("endLine")) or start_line) if start_line else 0
 
         # Extract CWE. Pre-fix `for tag in tags: if tag.startswith(...)`
         # raised AttributeError when SARIF emitters produced
@@ -525,8 +527,8 @@ class AutonomousCodeQLAnalyzer:
             message=(result.get("message") or {}).get("text", ""),
             level=result.get("level", rule_default_level(rule) or "warning"),
             file_path=sarif_uri_path(ArtifactUriResolver(run).resolve(artifact)) or "",
-            start_line=region.get("startLine", 0),
-            end_line=region.get("endLine") or region.get("startLine", 0),
+            start_line=start_line,
+            end_line=end_line,
             snippet=(region.get("snippet") or {}).get("text", ""),
             cwe=cwe,
             has_dataflow=has_dataflow,
