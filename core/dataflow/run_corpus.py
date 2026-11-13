@@ -66,7 +66,8 @@ def _read_corpus_json(path: Path) -> str:
 
 
 def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
-    """Yield ``(finding, label)`` for every paired entry in the corpus dir."""
+    """Yield paired records, refusing mismatched or duplicate finding IDs."""
+    seen_ids: set[str] = set()
     for fp in sorted(corpus_dir.glob("*.json")):
         if fp.name.endswith(".label.json"):
             continue
@@ -79,6 +80,9 @@ def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
                 f"finding {finding.finding_id!r}, label {label.finding_id!r}"
             )
             raise ValueError(msg)
+        if finding.finding_id in seen_ids:
+            raise ValueError(f"duplicate corpus finding_id {finding.finding_id!r}: {fp}")
+        seen_ids.add(finding.finding_id)
         yield finding, label
 
 
