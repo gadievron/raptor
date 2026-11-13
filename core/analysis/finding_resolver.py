@@ -885,8 +885,8 @@ def _resolve_sink(
     * If a hint is provided and matches a CallSite's
       ``arg_names``, use the hint.
     * Else the outermost call (last in source order) is the
-      assumed sink; its first ``arg_name`` (lexicographic for
-      determinism) is ``sink_arg``.
+      assumed sink; exactly one distinct ``arg_name`` is required.
+      Multiple names need an explicit hint rather than an arbitrary pick.
 
     Returns ``(None, "")`` on failure; the caller surfaces the
     audit reason.
@@ -901,8 +901,10 @@ def _resolve_sink(
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
     outermost = node.call_sites[-1]
+    if len(outermost.arg_names) == 1:
+        return node, next(iter(outermost.arg_names))
     if outermost.arg_names:
-        return node, sorted(outermost.arg_names)[0]
+        return None, ""
     # Fallback: no bare-name argument, but the argument subtrees
     # reference exactly ONE variable (``print(bar.toCharArray())``,
     # ``println("x: " + bar)``) — the sink consumes that variable's
