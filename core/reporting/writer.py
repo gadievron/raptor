@@ -354,6 +354,8 @@ def _load_generation_report(output_dir, current, *, root=None):
         raise ValueError("Committed reporting manifest unavailable") from exc
     if not isinstance(manifest, dict) or manifest.get("generation") != identity:
         raise ValueError("Committed generation identity mismatch")
+    if type(manifest.get("schema_version")) is not int or manifest.get("schema_version") != 1:
+        raise ValueError("Unsupported committed reporting manifest schema version")
     definition = {k: v for k, v in manifest.items() if k not in {"generation", "directory", "status"}}
     if digest(definition) != identity or current.get("snapshot_id") != manifest.get("snapshot_id"):
         raise ValueError("Committed generation digest mismatch")
