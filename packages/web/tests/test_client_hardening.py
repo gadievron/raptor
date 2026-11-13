@@ -130,19 +130,22 @@ def test_redirect_hops_pass_through_the_rate_limiter():
 
 
 def test_rate_limiter_reservation_is_thread_safe():
-    client = WebClient("https://example.test", rate_limit=0.02)
-    started = time.monotonic()
+    from core.testing.threads import retiring_threads
 
-    threads = [
-        threading.Thread(target=client._rate_limit_wait) for _ in range(5)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    with WebClient("https://example.test", rate_limit=0.02) as client:
+        started = time.monotonic()
 
-    # 5 concurrent claims must be spaced out: at least 4 full intervals.
-    assert time.monotonic() - started >= 4 * 0.02
+        threads = [
+            threading.Thread(target=client._rate_limit_wait) for _ in range(5)
+        ]
+        with retiring_threads(threads, release=lambda: None, timeout=10):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        # 5 concurrent claims must be spaced out: at least 4 full intervals.
+        assert time.monotonic() - started >= 4 * 0.02
 
 
 # -- buffered redirect-hop bodies --------------------------------------------
