@@ -13,6 +13,8 @@ Fields are grouped into two sections:
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
+from types import MappingProxyType
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +27,32 @@ if TYPE_CHECKING:
     from .propagation import PropagationConfig
     from .summary_cache import SummaryCache
     from .sweep import SarifCache
+
+
+def _snapshot_chain_occurrences(checklist) -> Mapping[tuple[str, str], int | None]:
+    """Copy primitive declaration bounds once; malformed inventories refuse."""
+    occurrences: dict[tuple[str, str], int | None] = {}
+    files = checklist.get("files") if isinstance(checklist, dict) else None
+    if not isinstance(files, list):
+        return MappingProxyType({})
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            return MappingProxyType({})
+        path = file_info.get("path")
+        items = file_info.get("items", file_info.get("functions"))
+        if not isinstance(path, str) or not path or not isinstance(items, list):
+            return MappingProxyType({})
+        for item in items:
+            if not isinstance(item, dict):
+                return MappingProxyType({})
+            name = item.get("name")
+            if not isinstance(name, str) or not name:
+                return MappingProxyType({})
+            key = (path, name)
+            line = item.get("line_start")
+            occurrences[key] = (line if key not in occurrences and type(line) is int and line > 0
+                                else None)
+    return MappingProxyType(occurrences)
 
 
 @dataclass
@@ -149,6 +177,11 @@ class SharedState:
     # lookups during chain injection.
     checklist_index: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
+    # Original occurrence inventory for advisory chain attribution. Unlike
+    # checklist_index, duplicate declarations remain ambiguous. Values are
+    # copied primitives and the mapping cannot mutate with the checklist.
+    chain_occurrences: Mapping[tuple[str, str], int | None] = field(init=False, repr=False)
+
     # Domain model (concepts + invariants) loaded from the journal.
     domain_model: dict[str, Any] | None = None
 
@@ -218,6 +251,9 @@ class SharedState:
     # ------------------------------------------------------------------
     # Factory
     # ------------------------------------------------------------------
+
+    def __post_init__(self) -> None:
+        self.chain_occurrences = _snapshot_chain_occurrences(self.checklist)
 
     @classmethod
     def from_prep(
