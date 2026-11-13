@@ -14,6 +14,25 @@ from .knowledge_calls import KnowledgeCallRefused
 _IMPLEMENTATION_VIEWS = frozenset(("decompilation", "disassembly"))
 
 
+_REVIEW_DEFERRAL_REASONS = {
+    "binary_implementation_unavailable":
+        "No implementation view was available for this binary unit; review deferred",
+    "binary_module_changed_or_unavailable":
+        "Binary module changed or became unavailable; review deferred",
+    "binary_occurrence_unavailable":
+        "Binary occurrence could not be bound to its module; review deferred",
+    "binary_view_identity_unavailable":
+        "Binary implementation input could not be bound; review deferred",
+}
+_ALLOWANCE_DEFERRED = "Knowledge review allowance exhausted"
+REVIEW_DEFERRAL_LIMITATIONS = (*_REVIEW_DEFERRAL_REASONS.values(), _ALLOWANCE_DEFERRED)
+
+
+def review_deferral_reason(reason: str) -> str:
+    """Return the bounded existing dispatch-refusal disclosure, never raw text."""
+    return _REVIEW_DEFERRAL_REASONS.get(reason, _ALLOWANCE_DEFERRED)
+
+
 def require_binary_implementation(ctx: dict[str, Any]) -> None:
     """Refuse unavailable binary views before spending a reviewer attempt.
 
