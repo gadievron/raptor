@@ -1148,18 +1148,41 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
+    literal_copy_receiver_cache: dict[ast.AST, ast.AST | None] = {}
+
     def selected_literal_copy_receiver(value: ast.AST) -> ast.AST | None:
-        while True:
-            if isinstance(value, ast.NamedExpr):
-                value = value.value
-            elif (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                  and value.func.attr == "copy" and not value.args and not value.keywords):
-                value = value.func.value
+        pending = [(value, 0)]
+        while pending:
+            cursor, phase = pending.pop()
+            if cursor in literal_copy_receiver_cache:
+                continue
+            if isinstance(cursor, (ast.Dict, ast.Tuple, ast.List)):
+                literal_copy_receiver_cache[cursor] = cursor
+            elif (isinstance(cursor, ast.NamedExpr)
+                  or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                      and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
+                source = cursor.value if isinstance(cursor, ast.NamedExpr) else cursor.func.value
+                if phase == 0:
+                    pending.append((cursor, 1))
+                    pending.append((source, 0))
+                    continue
+                literal_copy_receiver_cache[cursor] = literal_copy_receiver_cache[source]
+            elif isinstance(cursor, ast.Subscript) and not isinstance(cursor.slice, ast.Slice):
+                if phase == 0:
+                    pending.append((cursor, 1))
+                    pending.append((cursor.value, 0))
+                    continue
+                selected = selected_literal_member(literal_copy_receiver_cache[cursor.value], cursor.slice)
+                if selected is None:
+                    literal_copy_receiver_cache[cursor] = None
+                elif phase == 1:
+                    pending.append((cursor, 2))
+                    pending.append((selected, 0))
+                else:
+                    literal_copy_receiver_cache[cursor] = literal_copy_receiver_cache[selected]
             else:
-                selected = selected_literal_value(value)
-                if selected is value or selected is None:
-                    return selected
-                value = selected
+                literal_copy_receiver_cache[cursor] = None
+        return literal_copy_receiver_cache[value]
 
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
