@@ -190,6 +190,19 @@ def test_panel_reconstructions_bind_the_combined_runtime_scope():
              and ast.unparse(node.func) == "knowledge_runtime.bind_review_input_scope"]
     assert {ast.unparse(call.args[0]) for call in calls} == {"panel_outcome", "consistency_outcome"}
     assert len(calls) == 2
+    assert {ast.unparse(call.args[0]): ast.unparse(next(
+        keyword.value for keyword in call.keywords if keyword.arg == "members"))
+        for call in calls} == {"panel_outcome": "panel_members", "consistency_outcome": "all_raw"}
+    member_list = next(node.value for node in ast.walk(function)
+                       if isinstance(node, ast.Assign) and any(
+                           isinstance(target, ast.Name) and target.id == "panel_members"
+                           for target in node.targets))
+    assert ast.unparse(member_list) == "[row for rows in mr_result.per_model_raw.values() for row in rows]"
+    all_raw = next(node.value for node in ast.walk(function)
+                   if isinstance(node, ast.Assign) and any(
+                       isinstance(target, ast.Name) and target.id == "all_raw"
+                       for target in node.targets))
+    assert ast.unparse(all_raw) == "[r for raw_list in mr_result.per_model_raw.values() for r in raw_list]"
 
 
 def test_initial_publication_failure_keeps_original_live_scope(tmp_path, monkeypatch):

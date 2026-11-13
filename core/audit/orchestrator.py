@@ -15263,8 +15263,8 @@ def _multi_pass_review(
             primary = mr_result.items[0]
             from .review_claims import panel_context_history
 
-            panel_history = panel_context_history(primary.get("review_claims"),
-                [row for rows in mr_result.per_model_raw.values() for row in rows])
+            panel_members = [row for rows in mr_result.per_model_raw.values() for row in rows]
+            panel_history = panel_context_history(primary.get("review_claims"), panel_members)
             if panel_history is not None:
                 primary["review_claims"] = panel_history
             total_cost = sum(
@@ -15294,7 +15294,7 @@ def _multi_pass_review(
                 review_result=primary,
             )
             if knowledge_runtime is not None:
-                knowledge_runtime.bind_review_input_scope(panel_outcome)
+                knowledge_runtime.bind_review_input_scope(panel_outcome, members=panel_members)
             return panel_outcome
 
         except ImportError:
@@ -15428,7 +15428,7 @@ def _multi_pass_review(
                     review_result=primary,
                 )
                 if knowledge_runtime is not None:
-                    knowledge_runtime.bind_review_input_scope(consistency_outcome)
+                    knowledge_runtime.bind_review_input_scope(consistency_outcome, members=all_raw)
                 return consistency_outcome
             logger.warning(
                 "self-consistency produced no items for %s:%s — "
