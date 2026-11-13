@@ -17,6 +17,7 @@ import resource
 import shutil
 import signal
 import stat
+import math
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
@@ -3845,6 +3846,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 f"sandbox() context. Open a new sandbox(...) block to change it."
             )
             raise TypeError(msg_0)
+
+        # Native deadline comparisons cannot expire NaN, and subprocess
+        # waiters cannot represent infinite deadlines. None is unbounded.
+        _timeout = kwargs.get("timeout")
+        if _timeout is not None and not math.isfinite(_timeout):
+            raise ValueError("timeout must be finite or None")
 
         # Per-call capture ceiling (bytes per captured stream), for
         # callers that only ever consume bounded tails of hostile
