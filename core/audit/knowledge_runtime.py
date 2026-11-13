@@ -81,6 +81,8 @@ class AuditKnowledgeRuntime:
         self._request_status: dict[str, dict] = {}
         self._semantic_requests: dict[tuple, str] = {}
         self._binary_initial_guarded: set[str] = set()
+        self._binary_subject_pending: dict[tuple[str, str, int], object] = {}
+        self._binary_subject_locks: dict[tuple[str, str, int], Lock] = {}
         self._source_answers: dict[str, list[SubjectExplanation]] = {}
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
@@ -678,7 +680,8 @@ class AuditKnowledgeRuntime:
     def _register_binary_subjects(self, origin: BinaryKnowledgeOrigin, ctx: dict,
                                   batch: KnowledgeBatch, *, initial_delivery=None, initial_inventory=None) -> None:
         """Keep recovered metadata out of source-study requests and receipts."""
-        from .binary_subjects import BinarySubjectContext, resolve_binary_subjects
+        from .binary_subjects import (BinarySubjectContext, coalesce_binary_subject_contexts,
+                                      resolve_binary_subjects)
         from .continuation_context import context_version
 
         key = self._key(origin)
@@ -767,19 +770,33 @@ class AuditKnowledgeRuntime:
                     "request_id": subject_answer.request_id, "subject": subject_answer.subject, "status": subject_answer.status,
                     "reason": subject_answer.reason, "material": subject_answer.material,
                     "role": "recovered_binary_type_context_not_evidence"})
-        previous = ctx.get("binary_subject_context")
-        if isinstance(previous, BinarySubjectContext) and previous.current(ctx):
-            resolved = BinarySubjectContext(origin, owned, (*previous.answers, *resolved.answers),
-                                            (*previous.initial_observations, *resolved.initial_observations))
-        rendered = resolved.render()
-        if not rendered or not resolved.current(ctx):
-            return
-        version = context_version(rendered)
-        # Panel members may still be formatting the initial shared context.
-        # Only an owned continuation receives the newly resolved material.
-        offered_ctx = dict(ctx)
-        offered_ctx["binary_subject_context"] = resolved
-        self.offer_context_delta(offered_ctx, kind="binary_target_semantics", version=version)
+        with self._lock:
+            subject_lock = self._binary_subject_locks.setdefault(key, Lock())
+        # Resolve outside this lock, but serialize union and offer per unit.
+        # An older thread must not overwrite a newer accumulated version.
+        # Currentness callbacks never run under the Runtime-wide lock.
+        with subject_lock:
+            previous = self._binary_subject_pending.get(key, ctx.get("binary_subject_context"))
+            if isinstance(previous, BinarySubjectContext) and previous.current(ctx):
+                merged, why = coalesce_binary_subject_contexts(previous, resolved, ctx)
+                if merged is None:
+                    with self._lock:
+                        for request in targets:
+                            self._request_status[request.request_id] = {"state": "deferred", "reason": why}
+                            self._events.append({"event": "binary_subject_context_deferred",
+                                "request_id": request.request_id, "origin": asdict(origin), "reason": why})
+                    return
+                resolved = merged
+            rendered = resolved.render()
+            if not rendered or not resolved.current(ctx):
+                return
+            self._binary_subject_pending[key] = resolved
+            version = context_version(rendered)
+            # Initial contexts remain untouched; only the reserved continuation
+            # receives the union of original, still-current observations.
+            offered_ctx = dict(ctx)
+            offered_ctx["binary_subject_context"] = resolved
+            self.offer_context_delta(offered_ctx, kind="binary_target_semantics", version=version)
 
     def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result, *, delivered_references=None,
                   initial_binary_types=None, initial_type_inventory=None) -> None:
