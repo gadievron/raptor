@@ -459,6 +459,7 @@ class Job:
         from . import _spawn
         writer, self.writer = self.writer, None
         reader, self.reader = self.reader, None
+        close_error: BaseException | None = None
         try:
             if writer is not None:
                 try:
@@ -495,12 +496,16 @@ class Job:
                 raise TimeoutError('job watcher not reaped')
             self.record.update(report)
         except BaseException as exc:
-            self.record.update(_finish_scope(self.scope))
-            self.record['cleanup'] = 'failed'
-            self.record['cleanup_error'] = type(exc).__name__
-            if not isinstance(exc, Exception):
+            try:
+                self.record.update(_finish_scope(self.scope))
+                self.record['cleanup'] = 'failed'
+                self.record['cleanup_error'] = type(exc).__name__
+                if not isinstance(exc, Exception):
+                    raise
+                raise JobBudgetError('Sandbox job cleanup could not be verified', self.record) from exc
+            except BaseException as failure:
+                close_error = failure
                 raise
-            raise JobBudgetError('Sandbox job cleanup could not be verified', self.record) from exc
         finally:
             from ._retirement import retire_parent_resources
 
@@ -547,4 +552,5 @@ class Job:
                 retire(reap_watcher),
                 retire(lambda: os.close(reader) if reader is not None else None),
                 retire(close_scope), retire(close_receipt),
+                primary_error=close_error,
             )
