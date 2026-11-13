@@ -76,6 +76,10 @@ def python_runtime_tool_paths() -> list[str]:
     # that into a recursive read grant for credentials and account state.
     import sysconfig
     homes = _home_roots()
+    # Free-threaded CPython puts its ABI suffix on the library directory;
+    # get_python_version() alone returns only the major/minor version.
+    library_name = ('python' + sysconfig.get_python_version()
+                    + (sysconfig.get_config_var('abi_thread') or ''))
     narrow_candidates: list[str] = []
     for raw in candidates:
         # Reject relative input before HOME narrowing or realpath() can
@@ -85,8 +89,8 @@ def python_runtime_tool_paths() -> list[str]:
         prefix = Path(os.path.realpath(raw))
         if any(prefix == home or prefix in home.parents for home in homes):
             narrow_candidates.extend(str(prefix / item) for item in (
-                'bin', 'lib/python' + sysconfig.get_python_version(),
-                'lib64/python' + sysconfig.get_python_version(), 'pyvenv.cfg'))
+                'bin', 'lib/' + library_name,
+                'lib64/' + library_name, 'pyvenv.cfg'))
         else:
             narrow_candidates.append(raw)
     paths: list[str] = []
