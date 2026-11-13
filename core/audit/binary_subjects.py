@@ -15,6 +15,7 @@ from .binary_review_scope import (
     BinaryKnowledgeOrigin, BinaryReviewPublicationScope, capture_binary_input_identity,
 )
 from .knowledge_requests import KnowledgeRequest
+from .binary_initial_type_delivery import InitialBinaryTypeDelivery, InitialBinaryTypeInventory
 from .review_context_inputs import MAX_SNAPSHOT_BYTES
 
 _HEADER = (
@@ -62,19 +63,27 @@ def _unavailable(request_id: str, subject: str, reason: str) -> BinarySubjectAns
     return BinarySubjectAnswer(request_id, subject, "unavailable", reason, None)
 
 
-def _lookup(request_id: str, subject: str, ctx: dict) -> BinarySubjectAnswer:
+InitialTypeObservation = tuple[str, InitialBinaryTypeInventory | None, InitialBinaryTypeDelivery | None]
+
+
+def _lookup(request_id: str, subject: str, ctx: dict, *,
+            initial_inventory: InitialBinaryTypeInventory | None = None,
+            initial_delivery: InitialBinaryTypeDelivery | None = None) -> BinarySubjectAnswer:
     from packages.ghidra.model import REDatabase, REType
 
     if type(request_id) is not str or type(subject) is not str:
         return _unavailable(request_id, subject, "binary_subject_identity_unavailable")
     initial = ctx.get("type_definitions")
-    if isinstance(initial, list) and any(
+    currently_initial = isinstance(initial, list) and any(
         isinstance(row, dict) and type(row.get("name")) is str and row["name"] == subject
         for row in initial
-    ):
-        # A compatibility field does not prove complete fitting. Do not buy a
-        # new round by relabelling material which may already have been shown.
-        return _unavailable(request_id, subject, "initial_type_delivery_unmeasured")
+    )
+    if currently_initial or initial_inventory is not None and initial_inventory.contains(subject):
+        # Compatibility fields do not prove fitting. Only an original owned
+        # omission allows this lookup; unknown or visible material stays out.
+        if initial_delivery is None or not initial_delivery.permits_omission(
+                subject, ctx, initial_delivery.origin):
+            return _unavailable(request_id, subject, "initial_type_delivery_unmeasured")
     database = ctx.get("_binary_analysis_database")
     if not isinstance(database, REDatabase) or type(database.types) is not list:
         return _unavailable(request_id, subject, "binary_type_inventory_unavailable")
@@ -132,8 +141,17 @@ def _render(answers: tuple[BinarySubjectAnswer, ...]) -> str:
     return rendered if len(rendered.encode("utf-8")) <= MAX_SNAPSHOT_BYTES else ""
 
 
-def _answers(subjects: tuple[tuple[str, str], ...], ctx: dict) -> tuple[BinarySubjectAnswer, ...]:
-    answers = [_lookup(request_id, subject, ctx) for request_id, subject in subjects]
+def _answers(subjects: tuple[tuple[str, str], ...], ctx: dict, *,
+             initial_observations: tuple[InitialTypeObservation, ...] = ()) -> tuple[BinarySubjectAnswer, ...]:
+    observed = {}
+    for request_id, inventory, delivery in initial_observations:
+        if request_id in observed:
+            raise ValueError("ambiguous initial type observation")
+        observed[request_id] = (inventory, delivery)
+    answers = []
+    for request_id, subject in subjects:
+        inventory, delivery = observed.get(request_id, (None, None))
+        answers.append(_lookup(request_id, subject, ctx, initial_inventory=inventory, initial_delivery=delivery))
     accepted: list[BinarySubjectAnswer] = []
     # Stable subject/material ordering controls a bounded packet independently
     # of model wording, request IDs and input order. Duplicate facts are free.
@@ -151,6 +169,7 @@ class BinarySubjectContext:
     origin: BinaryKnowledgeOrigin
     scope: BinaryReviewPublicationScope
     answers: tuple[BinarySubjectAnswer, ...]
+    initial_observations: tuple[InitialTypeObservation, ...] = ()
 
     def current(self, ctx: dict) -> bool:
         """Retain original observation and facts; never adopt a late epoch."""
@@ -166,7 +185,22 @@ class BinarySubjectContext:
                     or not self.scope.current(target)
                     or capture_binary_input_identity(ctx, self.scope) != self.origin.binary_identity):
                 return False
-            expected = _answers(tuple((answer.request_id, answer.subject) for answer in self.answers), ctx)
+            answer_ids = {answer.request_id for answer in self.answers}
+            for request_id, inventory, delivery in self.initial_observations:
+                if request_id not in answer_ids:
+                    return False
+                if (inventory is not None and not isinstance(inventory, InitialBinaryTypeInventory)
+                        or delivery is not None and not isinstance(delivery, InitialBinaryTypeDelivery)):
+                    return False
+                for observation in (inventory, delivery):
+                    if observation is not None and (
+                            (observation.origin.file, observation.origin.function, observation.origin.binary_identity)
+                            != (self.origin.file, self.origin.function, self.origin.binary_identity)):
+                        return False
+                if inventory is not None and delivery is not None and inventory.origin != delivery.origin:
+                    return False
+            expected = _answers(tuple((answer.request_id, answer.subject) for answer in self.answers), ctx,
+                                initial_observations=self.initial_observations)
             return expected == self.answers and self.scope.current(target)
         except (OSError, TypeError, ValueError, UnicodeError, RecursionError, RuntimeError, OverflowError):
             return False
@@ -178,6 +212,8 @@ class BinarySubjectContext:
 
 def resolve_binary_subjects(
     requests: tuple[KnowledgeRequest, ...], ctx: dict, scope: BinaryReviewPublicationScope,
+    *, initial_delivery: InitialBinaryTypeDelivery | None = None,
+    initial_inventory: InitialBinaryTypeInventory | None = None,
 ) -> BinarySubjectContext | None:
     """Resolve exact recovered type names without entering source-study jobs."""
     if (not requests or not isinstance(scope, BinaryReviewPublicationScope)
@@ -194,8 +230,18 @@ def resolve_binary_subjects(
         if (not scope.current(scope.module.path)
                 or capture_binary_input_identity(ctx, scope) != origin.binary_identity):
             return None
-        answers = _answers(tuple((request.request_id, request.subject) for request in requests), ctx)
-        result = BinarySubjectContext(origin, scope, answers)
+        if initial_inventory is not None and (not isinstance(initial_inventory, InitialBinaryTypeInventory)
+                                              or initial_inventory.origin != origin):
+            return None
+        if initial_delivery is not None and (not isinstance(initial_delivery, InitialBinaryTypeDelivery)
+                                             or initial_delivery.origin != origin):
+            return None
+        initial_observations = (tuple((request.request_id, initial_inventory, initial_delivery)
+                                      for request in requests)
+                                if initial_inventory is not None or initial_delivery is not None else ())
+        answers = _answers(tuple((request.request_id, request.subject) for request in requests), ctx,
+                           initial_observations=initial_observations)
+        result = BinarySubjectContext(origin, scope, answers, initial_observations)
         return result if result.current(ctx) else None
     except (OSError, TypeError, ValueError, UnicodeError, RecursionError, RuntimeError, OverflowError):
         return None

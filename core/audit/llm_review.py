@@ -1526,6 +1526,9 @@ def make_review_fn(
             if delivered_knowledge_context:
                 result["language_reference_delivery"] = delivered_knowledge_context[0]["language_reference_delivery"]
                 result["source_study_delivery"] = delivered_knowledge_context[0]["source_study_delivery"]
+                initial_types = delivered_knowledge_context[0].get("binary_initial_type_delivery")
+                if initial_types:
+                    result["binary_initial_type_delivery"] = initial_types
             if isinstance(result.get("body"), str):
                 result["body"] = defang_model_body(result["body"])
 
