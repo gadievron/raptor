@@ -1336,6 +1336,8 @@ def module_dynamic_namespace(
             receiver = value.func.value
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
+            if value.func.attr == "pop" and isinstance(receiver, ast.Set) and not value.args:
+                return sequence_iteration_values(receiver)
             if value.func.attr == "pop" and not value.args:
                 selected = selected_literal_value(receiver)
                 if isinstance(selected, ast.List):
