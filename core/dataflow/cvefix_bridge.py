@@ -397,6 +397,8 @@ def _extract_proposal(
                     repo_root, pair.parent_hash, pair.fix_hash, raw_uri)
                 path = _format_path(res)
                 context_parts = [body]
+                if got[1]:
+                    context_parts.append("\n\n# Source read truncated; only a file prefix was available.")
                 if diff:
                     context_parts.append("\n\n# fix diff (the change that added the sanitizer):\n" + diff)
                 if other_diffs:
