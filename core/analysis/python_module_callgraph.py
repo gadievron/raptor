@@ -1136,6 +1136,22 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
+    def literal_list_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        if (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add)
+                and isinstance(value.left, ast.List) and isinstance(value.right, ast.List)
+                and type(value.left) is type(value.right)):
+            return (value.left, value.right)
+        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
+            for source, count in ((value.left, value.right), (value.right, value.left)):
+                if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
+                        and type(count.value) is int and count.value > 0):
+                    return (source,)
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "copy" and isinstance(value.func.value, ast.List)
+                and not value.args and not value.keywords):
+            return (value.func.value,)
+        return None
+
     def literal_set_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         if (isinstance(value, ast.BinOp) and isinstance(value.left, ast.Set)
                 and isinstance(value.right, ast.Set)):
@@ -1177,9 +1193,11 @@ def module_dynamic_namespace(
                     sequence_iteration_cache[cursor] = (True, values)
                 else:
                     children = ()
-                    set_sources = literal_set_operation_sources(cursor)
-                    if set_sources is not None:
-                        children = set_sources
+                    operation_sources = literal_set_operation_sources(cursor)
+                    if operation_sources is None:
+                        operation_sources = literal_list_operation_sources(cursor)
+                    if operation_sources is not None:
+                        children = operation_sources
                     elif isinstance(cursor, ast.NamedExpr):
                         children = (cursor.value,)
                     elif isinstance(cursor, ast.IfExp):
@@ -1441,7 +1459,8 @@ def module_dynamic_namespace(
                     elif isinstance(pop_receiver, ast.BoolOp):
                         pending_pop_receivers.extend(pop_receiver.values)
                     elif (isinstance(pop_receiver, (ast.List, ast.Set))
-                          or literal_set_operation_sources(pop_receiver) is not None):
+                          or literal_set_operation_sources(pop_receiver) is not None
+                          or literal_list_operation_sources(pop_receiver) is not None):
                         sources = sequence_iteration_values(pop_receiver)
                         if sources is not None:
                             recognised_pop_origin = True
