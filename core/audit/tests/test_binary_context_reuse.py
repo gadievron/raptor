@@ -18,6 +18,13 @@ from core.coverage.journal import (
 )
 
 
+def _current_plain_hash(origin):
+    from core.audit.binary_review_scope import binary_view_anchor
+    anchor = binary_view_anchor(origin.binary_identity)
+    assert anchor is not None and anchor.startswith('bin:inputs1:')
+    return anchor
+
+
 @pytest.fixture
 def subject(binary_inputs):
     target, runtime, context = binary_inputs
@@ -70,11 +77,11 @@ def test_actual_fitted_binary_advisory_record_has_separate_anchor_and_no_source_
 @pytest.mark.parametrize('damage', ['none', 'missing-history', 'missing-tag', 'unknown'])
 def test_contextual_binary_review_blocks_older_other_source_credit(subject, tmp_path, context_in_project, reuse, damage):
     target, origin, ctx, deliveries, current, plain = subject
-    old = replace(current, source_hash=plain, review_claims=None, ts='2026-11-13T00:00:00Z')
+    old = replace(current, source_hash=_current_plain_hash(origin), review_claims=None, ts='2026-11-13T00:00:00Z')
     if damage == 'missing-history':
         current = replace(current, review_claims=None)
     elif damage == 'missing-tag':
-        current = replace(current, source_hash=plain)
+        current = replace(current, source_hash=_current_plain_hash(origin))
     elif damage == 'unknown':
         current = replace(current, source_hash='bin:ctx99:unknown', review_claims=None)
     own, project = tmp_path/'own', tmp_path/'project'
@@ -84,18 +91,20 @@ def test_contextual_binary_review_blocks_older_other_source_credit(subject, tmp_
     merge_into_index(project, project/'indexed')
     covered, credits, sink = set(), {}, {} if reuse else None
     _fold_journal_into_covered(covered, own, project, target_path=target, current_spans={},
-        binary_hashes={make_function_key(origin.file, origin.function): plain}, credits=credits,
+        binary_hashes={make_function_key(origin.file, origin.function): plain},
+        binary_view_hashes={make_function_key(origin.file, origin.function): _current_plain_hash(origin)}, credits=credits,
         reuse_sink=sink, own_run_reuse=reuse)
     assert not covered and not credits and not sink
 
 
 def test_untrusted_context_cannot_invalidate_signed_plain_binary_review(subject, tmp_path):
     target, origin, ctx, deliveries, current, plain = subject
-    trusted = _signed(tmp_path/'plain', replace(current, source_hash=plain, review_claims=None,
+    trusted = _signed(tmp_path/'plain', replace(current, source_hash=_current_plain_hash(origin), review_claims=None,
                       ts='2026-11-13T00:00:00Z'))
     covered = set()
     _verify_entries_fold(covered, [trusted, current], target_path=target, current_spans={},
-        binary_hashes={make_function_key(origin.file, origin.function):plain}, reuse_sink=None,
+        binary_hashes={make_function_key(origin.file, origin.function):plain},
+        binary_view_hashes={make_function_key(origin.file, origin.function): _current_plain_hash(origin)}, reuse_sink=None,
         current_strategies_fn=lambda *_:set(), current_model=None, source_label='owned')
     assert covered == {make_function_key(origin.file, origin.function)}
 
@@ -109,7 +118,7 @@ def test_binary_context_is_not_projected_into_existence_only_coverage(subject, t
     assert not entry_earns_function_coverage(row)
     record = build_from_journal(out)
     assert record is not None and not record['functions_analysed']
-    assert not entry_earns_function_coverage(replace(row, source_hash=plain))
+    assert not entry_earns_function_coverage(replace(row, source_hash=_current_plain_hash(origin)))
     assert not entry_earns_function_coverage(replace(row, review_claims=None))
     assert binary_context_bound('', {'binary_inputs': None})
 
@@ -117,10 +126,10 @@ def test_binary_context_is_not_projected_into_existence_only_coverage(subject, t
 def test_current_plain_binary_review_and_later_independent_review_keep_credit(subject, tmp_path):
     target, origin, ctx, deliveries, current, plain = subject
     key = make_function_key(origin.file, origin.function)
-    signed = _signed(tmp_path/'plain', replace(current, source_hash=plain, review_claims=None))
+    signed = _signed(tmp_path/'plain', replace(current, source_hash=_current_plain_hash(origin), review_claims=None))
     covered = set()
     _verify_entries_fold(covered, [signed], target_path=target, current_spans={},
-        binary_hashes={key:plain}, reuse_sink=None,
+        binary_hashes={key:plain}, binary_view_hashes={key:_current_plain_hash(origin)}, reuse_sink=None,
         current_strategies_fn=lambda *_:set(), current_model=None, source_label='owned')
     assert covered == {key}
     own, project = tmp_path/'own', tmp_path/'project'
@@ -129,7 +138,7 @@ def test_current_plain_binary_review_and_later_independent_review_keep_credit(su
     merge_into_index(project, project/'later')
     covered = set()
     _fold_journal_into_covered(covered, own, project, target_path=target, current_spans={},
-                              binary_hashes={key:plain})
+                              binary_hashes={key:plain}, binary_view_hashes={key:_current_plain_hash(origin)})
     assert covered == {key}
 
 

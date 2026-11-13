@@ -57,7 +57,7 @@ def test_healthy_binary_ack_uses_the_full_original_module_digest(owned_binary_re
     target, out, gap, outcome, runtime, original = owned_binary_review
     ack = Collector(out_dir=out, target_path=target, run_id=out.name).submit(outcome, gap)
     assert ack is not None and journal_acknowledges_outcome(ack, outcome, gap)
-    assert ack.source_hash == (f"bin:view1:decompilation:"
+    assert ack.source_hash == (f"bin:inputs1:{outcome.binary_publication_scope.view_identity.analysis_sha256}:decompilation:"
         f"{outcome.binary_publication_scope.view_identity.view_sha256}:"
         f"{hashlib.sha256(original).hexdigest()}:1000:20")
     from dataclasses import replace
