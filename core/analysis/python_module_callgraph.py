@@ -929,6 +929,13 @@ def module_dynamic_namespace(
                 pending_values.extend((child, False) for child in children)
         return namespace_dict_value_cache[value]
 
+    def namespace_copy_receiver(value: ast.AST) -> ast.AST | None:
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and value.func.attr == "copy" and not value.args and not value.keywords
+                and possible_namespace_dict_value(value.func.value)):
+            return value.func.value
+        return None
+
     def namespace_dict_member_receiver(member: ast.AST) -> ast.AST | None:
         if (isinstance(member, ast.Attribute)
                 and member.attr in {"update", "clear", "pop", "popitem", "setdefault",
@@ -993,7 +1000,11 @@ def module_dynamic_namespace(
                                                and isinstance(key.value, str)
                                                and key.value in original_import_roots)
                 continue
-            if isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
+            copied_namespace = (namespace_copy_receiver(cursor.value)
+                                if isinstance(cursor, ast.Subscript) else None)
+            if copied_namespace is not None:
+                children = (copied_namespace,)
+            elif isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
                 children = (cursor.value,)
             elif isinstance(cursor, ast.IfExp):
                 children = (cursor.body, cursor.orelse)
@@ -1013,8 +1024,11 @@ def module_dynamic_namespace(
                   and not cursor.keywords
                   and ((cursor.func.attr == "get" and len(cursor.args) in {1, 2})
                        or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
-                  and possible_namespace_dict_value(cursor.func.value)):
-                children = (cursor.func.value, *cursor.args[1:])
+                  and (possible_namespace_dict_value(cursor.func.value)
+                       or namespace_copy_receiver(cursor.func.value) is not None)):
+                receiver = namespace_copy_receiver(cursor.func.value)
+                children = ((receiver if receiver is not None else cursor.func.value),
+                            *cursor.args[1:])
             else:
                 children = ()
             if not children:
