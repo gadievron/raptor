@@ -582,6 +582,7 @@ def assemble_binary_context(
 
     func = None
     if db is not None:
+        _prepare_function_layout(db)
         if address is not None:
             func = db.function_by_address(address)
         else:
@@ -764,6 +765,29 @@ def _read_binary_source(func, target_path=None, out_dir=None, *, cached_only=Fal
     )
 
 
+def _prepare_function_layout(db) -> bytes:
+    """Refresh the indexed resolver once per changed audit function layout.
+
+    Snapshot admission already walks the parsed database. Check identity,
+    ordering and extents here, never on each indexed xref lookup. This is a
+    best-effort mutable-cache version, not an immutable analysis guarantee.
+    """
+    from hashlib import sha256
+
+    from core.json import dumps_canonical
+
+    digest = sha256()
+    for function in db.functions:
+        digest.update(dumps_canonical(
+            [id(function), function.address, function.size]).encode("utf-8"))
+        digest.update(b"\n")
+    version = digest.digest()
+    if getattr(db, "_audit_function_layout", None) != version:
+        db.refresh_address_index()
+        db._audit_function_layout = version
+    return version
+
+
 def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
     """Call-edge adjacency: (to_addr -> [xref], caller_addr -> [xref]).
 
@@ -772,7 +796,7 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
     once per unchanged ordered edge set and memoised on the database.
     Edge identity and routing fields invalidate replacement, mutation and
     reordering even when the row count stays unchanged. Computing the
-    version is linear in xrefs, without repeating function lookups on a
+    version is linear in functions and xrefs, without repeating function lookups on a
     cache hit. This is a best-effort cache check, not an immutable snapshot.
     """
     from hashlib import sha256
@@ -784,7 +808,7 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
         digest.update(dumps_canonical(
             [id(xref), xref.from_addr, xref.to_addr, xref.kind]).encode("utf-8"))
         digest.update(b"\n")
-    version = digest.digest()
+    version = (_prepare_function_layout(db), digest.digest())
     cached = getattr(db, "_audit_xref_adjacency", None)
     if cached is not None and cached[0] == version:
         return cached[1], cached[2]

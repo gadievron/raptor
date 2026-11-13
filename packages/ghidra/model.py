@@ -403,6 +403,16 @@ class REDatabase:
             len(self.functions), starts, ordered, by_addr, ids)
         return starts, ordered, by_addr, ids
 
+    def refresh_address_index(self) -> None:
+        """Rebuild once after caller-owned function replacement or layout edits.
+
+        Keep bulk lookups indexed: consumers that admit mutable snapshots can
+        check their version at that boundary rather than scanning every lookup.
+        """
+        if hasattr(self, "_addr_index_cache"):
+            del self._addr_index_cache
+        self._addr_index()
+
     def function_by_address(self, addr: int) -> Optional[REFunction]:
         """Look up a function by address (indexed)."""
         _starts, _ordered, by_addr, _ids = self._addr_index()
