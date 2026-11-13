@@ -424,6 +424,11 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
             if node.keywords:
                 msg = f"keyword arguments not allowed in {expr!r}"
                 raise ValueError(msg)
+            if fname == "int" and args:
+                # Raw receive bindings can exceed the value budget. Admit
+                # conversion input before int() materialises a large result;
+                # bounded slicing/unpacking of those bindings stays available.
+                _cap_result(args[0], expr)
             return _cap_result(fn(*args), expr)
         msg = f"disallowed node: {type(node).__name__} in {expr!r}"
         raise ValueError(msg)
