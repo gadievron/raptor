@@ -21,6 +21,7 @@ import pytest
 import core.audit.sweep as sweep_mod
 from core.audit.run_memo import BoundedMemo
 from core.audit.sweep import run_codeql_sweep
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture(autouse=True)
@@ -43,10 +44,19 @@ def _hermetic_codeql_cli(monkeypatch):
     never depend on, or vary with, the host's codeql."""
     import shutil
 
-    monkeypatch.setattr(
-        shutil, "which",
-        lambda name, *a, **k: _FAKE_CODEQL if name == "codeql" else None,
-    )
+    with scoped_function_imports(
+        sweep_mod, ("run_codeql_sweep", "warm_codeql_memo"), {"shutil": shutil},
+    ) as imports:
+        monkeypatch.setattr(
+            imports.shutil, "which",
+            lambda name, *a, **k: _FAKE_CODEQL if name == "codeql" else None,
+        )
+        monkeypatch.setitem(globals(), "run_codeql_sweep", sweep_mod.run_codeql_sweep)
+        try:
+            yield imports
+        finally:
+            # Retire body overrides before closing their private lookup scope.
+            monkeypatch.undo()
 
 
 def _sarif_result(uri: str, line: int) -> dict:
@@ -1017,16 +1027,15 @@ class TestWarmupSandboxAndGuard:
         ]
 
     def test_missing_codeql_cli_degrades_loudly(
-        self, tmp_path: Path, monkeypatch, caplog,
+        self, tmp_path: Path, monkeypatch, caplog, _hermetic_codeql_cli,
     ):
         """No resolvable CLI: the warm-up must warn (an operator-
         visible line), not vanish at debug level, and never analyze."""
         import logging as _logging
-        import shutil
 
         db = _make_db(tmp_path)
         qa = _make_id_query(tmp_path, "cpp/overflow-buffer", "a.ql")
-        monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
+        monkeypatch.setattr(_hermetic_codeql_cli.shutil, "which", lambda *a, **k: None)
 
         def boom(*a, **k):
             raise AssertionError("analyze must not run without a CLI")
