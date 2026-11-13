@@ -291,6 +291,7 @@ from .triage import TriageBucket, classify_all, format_triage_summary
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
 
 if TYPE_CHECKING:
+    from .final_log_flush import _FinalLogSnapshot
     from concurrent.futures import Future
     from collections.abc import Callable, Iterator
 
@@ -9485,6 +9486,7 @@ def _run_audit_body(
 
     # --- Collector: batched I/O with journal + reading-list capture ---
     collector = None
+    final_log_flush = None
     try:
         from .collector import Collector
 
@@ -9497,7 +9499,10 @@ def _run_audit_body(
         # Buffered audit-log rows must survive a FORCED SIGTERM exit
         # (watchdog expiry / second TERM) — journal rows are appended
         # per-outcome and already safe.
-        _sigterm_flush_hooks.append(collector.flush)
+        from .final_log_flush import FinalAuditLogFlush
+
+        final_log_flush = FinalAuditLogFlush(collector, config)
+        _sigterm_flush_hooks.append(final_log_flush)
     except Exception:
         logger.debug("collector init failed", exc_info=True)
 
@@ -10099,7 +10104,8 @@ def _run_audit_body(
         # CLI can write the salvage report and mark the lifecycle
         # interrupted.
         if is_sigterm_requested():
-            return _sigterm_salvage(result, config, collector, start_time)
+            return _sigterm_salvage(
+                result, config, collector, start_time, final_log_flush=final_log_flush)
 
         # --- Journal checkpoint: post-review-drain segment boundary ---
         # The executor has returned, the batched pass joined its pool,
@@ -12123,7 +12129,10 @@ def _run_audit_body(
     except Exception:
         logger.debug("re-journal pass failed", exc_info=True)
     try:
-        _relog_final_statuses(result, config)
+        if final_log_flush is not None:
+            final_log_flush.finish(result)
+        else:
+            _relog_final_statuses(result, config)
         config._verdicts_finalized = True
     except Exception:
         logger.debug("re-log pass failed", exc_info=True)
@@ -12344,6 +12353,8 @@ def _sigterm_salvage(
     config: OrchestratorConfig,
     collector: Any,
     start_time: float,
+    *,
+    final_log_flush: Any = None,
 ) -> OrchestratorResult:
     """Bounded SIGTERM conclusion: flush and export what exists.
 
@@ -12373,7 +12384,10 @@ def _sigterm_salvage(
     except Exception:
         logger.debug("salvage: re-journal pass failed", exc_info=True)
     try:
-        _relog_final_statuses(result, config)
+        if final_log_flush is not None:
+            final_log_flush.finish(result)
+        else:
+            _relog_final_statuses(result, config)
         config._verdicts_finalized = True
     except Exception:
         logger.debug("salvage: re-log pass failed", exc_info=True)
@@ -33841,7 +33855,7 @@ def _rejournal_final_statuses(
 
 
 def _relog_final_statuses(
-    result: OrchestratorResult,
+    result: OrchestratorResult | _FinalLogSnapshot,
     config: OrchestratorConfig,
 ) -> int:
     """Audit-log twin of ``_rejournal_final_statuses``.
