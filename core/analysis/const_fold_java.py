@@ -363,7 +363,11 @@ class JavaConstIndex:
                 operands = n.named_children
                 operand = _paren_unwrap(operands[0]) if len(operands) == 1 else None
                 if operand is not None and operand.type == "identifier":
-                    self._compound_writers.add(operand.text.decode())
+                    operand_text = operand.text
+                    if operand_text is None:
+                        raise AttributeError("'NoneType' object has no attribute 'decode'",
+                                             name="decode", obj=None)
+                    self._compound_writers.add(operand_text.decode())
             elif n.type in ("enhanced_for_statement", "resource",
                             "instanceof_expression", "formal_parameter",
                             "spread_parameter"):

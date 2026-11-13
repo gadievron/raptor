@@ -979,7 +979,7 @@ def module_dynamic_namespace(
                 and not any(isinstance(item, ast.Starred) for item in pair.elts)
                 for pair in pairs):
             return None
-        return tuple(pair.elts[1] for pair in pairs)
+        return tuple(pair.elts[1] for pair in pairs if isinstance(pair, (ast.Tuple, ast.List)))
 
     def selected_literal_member(container: ast.AST | None, key: ast.AST) -> ast.AST | None:
         selected = None
@@ -998,7 +998,7 @@ def module_dynamic_namespace(
               and all(isinstance(item, ast.Constant) and isinstance(item.value, str)
                       for item in container.keys)):
             for item, candidate in zip(container.keys, container.values):
-                if item.value == key.value:
+                if isinstance(item, ast.Constant) and item.value == key.value:
                     selected = candidate
         return selected
 
@@ -1060,7 +1060,7 @@ def module_dynamic_namespace(
             return None
         pending = [value.func.value]
         seen = set()
-        members = []
+        members: list[ast.AST] = []
         recognised = False
         while pending:
             receiver = pending.pop()
@@ -1089,14 +1089,14 @@ def module_dynamic_namespace(
             elif (isinstance(receiver, ast.Call)
                   and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
                   and len(receiver.args) <= 1):
-                constructor_members = []
-                sources = [(source, False) for source in receiver.args]
+                constructor_members: list[ast.AST] = []
+                constructor_sources: list[tuple[ast.AST, bool]] = [(source, False) for source in receiver.args]
                 for item in receiver.keywords:
                     if item.arg is None:
-                        sources.append((item.value, True))
+                        constructor_sources.append((item.value, True))
                     elif value.func.attr == "values":
                         constructor_members.append(item.value)
-                for source, expanded in sources:
+                for source, expanded in constructor_sources:
                     dictionary_source = selected_literal_value(source)
                     if isinstance(dictionary_source, ast.Dict):
                         if value.func.attr == "values":
@@ -1111,7 +1111,8 @@ def module_dynamic_namespace(
                             constructor_members.extend(pair_values)
                         else:
                             pairs = literal_sequence_values(source) or ()
-                            constructor_members.extend(pair.elts[0] for pair in pairs)
+                            constructor_members.extend(pair.elts[0] for pair in pairs
+                                                      if isinstance(pair, (ast.Tuple, ast.List)))
                 else:
                     recognised = True
                     members.extend(constructor_members)
@@ -1161,7 +1162,11 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.NamedExpr)
                   or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                       and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
-                source = cursor.value if isinstance(cursor, ast.NamedExpr) else cursor.func.value
+                if isinstance(cursor, ast.NamedExpr):
+                    source = cursor.value
+                else:
+                    assert isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                    source = cursor.func.value
                 if phase == 0:
                     pending.append((cursor, 1))
                     pending.append((source, 0))
@@ -1237,13 +1242,16 @@ def module_dynamic_namespace(
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
     def literal_collection_operation(value: ast.AST) -> tuple[type[ast.AST] | None, tuple[ast.AST, ...]]:
+        operands: tuple[ast.AST, ...]
+        source: ast.AST | None
+        item: ast.AST | None
         pending = [(value, False)]
         while pending:
             cursor, expanded = pending.pop()
             if cursor in collection_operation_cache:
                 continue
-            kind = None
-            sources = ()
+            kind: type[ast.AST] | None = None
+            sources: tuple[ast.AST, ...] = ()
             if isinstance(cursor, ast.List):
                 kind = ast.List
             elif isinstance(cursor, ast.Set):
@@ -1346,6 +1354,7 @@ def module_dynamic_namespace(
                   and not cursor.keywords
                   and isinstance(literal_member_receiver(cursor.func.value), (ast.Tuple, ast.List))):
                 sequence = literal_member_receiver(cursor.func.value)
+                assert isinstance(sequence, (ast.Tuple, ast.List))
                 key = cursor.args[0]
                 index = None
                 if isinstance(key, ast.Constant) and type(key.value) is int:
@@ -1375,7 +1384,7 @@ def module_dynamic_namespace(
                                 for item in dictionary.keys)):
                     source = cursor.args[1] if len(cursor.args) == 2 else None
                     for item, candidate in zip(dictionary.keys, dictionary.values):
-                        if item.value == key.value:
+                        if isinstance(item, ast.Constant) and item.value == key.value:
                             source = candidate
                     if source is not None:
                         if not expanded:
@@ -1388,7 +1397,11 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.NamedExpr)
                   or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                       and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
-                source = cursor.value if isinstance(cursor, ast.NamedExpr) else cursor.func.value
+                if isinstance(cursor, ast.NamedExpr):
+                    source = cursor.value
+                else:
+                    assert isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                    source = cursor.func.value
                 if not expanded:
                     pending.append((cursor, True))
                     pending.append((source, False))
@@ -1452,7 +1465,7 @@ def module_dynamic_namespace(
                 if values is not None:
                     sequence_iteration_cache[cursor] = (True, values)
                 else:
-                    children = ()
+                    children: tuple[ast.AST, ...] = ()
                     operation_sources = literal_set_operation_sources(cursor)
                     if operation_sources is None:
                         operation_sources = literal_list_operation_sources(cursor)
@@ -1559,7 +1572,7 @@ def module_dynamic_namespace(
                 dictionary = selected_literal_value(container.func.value)
                 if isinstance(dictionary, ast.Dict) and all(key is not None for key in dictionary.keys):
                     recognised = True
-                    members.extend(dictionary.keys)
+                    members.extend(key for key in dictionary.keys if key is not None)
                     members.extend(dictionary.values)
                 elif not copied:
                     members.append(container)
@@ -1600,12 +1613,12 @@ def module_dynamic_namespace(
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names and len(container.args) <= 1
                   and container.keywords and any(item.arg is None for item in container.keywords)):
-                for item in container.keywords:
-                    if item.arg is None:
-                        pending.append((item.value, True))
+                for keyword in container.keywords:
+                    if keyword.arg is None:
+                        pending.append((keyword.value, True))
                     else:
                         recognised = True
-                        members.append(item.value)
+                        members.append(keyword.value)
                 if container.args:
                     pair_values = explicit_pair_values(container.args[0])
                     if pair_values is not None:
@@ -1658,9 +1671,9 @@ def module_dynamic_namespace(
             defaults = ()
         else:
             return None
-        pending = [iterator]
+        pending: list[ast.AST] = [iterator]
         seen = set()
-        members = []
+        members: list[ast.AST] = []
         known_members = False
         while pending:
             cursor = pending.pop()
@@ -1708,9 +1721,9 @@ def module_dynamic_namespace(
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
             if value.func.attr == "pop" and not value.args:
-                pending_pop_receivers = [receiver]
+                pending_pop_receivers: list[ast.AST] = [receiver]
                 seen_pop_receivers = set()
-                popped_members = []
+                popped_members: list[ast.AST] = []
                 recognised_pop_origin = False
                 while pending_pop_receivers:
                     pop_receiver = pending_pop_receivers.pop()
@@ -1781,10 +1794,10 @@ def module_dynamic_namespace(
     def namespace_copy_receiver(value: ast.AST) -> ast.AST | None:
         path = []
         cursor = value
-        source = None
+        source: ast.AST | None = None
         while cursor not in namespace_copy_cache:
             path.append(cursor)
-            next_source = None
+            next_source: ast.AST | None = None
             if (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                     and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
                 next_source = cursor.func.value
@@ -1859,6 +1872,7 @@ def module_dynamic_namespace(
     import_value_cache: dict[ast.AST, bool] = {}
 
     def possible_import_value(value: ast.AST) -> bool:
+        children: tuple[ast.AST, ...]
         pending_values = [(value, False)]
         while pending_values:
             cursor, expanded = pending_values.pop()
@@ -1921,6 +1935,9 @@ def module_dynamic_namespace(
                 pending_values.extend((child, False) for child in children)
         return import_value_cache[value]
 
+    value: ast.AST
+    items: list[ast.AST] | tuple[ast.AST, ...]
+    pending: list[tuple[ast.AST, ast.AST]]
     for statement in ast.walk(tree):
         if statement in local_annotation_nodes:
             continue
