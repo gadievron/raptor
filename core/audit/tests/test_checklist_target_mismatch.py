@@ -10,6 +10,8 @@ checklist keeps today's inheritance byte-for-byte.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
+import subprocess
 import json
 import sys
 from importlib.machinery import SourceFileLoader
@@ -18,6 +20,44 @@ from unittest.mock import patch
 from types import SimpleNamespace
 
 import pytest
+
+from core.testing.module_views import scoped_function_imports
+
+
+@pytest.fixture()
+def _private_cli_runtime(monkeypatch):
+    from core.audit import run_lock
+
+    inherited = tuple(run_lock._HELD)
+    acquired = []
+    acquire = run_lock.acquire_run_lock
+
+    def acquire_owned(*args, **kwargs):
+        handle = acquire(*args, **kwargs)
+        if all(handle is not existing for existing in (*inherited, *acquired)):
+            acquired.append(handle)
+        return handle
+
+    def release_owned():
+        for handle in reversed(acquired):
+            handle.release()
+
+    with ExitStack() as scopes:
+        scopes.callback(release_owned)
+
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("cmd_run",),
+                {"subprocess": subprocess, "core.audit.run_lock": run_lock},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+            monkeypatch.setattr(getattr(imports, "core.audit.run_lock"),
+                                "acquire_run_lock", acquire_owned)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def _load_cli():
@@ -141,7 +181,7 @@ class _SentinelStop(Exception):
     after the checklist gate + build decision under test."""
 
 
-def _run_cmd_run(tmp_path, monkeypatch, out_dir, target):
+def _run_cmd_run(tmp_path, monkeypatch, out_dir, target, _private_cli_runtime):
     """Drive cmd_run with lifecycle stubbed to OUTPUT_DIR=out_dir and
     the checklist build stubbed to fail fast; returns (rc, calls)."""
     mod = _load_cli()
@@ -154,8 +194,7 @@ def _run_cmd_run(tmp_path, monkeypatch, out_dir, target):
                 returncode=0, stdout=f"OUTPUT_DIR={out_dir}\n", stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="stub stop")
 
-    import subprocess
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _private_cli_runtime(mod, fake_run)
     monkeypatch.setattr(mod, "_lifecycle_fail", lambda *a, **k: None)
 
     # End the match-path deterministically right after the checklist
@@ -175,6 +214,7 @@ def _run_cmd_run(tmp_path, monkeypatch, out_dir, target):
 class TestCmdRunChecklistGate:
     def test_mismatch_discards_and_rebuilds(
         self, tmp_path: Path, monkeypatch, capsys,
+        _private_cli_runtime,
     ):
         target_a = tmp_path / "target-a"
         target_b = tmp_path / "target-b"
@@ -186,7 +226,7 @@ class TestCmdRunChecklistGate:
             {"target_path": str(target_a), "files": []}))
 
         mod, calls, args = _run_cmd_run(
-            tmp_path, monkeypatch, out_dir, target_b)
+            tmp_path, monkeypatch, out_dir, target_b, _private_cli_runtime)
         rc = mod.cmd_run(args)
         assert rc == 1  # stopped at the stubbed checklist BUILD
 
@@ -205,6 +245,7 @@ class TestCmdRunChecklistGate:
 
     def test_mismatched_symlink_dropped_project_copy_kept(
         self, tmp_path: Path, monkeypatch,
+        _private_cli_runtime,
     ):
         target_a = tmp_path / "target-a"
         target_b = tmp_path / "target-b"
@@ -219,7 +260,7 @@ class TestCmdRunChecklistGate:
         (run / "checklist.json").symlink_to("../checklist.json")
 
         mod, calls, args = _run_cmd_run(
-            tmp_path, monkeypatch, run, target_b)
+            tmp_path, monkeypatch, run, target_b, _private_cli_runtime)
         rc = mod.cmd_run(args)
         assert rc == 1  # stubbed rebuild fails fast
 
@@ -232,6 +273,7 @@ class TestCmdRunChecklistGate:
 
     def test_second_mismatch_preserves_first_set_aside(
         self, tmp_path: Path, monkeypatch,
+        _private_cli_runtime,
     ):
         # "Evidence, never deleted" must survive a SECOND mismatch in
         # the same out dir: the set-aside name is timestamp+counter
@@ -247,7 +289,7 @@ class TestCmdRunChecklistGate:
                 {"target_path": str(target_a), "files": [],
                  "round": round_no}))
             mod, calls, args = _run_cmd_run(
-                tmp_path, monkeypatch, out_dir, target_b)
+                tmp_path, monkeypatch, out_dir, target_b, _private_cli_runtime)
             assert mod.cmd_run(args) == 1  # stubbed rebuild fails fast
         asides = sorted(
             out_dir.glob("checklist.json.mismatched-target-*"))
@@ -278,6 +320,7 @@ class TestCmdRunChecklistGate:
 
     def test_sharded_mismatch_discards_and_rebuilds(
         self, tmp_path: Path, monkeypatch, capsys,
+        _private_cli_runtime,
     ):
         # The gate must see the SHARDED form too: a single-file probe
         # here plus the form-aware rebuild probe silently audited
@@ -291,7 +334,7 @@ class TestCmdRunChecklistGate:
         self._write_sharded(out_dir, target_a)
 
         mod, calls, args = _run_cmd_run(
-            tmp_path, monkeypatch, out_dir, target_b)
+            tmp_path, monkeypatch, out_dir, target_b, _private_cli_runtime)
         rc = mod.cmd_run(args)
         assert rc == 1  # stopped at the stubbed checklist BUILD
 
@@ -309,6 +352,7 @@ class TestCmdRunChecklistGate:
 
     def test_sharded_match_kept_no_rebuild(
         self, tmp_path: Path, monkeypatch,
+        _private_cli_runtime,
     ):
         target_a = tmp_path / "target-a"
         target_a.mkdir()
@@ -317,7 +361,7 @@ class TestCmdRunChecklistGate:
         self._write_sharded(out_dir, target_a)
 
         mod, calls, args = _run_cmd_run(
-            tmp_path, monkeypatch, out_dir, target_a)
+            tmp_path, monkeypatch, out_dir, target_a, _private_cli_runtime)
         with pytest.raises(_SentinelStop):
             mod.cmd_run(args)
 
@@ -328,6 +372,7 @@ class TestCmdRunChecklistGate:
 
     def test_matching_checklist_kept_no_rebuild(
         self, tmp_path: Path, monkeypatch,
+        _private_cli_runtime,
     ):
         target_a = tmp_path / "target-a"
         target_a.mkdir()
@@ -337,7 +382,7 @@ class TestCmdRunChecklistGate:
         (out_dir / "checklist.json").write_text(before)
 
         mod, calls, args = _run_cmd_run(
-            tmp_path, monkeypatch, out_dir, target_a)
+            tmp_path, monkeypatch, out_dir, target_a, _private_cli_runtime)
         with pytest.raises(_SentinelStop):
             mod.cmd_run(args)
 
