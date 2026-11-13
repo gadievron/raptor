@@ -1031,9 +1031,12 @@ def module_dynamic_namespace(
         if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute)
                 or value.args or value.keywords or value.func.attr not in {"keys", "values"}):
             return None
-        dictionary = selected_literal_value(value.func.value)
+        receiver = value.func.value
+        while (isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute)
+               and receiver.func.attr == "copy" and not receiver.args and not receiver.keywords):
+            receiver = receiver.func.value
+        dictionary = selected_literal_value(receiver)
         if not isinstance(dictionary, ast.Dict):
-            receiver = value.func.value
             if (value.func.attr == "values" and isinstance(receiver, ast.Call)
                     and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
                     and len(receiver.args) <= 1):
