@@ -1249,7 +1249,7 @@ def module_dynamic_namespace(
                     if kind is not None:
                         sources = (source,)
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
-                  and ((cursor.func.attr == "get" and len(cursor.args) in (1, 2))
+                  and ((cursor.func.attr in {"get", "pop"} and len(cursor.args) in (1, 2))
                        or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
                   and not cursor.keywords):
                 dictionary = selected_literal_value(cursor.func.value)
