@@ -1889,16 +1889,26 @@ def _spawn_pidns_tier(
             os.close(death_r)
             death_r = None
         b_pid, c_pid, b_pidfd = _recv_ready(p_sock, a_pid, death_w)
-        p_sock.close()
-        p_sock = None
         a_pidfd: int | None = None
-        with contextlib.suppress(OSError):
-            a_pidfd = os.pidfd_open(a_pid)
-        handle = SupervisedHandle(
-            tier="pidns", pid=a_pid, target_pid=c_pid,
-            on_parent_death="kill" if kill_mode else "survive",
-            name=name, ns_init_pid=b_pid, ns_init_pidfd=b_pidfd,
-            pidfd=a_pidfd, death_w=death_w)
+        try:
+            p_sock.close()
+            p_sock = None
+            with contextlib.suppress(OSError):
+                a_pidfd = os.pidfd_open(a_pid)
+            handle = SupervisedHandle(
+                tier="pidns", pid=a_pid, target_pid=c_pid,
+                on_parent_death="kill" if kill_mode else "survive",
+                name=name, ns_init_pid=b_pid, ns_init_pidfd=b_pidfd,
+                pidfd=a_pidfd, death_w=death_w)
+        except BaseException:
+            # Readiness transferred B's pidfd, but no caller owns a handle yet.
+            callbacks: list[Callable[[], object]] = [
+                partial(_kill_and_reap, a_pid), partial(os.close, b_pidfd),
+            ]
+            if a_pidfd is not None:
+                callbacks.append(partial(os.close, a_pidfd))
+            retire_parent_resources(*callbacks)
+            raise
         death_w = None  # ownership moved to the handle
         return handle
     finally:
