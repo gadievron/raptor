@@ -1184,6 +1184,18 @@ def module_dynamic_namespace(
                 literal_copy_receiver_cache[cursor] = None
         return literal_copy_receiver_cache[value]
 
+    def literal_list_pop_receiver(value: ast.AST) -> ast.Tuple | ast.List | None:
+        sequence = selected_literal_copy_receiver(value)
+        if isinstance(sequence, ast.List):
+            return sequence
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id in list_constructor_names
+                and len(value.args) == 1 and not value.keywords):
+            sequence = selected_literal_copy_receiver(value.args[0])
+            if isinstance(sequence, (ast.Tuple, ast.List)):
+                return sequence
+        return None
+
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
     def literal_collection_operation(value: ast.AST) -> tuple[type[ast.AST] | None, tuple[ast.AST, ...]]:
@@ -1271,8 +1283,8 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr == "pop" and len(cursor.args) <= 1
                   and not cursor.keywords
-                  and isinstance(selected_literal_copy_receiver(cursor.func.value), ast.List)):
-                sequence = selected_literal_copy_receiver(cursor.func.value)
+                  and isinstance(pop_sequence := literal_list_pop_receiver(cursor.func.value),
+                                 (ast.Tuple, ast.List))):
                 index = -1 if not cursor.args else None
                 if cursor.args:
                     key = cursor.args[0]
@@ -1281,9 +1293,9 @@ def module_dynamic_namespace(
                     elif (isinstance(key, ast.UnaryOp) and isinstance(key.op, ast.USub)
                           and isinstance(key.operand, ast.Constant) and type(key.operand.value) is int):
                         index = -key.operand.value
-                if (index is not None and not any(isinstance(item, ast.Starred) for item in sequence.elts)
-                        and -len(sequence.elts) <= index < len(sequence.elts)):
-                    source = sequence.elts[index]
+                if (index is not None and not any(isinstance(item, ast.Starred) for item in pop_sequence.elts)
+                        and -len(pop_sequence.elts) <= index < len(pop_sequence.elts)):
+                    source = pop_sequence.elts[index]
                     if not expanded:
                         pending.append((cursor, True))
                         pending.append((source, False))
