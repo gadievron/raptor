@@ -195,8 +195,12 @@ def main():
     # Workers own private directories and per-family reports. Only this thread
     # writes the shared summary; already active families finish and clean up.
     order = {group[0]: index for index, group in enumerate(runs)}
+    execution_runs = runs
+    if args.lane == 'native' and sys.platform == 'linux' and args.jobs == 2:
+        # Start the long browser family early; retain registry order in reports.
+        execution_runs = sorted(runs, key=lambda group: group[0] != 'playwright-browser')
     with ThreadPoolExecutor(max_workers=min(args.jobs, len(runs))) as pool:
-        futures = [pool.submit(guarded_group, group) for group in runs]
+        futures = [pool.submit(guarded_group, group) for group in execution_runs]
         for future in as_completed(futures):
             result = future.result()
             if result is None:
