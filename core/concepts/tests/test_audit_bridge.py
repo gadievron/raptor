@@ -702,6 +702,8 @@ class TestQueueReadingListItem:
         assert held == [True]
 
     def test_concurrent_queuers_drop_nothing(self, tmp_path):
+        from core.testing.threads import retiring_threads
+
         import threading
 
         def queue_one(i: int) -> None:
@@ -711,10 +713,11 @@ class TestQueueReadingListItem:
             threading.Thread(target=queue_one, args=(i,))
             for i in range(16)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=30):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
         data = json.loads(
             (tmp_path / "reading-list.json").read_text(encoding="utf-8"))
         assert {i["question"] for i in data["items"]} == {
