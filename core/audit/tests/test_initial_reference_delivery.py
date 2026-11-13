@@ -51,7 +51,9 @@ def test_already_delivered_foundation_does_not_buy_an_identical_followup(tmp_pat
     monkeypatch.setattr('core.audit.llm_review._prompt_budget',lambda *a,**k:100 if small else 100000)
     calls=[]
     class Client:
+        _attempt_admission_protocol = 1
         def generate_structured(self,prompt,schema,**kwargs):
+            assert kwargs.pop("accounting_attempt_admission")() is True
             calls.append(prompt)
             return StructuredResponse(result={'status':'clean','body':'Scripted assessment',
                 'language_reference_requests':[{'topic':'integer promotion'}]},raw='',cost=0,model='scripted')
