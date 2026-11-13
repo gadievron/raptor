@@ -810,6 +810,7 @@ def module_dynamic_namespace(
     object_namespace_names = {"vars"}
     mapping_copy_names = {"dict"}
     sequence_copy_names = {"list", "tuple"}
+    iterator_wrapper_names = {"iter", "reversed"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
@@ -833,6 +834,10 @@ def module_dynamic_namespace(
             sequence_copy_names.update(
                 alias for alias, target in bindings.items()
                 if target in {"builtins.list", "builtins.tuple"}
+            )
+            iterator_wrapper_names.update(
+                alias for alias, target in bindings.items()
+                if target in {"builtins.iter", "builtins.reversed"}
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -1058,7 +1063,8 @@ def module_dynamic_namespace(
                     elif isinstance(cursor, ast.BoolOp):
                         children = tuple(cursor.values)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
-                          and cursor.func.id in sequence_copy_names
+                          and (cursor.func.id in sequence_copy_names
+                               or cursor.func.id in iterator_wrapper_names)
                           and len(cursor.args) == 1 and not cursor.keywords):
                         children = (cursor.args[0],)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
