@@ -129,7 +129,7 @@ class AuditKnowledgeRuntime:
                 self._busy[key] = self._busy.get(key, 0) + 1
             try:
                 from .knowledge_calls import owned_call_scope
-                with owned_call_scope(lambda purpose, method: self.admit_client_call(gap, purpose, method),
+                with owned_call_scope(lambda purpose, method: self._admit_client_key(key, purpose, method),
                                       validity=self.client_lifetime_valid):
                     return review_one_fn(gap, *args, **kwargs)
             finally:
@@ -1285,7 +1285,11 @@ class AuditKnowledgeRuntime:
             return not self._closed and monotonic() < self.deadline
 
     def admit_client_call(self, gap: dict, purpose: str, method: str) -> bool:
-        key = self._gap_key(gap)
+        return self._admit_client_key(self._gap_key(gap), purpose, method)
+
+    def _admit_client_key(self, key: tuple[str, str, int], purpose: str, method: str) -> bool:
+        # Ownership and admission use the same scheduled key throughout the
+        # unit lifetime, even when helpers annotate the mutable gap object.
         with self._lock:
             cycle = self._cycles.get(key)
             limit = cycle.max_model_calls if cycle else self._policy["max_model_calls"]
