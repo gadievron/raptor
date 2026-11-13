@@ -23,7 +23,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import dumps_artifact, loads
 
-from core.dataflow._schema_checks import check_extra_fields, require_nonempty
+from core.dataflow._schema_checks import check_extra_fields, require_nonempty, unique_object_fields
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -196,4 +196,4 @@ class Finding:
 
     @classmethod
     def from_json(cls, text: str) -> Finding:
-        return cls.from_dict(loads(text))
+        return cls.from_dict(loads(text, object_pairs_hook=unique_object_fields))

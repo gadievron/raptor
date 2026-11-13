@@ -41,7 +41,7 @@ from typing import Any
 
 from core.json import dumps_artifact, loads
 
-from core.dataflow._schema_checks import check_extra_fields, require_nonempty
+from core.dataflow._schema_checks import check_extra_fields, require_nonempty, unique_object_fields
 
 
 SCHEMA_VERSION = 1
@@ -341,4 +341,4 @@ class SanitizerEvidence:
 
     @classmethod
     def from_json(cls, text: str) -> SanitizerEvidence:
-        return cls.from_dict(loads(text))
+        return cls.from_dict(loads(text, object_pairs_hook=unique_object_fields))
