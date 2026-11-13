@@ -231,3 +231,31 @@ def test_unavailable_primary_location_wrapper_preserves_report_identity(field):
     assert finding.file_path == (file if field == 'region' else '')
     assert finding.start_line == (line if field == 'artifactLocation' else 0)
     assert finding.snippet == ''
+
+
+@pytest.mark.parametrize('name', [
+    pytest.param(None, id='null-name'), pytest.param([], id='array-name'),
+    pytest.param({}, id='object-name'), pytest.param(7, id='number-name'),
+    pytest.param('', id='empty-name'), pytest.param('Owned display name', id='valid-name'),
+])
+def test_unavailable_descriptor_name_retains_readable_rule_identity(tmp_path, name):
+    from core.security.prompt_defense_profiles import CONSERVATIVE
+    from core.security.prompt_envelope import TaintedString, build_prompt
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    run = _run(result)
+    run['tool']['driver']['rules'][0]['name'] = name
+    path = _write(tmp_path, 'descriptor-name.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    expected = name if isinstance(name, str) and name else result['ruleId']
+    assert finding.rule_name == expected
+    bundle = build_prompt(system='Owned descriptor control', profile=CONSERVATIVE,
+                          slots={'rule_name': TaintedString(value=finding.rule_name, trust='untrusted')})
+    assert any(expected in message.content for message in bundle.messages)
+    assert finding.rule_id == result['ruleId']
+    assert json.loads(path.read_text())['runs'][0] == run

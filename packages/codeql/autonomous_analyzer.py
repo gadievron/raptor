@@ -480,6 +480,8 @@ class AutonomousCodeQLAnalyzer:
             rule_id = ""
 
         rule_name = rule.get("name", rule_id)
+        if not isinstance(rule_name, str) or not rule_name:
+            rule_name = rule_id
 
         # Extract location
         locations = result.get("locations", [])
