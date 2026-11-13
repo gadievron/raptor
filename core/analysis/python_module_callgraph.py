@@ -1059,7 +1059,7 @@ def module_dynamic_namespace(
                 sources = (literal_dictionary_keys(dictionary) if value.func.attr == "keys"
                            else literal_member_values(dictionary))
                 members.extend(sources or ())
-            elif (value.func.attr == "values" and isinstance(receiver, ast.Call)
+            elif (isinstance(receiver, ast.Call)
                   and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
                   and len(receiver.args) <= 1):
                 constructor_members = []
@@ -1067,17 +1067,24 @@ def module_dynamic_namespace(
                 for item in receiver.keywords:
                     if item.arg is None:
                         sources.append((item.value, True))
-                    else:
+                    elif value.func.attr == "values":
                         constructor_members.append(item.value)
                 for source, expanded in sources:
                     dictionary_source = selected_literal_value(source)
                     if isinstance(dictionary_source, ast.Dict):
-                        constructor_members.extend(literal_member_values(dictionary_source) or ())
+                        if value.func.attr == "values":
+                            constructor_members.extend(literal_member_values(dictionary_source) or ())
+                        elif not expanded:
+                            constructor_members.extend(literal_dictionary_keys(dictionary_source) or ())
                     else:
                         pair_values = explicit_pair_values(source) if not expanded else None
                         if pair_values is None:
                             break
-                        constructor_members.extend(pair_values)
+                        if value.func.attr == "values":
+                            constructor_members.extend(pair_values)
+                        else:
+                            pairs = literal_sequence_values(source) or ()
+                            constructor_members.extend(pair.elts[0] for pair in pairs)
                 else:
                     recognised = True
                     members.extend(constructor_members)
