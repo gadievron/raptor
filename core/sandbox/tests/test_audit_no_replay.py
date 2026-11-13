@@ -36,8 +36,8 @@ def test_execution_boundary_controls_fallback(tmp_path, required, error_type, st
     failure = error_type('owned evidence retirement failure')
     reached = []
 
-    def finish(handle):
-        result = evidence.finalize_capture(handle)
+    def finish(handle, *, preserve_active_error=True):
+        result = evidence.finalize_capture(handle, preserve_active_error=preserve_active_error)
         reached.append(result)
         raise failure
 

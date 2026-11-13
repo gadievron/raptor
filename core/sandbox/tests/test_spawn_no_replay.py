@@ -46,8 +46,8 @@ def test_completed_namespace_command_is_not_replayed(tmp_path, profile, error_ty
     failure = error_type('owned post-execution evidence retirement failure')
     reached = []
 
-    def finish(handle):
-        result = evidence.finalize_capture(handle)
+    def finish(handle, *, preserve_active_error=True):
+        result = evidence.finalize_capture(handle, preserve_active_error=preserve_active_error)
         reached.append(result)
         raise failure
 

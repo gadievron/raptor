@@ -479,14 +479,16 @@ class EvidenceFile:
 
 
 
-def finalize_capture(evidence_file: EvidenceFile) -> bool:
+def finalize_capture(evidence_file: EvidenceFile, *, preserve_active_error: bool = True) -> bool:
     """Close a tracer's evidence handle and retain parent-known capture loss.
 
     Call in the parent, outside the summary writer's lock. The summary
     writer already records verification failures for its own handle; Linux
     tracer backends own separate handles and must publish their verdict too.
+    Enclosing cleanup owners can disable ambient-error inference and preserve
+    their own operation error while this function reports its local failure.
     """
-    active_error = sys.exc_info()[1]
+    active_error = sys.exc_info()[1] if preserve_active_error else None
     try:
         return _close_and_publish_capture(evidence_file)
     except BaseException as cleanup_error:
