@@ -5,6 +5,7 @@ import json
 import pytest
 
 from core.audit import record
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.mark.parametrize("row", [
@@ -27,8 +28,9 @@ def test_identical_bytes_with_one_encoding(tmp_path, monkeypatch, row):
         encoded.append(value)
         return original(value, *args, **kwargs)
 
-    monkeypatch.setattr(json, "dumps", counted)
-    record.append_audit_log(tmp_path, row)
+    with scoped_function_imports(record, ("append_audit_log",), {"json": json}) as private:
+        monkeypatch.setattr(private.json, "dumps", counted)
+        record.append_audit_log(tmp_path, row)
     assert (tmp_path / record.AUDIT_LOG_FILENAME).read_bytes() == expected
     assert encoded == [stamped]
 
