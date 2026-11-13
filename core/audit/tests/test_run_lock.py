@@ -33,6 +33,7 @@ from core.audit.run_lock import (
     run_lock_path,
 )
 from core.testing.processes import reap_on_exit
+from core.testing.threads import retiring_threads
 from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -417,11 +418,12 @@ def test_in_process_reacquisition_is_a_noop(tmp_path):
                 results.append(exc)
 
         t = threading.Thread(target=worker)
-        t.start()
-        t.join(timeout=30)
-        assert not t.is_alive()                     # never blocked
-        assert len(results) == 1
-        assert not isinstance(results[0], AuditRunLocked)
+        with retiring_threads((t,), release=lambda: None, timeout=30):
+            t.start()
+            t.join(timeout=30)
+            assert not t.is_alive()                     # never blocked
+            assert len(results) == 1
+            assert not isinstance(results[0], AuditRunLocked)
     finally:
         handle.release()
 
