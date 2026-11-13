@@ -17,6 +17,7 @@ intermediate steps, strict JSON loading) are enforced.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
@@ -25,7 +26,7 @@ from core.json import dumps_artifact, loads
 from core.dataflow._schema_checks import check_extra_fields, require_nonempty
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable
 
 
 SCHEMA_VERSION = 1
@@ -164,6 +165,11 @@ class Finding:
             )
             raise ValueError(msg)
         steps_raw: Iterable[Mapping[str, Any]] = data.get("intermediate_steps", [])
+        if isinstance(steps_raw, (str, bytes, Mapping)):
+            raise ValueError("Finding.intermediate_steps must be an iterable of step objects")
+        raw = data.get("raw", {})
+        if not isinstance(raw, Mapping):
+            raise ValueError("Finding.raw must be an object")
         return cls(
             finding_id=data["finding_id"],
             producer=data["producer"],
@@ -172,7 +178,7 @@ class Finding:
             source=Step.from_dict(data["source"]),
             sink=Step.from_dict(data["sink"]),
             intermediate_steps=tuple(Step.from_dict(s) for s in steps_raw),
-            raw=dict(data.get("raw", {})),
+            raw=dict(raw),
         )
 
     def to_json(self, *, indent: int | None = None) -> str:
