@@ -1469,7 +1469,8 @@ def module_dynamic_namespace(
             value = statement.value
         elif (isinstance(statement, ast.For)
               or (isinstance(statement, ast.comprehension)
-                  and isinstance(statement.iter, (ast.Tuple, ast.List)))):
+                  and (not statement.is_async
+                       or isinstance(statement.iter, (ast.Tuple, ast.List))))):
             targets = [statement.target]
             value = statement.iter
         else:
