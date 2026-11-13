@@ -809,6 +809,7 @@ def module_dynamic_namespace(
     reflective_read_names = {"getattr"}
     object_namespace_names = {"vars"}
     mapping_copy_names = {"dict"}
+    sequence_copy_names = {"list", "tuple"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
@@ -828,6 +829,10 @@ def module_dynamic_namespace(
             )
             mapping_copy_names.update(
                 alias for alias, target in bindings.items() if target == "builtins.dict"
+            )
+            sequence_copy_names.update(
+                alias for alias, target in bindings.items()
+                if target in {"builtins.list", "builtins.tuple"}
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -942,13 +947,16 @@ def module_dynamic_namespace(
                 return True
         return False
 
-    def explicit_pair_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+    def literal_sequence_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
         sequence = value
         while isinstance(sequence, ast.Subscript) and isinstance(sequence.slice, ast.Slice):
             sequence = sequence.value
         if not isinstance(sequence, (ast.Tuple, ast.List)):
             return None
-        pairs = literal_member_values(value)
+        return literal_member_values(value)
+
+    def explicit_pair_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        pairs = literal_sequence_values(value)
         if pairs is None or not all(
                 isinstance(pair, (ast.Tuple, ast.List)) and len(pair.elts) == 2
                 and not any(isinstance(item, ast.Starred) for item in pair.elts)
@@ -1040,14 +1048,22 @@ def module_dynamic_namespace(
                   and container.func.attr == "copy" and not container.args and not container.keywords):
                 pending.append((container.func.value, True))
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
-                  and container.func.id in mapping_copy_names
+                  and (container.func.id in mapping_copy_names or container.func.id in sequence_copy_names)
                   and len(container.args) == 1 and not container.keywords):
-                pair_values = explicit_pair_values(container.args[0])
-                if pair_values is not None:
-                    recognised = True
-                    members.extend(pair_values)
-                # Pair projection adds values without erasing old possibilities.
-                pending.append((container.args[0], True))
+                if container.func.id in sequence_copy_names:
+                    sequence_values = literal_sequence_values(container.args[0])
+                    if sequence_values is not None:
+                        recognised = True
+                        members.extend(sequence_values)
+                if container.func.id in mapping_copy_names:
+                    pair_values = explicit_pair_values(container.args[0])
+                    if pair_values is not None:
+                        recognised = True
+                        members.extend(pair_values)
+                    # Constructor-name ambiguity retains both old possibilities.
+                    pending.append((container.args[0], True))
+                elif not copied:
+                    members.append(container)
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names and not container.args
                   and len(container.keywords) == 1 and container.keywords[0].arg is None):
