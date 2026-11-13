@@ -914,6 +914,7 @@ def module_dynamic_namespace(
     # existing object-mutation checks. This is deliberately one step only.
     original_import_roots = frozenset(import_roots)
     saved_import_values: set[str] = set()
+    import_value_cache: dict[ast.AST, bool] = {}
     for statement in ast.walk(tree):
         if statement in local_annotation_nodes:
             continue
@@ -928,24 +929,38 @@ def module_dynamic_namespace(
             value = statement.value
         else:
             continue
-        cursor = value
-        while isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
-            if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
-                    and isinstance(cursor.value.func, ast.Name)
-                    and cursor.value.func.id == "globals"
-                    and not cursor.value.args and not cursor.value.keywords):
-                key = cursor.slice
-                if (isinstance(key, ast.Constant) and isinstance(key.value, str)
-                        and key.value in original_import_roots):
-                    saved_import_values.update(
-                        target.id for target in targets if isinstance(target, ast.Name)
-                    )
-                break
-            cursor = cursor.value
-        if isinstance(cursor, ast.Name) and cursor.id in original_import_roots:
-            saved_import_values.update(
-                target.id for target in targets if isinstance(target, ast.Name)
-            )
+        pending = [(target, value) for target in targets]
+        while pending:
+            target, value = pending.pop()
+            if isinstance(target, (ast.Tuple, ast.List)):
+                if (isinstance(value, (ast.Tuple, ast.List))
+                        and len(target.elts) == len(value.elts)
+                        and not any(isinstance(item, ast.Starred)
+                                    for item in (*target.elts, *value.elts))):
+                    pending.extend(zip(target.elts, value.elts))
+                continue
+            if not isinstance(target, ast.Name):
+                continue
+            if value not in import_value_cache:
+                cursor = value
+                imported_value = False
+                while isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
+                    if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
+                            and isinstance(cursor.value.func, ast.Name)
+                            and cursor.value.func.id == "globals"
+                            and not cursor.value.args and not cursor.value.keywords):
+                        key = cursor.slice
+                        imported_value = (isinstance(key, ast.Constant)
+                                          and isinstance(key.value, str)
+                                          and key.value in original_import_roots)
+                        break
+                    cursor = cursor.value
+                else:
+                    imported_value = (isinstance(cursor, ast.Name)
+                                      and cursor.id in original_import_roots)
+                import_value_cache[value] = imported_value
+            if import_value_cache[value]:
+                saved_import_values.add(target.id)
     import_roots.update(saved_import_values)
 
     for node in ast.walk(tree):
