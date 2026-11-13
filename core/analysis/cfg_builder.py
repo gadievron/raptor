@@ -1300,6 +1300,7 @@ def build_python_cfg(
     source: str | Path, function_name: str,
     *,
     _module_tree: ast.Module | None = None,
+    _function_node: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
 ) -> PythonCFG | None:
     """Build the CFG for one named function in a Python source file or
     in-memory source string.
@@ -1313,6 +1314,10 @@ def build_python_cfg(
     to skip the redundant ``ast.parse()``.  Internal optimisation
     for the finding resolver's hot loop (one parse per finding
     instead of two).
+
+    ``_function_node`` pins an already-selected definition in that
+    module tree when several definitions share a name. A node from
+    another tree or with a different name refuses construction.
     """
     if isinstance(source, Path):
         file_path = str(source)
@@ -1330,8 +1335,9 @@ def build_python_cfg(
     tree = _module_tree if _module_tree is not None else ast.parse(source_text)
     func: ast.AST | None = None
     for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
-                and node.name == function_name:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == function_name
+                and (_function_node is None or node is _function_node)):
             func = node
             break
     if func is None:
