@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import socket
 import subprocess
 from types import SimpleNamespace
 
@@ -12,14 +13,15 @@ from core.sandbox import _spawn
 from core.testing.module_views import module_function_view
 
 
-def _exercise(scratch, *, ambient, cancel, body_error):
+def _exercise(scratch, *, ambient, cancel, body_error, scope=False):
     owned = set()
     pairs = []
     events = []
     death = set()
     token = 7654321
-    cancellation = KeyboardInterrupt("owned death-writer retirement")
+    cancellation = KeyboardInterrupt("owned parent retirement")
     root = scratch / "stub"
+    endpoints = []
 
     def pipe():
         pair = os.pipe()
@@ -64,7 +66,7 @@ def _exercise(scratch, *, ambient, cancel, body_error):
         close(fd)
         assert events[-1] in ("wait-success", "wait-error")
         events.append("death-retired")
-        if cancel:
+        if cancel and not scope:
             raise cancellation
         return True
 
@@ -109,6 +111,33 @@ def _exercise(scratch, *, ambient, cancel, body_error):
     def forbidden(*args, **kwargs):
         raise AssertionError("unreviewed process/native/helper route")
 
+    class Endpoint:
+        def __init__(self, raw, *, parent):
+            self.raw = raw
+            self.parent = parent
+
+        def shutdown(self, how):
+            assert self.parent and how == socket.SHUT_RDWR
+            self.raw.shutdown(how)
+
+        def close(self):
+            self.raw.close()
+            if self.parent:
+                assert events[-1] == "death-retired"
+                events.append("scope-retired")
+                if cancel:
+                    raise cancellation
+
+    def socketpair():
+        raw_pair = socket.socketpair()
+        endpoints.extend(raw_pair)
+        return Endpoint(raw_pair[0], parent=True), Endpoint(raw_pair[1], parent=False)
+
+    def receiver_thread(**kwargs):
+        assert kwargs["daemon"] and kwargs["name"].startswith("unix-scope-recv-")
+        # The owned endpoint lifecycle is exercised without a notify receiver.
+        return SimpleNamespace(start=lambda: None)
+
     imports = {
         (0, "tempfile"): SimpleNamespace(mkdtemp=mkdir),
         (1, "landlock"): SimpleNamespace(check_landlock_available=forbidden),
@@ -119,6 +148,7 @@ def _exercise(scratch, *, ambient, cancel, body_error):
         (0, "ctypes"): SimpleNamespace(CDLL=lambda *a, **kw: SimpleNamespace(prctl=forbidden)),
         (0, "ctypes.util"): SimpleNamespace(find_library=lambda name: "inert-libc"),
         (0, "core.sandbox._proxy_bridge"): SimpleNamespace(_bring_up_loopback=forbidden),
+        (1, "_unix_scope"): SimpleNamespace(probe_unix_scope=lambda: True),
     }
 
     def import_local(name, globals=None, locals=None, fromlist=(), level=0):
@@ -142,17 +172,23 @@ def _exercise(scratch, *, ambient, cancel, body_error):
         "_gidmap_allow_available": lambda: None, "_run_newuidmap": mapping,
         "_readable_fds": lambda fds, timeout: [fd for fd in fds if fd in owned],
         "_kill_and_reap": forbidden, "_teardown_target": forbidden,
-        "_make_landlock_preexec": forbidden, "_make_seccomp_preexec": forbidden,
+        "_make_landlock_preexec": forbidden,
+        "_make_seccomp_preexec": (lambda *args, **kwargs: forbidden) if scope else forbidden,
         "_reap_tracer": forbidden,
         "shutil": SimpleNamespace(rmtree=forbidden),
+        "_socket_mod": SimpleNamespace(socketpair=socketpair, SHUT_RDWR=socket.SHUT_RDWR),
+        "threading": SimpleNamespace(Thread=receiver_thread),
+        "_drop_host_tmpdir_grants": lambda grants, *args: grants,
+        "_anchor_grants_to_bind_view": lambda grants, *args, **kwargs: (grants, []),
+        "_pin_bind_sources": lambda *args, **kwargs: {},
         # Only value construction is available, never a subprocess launcher.
         "subprocess": SimpleNamespace(PIPE=-1, CompletedProcess=subprocess.CompletedProcess),
     }, import_hook=import_local)
     def invoke():
         return view.run_sandboxed(
-            ["INERT-NOT-EXECUTED"], target=None, output=None,
+            ["INERT-NOT-EXECUTED"], target=str(scratch) if scope else None, output=None,
             block_network=True, nproc_limit=0, limits={}, writable_paths=[],
-            readable_paths=None, allowed_tcp_ports=None, seccomp_profile=None,
+            readable_paths=None, allowed_tcp_ports=None, seccomp_profile="full" if scope else None,
             seccomp_block_udp=False, env={}, cwd=None, timeout=None,
             capture_output=False,
         )
@@ -174,13 +210,19 @@ def _exercise(scratch, *, ambient, cancel, body_error):
             caught = error
         expected = body_error if body_error is not None else cancellation if cancel else None
         assert caught is expected
+        if body_error is not None and cancel:
+            assert "parent owner cleanup: KeyboardInterrupt" in body_error.__notes__
         if expected is None:
             assert result.returncode == 0 and result._setup_status is None
-        assert events[-2:] == ["death-retired", "stub-retired"]
+        final_events = ["death-retired", "scope-retired", "stub-retired"] if scope else ["death-retired", "stub-retired"]
+        assert events[-len(final_events):] == final_events
         assert not root.exists() and not death
         # Only the harness-owned duplicate go reader remains.
         assert len(owned) == 1
+        assert all(endpoint.fileno() == -1 for endpoint in endpoints)
     finally:
+        for endpoint in endpoints:
+            endpoint.close()
         for fd in tuple(owned):
             close(fd)
         if root.exists():
@@ -196,3 +238,14 @@ def test_parent_collection_retirement_uses_local_context(tmp_path, ambient, canc
 @pytest.mark.parametrize("ambient", [False, True])
 def test_parent_collection_error_survives_cleanup_cancellation(tmp_path, ambient):
     _exercise(tmp_path, ambient=ambient, cancel=True, body_error=OSError("owned wait failure"))
+
+
+@pytest.mark.parametrize("ambient", [False, True])
+@pytest.mark.parametrize("cancel", [False, True])
+def test_parent_scope_retirement_reports_its_own_failure(tmp_path, ambient, cancel):
+    _exercise(tmp_path, ambient=ambient, cancel=cancel, body_error=None, scope=True)
+
+
+@pytest.mark.parametrize("ambient", [False, True])
+def test_parent_collection_error_survives_scope_cancellation(tmp_path, ambient):
+    _exercise(tmp_path, ambient=ambient, cancel=True, body_error=OSError("owned wait failure"), scope=True)
