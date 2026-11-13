@@ -16,8 +16,8 @@ def test_metrics_label_domains(tmp_path):
         with path.open("w", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=CSV_HEADER)
             writer.writeheader()
-            for row in rows:
-                writer.writerow({**dict.fromkeys(CSV_HEADER, ""), **row})
+            for index, row in enumerate(rows):
+                writer.writerow({**dict.fromkeys(CSV_HEADER, ""), "finding_id": f"fixture-{index}", **row})
 
     valid = [
         {"label_verdict": label, "validator_label": predicted,
