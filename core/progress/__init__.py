@@ -384,8 +384,12 @@ class HackerProgressBar:
         # Finalise any in-flight stage so the operator sees its
         # detail rather than the bar.
         if self._stage is not None:
-            self._finalise_stage(detail="interrupted"
-                                  if exc_type else self._stage_detail)
+            try:
+                self._finalise_stage(detail="interrupted"
+                                      if exc_type else self._stage_detail)
+            except BaseException:
+                if exc_type is None:
+                    raise
         return False
 
     def stage(self, name: str, total: int | None = None) -> None:
