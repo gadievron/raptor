@@ -10,6 +10,7 @@ test, in its own session, and reaped in ``finally``.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import signal
 import subprocess
@@ -24,6 +25,7 @@ import pytest
 
 from core.run import parent_liveness
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 _RAPTOR_ROOT = Path(__file__).resolve().parents[3]
 
@@ -131,6 +133,21 @@ def _stub_terminate(monkeypatch):
     return calls
 
 
+@contextmanager
+def _owned_watchdog_threads():
+    workers = []
+    real_thread = parent_liveness.threading.Thread
+
+    def construct(*args, **kwargs):
+        worker = real_thread(*args, **kwargs)
+        workers.append(worker)
+        return worker
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch_module_attribute(patch, parent_liveness, "threading", "Thread", construct)
+        yield workers
+
+
 class TestTrigger:
     def test_ppid_change_fires(self, monkeypatch, _stub_terminate):
         borrowed_getppid = os.getppid
@@ -150,35 +167,43 @@ class TestTrigger:
         patch_module_attribute(monkeypatch, parent_liveness, "os", "getppid", fake_getppid)
         patch_module_attribute(monkeypatch, parent_liveness, "time", "sleep", wait_for_parent_change)
         assert os.getppid is borrowed_getppid, "watchdog mock escaped its consumer"
-        thread = parent_liveness.start_orphan_watchdog("trigger", poll_s=60.0)
-        try:
-            assert polled.wait(5), "watchdog never observed the live parent"
-            assert _stub_terminate == [], "watchdog fired while parent was alive"
+        def release_watchdog():
             flipped.set()
             resume.set()
-            thread.join(timeout=5)
-            assert _stub_terminate == ["trigger"], "watchdog did not fire after parent change"
-        finally:
-            # Release and retire the real thread before restoring its action
-            # or borrowed module bindings, including on assertion failures.
-            flipped.set()
-            resume.set()
-            thread.join(timeout=5)
-            assert not thread.is_alive()
+
+        with _owned_watchdog_threads() as workers:
+            with retiring_threads(workers, release=release_watchdog, timeout=5):
+                thread = parent_liveness.start_orphan_watchdog("trigger", poll_s=60.0)
+                try:
+                    assert polled.wait(5), "watchdog never observed the live parent"
+                    assert _stub_terminate == [], "watchdog fired while parent was alive"
+                    flipped.set()
+                    resume.set()
+                    thread.join(timeout=5)
+                    assert _stub_terminate == ["trigger"], "watchdog did not fire after parent change"
+                finally:
+                    # Release and retire the real thread before restoring its action
+                    # or borrowed module bindings, including on assertion failures.
+                    flipped.set()
+                    resume.set()
+                    thread.join(timeout=5)
+                    assert not thread.is_alive()
 
     def test_already_orphaned_expected_parent_fires(self, _stub_terminate):
         # The spawner recorded its pid, then died inside the spawn
         # window: getppid() never matches the recorded parent, so the
         # action fires at once instead of never.
-        thread = parent_liveness.start_orphan_watchdog(
-            "orphaned", expected_parent=os.getppid() + 1, poll_s=0.05,
-        )
-        try:
-            _wait_for(lambda: _stub_terminate == ["orphaned"], 5.0,
-                      "watchdog to fire for an already-orphaned child")
-        finally:
-            thread.join(timeout=5)
-            assert not thread.is_alive()
+        with _owned_watchdog_threads() as workers:
+            with retiring_threads(workers, release=lambda: None, timeout=5):
+                thread = parent_liveness.start_orphan_watchdog(
+                    "orphaned", expected_parent=os.getppid() + 1, poll_s=0.05,
+                )
+                try:
+                    _wait_for(lambda: _stub_terminate == ["orphaned"], 5.0,
+                              "watchdog to fire for an already-orphaned child")
+                finally:
+                    thread.join(timeout=5)
+                    assert not thread.is_alive()
 
 
 @pytest.mark.linux_native
