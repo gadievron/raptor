@@ -31,3 +31,13 @@ def require_nonempty(label: str, value: str) -> None:
     if not isinstance(value, str) or not value.strip():
         msg = f"{label} must be a non-empty string"
         raise ValueError(msg)
+
+
+def unique_object_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous object fields before strict record validation."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON field in dataflow record")
+        result[key] = value
+    return result
