@@ -824,6 +824,9 @@ class UnixScopeSupervisor:
                 if events:
                     so_error = _getsockopt_int(
                         dupfd, socket.SOL_SOCKET, socket.SO_ERROR)
+                    if so_error is None:
+                        # Readiness alone does not confirm connect success.
+                        return -errno.EPERM, 0
                     if so_error:
                         return -so_error, 0
                     return 0, 0
