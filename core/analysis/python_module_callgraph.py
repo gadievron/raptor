@@ -849,6 +849,15 @@ def module_dynamic_namespace(
             cur = parents.get(cur)
         return True
 
+    def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"update", "clear", "pop", "popitem", "setdefault",
+                                       "__setitem__", "__delitem__"}
+                and isinstance(node.func.value, ast.Attribute)
+                and node.func.value.attr == "__dict__"):
+            return node.func.value.value
+        return None
+
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
@@ -878,12 +887,8 @@ def module_dynamic_namespace(
                 whole = True
         elif isinstance(node, ast.Call):
             func = node.func
-            if (isinstance(func, ast.Attribute)
-                    and func.attr in {"update", "clear", "pop", "popitem", "setdefault",
-                                      "__setitem__", "__delitem__"}
-                    and isinstance(func.value, ast.Attribute)
-                    and func.value.attr == "__dict__"):
-                receiver = func.value.value
+            receiver = namespace_dict_receiver(node)
+            if receiver is not None:
                 while isinstance(receiver, (ast.Attribute, ast.Subscript)):
                     receiver = receiver.value
                 if isinstance(receiver, ast.Name) and receiver.id in import_roots:
@@ -921,6 +926,10 @@ def module_dynamic_namespace(
                     receiver_write = False
                     while True:
                         container = parents.get(cursor)
+                        if (isinstance(container, ast.Call) and container.func is cursor
+                                and namespace_dict_receiver(container) is not None):
+                            receiver_write = True
+                            break
                         if (isinstance(container, ast.Call)
                                 and isinstance(container.func, ast.Name)
                                 and container.func.id in {"setattr", "delattr"}
