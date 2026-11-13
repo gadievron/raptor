@@ -105,6 +105,17 @@ def test_binary_subject_request_reaches_scheduler_continuation(tmp_path, monkeyp
         assert not any(row.get("stage") in {"admitted", "reported"}
                        for row in load_verified_audit_log(out))
         assert bundle.client.reported_spend_usd == 0
+        from core.audit.report import generate_report, write_report
+
+        report = generate_report(out, final_status="completed",
+                                 processing_limitations=result.processing_limitations)
+        assert report["completeness"]["partial"] is True
+        assert result.outcomes[0].body in report["completeness"]["missing"]
+        assert report["stats"]["reviewed"] == 0
+        write_report(report, out)
+        saved = json.loads((out / "audit-report.json").read_text())
+        assert result.outcomes[0].body in saved["completeness"]["missing"]
+        assert not (out / "processing-completeness.json").exists()
         return
     assert len(bundle.state["requests"]) == 2, "binary request did not receive one scheduler-owned continuation"
     prompts = [json.loads(req.content)["messages"] for req in bundle.state["requests"]]

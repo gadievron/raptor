@@ -22,6 +22,8 @@ from core.json import load_json, save_json
 from core.security.prompt_output_sanitise import sanitise_string
 from core.source.streams import preserving_stream_error
 
+from .review_availability import REVIEW_DEFERRAL_LIMITATIONS
+
 # Byte budgets for the report's artifact reads: 1 MiB for run
 # metadata, 8 MiB for small state files, 64 MiB for findings-class
 # documents, 256 MiB for the checklist (largest measured artifact
@@ -195,9 +197,10 @@ def generate_report(
         completeness["resumable"] = final_status in _RESUMABLE_STATUSES
         if final_status == "completed":
             completeness["partial"] = bool(completeness.get("missing"))
-    # Preserve durable assessments while disclosing explicit retention failures.
+    # Preserve durable assessments while disclosing retention failures and
+    # known dispatch deferrals; neither rewrites review or finding statistics.
     # Apply after the terminal-status override can reset partial.
-    allowed_limitations = _RETENTION_LIMITATIONS
+    allowed_limitations = (*_RETENTION_LIMITATIONS, *REVIEW_DEFERRAL_LIMITATIONS)
     if isinstance(processing_limitations, list):
         labels = [label for label in allowed_limitations if label in processing_limitations]
         if labels:
