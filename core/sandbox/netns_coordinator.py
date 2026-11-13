@@ -580,7 +580,7 @@ def main() -> None:
     request_raw = sys.stdin.read()
     try:
         request = json.loads(request_raw)
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
         _emit_error("bad_request", f"could not parse request JSON: {exc}")
         sys.exit(2)
 

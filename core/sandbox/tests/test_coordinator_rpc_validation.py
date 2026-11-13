@@ -14,6 +14,7 @@ thread, leaving ``returncode=None`` with no error string.
 
 import io
 import json
+import sys
 
 import pytest
 
@@ -113,7 +114,7 @@ def test_run_child_default_timeout_matches_main_join_bound(monkeypatch):
     assert captured["timeout"] == _nc._DEFAULT_CHILD_TIMEOUT_S
 
 
-def _drive_main_hermetic(request, monkeypatch, *, validate_join_timeout=False):
+def _drive_main_hermetic(request, monkeypatch, *, validate_join_timeout=False, raw_request=None):
     """Drive main() with namespaces and children stubbed out (no forks,
     no privileges needed). Returns (errors, responses, join_timeouts,
     exit_code) — exit_code is None when main() returned normally."""
@@ -136,7 +137,7 @@ def _drive_main_hermetic(request, monkeypatch, *, validate_join_timeout=False):
                 lock.release()
 
     monkeypatch.setattr(_nc, "_setup_namespaces", lambda: "test")
-    patch_module_attribute(monkeypatch, _nc, 'sys', "stdin", io.StringIO(json.dumps(request)))
+    patch_module_attribute(monkeypatch, _nc, 'sys', "stdin", io.StringIO(json.dumps(request) if raw_request is None else raw_request))
     patch_module_attribute(monkeypatch, _nc, 'threading', "Thread", FakeThread)
     monkeypatch.setattr(_nc, "_run_child", lambda *a, **k: None)
     monkeypatch.setattr(_nc, "_emit_response", responses.append)
@@ -390,3 +391,29 @@ def test_main_accepts_representable_target_join_timeout(monkeypatch, timeout):
     )
     assert exit_code is None and not errors and len(responses) == 1
     assert joins == [timeout + 1.0]
+
+
+@pytest.mark.parametrize("kind", ["integer-limit", "recursion-error", "syntax"])
+def test_main_decoder_failures_are_structured_refusals(monkeypatch, kind):
+    if kind == "integer-limit":
+        limit = sys.get_int_max_str_digits()
+        if not limit:
+            pytest.skip("interpreter integer digit limit disabled")
+        raw = '{"number":' + '9' * (limit + 1) + '}'
+    elif kind == "recursion-error":
+        # Decoder implementations differ in nesting support. Exercise the
+        # decoder-error contract without changing global recursion limits.
+        raw = '{}'
+
+        def refuse_nesting(*args, **kwargs):
+            raise RecursionError("owned decoder nesting refusal")
+
+        patch_module_attribute(monkeypatch, _nc, 'json', 'loads', refuse_nesting)
+    else:
+        raw = '{'
+    errors, responses, joins, exit_code = _drive_main_hermetic(
+        None, monkeypatch, raw_request=raw,
+    )
+    assert exit_code == 2 and errors[0][0] == "bad_request"
+    assert "could not parse request JSON" in errors[0][1]
+    assert not responses and not joins
