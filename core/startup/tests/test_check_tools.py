@@ -253,14 +253,18 @@ class TestSemgrepVersion:
 
 class TestJoernVersion:
     def test_reads_dist_version_without_subprocess(self):
+        import packages.joern.prereqs as joern_prereqs
+
+        sub = mock.Mock()
         with mock.patch(
             "packages.joern.prereqs._joern_path",
             return_value="/opt/joern/joern",
         ), mock.patch(
             "packages.joern.prereqs._version_from_dist",
             return_value="4.0.470",
-        ) as dist, mock.patch("subprocess.run") as sub, \
-             mock_module_attribute(_probe_imports, "subprocess", "run", sub):
+        ) as dist, mock_module_attribute(
+            joern_prereqs, "subprocess", "run", sub,
+        ), mock_module_attribute(_probe_imports, "subprocess", "run", sub):
             assert startup_init._joern_version() == "4.0.470"
         dist.assert_called_once_with("/opt/joern/joern")
         # No JVM boot at startup — dist-file read only.
