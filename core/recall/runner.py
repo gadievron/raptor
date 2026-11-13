@@ -27,7 +27,7 @@ from core.atomic_fs import (
 )
 from core.json import dumps_artifact
 from core.sarif.parser import parse_sarif_findings
-from core.source.streams import open_owned_fd
+from core.source.streams import open_owned_fd, preserving_stream_error
 
 from core.recall.manifest import PROFILES, RecallManifest
 from core.recall.pinned_clone import verify_pinned_clone as _verify_pin
@@ -284,7 +284,7 @@ def _chunk_oversized_sarif(path: Path, tmpdir: Path) -> list[Path]:
             path, size // (1024 * 1024),
             _SARIF_CHUNK_CAP // (1024 * 1024))
         return []
-    with Path(path).open(encoding="utf-8") as f:
+    with preserving_stream_error(Path(path).open(encoding="utf-8")) as f:
         doc = json.load(f)
     runs = doc.get("runs")
     if not isinstance(runs, list):
