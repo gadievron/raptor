@@ -10,6 +10,8 @@ without ever running target code.
 from __future__ import annotations
 
 
+from contextlib import ExitStack
+import errno
 import os
 from pathlib import Path
 
@@ -28,6 +30,7 @@ from core.inventory.perlasm import (
 )
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 # The structural preamble shape shared by openssl perlasm generators:
 # xlate driver lookup + $flavour/$output argv handling.
@@ -255,8 +258,13 @@ class TestGenerationAndCache:
         gen = detect_perlasm_generators(self._with_gen(target))[0]
         cache = tmp_path / "cache"
 
+        fifo_paths = []
+        fifo_created = threading.Event()
+
         def _fifo(cmd, **kwargs):
             _os.mkfifo(cmd[3])
+            fifo_paths.append(Path(cmd[3]))
+            fifo_created.set()
 
             class _Proc:
                 returncode = 0
@@ -270,11 +278,26 @@ class TestGenerationAndCache:
             target=lambda: result.append(
                 generate_asm(gen, "linux64", target, cache)),
             daemon=True)
-        t.start()
-        t.join(timeout=10)
-        assert not t.is_alive(), "generate_asm blocked on a FIFO output"
-        cached, gap = result[0]
-        assert cached is None and gap is not None
+        with ExitStack() as cleanup:
+            def release_reader():
+                if t.ident is None or not t.is_alive():
+                    return
+                if not fifo_created.wait(timeout=10):
+                    return
+                try:
+                    peer = _os.open(fifo_paths[0], _os.O_WRONLY | _os.O_NONBLOCK)
+                except OSError as exc:
+                    if exc.errno not in (errno.ENOENT, errno.ENXIO):
+                        raise
+                else:
+                    cleanup.callback(_os.close, peer)
+
+            with retiring_threads([t], release=release_reader, timeout=10):
+                t.start()
+                t.join(timeout=10)
+                assert not t.is_alive(), "generate_asm blocked on a FIFO output"
+                cached, gap = result[0]
+                assert cached is None and gap is not None
 
     def test_cache_key_varies_by_flavour_and_content(self, target):
         gen = detect_perlasm_generators(self._with_gen(target))[0]
