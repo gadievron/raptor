@@ -979,13 +979,10 @@ def test_bedrock_session_warnings_unmanaged_asia_env(monkeypatch):
     monkeypatch.setenv("AWS_SESSION_TOKEN", "session")
     monkeypatch.delenv("AWS_PROFILE", raising=False)
     monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
-    monkeypatch.setattr(
-        "core.llm.dispatcher.auth.Path.is_file",
-        lambda self: False,
-    )
-    store = CredentialStore()
-    warnings = store.bedrock_session_warnings()
-    assert any("short-lived" in w and "aws configure sso" in w for w in warnings)
+    with _without_credential_file():
+        store = CredentialStore()
+        warnings = store.bedrock_session_warnings()
+        assert any("short-lived" in w and "aws configure sso" in w for w in warnings)
 
 
 def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
@@ -993,35 +990,46 @@ def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
     trodden setup, no warnings.  Mocked here so the test passes both
     in CI (no botocore) and on dev hosts (where it is installed) —
     we're only asserting the behaviour when botocore IS available."""
-    import sys as _sys
-    import types as _types
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
-    # Mock botocore as importable so the SigV4-without-botocore
-    # warning doesn't fire in CI environments that don't have it
-    # installed — irrelevant for what this test asserts.
-    if "botocore" not in _sys.modules:
-        monkeypatch.setitem(
-            _sys.modules, "botocore", _types.ModuleType("botocore"),
-        )
+    # Model botocore presence only inside the warning-method view.
     # Drop the no-creds-file requirement so this test doesn't depend
     # on whether the dev host has ~/.aws/credentials.  We're only
     # asserting that AKIA + no bearer + botocore = silent.
-    monkeypatch.setattr(
-        "core.llm.dispatcher.auth.Path.is_file",
-        lambda self: False,
-    )
     monkeypatch.delenv("AWS_SHARED_CREDENTIALS_FILE", raising=False)
-    store = CredentialStore()
-    assert store.bedrock_session_warnings() == []
+    with _without_credential_file(botocore_available=True):
+        store = CredentialStore()
+        assert store.bedrock_session_warnings() == []
 
 
 class _NoCredentialsPath(type(auth_module.Path())):
     def is_file(self):
         return False
+
+
+@contextmanager
+def _without_credential_file(*, botocore_available=False):
+    import builtins
+    from types import ModuleType
+
+    original = CredentialStore.bedrock_session_warnings
+    importer = builtins.__import__
+    sdk = ModuleType("botocore")
+    def available(name, *args, **kwargs):
+        if name == "botocore":
+            return sdk
+        return importer(name, *args, **kwargs)
+    view = module_function_view(
+        auth_module,
+        bindings={"_owned_warnings": original, "Path": _NoCredentialsPath},
+        import_hook=available if botocore_available else None,
+    )
+    with pytest.MonkeyPatch.context() as scope:
+        scope.setattr(CredentialStore, "bedrock_session_warnings", view._owned_warnings)
+        yield view
 
 
 @contextmanager
