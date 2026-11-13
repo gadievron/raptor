@@ -207,6 +207,7 @@ def compute_gaps(
     current_tools: frozenset[str] | None = None,
     source_roots: dict[str, Path] | None = None,
     require_c_foundation: bool = True,
+    binary_view_snapshot: Any = None,
 ) -> list[dict[str, Any]]:
     """Compute the list of unreviewed functions.
 
@@ -300,12 +301,19 @@ def compute_gaps(
           is_stale, old_annotation (if stale)
     """
     binary_hashes = _current_binary_hashes(checklist, checklist.get("target_path", "") or "")
+    if binary_view_snapshot is None and binary_hashes and out_dir is not None:
+        binary_view_snapshot = _load_current_binary_views(out_dir, checklist.get("target_path", ""))
+    binary_view_hashes = _binary_view_hashes(binary_view_snapshot, checklist)
+    manual_binary_covered: set[str] = set()
+    manual_binary_credits: dict[str, list[int]] = {}
     covered_functions = _build_covered_set(
         coverage_records,
         target_path=checklist.get("target_path", "") or "",
         checklist=checklist,
         require_c_foundation=require_c_foundation,
         _binary_hashes=binary_hashes,
+        _binary_view_hashes=binary_view_hashes,
+        manual_binary_covered=manual_binary_covered,
     )
     # Span-bound credits from the hash-verified journal fold: each
     # verified per-site entry credits ITS OWN line_start under the
@@ -506,6 +514,8 @@ def compute_gaps(
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
         binary_hashes=binary_hashes,
+        binary_view_hashes=binary_view_hashes,
+        manual_binary_credits=manual_binary_credits,
         reuse_sink=reuse_sink,
         credits=covered_credits,
         current_strategies_fn=_current_strategies,
@@ -524,6 +534,22 @@ def compute_gaps(
             covered_credits.pop(binary_key, None)
             if reuse_sink is not None:
                 reuse_sink.pop(binary_key, None)
+
+    final_views = _binary_view_hashes(binary_view_snapshot, checklist)
+    for binary_key in binary_view_hashes.keys() | final_views.keys():
+        if binary_view_hashes.get(binary_key) == final_views.get(binary_key):
+            continue
+        if binary_hashes.get(binary_key) != final_binary_hashes.get(binary_key):
+            continue  # Existing module-change retirement already removed every credit.
+        covered_functions.discard(binary_key)
+        covered_credits.pop(binary_key, None)
+        if reuse_sink is not None:
+            reuse_sink.pop(binary_key, None)
+        manual_spans = manual_binary_credits.get(binary_key)
+        if binary_key in manual_binary_covered or manual_spans:
+            covered_functions.add(binary_key)
+            if manual_spans:
+                covered_credits[binary_key] = list(manual_spans)
 
     # Seed-forced re-review (--seed-rereview): drop the suppression
     # the folds just granted for every resolved seed key, AFTER all
@@ -2108,6 +2134,36 @@ def write_gaps(gaps: list[dict[str, Any]], out_dir: Path) -> Path:
 # for the full store-by-store contract.
 
 
+def _load_current_binary_views(out_dir: Path, target_path: str):
+    from .binary_context import find_redb_snapshot, load_redb_binding
+    from .binary_view_snapshot import capture_binary_view_snapshot
+    try:
+        accepted = find_redb_snapshot(out_dir, Path(target_path))
+        if accepted is None:
+            return None
+        path, database = accepted
+        read = load_redb_binding(path)
+        if read.database is not database:
+            return None
+        return capture_binary_view_snapshot(read, Path(target_path))
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
+        return None
+
+
+def _binary_view_hashes(snapshot, checklist: dict) -> dict[str, str]:
+    from .binary_review_scope import binary_view_anchor
+    from .binary_view_snapshot import BinaryViewSnapshot
+    if not isinstance(snapshot, BinaryViewSnapshot):
+        return {}
+    target = checklist.get("target_path")
+    if not isinstance(target, (str, Path)) or Path(target).absolute() != snapshot.module.path:
+        return {}
+    modules = _current_binary_hashes(checklist, str(snapshot.module.path))
+    return {key: anchor for key, identity in snapshot.view_identities(checklist).items()
+            if modules.get(key) == (f"bin:{identity.module_sha256}:{identity.address:x}:{identity.size:x}")
+            and (anchor := binary_view_anchor(identity)) is not None}
+
+
 def _current_binary_hashes(checklist: dict | None, target_path: str) -> dict[str, str]:
     """Bind recorded binary inventory anchors to a directly selected module.
 
@@ -2153,6 +2209,8 @@ def _build_covered_set(
     checklist: dict[str, Any] | None = None,
     *, require_c_foundation: bool = False,
     _binary_hashes: dict[str, str] | None = None,
+    _binary_view_hashes: dict[str, str] | None = None,
+    manual_binary_covered: set[str] | None = None,
 ) -> set:
     """Build set of file:function keys that have coverage.
 
@@ -2317,8 +2375,15 @@ def _build_covered_set(
                     and isinstance(func_name, str) and func_name):
                 continue
             stored_hash = fa.get("hash")
+            if (file_path.startswith("binary:") and tool not in {"mark", "annotations"}
+                    and (not isinstance(stored_hash, str) or not stored_hash.startswith("bin:view1:")
+                         or (_binary_view_hashes or {}).get(make_function_key(file_path, func_name))
+                            != stored_hash)):
+                stale_binary_rows += 1
+                continue
             if isinstance(stored_hash, str) and stored_hash.startswith("bin:"):
-                if current_binary_hashes.get(make_function_key(file_path, func_name)) != stored_hash:
+                expected_hashes = current_binary_hashes if tool in {"mark", "annotations"} else (_binary_view_hashes or {})
+                if expected_hashes.get(make_function_key(file_path, func_name)) != stored_hash:
                     stale_binary_rows += 1
                     continue
             binary_review = ((file_path, func_name) in binary_sites
@@ -2352,7 +2417,11 @@ def _build_covered_set(
                         tool, file_path, func_name, prov,
                     )
                     continue
-            covered.add(make_function_key(file_path, func_name))
+            accepted_key = make_function_key(file_path, func_name)
+            covered.add(accepted_key)
+            if (manual_binary_covered is not None and tool in {"mark", "annotations"}
+                    and accepted_key in current_binary_hashes):
+                manual_binary_covered.add(accepted_key)
     if stale_binary_rows:
         logger.info("coverage records: %d binary review projection(s) lack a matching current module/inventory anchor; review required",
                     stale_binary_rows)
@@ -2537,6 +2606,8 @@ def _fold_journal_into_covered(
     current_raw_ends: dict[str, int | None] | None = None,
     site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
+    binary_view_hashes: dict[str, str] | None = None,
+    manual_binary_credits: dict[str, list[int]] | None = None,
     reuse_sink: dict | None = None,
     credits: dict | None = None,
     current_strategies_fn=None,
@@ -2655,6 +2726,8 @@ def _fold_journal_into_covered(
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
                     binary_hashes=binary_hashes or {},
+                    binary_view_hashes=binary_view_hashes,
+                    manual_binary_credits=manual_binary_credits,
                     reuse_sink=reuse_sink,
                     credits=credits,
                     current_strategies_fn=current_strategies_fn,
@@ -2706,6 +2779,8 @@ def _fold_journal_into_covered(
                     current_raw_ends=current_raw_ends or {},
                     site_raw_ends=site_raw_ends or {},
                     binary_hashes=binary_hashes or {},
+                    binary_view_hashes=binary_view_hashes,
+                    manual_binary_credits=manual_binary_credits,
                     reuse_sink=None,
                     credits=credits,
                     current_strategies_fn=current_strategies_fn,
@@ -2745,6 +2820,8 @@ def _fold_journal_into_covered(
                 current_raw_ends=current_raw_ends or {},
                 site_raw_ends=site_raw_ends or {},
                 binary_hashes=binary_hashes or {},
+                binary_view_hashes=binary_view_hashes,
+                manual_binary_credits=manual_binary_credits,
                 reuse_sink=reuse_sink,
                 credits=credits,
                 current_strategies_fn=current_strategies_fn,
@@ -3406,6 +3483,8 @@ def _fold_project_index(
     current_raw_ends: dict[str, int | None] | None = None,
     site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
+    binary_view_hashes: dict[str, str] | None = None,
+    manual_binary_credits: dict[str, list[int]] | None = None,
     reuse_sink: dict | None = None,
     credits: dict | None = None,
     current_strategies_fn=None,
@@ -3521,6 +3600,8 @@ def _fold_project_index(
         current_raw_ends=current_raw_ends,
         site_raw_ends=site_raw_ends,
         binary_hashes=binary_hashes,
+        binary_view_hashes=binary_view_hashes,
+        manual_binary_credits=manual_binary_credits,
         reuse_sink=reuse_sink,
         credits=credits,
         current_strategies_fn=current_strategies_fn,
@@ -3576,6 +3657,8 @@ def _verify_entries_fold(
     current_raw_ends: dict[str, int | None] | None = None,
     site_raw_ends: dict[str, dict[int, int | None | object]] | None = None,
     binary_hashes: dict[str, str] | None = None,
+    binary_view_hashes: dict[str, str] | None = None,
+    manual_binary_credits: dict[str, list[int]] | None = None,
     reuse_sink: dict | None,
     credits: dict | None = None,
     current_strategies_fn,
@@ -3676,6 +3759,11 @@ def _verify_entries_fold(
 
     def _credit(key: str, line_start: int) -> None:
         covered.add(key)
+        producer = getattr(entry, "producer", None)
+        operator = (producer == "annotations" or
+                    producer == "mark" and getattr(entry, "model", None) == "operator")
+        if (operator and key in (binary_hashes or {}) and manual_binary_credits is not None):
+            manual_binary_credits.setdefault(key, []).append(int(line_start or 0))
         if credits is not None:
             # Span-BOUND credit: the credit belongs to the reviewed
             # site, not to the key. Count-based credits let an
@@ -3912,6 +4000,14 @@ def _verify_entries_fold(
                 if reuse_stats is not None:
                     reuse_stats.setdefault(key, "source_binding")
                 continue
+        producer = getattr(entry, "producer", None)
+        operator = (producer == "annotations" or
+                    producer == "mark" and getattr(entry, "model", None) == "operator")
+        if (isinstance(entry.file, str) and entry.file.startswith("binary:") and not operator
+                and (not isinstance(entry.source_hash, str)
+                     or not entry.source_hash.startswith("bin:view1:")
+                     or (binary_view_hashes or {}).get(key) != entry.source_hash)):
+            continue
         if entry.source_hash and entry.source_hash.startswith("bin:"):
             # Binary items: the hash anchors the BINARY's content +
             # the function's address/size. A rebuilt binary (or a
@@ -3922,7 +4018,10 @@ def _verify_entries_fold(
             # from the current inventory (renamed/removed function or
             # unhashable binary) — crediting across that would keep a
             # verdict alive over arbitrary rebuilds.
-            expected = (binary_hashes or {}).get(key)
+            producer = getattr(entry, "producer", None)
+            operator = (producer == "annotations" or
+                        producer == "mark" and getattr(entry, "model", None) == "operator")
+            expected = ((binary_hashes if operator else binary_view_hashes) or {}).get(key)
             if dark_row:
                 # Binary rows never reach the reuse import below (the
                 # branch credits and continues), so a dark binary row
