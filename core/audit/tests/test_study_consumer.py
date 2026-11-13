@@ -1,6 +1,7 @@
 """Tests for the incremental study consumer (StudyQueue + helpers)."""
 
 import asyncio
+from contextlib import closing
 import threading
 import time
 
@@ -282,25 +283,25 @@ class TestStudyQueueConcepts:
         assert q.consumer_done is True
 
     def test_set_event_loop_and_notify(self):
-        loop = asyncio.new_event_loop()
-        event = asyncio.Event()
-        q = StudyQueue()
-        q.set_event_loop(loop, event)
-        q.enqueue(StudyRequest("what is sk_buff?", "a.c", "fn"))
+        with closing(asyncio.new_event_loop()) as loop:
+            event = asyncio.Event()
+            q = StudyQueue()
+            q.set_event_loop(loop, event)
+            q.enqueue(StudyRequest("what is sk_buff?", "a.c", "fn"))
 
-        def _mark():
-            time.sleep(0.02)
-            q.mark_studied({"sk_buff"})
+            def _mark():
+                time.sleep(0.02)
+                q.mark_studied({"sk_buff"})
 
-        t = threading.Thread(target=_mark)
-        t.start()
+            t = threading.Thread(target=_mark)
+            with retiring_threads((t,), release=lambda: None, timeout=5):
+                t.start()
 
-        async def _wait():
-            await asyncio.wait_for(event.wait(), timeout=2.0)
+                async def _wait():
+                    await asyncio.wait_for(event.wait(), timeout=2.0)
 
-        loop.run_until_complete(_wait())
-        t.join()
-        loop.close()
+                loop.run_until_complete(_wait())
+                t.join()
         assert "sk_buff" not in q.pending_concepts()
 
     def test_notify_noop_before_set_event_loop(self):
