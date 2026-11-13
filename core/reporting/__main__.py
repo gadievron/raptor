@@ -62,9 +62,17 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         options = options_from_args(args, parser)
         document = None
+        captured_sarif = False
         if args.command == "sarif":
             context = context_from_sarif(args.inputs, target=args.target, run_id=args.run_id or args.out.name,
                                          pass_id=args.pass_id, attempt_id=args.attempt_id, parents=args.parent)
+            captured_sarif = bool(context.artifacts)
+            referenced = {Path(artifact["path"]).resolve() for artifact in context.artifacts}
+            for source in args.inputs:
+                resolved = source.resolve()
+                if resolved not in referenced:
+                    context.artifacts.append({"path": str(resolved)})
+                    referenced.add(resolved)
         elif args.command == "native":
             try:
                 payload = loads_bounded(read_text_gated(args.input, MAX_JSON_BYTES), max_bytes=MAX_JSON_BYTES)
@@ -99,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             context, document = build_delta(before, after, lineage=lineage,
                                             artifacts=[{"path": str(path.resolve())} for path in inputs])
         result = complete_reporting(context, args.out, document=document, options=options, stream=sys.stdout)
-        return 1 if result.errors or (args.command == "sarif" and not context.artifacts) else 0
+        return 1 if result.errors or (args.command == "sarif" and not captured_sarif) else 0
     except (OSError, ValueError, TypeError) as exc:
         print("Reporting failed: " + sanitise_for_terminal(str(exc), max_len=1000), file=sys.stderr)
         return 1
