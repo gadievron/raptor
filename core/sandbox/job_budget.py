@@ -457,6 +457,7 @@ class Job:
         if self.scope is None:
             return
         from . import _spawn
+        from ._retirement import retire_parent_resources
         writer, self.writer = self.writer, None
         reader, self.reader = self.reader, None
         close_error: BaseException | None = None
@@ -464,7 +465,10 @@ class Job:
             if writer is not None:
                 try:
                     os.write(writer, b'S')
-                finally:
+                except BaseException:
+                    retire_parent_resources(lambda: _spawn.close_death_w(writer))
+                    raise
+                else:
                     _spawn.close_death_w(writer)
             if reader is None or self.watcher is None:
                 raise ValueError("job watcher ownership missing")
@@ -507,8 +511,6 @@ class Job:
                 close_error = failure
                 raise
         finally:
-            from ._retirement import retire_parent_resources
-
             def reap_watcher():
                 # An unreaped owned child cannot be confused with PID reuse.
                 if self.watcher is None:

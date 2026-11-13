@@ -12,11 +12,12 @@ from core.security import cgroup_scope
 from core.testing.module_views import module_function_view
 
 
-def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=None):
+def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=None,
+              write_error=False, cancellation_type=KeyboardInterrupt):
     owned = set()
     roles = {}
     events = []
-    cancellation = KeyboardInterrupt("owned job close retirement")
+    cancellation = cancellation_type("owned job close retirement") if cancellation_type else None
     watcher = 7654321
 
     def remember(fd, role):
@@ -39,7 +40,7 @@ def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=No
         os.close(fd)
         role = roles[fd]
         events.append(role)
-        if role == stage:
+        if role == stage and cancellation is not None:
             raise cancellation
 
     def write(fd, data):
@@ -97,6 +98,10 @@ def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=No
         os.write(reply, json.dumps(report).encode())
         close(reply)
         job.writer, job.reader, job.watcher = writer, reader, watcher
+        if write_error:
+            # An exited watcher leaves no stop-pipe reader. This causes an
+            # actual EPIPE on our owned writer without starting a process.
+            close(stop_reader)
         private_os = SimpleNamespace(
             write=write, read=read, set_blocking=blocking, close=close,
             waitpid=waitpid, WNOHANG=os.WNOHANG,
@@ -121,7 +126,12 @@ def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=No
             caller()
         except BaseException as error:
             caught = error
-        if finish_error is not None:
+        if write_error:
+            assert isinstance(caught, job_budget.JobBudgetError)
+            assert isinstance(caught.__cause__, BrokenPipeError)
+            if stage == "writer" and cancellation is not None:
+                assert "parent owner cleanup: " + type(cancellation).__name__ in caught.__cause__.__notes__
+        elif finish_error is not None:
             assert caught is finish_error
         elif protocol_error:
             assert isinstance(caught, job_budget.JobBudgetError)
@@ -133,8 +143,8 @@ def _exercise(tmp_path, *, ambient, stage, protocol_error=False, finish_error=No
         assert job.writer is job.reader is job.watcher is job.scope is None
         assert raw_scope.node is raw_scope.parent is None
         assert events.count("reader") == events.count("node") == events.count("parent") == 1
-        assert owned == {stop_reader}
-        assert job.record["cleanup"] == ("failed" if protocol_error or stage else "complete")
+        assert owned == (set() if write_error else {stop_reader})
+        assert job.record["cleanup"] == ("failed" if protocol_error or write_error or stage else "complete")
     finally:
         for fd in tuple(owned):
             owned.remove(fd)
@@ -161,3 +171,15 @@ def test_protocol_failure_keeps_wrapped_error_and_cleanup_note(tmp_path, ambient
 def test_fallback_failure_keeps_identity_and_cleanup_note(tmp_path, ambient):
     _exercise(tmp_path, ambient=ambient, stage="reader", protocol_error=True,
               finish_error=SystemExit("owned fallback retirement"))
+
+
+@pytest.mark.parametrize("ambient", [False, True])
+@pytest.mark.parametrize("cancellation_type", [KeyboardInterrupt, SystemExit, None])
+def test_stop_write_failure_remains_the_primary_cause(tmp_path, ambient, cancellation_type):
+    _exercise(tmp_path, ambient=ambient, stage="writer", write_error=True,
+              cancellation_type=cancellation_type)
+
+
+@pytest.mark.parametrize("ambient", [False, True])
+def test_successful_stop_write_reports_its_cleanup_cancellation(tmp_path, ambient):
+    _exercise(tmp_path, ambient=ambient, stage="writer")
