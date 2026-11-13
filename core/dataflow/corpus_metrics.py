@@ -72,6 +72,9 @@ def compute(csv_path: Path) -> Metrics:
     m = Metrics()
     with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        columns = reader.fieldnames or []
+        if len(columns) != len(set(columns)):
+            raise ValueError("duplicate CSV column names")
         for row in reader:
             label = row["label_verdict"]
             v = row["validator_label"]
