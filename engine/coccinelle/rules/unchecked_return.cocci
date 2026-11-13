@@ -70,7 +70,7 @@ p << ur_unchecked.p;
 
 import json, sys
 for _p in p:
-    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": "unchecked_return", "message": "Return value not checked (most callers check)"}
+    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column), "line_end": int(_p.line_end), "col_end": int(_p.column_end), "rule": "unchecked_return", "message": "Return value not checked by a recognised stored-result guard"}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 // ---- Bare mode (no defines): same-file inference ----
