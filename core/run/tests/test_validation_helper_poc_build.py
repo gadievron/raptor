@@ -9,6 +9,9 @@ the LLM reads.
 """
 
 import importlib.util
+import builtins
+import subprocess
+from types import ModuleType
 import os
 import shutil
 import sys
@@ -19,7 +22,28 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_views import module_function_view
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture()
+def _private_poc_runtime(monkeypatch):
+    def install(mod, import_hook=None):
+        process = ModuleType(subprocess.__name__)
+        vars(process).update(vars(subprocess))
+        original_import = builtins.__import__
+
+        def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+            if level == 0 and name == "subprocess":
+                return process
+            return (import_hook or original_import)(name, globals, locals, fromlist, level)
+
+        view = module_function_view(mod, import_hook=import_local)
+        monkeypatch.setattr(mod, "_build_standalone_pocs", view._build_standalone_pocs)
+        return process
+
+    return install
 
 
 def _load_helper():
@@ -83,7 +107,7 @@ def test_build_system_target_skips_poc_build(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('optout', [None, '', '0', 'true', ' 1'])
-def test_missing_sandbox_refuses_before_any_compiler_call(tmp_path, monkeypatch, optout):
+def test_missing_sandbox_refuses_before_any_compiler_call(tmp_path, monkeypatch, optout, _private_poc_runtime):
     import builtins
     from core.run.sandbox_policy import SandboxUnavailableError
 
@@ -100,22 +124,20 @@ def test_missing_sandbox_refuses_before_any_compiler_call(tmp_path, monkeypatch,
         if name == 'core.sandbox':
             raise failure
         return original_import(name, *args, **kwargs)
-    monkeypatch.setattr(builtins, '__import__', unavailable)
+    process = _private_poc_runtime(mod, unavailable)
     calls = []
     def forbidden(*args, **kwargs):
         calls.append(args)
         raise AssertionError('compiler must not run without explicit consent')
-    import subprocess
-    monkeypatch.setattr(subprocess, 'run', forbidden)
+    monkeypatch.setattr(process, 'run', forbidden)
     with pytest.raises(SandboxUnavailableError, match='RAPTOR_ALLOW_UNSANDBOXED_TOOLS=1') as caught:
         mod._build_standalone_pocs(str(target), str(tmp_path / 'build'))
     assert caught.value.__cause__ is failure
     assert not calls
 
 
-def test_missing_sandbox_explicit_optout_logs_and_keeps_filtered_env(tmp_path, monkeypatch, caplog):
+def test_missing_sandbox_explicit_optout_logs_and_keeps_filtered_env(tmp_path, monkeypatch, caplog, _private_poc_runtime):
     import builtins
-    import subprocess
     from core.run import sandbox_policy
 
     mod = _load_helper()
@@ -130,12 +152,12 @@ def test_missing_sandbox_explicit_optout_logs_and_keeps_filtered_env(tmp_path, m
         if name == 'core.sandbox':
             raise ImportError('test-only missing sandbox dependency')
         return original_import(name, *args, **kwargs)
-    monkeypatch.setattr(builtins, '__import__', unavailable)
+    process = _private_poc_runtime(mod, unavailable)
     calls, events = [], []
     def record(cmd, **kwargs):
         calls.append((cmd, kwargs))
         return CompletedProcess(cmd, 0, stdout='', stderr='')
-    monkeypatch.setattr(subprocess, 'run', record)
+    monkeypatch.setattr(process, 'run', record)
     monkeypatch.setattr(sandbox_policy, 'log_security_event',
                         lambda *args, **kwargs: events.append((args, kwargs)))
     mod._build_standalone_pocs(str(target), str(tmp_path / 'build'))
@@ -149,12 +171,12 @@ def test_missing_sandbox_explicit_optout_logs_and_keeps_filtered_env(tmp_path, m
     assert 'standalone PoC compilation' in events[0][1]['tool']
 
 
-def test_sandbox_setup_failure_never_retries_as_bare_compile(tmp_path, monkeypatch):
-    import subprocess
+def test_sandbox_setup_failure_never_retries_as_bare_compile(tmp_path, monkeypatch, _private_poc_runtime):
     import core.sandbox
     from core.sandbox.errors import SandboxSetupError
 
     mod = _load_helper()
+    process = _private_poc_runtime(mod)
     target = tmp_path / 'target'
     target.mkdir()
     (target / 'poc.c').write_text('int main(void){return 0;}\n')
@@ -166,7 +188,7 @@ def test_sandbox_setup_failure_never_retries_as_bare_compile(tmp_path, monkeypat
         calls.append(cmd)
         assert cmd == ['gcc', '--version']
         return CompletedProcess(cmd, 0, stdout='', stderr='')
-    monkeypatch.setattr(subprocess, 'run', probe)
+    monkeypatch.setattr(process, 'run', probe)
     def refused(*args, **kwargs):
         raise SandboxSetupError('test-only setup failure')
     monkeypatch.setattr(core.sandbox, 'run', refused)
