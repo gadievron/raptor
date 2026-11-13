@@ -808,7 +808,7 @@ def import_functions_analysed(
             # re-imported raw at every render; same discipline as the
             # audit gap fold (core.audit.gaps._build_covered_set).
             continue
-        if review_grade and isinstance(fa.get("hash"), str) and fa["hash"].startswith("src:ctx"):
+        if review_grade and isinstance(fa.get("hash"), str) and fa["hash"].startswith(("src:ctx", "bin:ctx")):
             # A legacy or external projection must not discard the original
             # review's dependency admission, even when its MAC verifies.
             continue
