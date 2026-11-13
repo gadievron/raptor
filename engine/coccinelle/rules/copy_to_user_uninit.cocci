@@ -1,11 +1,11 @@
-// copy_to_user_uninit.cocci — Find automatic stack values that are
-// copied to userspace without any initialization (kernel info leak).
+// copy_to_user_uninit.cocci — Review automatic values passed to copy_to_user
+// without recognised initialisation before the call.
 //
 // The pattern: a local variable is declared and then passed to
 // copy_to_user with NO initialization of any kind in between — no
 // memset, no whole-struct assignment, no member assignment, and no
-// helper call taking its address (which may initialize it). Whatever
-// was on the stack leaks to userspace.
+// helper call taking its address (which may initialize it). Actual byte
+// extent, copy success, API identity and target policy require review.
 //
 // Member-by-member assignment is treated as initialization: spatch
 // cannot enumerate a struct's fields to prove FULL coverage, so a
@@ -133,7 +133,7 @@ for _p in p_copy:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
            "line_end": int(_p.line_end), "col_end": int(_p.column_end),
            "rule": "copy_to_user_uninit",
-           "message": "Stack value '%s' (type %s) copied to userspace with no initialization — kernel stack info leak" % (out, T)}
+           "message": "Candidate: automatic value '%s' (type %s) reaches copy_to_user without recognised initialisation; review byte extent, copy outcome and API identity before claiming disclosure (CWE-200/CWE-908)" % (out, T)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
 
 
@@ -174,5 +174,5 @@ if match and len(match.group(1)) <= 128:
             result = {"file": site.file, "line": int(site.line), "col": int(site.column),
                       "line_end": int(site.line_end), "col_end": int(site.column_end),
                       "rule": "copy_to_user_uninit",
-                      "message": "Stack byte array '%s' copied in full immediately after declaration without initialisation — kernel stack info leak" % out}
+                      "message": "Candidate: automatic byte array '%s' reaches a full-size copy_to_user immediately after declaration without initialisation; review copy outcome and API identity before claiming disclosure (CWE-200/CWE-908)" % out}
             sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")
