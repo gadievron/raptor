@@ -235,8 +235,9 @@ class StudySubjects:
         raw = response.get("subject_answers", [])
         rows = raw if isinstance(raw, list) else []
         by_id: dict[str, list[dict]] = {}
-        rejections = []
-        for row in rows[:32]:
+        overflow = len(rows) > 32
+        rejections = ["subject_answer_limit_exceeded"] if overflow else []
+        for row in (() if overflow else rows[:32]):
             if not isinstance(row, dict) or not isinstance(row.get("request_id"), str):
                 rejections.append("malformed_subject_answer")
                 continue
@@ -247,7 +248,7 @@ class StudySubjects:
         answers = []
         for request_id in requested:
             candidates = by_id.get(request_id, [])
-            reason = "missing_subject_answer"
+            reason = "subject_answer_limit_exceeded" if overflow else "missing_subject_answer"
             if len(candidates) > 1:
                 reason = "duplicate_subject_answer"
             elif candidates:
