@@ -8,6 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from core.audit import codeql_validation as _validation
+from core.testing.module_views import module_function_view
+
 from core.audit.codeql_validation import (
     DataflowClaim,
     _count_codeflow_results,
@@ -127,7 +130,9 @@ class TestValidateDataflowClaim:
                 raise ImportError("not installed")
             return real_import(name, *args, **kwargs)
 
-        monkeypatch.setattr(builtins, "__import__", fake_import)
+        private = module_function_view(_validation, import_hook=fake_import)
+        monkeypatch.setitem(globals(), "validate_dataflow_claim",
+                            private.validate_dataflow_claim)
 
         result = validate_dataflow_claim(_claim(), db_path=db)
         assert result.confirmed is None
