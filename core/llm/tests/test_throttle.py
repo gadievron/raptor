@@ -536,10 +536,13 @@ class TestAcquireSync:
                     current[0] -= 1
 
         threads = [threading.Thread(target=worker) for _ in range(6)]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
         assert peak[0] <= 2
 
     def test_respects_throttle_down(self):
@@ -560,10 +563,13 @@ class TestAcquireSync:
                     current[0] -= 1
 
         threads = [threading.Thread(target=worker) for _ in range(6)]
-        for th in threads:
-            th.start()
-        for th in threads:
-            th.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for th in threads:
+                th.start()
+            for th in threads:
+                th.join()
         assert peak[0] <= 2
 
     def test_restore_unblocks(self):
