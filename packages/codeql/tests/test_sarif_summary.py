@@ -89,7 +89,7 @@ def test_rule_resolution_is_lazy_and_shared_within_a_run(runner, tmp_path, monke
         created.append(1)
         return original(run)
     monkeypatch.setattr(parser, 'ResultRuleResolver', resolve)
-    row = {'ruleId': 'java/r', 'level': 'error'} if explicit else {'ruleIndex': 0}
+    row = {'ruleId': 'java/r', 'level': 'error'} if explicit else {'ruleId': 'java/r'}
     data = {'runs': [{'tool': {'driver': {'rules': [
         {'id': 'java/r', 'defaultConfiguration': {'level': 'error'}},
     ]}}, 'results': [dict(row) for _ in range(100)]}]}
@@ -151,3 +151,30 @@ def test_summary_and_scan_metrics_share_configuration_diagnostics(runner, tmp_pa
     assert summary['tool_execution_failures'] == {'codeql': 1}
     assert summary['tool_coverage_limitations'] == {'codeql': 1}
     assert scan_execution_status(summary) == 'partial'
+
+
+@pytest.mark.parametrize('indexed', [True, False], ids=['indexed-driver', 'id-only'])
+def test_summary_uses_direct_driver_indexes_and_reuses_id_lookup(runner, tmp_path, monkeypatch, indexed):
+    original = parser.ResultRuleResolver
+    allocated = []
+
+    def resolver(run):
+        allocated.append(len(run['tool']['driver']['rules']))
+        return original(run)
+
+    monkeypatch.setattr(parser, 'ResultRuleResolver', resolver)
+    descriptor = {'id': 'owned/rule', 'defaultConfiguration': {'level': 'error'}}
+    data = {'runs': [{'tool': {'driver': {'rules': [descriptor, *[
+        {'id': f'other/{i}'} for i in range(2000)
+    ]]}}, 'results': [({'ruleIndex': 0} if indexed else {'ruleId': 'owned/rule'}) for _ in range(2)]}]}
+    before = copy.deepcopy(data)
+
+    summary = runner.get_sarif_summary(tmp_path / 'unused', sarif_data=data)
+
+    assert summary['total_findings'] == 2
+    assert summary['by_severity'] == {'error': 2, 'warning': 0, 'note': 0}
+    assert summary['by_rule'] == {'owned/rule': 2}
+    assert summary['queries_executed'] == 2001
+    assert summary['sarif_input_errors'] == 0
+    assert data == before
+    assert allocated == ([] if indexed else [2001])
