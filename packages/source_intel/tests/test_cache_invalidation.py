@@ -19,6 +19,8 @@ from unittest import mock
 
 import pytest
 
+from core.testing.module_views import module_function_view
+from packages import source_intel
 from packages.source_intel import (
     clear_all_source_intel_caches,
     clear_inventory_cache,
@@ -285,8 +287,8 @@ def test_clear_all_safe_when_inject_module_unavailable(tmp_path):
             raise ImportError("simulated minimal-install")
         return real_import(name, *args, **kwargs)
 
-    with mock.patch.object(builtins, "__import__", side_effect=fake_import):
-        clear_all_source_intel_caches()  # must not raise
+    owner = module_function_view(source_intel, import_hook=fake_import)
+    owner.clear_all_source_intel_caches()  # must not raise
 
     assert not _INVENTORY_BY_TARGET  # inventory clear still ran
 
