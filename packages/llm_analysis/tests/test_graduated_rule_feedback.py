@@ -114,21 +114,11 @@ class TestGraduatedRuleFeedback:
         recorded", not crash the analysis loop on the first
         synthesized: finding. Pin the call-site contract by
         exercising the same suppression the loop uses."""
-        import builtins
         import contextlib
 
-        real_import = builtins.__import__
-
-        def _no_checker_synthesis(name, *args, **kwargs):
-            if name.startswith("packages.checker_synthesis"):
-                raise ImportError(f"No module named {name!r}")
-            return real_import(name, *args, **kwargs)
-
-        monkeypatch.delitem(
-            sys.modules, "packages.checker_synthesis.library",
-            raising=False,
+        monkeypatch.setitem(
+            sys.modules, "packages.checker_synthesis.library", None,
         )
-        monkeypatch.setattr(builtins, "__import__", _no_checker_synthesis)
         agent = _agent_stub()
         vuln = _vuln("synthesized:uaf-variant-3",
                      {"is_true_positive": True})
