@@ -934,6 +934,11 @@ def module_dynamic_namespace(
                 and value.func.attr == "copy" and not value.args and not value.keywords
                 and possible_namespace_dict_value(value.func.value)):
             return value.func.value
+        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr):
+            for source, empty in ((value.left, value.right), (value.right, value.left)):
+                if (isinstance(empty, ast.Dict) and not empty.keys
+                        and possible_namespace_dict_value(source)):
+                    return source
         return None
 
     def namespace_dict_member_receiver(member: ast.AST) -> ast.AST | None:
