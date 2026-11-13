@@ -1045,8 +1045,8 @@ def module_dynamic_namespace(
                 elif (not receiver.args and len(receiver.keywords) == 1
                       and receiver.keywords[0].arg is None):
                     source = selected_literal_value(receiver.keywords[0].value)
-                if isinstance(source, ast.Dict) and all(key is not None for key in source.keys):
-                    return tuple(source.values)
+                if isinstance(source, ast.Dict):
+                    return literal_member_values(source)
             return None
         if value.func.attr == "keys":
             return literal_dictionary_keys(dictionary)
