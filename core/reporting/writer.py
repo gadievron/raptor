@@ -173,6 +173,8 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
         raise ValueError("Unsafe report filename stem")
     if document.snapshot_id != context.snapshot_id:
         raise ValueError("Document and context snapshot identities disagree")
+    if not options.enabled:
+        ReportDocument.from_dict(document.to_dict())
     output_dir = Path(os.path.abspath(output_dir))
     blocked = _protected(context, output_dir)
     destinations = {}
