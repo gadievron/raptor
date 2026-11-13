@@ -175,10 +175,14 @@ def test_completed_prompt_receipt_does_not_consume_a_late_context_version(tmp_pa
     runtime = AuditKnowledgeRuntime(tmp_path, StudyQueue(), deadline=float("inf"))
 
     class CapturedReply:
+        _attempt_admission_protocol = 1
         calls = 0
         after = staticmethod(lambda: None)
 
         def generate_structured(self, prompt, schema, **kwargs):
+            admission = kwargs.pop("accounting_attempt_admission", None)
+            if admission is not None:
+                assert admission() is True
             self.calls += 1
             self.after()
             return StructuredResponse(result={"status": "clean", "body": "Captured review judgment"},

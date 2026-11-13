@@ -290,9 +290,10 @@ class KnowledgeCycle:
                     self._events.append(KnowledgeCycleEvent("binary_input_changed", tuple(sorted(self._delta))))
                     self._retired = True
                     return None
-                advisory = self._external_latest.get("disagreement")
+                advisory = {self._external_latest[kind] for kind in
+                            ("disagreement", "binary_target_semantics") if kind in self._external_latest}
                 if (self.requests or self.caller_requests or self._references or self._explanations
-                        or advisory is None or not self._delta <= {advisory}):
+                        or not advisory or not self._delta <= advisory):
                     self._defer("binary_external_context_unavailable")
                     return None
             else:

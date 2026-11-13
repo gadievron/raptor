@@ -9,6 +9,7 @@ _CONTEXT_INPUTS = {
     "late_joern": ("mechanical_evidence", "evidence"),
     "live_sinks": ("live_sinks", "live_sinks"),
     "disagreement": ("disagreement_override", "disagreement_override"),
+    "binary_target_semantics": ("binary_subject_context", "binary_subject_context"),
     "deepen_quality": ("deepen_quality_selection", "deepen_quality"),
     "callee_contract": ("callee_contract_violation", "callee_contract"),
 }
@@ -24,6 +25,10 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         return None
     key, section = fields
     value = ctx.get(key)
+    if kind == "binary_target_semantics":
+        from .binary_subjects import render_binary_subject_context
+
+        value = render_binary_subject_context(value, ctx)
     if kind == "callee_contract":
         from .callee_review_context import render_callee_context
         from .context import _defend_identifier

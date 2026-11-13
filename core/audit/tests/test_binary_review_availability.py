@@ -44,7 +44,12 @@ def _reviewer():
     calls = []
 
     class Client:
+        _attempt_admission_protocol = 1
+
         def generate_structured(self, prompt, schema, **kwargs):
+            admission = kwargs.pop("accounting_attempt_admission", None)
+            if admission is not None:
+                assert admission() is True
             calls.append((prompt, schema, kwargs))
             return StructuredResponse(result={"status": "clean", "body": "Captured reviewer judgement."},
                                       raw="", cost=.1, model="captured")
