@@ -811,6 +811,7 @@ def module_dynamic_namespace(
     mapping_copy_names = {"dict"}
     sequence_copy_names = {"list", "tuple"}
     iterator_wrapper_names = {"iter", "reversed"}
+    iterator_advance_names = {"next"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
@@ -838,6 +839,9 @@ def module_dynamic_namespace(
             iterator_wrapper_names.update(
                 alias for alias, target in bindings.items()
                 if target in {"builtins.iter", "builtins.reversed"}
+            )
+            iterator_advance_names.update(
+                alias for alias, target in bindings.items() if target == "builtins.next"
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -1198,7 +1202,32 @@ def module_dynamic_namespace(
                 members.append(container)
         return tuple(members) if recognised else None
 
+    def iterator_advance_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        if not isinstance(value, ast.Call) or value.keywords:
+            return None
+        if (isinstance(value.func, ast.Name) and value.func.id in iterator_advance_names
+                and len(value.args) in {1, 2}):
+            iterator = value.args[0]
+            defaults = tuple(value.args[1:])
+        elif (isinstance(value.func, ast.Attribute) and value.func.attr == "__next__"
+              and not value.args):
+            iterator = value.func.value
+            defaults = ()
+        else:
+            return None
+        members = None
+        if (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
+                and iterator.func.id in iterator_wrapper_names
+                and len(iterator.args) == 1 and not iterator.keywords):
+            members = sequence_iteration_values(iterator)
+        if members is None and not defaults:
+            return None
+        return (*(members or ()), *defaults)
+
     def literal_member_result_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        advancement = iterator_advance_sources(value)
+        if advancement is not None:
+            return advancement
         if isinstance(value, ast.Subscript):
             if isinstance(value.slice, ast.Slice):
                 # A sequence slice returns a container, not an element.
