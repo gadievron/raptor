@@ -529,6 +529,13 @@ def _parse_bytes_to_int(raw: bytes) -> int | None:
                 pass
     m = re.search(r"(-?\d{2,})", text)
     if m:
+        # Honour the active interpreter guard before copying the substring.
+        # A disabled limit stays disabled; the ASCII sign is not a digit.
+        limit = sys.get_int_max_str_digits()
+        start = m.start(1)
+        digits = m.end(1) - start - (text[start] == "-")
+        if limit and digits > limit:
+            return None
         try:
             return int(m.group(1))
         except ValueError:
