@@ -544,6 +544,7 @@ def assemble_binary_context(
     out_dir: Path | None = None,
     db=None,
     cached_only: bool = False,
+    integer_abi=None,
 ) -> dict[str, Any]:
     """Assemble a context slice for one binary function.
 
@@ -627,6 +628,11 @@ def assemble_binary_context(
     ctx["threat_model"] = _load_threat_model(target_path)
     from .binary_threat_inputs import binary_threat_material_digest
     ctx["_binary_threat_model_sha256"] = binary_threat_material_digest(ctx["threat_model"])
+    from .binary_integer_inputs import capture_binary_integer_context
+    abi_owner = capture_binary_integer_context(integer_abi, target_path=target_path)
+    if abi_owner is not None:
+        ctx["_binary_integer_abi_owner"] = abi_owner
+        ctx["integer_abi_context"] = abi_owner.material
     ctx["trust_surface"] = []
     ctx["prior_attempts"] = {}
     ctx["shared_state"] = {}

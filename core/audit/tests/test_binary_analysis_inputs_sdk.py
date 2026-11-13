@@ -28,7 +28,7 @@ from packages.ghidra.model import REDatabase, REFunction
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("change", ["healthy", "signature", "threat_model"])
+@pytest.mark.parametrize("change", ["healthy", "signature", "threat_model", "integer_abi"])
 def test_paid_sdk_review_cannot_publish_changed_analysis_inputs(tmp_path, monkeypatch, sdk_clients, change, request):
     import core.audit.binary_context as context_module
 
@@ -131,6 +131,12 @@ def test_paid_sdk_review_cannot_publish_changed_analysis_inputs(tmp_path, monkey
             threat_path.write_text(dumps_canonical(threat_model.to_dict()))
             assert read.current()
             assert not scope.current(target)
+        elif change == "integer_abi":
+            assert 'Selected integer-layout assumptions' in bundle.state["requests"][0].content.decode("utf-8")
+            assert origin["binary_identity"]["integer_abi_sha256"] is not None
+            ctx["integer_abi_context"]["status"] = "contradictory"
+            assert read.current()
+            assert not scope.current(target)
         else:
             assert read.current()
         assert target.read_bytes() == original_module and ctx["source"] == original_source
@@ -141,7 +147,7 @@ def test_paid_sdk_review_cannot_publish_changed_analysis_inputs(tmp_path, monkey
         else:
             assert acknowledgement is not None and len(rows) == 1
             assert rows[0].source_hash == scope.anchor()
-            assert rows[0].source_hash.startswith("bin:inputs2:" + read.projection_sha256 + ":")
+            assert rows[0].source_hash.startswith("bin:inputs3:" + read.projection_sha256 + ":")
             assert rows[0].review_claims["review"]["origin"]["pass_id"] == origin["pass_id"]
         assert len(bundle.state["requests"]) == bundle.client._governed_calls == 1
         assert load_verified_audit_log(out) == signed

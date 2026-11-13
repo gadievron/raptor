@@ -381,6 +381,7 @@ def assemble_context(
     inventory: dict[str, Any] | None = None,
     out_dir: Path | None = None,
     caller_contract: bool = True,
+    integer_abi=None,
 ) -> dict[str, Any]:
     """Assemble a context slice for one function.
 
@@ -408,6 +409,7 @@ def assemble_context(
             context_map=context_map,
             annotations_dir=annotations_dir,
             out_dir=out_dir,
+            integer_abi=integer_abi,
         )
 
     ctx: dict[str, Any] = {
@@ -1268,15 +1270,29 @@ def format_context_for_prompt(
         if caller_delivery_sink is not None:
             caller_delivery_sink(deepcopy(rows))
 
+    from .binary_integer_inputs import BinaryIntegerContext
+    abi_owner = ctx.get("_binary_integer_abi_owner")
+    if abi_owner is not None or "integer_abi_context" in ctx:
+        abi_target = ctx.get("target_path")
+        if (not isinstance(abi_owner, BinaryIntegerContext)
+                or not isinstance(abi_target, (str, Path))
+                or Path(abi_target).absolute() != abi_owner.target_path
+                or not abi_owner.current(ctx.get("integer_abi_context"))):
+            from .knowledge_calls import KnowledgeCallRefused
+            raise KnowledgeCallRefused("binary_integer_abi_context_changed")
+
     if ctx.get("triage_bucket") == "glance":
         deliver_knowledge_context([], omission_reason="glance_packet")
         if caller_requests:
             deliver_caller_context([], omission_reason="glance_packet")
-        return _format_glance_prompt(ctx)
+        glance = _format_glance_prompt(ctx)
+        return abi_owner.render() + "\n\n" + glance if isinstance(abi_owner, BinaryIntegerContext) else glance
 
     from core.llm.prompt_budget import PromptSection, fit_to_budget_report
 
     sections: list[PromptSection] = []
+    if isinstance(abi_owner, BinaryIntegerContext):
+        sections.append(PromptSection("integer_abi_context", abi_owner.render(), 1))
     from .review_claims import prepare_history_presentation, source_fragment
 
     # A panel can share ctx. Source identity and rendered text must come
