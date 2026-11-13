@@ -5,7 +5,7 @@ from __future__ import annotations
 from core.language_reference import ReferenceAnswer, ReferenceEntry
 from core.llm.prompt_budget import FitReport, PromptSection
 from core.concepts.subject_study import SubjectExplanation
-from core.json import dumps_display
+from core.json import dumps_display, dumps_canonical
 from core.security.prompt_envelope import wrap_untrusted
 
 from .knowledge_requests import KnowledgeRequest
@@ -18,11 +18,26 @@ def context_answers(value: object) -> tuple[ReferenceAnswer, ...]:
     return tuple(answer for answer in value if isinstance(answer, ReferenceAnswer))
 
 
+_ReadingMetadata = tuple[str, str, str, tuple[str, ...], str, str, tuple[str, ...]]
+
+
+def _material_frame(answer: ReferenceAnswer) -> str:
+    # These fixed resolver-owned labels contain no model/target strings. A
+    # compact frame keeps the complete existing rule cores within their budget.
+    return (dumps_canonical(answer.material_envelope()) + "\n"
+            "This reference does not establish source/build/module correspondence. "
+            "Beside binary/decompiled views it is advisory, not proof. "
+            "Check conditions and missing target facts.\n")
+
+
 def _labels(answers: tuple[ReferenceAnswer, ...]) -> list[str]:
     groups: dict[tuple, str] = {}
     labels = []
     for index, answer in enumerate(answers):
-        key = (answer.entries, answer.missing_facts, answer.status, answer.reason)
+        # Identical cores may share their original body across pack aliases;
+        # the sharing/removal stages below still check every alias's pack.
+        key = (answer.entries, answer.missing_facts, answer.status, answer.reason,
+               answer.representation, answer.applicability_domain, answer.correspondence_ids)
         labels.append(groups.setdefault(key, f"language_reference_{index}"))
     return labels
 
@@ -53,6 +68,7 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
                 "\n### Language-reference limitation (context, not proof)\n"
                 "No reviewed rule material was supplied for this request. "
                 "Preserve this limitation; do not infer applicability or safety.\n"
+                + _material_frame(answer)
                 + wrap_untrusted(dumps_display({"answer_status": answer.status,
                                                "resolution_reason": answer.reason}),
                                  kind="reference_resolution", origin="language-reference"),
@@ -62,9 +78,7 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
         sections.append(PromptSection(
             label,
             "\n### Language reference (context, not proof)\n"
-            "Apply these rules to the actual supplied implementation. Check the "
-            "conditions and missing target facts; reference material alone does "
-            "not confirm or refute a concern.\n"
+            + _material_frame(answer)
             + ("Target language edition is unknown; these are conditional C11 rules.\n"
                if "language edition" in answer.missing_facts else "")
             + ("Several reading candidates were retrieved; applicability is unresolved.\n"
@@ -78,8 +92,9 @@ def reference_sections(answers: tuple[ReferenceAnswer, ...]) -> list[PromptSecti
     return sections
 
 
-def _reading_metadata(answer: ReferenceAnswer) -> tuple[str, str, str, tuple[str, ...]]:
-    return answer.pack_version, answer.status, answer.reason, answer.missing_facts
+def _reading_metadata(answer: ReferenceAnswer) -> _ReadingMetadata:
+    return (answer.pack_version, answer.status, answer.reason, answer.missing_facts,
+            answer.representation, answer.applicability_domain, answer.correspondence_ids)
 
 
 def _share_reference_entries(
@@ -91,7 +106,7 @@ def _share_reference_entries(
     aliases: dict[str, list[ReferenceAnswer]] = {}
     for label, answer in zip(_labels(answers), answers, strict=True):
         aliases.setdefault(label, []).append(answer)
-    seen: dict[tuple[str, str, str, tuple[str, ...]], set[ReferenceEntry]] = {}
+    seen: dict[_ReadingMetadata, set[ReferenceEntry]] = {}
     result = []
     for section in kept:
         members = aliases.get(section.label, [])
@@ -152,9 +167,7 @@ def dedupe_reference_sections(
             supplied.setdefault(label, answer)
     redundant = {label for label, answer in supplied.items() if answer.entries and any(
         len(other.entries) > len(answer.entries) and all(
-            alias.pack_version == other.pack_version
-            and alias.status == other.status and alias.reason == other.reason
-            and alias.missing_facts == other.missing_facts
+            _reading_metadata(alias) == _reading_metadata(other)
             and all(entry in other.entries for entry in alias.entries)
             for alias in aliases[label])
         for other in supplied.values())}
@@ -178,13 +191,12 @@ def reference_delivery(
     records = []
     for label, answer in zip(answer_labels, answers, strict=True):
         delivered = bool(answer.entries) and (label in labels or any(
-            answer.pack_version == other.pack_version
-            and answer.status == other.status and answer.reason == other.reason
-            and answer.missing_facts == other.missing_facts
+            _reading_metadata(answer) == _reading_metadata(other)
             and all(entry in other.entries for entry in answer.entries)
             for other in supplied.values()))
         records.append({
             "request_id": answer.request_id,
+            **answer.material_envelope(),
             "answer_status": answer.status,
             "pack_version": answer.pack_version,
             "delivered": delivered,

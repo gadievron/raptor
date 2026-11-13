@@ -103,15 +103,27 @@ def test_initial_panel_members_keep_their_actual_foundation_fitting(tmp_path, mo
 def test_initial_foundation_does_not_invent_c_mode_for_other_subjects(tmp_path, file, language):
     from core.audit.knowledge_runtime import AuditKnowledgeRuntime
     source='int f(void) { return 1; }'
-    if not file.startswith('binary:'):
+    target=tmp_path
+    if file.startswith('binary:'):
+        from core.audit.binary_context import assemble_binary_context
+        from packages.ghidra.model import REDatabase, REFunction
+        target=tmp_path/'owned.bin'
+        target.write_bytes(b'owned binary view fixture, not executable')
+        database=REDatabase(source_tool='ghidra',binary_path=str(target),functions=[
+            REFunction(name='f',address=4096,size=32,source_tool='ghidra',decompilation=source)])
+        ctx=assemble_binary_context(target_path=target,file_path=file,function_name='f',db=database)
+        # A C-looking view/label still does not establish a source-language
+        # translation unit or source/build/module correspondence.
+        ctx['language']=language
+    else:
         (tmp_path/file).write_text(source+'\n')
-    runtime=AuditKnowledgeRuntime(tmp_path,orch.StudyQueue(),deadline=float('inf'))
+        ctx={'file':file,'function':'f','line_start':1,'line_end':1,'source':source,'language':language}
+    runtime=AuditKnowledgeRuntime(target,orch.StudyQueue(),deadline=float('inf'))
     class Client:
         def generate_structured(self,prompt,schema,**kwargs):
             assert 'Language reference (context, not proof)' not in prompt
             return StructuredResponse(result={'status':'clean','body':'Scripted subject'},raw='',cost=0,model='scripted')
-    ctx={'file':file,'function':'f','line_start':1,'line_end':1,'source':source,'language':language}
-    config=orch.OrchestratorConfig(target_path=tmp_path,out_dir=tmp_path/'out')
+    config=orch.OrchestratorConfig(target_path=target,out_dir=tmp_path/'out')
     outcome=runtime.wrap_review(make_review_fn(Client(),escalate_clean=False))(ctx,config)
     assert outcome.review_result['language_reference_delivery']==[]
     assert 'reference_inputs' not in outcome.review_result['review_claims']
