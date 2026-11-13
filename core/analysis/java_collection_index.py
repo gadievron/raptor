@@ -341,6 +341,9 @@ def build_local_collection_index(
     except Exception:  # noqa: BLE001 — arbitrary scanned source
         return None
 
+    if tree.root_node.has_error:
+        return None  # Import, scope and mutation facts need a complete tree.
+
     idx = LocalCollectionIndex(ok=True)
     types, statics = build_import_map(tree.root_node)
     from core.analysis.cfg_builder_java import (
