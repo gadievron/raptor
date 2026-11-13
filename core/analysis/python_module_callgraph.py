@@ -1035,18 +1035,21 @@ def module_dynamic_namespace(
         if not isinstance(dictionary, ast.Dict):
             receiver = value.func.value
             if (value.func.attr == "values" and isinstance(receiver, ast.Call)
-                    and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names):
-                if (not receiver.args and receiver.keywords
-                        and all(item.arg is not None for item in receiver.keywords)):
-                    return tuple(item.value for item in receiver.keywords)
-                source = None
-                if len(receiver.args) == 1 and not receiver.keywords:
-                    source = selected_literal_value(receiver.args[0])
-                elif (not receiver.args and len(receiver.keywords) == 1
-                      and receiver.keywords[0].arg is None):
-                    source = selected_literal_value(receiver.keywords[0].value)
-                if isinstance(source, ast.Dict):
-                    return literal_member_values(source)
+                    and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
+                    and len(receiver.args) <= 1):
+                members = []
+                sources = list(receiver.args)
+                for item in receiver.keywords:
+                    if item.arg is None:
+                        sources.append(item.value)
+                    else:
+                        members.append(item.value)
+                for source in sources:
+                    dictionary_source = selected_literal_value(source)
+                    if not isinstance(dictionary_source, ast.Dict):
+                        return None
+                    members.extend(literal_member_values(dictionary_source) or ())
+                return tuple(members)
             return None
         if value.func.attr == "keys":
             return literal_dictionary_keys(dictionary)
