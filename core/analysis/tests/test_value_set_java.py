@@ -75,6 +75,16 @@ class TestQualification:
                      "        values[1]++;\n")
         assert v is REFUSE
 
+    @pytest.mark.parametrize("write", ["(values[1])++;", "++(values[1]);",
+                                       "((values[1]))--;"])
+    def test_parenthesized_element_update_refuses(self, write):
+        from core.analysis.cfg_builder_java import _get_parser
+
+        body = "        int[] values = {1, 2};\n" + f"        {write}\n"
+        _, source = _index(body)
+        assert not _get_parser().parse(source.encode()).root_node.has_error
+        assert _resolve(body) is REFUSE
+
     def test_bare_name_as_call_argument_refuses(self):
         v = _resolve('        String[] values = {"a", "b"};\n'
                      "        java.util.Arrays.fill(values, x);\n")
