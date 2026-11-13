@@ -1018,6 +1018,17 @@ def module_dynamic_namespace(
             return tuple(key for key in dictionary.keys if key is not None)
         return None
 
+    def literal_dictionary_view_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute)
+                or value.args or value.keywords or value.func.attr not in {"keys", "values"}):
+            return None
+        dictionary = selected_literal_value(value.func.value)
+        if not isinstance(dictionary, ast.Dict):
+            return None
+        if value.func.attr == "keys":
+            return literal_dictionary_keys(dictionary)
+        return literal_member_values(dictionary)
+
     sequence_iteration_cache: dict[ast.AST, tuple[bool, tuple[ast.AST, ...]] | None] = {}
 
     def sequence_iteration_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
@@ -1033,8 +1044,10 @@ def module_dynamic_namespace(
             if cursor not in sequence_iteration_cache:
                 sequence_values = literal_sequence_values(cursor)
                 dictionary_keys = literal_dictionary_keys(cursor)
-                if sequence_values is not None or dictionary_keys is not None:
-                    values = sequence_values if sequence_values is not None else dictionary_keys
+                view_values = literal_dictionary_view_values(cursor)
+                values = (sequence_values if sequence_values is not None else
+                          dictionary_keys if dictionary_keys is not None else view_values)
+                if values is not None:
                     sequence_iteration_cache[cursor] = (True, values)
                 else:
                     children = ()
