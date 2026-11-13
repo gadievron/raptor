@@ -187,6 +187,7 @@ class BinaryInputIdentity:
     view_sha256: str
     analysis_sha256: str | None = None
     threat_model_sha256: str | None = None
+    integer_abi_sha256: str | None = None
     domain: str = field(default="binary_view", init=False)
 
     def __post_init__(self):
@@ -200,7 +201,9 @@ class BinaryInputIdentity:
                 or (self.analysis_sha256 is not None and
                     (not isinstance(self.analysis_sha256, str) or _SHA256.fullmatch(self.analysis_sha256) is None))
                 or (self.threat_model_sha256 is not None and
-                    (not isinstance(self.threat_model_sha256, str) or _SHA256.fullmatch(self.threat_model_sha256) is None))):
+                    (not isinstance(self.threat_model_sha256, str) or _SHA256.fullmatch(self.threat_model_sha256) is None))
+                or (self.integer_abi_sha256 is not None and
+                    (not isinstance(self.integer_abi_sha256, str) or _SHA256.fullmatch(self.integer_abi_sha256) is None))):
             raise ValueError("binary identity requires complete original input stamps")
 
 
@@ -208,7 +211,11 @@ def binary_view_anchor(identity: BinaryInputIdentity | None) -> str | None:
     """Persist view text identity, without turning its physical epoch into proof."""
     if not isinstance(identity, BinaryInputIdentity):
         return None
-    if identity.analysis_sha256 is not None and identity.threat_model_sha256 is not None:
+    if (identity.analysis_sha256 is not None and identity.threat_model_sha256 is not None
+            and identity.integer_abi_sha256 is not None):
+        prefix = (f"bin:inputs3:{identity.analysis_sha256}:{identity.threat_model_sha256}:"
+                  f"{identity.integer_abi_sha256}")
+    elif identity.analysis_sha256 is not None and identity.threat_model_sha256 is not None:
         prefix = f"bin:inputs2:{identity.analysis_sha256}:{identity.threat_model_sha256}"
     else:
         prefix = (f"bin:inputs1:{identity.analysis_sha256}" if identity.analysis_sha256 is not None
@@ -262,10 +269,18 @@ def capture_binary_input_identity(ctx: dict, scope: BinaryReviewPublicationScope
                 or binary_threat_material_digest(ctx.get("threat_model")) != threat
                 or binary_threat_material_digest(_load_threat_model(scope.module.path)) != threat):
             return None
+    from .binary_integer_inputs import BinaryIntegerContext
+    abi_owner = ctx.get("_binary_integer_abi_owner")
+    abi_digest = None
+    if abi_owner is not None or "integer_abi_context" in ctx:
+        if (not isinstance(abi_owner, BinaryIntegerContext) or abi_owner.target_path != scope.module.path
+                or not abi_owner.current(ctx.get("integer_abi_context"))):
+            return None
+        abi_digest = abi_owner.digest
     try:
         return BinaryInputIdentity(scope.module.sha256, scope.module.version,
             scope.address, scope.size, representation, sha256(source.encode("utf-8")).hexdigest(),
-            analysis_sha256=analysis, threat_model_sha256=threat)
+            analysis_sha256=analysis, threat_model_sha256=threat, integer_abi_sha256=abi_digest)
     except (UnicodeEncodeError, ValueError):
         return None
 

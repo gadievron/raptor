@@ -14356,6 +14356,7 @@ def _build_context(
         inventory=config.inventory,
         out_dir=config.out_dir,
         caller_contract=getattr(config, "caller_contract_context", True),
+        integer_abi=config.integer_abi if config.integer_abi is not None else "unknown",
     )
 
     if evidence_index:

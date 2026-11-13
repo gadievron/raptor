@@ -21,7 +21,7 @@ from core.coverage.journal import (
 def _current_plain_hash(origin):
     from core.audit.binary_review_scope import binary_view_anchor
     anchor = binary_view_anchor(origin.binary_identity)
-    assert anchor is not None and anchor.startswith('bin:inputs2:')
+    assert anchor is not None and anchor.startswith('bin:inputs3:')
     return anchor
 
 
