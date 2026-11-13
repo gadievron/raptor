@@ -121,6 +121,12 @@ def retain_unbound_advisory_input_limit(outcome, reservation):
     from .review_claims import read_history
     from .review_context_inputs import context_inputs_from_sources, merge_context_inputs
 
+    from .binary_review_scope import BinaryKnowledgeOrigin
+
+    # Binary continuations retain their own typed input and delivery binding.
+    # They cannot manufacture a target source dependency from recovered bytes.
+    if isinstance(reservation.origin, BinaryKnowledgeOrigin):
+        return
     history = read_history((outcome.review_result or {}).get("review_claims"))
     if history is not None:
         origin = reservation.origin
