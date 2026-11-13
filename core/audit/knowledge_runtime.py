@@ -80,6 +80,7 @@ class AuditKnowledgeRuntime:
         self._pending_sources: set[str] = set()
         self._request_status: dict[str, dict] = {}
         self._semantic_requests: dict[tuple, str] = {}
+        self._binary_initial_guarded: set[str] = set()
         self._source_answers: dict[str, list[SubjectExplanation]] = {}
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
@@ -682,6 +683,21 @@ class AuditKnowledgeRuntime:
 
         key = self._key(origin)
         accepted = []
+        # Fitting progress is local metadata availability, not a restarted
+        # study/producer job. Compute material checks outside the runtime lock.
+        from .binary_initial_type_delivery import InitialBinaryTypeDelivery, InitialBinaryTypeInventory
+        omitted, prefiltered = set(), set()
+        if isinstance(initial_inventory, InitialBinaryTypeInventory) and initial_inventory.origin == origin:
+            delivery = (initial_delivery if isinstance(initial_delivery, InitialBinaryTypeDelivery)
+                        and initial_delivery.origin == origin else None)
+            rows = delivery.records() if delivery is not None else []
+            for request in batch.accepted:
+                if request.kind != "target_study" or not initial_inventory.contains(request.subject):
+                    continue
+                if delivery is not None and delivery.permits_omission(request.subject, ctx, origin):
+                    omitted.add(request.request_id)
+                if not any(row["subject"] == request.subject and row["status"] == "omitted" for row in rows):
+                    prefiltered.add(request.request_id)
         with self._lock:
             self._events.append({"event": "requests_registered", "origin": asdict(origin),
                                  "accepted": [asdict(r) for r in batch.accepted],
@@ -690,6 +706,16 @@ class AuditKnowledgeRuntime:
                 signature = self._signature(request, ctx)
                 duplicate = self._semantic_requests.get(signature)
                 self._requests[request.request_id] = request
+                if request.request_id in prefiltered:
+                    self._binary_initial_guarded.add(request.request_id)
+                prior_status = self._request_status.get(duplicate, {}) if duplicate is not None else {}
+                if (duplicate is not None and request.request_id in omitted
+                        and (duplicate in self._binary_initial_guarded
+                             or prior_status.get("state") == "unavailable"
+                             and prior_status.get("reason") == "initial_type_delivery_unmeasured")):
+                    # No producer lookup ran for the earlier prefilter refusal.
+                    # Keep its request/status and every consumed model credit.
+                    duplicate = None
                 if duplicate is not None:
                     self._request_status[request.request_id] = {"state": "duplicate", "duplicate_of": duplicate}
                     self._events.append({"event": "request_duplicate", "request_id": request.request_id,
