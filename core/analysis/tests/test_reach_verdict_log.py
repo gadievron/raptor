@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from core.analysis import reach_verdict_log
+from core.testing.threads import retiring_threads
 
 
 @pytest.fixture(autouse=True)
@@ -236,10 +237,11 @@ def test_concurrent_record_threadsafe(_isolated_sidecar):
             reach_verdict_log.record_verdict("python", "reachable")
 
     threads = [threading.Thread(target=worker) for _ in range(N_THREADS)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=lambda: None, timeout=10):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
     assert reach_verdict_log._IN_MEMORY["python"]["reachable"] == \
         N_THREADS * N_PER_THREAD
