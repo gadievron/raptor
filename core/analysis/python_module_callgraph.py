@@ -769,7 +769,10 @@ def module_dynamic_namespace(
       name; a LOAD used as a direct or reflective attribute/item store receiver
       also poisons that name; plain lookup reads stay unpoisoned. Every other use
       (non-constant key store, aliasing the dict, ``.update(…)``,
-      passing it on) → whole module.
+      passing it on) → whole module. A function/class local lookup used as
+      an object mutation receiver removes whole-module trust: its key need
+      not identify the global import name. Bare function-local ``locals()``
+      mapping writes and inert lookup reads keep their existing treatment.
 
     Consumers abstain: a poisoned name (or every name, when
     whole_module) loses join/catalog trust — suppression can only be
@@ -867,6 +870,16 @@ def module_dynamic_namespace(
             child = cur
             cur = parents.get(cur)
         return True
+
+    def class_local_namespace(node: ast.AST) -> bool:
+        child = node
+        cur = parents.get(child)
+        while cur is not None:
+            if isinstance(cur, ast.ClassDef) and any(child is statement for statement in cur.body):
+                return True
+            child = cur
+            cur = parents.get(cur)
+        return False
 
     def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -995,8 +1008,9 @@ def module_dynamic_namespace(
                     if not receiver_write:
                         continue
                 if function_locals or (
-                        fname == "vars" and not node.args and not node.keywords
-                        and isinstance(parent.ctx, ast.Load) and not _module_reachable(node)):
+                        fname in {"locals", "vars"} and not node.args and not node.keywords
+                        and isinstance(parent.ctx, ast.Load)
+                        and (not _module_reachable(node) or class_local_namespace(node))):
                     # A local alias can refer to a shared imported object;
                     # its lookup key does not name the module-global root.
                     whole = True
