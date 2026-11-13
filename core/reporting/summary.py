@@ -42,6 +42,10 @@ class OperatorSummary:
 def build_operator_summary(context: ReportContext, *, limit: int = 12, show_suppressed: bool = False) -> OperatorSummary:
     if not 1 <= limit <= 100:
         raise ValueError("Summary limit must be between 1 and 100")
+    def status(finding):
+        value = finding.get("status")
+        return "Unknown" if value is None else value
+
     priority = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
     indexed = list(enumerate(context.findings, 1))
     indexed.sort(key=lambda pair: (priority.get(str(pair[1].get("severity", "")).lower(), 5),
@@ -53,8 +57,8 @@ def build_operator_summary(context: ReportContext, *, limit: int = 12, show_supp
         rows.append({"ref": f"F{i:05d}", "occurrence_ref": f["occurrence_ref"],
                      "tool": f.get("tool", ""), "rule": f.get("rule_id", ""),
                      "location": f"{f.get('file') or 'unknown'}" + (f":{f['line']}" if f.get("line") else ""),
-                     "status": f.get("status", "Unknown"), "level": f.get("scanner_level") or f.get("severity") or "unknown"})
-    counts = dict(Counter(f.get("status", "Unknown") for f in context.findings))
+                     "status": status(f), "level": f.get("scanner_level") or f.get("severity") or "unknown"})
+    counts = dict(Counter(status(f) for f in context.findings))
     diagnostics = list(context.diagnostics)
     known = {s.stage_id for s in context.stages}
     for stage in context.expected_stages:
