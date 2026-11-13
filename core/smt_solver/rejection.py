@@ -215,7 +215,7 @@ _HEX_LITERAL_RE = re.compile(r'0x[0-9a-f]+', re.IGNORECASE)
 # to a literal) are parseable. Hex tokens denote unsigned-spelled bit
 # patterns here. Source adapters may normalize a proven C negative hex
 # constant to a signed decimal atom before submitting it.
-_DEC_LITERAL_RE = re.compile(r'-?\d+')
+_DEC_LITERAL_RE = re.compile(r'-?[0-9]+')
 
 
 def propagate(text: str, sub: Rejection) -> Rejection:
