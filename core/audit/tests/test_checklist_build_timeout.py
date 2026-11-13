@@ -81,6 +81,8 @@ def _sparse(path: Path, size: int, head: bytes = b"") -> Path:
 @pytest.fixture(autouse=True)
 def _no_override(monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
+    monkeypatch.setattr(sys.modules[__name__], "_CLI_MOD", None)
+    yield
 
 
 def test_gaps_checklist_build_timeout_reported(
