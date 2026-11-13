@@ -923,6 +923,9 @@ def module_dynamic_namespace(
         elif isinstance(statement, ast.AnnAssign) and statement.value is not None:
             targets = [statement.target]
             value = statement.value
+        elif isinstance(statement, ast.NamedExpr):
+            targets = [statement.target]
+            value = statement.value
         else:
             continue
         cursor = value
