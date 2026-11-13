@@ -34,6 +34,7 @@ from core.json import load_json
 from core.paths import confine
 from core.sarif.parser import SARIF_MAX_BYTES
 from core.source import read_text_capped
+from core.source.lines import split_lines
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
     GroundTruth,
@@ -132,8 +133,8 @@ def _rewrite_finding_paths_and_snippets(
         if full not in line_cache:
             # Capped read: SARIF-named paths into the benchmark clone;
             # a snippet past the cap just stays empty (no-signal).
-            got = read_text_capped(full)
-            line_cache[full] = got[0].splitlines() if got is not None else []
+            got = read_text_capped(full, newline="")
+            line_cache[full] = split_lines(got[0]) if got is not None else []
         lines = line_cache[full]
         if 1 <= line <= len(lines):
             return lines[line - 1].strip()
