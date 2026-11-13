@@ -86,7 +86,7 @@ class _StubLibrary:
 
 
 def _stub_library(monkeypatch):
-    _StubLibrary.calls = []
+    monkeypatch.setattr(_StubLibrary, "calls", [])
     import packages.checker_synthesis as pkg
     monkeypatch.setattr(pkg, "RuleLibrary", _StubLibrary)
     return _StubLibrary
