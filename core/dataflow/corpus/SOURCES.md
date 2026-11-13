@@ -271,7 +271,7 @@ Pinned upstream sources for the source_intel arc's memory-corruption seed (PR0 s
 
 ### Why each kernel CVE gets its own clone
 
-Each CVE pins to a different upstream SHA, so they can't share a single working tree. The sparse-checkout pattern keeps each clone tiny (a single source file at the pinned commit, ~few KB on disk).
+Each CVE has a separate clone path so its pinned revision and sparse-checkout files can be managed independently. Some entries share an upstream revision. The sparse-checkout pattern keeps each clone small by retaining only the files needed for that fixture.
 
 ### Axis-1 evidence gap on the kstrdup-class CVEs
 
