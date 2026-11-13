@@ -33817,7 +33817,7 @@ def _rejournal_final_statuses(
                 "strategies": list(donor.strategies or []),
             }
         try:
-            append_journal_for_outcome(
+            acknowledgement = append_journal_for_outcome(
                 out_dir=config.out_dir,
                 target_path=config.target_path,
                 source_roots=_review_source_roots(config),
@@ -33825,7 +33825,8 @@ def _rejournal_final_statuses(
                 outcome=outcome,
                 gap=gap,
             )
-            updated += 1
+            if acknowledgement is not None:
+                updated += 1
         except Exception:
             logger.debug(
                 "re-journal failed for %s:%s",
