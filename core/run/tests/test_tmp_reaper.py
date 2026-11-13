@@ -18,6 +18,7 @@ from core.run.tmp_reaper import reap_stale_logs, reap_stale_runs, reap_stale_tmp
 
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 import core.run.tmp_reaper as _tempfile_owner
 
@@ -1889,8 +1890,11 @@ def test_darwin_cwd_probe_keeps_live_or_unverifiable_scratch(tmp_path, monkeypat
         assert command[:2] == ["/usr/sbin/lsof", "-a"]
         return SimpleNamespace(returncode=0 if outcome == "busy" else 1,
                                stdout="p123\nn" + str(tmp_path) + "\n", stderr="")
-    monkeypatch.setattr(subprocess, "run", lsof)
-    assert reaper._dir_in_use(tmp_path, reaper._live_cwds()) is True
+    with scoped_function_imports(
+        reaper, ("_live_cwds",), {"subprocess": subprocess},
+    ) as imports:
+        monkeypatch.setattr(imports.subprocess, "run", lsof)
+        assert reaper._dir_in_use(tmp_path, reaper._live_cwds()) is True
 
 
 def test_unavailable_cwd_probe_is_cached_for_the_whole_sweep(tmp_root, monkeypatch):
