@@ -49,3 +49,21 @@ def test_nested_function_generator_does_not_poison_its_enclosing_summary():
     )
     assert not result.summary_unknown
     assert (0, "", -1) in result.return_effects
+
+
+@pytest.mark.parametrize("definition", [
+    "def nested(value=((tmp := 0) for item in rows)):\n    return value",
+    "def nested(*, value=((tmp := 0) for item in rows)):\n    return value",
+    "nested = lambda value=((tmp := 0) for item in rows): value",
+    "nested = lambda *, value=((tmp := 0) for item in rows): value",
+])
+def test_nested_definition_defaults_keep_the_enclosing_generator_write(definition):
+    result = summary(f"tmp = raw\n{definition}\nreturn tmp")
+    assert result.summary_unknown
+    assert result.summary_unknown_reason == "generator defers an enclosing-frame assignment"
+
+
+def test_lambda_body_generator_stays_in_its_own_frame():
+    result = summary("tmp = raw\nnested = lambda: ((tmp := 0) for item in rows)\nreturn tmp")
+    assert not result.summary_unknown
+    assert (0, "", -1) in result.return_effects
