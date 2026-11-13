@@ -184,21 +184,27 @@ class TestConcurrentAdmission:
         # Two sessions admit at once: the flock serialises them, so
         # the second sees the first's row — grants sum to the budget,
         # not to 2x the derivation.
+        from core.testing.threads import retiring_threads
+
         _set_budget(monkeypatch, 10000)
         ledger = tmp_path / "l.json"
         grants: list[int] = []
         barrier = threading.Barrier(2)
 
         def worker() -> None:
-            barrier.wait(timeout=30)
+            try:
+                barrier.wait(timeout=30)
+            except threading.BrokenBarrierError:
+                return
             res = reserve_heap_mb(6000, derived=True, ledger_path=ledger)
             grants.append(res.granted_mb)
 
         threads = [threading.Thread(target=worker) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=60)
+        with retiring_threads(threads, release=barrier.abort, timeout=60):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=60)
         assert sorted(grants) == [4000, 6000]
 
 
