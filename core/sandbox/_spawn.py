@@ -4624,6 +4624,7 @@ def run_sandboxed(
                     stderr_chunks.clear()
 
             drain_deadline = None
+            _capture_error: BaseException | None = None
             try:
                 while fds:
                     if child_status is None:
@@ -4705,17 +4706,21 @@ def run_sandboxed(
                         b"\n[sandbox: stderr capture truncated "
                         b"at %d bytes]\n" % _capture_cap
                     )
+            except BaseException as error:
+                _capture_error = error
+                raise
             finally:
-                # Fold pending chunks on EVERY exit path (the normal
-                # exit above already did; this covers exceptions) so
-                # no later reader sees a stale buffer.
-                _materialize()
-                # Close any pipes we didn't drain (timeout, exception).
-                for _capture_fd in fds:
-                    try:
-                        _close_parent_fd(_capture_fd)
-                    except OSError:
-                        pass
+                def close_capture_fd(fd: int) -> None:
+                    with contextlib.suppress(OSError):
+                        _close_parent_fd(fd)
+
+                # Fold retained data and retire every remaining owner without
+                # replacing the capture failure with a cleanup interruption.
+                _retire_parent_resources(
+                    _materialize,
+                    *(lambda fd=fd: close_capture_fd(fd) for fd in tuple(fds)),
+                    primary_error=_capture_error,
+                )
 
         try:
             # waitpid with a remaining timeout window. `is not None`,
