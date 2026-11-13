@@ -173,15 +173,15 @@ def test_main_join_bound_uses_shared_default_without_timeout_s(monkeypatch):
     assert len(responses) == 1
 
 
-@pytest.mark.parametrize("field", ["target-timeout", "listen-timeout"])
+@pytest.mark.parametrize("field", ["target-timeout", "exploit-timeout", "listen-timeout"])
 @pytest.mark.parametrize("value", [10 ** 400, "not-a-number"], ids=["overflow", "invalid"])
 def test_main_numeric_conversion_failure_is_a_structured_refusal(monkeypatch, field, value):
     request = {
         "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
         "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
     }
-    if field == "target-timeout":
-        request["target"]["timeout_s"] = value
+    if field in ("target-timeout", "exploit-timeout"):
+        request[field.split("-")[0]]["timeout_s"] = value
     else:
         request["wait_listen_timeout_s"] = value
     errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
@@ -210,15 +210,15 @@ def test_main_unhashable_profile_is_a_structured_refusal(monkeypatch, role, prof
     assert role in errors[0][1]
 
 
-@pytest.mark.parametrize("field", ["target-timeout", "listen-timeout"])
+@pytest.mark.parametrize("field", ["target-timeout", "exploit-timeout", "listen-timeout"])
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
 def test_main_nonfinite_deadline_is_refused(monkeypatch, field, value):
     request = {
         "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
         "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
     }
-    if field == "target-timeout":
-        request["target"]["timeout_s"] = value
+    if field in ("target-timeout", "exploit-timeout"):
+        request[field.split("-")[0]]["timeout_s"] = value
     else:
         request["wait_listen_timeout_s"] = value
     errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
@@ -235,7 +235,8 @@ def test_main_preserves_finite_deadline_values(monkeypatch, timeout):
     request = {
         "target": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out",
                    "timeout_s": timeout},
-        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out"},
+        "exploit": {"cmd": ["/bin/true"], "output": "/tmp/coord-test-out",
+                    "timeout_s": timeout},
         "wait_listen_timeout_s": timeout,
     }
     errors, responses, joins, exit_code = _drive_main_hermetic(request, monkeypatch)
