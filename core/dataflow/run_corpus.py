@@ -69,11 +69,11 @@ def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
     """Yield paired records, refusing mismatched or duplicate finding IDs."""
     seen_ids: set[str] = set()
     paths = sorted(corpus_dir.glob("*.json"))
-    path_set = set(paths)
+    finding_paths = {p for p in paths if not p.name.endswith(".label.json")}
     for label_path in paths:
         if label_path.name.endswith(".label.json"):
             finding_path = label_path.with_name(label_path.name.removesuffix(".label.json") + ".json")
-            if finding_path not in path_set:
+            if finding_path not in finding_paths:
                 raise ValueError(f"orphan corpus label without finding: {label_path}")
     for fp in paths:
         if fp.name.endswith(".label.json"):
