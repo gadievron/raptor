@@ -44,8 +44,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.auth.jwt-no-verify.javascript
     message: >-
-      JWT is decoded without signature verification. jwt.decode() never
-      verifies the signature — use jwt.verify() with a trusted secret.
+      JWT claims are decoded without signature verification. Use the matching
+      library's verification API (jsonwebtoken verify or jose jwtVerify) with
+      a trusted key and an explicit algorithm policy before using claims for
+      authentication.
     languages: [javascript, typescript]
     severity: CRITICAL
     pattern-either:
