@@ -29,6 +29,7 @@ from .renderers import get_renderer, render_document
 from .summary import OperatorSummary, render_operator_summary
 
 
+_MAX_MANIFEST_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -84,12 +85,19 @@ def _lock(directory: Path) -> Iterator[None]:
 def _current_manifest(output_dir: Path, *, root: Path | None = None) -> dict:
     path = output_dir / "reporting-manifest.json"
     try:
-        data = _read_json(path, 1024 * 1024, root=root)
+        data = _read_json(path, _MAX_MANIFEST_BYTES, root=root)
     except FileNotFoundError:
         return {}
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int or data.get("schema_version") != 1
             or not isinstance(data.get("generation"), str)):
         raise ValueError("Invalid current reporting manifest")
+    return data
+
+
+def _encode_manifest(manifest: dict) -> bytes:
+    data = encode(manifest)
+    if len(data) > _MAX_MANIFEST_BYTES:
+        raise ValueError("Reporting manifest exceeds read limit")
     return data
 
 
@@ -229,7 +237,7 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
         immutable_manifest = {**definition, "generation": generation_id,
                               "directory": str(generation.relative_to(output_dir)),
                               "status": "partial" if render_failures else "completed"}
-        for name, content in {**payloads, "manifest.json": encode(immutable_manifest)}.items():
+        for name, content in {**payloads, "manifest.json": _encode_manifest(immutable_manifest)}.items():
             dest = generation / name
             if dest.exists() or dest.is_symlink():
                 if _read_bytes(dest, root=output_dir) != content:
@@ -281,7 +289,7 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
         current = {**immutable_manifest, "outputs": publication.outputs,
                    "diagnostics": publication.diagnostics, "failed_formats": publication.failed_formats,
                    "status": "partial" if publication.failed_formats else "completed"}
-        write_bytes_atomically(output_dir / "reporting-manifest.json", encode(current), root=output_dir)
+        write_bytes_atomically(output_dir / "reporting-manifest.json", _encode_manifest(current), root=output_dir)
         publication.committed = True
     return publication
 
@@ -349,7 +357,7 @@ def _load_generation_report(output_dir, current, *, root=None):
     if owned.is_symlink() or generation.is_symlink() or not generation.resolve().is_relative_to(owned.resolve()):
         raise ValueError("Committed reporting directory is not contained")
     try:
-        manifest = _read_json(generation / "manifest.json", 1024 * 1024, root=root)
+        manifest = _read_json(generation / "manifest.json", _MAX_MANIFEST_BYTES, root=root)
     except (OSError, ValueError) as exc:
         raise ValueError("Committed reporting manifest unavailable") from exc
     if not isinstance(manifest, dict) or manifest.get("generation") != identity:
