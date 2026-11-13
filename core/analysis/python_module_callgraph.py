@@ -882,8 +882,10 @@ def module_dynamic_namespace(
                 continue
             fname = func.id
             if fname in ("setattr", "delattr") and node.args:
-                receiver = _attribute_chain(node.args[0])
-                if receiver and receiver[0] in import_roots:
+                receiver = node.args[0]
+                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                    receiver = receiver.value
+                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
                     # Imported objects can share the trusted module's
                     # callable namespace, including through import aliases.
                     whole = True
