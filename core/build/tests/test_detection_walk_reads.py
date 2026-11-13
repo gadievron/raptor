@@ -13,26 +13,42 @@ must carry the safe-read discipline the sibling readers already use:
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+import errno
 import os
 import threading
 
 import pytest
 
 from core.build.build_detector import BuildDetector
+from core.testing.threads import retiring_threads
 
 pytestmark = pytest.mark.skipif(
     not hasattr(os, "mkfifo"), reason="os.mkfifo not available",
 )
 
 
-def _run_bounded(fn, timeout=15):
-    """Run *fn* on a daemon thread; fail loud when it blocks."""
+def _run_bounded(fn, timeout=15, *, fifo):
+    """Run *fn* while owning its thread and FIFO release peer."""
     result: list = []
     t = threading.Thread(target=lambda: result.append(fn()), daemon=True)
-    t.start()
-    t.join(timeout=timeout)
-    assert not t.is_alive(), "detection-walk read blocked"
-    return result[0]
+    with ExitStack() as cleanup:
+        def release_reader():
+            if t.ident is None or not t.is_alive():
+                return
+            try:
+                peer = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+            else:
+                cleanup.callback(os.close, peer)
+
+        with retiring_threads([t], release=release_reader, timeout=timeout):
+            t.start()
+            t.join(timeout=timeout)
+            assert not t.is_alive(), "detection-walk read blocked"
+            return result[0]
 
 
 class TestMissingConfigHeaderScanReads:
@@ -44,6 +60,7 @@ class TestMissingConfigHeaderScanReads:
         (tmp_path / "b.c").write_text('#include "foo_config.h"\n')
         missing = _run_bounded(
             BuildDetector(tmp_path).detect_missing_config_headers,
+            fifo=tmp_path / "a.c",
         )
         assert [(h, p.name) for h, p in missing] == [("foo_config.h", "b.c")]
 
@@ -72,6 +89,7 @@ class TestCMakeProjectRootReads:
         os.mkfifo(fifo)
         got = _run_bounded(
             lambda: BuildDetector._is_cmake_project_root(fifo),
+            fifo=fifo,
         )
         assert got is False
 
