@@ -988,9 +988,9 @@ def main() -> None:
                 from core.hash import sha256_fileobj
                 from core.source import open_regular_gated
                 try:
-                    with open_regular_gated(
+                    with preserving_stream_error(open_regular_gated(
                             resolved_path,
-                            follow_symlinks=False) as pin:
+                            follow_symlinks=False)) as pin:
                         digest = sha256_fileobj(pin)  # type: ignore[arg-type]
                 except (FileNotFoundError, NotADirectoryError,
                         ValueError):
