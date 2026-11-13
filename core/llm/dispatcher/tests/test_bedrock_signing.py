@@ -21,7 +21,7 @@ credential-scrub guarantee.
 
 from __future__ import annotations
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import json
 import os
 import re
@@ -39,6 +39,8 @@ from core.llm.dispatcher.auth import (
     seed_from_config,
 )
 from core.llm.dispatcher.server import LLMDispatcher, _TOKEN_HEADER
+from core.llm.dispatcher import auth as auth_module
+from core.testing.module_views import module_function_view
 
 from packages.web.tests.http_server import start_http_server
 
@@ -1017,54 +1019,62 @@ def test_bedrock_session_warnings_silent_for_long_term_setup(monkeypatch):
     assert store.bedrock_session_warnings() == []
 
 
+class _NoCredentialsPath(type(auth_module.Path())):
+    def is_file(self):
+        return False
+
+
+@contextmanager
+def _without_botocore(*, no_credentials_file=False):
+    import builtins
+
+    original = CredentialStore.bedrock_session_warnings
+    importer = builtins.__import__
+    def absent(name, *args, **kwargs):
+        if name == "botocore" or name.startswith("botocore."):
+            raise ImportError("no botocore in this test")
+        return importer(name, *args, **kwargs)
+    bindings = {"_owned_warnings": original}
+    if no_credentials_file:
+        bindings["Path"] = _NoCredentialsPath
+    view = module_function_view(auth_module, bindings=bindings, import_hook=absent)
+    with pytest.MonkeyPatch.context() as scope:
+        scope.setattr(CredentialStore, "bedrock_session_warnings", view._owned_warnings)
+        yield
+
+
 def test_bedrock_session_warnings_sigv4_intent_without_botocore(monkeypatch):
     """When SigV4 credentials are configured (env keys, profile, or
     shared credentials file) but ``botocore`` isn't importable, warn
     loudly at startup — otherwise the operator's first request would
     be a confusing 503."""
-    import builtins as _b
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
 
-    real_import = _b.__import__
-    def _no_botocore(name, *a, **k):
-        if name == "botocore" or name.startswith("botocore."):
-            raise ImportError("no botocore in this test")
-        return real_import(name, *a, **k)
-    monkeypatch.setattr(_b, "__import__", _no_botocore)
 
-    store = CredentialStore()
-    warnings = store.bedrock_session_warnings()
-    assert any(
-        "botocore" in w and "pip install" in w for w in warnings
-    ), f"expected botocore warning, got {warnings!r}"
+    with _without_botocore():
+        store = CredentialStore()
+        warnings = store.bedrock_session_warnings()
+        assert any(
+            "botocore" in w and "pip install" in w for w in warnings
+        ), f"expected botocore warning, got {warnings!r}"
 
 
 def test_bedrock_session_warnings_bearer_only_no_botocore_warning(monkeypatch):
     """Bearer-only operators don't need botocore — no warning even
     when it's absent."""
-    import builtins as _b
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "ABSK-opaque")
     monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
     monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
     monkeypatch.delenv("AWS_PROFILE", raising=False)
-    monkeypatch.setattr(
-        "core.llm.dispatcher.auth.Path.is_file",
-        lambda self: False,
-    )
 
-    real_import = _b.__import__
-    def _no_botocore(name, *a, **k):
-        if name == "botocore" or name.startswith("botocore."):
-            raise ImportError("no botocore in this test")
-        return real_import(name, *a, **k)
-    monkeypatch.setattr(_b, "__import__", _no_botocore)
 
-    store = CredentialStore()
-    warnings = store.bedrock_session_warnings()
-    assert not any("botocore" in w for w in warnings)
+    with _without_botocore(no_credentials_file=True):
+        store = CredentialStore()
+        warnings = store.bedrock_session_warnings()
+        assert not any("botocore" in w for w in warnings)
 
 
 # ---------------------------------------------------------------------------
