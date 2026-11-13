@@ -4874,6 +4874,7 @@ def _review_one_function_impl(
                 finding_priority=finding_prio,
                 call_edge_index=call_edge_index,
                 checklist_index=checklist_index,
+                occurrences=shared.chain_occurrences,
             )
         except Exception:
             logger.debug(
@@ -29259,6 +29260,8 @@ def _inject_chain_targets(
     finding_priority: float = 0.0,
     call_edge_index: dict[str, list] | None = None,
     checklist_index: dict[tuple, dict] | None = None,
+    *,
+    occurrences=None,
 ) -> int:
     """Inject callers and callees of a confirmed finding into the TaskGraph.
 
@@ -29268,8 +29271,16 @@ def _inject_chain_targets(
     - **Callers** that might pass unsanitised input to the vulnerable function.
     - **Callees** that consume corrupted output from the vulnerable function.
 
-    Returns the number of tasks injected or reprioritised.
+    Returns the number of tasks injected or reprioritised. The pipeline
+    supplies its original occurrence inventory so bare edges cannot select
+    an arbitrary duplicate declaration. Legacy direct callers retain their
+    existing scheduling behaviour when that inventory is absent.
     """
+    if occurrences is not None and (
+        type(outcome.line) is not int or outcome.line <= 0
+        or occurrences.get((outcome.file, outcome.function)) != outcome.line
+    ):
+        return 0
     if graph is None:
         return 0
 
@@ -29314,6 +29325,12 @@ def _inject_chain_targets(
         if not gap:
             continue
 
+        if occurrences is not None and (
+            (gap.get("file"), gap.get("name")) != (t_file, t_name)
+            or type(gap.get("line_start")) is not int or gap["line_start"] <= 0
+            or occurrences.get((t_file, t_name)) != gap["line_start"]
+        ):
+            continue
         gap["force_review"] = True
         key = f"{t_file}:{t_name}:{gap.get('line_start', 0)}"
         if graph.inject_task(key, gap, finding_priority, requeue=True):
