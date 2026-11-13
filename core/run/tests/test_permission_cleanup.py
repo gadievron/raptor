@@ -159,7 +159,9 @@ def test_common_removal_does_not_repair_permissions_on_normal_tree(
     def unexpected(*args, **kw):
         raise AssertionError("normal cleanup must not chmod every directory")
 
-    monkeypatch.setattr(os, "chmod", unexpected)
+    import core.atomic_fs as atomic_fs
+    from core.testing.module_bindings import patch_module_attribute
+    patch_module_attribute(monkeypatch, atomic_fs, "os", "chmod", unexpected)
     assert rmtree_hardened(tree)
 
 
