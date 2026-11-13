@@ -291,7 +291,7 @@ def _hex_literal_forces_unsigned(tok: str, profile: "BVProfile") -> bool:
     This remains a uniform-width convention, not a target ABI type resolver."""
     if not profile.signed or not _HEX_RE.fullmatch(tok):
         return False
-    return int(tok, 16) >= (1 << (profile.width - 1))
+    return int(tok, 16).bit_length() >= profile.width
 _INT_RE = re.compile(r'^\d+$')
 _IDENT_RE = re.compile(r'^[a-z_][a-z0-9_]*$', re.IGNORECASE)
 # Source identifiers are case-sensitive; English aliases canonicalise to NULL.
