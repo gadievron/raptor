@@ -1329,6 +1329,7 @@ def run_sandboxed(cmd: list[str], *,
                     exc_info=True,
                 )
 
+    _operation_error: BaseException | None = None
     try:
         if audit_mode and audit_run_dir:
             from . import seatbelt_audit
@@ -1655,6 +1656,9 @@ def run_sandboxed(cmd: list[str], *,
         result = subprocess.CompletedProcess(
             sandbox_cmd, _retcode, _stdout, _stderr,  # type: ignore[arg-type]
         )
+    except BaseException as exc:
+        _operation_error = exc
+        raise
     finally:
         # Every owner is registered before retirement can fail. No numeric
         # endpoint is closed twice, and preparation errors remain primary.
@@ -1663,6 +1667,7 @@ def run_sandboxed(cmd: list[str], *,
             lambda: _close_parent_fd_once(death_w),
             _finish_parent_status,
             _stop_audit_streamer,
+            primary_error=_operation_error,
         )
 
     # 6b. Fail-loud signal for context.py (mirrors the Linux exec-status
