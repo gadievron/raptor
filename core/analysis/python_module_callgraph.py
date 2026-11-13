@@ -1166,9 +1166,10 @@ def module_dynamic_namespace(
                     kind, sources = ast.Set, (cursor.left, cursor.right)
                 elif isinstance(cursor.op, (ast.BitAnd, ast.Sub)):
                     kind, sources = ast.Set, (cursor.left,)
-            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
-                  and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
-                source = cursor.func.value
+            elif (isinstance(cursor, ast.NamedExpr)
+                  or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                      and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
+                source = cursor.value if isinstance(cursor, ast.NamedExpr) else cursor.func.value
                 if not expanded:
                     pending.append((cursor, True))
                     pending.append((source, False))
