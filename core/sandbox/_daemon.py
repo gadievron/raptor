@@ -412,7 +412,13 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
                 lower = _ev(sl.lower) if sl.lower is not None else None
                 upper = _ev(sl.upper) if sl.upper is not None else None
                 step = _ev(sl.step) if sl.step is not None else None
-                return _cap_result(value[lower:upper:step], expr)
+                selection = slice(lower, upper, step)
+                if isinstance(value, (bytes, str)):
+                    # Normalise clipping and strides without copying the slice.
+                    size = len(range(*selection.indices(len(value))))
+                    if size > _INT_BIT_CEILING // 8:
+                        raise ValueError(f"compute slice exceeds byte budget in {expr!r}")
+                return _cap_result(value[selection], expr)
             return _cap_result(value[_ev(sl)], expr)
         if isinstance(node, ast.Call):
             fname = getattr(node.func, "id", None)
