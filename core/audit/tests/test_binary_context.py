@@ -485,7 +485,6 @@ class TestBinaryStaleness:
             merge_into_index,
             now_iso,
         )
-        from core.audit.record import binary_item_hash
 
         target = tmp_path / "t.bin"
         target.write_bytes(b"owned original module bytes, not an executable")
@@ -502,10 +501,24 @@ class TestBinaryStaleness:
 
         project = tmp_path / "project"
         project.mkdir()
+        from core.audit.binary_context import load_redb_binding
+        from core.audit.binary_view_snapshot import capture_binary_view_snapshot
+        from core.audit.binary_review_scope import binary_view_anchor
+        from core.json import dumps_canonical
+        from packages.ghidra.model import REDatabase, REFunction
+        database = REDatabase(source_tool="fixture", binary_path=str(target),
+            metadata={"binary_sha256": hashlib.sha256(target.read_bytes()).hexdigest()},
+            functions=[REFunction(name="f", address=0x1000, size=0x40,
+                                  decompilation="return 1;", source_tool="fixture")])
+        artifact = project / "re-database.json"
+        artifact.write_text(dumps_canonical(database.to_dict()))
+        snapshot = capture_binary_view_snapshot(load_redb_binding(artifact), target)
+        assert snapshot is not None
+        identity = snapshot.view_identity(file="binary:t", function="f", checklist=cl)
+        assert identity is not None
         entry = ReviewJournalEntry(
             ts=now_iso(), run_id="r1", file="binary:t", function="f",
-            verdict="clean",
-            source_hash=binary_item_hash(fe, fe["items"][0]),
+            verdict="clean", source_hash=binary_view_anchor(identity),
         )
         append_entry(project, entry)
         merge_into_index(project, project)
@@ -513,7 +526,7 @@ class TestBinaryStaleness:
         run = tmp_path / "run"
         run.mkdir()
         # matching hash → suppressed
-        gaps = compute_gaps(cl, [], out_dir=run, project_dir=project)
+        gaps = compute_gaps(cl, [], out_dir=run, project_dir=project, binary_view_snapshot=snapshot)
         assert all(g["name"] != "f" for g in gaps)
 
         # rebuilt binary (different sha) → re-opened
@@ -522,7 +535,7 @@ class TestBinaryStaleness:
         cl2 = {"target_path": str(target), "files": [fe2],
                "target_kind": "binary"}
         (tmp_path / "checklist.json").write_text(json.dumps(cl2))
-        gaps2 = compute_gaps(cl2, [], out_dir=run, project_dir=project)
+        gaps2 = compute_gaps(cl2, [], out_dir=run, project_dir=project, binary_view_snapshot=snapshot)
         assert any(g["name"] == "f" for g in gaps2)
 
 

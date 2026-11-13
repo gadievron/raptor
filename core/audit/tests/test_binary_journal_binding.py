@@ -22,12 +22,15 @@ def owned_binary_review(tmp_path):
     target.write_bytes(original)
     key = binary_path_key(target)
     gap = {"file": key, "name": "f", "kind": "function", "line_start": 0, "line_end": None,
-           "address": 4096, "size": 32}
+           "address": 4096, "size": 32, "metadata": {"address": 4096, "size": 32}}
     checklist = {"files": [{"path": key, "sha256": hashlib.sha256(original).hexdigest(), "items": [gap]}]}
     save_checklist(out, checklist)
     database = REDatabase(source_tool="ghidra", binary_path=str(target), functions=[
         REFunction(name="f", address=4096, size=32, source_tool="ghidra",
                    decompilation="unsigned f(unsigned n) { return n + 1; }")])
+    from core.json import dumps_canonical
+    database.metadata['binary_sha256'] = hashlib.sha256(original).hexdigest()
+    (out / 're-database.json').write_text(dumps_canonical(database.to_dict()))
     context = assemble_binary_context(target_path=target, file_path=key, function_name="f", db=database)
     reviewer, calls = _reviewer()
     runtime = AuditKnowledgeRuntime(target, StudyQueue(), deadline=float("inf"), window=0)
@@ -54,7 +57,9 @@ def test_healthy_binary_ack_uses_the_full_original_module_digest(owned_binary_re
     target, out, gap, outcome, runtime, original = owned_binary_review
     ack = Collector(out_dir=out, target_path=target, run_id=out.name).submit(outcome, gap)
     assert ack is not None and journal_acknowledges_outcome(ack, outcome, gap)
-    assert ack.source_hash == f"bin:{hashlib.sha256(original).hexdigest()}:1000:20"
+    assert ack.source_hash == (f"bin:view1:decompilation:"
+        f"{outcome.binary_publication_scope.view_identity.view_sha256}:"
+        f"{hashlib.sha256(original).hexdigest()}:1000:20")
     from dataclasses import replace
     assert not journal_acknowledges_outcome(replace(ack, source_hash="bin:short:1000:20"), outcome, gap)
 

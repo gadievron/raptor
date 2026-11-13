@@ -13,6 +13,14 @@ from core.coverage import journal_mac
 from core.coverage.record import build_from_journal
 
 
+def _views(out, target):
+    from core.audit.binary_context import load_redb_binding
+    from core.audit.binary_view_snapshot import capture_binary_view_snapshot
+    snapshot = capture_binary_view_snapshot(load_redb_binding(out / 're-database.json'), target)
+    assert snapshot is not None
+    return snapshot
+
+
 def test_signed_binary_projection_cannot_suppress_changed_module(owned_binary_review, tmp_path):
     target, out, gap, outcome, runtime, original = owned_binary_review
     assert Collector(out_dir=out, target_path=target, run_id=out.name).submit(outcome, gap) is not None
@@ -26,7 +34,8 @@ def test_signed_binary_projection_cannot_suppress_changed_module(owned_binary_re
     checklist["files"][0]["language"] = "binary"
     fresh_run = tmp_path / "fresh-run"
     fresh_run.mkdir()
-    assert not any(item["name"] == "f" for item in compute_gaps(checklist, [projected], out_dir=fresh_run))
+    assert not any(item["name"] == "f" for item in compute_gaps(checklist, [projected],
+        out_dir=fresh_run, binary_view_snapshot=_views(out, target)))
     target.write_bytes(b"owned changed module, still not executable")
     checklist["files"][0]["sha256"] = hashlib.sha256(target.read_bytes()).hexdigest()
     gaps = compute_gaps(checklist, [projected], out_dir=fresh_run)
@@ -42,6 +51,8 @@ def _projected_current_inventory(owned):
     checklist = load_checklist(out)
     checklist.update(target_path=str(target), target_kind="binary")
     checklist["files"][0]["language"] = "binary"
+    assert not any(item["name"] == "f" for item in compute_gaps(checklist, [projected],
+        binary_view_snapshot=_views(out, target)))
     return projected, checklist
 
 

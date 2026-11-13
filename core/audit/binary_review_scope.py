@@ -136,7 +136,7 @@ class BinaryReviewPublicationScope:
     def anchor(self) -> str:
         plain = self.module_anchor()
         return (f"bin:ctx1:{self.context_digest}:{plain[4:]}"
-                if self.context_digest is not None else plain)
+                if self.context_digest is not None else binary_view_anchor(self.view_identity) or plain)
 
     def module_anchor(self) -> str:
         from .record import binary_item_hash
@@ -191,6 +191,14 @@ class BinaryInputIdentity:
                 or type(self.size) is not int or self.size <= 0
                 or self.representation not in ("decompilation", "disassembly")):
             raise ValueError("binary identity requires complete original input stamps")
+
+
+def binary_view_anchor(identity: BinaryInputIdentity | None) -> str | None:
+    """Persist view text identity, without turning its physical epoch into proof."""
+    if not isinstance(identity, BinaryInputIdentity):
+        return None
+    return (f"bin:view1:{identity.representation}:{identity.view_sha256}:"
+            f"{identity.module_sha256}:{identity.address:x}:{identity.size:x}")
 
 
 @dataclass(frozen=True, kw_only=True)
