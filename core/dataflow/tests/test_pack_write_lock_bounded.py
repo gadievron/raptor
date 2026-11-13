@@ -57,14 +57,15 @@ def test_wedged_holder_degrades_after_bounded_wait(
     pack = tmp_path / "pack.json"
     lock = tmp_path / "pack.json.lock"
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    entered = threading.Event()
-
-    def harvester() -> None:
-        with pack_write_lock(pack):
-            entered.set()
-
-    thread = threading.Thread(target=harvester, daemon=True)
+    thread = None
     try:
+        entered = threading.Event()
+
+        def harvester() -> None:
+            with pack_write_lock(pack):
+                entered.set()
+
+        thread = threading.Thread(target=harvester, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         with caplog.at_level("WARNING"):
             thread.start()
@@ -76,7 +77,7 @@ def test_wedged_holder_degrades_after_bounded_wait(
         assert any("WITHOUT" in r.message for r in caplog.records)
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
