@@ -761,8 +761,25 @@ class DataflowVisualizer:
         # and the whole .mmd fails to render. Collapse whitespace
         # FIRST so legitimate newlines become spaces; whatever
         # control/bidi bytes remain are then escaped.
-        text = ' '.join(str(text).split())
-        text = escape_nonprintable(text)
+        # Every normalised character contributes at least one escaped
+        # character. A 61-character prefix therefore determines both the
+        # displayed first 57 characters and whether the 60-character cap
+        # needs an ellipsis, without copying/escaping a discarded suffix.
+        prefix = []
+        separated = False
+        for char in str(text):
+            if char.isspace():
+                separated = bool(prefix)
+                continue
+            if separated:
+                prefix.append(' ')
+                separated = False
+                if len(prefix) == 61:
+                    break
+            prefix.append(char)
+            if len(prefix) == 61:
+                break
+        text = escape_nonprintable(''.join(prefix))
 
         # Truncate long text
         if len(text) > 60:

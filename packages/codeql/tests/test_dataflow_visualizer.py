@@ -301,3 +301,30 @@ class TestMermaidLabelSanitised:
         assert "\x1b" not in text
         assert "\x07" not in text
         assert "‮" not in text
+
+
+def test_mermaid_short_label_does_not_escape_the_discarded_suffix(visualizer, monkeypatch):
+    from core.security import log_sanitisation
+
+    original = log_sanitisation.escape_nonprintable
+    input_lengths = []
+
+    def escaped(text, **kwargs):
+        input_lengths.append(len(text))
+        return original(text, **kwargs)
+
+    monkeypatch.setattr(log_sanitisation, 'escape_nonprintable', escaped)
+    assert visualizer._escape_mermaid('a' * 100_000) == 'a' * 57 + '...'
+    assert input_lengths and max(input_lengths) <= 61
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('a' * 60, 'a' * 60),
+    ('a' * 61, 'a' * 57 + '...'),
+    ('a' * 60 + ' \t\n', 'a' * 60),
+    (' \t\u2003first\n\nsecond\u00a0 ', 'first second'),
+    (' \t\u2003', ''),
+    ('a' * 55 + '\x00' + 'b' * 100, 'a' * 55 + '\\x...'),
+])
+def test_mermaid_prefix_preserves_whitespace_and_escaped_length_boundaries(visualizer, text, expected):
+    assert visualizer._escape_mermaid(text) == expected
