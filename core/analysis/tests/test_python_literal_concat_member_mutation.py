@@ -1,0 +1,42 @@
+"""Literal sequence concatenation copies references into a fresh sequence."""
+
+import ast
+
+import pytest
+
+from core.analysis.python_module_callgraph import module_dynamic_namespace
+from core.analysis.tests.test_python_reflective_callable_escape import suppression
+
+
+def test_list_concat_member_cannot_preserve_replaced_callable_identity():
+    assert suppression('saved=([werkzeug.utils]+[])[0]', 'saved.secure_filename=replacement') is False
+
+
+def test_tuple_concat_member_cannot_preserve_replaced_callable_identity():
+    assert suppression('saved=(()+(werkzeug.utils,))[0]', 'saved.secure_filename=replacement') is False
+
+
+@pytest.mark.parametrize('value', [
+    '([werkzeug.utils]+[])[0]',
+    '([]+[werkzeug.utils])[0]',
+    '((werkzeug.utils,)+())[0]',
+    '(()+(werkzeug.utils,)).__getitem__(0)',
+])
+def test_literal_concat_member_references_remove_trust(value):
+    assert module_dynamic_namespace(ast.parse('import werkzeug\nsaved='+value+'\nsaved.member=value')) == (True, frozenset())
+
+
+def test_literal_concat_keeps_namespace_dictionary_kind():
+    source='import werkzeug\nsaved=([werkzeug.utils.__dict__]+[])[0]\nsaved.update({})'
+    assert module_dynamic_namespace(ast.parse(source)) == (True, frozenset())
+
+
+@pytest.mark.parametrize('source', [
+    'import werkzeug\nsaved=([werkzeug]+holder)[0]\nsaved.member=value',
+    'import werkzeug\nsaved=(holder+[werkzeug])[0]\nsaved.member=value',
+    'import werkzeug\nsaved=([werkzeug]+())[0]\nsaved.member=value',
+    'import werkzeug\nsaved=[werkzeug]+[]\nsaved[0]=value',
+    'import werkzeug\nsaved=([[werkzeug]]+[])[0]\nsaved[0]=value',
+])
+def test_unknown_addition_and_fresh_sequence_or_member_containers_keep_behavior(source):
+    assert module_dynamic_namespace(ast.parse(source)) == (False, frozenset())
