@@ -20,6 +20,7 @@ import os
 import stat
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, cast
 
@@ -27,6 +28,7 @@ from core.inventory.binary_builder import BINARY_PATH_PREFIX
 from core.source.lines import splitlines_prefix
 
 from .run_memo import BoundedMemo
+from .redb_read_scope import RedbReadScope, database_projection_digest
 
 logger = logging.getLogger(__name__)
 
@@ -477,7 +479,18 @@ from core.json.utils import (  # noqa: E402
 )
 
 
+@dataclass(frozen=True)
+class _ParsedRedb:
+    database: Any
+    projection_sha256: str | None
+
+
 def load_redb(redb_path: Path):
+    """Return the legacy parsed data object without granting read authority."""
+    return load_redb_binding(redb_path).database
+
+
+def load_redb_binding(redb_path: Path) -> RedbReadScope:
     """Load a bounded analysis artefact through one version-checked descriptor.
 
     Stable reads reuse the parsed object. File changes or unavailable reads
@@ -507,15 +520,17 @@ def load_redb(redb_path: Path):
                 raise OSError("analysis JSON changed before read")
             document = load_json_stream_bounded(cast(BinaryIO, stream), max_bytes=limit)
             database = REDatabase.from_dict(document)
+            projection = database_projection_digest(database, limit)
             if (_binary_content_version(os.fstat(stream.fileno())) != version
                     or _binary_content_version(path.stat()) != version):
                 raise OSError("analysis JSON changed during read")
-        return database
+        return _ParsedRedb(database, projection)
 
-    db, _cached = _REDB_MEMO.get_or_compute(key, compute)
+    parsed, _cached = _REDB_MEMO.get_or_compute(key, compute)
     if _binary_content_version(path.stat()) != version:
         raise OSError("analysis JSON changed during cache lookup")
-    return db
+    return RedbReadScope(path, resolved, version, limit,
+                         parsed.database, parsed.projection_sha256)
 
 
 def assemble_binary_context(
