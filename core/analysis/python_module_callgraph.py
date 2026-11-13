@@ -1105,6 +1105,12 @@ def module_dynamic_namespace(
                         selected = selected_literal_value(cursor)
                         if selected is not None:
                             children = (selected,)
+                    elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
+                        for operand, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
+                            if (isinstance(operand, (ast.Tuple, ast.List)) and isinstance(count, ast.Constant)
+                                    and type(count.value) is int and count.value > 0):
+                                children = (operand,)
+                                break
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
                           and (cursor.func.id in sequence_copy_names
                                or cursor.func.id in iterator_wrapper_names)
