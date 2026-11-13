@@ -203,7 +203,7 @@ class GroundTruth:
     def from_dict(cls, data: Mapping[str, Any]) -> GroundTruth:
         _check_extra_fields("GroundTruth", data, _GROUND_TRUTH_KEYS)
         version = data["schema_version"]
-        if version != SCHEMA_VERSION:
+        if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
             msg = (
                 f"GroundTruth schema_version {version!r} != expected "
                 f"{SCHEMA_VERSION!r}; corpus upgrade required"

@@ -309,7 +309,7 @@ class SanitizerEvidence:
     def from_dict(cls, data: Mapping[str, Any]) -> SanitizerEvidence:
         _check_extra_fields("SanitizerEvidence", data, _EVIDENCE_KEYS)
         version = data["schema_version"]
-        if version != SCHEMA_VERSION:
+        if isinstance(version, bool) or not isinstance(version, int) or version != SCHEMA_VERSION:
             msg = (
                 f"SanitizerEvidence schema_version {version!r} != expected "
                 f"{SCHEMA_VERSION!r}; consumer upgrade required"
