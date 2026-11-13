@@ -217,12 +217,11 @@ def _socket_io_timeout(deadline, check_cancel):
         raise socket.timeout("parser worker frame deadline exceeded")
     return min(remaining, _IO_WAIT_TICK_S) if check_cancel is not None else remaining
 
-def _restore_socket_timeout(sock, timeout):
-    primary = sys.exc_info()[1]
+def _restore_socket_timeout(sock, timeout, *, operation_failed):
     try:
         sock.settimeout(timeout)
     except BaseException:
-        if primary is None:
+        if not operation_failed:
             raise
         # A second close/mode error must not replace request cancellation
         # or the transport failure that already requires worker retirement.
@@ -548,6 +547,7 @@ class ParserJail:
                     check_cancel=None) -> bytes:
         timeout = sock.gettimeout()
         buf = bytearray()
+        operation_failed = True
         try:
             while len(buf) < n:
                 sock.settimeout(_socket_io_timeout(deadline, check_cancel))
@@ -562,9 +562,11 @@ class ParserJail:
                 if not chunk:
                     raise OSError("parser worker closed the socket")
                 buf.extend(chunk)
-            return bytes(buf)
+            result = bytes(buf)
+            operation_failed = False
+            return result
         finally:
-            _restore_socket_timeout(sock, timeout)
+            _restore_socket_timeout(sock, timeout, operation_failed=operation_failed)
 
     @staticmethod
     def _send_exact(sock: socket.socket, data: bytes, *, deadline: float,
@@ -611,6 +613,7 @@ class ParserJail:
         if deadline is None:
             deadline = time.monotonic() + _ROUNDTRIP_TIMEOUT_S
         timeout = sock.gettimeout()
+        operation_failed = True
         try:
             # One deadline covers queueing, sendall, header and payload.
             # A previous socket timeout is not a fresh per-stage budget.
@@ -641,11 +644,13 @@ class ParserJail:
                 raise _ProtocolError("verdict frame id desync")
             payload = self._recv_exact(sock, length, deadline=deadline,
                                        check_cancel=self._check_running)
-            return _validate_verdict(payload)
+            verdict = _validate_verdict(payload)
+            operation_failed = False
+            return verdict
         except socket.timeout as exc:
             raise OSError("parser worker round-trip timed out") from exc
         finally:
-            _restore_socket_timeout(sock, timeout)
+            _restore_socket_timeout(sock, timeout, operation_failed=operation_failed)
 
     def _kill_worker_locked(self) -> None:
         sock, proc = self._sock, self._proc
