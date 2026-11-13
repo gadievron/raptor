@@ -956,6 +956,47 @@ def module_dynamic_namespace(
             return None
         return tuple(pair.elts[1] for pair in pairs)
 
+    literal_selection_cache: dict[ast.AST, ast.AST | None] = {}
+
+    def selected_literal_value(value: ast.AST) -> ast.AST | None:
+        pending = [(value, False)]
+        while pending:
+            cursor, expanded = pending.pop()
+            if cursor in literal_selection_cache:
+                continue
+            if isinstance(cursor, (ast.Dict, ast.Tuple, ast.List)):
+                literal_selection_cache[cursor] = cursor
+                continue
+            if not isinstance(cursor, ast.Subscript) or isinstance(cursor.slice, ast.Slice):
+                literal_selection_cache[cursor] = None
+                continue
+            if not expanded:
+                pending.append((cursor, True))
+                pending.append((cursor.value, False))
+                continue
+            container = literal_selection_cache[cursor.value]
+            key = cursor.slice
+            selected = None
+            if (isinstance(container, (ast.Tuple, ast.List))
+                    and not any(isinstance(item, ast.Starred) for item in container.elts)):
+                index = None
+                if isinstance(key, ast.Constant) and type(key.value) is int:
+                    index = key.value
+                elif (isinstance(key, ast.UnaryOp) and isinstance(key.op, ast.USub)
+                      and isinstance(key.operand, ast.Constant) and type(key.operand.value) is int):
+                    index = -key.operand.value
+                if index is not None and -len(container.elts) <= index < len(container.elts):
+                    selected = container.elts[index]
+            elif (isinstance(container, ast.Dict) and isinstance(key, ast.Constant)
+                  and isinstance(key.value, str)
+                  and all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                          for item in container.keys)):
+                for item, candidate in zip(container.keys, container.values):
+                    if item.value == key.value:
+                        selected = candidate
+            literal_selection_cache[cursor] = selected
+        return literal_selection_cache[value]
+
     def container_member_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         members: list[ast.AST] = []
         pending = [(value, False)]
@@ -974,6 +1015,14 @@ def module_dynamic_namespace(
             elif literal_members is not None:
                 recognised = True
                 members.extend(literal_members)
+            elif isinstance(container, ast.Subscript) and not isinstance(container.slice, ast.Slice):
+                selected = selected_literal_value(container)
+                if selected is not None:
+                    recognised = True
+                    pending.append((selected, copied))
+                if not copied:
+                    # Selection adds candidates without erasing old kind evidence.
+                    members.append(container)
             elif isinstance(container, ast.NamedExpr):
                 pending.append((container.value, copied))
             elif isinstance(container, ast.IfExp):
