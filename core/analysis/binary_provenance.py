@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Literal, Optional
 
 from core.binary.elf import is_elf
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,7 @@ def _debug_info_header_sane(
     if size < 8:
         return False
     try:
-        with open(binary_path, "rb") as f:
+        with preserving_stream_error(open(binary_path, "rb")) as f:
             f.seek(offset)
             head = f.read(24)
     except OSError:
