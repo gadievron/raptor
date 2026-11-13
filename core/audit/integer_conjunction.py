@@ -8,6 +8,7 @@ from core.smt_solver.witness import format_vars
 
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_operation import _unwrap
+from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
 from .integer_comparison_model import COMPARISONS, ComparisonModel, UnsupportedComparison
 from .integer_condition import CONDITION_GOALS
@@ -19,7 +20,7 @@ from .integer_witness import source_model_scope, validate_integer_witness
 _RELATIONS = {'<': {-1}, '<=': {-1, 0}, '>': {1}, '>=': {0, 1}, '==': {0}, '!=': {-1, 1}}
 
 
-def _shape(node, data, *, selected=True, logical_operator='&&'):
+def _shape(node, data, language, *, selected=True, logical_operator='&&'):
     def text(item):
         return data[item.start_byte:item.end_byte].decode() if item is not None else ''
 
@@ -35,6 +36,10 @@ def _shape(node, data, *, selected=True, logical_operator='&&'):
             current, parent = parent, parent.parent
         if parent is None or parent.type != 'if_statement' or parent.child_by_field_name('condition') != current:
             return None
+        while parent is not None and parent.type != 'function_definition':
+            if unevaluated_context(parent, data, language):
+                return None
+            parent = parent.parent
     leaves = []
     for field in ('left', 'right'):
         leaf = _unwrap(node.child_by_field_name(field))
@@ -66,7 +71,7 @@ def _claim(hypothesis, language, abi, logical_operator):
     if len(statements) != 1 or statements[0].type != 'return_statement':
         return None
     values = [n for n in statements[0].named_children if n.type != 'comment']
-    return _shape(_unwrap(values[0]), data, selected=False, logical_operator=logical_operator) if len(values) == 1 else None
+    return _shape(_unwrap(values[0]), data, language, selected=False, logical_operator=logical_operator) if len(values) == 1 else None
 
 
 def conjunction_candidates(source, *, language, integer_abi):
@@ -76,7 +81,7 @@ def conjunction_candidates(source, *, language, integer_abi):
         return []
     data, _, nodes = frame
     shapes = [(node, leaves) for node in nodes
-              if (leaves := _shape(node, data)) is not None]
+              if (leaves := _shape(node, data, language)) is not None]
     occurrences = Counter(leaves for _, leaves in shapes)
     candidates = []
     for node, leaves in shapes:
@@ -101,7 +106,7 @@ def disjunction_candidates(source, *, language, integer_abi):
         return []
     data, _, nodes = frame
     shapes = [(node, leaves) for node in nodes
-              if (leaves := _shape(node, data, logical_operator='||')) is not None]
+              if (leaves := _shape(node, data, language, logical_operator='||')) is not None]
     occurrences = Counter(leaves for _, leaves in shapes)
     candidates = []
     for node, leaves in shapes:
@@ -150,7 +155,7 @@ def range_condition_candidates(source, *, language, integer_abi):
         logical_operator = data[operator_node.start_byte:operator_node.end_byte].decode() if operator_node is not None else ''
         if logical_operator not in {'&&', '||'}:
             continue
-        leaves = _shape(node, data, logical_operator=logical_operator)
+        leaves = _shape(node, data, language, logical_operator=logical_operator)
         if leaves is not None:
             shapes.append((node, logical_operator, leaves))
     occurrences = Counter((operator, leaves) for _, operator, leaves in shapes)
@@ -210,7 +215,7 @@ def _check_boolean_condition(source, hypothesis, *, language, integer_abi, logic
     if frame is None:
         return unavailable
     data, body, nodes = frame
-    matches = [node for node in nodes if _shape(node, data, logical_operator=logical_operator) == wanted]
+    matches = [node for node in nodes if _shape(node, data, language, logical_operator=logical_operator) == wanted]
     if len(matches) != 1:
         return unavailable
     target = matches[0]
