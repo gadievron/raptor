@@ -1191,10 +1191,15 @@ def module_dynamic_namespace(
                 elif not copied:
                     members.append(container)
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
-                  and container.func.id in mapping_copy_names and not container.args
+                  and container.func.id in mapping_copy_names and len(container.args) <= 1
                   and container.keywords and all(item.arg is not None for item in container.keywords)):
                 recognised = True
                 members.extend(item.value for item in container.keywords)
+                if container.args:
+                    pair_values = explicit_pair_values(container.args[0])
+                    if pair_values is not None:
+                        members.extend(pair_values)
+                    pending.append((container.args[0], True))
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names and not container.args
                   and len(container.keywords) == 1 and container.keywords[0].arg is None):
