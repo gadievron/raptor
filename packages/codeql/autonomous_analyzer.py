@@ -511,6 +511,8 @@ class AutonomousCodeQLAnalyzer:
 
         # Check for dataflow
         code_flows = result.get("codeFlows", [])
+        if not isinstance(code_flows, list):
+            code_flows = []
         has_dataflow = len(code_flows) > 0
         dataflow_path_count = len(code_flows)
 
