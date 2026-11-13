@@ -136,7 +136,7 @@ def test_step_with_no_validators_renders_explicit_marker():
     )
     out = render_evidence_for_prompt(e)
     assert "step 0" in out
-    assert "no validators called" in out
+    assert "no validator calls identified" in out
 
 
 def test_step_with_validators_lists_them():

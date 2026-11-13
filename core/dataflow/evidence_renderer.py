@@ -83,7 +83,7 @@ def _render_step_annotations(annotations: Iterable[StepAnnotation]) -> str:
                 + "]"
             )
         else:
-            validators_part = "no validators called"
+            validators_part = "no validator calls identified"
         lines.append(f"  step {ann.step_index}: {validators_part}")
         if ann.variables_referenced:
             lines.append(
