@@ -1204,6 +1204,21 @@ def module_dynamic_namespace(
                   and container.func.id in mapping_copy_names and not container.args
                   and len(container.keywords) == 1 and container.keywords[0].arg is None):
                 pending.append((container.keywords[0].value, True))
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
+                  and container.func.id in mapping_copy_names and len(container.args) <= 1
+                  and container.keywords and any(item.arg is None for item in container.keywords)):
+                for item in container.keywords:
+                    if item.arg is None:
+                        pending.append((item.value, True))
+                    else:
+                        recognised = True
+                        members.append(item.value)
+                if container.args:
+                    pair_values = explicit_pair_values(container.args[0])
+                    if pair_values is not None:
+                        recognised = True
+                        members.extend(pair_values)
+                    pending.append((container.args[0], True))
             elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.BitOr):
                 for source, empty in ((container.left, container.right), (container.right, container.left)):
                     if isinstance(empty, ast.Dict) and not empty.keys:
