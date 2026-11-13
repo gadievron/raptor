@@ -889,13 +889,34 @@ def module_dynamic_namespace(
             cur = parents.get(cur)
         return False
 
+    saved_namespace_dict_values: set[str] = set()
+    namespace_dict_value_cache: dict[ast.AST, bool] = {}
+
+    def direct_namespace_dict_value(value: ast.AST) -> bool:
+        wrappers = []
+        cursor = value
+        while isinstance(cursor, ast.NamedExpr) and cursor not in namespace_dict_value_cache:
+            wrappers.append(cursor)
+            cursor = cursor.value
+        if cursor not in namespace_dict_value_cache:
+            namespace_dict_value_cache[cursor] = (
+                isinstance(cursor, ast.Attribute) and cursor.attr == "__dict__"
+            )
+        result = namespace_dict_value_cache[cursor]
+        for wrapper in wrappers:
+            namespace_dict_value_cache[wrapper] = result
+        return result
+
+
     def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in {"update", "clear", "pop", "popitem", "setdefault",
-                                       "__setitem__", "__delitem__", "__ior__", "__init__"}
-                and isinstance(node.func.value, ast.Attribute)
-                and node.func.value.attr == "__dict__"):
-            return node.func.value.value
+                                       "__setitem__", "__delitem__", "__ior__", "__init__"}):
+            receiver = node.func.value
+            if isinstance(receiver, ast.Attribute) and receiver.attr == "__dict__":
+                return receiver.value
+            if isinstance(receiver, ast.Name) and receiver.id in saved_namespace_dict_values:
+                return receiver
         return None
 
     def reflective_receiver(node: ast.AST) -> ast.AST | None:
@@ -1005,6 +1026,8 @@ def module_dynamic_namespace(
                 continue
             if possible_import_value(value):
                 saved_import_values.add(target.id)
+                if direct_namespace_dict_value(value):
+                    saved_namespace_dict_values.add(target.id)
     import_roots.update(saved_import_values)
 
     for node in ast.walk(tree):
