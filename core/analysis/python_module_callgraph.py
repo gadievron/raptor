@@ -1031,37 +1031,53 @@ def module_dynamic_namespace(
         if (not isinstance(value, ast.Call) or not isinstance(value.func, ast.Attribute)
                 or value.args or value.keywords or value.func.attr not in {"keys", "values"}):
             return None
-        receiver = value.func.value
-        while True:
+        pending = [value.func.value]
+        seen = set()
+        members = []
+        recognised = False
+        while pending:
+            receiver = pending.pop()
+            if receiver in seen:
+                continue
+            seen.add(receiver)
             if isinstance(receiver, ast.NamedExpr):
-                receiver = receiver.value
-            elif (isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute)
-                  and receiver.func.attr == "copy" and not receiver.args and not receiver.keywords):
-                receiver = receiver.func.value
-            else:
-                break
-        dictionary = selected_literal_value(receiver)
-        if not isinstance(dictionary, ast.Dict):
-            if (value.func.attr == "values" and isinstance(receiver, ast.Call)
-                    and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
-                    and len(receiver.args) <= 1):
-                members = []
+                pending.append(receiver.value)
+                continue
+            if isinstance(receiver, ast.IfExp):
+                pending.extend((receiver.body, receiver.orelse))
+                continue
+            if isinstance(receiver, ast.BoolOp):
+                pending.extend(receiver.values)
+                continue
+            if (isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute)
+                    and receiver.func.attr == "copy" and not receiver.args and not receiver.keywords):
+                pending.append(receiver.func.value)
+                continue
+            dictionary = selected_literal_value(receiver)
+            if isinstance(dictionary, ast.Dict):
+                recognised = True
+                sources = (literal_dictionary_keys(dictionary) if value.func.attr == "keys"
+                           else literal_member_values(dictionary))
+                members.extend(sources or ())
+            elif (value.func.attr == "values" and isinstance(receiver, ast.Call)
+                  and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
+                  and len(receiver.args) <= 1):
+                constructor_members = []
                 sources = list(receiver.args)
                 for item in receiver.keywords:
                     if item.arg is None:
                         sources.append(item.value)
                     else:
-                        members.append(item.value)
+                        constructor_members.append(item.value)
                 for source in sources:
                     dictionary_source = selected_literal_value(source)
                     if not isinstance(dictionary_source, ast.Dict):
-                        return None
-                    members.extend(literal_member_values(dictionary_source) or ())
-                return tuple(members)
-            return None
-        if value.func.attr == "keys":
-            return literal_dictionary_keys(dictionary)
-        return literal_member_values(dictionary)
+                        break
+                    constructor_members.extend(literal_member_values(dictionary_source) or ())
+                else:
+                    recognised = True
+                    members.extend(constructor_members)
+        return tuple(members) if recognised else None
 
     sequence_container_cache: dict[ast.AST, bool] = {}
 
