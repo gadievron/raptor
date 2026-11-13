@@ -587,14 +587,17 @@ class TestServerBootSingleFlight:
             )
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
-        for t in threads:
-            t.start()
-        boot_gate.set()
-        for t in threads:
-            t.join(10)
+        from core.testing.threads import retiring_threads
+
         try:
-            assert len(boots) == 1, boots
-            assert results == ["decompiled main"] * 4
+            with retiring_threads(threads, release=boot_gate.set, timeout=10):
+                for t in threads:
+                    t.start()
+                boot_gate.set()
+                for t in threads:
+                    t.join(10)
+                assert len(boots) == 1, boots
+                assert results == ["decompiled main"] * 4
         finally:
             key = str(binary.resolve())
             with bc._SERVER_CACHE_LOCK:
