@@ -1228,6 +1228,12 @@ def module_dynamic_namespace(
                         recognised = True
                         members.extend(pair_values)
                     pending.append((container.args[0], True))
+            elif (isinstance(container, ast.BinOp) and isinstance(container.op, ast.Add)
+                  and isinstance(container.left, (ast.Tuple, ast.List))
+                  and type(container.left) is type(container.right)):
+                recognised = True
+                members.extend(literal_member_values(container.left) or ())
+                members.extend(literal_member_values(container.right) or ())
             elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.BitOr):
                 for source, empty in ((container.left, container.right), (container.right, container.left)):
                     if isinstance(empty, ast.Dict) and not empty.keys:
