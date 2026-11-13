@@ -1192,6 +1192,11 @@ def module_dynamic_namespace(
                     members.append(container)
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names and not container.args
+                  and container.keywords and all(item.arg is not None for item in container.keywords)):
+                recognised = True
+                members.extend(item.value for item in container.keywords)
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
+                  and container.func.id in mapping_copy_names and not container.args
                   and len(container.keywords) == 1 and container.keywords[0].arg is None):
                 pending.append((container.keywords[0].value, True))
             elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.BitOr):
