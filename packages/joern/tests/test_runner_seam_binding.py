@@ -51,6 +51,8 @@ class TestBoundSandboxRunner:
         assert _default_sandbox_runner() is real_run
 
     def test_pin_is_thread_local(self) -> None:
+        from core.testing.threads import retiring_threads
+
         real_run = core.sandbox.run
         seen: dict[str, object] = {}
         pinned = threading.Event()
@@ -62,12 +64,13 @@ class TestBoundSandboxRunner:
             done.set()
 
         t = threading.Thread(target=other_thread, daemon=True)
-        t.start()
-        with bound_sandbox_runner(_sentinel_runner):
-            pinned.set()
-            assert done.wait(timeout=30)
-        t.join(timeout=30)
-        assert seen["runner"] is real_run
+        with retiring_threads((t,), release=pinned.set, timeout=30):
+            t.start()
+            with bound_sandbox_runner(_sentinel_runner):
+                pinned.set()
+                assert done.wait(timeout=30)
+            t.join(timeout=30)
+            assert seen["runner"] is real_run
 
 
 class TestResolveSandboxRunner:
