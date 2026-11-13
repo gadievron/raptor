@@ -2622,43 +2622,31 @@ def _supersede_prior_outcome(
     result: OrchestratorResult,
     reviewed_outcomes: Any,
     gap_key: str,
+    *,
+    occurrence: tuple[str, str, int] | None = None,
 ) -> ReviewOutcome | None:
-    """Remove and un-tally the prior outcome for a chain re-review.
+    """Remove and un-tally only one current outcome at the scheduled site.
 
-    The tracked object can be STALE: a mid-loop promotion (cadence
-    tick / critique) replaces the outcomes-list slot with a NEW
-    object after ``reviewed_outcomes`` recorded this one. Removing
-    nothing while un-tallying the stale status skewed the verdict
-    counters negative and left the promoted object as an orphan
-    finding beside the re-review's fresh outcome — so on an identity
-    miss, the CURRENT object at the same site is superseded instead,
-    and its ACTUAL status is what gets un-tallied. Returns the
-    outcome actually removed (the chain-status-change observation
-    compares against it), or ``None`` when nothing was superseded
-    (another pass already removed the outcome — un-tallying then
-    would skew counters for an outcome no longer in the tally).
+    The compatibility map can name another same-named occurrence, or retain
+    an object replaced by mid-loop promotion. Explicit callers select the
+    scheduled occurrence; legacy callers derive it from their tracked prior.
+    Ambiguous or vanished occurrences preserve every existing assessment.
     """
-    prior = reviewed_outcomes.get(gap_key)
-    if prior is None:
+    if occurrence is None:
+        tracked = reviewed_outcomes.get(gap_key)
+        if tracked is None:
+            return None
+        occurrence = (tracked.file, tracked.function, tracked.line or 0)
+    if type(occurrence[2]) is not int:
         return None
-    removed = False
     with result._lock:
-        try:
-            result.outcomes.remove(prior)
-            removed = True
-        except ValueError:
-            for j, cur in enumerate(result.outcomes):
-                if (
-                    cur.file == prior.file
-                    and cur.function == prior.function
-                    and (cur.line or 0) == (prior.line or 0)
-                ):
-                    prior = result.outcomes.pop(j)
-                    removed = True
-                    break
-    if not removed:
-        return None
-    _untally_outcome(result, prior)
+        matches = [(index, current) for index, current in enumerate(result.outcomes)
+                   if (current.file, current.function, current.line or 0) == occurrence]
+        if len(matches) != 1:
+            return None
+        index, prior = matches[0]
+        result.outcomes.pop(index)
+        _untally_outcome_unlocked(result, prior)
     return prior
 
 
@@ -2819,6 +2807,7 @@ def review_one_function(
     if gap.get("force_review") and reviewed_outcomes:
         _prior_outcome = _supersede_prior_outcome(
             result, reviewed_outcomes, gap_key,
+            occurrence=(gap["file"], gap["name"], gap.get("line_start", 0)),
         )
 
     # ── Triage skip ───────────────────────────────────────────────────
