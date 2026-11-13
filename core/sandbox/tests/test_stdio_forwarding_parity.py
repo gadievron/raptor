@@ -55,12 +55,14 @@ class TestSeatbeltDispatchStdio:
         return captured
 
     def test_dispatch_forwards_stdout_and_stderr(self, tmp_path):
-        kwargs = self._captured_kwargs(
-            tmp_path, capture_output=False, stdout=77, stderr=88)
-        assert kwargs.get("stdout") == 77, (
-            "seatbelt dispatch dropped stdout= — the write-only tty "
-            "reopen (and every caller redirect) is defeated on macOS")
-        assert kwargs.get("stderr") == 88
+        with (tmp_path / "stdout").open("wb") as out, (tmp_path / "stderr").open("wb") as err:
+            out_fd, err_fd = out.fileno(), err.fileno()
+            kwargs = self._captured_kwargs(
+                tmp_path, capture_output=False, stdout=out_fd, stderr=err_fd)
+            assert kwargs.get("stdout") == out_fd, (
+                "seatbelt dispatch dropped stdout= — the write-only tty "
+                "reopen (and every caller redirect) is defeated on macOS")
+            assert kwargs.get("stderr") == err_fd
 
     def test_dispatch_defaults_stay_none(self, tmp_path):
         kwargs = self._captured_kwargs(tmp_path, capture_output=False)

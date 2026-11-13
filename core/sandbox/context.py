@@ -293,6 +293,30 @@ _TEARDOWN_SWEEP_GRACE_S = 3.0
 _TEARDOWN_KILL_GRACE_S = 5.0
 
 
+def _validate_output_redirections(kwargs: dict) -> None:
+    """Refuse invalid output sources before setup can reuse their fd numbers."""
+    if (kwargs.get("capture_output")
+            and (kwargs.get("stdout") is not None or kwargs.get("stderr") is not None)):
+        raise ValueError("stdout and stderr may not be used with capture_output")
+    for stream in ("stdout", "stderr"):
+        supplied = kwargs.get(stream)
+        if supplied is None:
+            continue
+        sentinels: tuple[int, ...] = (subprocess.PIPE, subprocess.DEVNULL)
+        if stream == "stderr":
+            sentinels += (subprocess.STDOUT,)
+        if isinstance(supplied, int) and supplied in sentinels:
+            continue
+        fd = supplied if isinstance(supplied, int) else supplied.fileno()
+        try:
+            os.fstat(fd)
+        except OSError as exc:
+            raise TypeError(
+                f"sandbox().run(): {stream}= fd={fd} is not a valid open "
+                f"file descriptor ({exc.__class__.__name__}: {exc})"
+            ) from exc
+
+
 def _run_teardown_first_timeout(
     cmd: list, pk: dict, death_w_holder: list, start_new_session: bool,
     *, max_capture_bytes: int | None = None, teardown_first: bool = True,
@@ -3818,9 +3842,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         _job_controller = kwargs.pop('_job_controller', None)
         _input_spool_files = kwargs.pop('_input_spool_files')
 
-        if (kwargs.get("capture_output")
-                and (kwargs.get("stdout") is not None or kwargs.get("stderr") is not None)):
-            raise ValueError("stdout and stderr may not be used with capture_output")
+        _validate_output_redirections(kwargs)
 
         # Resolve the documented subprocess alias before selecting a native
         # backend. Passing both forms with different truth values is ambiguous.
@@ -9278,6 +9300,7 @@ def run(cmd: list[str], block_network=_UNSET, target: str | None = None,
     them into a one-shot context. An omitted block_network follows the
     selected profile; an explicit boolean overrides that profile default.
     """
+    _validate_output_redirections(kwargs)
     from contextlib import ExitStack
 
     from .errors import SandboxSetupError
@@ -9838,6 +9861,7 @@ def _untrusted_stdio_write_only(kwargs: dict, caller: str) -> "list[int]":
     defence held. Any future untrusted entry point calls this helper
     (the entry-point sweep test enforces it mechanically).
     """
+    _validate_output_redirections(kwargs)
     wo_fds: list[int] = []
     if kwargs.get("capture_output"):
         return wo_fds
