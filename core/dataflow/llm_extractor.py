@@ -25,6 +25,7 @@ import hashlib
 import json
 from collections.abc import Callable, Sequence
 
+from core.dataflow._schema_checks import unique_object_fields
 from core.dataflow.sanitizer_evidence import (
     PROVENANCE_LLM,
     SCHEMA_VERSION,
@@ -241,7 +242,7 @@ def _parse_response(
     errors: list[str] = []
 
     try:
-        obj = json.loads(raw)
+        obj = json.loads(raw, object_pairs_hook=unique_object_fields)
     except ValueError as e:
         # JSONDecodeError and configured integer-decoder limits both
         # represent response refusals, not a successful empty extraction.
@@ -250,7 +251,9 @@ def _parse_response(
     if not isinstance(obj, dict):
         return (), [f"{file_path}: response top-level is not an object"]
 
-    items = obj.get("validators", [])
+    if "validators" not in obj:
+        return (), [f"{file_path}: response missing 'validators' field"]
+    items = obj["validators"]
     if not isinstance(items, list):
         return (), [f"{file_path}: 'validators' field is not a list"]
 
