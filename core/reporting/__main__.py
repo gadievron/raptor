@@ -7,7 +7,9 @@ from pathlib import Path
 import sys
 
 from core.json import load_json
+from core.json.bounded import loads_bounded
 from core.security.log_sanitisation import sanitise_for_terminal
+from core.source.gated import read_text_gated
 from .adapters import context_from_sarif, native_findings
 from .delta import build_delta
 from .document import MAX_JSON_BYTES, ReportContext
@@ -64,7 +66,10 @@ def main(argv: list[str] | None = None) -> int:
             context = context_from_sarif(args.inputs, target=args.target, run_id=args.run_id or args.out.name,
                                          pass_id=args.pass_id, attempt_id=args.attempt_id, parents=args.parent)
         elif args.command == "native":
-            payload = load_json(args.input, max_bytes=MAX_JSON_BYTES)
+            try:
+                payload = loads_bounded(read_text_gated(args.input, MAX_JSON_BYTES), max_bytes=MAX_JSON_BYTES)
+            except RecursionError as exc:
+                raise ValueError("Workflow JSON nesting limit exceeded") from exc
             findings = payload if args.findings_key == "." else payload.get(args.findings_key) if isinstance(payload, dict) else None
             if args.findings_key == "-":
                 findings = None
