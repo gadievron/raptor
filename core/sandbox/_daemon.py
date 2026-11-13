@@ -471,6 +471,13 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
                 raise ValueError(msg)
             return left << right
         if isinstance(op, ast.Add):
+            matching_sequences = (
+                isinstance(left, bytes) and isinstance(right, bytes)
+            ) or (
+                isinstance(left, str) and isinstance(right, str)
+            )
+            if matching_sequences and len(left) + len(right) > _INT_BIT_CEILING // 8:
+                raise ValueError(f"compute concatenation exceeds byte budget in {expr!r}")
             return left + right
         if isinstance(op, ast.Sub):
             return left - right
