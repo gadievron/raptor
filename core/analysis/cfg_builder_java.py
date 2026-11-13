@@ -484,11 +484,11 @@ def _walk_uses(n, resolver, *, exclude: set | None = None) -> frozenset[str]:
                         or resolver.vouches_local(
                             _node_text(obj_u), obj_u.start_byte)):
                     out.add(_node_text(obj_u))
-                elif obj_u.type in (_METHOD_INVOCATION, _OBJECT_CREATION):
-                    # A chained-call or instance-creation receiver can
-                    # carry value uses in ITS argument subtrees
-                    # (``new Helper(x).m(y)``) — walk it. Conservative
-                    # direction: more uses = more visible taint.
+                elif obj_u.type != _IDENT:
+                    # Receivers are evaluated expressions too: array
+                    # indices, field bases, conditional arms and embedded
+                    # assignments can all read locals. Reuse the ordinary
+                    # walker, including its type-namespace filtering.
                     stack.append(obj_u)
             args = cur.child_by_field_name("arguments")
             if args is not None:
