@@ -1699,8 +1699,12 @@ class ModelScorecard:
             try:
                 return self._enter_under_lock(path, lock_path)
             except BaseException:
-                self.lock_fh.close()  # type: ignore[attr-defined]
-                self.lock_fh = None
+                lock_fh, self.lock_fh = self.lock_fh, None
+                if lock_fh is not None:
+                    try:
+                        lock_fh.close()
+                    except BaseException:
+                        pass  # Preserve the failed entry's primary error.
                 raise
 
         _ACQUIRE_DEADLINE_S = 60.0
