@@ -4,6 +4,7 @@ from collections import Counter
 from .integer_conversion import _frame
 from .array_index import source_index
 from .arithmetic_operation import _unwrap
+from .arithmetic_evaluation import unevaluated_context
 from .arithmetic_guards import guards_for_operation
 from .arithmetic_prefix import PrefixIntegerModel
 from .arithmetic_types import common_integer_type, integer_type, model_for_integer_terms
@@ -33,6 +34,19 @@ def _shape(node, data):
     return (node, right, numerator, affine, operator) if numerator is not None and affine is not None and affine[1] in {'+', '-'} else None
 
 
+def _evaluated_shapes(body, data, language):
+    """Visit executable operands after the frame has rejected VLA syntax."""
+    stack = [body]
+    while stack:
+        node = stack.pop()
+        if unevaluated_context(node, data, language):
+            continue
+        shape = _shape(node, data)
+        if shape is not None:
+            yield shape
+        stack.extend(reversed(node.named_children))
+
+
 def _claim(hypothesis, abi, language):
     goal = parse_integer_goal(hypothesis, DIVISION_GOALS)
     if goal is None:
@@ -58,8 +72,8 @@ def affine_division_candidates(source, *, language, integer_abi):
     frame = _frame(source, integer_abi, language)
     if frame is None:
         return []
-    data, _, nodes = frame
-    shapes = [shape for node in nodes if (shape := _shape(node, data)) is not None]
+    data, body, _ = frame
+    shapes = list(_evaluated_shapes(body, data, language))
     occurrences = Counter((shape[2], shape[3], shape[4]) for shape in shapes)
     result = []
     for shape in shapes:
@@ -110,11 +124,11 @@ def check_affine_division(source, hypothesis, *, language, integer_abi=None):
     frame = _frame(source, abi, language) if claim is not None else None
     if frame is None or not z3_available():
         return unavailable
-    data, body, nodes = frame
+    data, body, _ = frame
 
     wanted, requested = claim
-    sites = [shape for node in nodes if (shape := _shape(node, data)) is not None
-             and (shape[2], shape[3], shape[4]) == (wanted[2], wanted[3], wanted[4])]
+    sites = [shape for shape in _evaluated_shapes(body, data, language)
+             if (shape[2], shape[3], shape[4]) == (wanted[2], wanted[3], wanted[4])]
     if len(sites) != 1:
         return unavailable
     target, right, numerator, (count, op, offset), division_operator = sites[0]
