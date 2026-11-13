@@ -816,6 +816,17 @@ def module_dynamic_namespace(
         if src == "sys.modules" or src.startswith("sys.modules.")
     }
 
+    # Importing the registry inside a function does not confine it to
+    # that function: the object still exposes every loaded module.
+    # Scope/name ambiguity only removes namespace trust.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            sys_aliases.update(alias.asname or alias.name for alias in node.names
+                               if alias.name == "sys")
+        elif isinstance(node, ast.ImportFrom) and node.module == "sys":
+            modules_aliases.update(alias.asname or alias.name for alias in node.names
+                                   if alias.name == "modules")
+
     def _module_reachable(node: ast.AST) -> bool:
         child = node
         cur = parents.get(child)
