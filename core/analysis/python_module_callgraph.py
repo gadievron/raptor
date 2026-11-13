@@ -2272,10 +2272,22 @@ def _module_level_calls(
     """Calls that live at module level (outside any
     ``FunctionDef`` / ``AsyncFunctionDef`` / ``ClassDef`` body).
     These attach to the synthetic module-entry node."""
+    from bisect import bisect_right
+
     fn_ranges = [(fr.lineno, fr.end_lineno) for fr in function_records]
+    integer_bounds = all(type(start) is int and type(end) is int for start, end in fn_ranges)
+    starts: list[int] = []
+    prefix_ends: list[int] = []
+    if integer_bounds:
+        for start, end in sorted(fn_ranges):
+            starts.append(start)
+            prefix_ends.append(max(prefix_ends[-1], end) if prefix_ends else end)
 
     def _inside_function(line: int) -> bool:
-        return any(start <= line <= end for start, end in fn_ranges)
+        if not integer_bounds or type(line) is not int:
+            return any(start <= line <= end for start, end in fn_ranges)
+        index = bisect_right(starts, line) - 1
+        return index >= 0 and line <= prefix_ends[index]
 
     out: list[tuple[ast.Call, list[str]]] = []
     for node in ast.walk(tree):
