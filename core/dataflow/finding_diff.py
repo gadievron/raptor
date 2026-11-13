@@ -23,7 +23,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.dataflow.adapters.codeql import from_sarif_result
 from core.json import loads
-from core.sarif.parser import SARIF_MAX_BYTES
+from core.sarif.parser import get_run_execution_diagnostics, SARIF_MAX_BYTES
 from core.source import read_text_gated
 
 if TYPE_CHECKING:
@@ -77,6 +77,8 @@ def diff_sarif_data(
     findings. Non-dataflow results count toward neither baseline nor
     augmented totals. Malformed dataflow paths raise ``ValueError``;
     dropping them could misreport a parse failure as suppression.
+    Runs declaring execution failures or coverage limitations also refuse
+    comparison, as does malformed invocation status metadata.
     """
     baseline_ids = _sarif_finding_ids(baseline)
     augmented_ids = _sarif_finding_ids(augmented)
@@ -140,6 +142,9 @@ def _sarif_finding_ids(sarif: Mapping[str, Any]) -> set[str]:
     result in the SARIF document."""
     ids: set[str] = set()
     for run in sarif.get("runs", []) or []:
+        diagnostics = get_run_execution_diagnostics(run)
+        if any(diagnostics.values()):
+            raise ValueError(f"cannot compare incomplete SARIF run: {diagnostics}")
         for result in run.get("results", []) or []:
             finding = from_sarif_result(result)
             if finding is None:
