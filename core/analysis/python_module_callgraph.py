@@ -948,8 +948,16 @@ def module_dynamic_namespace(
         recognised = False
         while pending:
             container, copied = pending.pop()
-            literal_members = literal_member_values(container)
-            if literal_members is not None:
+            literal_members = (literal_member_values(container)
+                               if not isinstance(container, ast.Dict) else None)
+            if isinstance(container, ast.Dict):
+                recognised = True
+                for key, item in zip(container.keys, container.values):
+                    if key is None:
+                        pending.append((item, False))
+                    else:
+                        members.append(item)
+            elif literal_members is not None:
                 recognised = True
                 members.extend(literal_members)
             elif isinstance(container, ast.NamedExpr):
