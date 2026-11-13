@@ -25,6 +25,8 @@ from core.audit.sweep_memo import (
     hash_text,
 )
 
+from core.testing.threads import retiring_threads
+
 
 class _Cfg:
     """Minimal OrchestratorConfig stand-in for _run_tool_chain."""
@@ -214,10 +216,11 @@ class TestSweepMemoSubstrate:
         threads = [
             threading.Thread(target=worker, args=(s,)) for s in range(8)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
         assert not errors
         assert len(memo._entries) <= 32
         assert memo.hits + memo.misses > 0
