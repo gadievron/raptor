@@ -1357,15 +1357,23 @@ class TestStudyConsumerPreBatchGate:
             )
 
         t = threading.Thread(target=run, daemon=True)
-        t.start()
-        assert guard.paused.wait(timeout=10.0), (
-            "consumer never reached the pre-batch gate"
-        )
-        on_paused(queue, guard)
-        guard.release.set()
-        t.join(timeout=10.0)
-        assert not t.is_alive()
-        return study_ran, result, guard
+        try:
+            t.start()
+            assert guard.paused.wait(timeout=10.0), (
+                "consumer never reached the pre-batch gate"
+            )
+            on_paused(queue, guard)
+            guard.release.set()
+            t.join(timeout=10.0)
+            assert not t.is_alive()
+            return study_ran, result, guard
+        finally:
+            queue.request_stop()
+            guard.release.set()
+            if t.ident is not None:
+                t.join(timeout=10.0)
+                assert not t.is_alive(), "pre-batch test worker survived cleanup"
+
 
     def test_stop_during_prebatch_pause_skips_the_batch(
         self, tmp_path, monkeypatch,
