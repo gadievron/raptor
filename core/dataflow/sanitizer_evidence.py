@@ -35,15 +35,13 @@ required strings, ``confidence`` in ``[0, 1]``, ``source_line >= 1``,
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from core.json import dumps_artifact, loads
 
 from core.dataflow._schema_checks import check_extra_fields, require_nonempty
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 SCHEMA_VERSION = 1
@@ -243,6 +241,9 @@ class StepAnnotation:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> StepAnnotation:
         _check_extra_fields("StepAnnotation", data, _STEP_ANNOTATION_KEYS)
+        for field in ("on_path_validators", "variables_referenced", "inlined_helpers"):
+            if isinstance(data.get(field), (str, bytes, Mapping)):
+                raise ValueError(f"StepAnnotation.{field} must be an iterable of entries")
         return cls(
             step_index=data.get("step_index", 0),
             on_path_validators=tuple(data.get("on_path_validators", [])),
@@ -310,6 +311,9 @@ class SanitizerEvidence:
                 f"{SCHEMA_VERSION!r}; consumer upgrade required"
             )
             raise ValueError(msg)
+        for field in ("candidate_pool", "step_annotations", "extraction_failures"):
+            if isinstance(data.get(field), (str, bytes, Mapping)):
+                raise ValueError(f"SanitizerEvidence.{field} must be an iterable of entries")
         return cls(
             candidate_pool=tuple(
                 CandidateValidator.from_dict(c)
