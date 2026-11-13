@@ -20,6 +20,7 @@ import pytest
 
 from core.testing import module_registry as registry
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 _ROOT = Path(__file__).resolve().parents[3]
 _SITES = json.loads((Path(__file__).parent / 'data/module_registry_sites.json').read_text())
@@ -93,12 +94,13 @@ class _ForeignImport:
                 errors.append(error)
 
         worker = threading.Thread(target=other_importer)
-        try:
-            worker.start()
-        finally:
-            if worker.ident is not None:
-                worker.join(5)
-                assert not worker.is_alive(), 'independent importer survived'
+        with retiring_threads([worker], release=lambda: None, timeout=5):
+            try:
+                worker.start()
+            finally:
+                if worker.ident is not None:
+                    worker.join(5)
+                    assert not worker.is_alive(), 'independent importer survived'
         assert not errors
 
     def assert_live(self):
