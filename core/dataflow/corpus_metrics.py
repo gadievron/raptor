@@ -70,7 +70,7 @@ class Metrics:
 
 def compute(csv_path: Path) -> Metrics:
     m = Metrics()
-    with csv_path.open(encoding="utf-8") as f:
+    with csv_path.open(encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f, strict=True)
         columns = reader.fieldnames or []
         if len(columns) != len(set(columns)):
