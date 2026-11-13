@@ -1218,6 +1218,9 @@ def module_dynamic_namespace(
         receiver = selected_literal_copy_receiver(value)
         if receiver is not None:
             return receiver
+        selected = selected_literal_value(value)
+        if selected is not None:
+            value = selected
         while isinstance(value, ast.NamedExpr):
             value = value.value
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
