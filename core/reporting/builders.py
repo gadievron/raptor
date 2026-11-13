@@ -11,6 +11,9 @@ from .summary import OperatorSummary, build_operator_summary
 def build_document(context: ReportContext, *, title: str | None = None,
                    summary: OperatorSummary | None = None, blocks: list[Block] | None = None) -> ReportDocument:
     summary = summary or build_operator_summary(context)
+    status_counts = summary.counts
+    if "Captured findings" in status_counts:
+        status_counts = {f"Status: {label}": count for label, count in status_counts.items()}
     sections = [Block("paragraph", text=f"Outcome: {summary.state}." + (f" Captured findings: {summary.total}." if summary.findings_available else " Structured command result captured."))]
     if context.findings:
         sections.append(Block("table", title="Findings", columns=["Ref", "Tool", "Rule", "Location", "Status", "Scanner level", "Security severity", "Scanner security score", "Suppressed"], rows=[
@@ -51,7 +54,7 @@ def build_document(context: ReportContext, *, title: str | None = None,
     return ReportDocument(title or f"RAPTOR {context.kind.title()} Report", context.kind, context.snapshot_id,
                           metadata={"Target": context.target, "Run": context.run_id, "Pass": context.pass_id, "Attempt": context.attempt_id,
                                     "Captured at": context.generated_at or "not recorded"},
-                          summary=({"Captured findings": summary.total, **summary.counts} if summary.findings_available else {}), blocks=sections,
+                          summary=({"Captured findings": summary.total, **status_counts} if summary.findings_available else {}), blocks=sections,
                           diagnostics=list(dict.fromkeys([*context.diagnostics, *summary.diagnostics,
                                                          *(note for stage in context.stages for note in stage.diagnostics)])),
                           extensions={"raptor.summary": summary.to_dict(), "raptor.artifacts": context.artifacts,
