@@ -5,12 +5,14 @@ import time
 import pytest
 
 from core.audit import source_view as sv
+from core.testing.module_views import module_function_view
 
 
 @pytest.fixture(autouse=True)
 def force_marker_cursors(monkeypatch):
-    monkeypatch.setattr(sv, '_C_RANGE_MIN_SOURCE', 0)
-    monkeypatch.setattr(sv, '_C_RANGE_MIN_CHARS_PER_MARKER', 1)
+    monkeypatch.setitem(globals(), 'sv', module_function_view(sv, bindings={
+        '_C_RANGE_MIN_SOURCE': 0, '_C_RANGE_MIN_CHARS_PER_MARKER': 1,
+    }))
 
 
 @pytest.mark.parametrize('keep_strings', [False, True])
