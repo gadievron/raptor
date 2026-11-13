@@ -1,12 +1,14 @@
 """Offline registry resolution must preserve requested coverage without egress."""
 import importlib.util
 import json
+import sys
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
 from core.config import RaptorConfig
+from core.testing.module_views import scoped_function_imports
 from packages.semgrep import runner
 
 
@@ -70,14 +72,18 @@ def test_scanner_never_probes_or_drops_missing_packs(cache, monkeypatch):
     source = Path(__file__).resolve().parents[2] / 'static-analysis/scanner.py'
     spec = importlib.util.spec_from_file_location('semgrep_offline_scanner', source)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    import socket
-    probe = Mock(side_effect=AssertionError('must not probe'))
-    monkeypatch.setattr(socket, 'create_connection', probe)
-    with pytest.raises(ValueError, match='unavailable'):
-        module._drop_unreachable_registry_packs([('baseline', 'p/security-audit')])
-    probe.assert_not_called()
-
+    monkeypatch.setenv('RAPTOR_DIR', str(Path(__file__).resolve().parents[3]))
+    with patch.object(sys, 'path', sys.path.copy()):
+        spec.loader.exec_module(module)
+        import socket
+        probe = Mock(side_effect=AssertionError('must not probe'))
+        with scoped_function_imports(
+            module, ('_drop_unreachable_registry_packs',), {'socket': socket},
+        ) as imports:
+            monkeypatch.setattr(imports.socket, 'create_connection', probe)
+            with pytest.raises(ValueError, match='unavailable'):
+                module._drop_unreachable_registry_packs([('baseline', 'p/security-audit')])
+        probe.assert_not_called()
 
 @pytest.mark.parametrize('args', [['--config', 'p/secrets'], ['--config=p/secrets'],
                                   ['--metrics=on'], ['--enable-version-check'], ['--pro']])
