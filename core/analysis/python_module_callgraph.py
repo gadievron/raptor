@@ -758,6 +758,9 @@ def module_dynamic_namespace(
       local imports included) — replacing a builtin decorator can invalidate
       an otherwise trusted method body; escaping/read-only namespace access
       is conservatively uncertain, like ``sys.modules`` below;
+    * exposed ``__import__`` / ``importlib`` loaders (including imported
+      aliases) — shared modules can be obtained and mutated without an
+      ordinary import binding to follow;
     * any reachable ``sys.modules`` (aliased imports included) — a
       ``setattr(sys.modules[__name__], …)`` rebinds by attribute,
       and aliasing makes name-level tracking unsound → whole module.
@@ -800,6 +803,12 @@ def module_dynamic_namespace(
     builtin_namespace_names = {"__builtins__"}
     dynamic_import_names = {"__import__"}
     for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
+            dynamic_import_names.update(
+                alias for alias, target in bindings.items()
+                if target == "importlib" or target.startswith("importlib.")
+            )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
                 alias.asname or alias.name for alias in node.names
