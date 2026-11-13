@@ -728,18 +728,22 @@ class TestStoreLock:
             ])
             done.set()
 
-        with store_lock(run_dir):
-            # Simulate a concurrent writer mid-cycle: it seeded the
-            # store and holds the lock while this persist runs.
-            save_specs(run_dir, [_make_spec(fn="early_writer",
-                                            role="sink")])
-            t = threading.Thread(target=_writer, daemon=True)
-            t.start()
-            # The persist must block on the lock, not proceed.
-            assert not done.wait(0.3)
+        from core.testing.threads import retiring_threads
+        workers = []
+        with retiring_threads(workers, release=lambda: None, timeout=10):
+            with store_lock(run_dir):
+                # Simulate a concurrent writer mid-cycle: it seeded the
+                # store and holds the lock while this persist runs.
+                save_specs(run_dir, [_make_spec(fn="early_writer",
+                                                role="sink")])
+                t = threading.Thread(target=_writer, daemon=True)
+                workers.append(t)
+                t.start()
+                # The persist must block on the lock, not proceed.
+                assert not done.wait(0.3)
 
-        t.join(timeout=10)
-        assert done.is_set()
+            t.join(timeout=10)
+            assert done.is_set()
         # Serialised: the blocked persist saw the early writer's save
         # and merged instead of clobbering it.
         loaded = {s.function for s in load_specs(run_dir)}
@@ -770,12 +774,16 @@ class TestStoreLock:
             )
             done.set()
 
-        with store_lock(run_dir):
-            t = threading.Thread(target=_promoter, daemon=True)
-            t.start()
-            assert not done.wait(0.3)
-        t.join(timeout=10)
-        assert done.is_set()
+        from core.testing.threads import retiring_threads
+        workers = []
+        with retiring_threads(workers, release=lambda: None, timeout=10):
+            with store_lock(run_dir):
+                t = threading.Thread(target=_promoter, daemon=True)
+                workers.append(t)
+                t.start()
+                assert not done.wait(0.3)
+            t.join(timeout=10)
+            assert done.is_set()
 
 
 class TestAssumptionEvictionAtPersist:
