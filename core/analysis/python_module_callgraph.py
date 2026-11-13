@@ -1223,13 +1223,19 @@ def module_dynamic_namespace(
                     sources = (source,)
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
-                  and isinstance(cursor.func.value, ast.Set) and not cursor.keywords
+                  and not cursor.keywords
                   and all(isinstance(item, ast.Set) for item in cursor.args)
                   and (cursor.func.attr != "symmetric_difference" or len(cursor.args) == 1)):
-                kind = ast.Set
-                sources = ((cursor.func.value, *cursor.args)
-                           if cursor.func.attr in {"union", "symmetric_difference"}
-                           else (cursor.func.value,))
+                source = cursor.func.value
+                if not expanded:
+                    pending.append((cursor, True))
+                    pending.append((source, False))
+                    continue
+                if collection_operation_cache[source][0] is ast.Set:
+                    kind = ast.Set
+                    sources = ((source, *cursor.args)
+                               if cursor.func.attr in {"union", "symmetric_difference"}
+                               else (source,))
             collection_operation_cache[cursor] = (kind, sources)
         return collection_operation_cache[value]
 
