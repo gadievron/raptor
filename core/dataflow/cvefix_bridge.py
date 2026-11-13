@@ -361,7 +361,8 @@ def _extract_proposal(
                 phys = loc.get("physicalLocation", {})
                 raw_uri = phys.get("artifactLocation", {}).get("uri")
                 line = phys.get("region", {}).get("startLine")
-                if not raw_uri or not line:
+                if (not raw_uri or isinstance(line, bool)
+                        or not isinstance(line, int) or line < 1):
                     continue
                 src = _resolve_in_repo(repo_root, raw_uri)
                 if src is None or not src.is_file():
@@ -377,7 +378,9 @@ def _extract_proposal(
                 if got is None:
                     continue
                 lines = split_lines(got[0])
-                snippet = lines[line - 1].strip() if 0 < line <= len(lines) else raw_uri
+                if line > len(lines):
+                    continue
+                snippet = lines[line - 1].strip()
                 if len(lines) <= _SMALL_FILE:
                     body = "\n".join(lines)
                 else:
