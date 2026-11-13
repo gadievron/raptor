@@ -494,7 +494,7 @@ def _resolve_from_parsed_python(
             ),
         )
 
-    cfg = build_python_cfg(source_text, fn.name, _module_tree=tree)
+    cfg = build_python_cfg(source_text, fn.name, _module_tree=tree, _function_node=fn)
     if cfg is None:
         return ResolutionFailure(
             reason=f"CFG construction failed for {fn.name} in {parsed.file}",
