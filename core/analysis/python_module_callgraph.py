@@ -1144,6 +1144,12 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
+    def selected_literal_copy_receiver(value: ast.AST) -> ast.AST | None:
+        while (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+               and value.func.attr == "copy" and not value.args and not value.keywords):
+            value = value.func.value
+        return selected_literal_value(value)
+
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
     def literal_collection_operation(value: ast.AST) -> tuple[type[ast.AST] | None, tuple[ast.AST, ...]]:
@@ -1229,8 +1235,8 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr == "pop" and len(cursor.args) <= 1
                   and not cursor.keywords
-                  and isinstance(selected_literal_value(cursor.func.value), ast.List)):
-                sequence = selected_literal_value(cursor.func.value)
+                  and isinstance(selected_literal_copy_receiver(cursor.func.value), ast.List)):
+                sequence = selected_literal_copy_receiver(cursor.func.value)
                 index = -1 if not cursor.args else None
                 if cursor.args:
                     key = cursor.args[0]
@@ -1252,8 +1258,8 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr == "__getitem__" and len(cursor.args) == 1
                   and not cursor.keywords
-                  and isinstance(selected_literal_value(cursor.func.value), (ast.Tuple, ast.List))):
-                sequence = selected_literal_value(cursor.func.value)
+                  and isinstance(selected_literal_copy_receiver(cursor.func.value), (ast.Tuple, ast.List))):
+                sequence = selected_literal_copy_receiver(cursor.func.value)
                 key = cursor.args[0]
                 index = None
                 if isinstance(key, ast.Constant) and type(key.value) is int:
@@ -1275,13 +1281,7 @@ def module_dynamic_namespace(
                   and ((cursor.func.attr in {"get", "pop", "setdefault"} and len(cursor.args) in (1, 2))
                        or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
                   and not cursor.keywords):
-                dictionary_receiver = cursor.func.value
-                while (isinstance(dictionary_receiver, ast.Call)
-                       and isinstance(dictionary_receiver.func, ast.Attribute)
-                       and dictionary_receiver.func.attr == "copy"
-                       and not dictionary_receiver.args and not dictionary_receiver.keywords):
-                    dictionary_receiver = dictionary_receiver.func.value
-                dictionary = selected_literal_value(dictionary_receiver)
+                dictionary = selected_literal_copy_receiver(cursor.func.value)
                 key = cursor.args[0]
                 if (isinstance(dictionary, ast.Dict) and isinstance(key, ast.Constant)
                         and isinstance(key.value, str)
