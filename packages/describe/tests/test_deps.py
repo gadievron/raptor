@@ -153,9 +153,12 @@ class TestThreadScopedSuppression:
                 t = threading.Thread(
                     target=lambda: disc.info("concurrent sca info line"),
                 )
-                t.start()
-                t.join(timeout=5)
-                assert not t.is_alive()
+                from core.testing.threads import retiring_threads
+
+                with retiring_threads([t], release=lambda: None, timeout=5):
+                    t.start()
+                    t.join(timeout=5)
+                    assert not t.is_alive()
                 return []
 
             monkeypatch.setattr(
