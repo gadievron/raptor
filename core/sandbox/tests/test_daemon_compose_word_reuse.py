@@ -29,7 +29,7 @@ def _private(**bindings):
         return re.fullmatch(pattern, text)
 
     private = module_function_view(daemon, bindings={
-        "re": SimpleNamespace(fullmatch=fullmatch, split=re.split), **bindings,
+        "re": SimpleNamespace(fullmatch=fullmatch, split=re.split, search=re.search), **bindings,
     })
     return private, matches
 
