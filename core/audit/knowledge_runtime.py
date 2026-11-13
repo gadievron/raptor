@@ -1574,8 +1574,13 @@ class AuditKnowledgeRuntime:
 
     def _release(self, reservation: KnowledgeReservation) -> None:
         with self._lock:
+            current = self._active.get(reservation.packet.pass_id)
+            if current is not None and current is not reservation:
+                return
             self._active.pop(reservation.packet.pass_id, None)
-            self._active_units.pop(self._key(reservation.origin), None)
+            key = self._key(reservation.origin)
+            if self._active_units.get(key) is reservation:
+                self._active_units.pop(key, None)
             self._knowledge_deliveries.pop(reservation.packet.pass_id, None)
             self._external_deliveries.pop(reservation.packet.pass_id, None)
             self._caller_deliveries.pop(reservation.packet.pass_id, None)
@@ -1592,20 +1597,25 @@ class AuditKnowledgeRuntime:
         delivered = self._delivery(reservation, ctx)
         with self._lock:
             cycle = self._cycles[self._key(reservation.origin)]
-        if not cycle.complete(reservation.packet.pass_id, delivered):
-            return False
-        with self._lock:
-            for answer in reservation.packet.caller_contexts:
-                self._request_status[answer.request_id] = {
-                    "state": "review_completed" if answer.request_id in delivered else "deferred",
-                    "reason": "context_delivered_for_review" if answer.request_id in delivered else "context_not_delivered",
-                    "adjudication": "unverified", "pass_id": reservation.packet.pass_id,
-                }
-            self._events.append({"event": "continuation_completed", "pass_id": reservation.packet.pass_id,
-                                 "published_status": published_status, "reason": reason,
-                                 "delivered_request_ids": list(delivered)})
-        self._release(reservation)
-        return True
+        try:
+            if not cycle.complete(reservation.packet.pass_id, delivered):
+                return False
+            with self._lock:
+                for answer in reservation.packet.caller_contexts:
+                    self._request_status[answer.request_id] = {
+                        "state": "review_completed" if answer.request_id in delivered else "deferred",
+                        "reason": "context_delivered_for_review" if answer.request_id in delivered else "context_not_delivered",
+                        "adjudication": "unverified", "pass_id": reservation.packet.pass_id,
+                    }
+                self._events.append({"event": "continuation_completed", "pass_id": reservation.packet.pass_id,
+                                     "published_status": published_status, "reason": reason,
+                                     "delivered_request_ids": list(delivered)})
+            return True
+        finally:
+            # A cancellation may arrive after the cycle commits its terminal
+            # state but before the call returns. Retire only that finished owner.
+            if cycle.state_record()["active_pass_id"] != reservation.packet.pass_id:
+                self._release(reservation)
 
     def fail(self, reservation: KnowledgeReservation, reason: str = "review_failed", ctx: dict | None = None) -> bool:
         if not self._owned_reservation(reservation):
@@ -1613,17 +1623,20 @@ class AuditKnowledgeRuntime:
         self._delivery(reservation, ctx)
         with self._lock:
             cycle = self._cycles[self._key(reservation.origin)]
-        if not cycle.failed(reservation.packet.pass_id, reason=reason):
-            return False
-        with self._lock:
-            for answer in reservation.packet.caller_contexts:
-                self._request_status[answer.request_id] = {
-                    "state": "deferred", "reason": reason, "adjudication": "unverified",
-                }
-            self._events.append({"event": "continuation_failed", "pass_id": reservation.packet.pass_id,
-                                 "reason": reason, "published_status": ""})
-        self._release(reservation)
-        return True
+        try:
+            if not cycle.failed(reservation.packet.pass_id, reason=reason):
+                return False
+            with self._lock:
+                for answer in reservation.packet.caller_contexts:
+                    self._request_status[answer.request_id] = {
+                        "state": "deferred", "reason": reason, "adjudication": "unverified",
+                    }
+                self._events.append({"event": "continuation_failed", "pass_id": reservation.packet.pass_id,
+                                     "reason": reason, "published_status": ""})
+            return True
+        finally:
+            if cycle.state_record()["active_pass_id"] != reservation.packet.pass_id:
+                self._release(reservation)
 
     def wake_interval(self) -> float | None:
         with self._lock:
