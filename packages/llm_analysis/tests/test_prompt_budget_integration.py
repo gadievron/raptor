@@ -290,6 +290,8 @@ class TestDispatchTlsBudget:
 
     def test_tls_budget_isolation_across_threads(self):
         """Each thread sees its own _tls_budget.tokens value."""
+        from core.testing.threads import retiring_threads
+
         from packages.llm_analysis.tasks import AnalysisTask
         task = AnalysisTask()
         task._tls_budget = threading.local()
@@ -302,10 +304,11 @@ class TestDispatchTlsBudget:
 
         t1 = threading.Thread(target=set_budget, args=("a", 111))
         t2 = threading.Thread(target=set_budget, args=("b", 222))
-        t1.start()
-        t1.join()
-        t2.start()
-        t2.join()
+        with retiring_threads((t1, t2), release=lambda: None, timeout=30):
+            t1.start()
+            t1.join()
+            t2.start()
+            t2.join()
 
         assert results["a"] == 111
         assert results["b"] == 222
