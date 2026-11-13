@@ -1136,6 +1136,23 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
+    def literal_set_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        if (isinstance(value, ast.BinOp) and isinstance(value.left, ast.Set)
+                and isinstance(value.right, ast.Set)):
+            if isinstance(value.op, (ast.BitOr, ast.BitXor)):
+                return (value.left, value.right)
+            if isinstance(value.op, (ast.BitAnd, ast.Sub)):
+                return (value.left,)
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                and value.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
+                and isinstance(value.func.value, ast.Set) and not value.keywords
+                and all(isinstance(item, ast.Set) for item in value.args)
+                and (value.func.attr != "symmetric_difference" or len(value.args) == 1)):
+            return ((value.func.value, *value.args)
+                    if value.func.attr in {"union", "symmetric_difference"}
+                    else (value.func.value,))
+        return None
+
     sequence_iteration_cache: dict[ast.AST, tuple[bool, tuple[ast.AST, ...]] | None] = {}
 
     def sequence_iteration_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
@@ -1159,7 +1176,10 @@ def module_dynamic_namespace(
                     sequence_iteration_cache[cursor] = (True, values)
                 else:
                     children = ()
-                    if isinstance(cursor, ast.NamedExpr):
+                    set_sources = literal_set_operation_sources(cursor)
+                    if set_sources is not None:
+                        children = set_sources
+                    elif isinstance(cursor, ast.NamedExpr):
                         children = (cursor.value,)
                     elif isinstance(cursor, ast.IfExp):
                         children = (cursor.body, cursor.orelse)
@@ -1172,12 +1192,6 @@ def module_dynamic_namespace(
                         selected = selected_literal_value(cursor)
                         if selected is not None:
                             children = (selected,)
-                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, (ast.BitOr, ast.BitXor))
-                          and isinstance(cursor.left, ast.Set) and isinstance(cursor.right, ast.Set)):
-                        children = (cursor.left, cursor.right)
-                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, (ast.BitAnd, ast.Sub))
-                          and isinstance(cursor.left, ast.Set) and isinstance(cursor.right, ast.Set)):
-                        children = (cursor.left,)
                     elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
                           and isinstance(cursor.left, (ast.Tuple, ast.List))
                           and type(cursor.left) is type(cursor.right)):
@@ -1193,14 +1207,6 @@ def module_dynamic_namespace(
                                or cursor.func.id in iterator_wrapper_names)
                           and len(cursor.args) == 1 and not cursor.keywords):
                         children = (cursor.args[0],)
-                    elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
-                          and cursor.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
-                          and isinstance(cursor.func.value, ast.Set) and not cursor.keywords
-                          and all(isinstance(item, ast.Set) for item in cursor.args)
-                          and (cursor.func.attr != "symmetric_difference" or len(cursor.args) == 1)):
-                        children = ((cursor.func.value, *cursor.args)
-                                    if cursor.func.attr in {"union", "symmetric_difference"}
-                                    else (cursor.func.value,))
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                           and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
                         children = (cursor.func.value,)
@@ -1418,6 +1424,9 @@ def module_dynamic_namespace(
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
             if value.func.attr == "pop" and isinstance(receiver, ast.Set) and not value.args:
+                return sequence_iteration_values(receiver)
+            if (value.func.attr == "pop" and not value.args
+                    and literal_set_operation_sources(receiver) is not None):
                 return sequence_iteration_values(receiver)
             if value.func.attr == "pop" and not value.args:
                 selected = selected_literal_value(receiver)
