@@ -8,7 +8,8 @@ from .builders import build_document
 
 
 def build_delta(baseline: ReportContext, candidate: ReportContext, *,
-                lineage: dict[str, str] | None = None) -> tuple[ReportContext, ReportDocument]:
+                lineage: dict[str, str] | None = None,
+                artifacts: list[dict] | None = None) -> tuple[ReportContext, ReportDocument]:
     """Lineage maps candidate occurrence refs to baseline refs; no fuzzy joins.
 
     Revisions, rules, scopes, annotations, and selection remain explicit context.
@@ -91,6 +92,7 @@ def build_delta(baseline: ReportContext, candidate: ReportContext, *,
             context_changes.append({"dimension": dimension, "before": _preview(previous), "after": _preview(current)})
     context = ReportContext("delta", candidate.run_id, target=candidate.target, state="partial" if len(diagnostics) > 1 else "completed",
                             parents=[baseline.snapshot_id, candidate.snapshot_id], diagnostics=diagnostics,
+                            artifacts=list(artifacts or []),
                             extensions={"raptor.delta": {"baseline": baseline.snapshot_id, "candidate": candidate.snapshot_id,
                                                         "policy": "exact-occurrence-or-explicit-lineage/v1", "changes": rows,
                                                         "finding_changes": details, "context_changes": context_changes,
