@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from typing import Any, TYPE_CHECKING
 
 from core.dataflow.adapters.codeql import from_sarif_result
@@ -49,7 +50,7 @@ from core.dataflow.owasp_corpus_generator import write_corpus  # noqa: F401 (re-
 
 if TYPE_CHECKING:
     from core.dataflow.finding import Finding
-    from collections.abc import Iterable, Iterator, Mapping
+    from collections.abc import Iterable, Iterator
 
 _DEFAULT_LABELER = "trust-corpus-cvefix"
 
@@ -123,9 +124,14 @@ def generate_from_sarif(
     Omitting it is appropriate only for single-finding / synthetic inputs.
     """
     cve = _slug(cve_id)
-    touched: frozenset[str] | None = (
-        frozenset(fix_touched_files) if fix_touched_files is not None else None
-    )
+    touched: frozenset[str] | None = None
+    if fix_touched_files is not None:
+        if isinstance(fix_touched_files, (str, bytes, Mapping)):
+            raise ValueError("fix_touched_files must be an iterable of source paths")
+        files = tuple(fix_touched_files)
+        if any(not isinstance(path, str) or not path.strip() for path in files):
+            raise ValueError("fix_touched_files entries must be non-empty strings")
+        touched = frozenset(files)
     if touched is None:
         logger.warning(
             "generate_from_sarif(%s): no fix_touched_files — labels are "
