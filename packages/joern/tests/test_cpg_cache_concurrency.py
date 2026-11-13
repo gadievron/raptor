@@ -183,6 +183,8 @@ class TestSlotLockSerialises:
 
 class TestConcurrentDifferentTargets:
     def test_parallel_builds_never_swap_payloads(self, tmp_path):
+        from core.testing.threads import retiring_threads
+
         # Two unscoped consumers build DIFFERENT targets at the same
         # time. Target-keyed slots give them independent locks (truly
         # parallel) and independent promote destinations — neither
@@ -198,7 +200,12 @@ class TestConcurrentDifferentTargets:
             built_for = Path(cmd[cmd.index("--output") + 2])
             # Both builds must be in flight simultaneously — proves
             # per-target locks do not serialise unrelated targets.
-            both_building.wait(timeout=30)
+            try:
+                both_building.wait(timeout=30)
+            except threading.BrokenBarrierError:
+                return SimpleNamespace(
+                    returncode=1, stdout="", stderr="test build cancelled",
+                )
             methods = 3 if built_for.name == "proj_a" else 9
             out.write_bytes(_valid_cpg_bytes(methods=methods))
             return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -211,10 +218,11 @@ class TestConcurrentDifferentTargets:
 
         t1 = threading.Thread(target=worker, args=("a", target_a))
         t2 = threading.Thread(target=worker, args=("b", target_b))
-        t1.start()
-        t2.start()
-        t1.join(timeout=60)
-        t2.join(timeout=60)
+        with retiring_threads((t1, t2), release=both_building.abort, timeout=60):
+            t1.start()
+            t2.start()
+            t1.join(timeout=60)
+            t2.join(timeout=60)
 
         slot_a = _slot(cache, target_a)
         slot_b = _slot(cache, target_b)
