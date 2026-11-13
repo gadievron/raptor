@@ -13,6 +13,7 @@ import pytest
 from core.audit.claim_verification import ClaimVerification
 from core.audit.verification_results import ToolChainResult
 from core.audit.refutation_source import capture_source_identity
+from core.testing.threads import retiring_threads
 
 from core.audit.orchestrator import (
     AtomicSynthesisCounter,
@@ -84,10 +85,11 @@ class TestAtomicSynthesisCounter:
             results.append(successes)
 
         threads = [threading.Thread(target=worker) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert sum(results) == 10
         assert c.count == 10
