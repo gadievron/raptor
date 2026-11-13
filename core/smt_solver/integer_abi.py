@@ -41,6 +41,7 @@ class IntegerABI:
             raise ValueError("unsupported integer ABI width")
         if (
             widths != tuple(sorted(widths))
+            or self.short_bits < 16
             or self.int_bits < 16
             or self.long_bits < 32
             or self.long_long_bits < 64
