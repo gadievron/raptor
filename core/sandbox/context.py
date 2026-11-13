@@ -5623,6 +5623,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 _in_payload = _in_payload.encode(_enc, kwargs.get("errors") or "strict")
             from ._retirement import retire_parent_resources
             _stdin_spool = _tf_mod.TemporaryFile()
+            _spool_preparation_failed = True
             try:
                 _stdin_spool.write(_in_payload)
                 _stdin_spool.flush()
@@ -5635,8 +5636,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 except BaseException:
                     retire_parent_resources(_stdin_spool_ro.close)
                     raise
+                _spool_preparation_failed = False
             finally:
-                retire_parent_resources(_stdin_spool.close)
+                if _spool_preparation_failed:
+                    retire_parent_resources(_stdin_spool.close)
+                else:
+                    _stdin_spool.close()
             # Integrity gate on the description the child will read:
             # a short or empty spool silently turns a witness-driven
             # run into "input never arrived" — the target exits clean
