@@ -987,27 +987,41 @@ def module_dynamic_namespace(
                 pending_values.extend((child, False) for child in children)
         return namespace_dict_value_cache[value]
 
+    namespace_copy_cache: dict[ast.AST, ast.AST | None] = {}
+
     def namespace_copy_receiver(value: ast.AST) -> ast.AST | None:
-        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                and value.func.attr == "copy" and not value.args and not value.keywords
-                and possible_namespace_dict_value(value.func.value)):
-            return value.func.value
-        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-                and value.func.id in mapping_copy_names):
-            source = None
-            if len(value.args) == 1 and not value.keywords:
-                source = value.args[0]
-            elif (not value.args and len(value.keywords) == 1
-                  and value.keywords[0].arg is None):
-                source = value.keywords[0].value
-            if source is not None and possible_namespace_dict_value(source):
-                return source
-        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr):
-            for source, empty in ((value.left, value.right), (value.right, value.left)):
-                if (isinstance(empty, ast.Dict) and not empty.keys
-                        and possible_namespace_dict_value(source)):
-                    return source
-        return None
+        path = []
+        cursor = value
+        source = None
+        while cursor not in namespace_copy_cache:
+            path.append(cursor)
+            next_source = None
+            if (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                    and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
+                next_source = cursor.func.value
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
+                  and cursor.func.id in mapping_copy_names):
+                if len(cursor.args) == 1 and not cursor.keywords:
+                    next_source = cursor.args[0]
+                elif (not cursor.args and len(cursor.keywords) == 1
+                      and cursor.keywords[0].arg is None):
+                    next_source = cursor.keywords[0].value
+            elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.BitOr):
+                for candidate, empty in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
+                    if isinstance(empty, ast.Dict) and not empty.keys:
+                        next_source = candidate
+                        break
+            if next_source is None:
+                break
+            if possible_namespace_dict_value(next_source):
+                source = next_source
+                break
+            cursor = next_source
+        else:
+            source = namespace_copy_cache[cursor]
+        for node in path:
+            namespace_copy_cache[node] = source
+        return source
 
     def namespace_dict_member_receiver(member: ast.AST) -> ast.AST | None:
         if (isinstance(member, ast.Attribute)
