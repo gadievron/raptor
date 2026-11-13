@@ -381,7 +381,8 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     """Map ``id(call_node) → assigned LHS names`` for calls whose
     return value is captured into a fresh LHS name at this stmt.
 
-    Covers ``Assign`` (any LHS shape) and ``AnnAssign`` with a value.
+    Covers ``Assign`` (any LHS shape), ``AnnAssign`` with a value,
+    and standalone named expressions capturing a direct call.
     Augmented assignments combine the call's return with the previous
     target value, so they do not establish return-value identity.
     ``y, z = f(), g()`` pairs plain tuple/list targets with same-position
@@ -420,6 +421,12 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
             and isinstance(stmt.value, ast.Call)
         ):
             result[id(stmt.value)] = frozenset({stmt.target.id})
+    elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.NamedExpr):
+        # Only this root shape executes and captures the call unconditionally.
+        # Nested/conditional walruses need a separate evaluation-order model.
+        named = stmt.value
+        if isinstance(named.value, ast.Call):
+            result[id(named.value)] = _assign_target_names(named.target)
     if isinstance(stmt, ast.Assign):
         # Targets execute after the RHS, left to right. A later target
         # (including a walrus in a subscript) can overwrite a name that
