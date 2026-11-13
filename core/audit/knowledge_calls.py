@@ -34,6 +34,7 @@ class _Scope:
     work_id: str | None = None
     beneficiaries: tuple[str, ...] = ()
     validity: Callable[[], bool] | None = None
+    on_unobserved_attempts: Callable[[], None] | None = None
 
     def validate(self) -> bool:
         """Check captured lifetime without consuming another admission credit."""
@@ -50,10 +51,13 @@ _current: ContextVar[_Scope | None] = ContextVar("audit_knowledge_call_scope", d
 @contextmanager
 def owned_call_scope(admit: Admission, *, work_id: str | None = None,
                      beneficiaries: tuple[str, ...] = (),
-                     validity: Callable[[], bool] | None = None) -> Iterator[None]:
+                     validity: Callable[[], bool] | None = None,
+                     on_unobserved_attempts: Callable[[], None] | None = None) -> Iterator[None]:
     if validity is not None and not callable(validity):
         raise TypeError("owned call validity must be callable")
-    scope = _Scope(admit, Event(), work_id, tuple(beneficiaries), validity)
+    if on_unobserved_attempts is not None and not callable(on_unobserved_attempts):
+        raise TypeError("unobserved attempt notification must be callable")
+    scope = _Scope(admit, Event(), work_id, tuple(beneficiaries), validity, on_unobserved_attempts)
     token = _current.set(scope)
     try:
         yield
@@ -109,6 +113,8 @@ class _ObservedClient:
                     raise KnowledgeCallRefused("unit_admission")
                 return True
             owned["accounting_attempt_admission"] = admit_attempt
+        elif self._scope.on_unobserved_attempts is not None:
+            self._scope.on_unobserved_attempts()
         try:
             validity_protocol = getattr(self.__wrapped__, "_attempt_validity_protocol", None)
         except Exception:
