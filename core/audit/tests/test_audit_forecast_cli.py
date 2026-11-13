@@ -94,30 +94,69 @@ def cli_env(tmp_path, monkeypatch):
         raise AssertionError(
             f"unexpected subprocess in forecast path: {cmd_strs}")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    from core.audit import run_lock, codeql_provision
+    provision_calls = []
 
-    # $0 tripwire: any route into the paying pipeline fails the test.
-    import core.audit.pipeline as pipeline
+    def inert_provision(target, *, out_dir):
+        provision_calls.append((target, out_dir))
+        return codeql_provision.CodeqlProvision()
 
-    def _no_spend(*a, **k):
-        raise AssertionError("run_audit_pipeline called in --forecast mode")
+    inherited = tuple(run_lock._HELD)
+    acquired = []
+    acquire = run_lock.acquire_run_lock
 
-    monkeypatch.setattr(pipeline, "run_audit_pipeline", _no_spend)
+    def acquire_owned(*args, **kwargs):
+        handle = acquire(*args, **kwargs)
+        if all(handle is not existing for existing in (*inherited, *acquired)):
+            acquired.append(handle)
+        return handle
 
-    def run_cli(argv: list[str]) -> int:
-        # Through the real parser: every run-flag default is present,
-        # exactly as a live invocation would see them.
-        import core.project.trust as trust
-        monkeypatch.setattr(
-            trust, "apply_project_sandbox_floor", lambda *a, **k: None)
-        monkeypatch.setattr(sys, "argv", ["raptor-audit", *argv])
-        with patch.object(sys, "path", sys.path.copy()):
-            return mod.main()
+    def release_owned():
+        for handle in reversed(acquired):
+            handle.release()
 
-    return SimpleNamespace(
-        mod=mod, target=target, out_dir=out_dir,
-        lifecycle_calls=lifecycle_calls, run_cli=run_cli,
-    )
+    with ExitStack() as scopes:
+        scopes.callback(release_owned)
+        imports = scopes.enter_context(scoped_function_imports(
+            mod, ("cmd_run",),
+            {"subprocess": subprocess, "core.audit.run_lock": run_lock,
+             "core.audit.codeql_provision": codeql_provision},
+        ))
+        monkeypatch.setattr(getattr(imports, "core.audit.run_lock"),
+                            "acquire_run_lock", acquire_owned)
+        try:
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+            # Provisioning is incidental to forecast routing; no discovery or
+            # background extraction belongs in this paying-pipeline tripwire.
+            monkeypatch.setattr(getattr(imports, "core.audit.codeql_provision"),
+                                "provision_codeql_dbs", inert_provision)
+
+            # $0 tripwire: any route into the paying pipeline fails the test.
+            import core.audit.pipeline as pipeline
+
+            def _no_spend(*a, **k):
+                raise AssertionError("run_audit_pipeline called in --forecast mode")
+
+            monkeypatch.setattr(pipeline, "run_audit_pipeline", _no_spend)
+
+            def run_cli(argv: list[str]) -> int:
+                # Through the real parser: every run-flag default is present,
+                # exactly as a live invocation would see them.
+                import core.project.trust as trust
+                monkeypatch.setattr(
+                    trust, "apply_project_sandbox_floor", lambda *a, **k: None)
+                monkeypatch.setattr(sys, "argv", ["raptor-audit", *argv])
+                with patch.object(sys, "path", sys.path.copy()):
+                    return mod.main()
+
+            yield SimpleNamespace(
+                mod=mod, target=target, out_dir=out_dir,
+                lifecycle_calls=lifecycle_calls, provision_calls=provision_calls,
+                run_cli=run_cli,
+            )
+
+        finally:
+            monkeypatch.undo()
 
 
 def test_forecast_exits_zero_spend(cli_env, capsys):
