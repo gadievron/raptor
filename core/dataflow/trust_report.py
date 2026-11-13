@@ -19,6 +19,9 @@ import csv
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.dataflow.label import VALID_FP_CATEGORIES, VALID_VERDICTS
+from core.dataflow.validator import ValidatorVerdict
+
 # FP categories whose root cause is "taint neutralised on the path" — the
 # slice a trust witness can act on. (Reachability owns dead_code; SMT owns
 # infeasible_branch.) Callers can narrow this for corpus-specific exclusions.
@@ -29,6 +32,7 @@ TRUST_FP_CATEGORIES: frozenset[str] = frozenset(
 _SUPPRESS = "not_exploitable"
 _TP = "true_positive"
 _FP = "false_positive"
+_VALIDATOR_VERDICTS = frozenset(verdict.value for verdict in ValidatorVerdict)
 
 
 @dataclass(frozen=True)
@@ -67,13 +71,35 @@ def report(
     total = tp = trust_fp = 0
     coverage_n = false_suppression_n = defer_n = 0
     suppressed_total = suppressed_on_fp = 0
-    with Path(csv_path).open(encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            total += 1
+    with Path(csv_path).open(encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, strict=True)
+        columns = reader.fieldnames or []
+        if len(columns) != len(set(columns)):
+            raise ValueError("duplicate CSV column names")
+        seen_ids: set[str] = set()
+        for row in reader:
+            if "finding_id" in columns:
+                finding_id = row.get("finding_id")
+                if not isinstance(finding_id, str) or not finding_id.strip():
+                    raise ValueError(f"invalid finding_id at CSV line {reader.line_num}")
+                if finding_id in seen_ids:
+                    raise ValueError(f"duplicate finding_id at CSV line {reader.line_num}: {finding_id!r}")
+                seen_ids.add(finding_id)
             label = row["label_verdict"]
-            suppressed = row["validator_verdict"] == _SUPPRESS
-            is_trust_fp = label == _FP and (row.get("fp_category") or "") in trust_categories
-            if row["validator_verdict"] == "uncertain":
+            verdict = row["validator_verdict"]
+            if label not in VALID_VERDICTS:
+                raise ValueError(f"invalid label_verdict at CSV line {reader.line_num}: {label!r}")
+            if verdict not in _VALIDATOR_VERDICTS:
+                raise ValueError(f"invalid validator_verdict at CSV line {reader.line_num}: {verdict!r}")
+            category = row.get("fp_category") or ""
+            if label == _FP and category not in VALID_FP_CATEGORIES:
+                raise ValueError(f"invalid fp_category at CSV line {reader.line_num}: {category!r}")
+            if label == _TP and category != "":
+                raise ValueError(f"fp_category must be empty for true_positive at CSV line {reader.line_num}")
+            total += 1
+            suppressed = verdict == _SUPPRESS
+            is_trust_fp = label == _FP and category in trust_categories
+            if verdict == "uncertain":
                 defer_n += 1
             if suppressed:
                 suppressed_total += 1
