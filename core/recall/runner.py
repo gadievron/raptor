@@ -354,7 +354,7 @@ def _chunk_runs(doc: dict, runs: list, path: Path, tmpdir: Path,
             chunk_doc = dict(doc)
             chunk_doc["runs"] = [dict(header, results=batch)]
             out = tmpdir / f"{path.stem}.run{ri}.{ci:03d}.sarif"
-            with open(out, "w", encoding="utf-8") as f:
+            with preserving_stream_error(open(out, "w", encoding="utf-8")) as f:
                 f.write(_chunk_dumps(chunk_doc))
             chunks.append(out)
             batch, batch_bytes, ci = [], 0, ci + 1
