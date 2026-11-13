@@ -64,6 +64,10 @@ def selftest() -> Any:
             patch.object(sys, "path", sys.path.copy()),
         ):
             scope.setenv("_RAPTOR_TRUSTED", "1")
+            inherited_dir = os.environ.get("RAPTOR_DIR")
+            scope.setenv("RAPTOR_DIR", inherited_dir if inherited_dir is not None else "")
+            if inherited_dir is None:
+                scope.delenv("RAPTOR_DIR")
             spec.loader.exec_module(mod)
         yield mod
     finally:
