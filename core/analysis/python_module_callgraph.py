@@ -1032,9 +1032,14 @@ def module_dynamic_namespace(
                 or value.args or value.keywords or value.func.attr not in {"keys", "values"}):
             return None
         receiver = value.func.value
-        while (isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute)
-               and receiver.func.attr == "copy" and not receiver.args and not receiver.keywords):
-            receiver = receiver.func.value
+        while True:
+            if isinstance(receiver, ast.NamedExpr):
+                receiver = receiver.value
+            elif (isinstance(receiver, ast.Call) and isinstance(receiver.func, ast.Attribute)
+                  and receiver.func.attr == "copy" and not receiver.args and not receiver.keywords):
+                receiver = receiver.func.value
+            else:
+                break
         dictionary = selected_literal_value(receiver)
         if not isinstance(dictionary, ast.Dict):
             if (value.func.attr == "values" and isinstance(receiver, ast.Call)
