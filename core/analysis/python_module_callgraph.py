@@ -1034,6 +1034,37 @@ def module_dynamic_namespace(
             return literal_dictionary_keys(dictionary)
         return literal_member_values(dictionary)
 
+    sequence_container_cache: dict[ast.AST, bool] = {}
+
+    def potential_sequence_container(value: ast.AST) -> bool:
+        path = []
+        cursor = value
+        while cursor not in sequence_container_cache:
+            path.append(cursor)
+            if isinstance(cursor, (ast.Tuple, ast.List)):
+                result = True
+                break
+            if (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
+                    and cursor.func.id in sequence_copy_names
+                    and len(cursor.args) == 1 and not cursor.keywords):
+                result = True
+                break
+            if isinstance(cursor, ast.NamedExpr):
+                cursor = cursor.value
+            elif isinstance(cursor, ast.Subscript) and isinstance(cursor.slice, ast.Slice):
+                cursor = cursor.value
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
+                cursor = cursor.func.value
+            else:
+                result = False
+                break
+        else:
+            result = sequence_container_cache[cursor]
+        for node in path:
+            sequence_container_cache[node] = result
+        return result
+
     sequence_iteration_cache: dict[ast.AST, tuple[bool, tuple[ast.AST, ...]] | None] = {}
 
     def sequence_iteration_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
@@ -1062,6 +1093,9 @@ def module_dynamic_namespace(
                         children = (cursor.body, cursor.orelse)
                     elif isinstance(cursor, ast.BoolOp):
                         children = tuple(cursor.values)
+                    elif (isinstance(cursor, ast.Subscript) and isinstance(cursor.slice, ast.Slice)
+                          and potential_sequence_container(cursor.value)):
+                        children = (cursor.value,)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
                           and (cursor.func.id in sequence_copy_names
                                or cursor.func.id in iterator_wrapper_names)
@@ -1101,6 +1135,14 @@ def module_dynamic_namespace(
             elif literal_members is not None:
                 recognised = True
                 members.extend(literal_members)
+            elif (isinstance(container, ast.Subscript) and isinstance(container.slice, ast.Slice)
+                  and potential_sequence_container(container.value)):
+                sequence_values = sequence_iteration_values(container)
+                if sequence_values is not None:
+                    recognised = True
+                    members.extend(sequence_values)
+                if not copied:
+                    members.append(container)
             elif isinstance(container, ast.Subscript) and not isinstance(container.slice, ast.Slice):
                 selected = selected_literal_value(container)
                 if selected is not None:
