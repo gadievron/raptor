@@ -105,7 +105,7 @@ def release_response(response: Any, *, reusable: bool = False) -> None:
         response.release_conn()
     try:
         response.close()
-    except Exception:
+    except BaseException:
         # A failed close must not put a possibly-live partial connection back
         # in the pool. Retire its slot even if closing the connection fails.
         if isinstance(response, HTTPResponse) and response._connection is not None:
