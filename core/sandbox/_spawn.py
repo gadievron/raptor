@@ -3910,7 +3910,7 @@ def run_sandboxed(
                               lambda: _close_scope_socket(_unix_scope_parent_sock)))
         if _unix_scope_child_sock is not None:
             callbacks.append(lambda: _close_scope_socket(_unix_scope_child_sock))
-        _retire_parent_resources(*callbacks)
+        _retire_parent_resources(*callbacks, primary_error=None)
 
     try:
         # The setup child cannot fork a payload until the parent go signal.
