@@ -226,6 +226,8 @@ def _gunzip_ratio_guarded(
                 decomp = zlib.decompressobj(31)
                 continue
             data = decomp.unconsumed_tail
+    if not decomp.eof:
+        raise TarOpenError("incomplete gzip layer stream")
     try:
         out = decomp.flush()
     except zlib.error as exc:
@@ -476,9 +478,10 @@ def extract_files_from_layer(
     # an early exit would skip the check by construction, so no
     # extracted content leaves this function until the source
     # iterator has run to completion (raising on digest mismatch).
-    if expected_diff_id is not None:
-        for _ in tar_iter:
-            pass
+    # Exhaust the decoded iterator too: tar EOF can precede gzip trailer
+    # validation, including the decoder's incomplete-stream check.
+    for _ in tar_iter:
+        pass
     for _ in chunk_iter:
         pass
     unresolved = dict(hardlinks)
