@@ -81,31 +81,33 @@ def test_resync_remains_pending_after_zero_progress(tmp_path, monkeypatch):
 
 
 def test_recovery_state_is_set_before_another_writer_can_enter(tmp_path, monkeypatch):
-    handle = evidence.EvidenceFile.open(tmp_path, 'events.jsonl')
-    original = os.write
-    failed = threading.Event()
-    result = []
+    from contextlib import ExitStack
+    from core.testing.threads import retiring_threads
 
-    def write(fd, data):
-        if not failed.is_set():
-            n = original(fd, data[:4])
-            failed.set()
-            return n
-        return original(fd, data)
+    with ExitStack() as cleanup:
+        handle = evidence.EvidenceFile.open(tmp_path, 'events.jsonl')
+        cleanup.callback(handle.close)
+        original = os.write
+        failed = threading.Event()
+        result = []
 
-    def second_writer():
-        assert failed.wait(2)
-        result.append(handle.write_record({'second': 'preserved'}))
+        def write(fd, data):
+            if not failed.is_set():
+                n = original(fd, data[:4])
+                failed.set()
+                return n
+            return original(fd, data)
 
-    thread = threading.Thread(target=second_writer)
-    try:
-        patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
-        thread.start()
-        assert not handle.write_record({'first': 'incomplete'})
-        thread.join(2)
-        assert not thread.is_alive()
-        assert result == [True]
-        assert json.loads(handle.path.read_bytes().splitlines()[-1]) == {'second': 'preserved'}
-    finally:
-        thread.join(2)
-        handle.close()
+        def second_writer():
+            assert failed.wait(2)
+            result.append(handle.write_record({'second': 'preserved'}))
+
+        thread = threading.Thread(target=second_writer)
+        with retiring_threads((thread,), release=failed.set, timeout=2):
+            patch_module_attribute(monkeypatch, _os_fault_consumer, "os", 'write', write)
+            thread.start()
+            assert not handle.write_record({'first': 'incomplete'})
+            thread.join(2)
+            assert not thread.is_alive()
+            assert result == [True]
+            assert json.loads(handle.path.read_bytes().splitlines()[-1]) == {'second': 'preserved'}
