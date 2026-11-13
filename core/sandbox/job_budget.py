@@ -365,6 +365,7 @@ class Job:
         signer = self.signer if self.receipt_handle is not None else None
         lifetime, writer = _spawn.open_death_pipe()
         reader = reply = None
+        startup_error: BaseException | None = None
         try:
             reader, reply = os.pipe()
             with _spawn._DEATH_W_LOCK:
@@ -374,7 +375,8 @@ class Job:
                        receipt_fd, receipt, signer)
                 os._exit(1)
             self.writer, self.reader, self.watcher = writer, reader, watcher
-        except BaseException:
+        except BaseException as exc:
+            startup_error = exc
             retire_parent_resources(
                 lambda: _spawn.close_death_w(writer),
                 lambda: os.close(reader) if reader is not None else None,
@@ -384,6 +386,7 @@ class Job:
             retire_parent_resources(
                 lambda: os.close(lifetime),
                 lambda: os.close(reply) if reply is not None else None,
+                primary_error=startup_error,
             )
 
     def ensure_lane(self, lane: str, *, namespace_isolated: bool = False) -> None:
