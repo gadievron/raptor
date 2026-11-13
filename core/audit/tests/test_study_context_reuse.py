@@ -35,9 +35,11 @@ def test_changed_studied_type_cannot_reuse_unchanged_function(tmp_path, monkeypa
     calls = []
 
     class Client:
+        _attempt_admission_protocol = 1
         _call_cost_history = None
         def is_budget_exhausted(self): return False
         def generate_structured(self, prompt, schema, **kwargs):
+            assert kwargs.pop("accounting_attempt_admission")() is True
             task = kwargs["task_type"]; calls.append(task)
             if task == "study":
                 assert "typedef unsigned foo_t" in prompt

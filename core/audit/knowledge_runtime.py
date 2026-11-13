@@ -97,6 +97,7 @@ class AuditKnowledgeRuntime:
         self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
         self._live_input_errors: set[str] = set()
         self._binary_review_scopes: dict[tuple[str, str], tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin]] = {}
+        self._source_review_scopes: dict[tuple[str, str], ReviewInputScope] = {}
         self._binary_cycle_scopes: dict[tuple[str, str, int], tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin]] = {}
         self._binary_context_records: dict[str, list[dict]] = {}
         self._binary_context_origins: dict[str, BinaryKnowledgeOrigin] = {}
@@ -454,6 +455,9 @@ class AuditKnowledgeRuntime:
             self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest,
                            initial_binary_types=initial_binary_types, initial_type_inventory=initial_type_inventory)
             self._register_caller_requests(origin, outcome.review_result, ctx=ctx)
+            if reservation is None and isinstance(outcome.review_input_scope, ReviewInputScope):
+                with self._lock:
+                    self._source_review_scopes[(origin.pass_id, attempt_id)] = outcome.review_input_scope
             self.notify()
             return outcome
 
@@ -557,7 +561,7 @@ class AuditKnowledgeRuntime:
                 for source in group))
         return ReviewInputScope(reservation.origin, digest, sources)
 
-    def bind_review_input_scope(self, outcome) -> None:
+    def bind_review_input_scope(self, outcome, *, members=None) -> None:
         """Attach the combined pass scope after panel reconstruction."""
         from .review_claims import read_history
 
@@ -565,6 +569,8 @@ class AuditKnowledgeRuntime:
         if outcome.file.startswith(BINARY_PATH_PREFIX):
             self._bind_binary_publication_scope(outcome)
             return
+        if members is not None:
+            outcome.review_input_scope = None
         line = outcome.line or 0
         if type(line) is not int or line <= 0:
             history = read_history((outcome.review_result or {}).get("review_claims"))
@@ -580,6 +586,18 @@ class AuditKnowledgeRuntime:
             reservation = self._active_units.get((outcome.file, outcome.function, line))
         if reservation is not None:
             outcome.review_input_scope = self.publication_input_scope(reservation, outcome)
+        else:
+            from .source_panel_scope import combine_source_panel_scope
+
+            # Explicit initial-member admission must never retain an earlier
+            # attached scope when one contributor or the aggregate is invalid.
+            outcome.review_input_scope = None
+            def owned(key):
+                with self._lock:
+                    return self._source_review_scopes.get(key)
+
+            outcome.review_input_scope = combine_source_panel_scope(
+                outcome, members=members, owned=owned, target_root=self.target_root)
 
     def _bind_binary_publication_scope(self, outcome) -> None:
         """Restore only original owner-held scopes after panel reconstruction."""
