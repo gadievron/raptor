@@ -106,14 +106,14 @@ class TestRecordDenial:
     def test_swallows_oserror_silently(self, tmp_path, monkeypatch):
         # If the run dir disappears mid-write, record_denial must not
         # raise — sandbox calls must succeed regardless of summary I/O.
-        summary_mod.set_active_run_dir(tmp_path / "does-not-exist")
-
-        def boom(*a, **k):
-            raise OSError("simulated disk full")
-
-        monkeypatch.setattr("builtins.open", boom)
-        # Must not propagate the OSError
+        run_dir = tmp_path / "does-not-exist"
+        summary_mod.set_active_run_dir(run_dir)
+        # The real evidence open raises FileNotFoundError for this path.
+        # Must not propagate the OSError or lose the failure observation.
         summary_mod.record_denial("cmd", 1, "network")
+        assert summary_mod._evidence_handle is None
+        assert summary_mod._evidence_write_failures[str(run_dir.resolve())] is True
+        assert not run_dir.exists()
 
     def test_denial_lines_are_ascii_safe(self, tmp_path):
         """Sandbox telemetry pins ASCII-safe output by intent: denial
