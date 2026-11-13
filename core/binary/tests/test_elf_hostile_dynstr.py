@@ -15,6 +15,7 @@ import struct
 
 from core.binary import elf as elf_mod
 from core.binary.elf import parse_elf
+from core.testing.processes import run_in_process_group as _run_memory_process
 
 from .test_elf import _build_elf64_with_dynsym
 
@@ -144,6 +145,40 @@ def _build_elf64_many_named_sections(
     return ehdr + bytes(shdrs) + shstrtab
 
 
+def _run_section_name_memory_proof(tmp_path):
+    """Keep a borrowed tracing session out of the section-name memory bound."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.binary.tests.test_elf_hostile_dynstr import TestSectionNameWalkBounded
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    TestSectionNameWalkBounded().test_many_sections_no_nul_shstrtab_stays_small(owned)
+print("elf-section-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "elf-section-memory-proof-ok", result.stdout
+
+
 class TestSectionNameWalkBounded:
     def test_many_sections_no_nul_shstrtab_stays_small(self, tmp_path):
         """The section-NAME walk must not retain a name per header: a
@@ -153,6 +188,10 @@ class TestSectionNameWalkBounded:
         file."""
         import tracemalloc
 
+        if tracemalloc.is_tracing():
+            _run_section_name_memory_proof(tmp_path)
+            return
+
         # The ONLY NUL is the final byte: every lookup yields a valid
         # near-cap-length name (an unterminated strtab would already
         # be rejected per-name).
@@ -160,8 +199,8 @@ class TestSectionNameWalkBounded:
             sections=20_000, shstrtab=b"A" * 4095 + b"\x00")
         p = tmp_path / "many-sections.elf"
         p.write_bytes(blob)
-        tracemalloc.start()
         try:
+            tracemalloc.start()
             parse_elf(p)
             _, peak = tracemalloc.get_traced_memory()
         finally:
