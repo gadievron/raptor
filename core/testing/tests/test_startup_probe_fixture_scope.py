@@ -103,40 +103,46 @@ def test_native_probe_mock_is_private(file, anchor, target, index, finish, tmp_p
 
 
 @pytest.mark.parametrize('finish', ['normal', 'error', 'interrupt'])
-def test_joern_global_no_subprocess_guard_is_retained(finish, tmp_path):
-    from contextlib import nullcontext
+def test_joern_no_subprocess_guard_is_retained(finish, tmp_path):
+    from contextlib import ExitStack, nullcontext
     from core.startup import init
+    import packages.joern.prereqs as joern_prereqs
 
     file = 'core/startup/tests/test_check_tools.py'
     module = importlib.import_module('core.startup.tests.test_check_tools')
-    call = _native_call(file, ('TestJoernVersion', 'test_reads_dist_version_without_subprocess'), 'subprocess.run', 0)
     function = _function(ast.parse((ROOT / file).read_text()),
                          ('TestJoernVersion', 'test_reads_dist_version_without_subprocess'))
     mirrors = [n for n in ast.walk(function) if isinstance(n, ast.Call)
                and isinstance(n.func, ast.Name) and n.func.id == 'mock_module_attribute']
-    assert len(mirrors) <= 1
-    original = subprocess.run
+    assert {ast.unparse(n.args[0]) for n in mirrors} == {'joern_prereqs', '_probe_imports'}
+    assert len(mirrors) == 2
+    assert all(ast.literal_eval(n.args[1]) == 'subprocess' and
+               ast.literal_eval(n.args[2]) == 'run' for n in mirrors)
+    original, borrowed = subprocess.run, joern_prereqs.subprocess
     patcher = pytest.MonkeyPatch()
     generator = None
+    expected = (nullcontext() if finish == 'normal' else
+                pytest.raises({'error': RuntimeError, 'interrupt': KeyboardInterrupt}[finish],
+                              match='owned exit'))
     try:
         module._isolate_shutil_patch_targets.__wrapped__(patcher)
-        fixture = getattr(module, '_owned_probe_imports', None)
-        if fixture is not None:
-            generator = fixture.__wrapped__(patcher)
-            next(generator)
-        imports = getattr(module, '_probe_imports', None)
+        generator = module._owned_probe_imports.__wrapped__(patcher)
+        next(generator)
+        imports = module._probe_imports
         executable = tmp_path / 'joern'
         executable.write_text('fixture-only; never executed\n')
         patcher.setenv('XDG_CACHE_HOME', str(tmp_path / 'cache'))
         patcher.setattr(init.shutil, 'which', lambda _name: str(executable))
-        with eval(compile(ast.Expression(call), file, 'eval'), {'mock': mock}) as guard:
-            context = (eval(compile(ast.Expression(mirrors[0]), file, 'eval'),
-                            dict(mock_module_attribute=mock_module_attribute,
-                                 _probe_imports=imports, sub=guard))
-                       if mirrors else nullcontext())
-            with context:
-                assert subprocess.run is guard
-                subprocess.run(['owned-negative-control'])
+        guard = mock.Mock()
+        with expected:
+            with ExitStack() as contexts:
+                for call in mirrors:
+                    contexts.enter_context(eval(compile(ast.Expression(call), file, 'eval'),
+                        dict(mock_module_attribute=mock_module_attribute,
+                             joern_prereqs=joern_prereqs, _probe_imports=imports, sub=guard)))
+                assert subprocess.run is original
+                assert joern_prereqs.subprocess is not borrowed
+                joern_prereqs.subprocess.run(['owned-negative-control'])
                 guard.assert_called_once_with(['owned-negative-control'])
                 guard.reset_mock()
                 guard.return_value = mock.Mock(returncode=0, stdout='joern 1.2.3', stderr='')
@@ -147,8 +153,36 @@ def test_joern_global_no_subprocess_guard_is_retained(finish, tmp_path):
                     raise RuntimeError('owned exit')
                 if finish == 'interrupt':
                     raise KeyboardInterrupt('owned exit')
-    except (RuntimeError, KeyboardInterrupt) as error:
-        assert type(error) is {'error': RuntimeError, 'interrupt': KeyboardInterrupt}.get(finish)
+    finally:
+        if generator is not None:
+            generator.close()
+        patcher.undo()
+        assert subprocess.run is original
+        assert joern_prereqs.subprocess is borrowed
+
+
+@pytest.mark.parametrize('route', ['startup', 'joern'])
+def test_joern_native_guard_rejects_dispatch_regression(route):
+    import packages.joern.prereqs as joern_prereqs
+    module = importlib.import_module('core.startup.tests.test_check_tools')
+    patcher = pytest.MonkeyPatch()
+    generator = None
+    original = subprocess.run
+    try:
+        generator = module._owned_probe_imports.__wrapped__(patcher)
+        next(generator)
+
+        version = module.startup_init._joern_version
+
+        def unsafe_version():
+            result = version()
+            consumer = module._probe_imports if route == 'startup' else joern_prereqs
+            consumer.subprocess.run(['owned-negative-control'])
+            return result
+
+        patcher.setattr(module.startup_init, '_joern_version', unsafe_version)
+        with pytest.raises(AssertionError, match='not have been called'):
+            module.TestJoernVersion().test_reads_dist_version_without_subprocess()
     finally:
         if generator is not None:
             generator.close()
