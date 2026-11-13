@@ -138,9 +138,19 @@ def _adjacency(
 
 def _ball(
     seed: str, adj: dict[str, set[str]], radius: int,
+    *, weighted: dict[str, FunctionWeight] | None = None,
+    member_cap: int | None = None,
 ) -> set[str]:
-    """Nodes within ``radius`` undirected hops of ``seed``."""
+    """Nodes within ``radius`` hops, or an oversized rejection witness.
+
+    Cutoff mode returns early only after finding more weighted members than
+    the caller can retain. Such a partial ball must be discarded, never
+    published as a truncated cluster. Calls without a cap remain complete.
+    """
     seen = {seed}
+    members = int(weighted is not None and seed in weighted)
+    if member_cap is not None and members > member_cap:
+        return seen
     frontier = deque([(seed, 0)])
     while frontier:
         node, dist = frontier.popleft()
@@ -149,6 +159,10 @@ def _ball(
         for neighbour in adj.get(node, ()):
             if neighbour not in seen:
                 seen.add(neighbour)
+                if member_cap is not None and weighted is not None and neighbour in weighted:
+                    members += 1
+                    if members > member_cap:
+                        return seen
                 frontier.append((neighbour, dist + 1))
     return seen
 
@@ -175,13 +189,18 @@ def rank_clusters(
     if not weights:
         return report
     adj = _adjacency(edges)
+    # Without more weighted nodes than the cap, no ball can be oversized.
+    # Keep other comparison types on the existing complete-traversal path.
+    member_cap = (max_members if type(max_members) is int and len(weights) > max_members
+                  else None)
 
     seen_members: dict[tuple[str, ...], Cluster] = {}
     for radius in sorted(set(int(r) for r in radii)):
         if radius < 1:
             continue
         for seed in weights:
-            reachable = _ball(seed, adj, radius)
+            reachable = (_ball(seed, adj, radius, weighted=weights, member_cap=member_cap)
+                         if member_cap is not None else _ball(seed, adj, radius))
             members = tuple(sorted(n for n in reachable if n in weights))
             if not members or len(members) > max_members:
                 continue
