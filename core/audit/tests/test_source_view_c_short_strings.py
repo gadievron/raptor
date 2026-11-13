@@ -5,13 +5,14 @@ import tracemalloc
 import pytest
 
 from core.audit import source_view as sv
+from core.testing.module_views import module_function_view
 
 
 @pytest.fixture(params=['normal', 'probe'], autouse=True)
 def string_probe_mode(request, monkeypatch):
-    if request.param == 'probe':
-        monkeypatch.setattr(sv, '_C_RANGE_MIN_SOURCE', 0)
-        monkeypatch.setattr(sv, '_C_RANGE_MIN_CHARS_PER_MARKER', 1)
+    bindings = ({'_C_RANGE_MIN_SOURCE': 0, '_C_RANGE_MIN_CHARS_PER_MARKER': 1}
+                if request.param == 'probe' else {})
+    monkeypatch.setitem(globals(), 'sv', module_function_view(sv, bindings=bindings))
 
 
 @pytest.mark.parametrize('length', [0, 1, 2, 126, 127, 128, 129, 256])
@@ -61,8 +62,8 @@ def test_long_escaped_literals_keep_probe_workspace_bounded():
         pytest.skip('requires isolated allocation tracing')
     body = '\\n' * 50000
     source = 'before(); "' + body + '"; live();'
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = sv.sanitized_view_with_status(source, 'a.c')
         _, peak = tracemalloc.get_traced_memory()
     finally:
