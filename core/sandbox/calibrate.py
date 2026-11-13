@@ -76,7 +76,7 @@ logger = logging.getLogger(__name__)
 # bleed reduces the surface for misconfigured shared homedirs
 # (e.g. tmpfs /home setups in CI).
 # Earlier records did not require trusted, loss-free observations.
-_CACHE_VERSION = 2
+_CACHE_VERSION = 3
 # Match the observation reader's total input ceiling. Cache entries are
 # normally much smaller, but damaged artifacts must not be unbounded.
 _MAX_CACHE_BYTES = 64 * 1024 * 1024
@@ -412,6 +412,13 @@ def _spawn_probe(
         # + sort so repeated probes of the same binary produce
         # identical profiles (modulo timestamp).
         events = result.sandbox_info.get("proxy_events") or ()  # type: ignore[attr-defined]
+        if any(
+            isinstance(ev, dict) and ev.get("result") == "buffer_overflow"
+            and (ev.get("dropped", 0) > 0 or ev.get("dropped_denials", 0) > 0)
+            for ev in events
+        ):
+            raise RuntimeError(
+                "calibration proxy observation is incomplete; profile was not cached")
         hosts = sorted({
             ev["host"] for ev in events
             if isinstance(ev, dict) and ev.get("host")
