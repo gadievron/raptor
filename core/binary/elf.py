@@ -283,7 +283,7 @@ def parse_elf(path: Path) -> ElfMetadata | None:
     memory.
     """
     try:
-        with Path(path).open("rb") as f:
+        with preserving_stream_error(Path(path).open("rb")) as f:
             return _parse_elf_stream(f)
     except OSError as e:
         logger.debug("core.binary.elf: read failed for %s: %s", path, e)
