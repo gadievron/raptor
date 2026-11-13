@@ -8,6 +8,7 @@ import math
 from core.audit.cost_tracker import PhaseCost, PhaseCostLedger
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 
 class TestPhaseCost:
@@ -210,15 +211,16 @@ class TestPhaseWallClock:
                 ct.record_call("review", cost_usd=0.001, wall_time_s=0.01)
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
-        for t in threads:
-            t.start()
-        for i in range(200):
-            ct.start_phase(f"pass_{i % 3}")
-        ct.end_phase()
-        stop.set()
-        for t in threads:
-            t.join(timeout=10)
-            assert not t.is_alive()
+        with retiring_threads(threads, release=stop.set, timeout=10):
+            for t in threads:
+                t.start()
+            for i in range(200):
+                ct.start_phase(f"pass_{i % 3}")
+            ct.end_phase()
+            stop.set()
+            for t in threads:
+                t.join(timeout=10)
+                assert not t.is_alive()
 
         calls = ct.phases["review"].calls
         assert calls > 0
