@@ -147,6 +147,16 @@ jobs:
             --lane "${TIER}/image" \
             "$@"
 
+      - name: Retain per-profile JUnit reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pytest-${{ inputs.tier }}-${{ github.job }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pytest-junit.xml
+            ${{ runner.temp }}/pytest-native-junit.xml
+          if-no-files-found: error
+
   # Fallback path: fork PRs can't pull the private image, so install into
   # the runner's system Python (uv's cache keyed on uv.lock).
   runner:
@@ -235,3 +245,12 @@ jobs:
           python3 .github/scripts/check_skip_budget.py \
             --lane "${TIER}/runner" \
             "$@"
+      - name: Retain per-profile JUnit reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pytest-${{ inputs.tier }}-${{ github.job }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/pytest-junit.xml
+            ${{ runner.temp }}/pytest-native-junit.xml
+          if-no-files-found: error
