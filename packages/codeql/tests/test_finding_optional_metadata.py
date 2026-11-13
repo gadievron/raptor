@@ -86,3 +86,37 @@ def test_relationship_cwe_metadata_reaches_the_selected_finding(
     assert finding.rule_id == selected[0].result["ruleId"]
     assert finding.level == "warning"
     assert json.loads(path.read_text())["runs"][0] == run
+
+
+@pytest.mark.parametrize('flows', [None, 3, 'unavailable', {'unknown': True}])
+def test_unavailable_flow_array_keeps_the_selected_report(tmp_path, flows):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    result['codeFlows'] = flows
+    run = _run(result)
+    path = _write(tmp_path, 'flow-shape.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert finding.rule_id == result['ruleId']
+    assert finding.message == result['message']['text']
+    assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
+    assert not finding.has_dataflow
+    assert finding.dataflow_path_count == 0
+    assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('flows', [[], [{'threadFlows': []}], [{'threadFlows': []}, {'threadFlows': []}]])
+def test_flow_array_retains_existing_path_count(flows):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run
+
+    result = _located_result()
+    result['codeFlows'] = flows
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(result, _run(result))
+    assert finding.dataflow_path_count == len(flows)
+    assert finding.has_dataflow is bool(flows)
