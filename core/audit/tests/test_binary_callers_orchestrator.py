@@ -3,7 +3,7 @@
 The scripted response selects a recorded identity from the actual first prompt.
 This tests metadata availability, request routing and publication, not model
 judgment, binary extraction, build correspondence, native execution or concurrent
-panels.
+panels. The coalesced type request is fixture-scripted, not model discovery.
 """
 import hashlib
 import json
@@ -21,11 +21,11 @@ from core.inventory import save_checklist
 from core.inventory.binary_builder import build_binary_checklist
 from core.json import dumps_canonical
 from core.llm.tests.test_prepared_attempt_reservation import sdk_clients as sdk_clients
-from packages.ghidra.model import REDatabase, REFunction, REXref
+from packages.ghidra.model import REDatabase, REFunction, REType, REXref
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("change", ["healthy", "changed_caller"])
+@pytest.mark.parametrize("change", ["healthy", "changed_caller", "coalesced"])
 def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk_clients, change):
     import core.audit.binary_context as context_module
     import core.inventory.binary_builder as builder
@@ -50,6 +50,9 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             REFunction(name="caller", address=8192, size=32, source_tool="fixture",
                        decompilation="unsigned caller(unsigned n) { return f(n); }"),
         ], xrefs=[REXref(from_addr=8196, to_addr=4096, kind="call", source_tool="fixture")])
+    if change == "coalesced":
+        database.types.append(REType(name="Packet", kind="struct", size=16, source_tool="fixture",
+            fields=[{"name": "length", "type": "unsigned int", "offset": None}]))
     checklist = build_binary_checklist(database, binary_path=target)
     entry, = checklist["files"]
     # This is an explicitly scoped one-unit audit, not whole-module coverage.
@@ -102,12 +105,17 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             caller, = identities["callers"]
             assert caller == {"function": "caller", "address": 8192}
             assert "return f(n);" not in prompt and "Binary related-code context" not in prompt
+            if change == "coalesced":
+                assert "Packet" not in prompt and "Recovered binary type context" not in prompt
             selected_caller.update(file=identities["module_file"], function=caller["function"],
                                    address=caller["address"], line_start=0)
         assert len(selected_caller) == 4
         payload = {"status": "clean", "body": "Recorded related code is partial context, not verification.",
                    "caller_context_requests": [{**selected_caller,
                        "reason": "Inspect input handling" if first else "Inspect the same recorded caller"}]}
+        if change == "coalesced":
+            payload["reading_list"] = [{"subject": "Packet", "resolution": "identifier",
+                "context": "field layout" if first else "interpret the same recorded fields"}]
         message = response["choices"][0]["message"]
         if message.get("tool_calls"):
             message["tool_calls"][0]["function"]["arguments"] = json.dumps(payload)
@@ -123,6 +131,10 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             "address": {"type": "integer", "minimum": 0}, "line_start": {"type": "integer", "minimum": 0},
             "reason": {"type": "string"}}, "required": ["file", "function", "address", "line_start", "reason"]}},
     }, "required": ["status", "body"]}
+    if change == "coalesced":
+        schema["properties"]["reading_list"] = {"type": "array", "items": {"type": "object", "properties": {
+            "subject": {"type": "string"}, "context": {"type": "string"},
+            "resolution": {"type": "string"}}, "required": ["subject", "context", "resolution"]}}
     review = make_review_fn(bundle.client, schema=schema, escalate_clean=False)
     config = OrchestratorConfig(target_path=target, out_dir=out, review_passes=1,
         resume=False, max_workers=1, batch_sloc_threshold=0, prefilter=False,
@@ -142,6 +154,10 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
     assert '"caller_address":8192' in second
     assert "recorded_direct_call_xref_not_execution" in second
     assert "binary:previous-name" not in second
+    if change == "coalesced":
+        assert "Recovered binary type context" in second
+        assert '"subject":"Packet"' in second and '"name":"length"' in second
+        assert "recovered_binary_type_context_not_evidence" in second
     history = json.loads((out / "knowledge-results.json").read_text())
     attempts = [event for event in history["events"] if event["event"] == "review_attempt"]
     assert len(attempts) == 2
@@ -175,14 +191,26 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
     completed = [event for event in history["events"] if event["event"] == "continuation_completed"]
     caller_answers = [event for event in history["events"] if event["event"] == "binary_caller_answer"]
     assert caller_answers and caller_answers[0]["material"]["caller_address"] == 8192
-    if change == "healthy":
+    if change in ("healthy", "coalesced"):
         assert not changed and result.clean == 1
         assert len(context_entries) == len(completed) == 1
         assert completed[0]["pass_id"] == origins[1]["pass_id"]
         assert completed[0]["published_status"] == "clean"
         context = context_entries[0].review_claims["binary_inputs"]
         assert context["origin"] == origins[1]
-        assert [row["kind"] for row in context["contexts"]] == ["binary_callers"]
+        if change == "coalesced":
+            assert {row["kind"] for row in context["contexts"]} == {
+                "binary_target_semantics", "binary_callers"}
+            assert len(context["contexts"]) == 2
+            subject_answers = [event for event in history["events"] if event["event"] == "binary_subject_answer"]
+            assert subject_answers and all(answer["status"] == "partial" for answer in subject_answers)
+            material = subject_answers[0]["material"]
+            assert material["subject"] == "Packet" and material["fields"][0]["name"] == "length"
+            assert material["fields"][0]["offset_bytes"] is None
+            assert material["fields"][0]["size_bytes"] is None and material["signedness"] == "unknown"
+            assert "source_quote" not in material
+        else:
+            assert [row["kind"] for row in context["contexts"]] == ["binary_callers"]
     else:
         assert changed == [True]
         assert not context_entries and not completed
