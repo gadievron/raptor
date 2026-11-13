@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.processes import run_in_process_group as _run_memory_process
 
 
 @pytest.fixture(autouse=True)
@@ -1222,6 +1223,43 @@ class TestStatusPathsFound:
         assert AFLRunner._status_paths_found({"execs_done": "1"}) == "N/A"
 
 
+
+def _run_afl_tail_memory_proof(tmp_path):
+    """Measure the exact tail-reader source without consuming a caller trace."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.testing.tests._afl_tail_memory import load_memory_module
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    native = load_memory_module()
+    native.TestBoundedTargetWritableReads().test_tail_file_does_not_materialise_whole_file(owned)
+assert not tracemalloc.is_tracing()
+print("afl-tail-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "afl-tail-memory-proof-ok", result.stdout
+
+
 class TestBoundedTargetWritableReads:
     """AFL output files live in target-writable space; every host-side
     reader must be byte-bounded (the libFuzzer runner's seek-tail and
@@ -1232,14 +1270,20 @@ class TestBoundedTargetWritableReads:
     def test_tail_file_does_not_materialise_whole_file(self, tmp_path):
         import tracemalloc
 
+        if tracemalloc.is_tracing():
+            _run_afl_tail_memory_proof(tmp_path)
+            return
+
         log = tmp_path / "stderr.log"
         with log.open("wb") as f:
             f.write(b"A" * (8 * 1024 * 1024))
             f.write(b"TAIL-MARKER")
-        tracemalloc.start()
-        tail = AFLRunner._tail_file(log)
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        try:
+            tracemalloc.start()
+            tail = AFLRunner._tail_file(log)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         assert tail.endswith("TAIL-MARKER")
         assert peak < 1024 * 1024, (
             f"whole file materialised for a 4 KiB tail (peak {peak} bytes)"
