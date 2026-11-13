@@ -878,6 +878,18 @@ def module_dynamic_namespace(
                 whole = True
         elif isinstance(node, ast.Call):
             func = node.func
+            if (isinstance(func, ast.Attribute)
+                    and func.attr in {"update", "clear", "pop", "popitem", "setdefault",
+                                      "__setitem__", "__delitem__"}
+                    and isinstance(func.value, ast.Attribute)
+                    and func.value.attr == "__dict__"):
+                receiver = func.value.value
+                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                    receiver = receiver.value
+                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                    # Dictionary methods can replace imported members with
+                    # no Store node or rebinding of the import name.
+                    whole = True
             if not isinstance(func, ast.Name):
                 continue
             fname = func.id
