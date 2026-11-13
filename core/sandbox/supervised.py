@@ -1952,10 +1952,19 @@ def _spawn_group_tier(
         raise SandboxSetupError(
             f"supervised spawn (group tier) exec failed: {e}",
             setup_category="X") from e
-    return SupervisedHandle(
-        tier="group", pid=popen.pid, target_pid=popen.pid,
-        on_parent_death="kill" if kill_mode else "survive",
-        name=name, popen=popen)
+    try:
+        return SupervisedHandle(
+            tier="group", pid=popen.pid, target_pid=popen.pid,
+            on_parent_death="kill" if kill_mode else "survive",
+            name=name, popen=popen)
+    except BaseException:
+        # Popen has not been polled or handed out: its unreaped leader
+        # still owns the private process-group number. Signal before wait.
+        retire_parent_resources(
+            partial(os.killpg, popen.pid, signal.SIGKILL),
+            partial(popen.wait, timeout=_KILL_REAP_BUDGET_S),
+        )
+        raise
 
 
 def spawn_supervised(
