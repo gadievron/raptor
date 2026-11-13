@@ -1425,12 +1425,29 @@ def module_dynamic_namespace(
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
             if value.func.attr == "pop" and not value.args:
-                set_receiver = receiver
-                while isinstance(set_receiver, ast.NamedExpr):
-                    set_receiver = set_receiver.value
-                if (isinstance(set_receiver, ast.Set)
-                        or literal_set_operation_sources(set_receiver) is not None):
-                    return sequence_iteration_values(receiver)
+                pending_sets = [receiver]
+                seen_sets = set()
+                set_members = []
+                recognised_set = False
+                while pending_sets:
+                    set_receiver = pending_sets.pop()
+                    if set_receiver in seen_sets:
+                        continue
+                    seen_sets.add(set_receiver)
+                    if isinstance(set_receiver, ast.NamedExpr):
+                        pending_sets.append(set_receiver.value)
+                    elif isinstance(set_receiver, ast.IfExp):
+                        pending_sets.extend((set_receiver.body, set_receiver.orelse))
+                    elif isinstance(set_receiver, ast.BoolOp):
+                        pending_sets.extend(set_receiver.values)
+                    elif (isinstance(set_receiver, ast.Set)
+                          or literal_set_operation_sources(set_receiver) is not None):
+                        sources = sequence_iteration_values(set_receiver)
+                        if sources is not None:
+                            recognised_set = True
+                            set_members.extend(sources)
+                if recognised_set:
+                    return tuple(set_members)
             if value.func.attr == "pop" and not value.args:
                 selected = selected_literal_value(receiver)
                 if isinstance(selected, ast.List):
