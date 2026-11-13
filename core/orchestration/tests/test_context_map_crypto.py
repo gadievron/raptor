@@ -11,6 +11,8 @@ strategy routing.
 
 from __future__ import annotations
 
+from core.testing.processes import run_in_process_group as _run_memory_process
+
 from core.orchestration.context_map_crypto import (
     enrich_with_crypto_inventory,
 )
@@ -262,6 +264,40 @@ class TestChecklistPathContainment:
         assert cm["crypto_inventory"][0]["file"] == "ok.c"
 
 
+def _run_crypto_inventory_memory_proof(tmp_path):
+    """Measure the dense native inventory without consuming a caller trace."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.orchestration.tests.test_context_map_crypto import TestSiteCaps
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    TestSiteCaps().test_dense_file_bounded_at_per_file_cap(owned)
+print("crypto-inventory-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "crypto-inventory-memory-proof-ok", result.stdout
+
+
 class TestSiteCaps:
     """_MAX_FILES/_MAX_FILE_BYTES bound the scan; the site caps bound
     the EMISSION — a dense-match file from an untrusted repo must not
@@ -269,6 +305,10 @@ class TestSiteCaps:
 
     def test_dense_file_bounded_at_per_file_cap(self, tmp_path):
         import tracemalloc
+
+        if tracemalloc.is_tracing():
+            _run_crypto_inventory_memory_proof(tmp_path)
+            return
 
         from core.orchestration import context_map_crypto as cmc
 
@@ -279,11 +319,13 @@ class TestSiteCaps:
         (root / "dense.c").write_text(("rand();" * 100 + "\n") * 30)
         cm: dict = {}
         checklist = {"files": [{"path": "dense.c", "items": []}]}
-        tracemalloc.start()
-        n = enrich_with_crypto_inventory(
-            cm, checklist=checklist, target_path=root)
-        _cur, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        try:
+            tracemalloc.start()
+            n = enrich_with_crypto_inventory(
+                cm, checklist=checklist, target_path=root)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         assert n == cmc._MAX_FILE_SITES
         assert len(cm["crypto_inventory"]) == cmc._MAX_FILE_SITES
         assert peak < 16 * 1024 * 1024, f"peak {peak/1e6:.1f}MB"
