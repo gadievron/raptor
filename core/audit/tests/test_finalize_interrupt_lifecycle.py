@@ -10,6 +10,8 @@ interrupt.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -18,8 +20,25 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_views import scoped_function_imports
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "libexec" / "raptor-audit"
+
+
+@pytest.fixture()
+def _private_finalize_run(monkeypatch):
+    with ExitStack() as scopes:
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("_finalize_run",), {"subprocess": subprocess},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def _load_cli():
@@ -67,13 +86,12 @@ def _fake_lifecycle(calls, returncode: int, stderr: str = ""):
 
 
 def test_failed_interrupt_transition_is_surfaced(
-        finalize_env, monkeypatch, capsys):
+        finalize_env, monkeypatch, capsys, _private_finalize_run):
     mod = _load_cli()
     out_dir, result = finalize_env
     calls: list[list[str]] = []
-    import subprocess
-    monkeypatch.setattr(
-        subprocess, "run",
+    _private_finalize_run(
+        mod,
         _fake_lifecycle(calls, returncode=1, stderr="run not owned"),
     )
     rc = mod._finalize_run(out_dir, result, "model-x")
@@ -85,13 +103,12 @@ def test_failed_interrupt_transition_is_surfaced(
 
 
 def test_clean_interrupt_transition_stays_quiet(
-        finalize_env, monkeypatch, capsys):
+        finalize_env, monkeypatch, capsys, _private_finalize_run):
     mod = _load_cli()
     out_dir, result = finalize_env
     calls: list[list[str]] = []
-    import subprocess
-    monkeypatch.setattr(
-        subprocess, "run", _fake_lifecycle(calls, returncode=0),
+    _private_finalize_run(
+        mod, _fake_lifecycle(calls, returncode=0),
     )
     rc = mod._finalize_run(out_dir, result, "model-x")
     captured = capsys.readouterr()
