@@ -419,7 +419,7 @@ def test_nested_call_arg_does_not_inject_inner_names():
 
 
 def test_aug_assign_call_records_target_as_assigned():
-    """``acc += encode(x)`` — encode's return flows into acc."""
+    """The target is read/written, but gets a combined value, not the call return."""
     src = (
         "def handle(x):\n"
         "    acc = 0\n"
@@ -428,7 +428,10 @@ def test_aug_assign_call_records_target_as_assigned():
     cfg = build_python_cfg(src, "handle")
     aug = _find_node(cfg, 3)
     site = _site_by_name(aug, "encode")
-    assert site.assigned_names == frozenset({"acc"})
+    assert aug.defs == frozenset({"acc"})
+    assert {"acc", "x"} <= aug.uses
+    assert site.arg_names == frozenset({"x"})
+    assert site.assigned_names == frozenset()
 
 
 def test_multiple_calls_ordered_by_source_position():
