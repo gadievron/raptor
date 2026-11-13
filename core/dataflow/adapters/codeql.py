@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import unquote
 
 from core.dataflow.finding import Finding, Step
 
@@ -129,12 +130,13 @@ def from_sarif_result(
             object_or_empty(loc.get("message"), "location.message").get("text"),
             "location.message.text", "",
         )
+        uri = text_or_default(artifact.get("uri"), "artifactLocation.uri", "")
         column = region.get("startColumn")
         # Explicit null objects retain their empty defaults; malformed
         # scalar objects must use the caller's ValueError refusal path.
         steps.append(
             Step(
-                file_path=artifact.get("uri") or "",
+                file_path=unquote(uri, errors="strict"),
                 line=region.get("startLine") or 0,
                 column=0 if column is None else column,
                 snippet=text_or_default(

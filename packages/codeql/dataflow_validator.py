@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from dataclasses import fields as _dataclass_fields
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 # Path setup MUST precede every core.* import — pre-fix the
 # core.smt_solver imports sat ABOVE the insert, so direct CLI
@@ -506,7 +507,7 @@ class DataflowValidator:
             artifact = physical_loc.get("artifactLocation", {})
 
             step = DataflowStep(
-                file_path=artifact.get("uri", ""),
+                file_path=unquote(artifact.get("uri", ""), errors="strict"),
                 line=region.get("startLine", 0),
                 column=region.get("startColumn", 0),
                 snippet=(region.get("snippet") or {}).get("text", ""),
