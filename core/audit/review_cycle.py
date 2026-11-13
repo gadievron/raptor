@@ -291,7 +291,7 @@ class KnowledgeCycle:
                     self._retired = True
                     return None
                 advisory = {self._external_latest[kind] for kind in
-                            ("disagreement", "binary_target_semantics", "binary_callers") if kind in self._external_latest}
+                            ("disagreement", "binary_target_semantics", "binary_callers", "binary_callee_assessments") if kind in self._external_latest}
                 if (self.requests or self.caller_requests or self._references or self._explanations
                         or not advisory or not self._delta <= advisory):
                     self._defer("binary_external_context_unavailable")

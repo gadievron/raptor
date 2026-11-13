@@ -35366,6 +35366,8 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
     from .review_claims import read_history
     from .review_context_inputs import context_inputs_from_sources, merge_context_inputs
 
+    from .binary_callee_assessments import BinaryCalleeAssessmentContext
+
     reviewer = runtime.wrap_review(review_fn)
     published = 0
     for _index, gap, prior, ctx, callee in prepared:
@@ -35376,9 +35378,16 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                 env_gate()
             if _check_budget(config, start_time, result):
                 break
-            contributors = callee if isinstance(callee, tuple) else (callee,)
-            scopes = tuple(item.review_input_scope for item in contributors
-                           if item.review_input_scope is not None)
+            binary_bundle = callee if isinstance(callee, BinaryCalleeAssessmentContext) else None
+            contributors = (binary_bundle.contributor_outcomes if binary_bundle is not None else
+                            callee if isinstance(callee, tuple) else (callee,))
+            if binary_bundle is not None and not binary_bundle.current(ctx):
+                continue
+            scopes = (tuple(item.binary_publication_scope for item in contributors
+                            if item.binary_publication_scope is not None)
+                      if binary_bundle is not None else
+                      tuple(item.review_input_scope for item in contributors
+                            if item.review_input_scope is not None))
             if any(not scope.current(config.target_path) for scope in scopes):
                 continue
             from .ready_review_context import offer_ready_joern_context
@@ -35387,10 +35396,13 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
             offer_ready_live_sink_context(runtime, ctx)
             from .ready_review_context import offer_ready_disagreement_context
             offer_ready_disagreement_context(runtime, ctx)
-            version = context_version(render_callee_context(
-                ctx.get("callee_contract_violation"), defend_identifier=_defend_identifier))
-            spec = context_spec(ctx, kind="callee_contract", version=version)
-            if spec is None or not runtime.offer_context_delta(ctx, kind="callee_contract", version=version):
+            kind = "binary_callee_assessments" if binary_bundle is not None else "callee_contract"
+            rendered = (binary_bundle.render() if binary_bundle is not None else
+                        render_callee_context(ctx.get("callee_contract_violation"),
+                                              defend_identifier=_defend_identifier))
+            version = context_version(rendered)
+            spec = context_spec(ctx, kind=kind, version=version)
+            if spec is None or not runtime.offer_context_delta(ctx, kind=kind, version=version):
                 continue
             width = max(1, config.review_passes,
                         len(config.models or []) if config.multi_model else 1)
@@ -35418,14 +35430,15 @@ def _run_callee_continuations(result, config, review_fn, prepared, runtime, *, e
                 runtime.fail(reservation, "callee_context_not_delivered", ctx=ctx)
                 settled = True
                 continue
-            if any(not scope.current(config.target_path) for scope in scopes):
+            if (any(not scope.current(config.target_path) for scope in scopes)
+                    or binary_bundle is not None and not binary_bundle.current(ctx)):
                 runtime.fail(reservation, "callee_source_changed", ctx=ctx)
                 settled = True
                 continue
             # An old model assessment is advisory. Never recapture its bytes to
             # turn it into proof of the source seen by that earlier invocation.
             history = read_history((outcome.review_result or {}).get("review_claims"))
-            if history is not None:
+            if history is not None and reservation.origin.source_identity is not None:
                 origin = reservation.origin
                 incomplete = context_inputs_from_sources(
                     [("target", origin.file, origin.source_identity.sha256)], complete=False)
@@ -35471,6 +35484,27 @@ def _requeue_ready_callee_assessments(
             continue
         occurrence = (caller.file, caller.function, caller.line)
         if occurrences[occurrence] != 1:
+            continue
+        if caller.file.startswith(BINARY_PATH_PREFIX):
+            from .binary_callee_assessments import build_binary_callee_assessment_context
+
+            # Binary occurrences retain addresses and original view ownership;
+            # they never enter the source line/SourceIdentity adapter below.
+            matches = [(path, item) for path, _info, item in _iter_checklist_items(checklist)
+                       if (path, item.get("name")) == (caller.file, caller.function)]
+            if len(matches) != 1:
+                continue
+            path, item = matches[0]
+            gap = {**item, "file": path, "line_start": 0, "line_end": None}
+            ctx = _build_context(config, gap, checklist, context_map, evidence_index,
+                                 discovered_evidence=discovered_evidence)
+            binary_bundle = build_binary_callee_assessment_context(
+                caller, ctx, outcomes, owned_observation=runtime.binary_assessment_observation,
+                current_outcomes=lambda: tuple(result.outcomes), include_graph=config.propagate_constraints)
+            if binary_bundle is None:
+                continue
+            ctx["binary_callee_assessment_context"] = binary_bundle
+            prepared.append((len(prepared), gap, caller, ctx, binary_bundle))
             continue
         bundle = build_callee_assessment_bundle(
             caller, outcomes, inventory=config.inventory, context_map=context_map,
