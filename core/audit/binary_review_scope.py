@@ -174,7 +174,10 @@ class BinaryInputIdentity:
     The physical version is an in-run observation. The view digest covers
     supplied raw text, not its postfit delivery or machine-code fidelity.
     A known analysis digest conservatively versions the full parsed database;
-    it does not authenticate recovered facts or external context inputs.
+    it does not authenticate recovered facts. A threat-model digest versions
+    pre-fit rendered material without proving delivery, granting authority or
+    proving empty output means
+    absence. Other external inputs remain separate dependencies.
     """
     module_sha256: str
     module_version: tuple[int, ...]
@@ -183,6 +186,7 @@ class BinaryInputIdentity:
     representation: str
     view_sha256: str
     analysis_sha256: str | None = None
+    threat_model_sha256: str | None = None
     domain: str = field(default="binary_view", init=False)
 
     def __post_init__(self):
@@ -194,7 +198,9 @@ class BinaryInputIdentity:
                 or type(self.size) is not int or self.size <= 0
                 or self.representation not in ("decompilation", "disassembly")
                 or (self.analysis_sha256 is not None and
-                    (not isinstance(self.analysis_sha256, str) or _SHA256.fullmatch(self.analysis_sha256) is None))):
+                    (not isinstance(self.analysis_sha256, str) or _SHA256.fullmatch(self.analysis_sha256) is None))
+                or (self.threat_model_sha256 is not None and
+                    (not isinstance(self.threat_model_sha256, str) or _SHA256.fullmatch(self.threat_model_sha256) is None))):
             raise ValueError("binary identity requires complete original input stamps")
 
 
@@ -202,8 +208,11 @@ def binary_view_anchor(identity: BinaryInputIdentity | None) -> str | None:
     """Persist view text identity, without turning its physical epoch into proof."""
     if not isinstance(identity, BinaryInputIdentity):
         return None
-    prefix = (f"bin:inputs1:{identity.analysis_sha256}" if identity.analysis_sha256 is not None
-              else "bin:view1")
+    if identity.analysis_sha256 is not None and identity.threat_model_sha256 is not None:
+        prefix = f"bin:inputs2:{identity.analysis_sha256}:{identity.threat_model_sha256}"
+    else:
+        prefix = (f"bin:inputs1:{identity.analysis_sha256}" if identity.analysis_sha256 is not None
+                  else "bin:view1")
     return (f"{prefix}:{identity.representation}:{identity.view_sha256}:"
             f"{identity.module_sha256}:{identity.address:x}:{identity.size:x}")
 
@@ -245,10 +254,18 @@ def capture_binary_input_identity(ctx: dict, scope: BinaryReviewPublicationScope
         if (not isinstance(analysis, str) or _SHA256.fullmatch(analysis) is None
                 or database is None or database_projection_digest(database, _MAX_REDB_BYTES) != analysis):
             return None
+    threat = ctx.get("_binary_threat_model_sha256")
+    if threat is not None:
+        from .binary_context import _load_threat_model
+        from .binary_threat_inputs import binary_threat_material_digest
+        if (not isinstance(threat, str) or _SHA256.fullmatch(threat) is None
+                or binary_threat_material_digest(ctx.get("threat_model")) != threat
+                or binary_threat_material_digest(_load_threat_model(scope.module.path)) != threat):
+            return None
     try:
         return BinaryInputIdentity(scope.module.sha256, scope.module.version,
             scope.address, scope.size, representation, sha256(source.encode("utf-8")).hexdigest(),
-            analysis_sha256=analysis)
+            analysis_sha256=analysis, threat_model_sha256=threat)
     except (UnicodeEncodeError, ValueError):
         return None
 

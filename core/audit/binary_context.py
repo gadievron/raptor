@@ -625,6 +625,8 @@ def assemble_binary_context(
     ctx["is_prior_audit_annotation"] = False
     ctx["sinks"] = _binary_sinks(context_map, function_name, address, func)
     ctx["threat_model"] = _load_threat_model(target_path)
+    from .binary_threat_inputs import binary_threat_material_digest
+    ctx["_binary_threat_model_sha256"] = binary_threat_material_digest(ctx["threat_model"])
     ctx["trust_surface"] = []
     ctx["prior_attempts"] = {}
     ctx["shared_state"] = {}
