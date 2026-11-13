@@ -1270,7 +1270,7 @@ def run_sandboxed(cmd: list[str], *,
 
     # Harvest only after a launched shim has been reaped. Preparation
     # failures have no writer to report; close their endpoints without a read.
-    _status_state: dict = {"done": False, "data": b""}
+    _status_state: dict = {"done": False, "data": b"", "read_failed": False}
 
     def _harvest_status() -> bytes:
         if _status_state["done"]:
@@ -1282,12 +1282,15 @@ def run_sandboxed(cmd: list[str], *,
             _close_parent_fd_once(status_w)
             if read_fd is not None:
                 while True:
-                    chunk = os.read(read_fd, 4096)
+                    try:
+                        chunk = os.read(read_fd, 4096)
+                    except InterruptedError:
+                        continue
                     if not chunk:
                         break
                     data += chunk
         except OSError:
-            pass
+            _status_state["read_failed"] = True
         finally:
             _close_parent_fd_once(status_r)
         _status_state["data"] = data
@@ -1700,6 +1703,12 @@ def run_sandboxed(cmd: list[str], *,
             (f"unrecognised bytes on the seatbelt status channel "
              f"({_leftover[:16]!r}) — protocol violation; refusing "
              f"to trust the result"),
+        )
+    elif _status_state["read_failed"]:
+        result._setup_status = (  # type: ignore[attr-defined]
+            "B",
+            ("seatbelt status channel read failed; execution status is "
+             "unknown and the result must not be trusted"),
         )
     elif _READY_BYTE in _status_bytes:
         result._setup_status = None  # type: ignore[attr-defined]
