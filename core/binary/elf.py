@@ -744,7 +744,7 @@ def is_packed(path: Path) -> str | None:
     :func:`_shannon_entropy`.
     """
     try:
-        with Path(path).open("rb") as f:
+        with preserving_stream_error(Path(path).open("rb")) as f:
             head = f.read(4096)
     except OSError:
         return None
