@@ -1425,29 +1425,29 @@ def module_dynamic_namespace(
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
             if value.func.attr == "pop" and not value.args:
-                pending_sets = [receiver]
-                seen_sets = set()
-                set_members = []
-                recognised_set = False
-                while pending_sets:
-                    set_receiver = pending_sets.pop()
-                    if set_receiver in seen_sets:
+                pending_pop_receivers = [receiver]
+                seen_pop_receivers = set()
+                popped_members = []
+                recognised_pop_origin = False
+                while pending_pop_receivers:
+                    pop_receiver = pending_pop_receivers.pop()
+                    if pop_receiver in seen_pop_receivers:
                         continue
-                    seen_sets.add(set_receiver)
-                    if isinstance(set_receiver, ast.NamedExpr):
-                        pending_sets.append(set_receiver.value)
-                    elif isinstance(set_receiver, ast.IfExp):
-                        pending_sets.extend((set_receiver.body, set_receiver.orelse))
-                    elif isinstance(set_receiver, ast.BoolOp):
-                        pending_sets.extend(set_receiver.values)
-                    elif (isinstance(set_receiver, ast.Set)
-                          or literal_set_operation_sources(set_receiver) is not None):
-                        sources = sequence_iteration_values(set_receiver)
+                    seen_pop_receivers.add(pop_receiver)
+                    if isinstance(pop_receiver, ast.NamedExpr):
+                        pending_pop_receivers.append(pop_receiver.value)
+                    elif isinstance(pop_receiver, ast.IfExp):
+                        pending_pop_receivers.extend((pop_receiver.body, pop_receiver.orelse))
+                    elif isinstance(pop_receiver, ast.BoolOp):
+                        pending_pop_receivers.extend(pop_receiver.values)
+                    elif (isinstance(pop_receiver, (ast.List, ast.Set))
+                          or literal_set_operation_sources(pop_receiver) is not None):
+                        sources = sequence_iteration_values(pop_receiver)
                         if sources is not None:
-                            recognised_set = True
-                            set_members.extend(sources)
-                if recognised_set:
-                    return tuple(set_members)
+                            recognised_pop_origin = True
+                            popped_members.extend(sources)
+                if recognised_pop_origin:
+                    return tuple(popped_members)
             if value.func.attr == "pop" and not value.args:
                 selected = selected_literal_value(receiver)
                 if isinstance(selected, ast.List):
