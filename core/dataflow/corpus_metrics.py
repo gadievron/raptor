@@ -20,6 +20,7 @@ from pathlib import Path
 
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
+    VALID_VERDICTS,
     VERDICT_FALSE_POSITIVE,
     VERDICT_TRUE_POSITIVE,
 )
@@ -69,9 +70,15 @@ def compute(csv_path: Path) -> Metrics:
     with csv_path.open(encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            m.total += 1
             label = row["label_verdict"]
             v = row["validator_label"]
+            if label not in VALID_VERDICTS:
+                msg = f"invalid label_verdict at CSV line {reader.line_num}: {label!r}"
+                raise ValueError(msg)
+            if v not in VALID_VERDICTS and v != "uncertain":
+                msg = f"invalid validator_label at CSV line {reader.line_num}: {v!r}"
+                raise ValueError(msg)
+            m.total += 1
             if label == VERDICT_FALSE_POSITIVE and row["fp_category"]:
                 m.fp_categories[row["fp_category"]] += 1
             if v == "uncertain":
