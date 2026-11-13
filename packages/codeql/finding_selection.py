@@ -172,6 +172,8 @@ def _scan_file(
         first_result = next(results, None)
         if first_result is None:
             continue
+        second_result = next(results, None)
+        prefix = (first_result,) if second_result is None else (first_result, second_result)
         run_key: str | None = None
         rule_owners: dict[int, dict] = {}
         context_keys: dict[tuple[str, int], str] = {}
@@ -182,7 +184,7 @@ def _scan_file(
             index = result.get("ruleIndex")
             # A single result cannot amortize an ID index. Ordinary indexed
             # references already validate in constant time without a cache.
-            if (len(run["results"]) == 1 or ("rule" not in result
+            if (second_result is None or ("rule" not in result
                     and type(index) is int and index >= 0)):
                 return get_result_rule(run, result)
             if rule_resolver is None:
@@ -198,7 +200,7 @@ def _scan_file(
                     rule_owners.update({id(rule): component for rule in component["rules"]
                                         if isinstance(rule, dict)})
         analysis_run = None
-        for result in chain((first_result,), results):
+        for result in chain(prefix, results):
             candidate_count += 1
             rule = resolve_rule(result)
             duplicate_key = _duplicate_key(run, result, rule, rule_owners.get(id(rule)), context_keys)
