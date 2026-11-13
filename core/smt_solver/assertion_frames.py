@@ -7,7 +7,7 @@ from typing import Any
 
 from core.logging import get_logger
 
-from .availability import z3
+from .availability import Z3_ERRORS, z3
 from .explain import track
 from .session import check_solver
 
@@ -47,7 +47,7 @@ class TrackedFrames:
             return len(current) == len(self._assertions) and all(
                 actual.eq(original) for actual, original in zip(current, self._assertions, strict=True)
             )
-        except (z3.Z3Exception, AttributeError):
+        except (*Z3_ERRORS, AttributeError):
             return False
 
     def check(self) -> Any:
