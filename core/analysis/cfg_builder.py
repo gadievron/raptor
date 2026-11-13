@@ -278,6 +278,10 @@ def _statement_expr_roots(stmt: ast.stmt) -> list[ast.AST]:
     symbol-aware extractor stay in lockstep on what "statement-level"
     means.
     """
+    if hasattr(ast, "TypeAlias") and isinstance(stmt, ast.TypeAlias):
+        # Only the alias name is bound now. Its value and type-parameter
+        # bounds/defaults run lazily in annotation scopes.
+        return [stmt.name]
     if isinstance(stmt, ast.AnnAssign):
         # These nodes belong to a function body: local annotations are
         # never evaluated. Without an RHS a bare name is not rebound,
