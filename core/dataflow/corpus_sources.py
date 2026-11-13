@@ -95,7 +95,7 @@ def parse_pinned_sources(text: str) -> list[PinnedSource]:
             sha = m.group(1).lower()
             continue
         m = _PATH_LINE.match(line)
-        if m and name is not None and sha is not None and path is None:
+        if m and name is not None and path is None:
             path = m.group(1)
     _flush()
     return out
