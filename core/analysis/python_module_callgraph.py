@@ -1033,6 +1033,12 @@ def module_dynamic_namespace(
             return None
         dictionary = selected_literal_value(value.func.value)
         if not isinstance(dictionary, ast.Dict):
+            receiver = value.func.value
+            if (value.func.attr == "values" and isinstance(receiver, ast.Call)
+                    and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
+                    and not receiver.args and receiver.keywords
+                    and all(item.arg is not None for item in receiver.keywords)):
+                return tuple(item.value for item in receiver.keywords)
             return None
         if value.func.attr == "keys":
             return literal_dictionary_keys(dictionary)
