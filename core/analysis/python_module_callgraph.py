@@ -1234,6 +1234,16 @@ def module_dynamic_namespace(
                 recognised = True
                 members.extend(literal_member_values(container.left) or ())
                 members.extend(literal_member_values(container.right) or ())
+            elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.Mult):
+                for source, count in ((container.left, container.right), (container.right, container.left)):
+                    if (isinstance(source, (ast.Tuple, ast.List)) and isinstance(count, ast.Constant)
+                            and type(count.value) is int and count.value > 0):
+                        recognised = True
+                        members.extend(literal_member_values(source) or ())
+                        break
+                else:
+                    if not copied:
+                        members.append(container)
             elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.BitOr):
                 for source, empty in ((container.left, container.right), (container.right, container.left)):
                     if isinstance(empty, ast.Dict) and not empty.keys:
