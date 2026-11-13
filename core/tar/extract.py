@@ -233,11 +233,28 @@ def _budgeted_tarinfo(budget: int, consumed: dict[str, int]) -> type:
 
         def _proc_gnusparse_10(self, member, pax_headers, tarobj):
             source = tarobj.fileobj
+            stored_size = member.size
+            before_map = consumed["total"]
+            reliable = ("size" not in pax_headers and not any(
+                key in tarobj.pax_headers for key in
+                ("size", "GNU.sparse.size", "GNU.sparse.realsize")))
             tarobj.fileobj = _SparseMetadataReader(source)
             try:
-                return super()._proc_gnusparse_10(member, pax_headers, tarobj)
+                result = super()._proc_gnusparse_10(member, pax_headers, tarobj)
             finally:
                 tarobj.fileobj = source
+            unsafe = (getattr(member, "_pax10_unsafe", False)
+                      or hasattr(member, "_pax10_storage") or not reliable)
+            member._pax10_unsafe = unsafe
+            member._pax10_storage = (stored_size,
+                                     consumed["total"] - before_map, not unsafe)
+            return result
+
+        def _proc_pax(self, tarobj):
+            member = super()._proc_pax(tarobj)
+            if "size" in member.pax_headers:
+                member._pax_size_override = True
+            return member
 
         def _proc_member(self, tarobj):
             if self.type in _METADATA_MEMBER_TYPES:
@@ -370,7 +387,13 @@ def extract_files_from_tar(
                 # time metadata charging (see _budgeted_tarinfo) so
                 # one budget bounds everything the stream makes
                 # tarfile consume.
-                consumed["total"] += member.size
+                member_bytes = member.size
+                storage = getattr(member, "_pax10_storage", None)
+                if storage is not None and not getattr(member, "_pax_size_override", False):
+                    stored_size, map_bytes, reliable = storage
+                    if reliable:
+                        member_bytes = max(member_bytes, stored_size - map_bytes)
+                consumed["total"] += member_bytes
                 if consumed["total"] > max_total_bytes:
                     msg = (
                         f"tar decompression exceeds {max_total_bytes} bytes "
