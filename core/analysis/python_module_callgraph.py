@@ -1477,8 +1477,12 @@ def module_dynamic_namespace(
             continue
         if isinstance(statement, (ast.For, ast.comprehension)):
             if isinstance(statement.iter, (ast.Tuple, ast.List)):
-                items = tuple(item for item in statement.iter.elts
-                              if not isinstance(item, ast.Starred))
+                items = []
+                for item in statement.iter.elts:
+                    if not isinstance(item, ast.Starred):
+                        items.append(item)
+                    elif not (isinstance(statement, ast.comprehension) and statement.is_async):
+                        items.extend(sequence_iteration_values(item.value) or ())
             else:
                 items = sequence_iteration_values(statement.iter) or ()
             pending = [(statement.target, item) for item in items]
