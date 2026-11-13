@@ -2425,8 +2425,14 @@ _ContextReviewBarriers = dict[tuple[str, str], dict[int, _ContextReviewBarrier]]
 def _review_context_binding(entry) -> tuple[bool, _ContextReviewBinding]:
     """Recognise durable input bindings without granting them authority."""
     from .reference_inputs import review_context_digest
+    from .binary_context_inputs import binary_context_bound, binary_context_record_digest
 
     history = getattr(entry, "review_claims", None)
+    if binary_context_bound(getattr(entry, "source_hash", None), history):
+        snapshot = history.get("binary_inputs") if isinstance(history, dict) else None
+        source_hash = getattr(entry, "source_hash", "")
+        return True, (source_hash if isinstance(source_hash, str) else "",
+                      binary_context_record_digest(snapshot))
     present = isinstance(history, dict) and any(field in history for field in ("source_inputs", "reference_inputs"))
     snapshot = history.get("source_inputs") if isinstance(history, dict) else None
     references = (history["reference_inputs"] if history["reference_inputs"] is not None else {}) if (
@@ -2446,6 +2452,10 @@ def _review_context_current(entry, target_path: Path | None, source_roots=None) 
     bound, (source_hash, digest) = _review_context_binding(entry)
     if not bound:
         return True
+    from .binary_context_inputs import binary_context_bound
+    if binary_context_bound(source_hash, getattr(entry, "review_claims", None)):
+        # A cold row cannot recreate the original live module/view capability.
+        return False
     anchor = parse_context_source_anchor(source_hash)
     if anchor is None or digest is None or anchor[2] != digest:
         return False

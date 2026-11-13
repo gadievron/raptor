@@ -86,6 +86,10 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
         from .reference_inputs import merge_reference_inputs
         history["reference_inputs"] = merge_reference_inputs(
             value["reference_inputs"] if value["reference_inputs"] is not None else {})
+    if isinstance(value, dict) and "binary_inputs" in value:
+        from .binary_context_inputs import merge_binary_context_inputs
+        history["binary_inputs"] = merge_binary_context_inputs(
+            value["binary_inputs"] if value["binary_inputs"] is not None else {})
     review = history["review"]
     origin = review.get("origin") if isinstance(review, dict) else None
     occurrence = (origin.get("file"), origin.get("function"), origin.get("line_start")) if isinstance(origin, dict) else None
@@ -130,7 +134,7 @@ def record_intake(value: object, revisions: list[ClaimRevision]) -> dict[str, An
 def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
     """Retain contributing attempts without attributing new text to old IDs."""
     left, right = read_history(prior), read_history(fresh)
-    has_dependencies = any(isinstance(value, dict) and any(field in value for field in ("source_inputs", "reference_inputs"))
+    has_dependencies = any(isinstance(value, dict) and any(field in value for field in ("source_inputs", "reference_inputs", "binary_inputs"))
                            for value in (prior, fresh))
     if left is None and right is None and not has_dependencies:
         return None
@@ -151,6 +155,12 @@ def merge_history(prior: object, fresh: object) -> dict[str, Any] | None:
                                           if isinstance(value, dict) and "reference_inputs" in value))
     if references is not None:
         result["reference_inputs"] = references
+    from .binary_context_inputs import merge_binary_context_inputs
+    binary = merge_binary_context_inputs(*(value["binary_inputs"] if value["binary_inputs"] is not None else {}
+                                          for value in (prior, fresh)
+                                          if isinstance(value, dict) and "binary_inputs" in value))
+    if binary is not None:
+        result["binary_inputs"] = binary
     # All producer omission reasons are fixed strings. Keep them distinct so
     # repeated merges cannot grow the envelope through repeated warnings.
     for history in histories:
@@ -181,9 +191,11 @@ def panel_context_history(primary_history: object, member_results: list[dict]) -
     from .review_context_inputs import merge_context_inputs
 
     from .reference_inputs import merge_reference_inputs
+    from .binary_context_inputs import merge_binary_context_inputs
     retained = {}
     for field, merger in (("source_inputs", merge_context_inputs),
-                          ("reference_inputs", merge_reference_inputs)):
+                          ("reference_inputs", merge_reference_inputs),
+                          ("binary_inputs", merge_binary_context_inputs)):
         contributors = []
         for member in member_results:
             member_history = member.get("review_claims")

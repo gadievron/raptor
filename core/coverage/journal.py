@@ -2895,8 +2895,9 @@ def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
     # Leave these reviews in the journal, whose reader admits their current
     # inputs before awarding occurrence-specific credit. A stamped projection
     # would otherwise turn a stale caller into permanent review coverage.
-    if ((isinstance(entry.source_hash, str) and entry.source_hash.startswith("src:ctx"))
-            or (isinstance(entry.review_claims, dict) and "source_inputs" in entry.review_claims)):
+    if ((isinstance(entry.source_hash, str) and entry.source_hash.startswith(("src:ctx", "bin:ctx")))
+            or (isinstance(entry.review_claims, dict)
+                and any(key in entry.review_claims for key in ("source_inputs", "binary_inputs")))):
         return False
     return (
         entry.verdict not in ("error", "dark")
