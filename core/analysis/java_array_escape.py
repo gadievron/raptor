@@ -244,6 +244,9 @@ def build_local_array_index(
     except Exception:  # noqa: BLE001 — arbitrary scanned source
         return None
 
+    if tree.root_node.has_error:
+        return None  # An incomplete tree cannot enumerate every array write.
+
     idx = LocalArrayIndex(ok=True)
     types, statics = build_import_map(tree.root_node)
     from core.analysis.cfg_builder_java import (
