@@ -112,6 +112,17 @@ def test_order_and_duplicate_names_do_not_buy_another_pass(selected):
 
 def test_new_leads_share_existing_two_round_cap(selected):
     _, config, runtime, client, owner, ctx = selected
+    # This particular control models exactly one observed dispatch per call.
+    original = client.generate_structured
+
+    def observed(prompt, schema, **kwargs):
+        admission = kwargs.pop("accounting_attempt_admission", None)
+        if admission is not None:
+            admission()
+        return original(prompt, schema, **kwargs)
+
+    client._attempt_admission_protocol = 1
+    client.generate_structured = observed
     for index in range(2):
         ctx["live_sinks"].append(f"new_{index}")
         owner.dispatch(index, ctx, config)
