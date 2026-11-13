@@ -22,6 +22,7 @@ import core.audit.sweep as sweep_mod
 from core.audit.run_memo import BoundedMemo
 from core.audit.sweep import run_codeql_sweep
 from core.testing.module_views import scoped_function_imports
+from core.testing.threads import retiring_threads
 
 
 @pytest.fixture(autouse=True)
@@ -326,14 +327,15 @@ class TestBoundedMemo:
             results.append(memo.get_or_compute(("k",), slow_compute))
 
         threads = [threading.Thread(target=worker) for _ in range(4)]
-        for t in threads[:1]:
-            t.start()
-        assert entered.wait(timeout=10)
-        for t in threads[1:]:
-            t.start()
-        release.set()
-        for t in threads:
-            t.join(timeout=10)
+        with retiring_threads(threads, release=release.set, timeout=10):
+            for t in threads[:1]:
+                t.start()
+            assert entered.wait(timeout=10)
+            for t in threads[1:]:
+                t.start()
+            release.set()
+            for t in threads:
+                t.join(timeout=10)
         assert len(computes) == 1
         assert all(value == "value" for value, _ in results)
         assert sum(1 for _, cached in results if cached) == 3
