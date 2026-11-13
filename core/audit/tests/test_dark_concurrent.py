@@ -141,21 +141,21 @@ class TestDrainDarkProbes:
         )
         import concurrent.futures
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = executor.submit(lambda: _VerifyResult("confirmed"))
-        fut.result()  # Wait for completion.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(lambda: _VerifyResult("confirmed"))
+            fut.result()  # Wait for completion.
 
-        handled = _drain_dark_probes(
-            result, _config(tmp_path),
-            dark_outcomes=[o],
-            futures=[fut],
-            executor=executor,
-        )
-        assert id(o) in handled
-        assert o.status == "finding"
-        assert result.findings == 1
-        assert result.dormant == 0
-        assert "dark_verify:sanitizer-violation" in (o.evidence_tool or "")
+            handled = _drain_dark_probes(
+                result, _config(tmp_path),
+                dark_outcomes=[o],
+                futures=[fut],
+                executor=executor,
+            )
+            assert id(o) in handled
+            assert o.status == "finding"
+            assert result.findings == 1
+            assert result.dormant == 0
+            assert "dark_verify:sanitizer-violation" in (o.evidence_tool or "")
 
     def test_nonreproduction_preserves_dark(self, tmp_path):
         """A failed witness prediction leaves the original dark verdict."""
@@ -165,20 +165,20 @@ class TestDrainDarkProbes:
         )
         import concurrent.futures
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = executor.submit(lambda: _VerifyResult("refuted"))
-        fut.result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(lambda: _VerifyResult("refuted"))
+            fut.result()
 
-        handled = _drain_dark_probes(
-            result, _config(tmp_path),
-            dark_outcomes=[o],
-            futures=[fut],
-            executor=executor,
-        )
-        assert id(o) in handled
-        assert o.status == "dark"
-        assert result.clean == 0
-        assert result.dormant == 1
+            handled = _drain_dark_probes(
+                result, _config(tmp_path),
+                dark_outcomes=[o],
+                futures=[fut],
+                executor=executor,
+            )
+            assert id(o) in handled
+            assert o.status == "dark"
+            assert result.clean == 0
+            assert result.dormant == 1
 
     def test_none_result_handled_but_no_verdict(self, tmp_path):
         """A probe returning None is still marked handled (no duplicate)."""
@@ -186,17 +186,17 @@ class TestDrainDarkProbes:
         result = OrchestratorResult(outcomes=[o], dormant=1)
         import concurrent.futures
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = executor.submit(lambda: None)
-        fut.result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(lambda: None)
+            fut.result()
 
-        handled = _drain_dark_probes(
-            result, _config(tmp_path),
-            dark_outcomes=[o], futures=[fut], executor=executor,
-        )
-        assert id(o) in handled
-        assert o.status == "dark"
-        assert result.dormant == 1
+            handled = _drain_dark_probes(
+                result, _config(tmp_path),
+                dark_outcomes=[o], futures=[fut], executor=executor,
+            )
+            assert id(o) in handled
+            assert o.status == "dark"
+            assert result.dormant == 1
 
     def test_timeout_abandons_slow_probes(self, tmp_path):
         """Probes exceeding the timeout are cancelled and not applied."""
@@ -233,21 +233,21 @@ class TestDrainDarkProbes:
         )
         import concurrent.futures
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-        futures = [
-            executor.submit(lambda o=o: _VerifyResult("confirmed", finding_key=f"{o.file}:{o.function}"))
-            for o in outcomes
-        ]
-        concurrent.futures.wait(futures, timeout=5)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [
+                executor.submit(lambda o=o: _VerifyResult("confirmed", finding_key=f"{o.file}:{o.function}"))
+                for o in outcomes
+            ]
+            concurrent.futures.wait(futures, timeout=5)
 
-        handled = _drain_dark_probes(
-            result, _config(tmp_path),
-            dark_outcomes=outcomes, futures=futures, executor=executor,
-        )
-        assert len(handled) == 5
-        assert result.findings == 5
-        assert result.dormant == 0
-        assert all(o.status == "finding" for o in outcomes)
+            handled = _drain_dark_probes(
+                result, _config(tmp_path),
+                dark_outcomes=outcomes, futures=futures, executor=executor,
+            )
+            assert len(handled) == 5
+            assert result.findings == 5
+            assert result.dormant == 0
+            assert all(o.status == "finding" for o in outcomes)
 
     def test_results_file_written(self, tmp_path):
         """Drain writes dark-verify-early-results.json when probes apply."""
@@ -258,19 +258,19 @@ class TestDrainDarkProbes:
         result = OrchestratorResult(outcomes=[o], dormant=1)
         cfg = _config(tmp_path)
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        fut = executor.submit(lambda: _VerifyResult("confirmed"))
-        fut.result()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            fut = executor.submit(lambda: _VerifyResult("confirmed"))
+            fut.result()
 
-        _drain_dark_probes(
-            result, cfg,
-            dark_outcomes=[o], futures=[fut], executor=executor,
-        )
-        results_path = Path(cfg.out_dir) / "dark-verify-early-results.json"
-        assert results_path.exists()
-        data = json.loads(results_path.read_text())
-        assert len(data) == 1
-        assert data[0]["verdict"] == "confirmed"
+            _drain_dark_probes(
+                result, cfg,
+                dark_outcomes=[o], futures=[fut], executor=executor,
+            )
+            results_path = Path(cfg.out_dir) / "dark-verify-early-results.json"
+            assert results_path.exists()
+            data = json.loads(results_path.read_text())
+            assert len(data) == 1
+            assert data[0]["verdict"] == "confirmed"
 
 
 class TestDarkHandledSkip:
