@@ -7,7 +7,7 @@ NON-``load_json`` idiom (per-line loads over an open(), a plain
 them — and the live ones were measured OOM levers on the render and
 prompt-assembly paths. Each member's budget is pinned with a peak
 memory bound (deterministic: the plant is written locally, the
-reader runs in-process).
+reader runs in-process unless a tracing session is borrowed).
 """
 
 from __future__ import annotations
@@ -16,16 +16,62 @@ import json
 import tracemalloc
 
 from core.coverage.store_summary import format_progress_trend
+from core.testing.processes import run_in_process_group as _run_memory_process
 
 
 def _peak(fn):
-    tracemalloc.start()
+    assert not tracemalloc.is_tracing(), "memory measurement requires an owned trace"
     try:
+        tracemalloc.start()
         result = fn()
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
     return result, peak
+
+
+_MEMORY_CASES = {
+    ("TestProgressTrend", "test_render_memory_is_bounded"),
+    ("TestVerifiedOutcomesTrail", "test_oversize_trail_loads_as_empty"),
+    ("TestTrajectoryIteration", "test_oversize_trajectory_skipped_without_buffering"),
+}
+
+
+def _run_reader_memory_proof(tmp_path, owner, method):
+    """Measure the native reader without consuming a borrowed tracing session."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    assert (owner, method) in _MEMORY_CASES
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.coverage.tests import test_reader_budgets as native
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+case = (sys.argv[3], sys.argv[4])
+assert case in native._MEMORY_CASES
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    getattr(getattr(native, case[0])(), case[1])(owned)
+print("reader-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path), owner, method],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "reader-memory-proof-ok", result.stdout
 
 
 class TestProgressTrend:
@@ -52,6 +98,10 @@ class TestProgressTrend:
         assert line is not None and "(1 run recorded)" in line
 
     def test_render_memory_is_bounded(self, tmp_path):
+        if tracemalloc.is_tracing():
+            _run_reader_memory_proof(tmp_path, "TestProgressTrend", "test_render_memory_is_bounded")
+            return
+
         # A planted multi-MB trail renders on EVERY coverage report;
         # the reader must retain two rows, not all of them (a 48 MB
         # plant measured +215 MB peak RSS pre-fix).
@@ -115,6 +165,10 @@ class TestVerifiedOutcomesTrail:
         )
 
     def test_oversize_trail_loads_as_empty(self, tmp_path):
+        if tracemalloc.is_tracing():
+            _run_reader_memory_proof(tmp_path, "TestVerifiedOutcomesTrail", "test_oversize_trail_loads_as_empty")
+            return
+
         from core.labeled_attempts.view import (
             _MAX_OUTCOMES_TRAIL_BYTES,
             collect_outcomes,
@@ -135,6 +189,13 @@ class TestVerifiedOutcomesTrail:
 class TestTrajectoryIteration:
     def test_oversize_trajectory_skipped_without_buffering(
             self, tmp_path):
+        if tracemalloc.is_tracing():
+            _run_reader_memory_proof(
+                tmp_path, "TestTrajectoryIteration",
+                "test_oversize_trajectory_skipped_without_buffering",
+            )
+            return
+
         from core.trajectories.store import (
             _MAX_TRAJECTORY_BYTES,
             iter_trajectory_json,
