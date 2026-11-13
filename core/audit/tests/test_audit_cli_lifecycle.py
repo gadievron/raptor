@@ -14,6 +14,30 @@ from pathlib import Path
 from unittest.mock import patch
 from types import SimpleNamespace
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _owned_run_locks(monkeypatch):
+    from core.audit import run_lock
+
+    inherited = tuple(run_lock._HELD)
+    acquired = []
+    acquire = run_lock.acquire_run_lock
+
+    def tracked_acquire(*args, **kwargs):
+        handle = acquire(*args, **kwargs)
+        if all(handle is not existing for existing in (*inherited, *acquired)):
+            acquired.append(handle)
+        return handle
+
+    monkeypatch.setattr(run_lock, "acquire_run_lock", tracked_acquire)
+    try:
+        yield
+    finally:
+        for handle in reversed(acquired):
+            handle.release()
+
 
 def _load_cli():
     cli_path = str(
