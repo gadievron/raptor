@@ -154,3 +154,56 @@ def test_historical_retriage_does_not_require_ephemeral_parent_memory(
     report = json.loads(capsys.readouterr().out)
     assert report["inputs"]["mac_key_posture"] == "unknown"
     assert triage.verify_triage_report(report, run) == "verified"
+
+
+@pytest.mark.parametrize("capture", ["clean", "loss", "reserve", "edited-counters"])
+def test_proxy_buffer_limit_cannot_attest_complete_capture(
+    authenticated_run, monkeypatch, capsys, capture,
+):
+    import itertools
+
+    from core.sandbox import context, proxy
+
+    run, write = authenticated_run
+    write([{"type": "write", "path": "/tmp/owned", "verdict": "allow"}])
+    events = [{"host": "kept.example", "result": "allowed"}]
+    if capture != "clean":
+        # The actual marker producer needs only owned Python state;
+        # no proxy construction, thread, socket or target execution.
+        monkeypatch.setattr(proxy, '_SANDBOX_BUFFER_MAX_EVENTS', 1)
+        producer = object.__new__(proxy.EgressProxy)
+        producer._sandbox_buffer_overflow = {}
+        producer._event_seq = itertools.count()
+        producer._stats_events = {'buffer_overflow': 0}
+        producer._append_bounded_locked(1, events, {
+            'host': 'later.example',
+            'result': 'denied_host' if capture == 'reserve' else 'allowed',
+        })
+        marker = next(e for e in events if e['result'] == 'buffer_overflow')
+        assert marker['dropped'] == (0 if capture == 'reserve' else 1)
+    # Persistence sequence state is owned by this case, not the caller.
+    monkeypatch.setattr(context, '_PROXY_STREAM_STATE', {})
+    context._persist_proxy_events(events, output=run)
+    if capture == 'edited-counters':
+        # These counters are outside the event MAC. They cannot promote
+        # a capped stream to complete, even if edited to look loss-free.
+        path = run / proxy.PROXY_EVENTS_FILENAME
+        rows = [json.loads(line) for line in path.read_text().splitlines()]
+        for row in rows:
+            if row['result'] == 'buffer_overflow':
+                row['dropped'] = row['dropped_denials'] = 0
+        path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    expected = 0 if capture == 'clean' else 1
+    assert triage._cli_main([str(run), '--json']) == 0
+    inspection = json.loads(capsys.readouterr().out)
+    assert inspection['verdict'] == 'clean'
+    assert any('Proxy capture' in note for note in inspection['caveats']) is bool(expected)
+    assert triage._cli_main([str(run), '--require-evidence', '--json']) == expected
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert report['inputs']['integrity']['proxy_events'] == 'verified'
+    assert report['verdict'] == 'clean'  # Capture limits do not establish intent.
+    assert triage.verify_triage_report(report, run) == 'verified'
+    assert report['inputs'].get('proxy_capture_unconfirmed', False) is bool(expected)
+    assert any('Proxy capture' in note for note in report['caveats']) is bool(expected)
+    assert ('proxy event capture is unconfirmed' in captured.err) is bool(expected)
