@@ -1069,43 +1069,61 @@ def _ledger_lock(pid: int) -> Iterator[None]:
         except OSError:
             yield
             return
+        failed = False
         try:
-            from core.atomic_fs.fs_lock import acquire_flock_bounded
-            acquired = acquire_flock_bounded(
-                fd, lock_path, subject="session ledger",
-                expiry_note=(
-                    "proceeding WITHOUT lock — ledger is "
-                    "best-effort data, never critical"
-                ),
-            )
-        except OSError:
-            os.close(fd)
-            logger.warning(
-                "sessions: ledger lock acquisition failed for pid %d "
-                "— proceeding UNLOCKED (best-effort data)", pid,
-                exc_info=True)
-            yield
-            return
-        if not acquired:
-            os.close(fd)
-            yield
-            return
-        try:
-            held = os.fstat(fd)
-            current = os.stat(str(lock_path))
-            same = (held.st_ino == current.st_ino
-                    and held.st_dev == current.st_dev)
-        except OSError:
-            same = False  # path unlinked under us — retry
-        if same:
             try:
+                from core.atomic_fs.fs_lock import acquire_flock_bounded
+                acquired = acquire_flock_bounded(
+                    fd, lock_path, subject="session ledger",
+                    expiry_note=(
+                        "proceeding WITHOUT lock — ledger is "
+                        "best-effort data, never critical"
+                    ),
+                )
+            except OSError:
+                owned, fd = fd, -1
+                os.close(owned)
+                logger.warning(
+                    "sessions: ledger lock acquisition failed for pid %d "
+                    "— proceeding UNLOCKED (best-effort data)", pid,
+                    exc_info=True)
                 yield
-            finally:
-                with contextlib.suppress(OSError):
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
-            return
-        os.close(fd)
+                return
+            if not acquired:
+                owned, fd = fd, -1
+                os.close(owned)
+                yield
+                return
+            try:
+                held = os.fstat(fd)
+                current = os.stat(str(lock_path))
+                same = (held.st_ino == current.st_ino
+                        and held.st_dev == current.st_dev)
+            except OSError:
+                same = False  # path unlinked under us — retry
+            if same:
+                try:
+                    yield
+                except BaseException:
+                    failed = True
+                    raise
+                finally:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except BaseException as exc:
+                        if not failed and not isinstance(exc, OSError):
+                            raise
+                return
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except BaseException:
+                    if not failed:
+                        raise
     # Persistent swapping (hostile or pathological): proceed unlocked
     # rather than deadlock — the ledger is an aid, never critical.
     logger.debug("sessions: ledger lock for pid %d kept vanishing — "
