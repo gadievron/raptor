@@ -405,14 +405,14 @@ class TestConfirmPrompt(unittest.TestCase):
 
     def test_eof_means_no(self):
         from core.project.cli import _confirm
-        with patch("builtins.input", side_effect=EOFError):
+        with patch("core.project.cli.input", create=True, side_effect=EOFError):
             self.assertFalse(_confirm("Proceed? [y/N] "))
 
     def test_yes_and_no_answers(self):
         from core.project.cli import _confirm
-        with patch("builtins.input", return_value="y"):
+        with patch("core.project.cli.input", create=True, return_value="y"):
             self.assertTrue(_confirm("Proceed? [y/N] "))
-        with patch("builtins.input", return_value="n"):
+        with patch("core.project.cli.input", create=True, return_value="n"):
             self.assertFalse(_confirm("Proceed? [y/N] "))
 
     def test_merge_without_yes_cancels_on_closed_stdin(self):
@@ -434,7 +434,7 @@ class TestConfirmPrompt(unittest.TestCase):
             project = Project(name="p", target=str(tmp / "code"),
                               output_dir=str(out))
             buf = io.StringIO()
-            with patch("builtins.input", side_effect=EOFError), \
+            with patch("core.project.cli.input", create=True, side_effect=EOFError), \
                     contextlib.redirect_stdout(buf):
                 _do_merge(project, "scan", yes=False)
             self.assertIn("Cancelled", buf.getvalue())
