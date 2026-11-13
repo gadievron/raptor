@@ -73,6 +73,12 @@ def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
         finding = Finding.from_json(_read_corpus_json(fp))
         label_path = fp.with_suffix(".label.json")
         label = GroundTruth.from_json(_read_corpus_json(label_path))
+        if label.finding_id != finding.finding_id:
+            msg = (
+                f"corpus finding/label id mismatch: {fp}: "
+                f"finding {finding.finding_id!r}, label {label.finding_id!r}"
+            )
+            raise ValueError(msg)
         yield finding, label
 
 
