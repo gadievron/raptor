@@ -178,13 +178,13 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
                 raise ValueError("Aggregate SARIF input limit exceeded during read")
             # Same guarded read supplies bytes provenance and parsed content.
             identity = metadata["sha256"]
+            from .lifecycle import input_digest
+            context.artifacts.append({"path": str(path), "digest": identity, "digest_kind": "sha256-bytes", "media_type": "application/sarif+json",
+                                      "canonical_digest": input_digest(data)})
             if identity in seen_digests:
                 context.diagnostics.append(f"Duplicate SARIF input omitted: {path.name}")
                 continue
             seen_digests.add(identity)
-            from .lifecycle import input_digest
-            context.artifacts.append({"path": str(path), "digest": identity, "digest_kind": "sha256-bytes", "media_type": "application/sarif+json",
-                                      "canonical_digest": input_digest(data)})
             runs = data["runs"]
             prepared: list[dict[str, Any]] = []
             remaining = max_findings - len(context.findings)
