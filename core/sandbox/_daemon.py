@@ -1580,10 +1580,17 @@ def _handle_conversation(payload: dict) -> dict:
             if not isinstance(hexstr, str):
                 return {"ok": False,
                         "error": f"sends[{i}].bytes_hex must be a string"}
+            text = hexstr.replace(" ", "").replace("\n", "")
+            # Valid hex has two non-whitespace characters per output byte.
+            # Refuse oversized sends before allocating their binary form.
+            hex_chars = len(text) - sum(text.count(ws) for ws in "\t\r\v\f")
+            decoded_size = (hex_chars + 1) // 2
+            if decoded_size > _MAX_SEND_BYTES:
+                return {"ok": False,
+                        "error": (f"sends[{i}] {decoded_size} > "
+                                  f"{_MAX_SEND_BYTES}")}
             try:
-                b = bytes.fromhex(
-                    hexstr.replace(" ", "").replace("\n", ""),
-                )
+                b = bytes.fromhex(text)
             except ValueError as e:
                 return {"ok": False,
                         "error": f"sends[{i}].bytes_hex: {e}"}
