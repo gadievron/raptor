@@ -21,6 +21,7 @@ from core.llm.models_config_perm import (
     refuse_exposed_inline_keys,
 )
 from core.logging import get_logger
+from core.source.streams import preserving_stream_error
 
 logger = get_logger()
 
@@ -467,7 +468,7 @@ def _try_auto_migrate(old_config: Path, new_config: Path) -> bool:
     })
 
     try:
-        with Path(old_config).open(encoding="utf-8") as f:
+        with preserving_stream_error(Path(old_config).open(encoding="utf-8")) as f:
             data = yaml.safe_load(f)
 
         if not data or not isinstance(data.get('model_list'), list):
