@@ -48,20 +48,21 @@ def test_wedged_holder_fails_the_save_after_bounded_wait(
     json_path = tmp_path / "threat-model.json"
     lock = tmp_path / "threat-model.json.lock"
     holder_fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT, 0o600)
-    errors: list[BaseException] = []
-    done = threading.Event()
-
-    def saver() -> None:
-        try:
-            with _model_write_lock(json_path):
-                pass
-        except OSError as exc:
-            errors.append(exc)
-        finally:
-            done.set()
-
-    thread = threading.Thread(target=saver, daemon=True)
+    thread = None
     try:
+        errors: list[BaseException] = []
+        done = threading.Event()
+
+        def saver() -> None:
+            try:
+                with _model_write_lock(json_path):
+                    pass
+            except OSError as exc:
+                errors.append(exc)
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=saver, daemon=True)
         fcntl.flock(holder_fd, fcntl.LOCK_EX)
         thread.start()
         assert done.wait(timeout=10), (
@@ -72,7 +73,7 @@ def test_wedged_holder_fails_the_save_after_bounded_wait(
         assert "refusing to save unserialised" in str(errors[0])
     finally:
         os.close(holder_fd)
-        if thread.ident is not None:
+        if thread is not None and thread.ident is not None:
             thread.join(timeout=10)
             assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
