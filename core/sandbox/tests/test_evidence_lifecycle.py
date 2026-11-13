@@ -103,55 +103,54 @@ def test_verification_exception_still_releases_descriptor(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize("verdict", [True, False])
 def test_concurrent_closers_share_one_verification_and_release(tmp_path, monkeypatch, verdict):
-    handle = evidence.EvidenceFile.open(tmp_path, "events.jsonl")
-    entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
-    verifications, closes, results, errors = [], [], [], []
-    real_close = os.close
+    from contextlib import ExitStack
+    from core.testing.threads import retiring_threads
 
-    def verify():
-        verifications.append(True)
-        entered.set()
-        assert release.wait(5)
-        return verdict
+    with ExitStack() as cleanup:
+        handle = evidence.EvidenceFile.open(tmp_path, "events.jsonl")
+        cleanup.callback(handle.close, verify=False)
+        entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
+        verifications, closes, results, errors = [], [], [], []
+        real_close = os.close
 
-    def close_fd(fd):
-        if fd == handle.fd:
-            closes.append(fd)
-            if len(closes) > 1:
-                raise OSError(errno.EBADF, "duplicate close intercepted")
-        return real_close(fd)
+        def verify():
+            verifications.append(True)
+            entered.set()
+            assert release.wait(5)
+            return verdict
 
-    def close(second=False):
-        if second:
-            second_started.set()
-        try:
-            results.append(handle.close())
-        except BaseException as exc:
-            errors.append(exc)
+        def close_fd(fd):
+            if fd == handle.fd:
+                closes.append(fd)
+                if len(closes) > 1:
+                    raise OSError(errno.EBADF, "duplicate close intercepted")
+            return real_close(fd)
 
-    monkeypatch.setattr(handle, "verify", verify)
-    patch_module_attribute(monkeypatch, evidence, "os", "close", close_fd)
-    first = threading.Thread(target=close, daemon=True)
-    second = threading.Thread(target=close, args=(True,), daemon=True)
-    first.start()
-    try:
-        assert entered.wait(5)
-        second.start()
-        assert second_started.wait(5)
-        release.set()
-        first.join(5)
-        second.join(5)
-        assert not first.is_alive() and not second.is_alive()
-        assert not errors
-        assert results == [verdict, verdict]
-        assert verifications == [True]
-        assert closes == [handle.fd]
-    finally:
-        release.set()
-        first.join(5)
-        if second.ident is not None:
+        def close(second=False):
+            if second:
+                second_started.set()
+            try:
+                results.append(handle.close())
+            except BaseException as exc:
+                errors.append(exc)
+
+        monkeypatch.setattr(handle, "verify", verify)
+        patch_module_attribute(monkeypatch, evidence, "os", "close", close_fd)
+        first = threading.Thread(target=close, daemon=True)
+        second = threading.Thread(target=close, args=(True,), daemon=True)
+        with retiring_threads((first, second), release=release.set, timeout=5):
+            first.start()
+            assert entered.wait(5)
+            second.start()
+            assert second_started.wait(5)
+            release.set()
+            first.join(5)
             second.join(5)
-        handle.close(verify=False)
+            assert not first.is_alive() and not second.is_alive()
+            assert not errors
+            assert results == [verdict, verdict]
+            assert verifications == [True]
+            assert closes == [handle.fd]
 
 
 def test_raw_descriptor_inheritor_does_not_need_parent_lock(tmp_path):
