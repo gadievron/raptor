@@ -135,6 +135,10 @@ class Finding:
         _require_nonempty("Finding.producer", self.producer)
         _require_nonempty("Finding.rule_id", self.rule_id)
         _require_nonempty("Finding.message", self.message)
+        if isinstance(self.intermediate_steps, (str, bytes, Mapping)):
+            raise ValueError("Finding.intermediate_steps must be an iterable of Step instances")
+        if not isinstance(self.raw, Mapping):
+            raise ValueError("Finding.raw must be an object")
         if not isinstance(self.intermediate_steps, tuple):
             self.intermediate_steps = tuple(self.intermediate_steps)
         if not all(isinstance(s, Step) for s in self.intermediate_steps):
