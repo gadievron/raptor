@@ -289,7 +289,7 @@ def _git_diff_other_files(
     sink_norm = _norm_uri(sink_uri)
     chunks: list = []
     total = 0
-    for path in files:
+    for index, path in enumerate(files):
         if path == sink_norm or _is_test_path(path):
             continue
         diff = _git_diff(repo, parent, fix, path, cap=per_file_cap,
@@ -313,6 +313,12 @@ def _git_diff_other_files(
         chunks.append(chunk)
         total += len(body_lines) + 1
         if total >= total_cap:
+            if any(p != sink_norm and not _is_test_path(p)
+                   for p in files[index + 1:]):
+                chunks.append(
+                    f"... [cross-file context truncated; total line cap {total_cap} "
+                    "reached; remaining files not examined]"
+                )
             break
     return "\n\n".join(chunks)
 
