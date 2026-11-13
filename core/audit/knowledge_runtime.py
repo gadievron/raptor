@@ -85,6 +85,7 @@ class AuditKnowledgeRuntime:
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
         self._reserving: set[tuple[str, str, int]] = set()
         self._context_deltas: dict[tuple, dict] = {}
+        self._binary_external_payloads: dict[tuple, tuple[str, object]] = {}
         self._external_deliveries: dict[str, list[list[dict]]] = {}
         self._knowledge_deliveries: dict[str, list[dict[str, list[dict]]]] = {}
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
@@ -372,6 +373,11 @@ class AuditKnowledgeRuntime:
                 if record is None or digest is None or retained != expected or binary_scope is None:
                     with self._lock:
                         self._live_input_errors.add(reservation.packet.pass_id)
+                        self._binary_review_scopes.pop((origin.pass_id, attempt_id), None)
+                    # Missing required context cannot downgrade this attempted
+                    # continuation into a publishable plain binary review.
+                    outcome.binary_publication_scope = None
+                    outcome.review_result["binary_review_binding"] = None
                 else:
                     history["binary_inputs"] = record
                     outcome.review_result["review_claims"] = history
@@ -581,7 +587,7 @@ class AuditKnowledgeRuntime:
                     scopes = []
                     break
                 owned = self._binary_review_scopes.get((pass_id, attempt_id))
-                if owned is None:
+                if pass_id in self._live_input_errors or owned is None:
                     scopes = []
                     break
                 scope, owned_origin = owned
@@ -615,8 +621,90 @@ class AuditKnowledgeRuntime:
         return (not answers or not any(a.materials for a in answers)
                 or any(self.bindings.admit(a)[0] for a in answers if a.materials))
 
+    def _register_binary_subjects(self, origin: BinaryKnowledgeOrigin, ctx: dict,
+                                  batch: KnowledgeBatch) -> None:
+        """Keep recovered metadata out of source-study requests and receipts."""
+        from .binary_subjects import BinarySubjectContext, resolve_binary_subjects
+        from .continuation_context import context_version
+
+        key = self._key(origin)
+        accepted = []
+        with self._lock:
+            self._events.append({"event": "requests_registered", "origin": asdict(origin),
+                                 "accepted": [asdict(r) for r in batch.accepted],
+                                 "rejected": [asdict(r) for r in batch.rejected]})
+            for request in batch.accepted:
+                signature = self._signature(request, ctx)
+                duplicate = self._semantic_requests.get(signature)
+                self._requests[request.request_id] = request
+                if duplicate is not None:
+                    self._request_status[request.request_id] = {"state": "duplicate", "duplicate_of": duplicate}
+                    self._events.append({"event": "request_duplicate", "request_id": request.request_id,
+                                         "duplicate_of": duplicate, "pass_id": origin.pass_id})
+                else:
+                    self._semantic_requests[signature] = request.request_id
+                    accepted.append(request)
+            owned = next((scope for scope, original in self._binary_review_scopes.values()
+                          if original == origin), None)
+            refusal = ("runtime_closed" if self._closed else
+                       "deadline" if monotonic() >= self.deadline else
+                       "model_call_count_unavailable" if key in self._unknown_calls else "")
+        targets = []
+        for request in accepted:
+            if request.kind == "language_reference":
+                answer = lookup(request.request_id, request.subject, ReferenceContext("binary"),
+                                entry_id=request.entry_id)
+                with self._lock:
+                    self._request_status[request.request_id] = {
+                        "state": "unavailable" if answer.status == "unsupported" else "deferred",
+                        "reason": answer.reason if answer.status == "unsupported" else
+                                  "binary_reference_continuation_unavailable"}
+                    self._events.append({"event": "reference_answer", "answer": asdict(answer),
+                                         "origin": asdict(origin)})
+            else:
+                targets.append(request)
+        if not targets:
+            return
+        if refusal or owned is None or not owned.current(self.target_root):
+            with self._lock:
+                for request in targets:
+                    self._request_status[request.request_id] = {
+                        "state": "deferred", "reason": refusal or "binary_original_input_unavailable"}
+            return
+        resolved = resolve_binary_subjects(tuple(targets), ctx, owned)
+        if resolved is None:
+            with self._lock:
+                for request in targets:
+                    self._request_status[request.request_id] = {
+                        "state": "deferred", "reason": "binary_original_input_unavailable"}
+            return
+        with self._lock:
+            for subject_answer in resolved.answers:
+                self._request_status[subject_answer.request_id] = {
+                    "state": "resolved_partial" if subject_answer.status == "partial" else "unavailable",
+                    "reason": subject_answer.reason}
+                self._events.append({"event": "binary_subject_answer", "origin": asdict(origin),
+                    "request_id": subject_answer.request_id, "subject": subject_answer.subject, "status": subject_answer.status,
+                    "reason": subject_answer.reason, "material": subject_answer.material,
+                    "role": "recovered_binary_type_context_not_evidence"})
+        previous = ctx.get("binary_subject_context")
+        if isinstance(previous, BinarySubjectContext) and previous.current(ctx):
+            resolved = BinarySubjectContext(origin, owned, (*previous.answers, *resolved.answers))
+        rendered = resolved.render()
+        if not rendered or not resolved.current(ctx):
+            return
+        version = context_version(rendered)
+        # Panel members may still be formatting the initial shared context.
+        # Only an owned continuation receives the newly resolved material.
+        offered_ctx = dict(ctx)
+        offered_ctx["binary_subject_context"] = resolved
+        self.offer_context_delta(offered_ctx, kind="binary_target_semantics", version=version)
+
     def _register(self, origin: KnowledgeOrigin, ctx: dict, review_result, *, delivered_references=None) -> None:
         batch = register_requests(review_result, origin)
+        if isinstance(origin, BinaryKnowledgeOrigin):
+            self._register_binary_subjects(origin, ctx, batch)
+            return
         key = self._key(origin)
         current = capture_source_identity(self.target_root, origin.file)
         accepted = []
@@ -732,6 +820,16 @@ class AuditKnowledgeRuntime:
             for request in batch.accepted:
                 self._caller_requests[request.request_id] = request
             if not batch.accepted:
+                return
+            if isinstance(origin, BinaryKnowledgeOrigin):
+                for request in batch.accepted:
+                    answer = CallerContextAnswer(request.request_id, origin, None, "deferred",
+                                                 "binary_context_binding_unavailable")
+                    self._caller_answers[request.request_id] = answer
+                    self._request_status[request.request_id] = {
+                        "state": "deferred", "reason": answer.reason}
+                    self._events.append({"event": "caller_context_answer", "answer": asdict(answer),
+                                         "changed_information": False})
                 return
             cycle = self._cycles.get(key)
             if cycle is None:
@@ -959,8 +1057,9 @@ class AuditKnowledgeRuntime:
         origin = self._origin(ctx)
         key = self._key(origin)
         binary_owned = None
+        external_payload: tuple[str, object] | None = None
         if isinstance(origin, BinaryKnowledgeOrigin):
-            if kind != "disagreement":
+            if kind not in ("disagreement", "binary_target_semantics"):
                 return False
             with self._lock:
                 binary_owned = next(((scope, original) for scope, original in self._binary_review_scopes.values()
@@ -970,6 +1069,27 @@ class AuditKnowledgeRuntime:
             # Empty-request initial passes still need their original owned
             # observation. Never create a fresh binary epoch on a late offer.
             origin = binary_owned[1]
+            field = spec["context_key"]
+            if kind == "binary_target_semantics":
+                from .binary_subjects import BinarySubjectContext
+                value = ctx.get(field)
+                if not isinstance(value, BinarySubjectContext) or not value.current(ctx):
+                    return False
+                payload: object = value
+            else:
+                value = ctx.get(field)
+                if not isinstance(value, dict):
+                    return False
+                # Retain only the renderer's validated primitive inputs, not
+                # arbitrary producer metadata or aliases to a shared panel dict.
+                payload = {"resolution": value.get("resolution", ""),
+                           "mechanical_reachable": value.get("mechanical_reachable"),
+                           "mechanical_has_flow": value.get("mechanical_has_flow")}
+            captured_ctx = dict(ctx)
+            captured_ctx[field] = payload
+            if context_spec(captured_ctx, kind=kind, version=version) != spec:
+                return False
+            external_payload = field, payload
         elif origin.source_identity is None:
             return False
         with self._lock:
@@ -985,6 +1105,9 @@ class AuditKnowledgeRuntime:
             if binary_owned is not None:
                 self._binary_cycle_scopes.setdefault(key, binary_owned)
             self._context_deltas[(key, spec["context_id"])] = spec
+            if external_payload is not None:
+                # Install the original input before notifying the coordinator.
+                self._binary_external_payloads[(key, spec["context_id"])] = external_payload
         offered = cycle.context_delta(spec["context_id"], now=monotonic(), kind=kind)
         if offered:
             with self._lock:
@@ -1055,6 +1178,22 @@ class AuditKnowledgeRuntime:
                 if (self._key(reservation.origin), cid) in self._context_deltas)
         from .continuation_context import context_spec
         for spec in ctx["continuation_context_inputs"]:
+            if isinstance(reservation.origin, BinaryKnowledgeOrigin):
+                from .binary_subjects import BinarySubjectContext
+                with self._lock:
+                    retained = self._binary_external_payloads.get(
+                        (self._key(reservation.origin), spec["context_id"]))
+                if retained is None or retained[0] != spec["context_key"]:
+                    return False
+                field, payload = retained
+                if spec["kind"] == "binary_target_semantics":
+                    if not isinstance(payload, BinarySubjectContext) or not payload.current(ctx):
+                        return False
+                    ctx[field] = payload
+                elif spec["kind"] == "disagreement" and type(payload) is dict:
+                    ctx[field] = dict(payload)
+                else:
+                    return False
             if context_spec(ctx, kind=spec["kind"], version=spec["version"]) != spec:
                 return False
         ctx["knowledge_requests"] = tuple(cycle.requests.values())

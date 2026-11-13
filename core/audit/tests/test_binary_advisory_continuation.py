@@ -44,11 +44,16 @@ def binary_case(tmp_path, monkeypatch):
     config = orch.OrchestratorConfig(target_path=target,out_dir=out,enable_session_context=False,
                                     immediate_verify=False,sweep_validate_findings=False)
     class Client:
+        _attempt_admission_protocol = 1
+
         def __init__(self):
             self.prompts=[]
             self.next_status='suspicious'
             self.after=lambda:None
         def generate_structured(self,prompt,schema,**kwargs):
+            admission = kwargs.pop("accounting_attempt_admission", None)
+            if admission is not None:
+                assert admission() is True
             self.prompts.append(prompt)
             if len(self.prompts)>1:
                 self.after()

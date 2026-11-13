@@ -241,6 +241,7 @@ def load_knowledge_processing(out_dir: Path) -> dict | None:
                 "available_requests_never_delivered": sum(state == "context_available" and key not in delivered
                                                           for key, state in states.items()),
                 "unavailable_requests": counts["unavailable"],
+                "partial_binary_requests": counts["resolved_partial"],
                 "deferred_requests": counts["deferred"],
                 "pending_requests": len(pending), "pending_delivery_requests": len(delta),
                 "context_updates": len(contexts), "delivered_context_updates": len(delivered_contexts),
@@ -299,4 +300,9 @@ def knowledge_processing_lines(report: dict) -> list[str]:
         lines.append(f"Completed-pass index: {len(record['completed_passes'])} of {record['completed_pass_count']} passes; "
                      f"{record['completed_passes_omitted']} omitted. Full records: knowledge-results.json. "
                      "Request identities do not identify historical answer versions or establish assessment basis.")
+    if record.get("partial_binary_requests", 0):
+        lines.append(
+            f"Recovered binary subjects: {record['partial_binary_requests']} partially resolved request records; "
+            "their prompt delivery is counted in context updates, not source-study delivery."
+        )
     return lines

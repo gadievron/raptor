@@ -2860,6 +2860,11 @@ def format_context_for_prompt(
             PromptSection("seed_hypotheses", seed_hyp_text, 1),
         )
 
+    from .binary_subjects import render_binary_subject_context
+    binary_subject_block = render_binary_subject_context(ctx.get("binary_subject_context"), ctx)
+    if binary_subject_block:
+        sections.append(PromptSection("binary_subject_context", binary_subject_block, 1))
+
     from .disagreement_review_context import render_disagreement_context
     disagreement_block = render_disagreement_context(
         ctx.get("disagreement_override"), defend_identifier=_defend_identifier,
