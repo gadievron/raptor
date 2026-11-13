@@ -31,3 +31,29 @@ def test_shadow_never_promotes_a_legacy_strong_chain():
     assert shadow["claims"][0]["state"] == "unresolved"
     assert shadow["claims"][0]["legacy_correspondence"] == "location_only_not_claim_authority"
     assert findings[0]["confidence"] == "high"
+
+
+def test_shadow_preserves_quarantined_event_ids_without_losing_independent_claims():
+    from dataclasses import replace
+
+    from core.audit.claim_adjudication import publication_shadow
+    from core.audit.tests.test_claim_adjudication import CONTEXT, CONTRACTS, fact
+
+    other = replace(CONTEXT, claim_id="independent")
+    contexts = [CONTEXT, other]
+    events = [fact("ambiguous"), fact("ambiguous", semantic="contradicts_fact"),
+              fact("other-reach", context=other), fact("other-effect", "effect", context=other)]
+    index = {"claims": [{"claim_reference": {"claim_id": ctx.claim_id, "revision_id": ctx.revision_id},
+                         "definition": {"file": "a", "function": "f", "line_start": 1},
+                         "producer_check_ids": []} for ctx in contexts]}
+    findings = [{"file": "a", "function": "f", "line": 1, "status": "finding", "confidence": "high"}]
+    before = deepcopy(findings)
+    shadow = publication_shadow(index, findings, prepared_inputs=(contexts, events, CONTRACTS, []))
+    assert shadow["quarantined_event_ids"] == ["ambiguous"]
+    claims = {row["claim_id"]: row for row in shadow["claims"]}
+    assert claims[CONTEXT.claim_id]["state"] == "unresolved"
+    assert claims[CONTEXT.claim_id]["reason"] == "conflicting_event_identity"
+    assert claims["independent"]["state"] == "supported"
+    assert claims["independent"]["accepted_event_ids"] == ["other-effect", "other-reach"]
+    assert shadow["authoritative"] is False and shadow["history_complete"] is False
+    assert findings == before

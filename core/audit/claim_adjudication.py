@@ -236,4 +236,5 @@ def publication_shadow(claim_index, findings, *, prepared_inputs=None):
             "limitations": ["Legacy public statuses and confidence are unchanged.",
                             "Legacy receipt labels and model proposals have no adjudication authority.",
                             "Missing contract or current source/dependency admission remains unresolved."],
-            "claim_index_quarantine": claim_index.get("quarantined_revisions", [])}
+            "claim_index_quarantine": claim_index.get("quarantined_revisions", []),
+            "quarantined_event_ids": reduced["quarantined_event_ids"]}
