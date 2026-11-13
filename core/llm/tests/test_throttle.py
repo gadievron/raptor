@@ -598,34 +598,37 @@ class TestAcquireSync:
                 waiter_done.set()
 
         th_holder = threading.Thread(target=holder)
-        th_holder.start()
-        assert holder_in.wait(timeout=5.0)
         th_waiter = threading.Thread(target=waiter)
-        th_waiter.start()
-        # Positive blocked checkpoint: the waiter registers itself
-        # before parking, and with the clock frozen it can never take
-        # the slot (in_flight == effective == 1, no restore possible).
-        # Single read per check: ``_sync_waiters`` transiently drops to
-        # 0 on every bounded-wait cycle, so a separate re-read in the
-        # assert could land in the deregistered gap.
-        deadline = time.monotonic() + 5.0
-        observed = t._sync_waiters
-        while observed == 0 and time.monotonic() < deadline:
-            time.sleep(0.005)
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads([th_holder, th_waiter], release=release_holder.set, timeout=5.0):
+            th_holder.start()
+            assert holder_in.wait(timeout=5.0)
+            th_waiter.start()
+            # Positive blocked checkpoint: the waiter registers itself
+            # before parking, and with the clock frozen it can never take
+            # the slot (in_flight == effective == 1, no restore possible).
+            # Single read per check: ``_sync_waiters`` transiently drops to
+            # 0 on every bounded-wait cycle, so a separate re-read in the
+            # assert could land in the deregistered gap.
+            deadline = time.monotonic() + 5.0
             observed = t._sync_waiters
-        assert observed == 1
-        assert not waiter_done.is_set()
-        clk.advance(61.0)
-        # The waiter's bounded condition-wait re-runs _maybe_restore,
-        # sees the elapsed cooldown, ramps 1 → 2, and admits itself —
-        # no slot was ever released.
-        assert waiter_done.wait(timeout=5.0)
-        release_holder.set()
-        th_holder.join(timeout=5.0)
-        th_waiter.join(timeout=5.0)
-        assert not th_holder.is_alive()
-        assert not th_waiter.is_alive()
-        assert t.effective_workers == 2
+            while observed == 0 and time.monotonic() < deadline:
+                time.sleep(0.005)
+                observed = t._sync_waiters
+            assert observed == 1
+            assert not waiter_done.is_set()
+            clk.advance(61.0)
+            # The waiter's bounded condition-wait re-runs _maybe_restore,
+            # sees the elapsed cooldown, ramps 1 → 2, and admits itself —
+            # no slot was ever released.
+            assert waiter_done.wait(timeout=5.0)
+            release_holder.set()
+            th_holder.join(timeout=5.0)
+            th_waiter.join(timeout=5.0)
+            assert not th_holder.is_alive()
+            assert not th_waiter.is_alive()
+            assert t.effective_workers == 2
 
     def test_in_flight_tracking(self):
         t = AdaptiveThrottle(4, auto_register=False)
