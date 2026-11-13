@@ -299,11 +299,13 @@ def compute_gaps(
         - file, name, line_start, line_end, priority, strategies,
           is_stale, old_annotation (if stale)
     """
+    binary_hashes = _current_binary_hashes(checklist, checklist.get("target_path", "") or "")
     covered_functions = _build_covered_set(
         coverage_records,
         target_path=checklist.get("target_path", "") or "",
         checklist=checklist,
         require_c_foundation=require_c_foundation,
+        _binary_hashes=binary_hashes,
     )
     # Span-bound credits from the hash-verified journal fold: each
     # verified per-site entry credits ITS OWN line_start under the
@@ -348,7 +350,6 @@ def compute_gaps(
     # call, and the writer stamps with the raw value: a missing
     # line_end means the fallback read window, not a single line.
     current_raw_ends: dict[str, int | None] = {}
-    binary_hashes: dict[str, str] = {}
     # key → {line_start: (item, fp)}: same-named items (function +
     # prototype pairs, macro redefinitions, C++ overloads) share one
     # file:function key but live at different SITES with different
@@ -408,16 +409,7 @@ def compute_gaps(
                     or (isinstance(raw_le, int)
                         and not isinstance(raw_le, bool))
                     else _RAW_END_UNKNOWN)
-            elif name and item.get("address") is not None:
-                # Binary items have no line spans; their staleness
-                # anchor is the binary's content hash + the function's
-                # address/size (same formula as the write side —
-                # core.audit.record.binary_item_hash).
-                from core.audit.record import binary_item_hash
-                bh = binary_item_hash(file_info, item)
-                if bh:
-                    binary_hashes.setdefault(
-                        make_function_key(fp, name), bh)
+
 
     def _current_strategies(key: str, line_start: int = 0) -> list | None:
         """CURRENT strategy inference for a checklist item, computed
@@ -523,6 +515,16 @@ def compute_gaps(
         reuse_stats=reuse_stats,
         current_tools=current_tools,
     )
+    # A later observation must not leave an earlier binary projection or
+    # journal credit current after the module changed during this fold.
+    final_binary_hashes = _current_binary_hashes(checklist, target_path_str or "")
+    for binary_key in binary_hashes.keys() | final_binary_hashes.keys():
+        if binary_hashes.get(binary_key) != final_binary_hashes.get(binary_key):
+            covered_functions.discard(binary_key)
+            covered_credits.pop(binary_key, None)
+            if reuse_sink is not None:
+                reuse_sink.pop(binary_key, None)
+
     # Seed-forced re-review (--seed-rereview): drop the suppression
     # the folds just granted for every resolved seed key, AFTER all
     # coverage/journal/reuse folds so nothing re-covers the key. Only
@@ -2106,11 +2108,51 @@ def write_gaps(gaps: list[dict[str, Any]], out_dir: Path) -> Path:
 # for the full store-by-store contract.
 
 
+def _current_binary_hashes(checklist: dict | None, target_path: str) -> dict[str, str]:
+    """Bind recorded binary inventory anchors to a directly selected module.
+
+    A project/directory is not its selected binary. Missing selection, stale
+    inventory or unavailable bytes remain unknown; no path is guessed from an
+    opaque binary key. This is byte currency, not extraction or build proof.
+    """
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX, binary_path_key
+    from .binary_review_scope import capture_binary_module
+    from .record import binary_item_hash
+
+    files = (checklist or {}).get("files")
+    binary_files = [entry for entry in files if isinstance(entry, dict)
+                    and isinstance(entry.get("path"), str) and entry["path"].startswith(BINARY_PATH_PREFIX)] \
+        if isinstance(files, list) else []
+    if not binary_files or not target_path:
+        return {}
+    module = capture_binary_module(target_path)
+    if module is None:
+        return {}
+    selected = binary_path_key(module.path)
+    anchors: dict[str, str] = {}
+    for entry in binary_files:
+        if entry["path"] != selected or entry.get("sha256") != module.sha256:
+            continue
+        items = entry.get("items", entry.get("functions", []))
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name, line = item.get("name"), item.get("line_start", 0)
+            if (not isinstance(name, str) or not name
+                    or not (line is None or type(line) is int and line == 0)):
+                continue
+            anchor = binary_item_hash(entry, item)
+            if anchor:
+                anchors.setdefault(make_function_key(selected, name), anchor)
+    return anchors if module.current() else {}
+
+
 def _build_covered_set(
     records: list[dict[str, Any]],
     target_path: str = "",
     checklist: dict[str, Any] | None = None,
     *, require_c_foundation: bool = False,
+    _binary_hashes: dict[str, str] | None = None,
 ) -> set:
     """Build set of file:function keys that have coverage.
 
@@ -2169,6 +2211,8 @@ def _build_covered_set(
     # hashes are computed per-file on the first candidate row
     # (hash_spans batches the file read) and only for files that
     # actually have unstamped rows to verify.
+    current_binary_hashes = (_current_binary_hashes(checklist, target_path)
+                             if _binary_hashes is None else _binary_hashes)
     spans_by_file: dict[str, list[tuple[str, tuple[int, int]]]] = {}
     binary_sites: set[tuple[str, str]] = set()
     files_val = (checklist or {}).get("files")
@@ -2229,6 +2273,7 @@ def _build_covered_set(
 
     covered = set()
     refused_rows = 0
+    stale_binary_rows = 0
     old_c_policy_rows = 0
     legacy_shape_records = 0
     for record in records:
@@ -2271,6 +2316,11 @@ def _build_covered_set(
             if not (isinstance(file_path, str) and file_path
                     and isinstance(func_name, str) and func_name):
                 continue
+            stored_hash = fa.get("hash")
+            if isinstance(stored_hash, str) and stored_hash.startswith("bin:"):
+                if current_binary_hashes.get(make_function_key(file_path, func_name)) != stored_hash:
+                    stale_binary_rows += 1
+                    continue
             binary_review = ((file_path, func_name) in binary_sites
                              and isinstance(fa.get("hash"), str) and fa["hash"].startswith("bin:"))
             if require_c_foundation and not binary_review and tool not in {"mark", "annotations"}:
@@ -2303,6 +2353,9 @@ def _build_covered_set(
                     )
                     continue
             covered.add(make_function_key(file_path, func_name))
+    if stale_binary_rows:
+        logger.info("coverage records: %d binary review projection(s) lack a matching current module/inventory anchor; review required",
+                    stale_binary_rows)
     if old_c_policy_rows:
         logger.info("C reference policy: %d projected model reviews require a current source-bound journal; history retained",
                     old_c_policy_rows)

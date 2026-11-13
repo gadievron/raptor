@@ -475,6 +475,7 @@ class TestBinaryStaleness:
         assert binary_item_hash(fe, {"address": 0x2000, "size": 0x40}) != h
 
     def test_fold_reopens_on_hash_mismatch(self, tmp_path):
+        import hashlib
         import json
 
         from core.audit.gaps import compute_gaps
@@ -486,14 +487,16 @@ class TestBinaryStaleness:
         )
         from core.audit.record import binary_item_hash
 
+        target = tmp_path / "t.bin"
+        target.write_bytes(b"owned original module bytes, not an executable")
         fe = {
             "path": "binary:t", "language": "binary",
-            "sha256": "ab" * 32,
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
             "items": [{"name": "f", "kind": "function",
                        "address": 0x1000, "size": 0x40,
                        "metadata": {"address": 0x1000, "size": 0x40}}],
         }
-        cl = {"target_path": str(tmp_path), "files": [fe],
+        cl = {"target_path": str(target), "files": [fe],
               "target_kind": "binary"}
         (tmp_path / "checklist.json").write_text(json.dumps(cl))
 
@@ -514,8 +517,9 @@ class TestBinaryStaleness:
         assert all(g["name"] != "f" for g in gaps)
 
         # rebuilt binary (different sha) → re-opened
-        fe2 = dict(fe, sha256="cd" * 32)
-        cl2 = {"target_path": str(tmp_path), "files": [fe2],
+        target.write_bytes(b"owned changed module bytes, not an executable")
+        fe2 = dict(fe, sha256=hashlib.sha256(target.read_bytes()).hexdigest())
+        cl2 = {"target_path": str(target), "files": [fe2],
                "target_kind": "binary"}
         (tmp_path / "checklist.json").write_text(json.dumps(cl2))
         gaps2 = compute_gaps(cl2, [], out_dir=run, project_dir=project)

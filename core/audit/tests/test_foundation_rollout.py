@@ -183,6 +183,7 @@ def test_operator_model_name_alone_does_not_bypass_model_review_policy(tmp_path)
 
 
 def test_binary_inventory_with_c_filename_does_not_gain_source_language_requirements(tmp_path):
+    from core.coverage.journal import make_function_key
     from core.audit.record import binary_item_hash
     anchor = binary_item_hash({'sha256': 'a'*64}, {'address': 4096, 'size': 16})
     row = ReviewJournalEntry(ts='2026-11-10T00:00:00Z',run_id='owned',file='image.c',function='f',
@@ -193,10 +194,19 @@ def test_binary_inventory_with_c_filename_does_not_gain_source_language_requirem
         binary_hashes={'image.c:f':anchor},current_strategies_fn=lambda *_:set(),current_model=None,
         source_label='owned-binary',require_c_foundation=True)
     assert covered == {'image.c:f'}
-    record = _record('audit', 'image.c')
+    # Projection reuse additionally needs the selected module's measured bytes.
+    import hashlib
+    from core.inventory.binary_builder import binary_path_key
+    module = tmp_path / 'image.c.bin'
+    module.write_bytes(b'owned inert binary inventory fixture')
+    digest = hashlib.sha256(module.read_bytes()).hexdigest()
+    file = binary_path_key(module)
+    anchor = binary_item_hash({'sha256': digest}, {'address': 4096, 'size': 16})
+    record = _record('audit', file)
     item = record['functions_analysed'][0]
     item.pop(journal_mac.TOKEN_KEY)
     item['hash'] = anchor
     item[journal_mac.TOKEN_KEY] = journal_mac.mint_coverage_row(item, 'audit')
-    checklist = {'files':[{'path':'image.c','sha256':'a'*64,'items':[{'name':'f','address':4096,'size':16}]}]}
-    assert _build_covered_set([record],checklist=checklist,require_c_foundation=True) == {'image.c:f'}
+    checklist = {'files':[{'path':file,'sha256':digest,'items':[{'name':'f','address':4096,'size':16}]}]}
+    assert _build_covered_set([record],target_path=str(module),checklist=checklist,
+                              require_c_foundation=True) == {make_function_key(file, 'f')}
