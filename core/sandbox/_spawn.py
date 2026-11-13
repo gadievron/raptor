@@ -82,6 +82,7 @@ from typing import TYPE_CHECKING, NoReturn
 
 from . import _pathpin, state
 from ._exec_signals import restore_exec_signals
+from ._stdio import preserve_output_sources as _preserve_output_sources
 from ._retirement import retire_parent_resources as _retire_parent_resources
 from ._pipe_poll import readable_fds as _readable_fds
 from ._tracer_launch import prepare_tracer_launch
@@ -2928,23 +2929,26 @@ def run_sandboxed(
                 os.close(out_r)  # type: ignore[arg-type]
                 os.close(err_r)  # type: ignore[arg-type]
             # Establish stdout before stderr so STDOUT follows its final sink.
-            for _redir, _fdnum, _capture_stream, _writer in (
-                    (stdout, 1, _capture_stdout, out_w),
-                    (stderr, 2, _capture_stderr, err_w)):
-                if _capture_stream:
-                    os.dup2(_writer, _fdnum)  # type: ignore[arg-type]
-                    continue
-                if _redir is None:
-                    continue
-                if _redir == subprocess.DEVNULL:
-                    _redirect_devnull(_fdnum, os.O_WRONLY)
-                    continue
-                if _fdnum == 2 and _redir == subprocess.STDOUT:
-                    os.dup2(1, 2)
-                    continue
-                _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
-                if _rfd != _fdnum:
-                    os.dup2(_rfd, _fdnum)
+            with _preserve_output_sources(
+                    stdout, stderr, capture_stdout=_capture_stdout,
+                    capture_stderr=_capture_stderr) as (_stdout_source, _stderr_source):
+                for _redir, _fdnum, _capture_stream, _writer in (
+                        (_stdout_source, 1, _capture_stdout, out_w),
+                        (_stderr_source, 2, _capture_stderr, err_w)):
+                    if _capture_stream:
+                        os.dup2(_writer, _fdnum)  # type: ignore[arg-type]
+                        continue
+                    if _redir is None:
+                        continue
+                    if _redir == subprocess.DEVNULL:
+                        _redirect_devnull(_fdnum, os.O_WRONLY)
+                        continue
+                    if _fdnum == 2 and _redir == subprocess.STDOUT:
+                        os.dup2(1, 2)
+                        continue
+                    _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
+                    if _rfd != _fdnum:
+                        os.dup2(_rfd, _fdnum)
             if _capture_any:
                 os.close(out_w)  # type: ignore[arg-type]
                 os.close(err_w)  # type: ignore[arg-type]
