@@ -1237,6 +1237,11 @@ def module_dynamic_namespace(
                 if sources is not None:
                     known_members = True
                     members.extend(sources)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr in {"get", "__getitem__"}):
+                sources = literal_member_result_values(cursor)
+                if sources is not None:
+                    pending.extend(sources)
         if not known_members and not defaults:
             return None
         return (*members, *defaults)
