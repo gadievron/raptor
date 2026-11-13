@@ -24,6 +24,7 @@ from typing import Any, TYPE_CHECKING
 from core.dataflow.adapters.codeql import from_sarif_result
 from core.json import loads
 from core.sarif.parser import SARIF_MAX_BYTES
+from core.source import read_text_gated
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -100,7 +101,8 @@ def diff_sarif_files(
     """File-based wrapper for :func:`diff_sarif_data`. Reads both
     SARIF JSON files and forwards the parsed dicts.
 
-    Size-capped at ``SARIF_MAX_BYTES`` per file. A hostile CodeQL
+    Size-capped at ``SARIF_MAX_BYTES`` per file, enforced on the
+    opened regular file and bounded read. A hostile CodeQL
     rule-pack could produce a multi-GiB SARIF; the cap is
     ``core/sarif/parser.py``'s policy constant (this docstring always
     claimed to match that policy, but the hand-copied value had
@@ -121,12 +123,12 @@ def diff_sarif_files(
             )
             raise RuntimeError(msg)
     try:
-        baseline = loads(baseline_path.read_text(encoding="utf-8"))
+        baseline = loads(read_text_gated(baseline_path, _SARIF_MAX_BYTES, encoding="utf-8"))
     except (OSError, ValueError) as e:
         msg = f"baseline SARIF read/parse failed: {e}"
         raise RuntimeError(msg) from e
     try:
-        augmented = loads(augmented_path.read_text(encoding="utf-8"))
+        augmented = loads(read_text_gated(augmented_path, _SARIF_MAX_BYTES, encoding="utf-8"))
     except (OSError, ValueError) as e:
         msg = f"augmented SARIF read/parse failed: {e}"
         raise RuntimeError(msg) from e
