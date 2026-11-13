@@ -915,6 +915,42 @@ def module_dynamic_namespace(
     original_import_roots = frozenset(import_roots)
     saved_import_values: set[str] = set()
     import_value_cache: dict[ast.AST, bool] = {}
+
+    def possible_import_value(value: ast.AST) -> bool:
+        pending_values = [(value, False)]
+        while pending_values:
+            cursor, expanded = pending_values.pop()
+            if cursor in import_value_cache:
+                continue
+            if isinstance(cursor, ast.Name):
+                import_value_cache[cursor] = cursor.id in original_import_roots
+                continue
+            if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
+                    and isinstance(cursor.value.func, ast.Name)
+                    and cursor.value.func.id == "globals"
+                    and not cursor.value.args and not cursor.value.keywords):
+                key = cursor.slice
+                import_value_cache[cursor] = (isinstance(key, ast.Constant)
+                                               and isinstance(key.value, str)
+                                               and key.value in original_import_roots)
+                continue
+            if isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
+                children = (cursor.value,)
+            elif isinstance(cursor, ast.IfExp):
+                children = (cursor.body, cursor.orelse)
+            elif isinstance(cursor, ast.BoolOp):
+                children = tuple(cursor.values)
+            else:
+                children = ()
+            if not children:
+                import_value_cache[cursor] = False
+            elif expanded:
+                import_value_cache[cursor] = any(import_value_cache[child] for child in children)
+            else:
+                pending_values.append((cursor, True))
+                pending_values.extend((child, False) for child in children)
+        return import_value_cache[value]
+
     for statement in ast.walk(tree):
         if statement in local_annotation_nodes:
             continue
@@ -949,25 +985,7 @@ def module_dynamic_namespace(
                 continue
             if not isinstance(target, ast.Name):
                 continue
-            if value not in import_value_cache:
-                cursor = value
-                imported_value = False
-                while isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
-                    if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
-                            and isinstance(cursor.value.func, ast.Name)
-                            and cursor.value.func.id == "globals"
-                            and not cursor.value.args and not cursor.value.keywords):
-                        key = cursor.slice
-                        imported_value = (isinstance(key, ast.Constant)
-                                          and isinstance(key.value, str)
-                                          and key.value in original_import_roots)
-                        break
-                    cursor = cursor.value
-                else:
-                    imported_value = (isinstance(cursor, ast.Name)
-                                      and cursor.id in original_import_roots)
-                import_value_cache[value] = imported_value
-            if import_value_cache[value]:
+            if possible_import_value(value):
                 saved_import_values.add(target.id)
     import_roots.update(saved_import_values)
 
