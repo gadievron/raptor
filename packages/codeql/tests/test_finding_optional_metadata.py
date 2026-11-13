@@ -120,3 +120,31 @@ def test_flow_array_retains_existing_path_count(flows):
     finding = parser.parse_sarif_finding(result, _run(result))
     assert finding.dataflow_path_count == len(flows)
     assert finding.has_dataflow is bool(flows)
+
+
+@pytest.mark.parametrize('artifact,expected', [
+    ({'index': 0}, 'src/owned%20file.py'),
+    ({'uri': 'owned%20file.py', 'uriBaseId': 'ROOT'}, 'src/owned%20file.py'),
+    ({'uri': 'plain.py'}, 'plain.py'),
+    ({'index': True}, ''),
+    ({'uri': 'file://remote-host/private.py'}, ''),
+])
+def test_selected_finding_resolves_source_in_its_own_run(tmp_path, artifact, expected):
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    result['locations'][0]['physicalLocation']['artifactLocation'] = artifact
+    run = _run(result)
+    run['originalUriBaseIds'] = {'ROOT': {'uri': 'src/'}}
+    run['artifacts'] = [{'location': {'uri': 'owned%20file.py', 'uriBaseId': 'ROOT'}}]
+    path = _write(tmp_path, 'artifact-source.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert finding.file_path == expected
+    assert finding.rule_id == result['ruleId']
+    assert finding.start_line == result['locations'][0]['physicalLocation']['region']['startLine']
+    assert json.loads(path.read_text())['runs'][0] == run
