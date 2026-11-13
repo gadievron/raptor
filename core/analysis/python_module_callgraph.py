@@ -1127,6 +1127,14 @@ def module_dynamic_namespace(
                           and len(cursor.args) == 1 and not cursor.keywords):
                         children = (cursor.args[0],)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                          and cursor.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
+                          and isinstance(cursor.func.value, ast.Set) and not cursor.keywords
+                          and all(isinstance(item, ast.Set) for item in cursor.args)
+                          and (cursor.func.attr != "symmetric_difference" or len(cursor.args) == 1)):
+                        children = ((cursor.func.value, *cursor.args)
+                                    if cursor.func.attr in {"union", "symmetric_difference"}
+                                    else (cursor.func.value,))
+                    elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                           and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
                         children = (cursor.func.value,)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
