@@ -308,6 +308,11 @@ def _parse_semgrep(
             reason="semgrep: missing source or sink line",
         )
 
+    for endpoint in ("taint_source", "taint_sink"):
+        endpoint_file = _semgrep_extract_path(trace.get(endpoint))
+        if endpoint_file and endpoint_file != file:
+            return ResolutionFailure(reason="semgrep: trace endpoint refers to a different file")
+
     return _ParsedFinding(
         file=file,
         cwe=cwe,
@@ -315,6 +320,25 @@ def _parse_semgrep(
         source_lineno=src_line,
         sink_lineno=sink_line,
     )
+
+
+def _semgrep_extract_path(trace: object) -> str | None:
+    """Optional path from the same trace location chosen for its line."""
+    while isinstance(trace, list) and trace:
+        trace = trace[0]
+    if not isinstance(trace, dict):
+        return None
+    location = trace.get("location")
+    if isinstance(location, dict):
+        start = location.get("start")
+        if isinstance(start, dict) and start.get("line") is not None:
+            path = location.get("path")
+            return path if isinstance(path, str) else None
+    start = trace.get("start")
+    if isinstance(start, dict) and start.get("line") is not None:
+        path = trace.get("path")
+        return path if isinstance(path, str) else None
+    return None
 
 
 def _semgrep_extract_line(trace: Any) -> int | None:
