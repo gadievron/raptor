@@ -13,55 +13,55 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 def test_close_during_encoding_cannot_write_to_reused_descriptor(tmp_path, monkeypatch):
-    handle = evidence.EvidenceFile.open(tmp_path, "events.jsonl")
-    entered, release = threading.Event(), threading.Event()
-    results, errors, writes = [], [], []
-    real_write = os.write
-    victim_fd = None
+    from contextlib import ExitStack
+    from core.testing.threads import retiring_threads
 
-    class PausedLine(str):
-        def encode(self, *args, **kwargs):
-            entered.set()
-            assert release.wait(5)
-            return super().encode(*args, **kwargs)
+    with ExitStack() as cleanup:
+        handle = evidence.EvidenceFile.open(tmp_path, "events.jsonl")
+        cleanup.callback(handle.close, verify=False)
+        entered, release = threading.Event(), threading.Event()
+        results, errors, writes = [], [], []
+        real_write = os.write
+        victim_fd = None
 
-    def write():
-        try:
-            results.append(handle.write_line(PausedLine("late record\n")))
-        except BaseException as exc:
-            errors.append(exc)
+        class PausedLine(str):
+            def encode(self, *args, **kwargs):
+                entered.set()
+                assert release.wait(5)
+                return super().encode(*args, **kwargs)
 
-    worker = threading.Thread(target=write, daemon=True)
-    worker.start()
-    try:
-        assert entered.wait(5)
-        assert handle.close() is True
-        victim = tmp_path / "other-file"
-        victim_fd = os.open(victim, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        real_write(victim_fd, b"unchanged")
+        def write():
+            try:
+                results.append(handle.write_line(PausedLine("late record\n")))
+            except BaseException as exc:
+                errors.append(exc)
 
-        def reused_write(fd, data):
-            # Model this descriptor number now belonging to another
-            # file without overwriting any unrelated process fd.
-            assert fd == handle.fd
-            writes.append(bytes(data))
-            return real_write(victim_fd, data)
+        worker = threading.Thread(target=write, daemon=True)
+        with retiring_threads((worker,), release=release.set, timeout=5):
+            worker.start()
+            assert entered.wait(5)
+            assert handle.close() is True
+            victim = tmp_path / "other-file"
+            victim_fd = os.open(victim, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            cleanup.callback(os.close, victim_fd)
+            real_write(victim_fd, b"unchanged")
 
-        with monkeypatch.context() as patch:
-            patch_module_attribute(patch, evidence, "os", "write", reused_write)
-            release.set()
-            worker.join(5)
-        assert not worker.is_alive()
-        assert results == [False]
-        assert not errors
-        assert writes == []
-        assert victim.read_bytes() == b"unchanged"
-    finally:
-        release.set()
-        worker.join(5)
-        handle.close(verify=False)
-        if victim_fd is not None:
-            os.close(victim_fd)
+            def reused_write(fd, data):
+                # Model this descriptor number now belonging to another
+                # file without overwriting any unrelated process fd.
+                assert fd == handle.fd
+                writes.append(bytes(data))
+                return real_write(victim_fd, data)
+
+            with monkeypatch.context() as patch:
+                patch_module_attribute(patch, evidence, "os", "write", reused_write)
+                release.set()
+                worker.join(5)
+            assert not worker.is_alive()
+            assert results == [False]
+            assert not errors
+            assert writes == []
+            assert victim.read_bytes() == b"unchanged"
 
 
 def test_failed_verification_survives_repeated_close(tmp_path):
