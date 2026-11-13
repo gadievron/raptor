@@ -29,6 +29,7 @@ import tempfile
 import threading as _threading
 import time
 from collections import OrderedDict
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -2618,6 +2619,71 @@ def _target_library_version(target_path, library: str) -> str | None:
     return _target_lib_version_memo[key]
 
 
+@dataclass
+class _InitialReviewReplacement:
+    occurrence: tuple[str, str, int]
+    entry_alias: ReviewOutcome | None
+    prior: ReviewOutcome | None = None
+    reused: bool = False
+    untallied: bool = False
+    target_path: Any = None
+    published: ReviewOutcome | None = None
+    acknowledgement: Any = None
+    source_scope: Any = None
+    publication_gap: dict | None = None
+    published_cost: float = 0.0
+    published_cost_booked: bool = False
+
+
+_initial_review_replacement: ContextVar[_InitialReviewReplacement | None] = ContextVar(
+    "initial_review_replacement", default=None)
+
+
+def _record_initial_review_publication(outcome, acknowledgement, source_scope, gap) -> None:
+    owner = _initial_review_replacement.get()
+    if (owner is None or owner.prior is None
+            or (outcome.file, outcome.function, outcome.line or 0) != owner.occurrence):
+        return
+    owner.published = outcome
+    owner.acknowledgement = acknowledgement
+    owner.source_scope = source_scope
+    owner.publication_gap = {"file": gap.get("file"), "name": gap.get("name"),
+                             "line_start": gap.get("line_start", 0), "line_end": gap.get("line_end")}
+    owner.published_cost = outcome.cost_usd
+
+
+def _restore_initial_review_replacement(owner, result, reviewed_outcomes) -> None:
+    if owner is None or owner.prior is None:
+        return
+    # Revalidate outside the result lock: currentness can read files or enter
+    # other owners. The compatibility alias alone cannot authorise a verdict.
+    published_current = (owner.published is not None and owner.publication_gap is not None
+                         and _initial_publication_acknowledged(
+                             owner.acknowledgement, owner.published, owner.publication_gap,
+                             target_path=owner.target_path, source_scope=owner.source_scope))
+    replacement = owner.published if published_current else owner.prior
+    with result._lock:
+        if owner.published is not None and not owner.published_cost_booked:
+            result.total_cost_usd += owner.published_cost
+            owner.published_cost_booked = True
+        if any((current.file, current.function, current.line or 0) == owner.occurrence
+               for current in result.outcomes):
+            return
+        if owner.untallied:
+            _tally_outcome_unlocked(result, replacement,
+                                    reused=owner.reused if replacement is owner.prior else False,
+                                    book_cost=False)
+        else:
+            result.outcomes.append(replacement)
+    if reviewed_outcomes is not None:
+        key = f"{owner.occurrence[0]}:{owner.occurrence[1]}"
+        alias = reviewed_outcomes.get(key)
+        if (alias is None or alias is owner.prior or alias is owner.entry_alias
+                or alias is owner.published):
+            if alias is None or (alias.file, alias.function, alias.line or 0) == owner.occurrence:
+                reviewed_outcomes[key] = replacement
+
+
 def _supersede_prior_outcome(
     result: OrchestratorResult,
     reviewed_outcomes: Any,
@@ -2645,8 +2711,14 @@ def _supersede_prior_outcome(
         if len(matches) != 1:
             return None
         index, prior = matches[0]
+        owner = _initial_review_replacement.get()
+        if owner is not None and owner.occurrence == occurrence and owner.prior is None:
+            owner.prior = prior
+            owner.reused = prior.reused
         result.outcomes.pop(index)
         _untally_outcome_unlocked(result, prior)
+        if owner is not None and owner.prior is prior:
+            owner.untallied = True
     return prior
 
 
@@ -2710,6 +2782,64 @@ def _match_fp_verdict_to_source(
 
 
 def review_one_function(
+    gap: dict,
+    shared,
+    config,
+    review_fn,
+    result,
+    *,
+    joern_server=None,
+    audit_log=None,
+    workqueue=None,
+    reviewed_set=None,
+    start_time: float=0.0,
+    layer_disagreements=None,
+    on_progress=None,
+    review_idx: int=0,
+    total: int=0,
+    collector=None,
+    graph=None,
+    reviewed_outcomes=None,
+    batch_context: list[str] | None = None,
+    knowledge_runtime: "AuditKnowledgeRuntime | None" = None,
+):
+    """Keep the actual superseded assessment when a review propagates an abort."""
+    owner = None
+    line = gap.get("line_start", 0)
+    if gap.get("force_review") and reviewed_outcomes is not None and type(line) is int:
+        occurrence = (gap["file"], gap["name"], line)
+        owner = _InitialReviewReplacement(occurrence, reviewed_outcomes.get(f"{gap['file']}:{gap['name']}"),
+                                          target_path=config.target_path)
+    token = _initial_review_replacement.set(owner)
+    try:
+        return _review_one_function_impl(
+            gap, shared, config, review_fn, result,
+            joern_server=joern_server,
+            audit_log=audit_log,
+            workqueue=workqueue,
+            reviewed_set=reviewed_set,
+            start_time=start_time,
+            layer_disagreements=layer_disagreements,
+            on_progress=on_progress,
+            review_idx=review_idx,
+            total=total,
+            collector=collector,
+            graph=graph,
+            reviewed_outcomes=reviewed_outcomes,
+            batch_context=batch_context,
+            knowledge_runtime=knowledge_runtime,
+        )
+    except BaseException as error:
+        try:
+            _restore_initial_review_replacement(owner, result, reviewed_outcomes)
+        except BaseException as restoration_error:
+            error.add_note("Prior assessment restoration also failed: " + type(restoration_error).__name__)
+        raise
+    finally:
+        _initial_review_replacement.reset(token)
+
+
+def _review_one_function_impl(
     gap: dict,
     shared,
     config,
@@ -4677,6 +4807,8 @@ def review_one_function(
             _tally_outcome(result, rejected)
         return rejected
 
+    _record_initial_review_publication(outcome, acknowledgement, source_publication_scope, gap)
+
     # ── Publish outcome before chain injection ─────────────────────────
     # The outcome, taint summaries, and constraints must be visible
     # before chain injection pushes neighbours onto the ready queue —
@@ -4848,6 +4980,10 @@ def review_one_function(
         on_progress(review_idx, total, outcome)
 
     return outcome
+
+
+review_one_function.__doc__ = _review_one_function_impl.__doc__
+setattr(review_one_function, "__wrapped__", _review_one_function_impl)
 
 
 _HEADER_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
@@ -19645,6 +19781,9 @@ def _tally_outcome_unlocked(
         result.reviewed += 1
     if book_cost:
         result.total_cost_usd += outcome.cost_usd
+        owner = _initial_review_replacement.get()
+        if owner is not None and owner.published is outcome:
+            owner.published_cost_booked = True
     if outcome.status == "finding":
         result.findings += 1
     elif outcome.status == "suspicious":
