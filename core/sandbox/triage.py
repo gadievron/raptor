@@ -847,6 +847,13 @@ def triage_run(run_dir: Path, *,
         "audit_degraded": audit_degraded is not None,
         "caveats": [],
     }
+    # The marker result is MAC-bound; its drop counters are not. Even
+    # zero counters cannot attest completeness after the buffer cap.
+    if any(event.get("result") == "buffer_overflow" for event in proxy_events):
+        report["inputs"]["proxy_capture_unconfirmed"] = True
+        report["caveats"].append(
+            "Proxy capture reached its buffer limit; complete event capture "
+            "cannot be confirmed.")
     capture = (summary or {}).get("audit_capture")
     if summary and (summary.get("cli_sandbox_disabled") or summary.get("floor_refusals")):
         report["inputs"]["sandbox_execution_unavailable"] = True
@@ -1433,6 +1440,8 @@ def _required_evidence_problem(report: dict) -> str | None:
     # Known exposure already demotes integrity; never promote it here.
     if isinstance(posture, dict) and posture.get("mac_key_hidden") is False:
         return "telemetry signing-key posture is explicitly degraded"
+    if inputs.get("proxy_capture_unconfirmed"):
+        return "proxy event capture is unconfirmed"
     capture = inputs.get("audit_capture")
     if report.get("audit_degraded") or (capture is not None and (
         not valid_audit_capture(capture)
