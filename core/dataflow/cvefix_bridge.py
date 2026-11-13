@@ -384,7 +384,7 @@ def _extract_proposal(
                 # bounds check below and the finding is skipped.
                 # newline="" + split_lines keep the \n-only line
                 # model the SARIF line numbers were counted in.
-                got = read_text_capped(src, errors="replace", newline="")
+                got = read_text_capped(src, errors="strict", newline="")
                 if got is None:
                     continue
                 lines = split_lines(got[0])
