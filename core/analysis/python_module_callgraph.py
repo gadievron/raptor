@@ -1215,6 +1215,8 @@ def module_dynamic_namespace(
             defaults = ()
         else:
             return None
+        while isinstance(iterator, ast.NamedExpr):
+            iterator = iterator.value
         members = None
         if (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
                 and iterator.func.id in iterator_wrapper_names
