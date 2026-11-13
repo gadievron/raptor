@@ -404,7 +404,7 @@ class TestSandboxedMain:
         with mock_patch.object(sandboxed, "sys") as mock_sys, \
              mock_patch("packages.frida.sandboxed.sys", mock_sys), \
              mock_module_registry({"core.sandbox": None}), \
-             mock_patch("subprocess.call", return_value=0) as mock_call:
+             mock_module_attribute(sandboxed, "subprocess", "call", return_value=0) as mock_call:
             mock_sys.argv = [
                 "sandboxed", "--out", "/tmp/run", "--",
                 "echo", "hello",
