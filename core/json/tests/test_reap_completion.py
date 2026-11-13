@@ -11,6 +11,7 @@ from core.atomic_fs import _atomic_temporary_name
 from core.json.cache import JsonCache
 from core.json import cache
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.threads import retiring_threads
 
 
 @pytest.mark.parametrize('wide', [False, True], ids=['ascii', 'multibyte'])
@@ -201,17 +202,18 @@ def test_active_compact_writer_retains_its_staging_file(tmp_path, monkeypatch):
             failures.append(error)
 
     writer = threading.Thread(target=write)
-    try:
-        writer.start()
-        assert entered.wait(5), failures
-        assert staging[0].name.count('.') == 3
-        assert staging[0].exists()
-        cache.JsonCache(root)
-        assert staging[0].exists(), 'cleanup removed an active writer staging file'
-    finally:
-        release.set()
-        if writer.ident is not None:
-            writer.join(5)
+    with retiring_threads([writer], release=release.set, timeout=5):
+        try:
+            writer.start()
+            assert entered.wait(5), failures
+            assert staging[0].name.count('.') == 3
+            assert staging[0].exists()
+            cache.JsonCache(root)
+            assert staging[0].exists(), 'cleanup removed an active writer staging file'
+        finally:
+            release.set()
+            if writer.ident is not None:
+                writer.join(5)
     assert not writer.is_alive()
     assert not failures, failures
     assert destination.read_bytes() == b'{"value":1}'
