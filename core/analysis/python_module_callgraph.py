@@ -1298,6 +1298,10 @@ def module_dynamic_namespace(
             receiver = value.func.value
             if value.func.attr == "pop" and isinstance(receiver, ast.List) and len(value.args) <= 1:
                 return literal_member_values(receiver)
+            if value.func.attr == "pop" and not value.args:
+                selected = selected_literal_value(receiver)
+                if isinstance(selected, ast.List):
+                    return literal_member_values(selected)
             if ((value.func.attr in {"get", "pop", "setdefault"}
                  and not isinstance(receiver, (ast.Tuple, ast.List))
                  and len(value.args) in {1, 2})
