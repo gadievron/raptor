@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any, TYPE_CHECKING
+from urllib.parse import unquote
 
 from core.dataflow.finding import Finding, Step
 
@@ -69,7 +70,9 @@ def _step_from_location(
     if not uri or isinstance(line, bool) or not isinstance(line, int) or line < 1:
         return None
     return Step(
-        file_path=uri,
+        # The native emitter quotes local filenames for SARIF. Decode
+        # exactly once; literal percent escapes remain literal filenames.
+        file_path=unquote(uri, errors="strict"),
         line=line,
         column=region.get("startColumn") or 0,
         snippet=(region.get("snippet") or {}).get("text") or "",
