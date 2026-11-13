@@ -60,6 +60,16 @@ def build_operator_summary(context: ReportContext, *, limit: int = 12, show_supp
                      "status": status(f), "level": f.get("scanner_level") or f.get("severity") or "unknown"})
     counts = dict(Counter(status(f) for f in context.findings))
     diagnostics = list(context.diagnostics)
+
+    def metadata_object(namespace, label):
+        value = context.extensions.get(namespace, {})
+        if isinstance(value, dict):
+            return value
+        diagnostics.append(f"Captured {label} unavailable: expected object metadata")
+        return {}
+
+    accounting = metadata_object("raptor.accounting", "accounting")
+    metrics = metadata_object("raptor.metrics", "metrics")
     known = {s.stage_id for s in context.stages}
     for stage in context.expected_stages:
         if stage not in known:
@@ -91,7 +101,7 @@ def build_operator_summary(context: ReportContext, *, limit: int = 12, show_supp
     return OperatorSummary(
         title=f"RAPTOR {context.kind.title()} Summary", target=context.target, state=state,
         total=len(context.findings), rows=rows, counts=counts, diagnostics=visible_notes,
-        stages=stages[:30], actions=actions, accounting=context.extensions.get("raptor.accounting", {}),
+        stages=stages[:30], actions=actions, accounting=accounting,
         snapshot_id=snapshot_id, diagnostic_total=len(unique_notes), stage_total=len(stages),
         scanner_levels=dict(Counter(str(f.get("scanner_level")) if f.get("scanner_level") in ("error", "warning", "note", "none") else "unknown"
                                     for f in context.findings if f.get("scanner_level") is not None)),
@@ -99,7 +109,7 @@ def build_operator_summary(context: ReportContext, *, limit: int = 12, show_supp
                                          for f in context.findings if f.get("severity") is not None)),
         tools=dict(Counter(str(f.get("tool") or "unknown") for f in context.findings)),
         findings_available=context.extensions.get("raptor.findings_available") is not False,
-        metrics={k: v for k, v in context.extensions.get("raptor.metrics", {}).items()
+        metrics={k: v for k, v in metrics.items()
                  if v is None or isinstance(v, (str, int, float, bool))},
         run_id=context.run_id, pass_id=context.pass_id, attempt_id=context.attempt_id, captured_at=context.generated_at,
     )
