@@ -73,6 +73,13 @@ def _single_parent(parents_repr: str | None) -> str | None:
     return None
 
 
+def _validate_pair_limit(limit: int | None) -> None:
+    if limit is not None and (
+        isinstance(limit, bool) or not isinstance(limit, int) or limit < 0
+    ):
+        raise ValueError("limit must be a non-negative integer or None")
+
+
 def load_pairs(
     db_path: Path,
     *,
@@ -80,7 +87,13 @@ def load_pairs(
     languages: Sequence[str] = CODEQL_LANGUAGES,
     limit: int | None = None,
 ) -> list[CveFixPair]:
-    """Return CodeQL-buildable before/after CVE fix-commit pairs."""
+    """Return CodeQL-buildable before/after CVE fix-commit pairs.
+
+    ``limit`` is a non-negative integer or None; zero skips metadata access.
+    """
+    _validate_pair_limit(limit)
+    if limit == 0:
+        return []
     cwe_ph = ",".join("?" * len(cwes))
     lang_ph = ",".join("?" * len(languages))
     sql = f"""
@@ -169,7 +182,12 @@ def load_pairs_from_cve_diff_runs(
     inferable language. Provenance validation is delegated to
     ``packages.checker_synthesis.cve_bridge.load_cve_run`` — the same
     OSV gate the checker-synthesis bridge enforces.
+
+    ``limit`` is a non-negative integer or None; zero skips metadata access.
     """
+    _validate_pair_limit(limit)
+    if limit == 0:
+        return []
     from packages.checker_synthesis.cve_bridge import (
         ProvenanceError,
         load_cve_run,
