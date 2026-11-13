@@ -40,8 +40,8 @@ def test_definitionless_conditional_file_avoids_dense_depth_table(tmp_path):
     (tmp_path / 'a.c').write_text(source)
     rd._constants_for_root(tmp_path, rd._Budget(1000))
     rd.clear_cache()
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         table = rd._constants_for_root(tmp_path, rd._Budget(1000))
         _, peak = tracemalloc.get_traced_memory()
     finally:
