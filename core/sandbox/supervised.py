@@ -101,6 +101,7 @@ from typing import IO, Callable, NamedTuple, NoReturn, Union
 from . import probes
 from ._fork_safe_warn import warn_post_fork
 from ._proxy_bridge import _bring_up_loopback
+from ._stdio import preserve_output_sources as _preserve_output_sources
 from ._spawn import (
     _DEATH_W_LOCK,
     CLONE_NEWNET,
@@ -422,10 +423,13 @@ def _make_target_exec(
             os.close(rep_w)
             if cwd is not None:
                 os.chdir(cwd)
-            if out_fd is not None:
-                os.dup2(out_fd, 1)
-            if err_fd is not None:
-                os.dup2(err_fd, 2)
+            with _preserve_output_sources(
+                out_fd, err_fd, capture_stdout=False, capture_stderr=False,
+            ) as (out_source, err_source):
+                if out_source is not None:
+                    os.dup2(out_source, 1)
+                if err_source is not None:
+                    os.dup2(err_source, 2)
             # xstat_w is close-on-exec: a successful exec closes it
             # (EOF, no bytes = the positive confirmation); the failure
             # arm below writes the diagnostic instead.
