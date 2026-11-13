@@ -817,3 +817,33 @@ def test_equal_sparse_invocation_context_still_merges(tmp_path):
     selected, count, duplicates = select_findings_for_analysis([path], 2)
 
     assert (len(selected), count, duplicates) == (1, 2, 1)
+
+
+@pytest.mark.parametrize("usable", [1, 2], ids=["one-usable", "two-usable"])
+def test_rule_index_cost_depends_on_usable_result_count(tmp_path, monkeypatch, usable):
+    from packages.codeql import finding_selection as selection
+
+    results = [_located_result("first"), _located_result("second")][:usable]
+    run = _run(*results)
+    run["tool"]["driver"]["rules"].extend(
+        {"id": f"unused-{index}"} for index in range(2_000)
+    )
+    run["results"] = [None, "invalid", *results, 13, None]
+    path = _write(tmp_path, "sparse-results.sarif", run)
+    indexed_rules = []
+    original = selection.ResultRuleResolver
+
+    def counted_resolver(context):
+        indexed_rules.append(len(context["tool"]["driver"]["rules"]))
+        return original(context)
+
+    monkeypatch.setattr(selection, "ResultRuleResolver", counted_resolver)
+    selected, count, duplicates = selection.select_findings_for_analysis([path], 2)
+
+    assert (len(selected), count, duplicates) == (usable, usable, 0)
+    assert {candidate.result["ruleId"] for candidate in selected} == {
+        result["ruleId"] for result in results
+    }
+    # One usable lookup cannot amortize allocating the full descriptor index.
+    assert indexed_rules == ([] if usable == 1 else [2_000 + usable])
+    assert json.loads(path.read_text())["runs"][0] == run
