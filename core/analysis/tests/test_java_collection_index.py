@@ -269,6 +269,54 @@ def _get_site_key(idx, src: str, marker: str = "// READ") -> str | None:
     return got[1] if got else None
 
 
+class TestNestedCollectionEvaluation:
+    def test_insert_argument_reads_pre_insertion_slot(self):
+        from core.analysis.cfg_builder_java import _get_parser
+        from core.analysis.const_fold_java import REFUSE, fold_expr
+
+        idx, src = _index(
+            "        ArrayList<String> l = new ArrayList<>();\n"
+            '        l.add("safe");\n'
+            "        l.add(x);\n"
+            "        l.add(0, l.get(1));\n"
+            "        String bar = l.get(0); // READ\n"
+        )
+        tree = _get_parser().parse(src.encode())
+        assert not tree.root_node.has_error
+        target_line = next(i for i, line in enumerate(src.splitlines()) if "// READ" in line)
+        pending = [tree.root_node]
+        reads = []
+        while pending:
+            node = pending.pop()
+            if node.type == "method_invocation" and node.start_point[0] == target_line:
+                reads.append(node)
+            pending.extend(node.named_children)
+        assert len(reads) == 1
+        assert fold_expr(reads[0], lambda *_: REFUSE,
+                         conduit_resolver=CollectionFoldResolver(idx)) is REFUSE
+
+
+    def test_nested_same_receiver_through_wrapper_loses_positional_binding(self):
+        idx, src = _index(
+            "        ArrayList<String> l = new ArrayList<>();\n"
+            '        l.add("safe");\n'
+            "        l.add(x);\n"
+            "        l.add(0, identity(\n"
+            "            (l.get(1))));\n"
+            "        String bar = l.get(0); // READ\n"
+        )
+        assert _get_site_key(idx, src) == ALL_ELEMENTS
+
+    def test_distinct_receiver_argument_keeps_positional_binding(self):
+        idx, src = _index(
+            "        ArrayList<String> l = new ArrayList<>();\n"
+            "        ArrayList<String> other = new ArrayList<>();\n"
+            '        l.add("safe");\n'
+            "        other.add(l.get(0)); // READ\n"
+        )
+        assert _get_site_key(idx, src).startswith("pos@")
+
+
 class TestPositionalLinearity:
     """The linearity proof must reject ops whose statement is not a
     direct child of the declaration's block. A braceless loop/if body

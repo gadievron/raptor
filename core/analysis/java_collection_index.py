@@ -177,9 +177,17 @@ def _linear_block_id(n) -> int | None:
     positional ``get`` to the wrong element. Require the op's own
     statement to be a DIRECT child of the block, reached only through
     allowlisted expression wrappers."""
+    receiver = n.child_by_field_name("object") if n.type == _METHOD_INVOCATION else None
     cur = n
     while cur.parent is not None:
         parent = cur.parent
+        if receiver is not None and receiver.type == _IDENT and parent.type == _METHOD_INVOCATION:
+            outer_receiver = parent.child_by_field_name("object")
+            if outer_receiver is not None and outer_receiver.type == _IDENT \
+                    and outer_receiver.text == receiver.text:
+                # Call-start ordering puts the outer mutation before its
+                # argument reads. Refuse positional replay of this receiver.
+                return None
         if parent.type == "block":
             if cur.type in _LINEAR_STATEMENTS:
                 return parent.start_byte
