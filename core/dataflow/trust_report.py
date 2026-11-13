@@ -22,6 +22,7 @@ from pathlib import Path
 from core.dataflow.label import VALID_FP_CATEGORIES, VALID_VERDICTS
 from core.dataflow.run_corpus import verdict_to_label
 from core.dataflow.validator import ValidatorVerdict
+from core.source.streams import preserving_stream_error
 
 # FP categories whose root cause is "taint neutralised on the path" — the
 # slice a trust witness can act on. (Reachability owns dead_code; SMT owns
@@ -72,7 +73,7 @@ def report(
     total = tp = trust_fp = 0
     coverage_n = false_suppression_n = defer_n = 0
     suppressed_total = suppressed_on_fp = 0
-    with Path(csv_path).open(encoding="utf-8", newline="") as f:
+    with preserving_stream_error(Path(csv_path).open(encoding="utf-8", newline="")) as f:
         reader = csv.DictReader(f, strict=True)
         columns = reader.fieldnames or []
         if len(columns) != len(set(columns)):
