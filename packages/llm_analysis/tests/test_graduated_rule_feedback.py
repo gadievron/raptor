@@ -50,7 +50,7 @@ def _vuln(rule_id, analysis):
 
 
 def _patch_library(monkeypatch):
-    _FakeLibrary.calls = []
+    monkeypatch.setattr(_FakeLibrary, "calls", [])
     import packages.checker_synthesis.library as lib_mod
     monkeypatch.setattr(lib_mod, "RuleLibrary", _FakeLibrary)
     return _FakeLibrary.calls
