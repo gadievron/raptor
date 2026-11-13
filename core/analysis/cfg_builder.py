@@ -998,6 +998,7 @@ class _PythonCFGBuilder:
         subject = self._new_node("stmt", stmt, label=f"match (line {stmt.lineno})")
         self._link_many(incoming, subject)
         exits: list[PyCFGNode] = []
+        case_nodes: list[PyCFGNode] = []
         for case in stmt.cases:
             # Per-case binding node between subject and body: carries
             # the pattern's capture names as defs (see
@@ -1007,6 +1008,11 @@ class _PythonCFGBuilder:
             # false-suppression direction for the value-bound gate.
             case_node = self._match_case_node(case)
             self._link(subject, case_node)
+            if case_nodes:
+                # Failed patterns may retain captures; false guards retain
+                # their side effects while the next case is attempted.
+                self._link(case_nodes[-1], case_node)
+            case_nodes.append(case_node)
             case_out = self._build_stmts(case.body, [case_node])
             exits.extend(case_out)
         # When no case is irrefutable, execution can match NOTHING and
@@ -1017,6 +1023,9 @@ class _PythonCFGBuilder:
         # the false-suppression direction for the vertex-cut consumer.
         if not _match_has_irrefutable_case(stmt):
             exits.append(subject)
+            # A failed guard can leave the match without entering its body,
+            # including when that body has no normal exit (return/raise).
+            exits.extend(case_nodes)
         return exits
 
     def _match_case_node(self, case: ast.match_case) -> PyCFGNode:
