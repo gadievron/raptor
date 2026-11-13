@@ -339,13 +339,16 @@ def test_concurrent_register_lookup_no_raise(tmp_path):
         [threading.Thread(target=writer) for _ in range(3)]
         + [threading.Thread(target=reader) for _ in range(5)]
     )
-    for t in threads:
-        t.start()
-    # Short burst is enough — even ~10k iter pairs per thread
-    # surface a torn dict reliably under the GIL on a multi-core box.
-    time.sleep(0.3)
-    stop.set()
-    for t in threads:
-        t.join(timeout=5.0)
-        assert not t.is_alive(), "thread didn't exit — possible deadlock"
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads(threads, release=stop.set, timeout=5.0):
+        for t in threads:
+            t.start()
+        # Short burst is enough — even ~10k iter pairs per thread
+        # surface a torn dict reliably under the GIL on a multi-core box.
+        time.sleep(0.3)
+        stop.set()
+        for t in threads:
+            t.join(timeout=5.0)
+            assert not t.is_alive(), "thread didn't exit — possible deadlock"
     assert errors == [], f"thread(s) raised: {errors}"
