@@ -17,6 +17,7 @@ from unittest import mock
 import pytest
 
 from core.startup import init as startup_init
+from core.testing.module_bindings import patch_module_attribute
 
 
 @pytest.fixture
@@ -39,7 +40,7 @@ def _run_check_env(monkeypatch):
     # Sandbox probes shell out; disk reads statvfs. Both are
     # noisy and orthogonal to the env-file check — patch them
     # away so the test stays focused.
-    monkeypatch.setattr("os.statvfs", lambda _: type(
+    patch_module_attribute(monkeypatch, startup_init, "os", "statvfs", lambda _: type(
         "S", (), {"f_bavail": 10**9, "f_frsize": 4096}
     )())
     return startup_init.check_env(set())
