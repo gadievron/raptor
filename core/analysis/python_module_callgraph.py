@@ -763,7 +763,8 @@ def module_dynamic_namespace(
       and aliasing makes name-level tracking unsound → whole module.
     * ``globals()`` / ``vars()`` / module-scope ``locals()``:
       a constant-key subscript STORE/DELETE poisons exactly that
-      name; a constant-key LOAD is harmless; every other use
+      name; a LOAD used as a direct attribute/item store receiver
+      also poisons that name; plain lookup reads stay unpoisoned. Every other use
       (non-constant key store, aliasing the dict, ``.update(…)``,
       passing it on) → whole module.
 
@@ -874,7 +875,26 @@ def module_dynamic_namespace(
             if (isinstance(parent, ast.Subscript)
                     and parent.value is node):
                 if isinstance(parent.ctx, ast.Load):
-                    continue                     # read-only — harmless
+                    # A lookup can be the receiver of an attribute/item
+                    # store, even though the lookup itself is a Load.
+                    cursor: ast.AST = parent
+                    receiver_write = False
+                    while True:
+                        container = parents.get(cursor)
+                        if not isinstance(container, (ast.Attribute, ast.Subscript)) \
+                                or container.value is not cursor:
+                            break
+                        if isinstance(container.ctx, (ast.Store, ast.Del)):
+                            receiver_write = True
+                            break
+                        cursor = container
+                    if not receiver_write:
+                        continue
+                if fname == "vars" and (node.args or node.keywords):
+                    # vars(obj) exposes obj's namespace; its lookup key
+                    # does not identify a module-global root to poison.
+                    whole = True
+                    continue
                 key = parent.slice
                 if (isinstance(key, ast.Constant)
                         and isinstance(key.value, str)):
