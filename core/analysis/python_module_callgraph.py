@@ -892,21 +892,42 @@ def module_dynamic_namespace(
     saved_namespace_dict_values: set[str] = set()
     namespace_dict_value_cache: dict[ast.AST, bool] = {}
 
-    def direct_namespace_dict_value(value: ast.AST) -> bool:
-        wrappers = []
-        cursor = value
-        while isinstance(cursor, ast.NamedExpr) and cursor not in namespace_dict_value_cache:
-            wrappers.append(cursor)
-            cursor = cursor.value
-        if cursor not in namespace_dict_value_cache:
-            namespace_dict_value_cache[cursor] = (
-                isinstance(cursor, ast.Attribute) and cursor.attr == "__dict__"
-            )
-        result = namespace_dict_value_cache[cursor]
-        for wrapper in wrappers:
-            namespace_dict_value_cache[wrapper] = result
-        return result
-
+    def possible_namespace_dict_value(value: ast.AST) -> bool:
+        pending_values = [(value, False)]
+        while pending_values:
+            cursor, expanded = pending_values.pop()
+            if cursor in namespace_dict_value_cache:
+                continue
+            if isinstance(cursor, ast.Attribute) and cursor.attr == "__dict__":
+                namespace_dict_value_cache[cursor] = True
+                continue
+            if isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name) and not cursor.keywords:
+                if cursor.func.id in object_namespace_names and len(cursor.args) == 1:
+                    namespace_dict_value_cache[cursor] = True
+                    continue
+                if (cursor.func.id in reflective_read_names and len(cursor.args) in {2, 3}
+                        and isinstance(cursor.args[1], ast.Constant)
+                        and cursor.args[1].value == "__dict__"):
+                    namespace_dict_value_cache[cursor] = True
+                    continue
+            if isinstance(cursor, ast.NamedExpr):
+                children = (cursor.value,)
+            elif isinstance(cursor, ast.IfExp):
+                children = (cursor.body, cursor.orelse)
+            elif isinstance(cursor, ast.BoolOp):
+                children = tuple(cursor.values)
+            else:
+                children = ()
+            if not children:
+                namespace_dict_value_cache[cursor] = False
+            elif expanded:
+                namespace_dict_value_cache[cursor] = any(
+                    namespace_dict_value_cache[child] for child in children
+                )
+            else:
+                pending_values.append((cursor, True))
+                pending_values.extend((child, False) for child in children)
+        return namespace_dict_value_cache[value]
 
     def namespace_dict_member_receiver(member: ast.AST) -> ast.AST | None:
         if (isinstance(member, ast.Attribute)
@@ -1035,7 +1056,7 @@ def module_dynamic_namespace(
                 continue
             if possible_import_value(value):
                 saved_import_values.add(target.id)
-                if direct_namespace_dict_value(value):
+                if possible_namespace_dict_value(value):
                     saved_namespace_dict_values.add(target.id)
     import_roots.update(saved_import_values)
 
