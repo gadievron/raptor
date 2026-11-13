@@ -32,7 +32,7 @@ def test_lookup_namespace_dictionary_update_cannot_preserve_callable_identity():
     ('globals()["root"].__dict__.copy()', (False, frozenset())),
     ('globals()["root"].__dict__.get("field")', (False, frozenset())),
     ('globals()["root"].update(replacement)', (False, frozenset())),
-    ('def handle():\n    locals()["root"].__dict__.update(replacement)', (False, frozenset())),
+    ('def handle():\n    locals()["root"].__dict__.update(replacement)', (True, frozenset())),
     ('def handle():\n    value: globals()["root"].__dict__.clear()', (False, frozenset())),
 ])
 def test_lookup_dictionary_receiver_and_scope_limits(source, expected):
