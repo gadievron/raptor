@@ -9,9 +9,7 @@ where the end-to-end test will live.
 
 from __future__ import annotations
 
-import sys as _sys
 
-import pytest as _pytest
 
 
 import core.sandbox.tracer as _os_fault_consumer
@@ -21,10 +19,6 @@ from core.testing.module_bindings import patch_module_attribute
 
 
 
-pytestmark = _pytest.mark.skipif(
-    _sys.platform != "linux",
-    reason="Linux-only sandbox internals (mount-ns / Landlock / seccomp / ptrace tracer / pid1 shim) — see core/sandbox/_macos_spawn.py for the macOS path",
-)
 
 
 import ctypes  # noqa: E402
@@ -49,15 +43,18 @@ def _denials_jsonl(run_dir):
     )
 
 
-# Skip the whole module on archs the tracer doesn't support (currently
-# x86_64 + aarch64). On supported archs the SeizeAndDetach test runs
-# real ptrace; on unsupported archs the module-level skip avoids
-# pulling in code paths that need _arch_info().
+# Keep the supported-architecture contract for the pure controls.
+# Actual kernel tests add explicit Linux-native restrictions below.
 pytestmark = pytest.mark.skipif(
     not tracer._is_supported_arch(),
     reason=f"tracer doesn't support {platform.machine()} (x86_64/aarch64 only)",
 )
 
+
+_requires_linux_tracer = pytest.mark.skipif(
+    sys.platform != "linux" or not tracer._is_supported_arch(),
+    reason="requires Linux ptrace/process_vm_readv on a supported architecture",
+)
 
 class TestLibcCacheSentinel:
     """N1: _get_libc caches BOTH success and failure to avoid repeated
@@ -649,12 +646,15 @@ class TestReadRegsContract:
             readonly.chmod(0o700)
 
 
+@pytest.mark.linux_native
+@_requires_linux_tracer
 class TestSeizeAndDetachLifecycle:
     """End-to-end sanity test of the ptrace handshake against a real
     child. Forks a sleep process, attaches via PTRACE_SEIZE, verifies
     the attach succeeded, then detaches cleanly. Doesn't drive the
     full event loop — that needs seccomp integration (commit 4)."""
 
+    @pytest.mark.slow
     def test_seize_interrupt_detach_against_sleeping_child(self):
         # Fork a sleeper, SEIZE it, INTERRUPT to bring to a group-stop,
         # waitpid for the stop, then DETACH. This is the minimal full
@@ -781,6 +781,8 @@ class TestPathDereference:
     our OWN PID — process_vm_readv on self is always permitted (no
     ptrace_attach needed)."""
 
+    @pytest.mark.linux_native
+    @_requires_linux_tracer
     def test_reads_self_string(self):
         # Construct a known string in our address space, hand its
         # pointer to _read_tracee_string, expect the bytes back.
@@ -791,6 +793,8 @@ class TestPathDereference:
         # NUL terminator is stripped.
         assert result == "raptor-audit-test-marker"
 
+    @pytest.mark.linux_native
+    @_requires_linux_tracer
     def test_reads_path_like_string(self):
         # Real-world shape: a path the operator would care about.
         marker = b"/etc/hostname\0"
@@ -806,6 +810,8 @@ class TestPathDereference:
         result = tracer._read_tracee_string(os.getpid(), 0)
         assert result is None
 
+    @pytest.mark.linux_native
+    @_requires_linux_tracer
     def test_reads_long_string_truncates_at_max(self):
         # Bound: max_bytes prevents pathological never-NUL'd
         # buffers from making us read forever.
@@ -818,6 +824,8 @@ class TestPathDereference:
         assert len(result) == 50
         assert result == "A" * 50
 
+    @pytest.mark.linux_native
+    @_requires_linux_tracer
     def test_handles_non_utf8_bytes(self):
         # Filename can contain arbitrary bytes (Linux filesystems
         # don't enforce encoding). errors='replace' keeps the
