@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from core.sandbox import context
+from core.sandbox import _capture, context
 from core.sandbox.errors import SandboxSetupError
 from core.sandbox.tests.test_context_decision_pins import _Driver
 from core.testing.module_bindings import patch_module_attribute
@@ -111,3 +111,20 @@ def test_native_metadata_uses_effective_cap_and_parent_loss_flags():
     assert len(writes) == 1
     expected = ast.parse('(_capture_cap, _truncated[1], _truncated[2])', mode='eval').body
     assert ast.dump(writes[0].value) == ast.dump(expected)
+
+
+@pytest.mark.parametrize('cap', [10, 1], ids=['complete', 'truncated'])
+def test_nontext_codec_refuses_before_incremental_decoder(monkeypatch, tmp_path, cap):
+    def forbidden(encoding):
+        raise AssertionError('nontext codec reached payload decoder construction')
+    patch_module_attribute(monkeypatch, _capture, 'codecs', 'getincrementaldecoder', forbidden)
+    with pytest.raises(LookupError, match='not a text encoding'):
+        _execute(monkeypatch, tmp_path, encoding='hex_codec', cap=cap, stdout=b'41')
+
+
+def test_complete_text_capture_does_not_require_incremental_decoder(monkeypatch, tmp_path):
+    def forbidden(encoding):
+        raise AssertionError('complete capture unnecessarily requested incremental decoder')
+    patch_module_attribute(monkeypatch, _capture, 'codecs', 'getincrementaldecoder', forbidden)
+    result = _execute(monkeypatch, tmp_path, encoding='utf-8', cap=20, stdout=b'owned')
+    assert result.stdout == 'owned' and result.stderr == ''

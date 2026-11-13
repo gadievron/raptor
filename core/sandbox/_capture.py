@@ -75,12 +75,21 @@ def decode_captured_result(result, encoding: str, errors: str) -> None:
             value = raw.decode(encoding, errors)
         else:
             cap, truncated = limits[0], limits[index + 1]
-            if truncated:
-                raw = raw[:cap]
-            factory = codecs.getincrementaldecoder(encoding)
-            value = factory(errors).decode(raw, final=not truncated)
-            if not isinstance(value, str):
-                raise LookupError(f"{encoding!r} is not a text encoding")
+            if not truncated:
+                # Keep bytes.decode's text-codec admission and support for
+                # complete-stream codecs without an incremental decoder.
+                value = raw.decode(encoding, errors)
+            else:
+                # Byte-to-byte codecs can expand their input. Refuse them
+                # before constructing or invoking a payload decoder, matching
+                # bytes.decode rather than rejecting their result afterwards.
+                codec = codecs.lookup(encoding)
+                if not getattr(codec, "_is_text_encoding", True):
+                    raise LookupError(f"{encoding!r} is not a text encoding")
+                factory = codecs.getincrementaldecoder(encoding)
+                value = factory(errors).decode(raw[:cap], final=False)
+                if not isinstance(value, str):
+                    raise LookupError(f"{encoding!r} is not a text encoding")
         value = value.replace("\r\n", "\n").replace("\r", "\n")
         if limits is not None:
             value = clipped_output(value, cap, label, truncated=truncated)
