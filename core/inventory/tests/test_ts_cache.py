@@ -22,6 +22,7 @@ import pytest
 
 from core.inventory import _ts_cache, call_graph, extractors
 from core.testing.threads import retiring_threads
+from core.testing.module_views import module_function_view
 
 _FAKE = "tree_sitter_zz_nonexistent"
 
@@ -187,6 +188,9 @@ def test_missing_tree_sitter_raises_from_call_graph_seam(
             raise ImportError("forced absent: tree_sitter")
         return real_import(name, *a, **kw)
 
-    monkeypatch.setattr(builtins, "__import__", _no_ts)
+    cache = module_function_view(_ts_cache, import_hook=_no_ts)
+    graph = module_function_view(call_graph, bindings={"_ts_cache": cache},
+                                 import_hook=_no_ts)
+    monkeypatch.setitem(globals(), "call_graph", graph)
     with pytest.raises(ImportError):
         call_graph._get_ts_parser(lambda: None)
