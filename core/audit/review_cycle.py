@@ -19,6 +19,7 @@ from core.concepts.subject_study import SubjectExplanation
 from core.language_reference import ReferenceAnswer
 
 from .caller_review_context import CallerContextAnswer, CallerContextRequest
+from .binary_review_scope import same_review_snapshot
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin
 from .refutation_source import SourceIdentity
 
@@ -107,10 +108,7 @@ class KnowledgeCycle:
             for request in batch.accepted:
                 candidate = request.origin
                 if (self._retired or
-                        (candidate.file, candidate.function, candidate.line_start,
-                         candidate.line_end, candidate.source_identity) !=
-                        (origin.file, origin.function, origin.line_start,
-                         origin.line_end, origin.source_identity)):
+                        not same_review_snapshot(candidate, origin)):
                     self._events.append(KnowledgeCycleEvent(
                         "rejected_requests", reason="different_review_snapshot"))
                     return False
@@ -155,9 +153,7 @@ class KnowledgeCycle:
         with self._lock:
             origin = self.origin
             if self._retired or any(
-                (r.origin.file, r.origin.function, r.origin.line_start, r.origin.line_end, r.origin.source_identity) !=
-                (origin.file, origin.function, origin.line_start, origin.line_end, origin.source_identity)
-                for r in requests
+                not same_review_snapshot(r.origin, origin) for r in requests
             ):
                 self._events.append(KnowledgeCycleEvent("rejected_caller_requests", reason="different_review_snapshot"))
                 return False

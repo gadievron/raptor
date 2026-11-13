@@ -9749,6 +9749,8 @@ def _run_audit_body(
                         "Binary module changed or became unavailable; review deferred",
                     "binary_occurrence_unavailable":
                         "Binary occurrence could not be bound to its module; review deferred",
+                    "binary_view_identity_unavailable":
+                        "Binary implementation input could not be bound; review deferred",
                 }.get(refusal.reason, "Knowledge review allowance exhausted"))
                 return ReviewOutcome(gap["file"], gap["name"], "deferred",
                                      reason, line=gap.get("line_start", 0))
