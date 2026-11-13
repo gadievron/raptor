@@ -196,6 +196,8 @@ class ReportContext:
             raise ValueError("Invalid context extensions or stages")
         for stage in self.stages:
             stage.validate()
+            if stage.state not in STATES:
+                raise ValueError("Invalid stage execution state")
         refs = [f.get("occurrence_ref") for f in self.findings]
         if not all(isinstance(r, str) and r for r in refs) or len(set(refs)) != len(refs):
             raise ValueError("Missing or duplicate finding occurrence references")
