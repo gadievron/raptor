@@ -24,6 +24,7 @@ import pytest
 import core.audit.orchestrator as orch
 from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
 from core.testing.processes import reap_on_exit
+from core.testing.threads import retiring_threads
 from core.testing.standalone_cli import run_standalone_cli, standalone_cli_env
 
 _RAPTOR_DIR = Path(__file__).resolve().parents[3]
@@ -71,8 +72,9 @@ class TestInstallSigtermGrace:
         t = threading.Thread(
             target=lambda: results.append(orch.install_sigterm_grace()),
         )
-        t.start()
-        t.join()
+        with retiring_threads((t,), release=lambda: None, timeout=5):
+            t.start()
+            t.join()
         assert results == [False]
 
     def test_registration_failure_degrades(self, monkeypatch):
