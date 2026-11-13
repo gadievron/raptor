@@ -563,7 +563,7 @@ def _walk_call_sites(
 
 def _subtree_may_escape(n, resolver) -> bool:
     """Java escape policy: array_access anywhere; field STORE
-    (assignment whose LHS is a field_access); System.arraycopy."""
+    (assignment or increment/decrement); System.arraycopy."""
     if n is None:
         return False
     stack = [n]
@@ -575,6 +575,11 @@ def _subtree_may_escape(n, resolver) -> bool:
         if t == _ASSIGNMENT:
             lhs = cur.child_by_field_name("left")
             if lhs is not None and lhs.type == _FIELD_ACCESS:
+                return True
+        if t == _UPDATE:
+            operands = cur.named_children
+            target = _unwrap_value_expr(operands[0]) if len(operands) == 1 else None
+            if target is not None and target.type == _FIELD_ACCESS:
                 return True
         if t == _METHOD_INVOCATION:
             name = resolver.callable_name(cur)
