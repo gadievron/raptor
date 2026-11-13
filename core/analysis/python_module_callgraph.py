@@ -994,7 +994,9 @@ def module_dynamic_namespace(
                         cursor = container
                     if not receiver_write:
                         continue
-                if function_locals:
+                if function_locals or (
+                        fname == "vars" and not node.args and not node.keywords
+                        and isinstance(parent.ctx, ast.Load) and not _module_reachable(node)):
                     # A local alias can refer to a shared imported object;
                     # its lookup key does not name the module-global root.
                     whole = True
