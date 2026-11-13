@@ -121,6 +121,8 @@ class TestConcurrentFuzzAppend:
         scheduling of the load → save window is nudged (both loaders
         are held until both have loaded, or until the lock has kept
         the second one out). No logic is patched."""
+        from core.testing.threads import retiring_threads
+
         binary, fuzz_dirs = self._seed_run(tmp_path)
 
         cond = threading.Condition()
@@ -154,10 +156,11 @@ class TestConcurrentFuzzAppend:
 
         threads = [threading.Thread(target=worker, args=(fd,))
                    for fd in fuzz_dirs]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+        with retiring_threads(threads, release=lambda: None, timeout=30):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
 
         assert not errs, errs
         payload = load_json(tmp_path / "binary-evidence.json")
