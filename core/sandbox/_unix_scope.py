@@ -609,16 +609,22 @@ class UnixScopeSupervisor:
 
     def _respond(self, nid: int, error: int, val: int = 0) -> None:
         resp = struct.pack(_RESP_FMT, nid, val, error, 0)
-        with contextlib.suppress(OSError):
-            fcntl.ioctl(self._fd, _IOCTL_NOTIF_SEND, bytearray(resp))
+        with self._close_lock:
+            if not self._owns_fd:
+                return
+            with contextlib.suppress(OSError):
+                fcntl.ioctl(self._fd, _IOCTL_NOTIF_SEND, bytearray(resp))
 
     def _id_valid(self, nid: int) -> bool:
-        try:
-            fcntl.ioctl(self._fd, _IOCTL_NOTIF_ID_VALID,
-                        struct.pack("<Q", nid))
-            return True
-        except OSError:
-            return False
+        with self._close_lock:
+            if not self._owns_fd:
+                return False
+            try:
+                fcntl.ioctl(self._fd, _IOCTL_NOTIF_ID_VALID,
+                            struct.pack("<Q", nid))
+                return True
+            except OSError:
+                return False
 
     def _handle_one(self, nid: int, pid: int, nr: int,
                     sockfd: int, addr_ptr: int, addr_len: int) -> None:
