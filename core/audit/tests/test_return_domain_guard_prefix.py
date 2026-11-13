@@ -41,8 +41,8 @@ def test_unguarded_file_does_not_allocate_a_line_list():
     if tracemalloc.is_tracing():
         pytest.skip('requires isolated allocation tracing')
     source = 'int ordinary;\n' * 100000
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = rd._strip_include_guard(source)
         _, peak = tracemalloc.get_traced_memory()
     finally:
