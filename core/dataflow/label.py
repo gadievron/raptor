@@ -15,15 +15,13 @@ the FP distribution — without categories we can't enforce that.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from core.json import dumps_artifact, loads
 
 from core.dataflow._schema_checks import check_extra_fields, require_nonempty
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 SCHEMA_VERSION = 1
@@ -210,6 +208,8 @@ class GroundTruth:
             )
             raise ValueError(msg)
         lcp = data.get("lifecycle_precondition")
+        if lcp is not None and not isinstance(lcp, Mapping):
+            raise ValueError("lifecycle_precondition must be an object or null")
         return cls(
             finding_id=data["finding_id"],
             verdict=data["verdict"],
@@ -218,7 +218,7 @@ class GroundTruth:
             labeled_at=data["labeled_at"],
             fp_category=data.get("fp_category"),
             lifecycle_precondition=(
-                LifecyclePrecondition.from_dict(lcp) if lcp else None
+                LifecyclePrecondition.from_dict(lcp) if lcp is not None else None
             ),
         )
 
