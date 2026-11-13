@@ -929,7 +929,7 @@ def module_dynamic_namespace(
         else:
             continue
         cursor = value
-        while isinstance(cursor, (ast.Attribute, ast.Subscript)):
+        while isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
             if (isinstance(cursor, ast.Subscript) and isinstance(cursor.value, ast.Call)
                     and isinstance(cursor.value.func, ast.Name)
                     and cursor.value.func.id == "globals"
