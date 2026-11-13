@@ -166,3 +166,181 @@ def test_unexpected_launch_error_cleans_up_and_cannot_pass(runner, monkeypatch, 
         invoke(runner, monkeypatch, tmp_path, execute)
     assert len(homes) == 1
     assert not Path(homes[0]).exists()
+
+
+@pytest.fixture
+def browser_runner(runner, monkeypatch):
+    registry = runner.load_registry()
+    registry['native'][-1]['id'] = 'playwright-browser'
+    for index, family in enumerate(registry['native']):
+        family['env'] = {'OWNED_FAMILY': str(index)}
+    monkeypatch.setattr(runner, 'sys', SimpleNamespace(**(vars(sys) | {'platform': 'linux'})))
+    return runner
+
+
+def browser_invoke(runner, monkeypatch, tmp_path, execute, *options):
+    monkeypatch.setattr(runner, 'subprocess', SimpleNamespace(
+        run=execute, STDOUT=subprocess.STDOUT, TimeoutExpired=subprocess.TimeoutExpired))
+    argv = ['runner', '--lane', 'native', '--jobs', '2',
+            '--report-dir', str(tmp_path / 'reports'), *options]
+    # argparse reads its own sys module, not the runner's platform facade.
+    monkeypatch.setattr(sys, 'argv', argv)
+    monkeypatch.setattr(runner.sys, 'argv', argv)
+    return runner.main()
+
+
+@pytest.mark.parametrize(('platform', 'jobs', 'lane', 'browser', 'expected'), [
+    pytest.param('linux', '2', 'native', True, [3, 0, 1, 2], id='linux-two-browser-first'),
+    pytest.param('linux', '2', 'native', False, [0, 1, 2, 3], id='browser-absent'),
+    pytest.param('linux', '1', 'native', True, [0, 1, 2, 3], id='linux-serial-unchanged'),
+    pytest.param('darwin', '2', 'native', True, [0, 1, 2, 3], id='macos-unchanged'),
+    pytest.param('linux', '2', 'contracts', True, ['contract'], id='contracts-unchanged'),
+])
+def test_browser_submission_preserves_work_and_report_order(
+        browser_runner, monkeypatch, tmp_path, platform, jobs, lane, browser, expected):
+    runner = browser_runner
+    runner.sys.platform = platform
+    if not browser:
+        runner.load_registry()['native'][-1]['id'] = 'family-3'
+    submitted, roots, environments = [], [], []
+    original_pool = runner.ThreadPoolExecutor
+
+    class RecordingPool:
+        def __init__(self, *, max_workers):
+            assert max_workers == (1 if lane == 'contracts' else int(jobs))
+            self.pool = original_pool(max_workers=max_workers)
+
+        def __enter__(self):
+            self.pool.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.pool.__exit__(*args)
+
+        def submit(self, function, group):
+            submitted.append(group)
+            return self.pool.submit(function, group)
+
+    monkeypatch.setattr(runner, 'ThreadPoolExecutor', RecordingPool)
+
+    def execute(command, **kwargs):
+        env = kwargs['env']
+        paths = [Path(env[key]) for key in ('HOME', 'TMPDIR', 'RAPTOR_OUT_DIR', 'RAPTOR_REGISTRY_HOME')]
+        assert all(path.is_dir() for path in paths)
+        assert len(set(paths)) == 4
+        roots.append(paths)
+        environments.append((command[5], env.get('OWNED_FAMILY')))
+        report(command)
+        return SimpleNamespace(returncode=0)
+
+    assert browser_invoke(runner, monkeypatch, tmp_path, execute, '--lane', lane, '--jobs', jobs) == 0
+    assert [group[1][0] for group in submitted] == [f'owned::case_{i}' if i != 'contract'
+                                                 else 'owned::contract' for i in expected]
+    if lane == 'native':
+        assert sorted(environments) == [(f'owned::case_{i}', str(i)) for i in range(4)]
+        assert all(group[2] == group[4] == 1 for group in submitted)
+    assert len({str(paths[0].parent) for paths in roots}) == len(roots)
+    assert all(not path.exists() for paths in roots for path in paths)
+    summary = json.loads((tmp_path / 'reports/summary.json').read_text())
+    plan = json.loads((tmp_path / 'reports/plan.json').read_text())
+    names = ['contracts'] if lane == 'contracts' else [family['id'] for family in runner.load_registry()['native']]
+    assert [group['family'] for group in plan['selected']] == names
+    assert [result['family'] for result in summary['results']] == names
+    assert all(result['returncode'] == 0 and not result['coverage_errors'] for result in summary['results'])
+
+
+@pytest.mark.parametrize(('fault', 'failing_selector'), [
+    pytest.param('returncode', 'owned::case_3', id='browser-failure'),
+    pytest.param('returncode', 'owned::case_0', id='companion-failure'),
+    pytest.param('exception', 'owned::case_3', id='launch-exception'),
+    pytest.param('timeout', 'owned::case_3', id='timeout'),
+    pytest.param('missing', 'owned::case_3', id='missing-coverage'),
+    pytest.param('malformed', 'owned::case_3', id='malformed-coverage'),
+    pytest.param('count', 'owned::case_3', id='wrong-count'),
+    pytest.param('skipped', 'owned::case_3', id='skipped-case'),
+    pytest.param('failure', 'owned::case_3', id='failed-case'),
+    pytest.param('error', 'owned::case_3', id='error-case'),
+])
+def test_browser_failure_prefix_stops_pending_work_and_cleans_active_roots(
+        browser_runner, monkeypatch, tmp_path, fault, failing_selector):
+    runner = browser_runner
+    started = threading.Barrier(2, timeout=4)
+    stopped = threading.Event()
+    monkeypatch.setattr(runner, 'threading', SimpleNamespace(Event=lambda: stopped))
+    calls, homes, completed = [], [], []
+
+    def execute(command, **kwargs):
+        selector = command[5]
+        calls.append(selector)
+        homes.append(Path(kwargs['env']['HOME']))
+        started.wait()
+        if selector != failing_selector:
+            assert stopped.wait(4)
+            assert Path(kwargs['env']['HOME']).is_dir()
+            completed.append(selector)
+            report(command)
+            return SimpleNamespace(returncode=0)
+        if fault == 'exception':
+            raise OSError('owned browser launch failure')
+        if fault == 'timeout':
+            raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+        if fault == 'malformed':
+            report(command, '<broken')
+        elif fault == 'count':
+            report(command, '<testcase/><testcase/>')
+        elif fault in ('skipped', 'failure', 'error'):
+            report(command, f'<testcase><{fault}/></testcase>')
+        elif fault != 'missing':
+            report(command)
+        return SimpleNamespace(returncode=13 if fault == 'returncode' else 0)
+
+    if fault == 'exception':
+        with pytest.raises(OSError, match='owned browser launch failure'):
+            browser_invoke(runner, monkeypatch, tmp_path, execute)
+    else:
+        expected_code = 13 if fault == 'returncode' else 124 if fault == 'timeout' else 1
+        assert browser_invoke(runner, monkeypatch, tmp_path, execute) == expected_code
+        summary = json.loads((tmp_path / 'reports/summary.json').read_text())
+        assert {row['family'] for row in summary['results']} == {'family-0', 'playwright-browser'}
+    assert stopped.is_set()
+    # Reordering deliberately changes the attempted subset after a failure.
+    assert sorted(calls) == ['owned::case_0', 'owned::case_3']
+    assert completed == [selector for selector in calls if selector != failing_selector]
+    assert len(set(homes)) == 2
+    assert all(not home.exists() for home in homes)
+
+
+def test_browser_order_retains_global_deadline_and_timeout_clamping(browser_runner, monkeypatch, tmp_path):
+    from concurrent.futures import Future
+
+    runner = browser_runner
+    clock = iter([100, 700, 1000, 1299.5, 1400])
+    monkeypatch.setattr(runner, 'time', SimpleNamespace(monotonic=lambda: next(clock)))
+
+    class InlinePool:
+        """Deterministic clock control, not a concurrency simulation."""
+        def __init__(self, *, max_workers):
+            assert max_workers == 2
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def submit(self, function, group):
+            future = Future()
+            future.set_result(function(group))
+            return future
+
+    monkeypatch.setattr(runner, 'ThreadPoolExecutor', InlinePool)
+    allocations = []
+
+    def execute(command, **kwargs):
+        allocations.append((command[5], kwargs['timeout']))
+        report(command)
+        return SimpleNamespace(returncode=0)
+
+    assert browser_invoke(runner, monkeypatch, tmp_path, execute) == 0
+    assert allocations == [('owned::case_3', 600), ('owned::case_0', 300),
+                           ('owned::case_1', 1), ('owned::case_2', 1)]
