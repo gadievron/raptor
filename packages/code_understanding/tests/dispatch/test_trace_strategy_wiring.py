@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from core.testing.module_views import module_function_view
+from packages.code_understanding.dispatch import trace_dispatch as dispatch
 from packages.code_understanding.dispatch.trace_dispatch import (
     _build_strategy_block,
     _format_user_message,
@@ -137,11 +139,11 @@ class TestRobustness:
                 raise ImportError("substrate missing")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", fake_import):
-            out = _format_user_message([{"trace_id": "T1", "cwe": "CWE-22"}])
-            assert 'kind="flow-traces"' in out
-            assert "</untrusted-" in out
-            assert "Bug-class lenses" not in out
+        owner = module_function_view(dispatch, import_hook=fake_import)
+        out = owner._format_user_message([{"trace_id": "T1", "cwe": "CWE-22"}])
+        assert 'kind="flow-traces"' in out
+        assert "</untrusted-" in out
+        assert "Bug-class lenses" not in out
 
     def test_picker_exception_returns_base_message(self):
         def boom(**kwargs):
@@ -241,10 +243,10 @@ class TestStrategyBlockDirect:
                 raise ImportError("substrate missing")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", fake_import):
-            assert _build_strategy_block(
-                [{"trace_id": "T1", "cwe": "CWE-22"}],
-            ) == ""
+        owner = module_function_view(dispatch, import_hook=fake_import)
+        assert owner._build_strategy_block(
+            [{"trace_id": "T1", "cwe": "CWE-22"}],
+        ) == ""
 
     def test_empty_traces_list_returns_block_with_general(self):
         # Empty list serialises to "[]"; no signals → general only.
