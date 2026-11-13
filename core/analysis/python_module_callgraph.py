@@ -967,6 +967,13 @@ def module_dynamic_namespace(
             if isinstance(cursor, (ast.Dict, ast.Tuple, ast.List)):
                 literal_selection_cache[cursor] = cursor
                 continue
+            if isinstance(cursor, ast.NamedExpr):
+                if expanded:
+                    literal_selection_cache[cursor] = literal_selection_cache[cursor.value]
+                else:
+                    pending.append((cursor, True))
+                    pending.append((cursor.value, False))
+                continue
             if not isinstance(cursor, ast.Subscript) or isinstance(cursor.slice, ast.Slice):
                 literal_selection_cache[cursor] = None
                 continue
