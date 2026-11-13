@@ -1222,6 +1222,10 @@ def module_dynamic_namespace(
             cursor = pending.pop()
             if isinstance(cursor, ast.NamedExpr):
                 pending.append(cursor.value)
+            elif isinstance(cursor, ast.Subscript):
+                selected = selected_literal_value(cursor)
+                if selected is not None:
+                    pending.append(selected)
             elif isinstance(cursor, ast.IfExp):
                 pending.extend((cursor.body, cursor.orelse))
             elif isinstance(cursor, ast.BoolOp):
