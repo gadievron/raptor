@@ -6805,34 +6805,23 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 setup_category=_setup_status[0],
                             )
                         if _setup_status is not None and _setup_status[0] == "!":
-                            # EOF with NO exec confirmation: the spawn
-                            # child died mid-setup without reaching any
-                            # reporting site — involuntary termination
-                            # (external SIGKILL, OOM kill, a hard cap
-                            # landing between fork and exec). Every
-                            # VOLUNTARY exit writes its category first
-                            # and a successful exec writes 'G', so this
-                            # shape is never a target result: the wait
-                            # status the backend collected belongs to
-                            # the setup child. Pre-fix, bare EOF read
-                            # as "the target execed" and the death came
-                            # back as a genuine-looking
-                            # CompletedProcess (e.g. rc=-9), feeding
-                            # crash oracles a fabricated target crash.
+                            # Missing confirmation or a damaged status channel
+                            # cannot establish a genuine target result. Keep
+                            # the typed refusal without promising pre-exec death:
+                            # a read error can also follow a released target.
                             from .errors import SandboxSetupError
                             msg_0 = (
-                                f"sandbox spawn child died during "
-                                f"setup (rc={result.returncode}): "
+                                f"sandbox target execution could not be confirmed "
+                                f"(rc={result.returncode}): "
                                 f"{_setup_status[1]}"
                             )
                             raise SandboxSetupError(
                                 msg_0,
-                                "the target never executed and the "
-                                "returncode belongs to the setup "
-                                "child, not the target. Retry the "
-                                "run; if it recurs, check for OOM "
-                                "kills (dmesg) or an external "
-                                "process sweeper.",
+                                "do not assume the target never ran or that "
+                                "the returncode is a genuine target result. "
+                                "Check the status-channel error, OOM kills "
+                                "(dmesg), and external process sweepers before "
+                                "deciding whether retrying is safe.",
                                 setup_category=_setup_status[0],
                             )
                         if _setup_status is not None and _setup_status[0] in ("L", "S", "U"):

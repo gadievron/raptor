@@ -525,10 +525,10 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
         except OSError:
             pass
     parsed = _parse_setup_status(raw)
-    if read_failed and parsed is None:
-        # G: is only positive confirmation when the remaining channel was
-        # drained successfully; a read error may hide a following X report.
-        return ("!", "exec-status pipe read failed after exec confirmation; "
+    if read_failed and (parsed is None or parsed[0] == "!"):
+        # A damaged channel cannot prove execution or pre-exec death. Even
+        # G: may hide a following X report; an empty read proves neither.
+        return ("!", "exec-status pipe read failed; "
                 "target execution status is unknown")
     return parsed
 

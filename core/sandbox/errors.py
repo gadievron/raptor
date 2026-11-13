@@ -38,8 +38,9 @@ class SandboxSetupError(BaseException):
 
     The distinction this type encodes is the whole point: it means the
     isolation the caller requested (namespace unshare, mount-ns, etc.)
-    failed to set up, so the target command **never executed**. That is
-    categorically different from "the command ran and exited non-zero"
+    failed to set up, or its execution status could not be confirmed after
+    a damaged status-channel read. An uncertain result must not be assumed
+    safe to retry. Both differ from "the command ran and exited non-zero"
     or "the command ran and produced no output".
 
     Without this signal those two cases are indistinguishable downstream:
@@ -72,8 +73,8 @@ class SandboxSetupError(BaseException):
     diagnostic.
 
     ``setup_category`` carries the exec-status-pipe category letter
-    (M/L/S/U/X/P/F/C, or the synthetic '!' for a spawn child that died
-    mid-setup without reaching any reporting site — see
+    (M/L/S/U/X/P/F/C, or the synthetic '!' for missing or unreadable
+    exec confirmation — see
     ``core/sandbox/_spawn._write_setup_status``) when the raise site
     holds one, else ``None``. The distinction a consumer can act on:
     ``"X"`` means every isolation layer engaged and the failure was
@@ -81,8 +82,9 @@ class SandboxSetupError(BaseException):
     condition (binary transiently unexecutable, e.g. ETXTBSY from a
     lingering writer; a path outside the bind set) that a caller with
     retry semantics may legitimately re-attempt at FULL isolation.
-    ``"!"`` is also per-invocation (external SIGKILL / OOM landed on
-    the setup child) but says nothing about isolation. Every other
+    ``"!"`` means confirmation is missing or unreadable and says nothing
+    about isolation; inspect the cause before deciding whether a retry is
+    safe. Every other
     category (and ``None``) means isolation itself could not engage,
     where a retry cannot help and the fail-loud contract stands.
     """
