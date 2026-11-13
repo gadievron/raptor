@@ -249,6 +249,18 @@ def _close_safely(fd: int) -> None:
         pass
 
 
+
+def _redirect_devnull_stdin() -> None:
+    """Replace inherited stdin before the audit child can execute."""
+    devnull = os.open("/dev/null", os.O_RDONLY)
+    if devnull == 0:
+        return
+    try:
+        os.dup2(devnull, 0)
+    finally:
+        _close_safely(devnull)
+
+
 def _kill_and_reap(pid: int, timeout_s: float = 2.0) -> None:
     """TERM then KILL an owned child, with bounded waits for each phase."""
     if type(pid) is not int or not 0 < pid <= 0x7fffffff:
@@ -692,12 +704,7 @@ def run_landlock_audit(
                     stdin is None or stdin in (subprocess.DEVNULL, subprocess.PIPE)
                 )
                 if _use_devnull:
-                    try:
-                        devnull = os.open("/dev/null", os.O_RDONLY)
-                        os.dup2(devnull, 0)
-                        os.close(devnull)
-                    except OSError:
-                        pass
+                    _redirect_devnull_stdin()
                 else:
                     try:
                         stdin_fd = (stdin if isinstance(stdin, int)
@@ -706,12 +713,7 @@ def run_landlock_audit(
                         if stdin_fd != 0 and stdin_fd not in pass_fds:
                             _close_safely(stdin_fd)
                     except (AttributeError, OSError):
-                        try:
-                            devnull = os.open("/dev/null", os.O_RDONLY)
-                            os.dup2(devnull, 0)
-                            os.close(devnull)
-                        except OSError:
-                            pass
+                        _redirect_devnull_stdin()
 
                 if start_new_session:
                     try:
