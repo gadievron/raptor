@@ -908,16 +908,19 @@ def module_dynamic_namespace(
         return result
 
 
-    def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"update", "clear", "pop", "popitem", "setdefault",
-                                       "__setitem__", "__delitem__", "__ior__", "__init__"}):
-            receiver = node.func.value
+    def namespace_dict_member_receiver(member: ast.AST) -> ast.AST | None:
+        if (isinstance(member, ast.Attribute)
+                and member.attr in {"update", "clear", "pop", "popitem", "setdefault",
+                                    "__setitem__", "__delitem__", "__ior__", "__init__"}):
+            receiver = member.value
             if isinstance(receiver, ast.Attribute) and receiver.attr == "__dict__":
                 return receiver.value
             if isinstance(receiver, ast.Name) and receiver.id in saved_namespace_dict_values:
                 return receiver
         return None
+
+    def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
+        return namespace_dict_member_receiver(node.func) if isinstance(node, ast.Call) else None
 
     def reflective_receiver(node: ast.AST) -> ast.AST | None:
         if not isinstance(node, ast.Call):
@@ -931,6 +934,12 @@ def module_dynamic_namespace(
     def direct_callee(node: ast.AST) -> bool:
         parent = parents.get(node)
         return isinstance(parent, ast.Call) and parent.func is node
+
+    def escaped_dictionary_mutator_receiver(node: ast.AST) -> ast.AST | None:
+        if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+                and not direct_callee(node)):
+            return namespace_dict_member_receiver(node)
+        return None
 
     def escaped_setter_receiver(node: ast.AST) -> ast.AST | None:
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
@@ -1054,11 +1063,12 @@ def module_dynamic_namespace(
                     and isinstance(node.value, ast.Name)
                     and node.value.id in sys_aliases):
                 whole = True
-            receiver = escaped_setter_receiver(node)
-            while isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                receiver = receiver.value
-            if isinstance(receiver, ast.Name) and receiver.id in import_roots:
-                whole = True
+            for receiver in (escaped_setter_receiver(node),
+                             escaped_dictionary_mutator_receiver(node)):
+                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                    receiver = receiver.value
+                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                    whole = True
         elif isinstance(node, ast.Name):
             if (node.id in modules_aliases or node.id in builtin_namespace_names
                     or (isinstance(node.ctx, ast.Load) and node.id in dynamic_import_names)):
@@ -1105,7 +1115,8 @@ def module_dynamic_namespace(
                     while True:
                         container = parents.get(cursor)
                         if (isinstance(container, ast.Attribute) and container.value is cursor
-                                and escaped_setter_receiver(container) is not None):
+                                and (escaped_setter_receiver(container) is not None
+                                     or escaped_dictionary_mutator_receiver(container) is not None)):
                             receiver_write = True
                             break
                         if (isinstance(container, ast.Call) and container.func is cursor
