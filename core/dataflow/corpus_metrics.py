@@ -27,6 +27,10 @@ from core.dataflow.label import (
 )
 
 
+from core.dataflow.run_corpus import verdict_to_label
+from core.dataflow.validator import ValidatorVerdict
+
+
 PIVOT_GATE_THRESHOLD = 0.10
 
 
@@ -98,6 +102,14 @@ def compute(csv_path: Path) -> Metrics:
                 raise ValueError(msg)
             if label == VERDICT_TRUE_POSITIVE and category != "":
                 raise ValueError(f"fp_category must be empty for true_positive at CSV line {reader.line_num}")
+            if "validator_verdict" in columns:
+                raw = row["validator_verdict"]
+                try:
+                    expected = verdict_to_label(ValidatorVerdict(raw))
+                except ValueError as exc:
+                    raise ValueError(f"invalid validator_verdict at CSV line {reader.line_num}: {raw!r}") from exc
+                if v != expected:
+                    raise ValueError(f"validator_label inconsistent with validator_verdict at CSV line {reader.line_num}")
             m.total += 1
             if label == VERDICT_FALSE_POSITIVE:
                 m.fp_categories[category] += 1

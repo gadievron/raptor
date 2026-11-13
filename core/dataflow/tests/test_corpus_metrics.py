@@ -47,7 +47,7 @@ def _row(
         "rule_id": "py/x",
         "label_verdict": label_verdict,
         "fp_category": fp_category,
-        "validator_verdict": "exploitable" if validator_label == VERDICT_TRUE_POSITIVE else "not_exploitable",
+        "validator_verdict": "uncertain" if validator_label == "uncertain" else "exploitable" if validator_label == VERDICT_TRUE_POSITIVE else "not_exploitable",
         "validator_label": validator_label,
         "agreement": "agree" if label_verdict == validator_label else "disagree",
     }

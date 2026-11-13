@@ -15,7 +15,7 @@ def _write(path, categories, label=VERDICT_FALSE_POSITIVE):
         writer.writeheader()
         for index, category in enumerate(categories):
             writer.writerow({**dict.fromkeys(CSV_HEADER, ""), "finding_id": f"fixture-{index}", "label_verdict": label,
-                             "validator_label": VERDICT_TRUE_POSITIVE, "fp_category": category})
+                             "validator_verdict": "exploitable", "validator_label": VERDICT_TRUE_POSITIVE, "fp_category": category})
 
 
 def test_metrics_category_domains_preserve_pivot_denominator(tmp_path):

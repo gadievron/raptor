@@ -12,7 +12,7 @@ from core.dataflow.run_corpus import CSV_HEADER
 def test_metrics_reject_duplicate_column_names(tmp_path):
     path = tmp_path / "results.csv"
     valid = {**dict.fromkeys(CSV_HEADER, ""), "finding_id": "fixture",
-             "label_verdict": VERDICT_TRUE_POSITIVE, "validator_label": VERDICT_TRUE_POSITIVE}
+             "label_verdict": VERDICT_TRUE_POSITIVE, "validator_verdict": "exploitable", "validator_label": VERDICT_TRUE_POSITIVE}
 
     def write(header, values):
         with path.open("w", newline="", encoding="utf-8") as stream:

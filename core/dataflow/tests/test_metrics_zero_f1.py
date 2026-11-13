@@ -17,7 +17,8 @@ def test_wrong_predictions_report_zero_f1(tmp_path):
             ("b", VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE, FP_DEAD_CODE),
         ):
             writer.writerow({**dict.fromkeys(CSV_HEADER, ""), "finding_id": finding_id,
-                             "label_verdict": label, "validator_label": prediction, "fp_category": category})
+                             "label_verdict": label, "validator_verdict": "exploitable" if prediction == VERDICT_TRUE_POSITIVE else "not_exploitable",
+                             "validator_label": prediction, "fp_category": category})
     metrics = compute(path)
     assert (metrics.tp, metrics.fp, metrics.fn) == (0, 1, 1)
     assert metrics.precision == metrics.recall == 0
