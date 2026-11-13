@@ -716,7 +716,14 @@ class SandboxHost:
             body = self._read_exact(length, deadline)
         except (OSError, HostRPCError) as exc:
             raise HostRPCError(f"body read failed: {exc}") from exc
-        return _decode_response(body, source="daemon")
+        if time.monotonic() >= deadline:
+            raise HostRPCError("RPC response deadline exceeded before decoding")
+        response = _decode_response(body, source="daemon")
+        # Parsing cannot be interrupted mid-call, but a late result must not
+        # turn an expired transaction into an accepted response.
+        if time.monotonic() >= deadline:
+            raise HostRPCError("RPC response deadline exceeded during decoding")
+        return response
 
     def _read_exact(self, n: int, deadline: float) -> bytes:
         # bytearray accumulator: bounded reply frames can run to

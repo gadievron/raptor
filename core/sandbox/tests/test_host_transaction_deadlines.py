@@ -208,6 +208,74 @@ def test_expiry_during_serialization_sends_nothing_and_keeps_channel(peers, monk
     assert peer.host._rpc({'cmd': 'ping'}, timeout=5) == {'ok': True}
 
 
+@pytest.mark.parametrize('elapsed', [5.0, 6.0])
+def test_response_decode_expiry_retires_completed_transaction(peers, monkeypatch, elapsed):
+    peer = peers.create()
+    clock, decoded = [100.0], []
+    loads = json.loads
+
+    def decode(body):
+        value = loads(body)
+        decoded.append(True)
+        clock[0] += elapsed
+        return value
+
+    with monkeypatch.context() as patch:
+        patch_module_attribute(patch, mod, 'time', 'monotonic', lambda: clock[0])
+        patch_module_attribute(patch, mod, 'json', 'loads', decode)
+        with pytest.raises(mod.HostRPCError, match='deadline'):
+            peer.host._rpc({'cmd': 'ping'}, timeout=5)
+    assert decoded == [True]
+    assert peer.host._broken
+    assert peer.host._write_fd is peer.host._read_fd is None
+    assert not peer.host._lock.locked()
+    assert len(peer.requests) == 1
+
+
+def test_response_decode_within_deadline_keeps_success(peers, monkeypatch):
+    peer = peers.create()
+    clock = [100.0]
+    loads = json.loads
+
+    def decode(body):
+        value = loads(body)
+        clock[0] = 104.0
+        return value
+
+    with monkeypatch.context() as patch:
+        patch_module_attribute(patch, mod, 'time', 'monotonic', lambda: clock[0])
+        patch_module_attribute(patch, mod, 'json', 'loads', decode)
+        assert peer.host._rpc({'cmd': 'ping'}, timeout=5) == {'ok': True}
+    assert not peer.host._broken
+
+
+def test_expired_body_is_not_submitted_to_decoder(peers, monkeypatch):
+    peer = peers.create()
+    clock, reads, decoded = [100.0], [], []
+    exact = peer.host._read_exact
+
+    def read(count, deadline):
+        value = exact(count, deadline)
+        reads.append(count)
+        if len(reads) == 2:
+            clock[0] = 106.0
+        return value
+
+    def forbidden(body):
+        decoded.append(True)
+        raise AssertionError('expired reply reached decoder')
+
+    with monkeypatch.context() as patch:
+        patch_module_attribute(patch, mod, 'time', 'monotonic', lambda: clock[0])
+        patch_module_attribute(patch, mod, 'json', 'loads', forbidden)
+        patch.setattr(peer.host, '_read_exact', read)
+        with pytest.raises(mod.HostRPCError, match='deadline'):
+            peer.host._rpc({'cmd': 'ping'}, timeout=5)
+    assert len(reads) == 2 and not decoded
+    assert peer.host._broken
+    assert peer.host._write_fd is peer.host._read_fd is None
+
+
 @pytest.mark.parametrize('error', [RuntimeError, KeyboardInterrupt, OSError])
 @pytest.mark.parametrize('phase', ['write', 'read'])
 def test_interrupted_transaction_retires_channel_without_replacing_error(peers, monkeypatch, error, phase):
