@@ -67,6 +67,8 @@ from core.analysis.cfg_builder_cpp import (
 )
 
 if TYPE_CHECKING:                                       # pragma: no cover
+    from tree_sitter import Node
+
     from core.analysis.cfg_builder_java import JavaCFG
 
 
@@ -702,7 +704,7 @@ def _resolve_from_parsed_cpp(
         )
 
     sink_node, sink_arg = _resolve_sink_cpp(
-        cfg, parsed.sink_lineno, parsed.sink_arg_hint,
+        cfg, parsed.sink_lineno, parsed.sink_arg_hint, source_root=ts_tree.root_node,
     )
     if sink_node is None:
         return ResolutionFailure(
@@ -1364,12 +1366,15 @@ def _resolve_source_cpp(
 
 def _resolve_sink_cpp(
     cfg: CPPCFG, sink_line: int, sink_arg_hint: str | None,
+    *, source_root: Node,
 ) -> tuple[CPPCFGNode | None, str]:
     """Resolve the C/C++ sink using its language-specific call ordering.
 
     A matching upstream argument hint takes precedence. Without a hint,
     the outermost call must expose exactly one distinct bare-name argument;
     alphabetical order cannot identify which argument the finding concerns.
+    Original argument shapes must also preserve direct value identity;
+    compound siblings cannot borrow the selected name's proof.
     """
     node = _cpp_node_at_lineno(cfg, sink_line)
     if node is None or not node.call_sites:
@@ -1379,6 +1384,38 @@ def _resolve_sink_cpp(
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
     outermost = node.call_sites[-1]
+    matches: list[Node] = []
+    stack = [source_root]
+    while stack:
+        current = stack.pop()
+        if (current.type == "call_expression"
+                and current.start_point[0] + 1 == outermost.lineno
+                and current.start_point[1] == outermost.col_offset):
+            matches.append(current)
+            if len(matches) > 1:
+                return None, ""
+        stack.extend(current.named_children)
+    if len(matches) != 1:
+        return None, ""
+    call = matches[0]
+    arguments = call.child_by_field_name("arguments")
+    if call.has_error or arguments is None or arguments.is_missing:
+        return None, ""
+    from core.analysis.cfg_builder_cpp import _unwrap_value_expr
+
+    for argument in arguments.named_children:
+        if argument.type == "comment":
+            continue
+        argument = _unwrap_value_expr(argument)
+        if argument.type in {"number_literal", "char_literal", "string_literal"}:
+            continue
+        while argument.type == "field_expression":
+            receiver = argument.child_by_field_name("argument")
+            if receiver is None:
+                return None, ""
+            argument = _unwrap_value_expr(receiver)
+        if argument.type != "identifier":
+            return None, ""
     if len(outermost.arg_names) == 1:
         return node, next(iter(outermost.arg_names))
     if outermost.arg_names:
