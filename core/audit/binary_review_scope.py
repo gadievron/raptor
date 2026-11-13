@@ -6,8 +6,12 @@ It is transient and must not be restored from model output or journal JSON.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from hashlib import sha256
+import re
 from pathlib import Path
+
+from .knowledge_requests import KnowledgeOrigin
 
 
 @dataclass(frozen=True)
@@ -110,3 +114,78 @@ def capture_binary_publication_scope(ctx: dict, module: BinaryModuleSnapshot) ->
             or type(address) is not int or address < 0 or type(size) is not int or size <= 0):
         return None
     return BinaryReviewPublicationScope(module, file, function, address, size)
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+
+
+@dataclass(frozen=True)
+class BinaryInputIdentity:
+    """Original module and available view inputs, not extraction evidence.
+
+    The physical version is an in-run observation. The view digest covers
+    supplied raw text, not its postfit delivery or machine-code fidelity.
+    """
+    module_sha256: str
+    module_version: tuple[int, ...]
+    address: int
+    size: int
+    representation: str
+    view_sha256: str
+    domain: str = field(default="binary_view", init=False)
+
+    def __post_init__(self):
+        if (not isinstance(self.module_sha256, str) or _SHA256.fullmatch(self.module_sha256) is None
+                or not isinstance(self.view_sha256, str) or _SHA256.fullmatch(self.view_sha256) is None
+                or not isinstance(self.module_version, tuple) or len(self.module_version) != 5
+                or any(type(value) is not int for value in self.module_version)
+                or type(self.address) is not int or self.address < 0
+                or type(self.size) is not int or self.size <= 0
+                or self.representation not in ("decompilation", "disassembly")):
+            raise ValueError("binary identity requires complete original input stamps")
+
+
+@dataclass(frozen=True, kw_only=True)
+class BinaryKnowledgeOrigin(KnowledgeOrigin):
+    """Binary input occurrence; source-line identities remain inapplicable."""
+    binary_identity: BinaryInputIdentity
+
+    def __post_init__(self):
+        from core.inventory.binary_builder import BINARY_PATH_PREFIX
+
+        if (not isinstance(self.binary_identity, BinaryInputIdentity)
+                or self.source_identity is not None
+                or type(self.line_start) is not int or self.line_start != 0
+                or type(self.line_end) is not int or self.line_end != 0
+                or not isinstance(self.pass_id, str) or not self.pass_id
+                or not isinstance(self.file, str) or not self.file.startswith(BINARY_PATH_PREFIX)
+                or not isinstance(self.function, str) or not self.function):
+            raise ValueError("binary origin cannot substitute for a source identity")
+
+
+def capture_binary_input_identity(ctx: dict, scope: BinaryReviewPublicationScope) -> BinaryInputIdentity | None:
+    """Capture input data from a current original scope, never model stamps."""
+    source, representation = ctx.get("source"), ctx.get("representation")
+    if (not isinstance(source, str) or not source.strip()
+            or not isinstance(representation, str) or representation not in ("decompilation", "disassembly")
+            or not scope.module.current()):
+        return None
+    try:
+        return BinaryInputIdentity(scope.module.sha256, scope.module.version,
+            scope.address, scope.size, representation, sha256(source.encode("utf-8")).hexdigest())
+    except (UnicodeEncodeError, ValueError):
+        return None
+
+
+def origin_input_identity(origin: KnowledgeOrigin):
+    """Retain the domain; a binary input is never a SourceIdentity."""
+    return origin.binary_identity if isinstance(origin, BinaryKnowledgeOrigin) else origin.source_identity
+
+
+def same_review_snapshot(left: KnowledgeOrigin, right: KnowledgeOrigin) -> bool:
+    if not isinstance(left, KnowledgeOrigin) or not isinstance(right, KnowledgeOrigin):
+        return False
+    if isinstance(left, BinaryKnowledgeOrigin) != isinstance(right, BinaryKnowledgeOrigin):
+        return False
+    return ((left.file, left.function, left.line_start, left.line_end, origin_input_identity(left))
+            == (right.file, right.function, right.line_start, right.line_end, origin_input_identity(right)))

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from functools import wraps
+import json
 from pathlib import Path
 from threading import Event, Lock, RLock
 from time import monotonic
@@ -24,6 +25,9 @@ from core.source.lines import split_lines
 from .caller_review_context import (CallerContextAnswer, CallerContextRequest, register_caller_context_requests,
                                     resolve_caller_context, validate_caller_context)
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin, KnowledgeRequest, register_requests
+from .binary_review_scope import (BinaryKnowledgeOrigin, BinaryModuleSnapshot, BinaryReviewPublicationScope,
+                                  capture_binary_input_identity, capture_binary_publication_scope,
+                                  origin_input_identity, same_review_snapshot)
 from .refutation_source import capture_source_identity
 from .review_input_scope import CapturedReviewInput, ReviewInputScope
 from .review_cycle import KnowledgeContinuation, KnowledgeCycle
@@ -77,7 +81,7 @@ class AuditKnowledgeRuntime:
         self._caller_deliveries: dict[str, list[list[dict]]] = {}
         self._live_input_sets: dict[str, list[tuple[CapturedReviewInput, ...]]] = {}
         self._live_input_errors: set[str] = set()
-        self._binary_review_scopes: dict[tuple[str, str], object] = {}
+        self._binary_review_scopes: dict[tuple[str, str], tuple[BinaryReviewPublicationScope, BinaryKnowledgeOrigin]] = {}
         self._publication_rejections: set[tuple[str, str]] = set()
         self._sources_closed = False
         self._written_events: dict[str, int] = {}
@@ -144,14 +148,25 @@ class AuditKnowledgeRuntime:
 
     @staticmethod
     def _same_snapshot(left: KnowledgeOrigin, right: KnowledgeOrigin) -> bool:
-        return (left.file, left.function, left.line_start, left.line_end, left.source_identity) == (
-            right.file, right.function, right.line_start, right.line_end, right.source_identity)
+        return same_review_snapshot(left, right)
 
     def _origin(self, ctx: dict) -> KnowledgeOrigin:
         # Reuse the exact inverse of the normal numbered review view. A stale
         # or unrecognised view cannot acquire a fresh whole-file identity.
         from .orchestrator import _raw_ihv_review_source
 
+        from core.inventory.binary_builder import BINARY_PATH_PREFIX
+
+        file_path = ctx.get("file")
+        if ctx.get("is_binary") is True or isinstance(file_path, str) and file_path.startswith(BINARY_PATH_PREFIX):
+            module = ctx.get("_binary_module_snapshot")
+            scope = capture_binary_publication_scope(ctx, module) if isinstance(module, BinaryModuleSnapshot) else None
+            binary = (capture_binary_input_identity(ctx, scope)
+                      if scope is not None and scope.current(self.target_root) else None)
+            if binary is not None:
+                return BinaryKnowledgeOrigin(uuid4().hex, ctx["file"], ctx["function"], 0, 0, None,
+                                             binary_identity=binary)
+            return KnowledgeOrigin(uuid4().hex, ctx["file"], ctx["function"], 0, 0, None)
         start = ctx.get("line_start", 0)
         if type(start) is not int or start < 1:
             start = 0
@@ -185,14 +200,16 @@ class AuditKnowledgeRuntime:
                 from .knowledge_calls import KnowledgeCallRefused
                 raise KnowledgeCallRefused("binary_occurrence_unavailable")
             captured = self._origin(ctx)
+            if binary_scope is not None and not isinstance(captured, BinaryKnowledgeOrigin):
+                from .knowledge_calls import KnowledgeCallRefused
+                raise KnowledgeCallRefused("binary_view_identity_unavailable")
             key = self._key(captured)
             with self._lock:
                 reservation = self._active_units.get(key)
             if reservation is not None:
                 if not self._same_snapshot(captured, reservation.origin) or not self.can_publish(reservation):
                     raise ValueError("knowledge continuation source changed before review")
-                origin = KnowledgeOrigin(reservation.packet.pass_id, captured.file, captured.function,
-                                         captured.line_start, captured.line_end, captured.source_identity)
+                origin = replace(captured, pass_id=reservation.packet.pass_id)
             else:
                 origin = captured
             from .reference_foundation import foundation_answers, foundation_required_for_file
@@ -241,7 +258,8 @@ class AuditKnowledgeRuntime:
                 outcome.binary_publication_scope = binary_scope
                 outcome.review_result["binary_review_binding"] = binary_scope.record()
                 with self._lock:
-                    self._binary_review_scopes[(origin.pass_id, attempt_id)] = binary_scope
+                    assert isinstance(origin, BinaryKnowledgeOrigin)
+                    self._binary_review_scopes[(origin.pass_id, attempt_id)] = (binary_scope, origin)
             # This is descriptive attribution to the actual completed
             # renderer invocation, never proof authority or current freshness.
             if (getattr(review_fn, "_knowledge_observed_client_contract", None) is True
@@ -465,7 +483,6 @@ class AuditKnowledgeRuntime:
 
     def _bind_binary_publication_scope(self, outcome) -> None:
         """Restore only original owner-held scopes after panel reconstruction."""
-        from .binary_review_scope import BinaryReviewPublicationScope
         from .review_claims import read_history
 
         review_result = dict(outcome.review_result or {})
@@ -491,8 +508,16 @@ class AuditKnowledgeRuntime:
                         or origin.get("source_identity") is not None):
                     scopes = []
                     break
-                scope = self._binary_review_scopes.get((pass_id, attempt_id))
-                if not isinstance(scope, BinaryReviewPublicationScope):
+                owned = self._binary_review_scopes.get((pass_id, attempt_id))
+                if owned is None:
+                    scopes = []
+                    break
+                scope, owned_origin = owned
+                expected_origin = asdict(owned_origin)
+                # Canonical JSON normalizes tuple/list transport while keeping
+                # numeric types distinct (a float/bool is not an input stamp).
+                if json.dumps(origin, sort_keys=True, allow_nan=False) != json.dumps(
+                        expected_origin, sort_keys=True, allow_nan=False):
                     scopes = []
                     break
                 scopes.append(scope)
@@ -506,7 +531,7 @@ class AuditKnowledgeRuntime:
 
     def _signature(self, request: KnowledgeRequest, ctx: dict) -> tuple:
         language = ctx.get("language") if isinstance(ctx.get("language"), str) else ""
-        return (self._key(request.origin), request.origin.source_identity, request.kind, request.subject,
+        return (self._key(request.origin), origin_input_identity(request.origin), request.kind, request.subject,
                 request.context, request.resolution, request.entry_id, request.source_line,
                 language if request.kind == "language_reference" else "")
 
@@ -667,7 +692,7 @@ class AuditKnowledgeRuntime:
             except Exception:
                 answer = CallerContextAnswer(request.request_id, request.origin, None, "deferred",
                                              "caller_context_resolution_error")
-            signature = (key, origin.source_identity, request.caller_file,
+            signature = (key, origin_input_identity(origin), request.caller_file,
                          request.caller_function, request.caller_line)
             with self._lock:
                 prior_id = self._caller_semantic.get(signature)
