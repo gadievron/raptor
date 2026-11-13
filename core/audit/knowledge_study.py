@@ -311,11 +311,19 @@ def study_batch(batch, runtime: AuditKnowledgeRuntime, config: OrchestratorConfi
                         reason = "source_study_admission_refused"
                         return runtime.admit_source_attempt(submitted)
 
+                    def unobserved_attempts():
+                        keys = {(r.origin.file, r.origin.function, r.origin.line_start) for r in submitted}
+                        for file, function, line in sorted(keys):
+                            runtime.mark_call_count_unknown(
+                                {"file": file, "name": function, "line_start": line},
+                                reason="opaque_study_client_attempts")
+
                     packet_key = json.dumps(sorted({r.request_id for r in submitted}), separators=(",", ":"))
                     with owned_call_scope(
                         admit, work_id="study:" + sha256(packet_key.encode()).hexdigest(),
                         beneficiaries=tuple(dict.fromkeys(r.origin.pass_id for r in submitted)),
                         validity=runtime.client_lifetime_valid,
+                        on_unobserved_attempts=unobserved_attempts,
                     ):
                         try:
                             return observed_client(client, purpose="study").generate_structured(*args, **kwargs)

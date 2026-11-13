@@ -138,7 +138,7 @@ def test_real_phase_failure_books_existing_ledger_and_actual_waiters(tmp_path, m
     requests = tuple(KnowledgeRequest(name, KnowledgeOrigin("p", "unit.py", name, start, start + 1, identity),
         "target_study", "foo_t", name + " construction", "normal", "identifier")
         for name, start in (("first", 3), ("second", 5)))
-    attempts, answers, booked, calls = [], [], [], []
+    attempts, answers, booked, calls, unknown = [], [], [], [], []
 
     class Runtime:
         bindings = StudyInputBindings(tmp_path)
@@ -156,6 +156,9 @@ def test_real_phase_failure_books_existing_ledger_and_actual_waiters(tmp_path, m
         def admit_source_attempt(self, submitted):
             attempts.append(tuple(r.request_id for r in submitted))
             return True
+
+        def mark_call_count_unknown(self, gap, reason="unowned_model_helper"):
+            unknown.append((gap["file"], gap["name"], gap["line_start"], reason))
 
         def record_source_answers(self, updates):
             answers.extend(updates)
@@ -177,6 +180,8 @@ def test_real_phase_failure_books_existing_ledger_and_actual_waiters(tmp_path, m
                 checklist={}, should_stop=lambda: False)
     assert attempts == [("first", "second")]
     assert len(calls) == 1
+    assert set(unknown) == {("unit.py", "first", 3, "opaque_study_client_attempts"),
+                            ("unit.py", "second", 5, "opaque_study_client_attempts")}
     assert "def first" in calls[0] and "def second" in calls[0]
     assert {a.request_id for a in answers} == {"first", "second"}
     assert all(a.status == "unavailable" for a in answers)
