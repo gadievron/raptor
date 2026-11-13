@@ -238,10 +238,11 @@ def _parse_sarif(finding: Mapping[str, Any]) -> _ParsedFinding | ResolutionFailu
     sink_phys = _sarif_physical_location(locations[-1])
     src_region = src_phys.get("region") or {}
     sink_region = sink_phys.get("region") or {}
-    file = (
-        (src_phys.get("artifactLocation") or {}).get("uri", "")
-        or (sink_phys.get("artifactLocation") or {}).get("uri", "")
-    )
+    source_file = (src_phys.get("artifactLocation") or {}).get("uri", "")
+    sink_file = (sink_phys.get("artifactLocation") or {}).get("uri", "")
+    if source_file and sink_file and source_file != sink_file:
+        return ResolutionFailure(reason="sarif: source and sink refer to different files")
+    file = source_file or sink_file
     if not file:
         return ResolutionFailure(reason="sarif: no artifactLocation.uri")
 
