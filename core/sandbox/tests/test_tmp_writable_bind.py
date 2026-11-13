@@ -5,7 +5,9 @@ import tempfile
 
 import pytest
 
-from core.sandbox._spawn import _anchor_grants_to_bind_view, _drop_host_tmpdir_grants
+from core.sandbox import _spawn
+from core.sandbox._spawn import _anchor_grants_to_bind_view
+from core.testing.module_views import module_function_view, scoped_function_imports
 from core.sandbox._pathpin import ViewAnchoredPath
 
 pytestmark = pytest.mark.skipif(sys.platform != 'linux', reason='Linux mount-tree grant planning')
@@ -72,9 +74,11 @@ def test_namespace_local_nonexistent_path_is_not_a_host_bind(paths):
 
 def test_host_tmpdir_baseline_is_not_reintroduced(paths, monkeypatch):
     root, source, output = paths
-    monkeypatch.setattr(tempfile, 'tempdir', str(root))
-    grants = _drop_host_tmpdir_grants([str(root), '/tmp', str(source)],
-                                    target=None, output=str(output), rootfs=None)
+    selected = module_function_view(tempfile, bindings={'tempdir': str(root)})
+    with scoped_function_imports(_spawn, ('_drop_host_tmpdir_grants',),
+                                 {'tempfile': selected}):
+        grants = _spawn._drop_host_tmpdir_grants([str(root), '/tmp', str(source)],
+                                               target=None, output=str(output), rootfs=None)
     assert str(root) not in grants
     _, carry = plan(paths, grants)
     assert carry == [str(source)]
