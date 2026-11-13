@@ -1127,6 +1127,8 @@ def module_dynamic_namespace(
             if direct_members:
                 recognised = True
                 members.extend(sources)
+                if isinstance(cursor, ast.Set):
+                    pending.extend(item.value for item in cursor.elts if isinstance(item, ast.Starred))
             else:
                 pending.extend(sources)
         return tuple(members) if recognised else None
