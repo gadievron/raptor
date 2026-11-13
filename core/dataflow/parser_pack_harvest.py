@@ -336,14 +336,21 @@ def harvest(
 
 
 def load_pack(path: Path) -> dict:
-    """Load a parser_apis pack, or an empty skeleton when absent."""
-    raw = load_json(path, max_bytes=8 * 1024 * 1024)
-    if not isinstance(raw, dict):
+    """Load a parser_apis pack, or an empty skeleton when absent.
+
+    Refuse malformed existing content rather than losing it on the next merge.
+    """
+    raw = load_json(path, strict=True, max_bytes=8 * 1024 * 1024)
+    if raw is None and not path.exists():
         raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("existing parser pack must be an object")
     raw.setdefault("pack", "parser_apis")
     raw.setdefault("schema", PACK_SCHEMA)
-    entries = raw.get("entries")
-    raw["entries"] = entries if isinstance(entries, list) else []
+    entries = raw.get("entries", [])
+    if not isinstance(entries, list):
+        raise ValueError("parser pack entries must be an array")
+    raw["entries"] = entries
     return raw
 
 
