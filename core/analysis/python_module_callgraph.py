@@ -910,7 +910,7 @@ def module_dynamic_namespace(
             return node.value
         return None
 
-    # Keep direct saved values of known imported globals visible to the
+    # Keep direct saved values of known imports visible to the
     # existing object-mutation checks. This is deliberately one step only.
     original_import_roots = frozenset(import_roots)
     saved_import_values: set[str] = set()
@@ -939,6 +939,10 @@ def module_dynamic_namespace(
                     )
                 break
             cursor = cursor.value
+        if isinstance(cursor, ast.Name) and cursor.id in original_import_roots:
+            saved_import_values.update(
+                target.id for target in targets if isinstance(target, ast.Name)
+            )
     import_roots.update(saved_import_values)
 
     for node in ast.walk(tree):
