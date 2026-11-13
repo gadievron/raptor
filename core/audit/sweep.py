@@ -89,9 +89,10 @@ def get_rule_role(rule_path: str) -> str:
     defaulting.
     """
     from core.analysis.coccinelle_metadata import role_from_header
+    from core.source.streams import preserving_stream_error
 
     try:
-        with Path(rule_path).open() as stream:  # raw-open: RAPTOR-owned cocci rule file (shipped or run-dir synthesized)
+        with preserving_stream_error(Path(rule_path).open()) as stream:  # raw-open: RAPTOR-owned cocci rule file (shipped or run-dir synthesized)
             return role_from_header(stream)
     except OSError:
         return "detection"
