@@ -537,7 +537,7 @@ def _resolve_from_parsed_python(
         )
 
     sink_node, sink_arg = _resolve_sink(
-        cfg, parsed.sink_lineno, parsed.sink_arg_hint,
+        cfg, parsed.sink_lineno, parsed.sink_arg_hint, function_node=fn,
     )
     if sink_node is None:
         return ResolutionFailure(
@@ -877,6 +877,8 @@ def _resolve_sink(
     cfg: PythonCFG,
     sink_line: int,
     sink_arg_hint: str | None,
+    *,
+    function_node: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> tuple[PyCFGNode | None, str]:
     """Resolve sink location to ``(cfg_node, sink_arg)``.
 
@@ -884,9 +886,10 @@ def _resolve_sink(
 
     * If a hint is provided and matches a CallSite's
       ``arg_names``, use the hint.
-    * Else the outermost call (last in source order) is the
-      assumed sink; exactly one distinct ``arg_name`` is required.
-      Multiple names need an explicit hint rather than an arbitrary pick.
+    * Else exactly one call record and one distinct ``arg_name``
+      are required. The original argument AST must contain only direct
+      names, name-rooted attributes or constants; compound arguments
+      cannot borrow a neighbouring argument's identity.
 
     Returns ``(None, "")`` on failure; the caller surfaces the
     audit reason.
@@ -900,7 +903,27 @@ def _resolve_sink(
         for cs in node.call_sites:
             if sink_arg_hint in cs.arg_names:
                 return node, sink_arg_hint
-    outermost = node.call_sites[-1]
+    if len(node.call_sites) != 1:
+        return None, ""
+    outermost = node.call_sites[0]
+    calls = [
+        child for child in ast.walk(function_node)
+        if isinstance(child, ast.Call)
+        and child.lineno == outermost.lineno
+        and child.col_offset == outermost.col_offset
+    ]
+    if len(calls) != 1:
+        return None, ""
+    call = calls[0]
+    if any(keyword.arg is None for keyword in call.keywords):
+        return None, ""
+    for argument in [*call.args, *(keyword.value for keyword in call.keywords)]:
+        if isinstance(argument, ast.Constant):
+            continue
+        while isinstance(argument, ast.Attribute):
+            argument = argument.value
+        if not isinstance(argument, ast.Name) or not isinstance(argument.ctx, ast.Load):
+            return None, ""
     if len(outermost.arg_names) == 1:
         return node, next(iter(outermost.arg_names))
     if outermost.arg_names:
