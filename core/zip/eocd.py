@@ -196,6 +196,7 @@ def peek_total_entries(
 def _peek_from_stream(fh: BinaryIO) -> EocdSummary | None:
     """Preflight the same held file ZipFile will read; preserve its position."""
     original = fh.tell()
+    failed = False
     try:
         fh.seek(0, 2)
         size = fh.tell()
@@ -206,8 +207,15 @@ def _peek_from_stream(fh: BinaryIO) -> EocdSummary | None:
         return _parse_eocd(fh.read(read_len), total_size=size, fh=fh)
     except (OSError, ValueError, struct.error):
         return None
+    except BaseException:
+        failed = True
+        raise
     finally:
-        fh.seek(original)
+        try:
+            fh.seek(original)
+        except BaseException:
+            if not failed:
+                raise
 
 
 def _peek_from_path(zip_path: Path) -> EocdSummary | None:
