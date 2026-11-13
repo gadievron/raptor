@@ -1240,8 +1240,8 @@ class TestStudyConsumerGate:
             )
 
         t = threading.Thread(target=run)
-        t.start()
         try:
+            t.start()
             # The consumer blocks inside the paused tick before its first
             # dequeue — the queued request is still there and no study
             # work has started.
@@ -1266,7 +1266,8 @@ class TestStudyConsumerGate:
             guard.concluded = True
             guard.resume()
             queue.request_stop()
-            t.join(timeout=10.0)
+            if t.ident is not None:
+                t.join(timeout=10.0)
 
 
 class _NthTickPauseGuard:
