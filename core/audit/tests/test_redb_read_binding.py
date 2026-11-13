@@ -50,7 +50,7 @@ def test_analysis_change_during_cache_hit_is_not_silently_returned(tmp_path, mon
 
     def get_then_change(key, compute):
         value = real_get(key, compute)
-        assert value[0] is original and value[1] is True
+        assert value[0].database is original and value[1] is True
         _change(artifact, before)
         return value
 
