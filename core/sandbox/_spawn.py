@@ -4587,6 +4587,7 @@ def run_sandboxed(
     # Exec-status verdict — populated in the finally so the pipe is read and
     # status_r reclaimed on EVERY exit path (success, timeout, exception).
     setup_status = None
+    collection_error: BaseException | None = None
     try:
         if _capture_any:
             fds = [out_r, err_r]
@@ -4749,6 +4750,9 @@ def run_sandboxed(
             logger.warning("waitpid: child %d already reaped (ECHILD); "
                            "exit status unknown", child_pid)
             status = 9
+    except BaseException as error:
+        collection_error = error
+        raise
     finally:
         def retire_status():
             nonlocal setup_status
@@ -4762,7 +4766,7 @@ def run_sandboxed(
         # owner still retires if status, supervisor or tracer cleanup fails.
         callbacks.extend((_retire_audit_config, _retire_evidence, _close_leftover,
                           lambda: _cleanup_stub(_root_dir)))
-        _retire_parent_resources(*callbacks)
+        _retire_parent_resources(*callbacks, primary_error=collection_error)
 
     if os.WIFEXITED(status):
         returncode = os.WEXITSTATUS(status)
