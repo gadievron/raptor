@@ -601,7 +601,7 @@ def _aggregate(syn: sqlite3.Connection) -> tuple[CorpusSynthReport, dict]:
     per: list = []
     errors: Counter = Counter()
     for status, fid in syn.execute("SELECT status, finding_id FROM synth_results"):
-        if status in _PIPELINE_ERRORS:
+        if status in _PIPELINE_ERRORS or status not in {"sound", "not_sound", "no_barrier"}:
             errors[status] += 1
             continue
         per.append((fid, status))
