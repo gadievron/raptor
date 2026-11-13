@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 from core.source import read_contained
@@ -28,6 +28,7 @@ class CallerContextRequest:
     caller_function: str
     caller_line: int
     reason: str
+    caller_address: int | None = None
 
 
 @dataclass(frozen=True)
@@ -93,18 +94,25 @@ def register_caller_context_requests(review: object, origin: KnowledgeOrigin) ->
         file = _bounded_request_text(row, 'file', 512)
         function = _bounded_request_text(row, 'function', 256)
         reason = _bounded_request_text(row, 'reason', 1000)
-        line = row.get('line_start')
+        from .binary_review_scope import BinaryKnowledgeOrigin
+
+        addressed_binary = isinstance(origin, BinaryKnowledgeOrigin) and row.get('address') is not None
+        address = row.get('address') if addressed_binary else None
+        line = row.get('line_start', 0 if addressed_binary else None)
+        invalid_location = ((type(address) is not int or not 0 <= address < 2 ** 64
+                             or file != origin.file or type(line) is not int or line != 0)
+                            if addressed_binary else type(line) is not int or line < 1)
         if (file is None or function is None or reason is None
                 or any(c in file or c in function for c in ('\0', '\n', '\r'))
-                or type(line) is not int or line < 1):
+                or invalid_location):
             rejected.append(CallerContextRejection(index, 'invalid_request_fields'))
             continue
-        signature = file, function, line, reason
+        signature = file, function, line, address, reason
         if signature in seen:
             rejected.append(CallerContextRejection(index, 'duplicate_request'))
             continue
         seen.add(signature)
-        accepted.append(CallerContextRequest(uuid4().hex, origin, file, function, line, reason))
+        accepted.append(CallerContextRequest(uuid4().hex, origin, file, function, cast(int, line), reason, address))
     return CallerContextBatch(tuple(accepted), tuple(rejected))
 
 

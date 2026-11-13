@@ -113,10 +113,12 @@ def test_normal_audit_reviews_related_code_and_retains_original_assessment(tmp_p
     calls = []
 
     class Client:
+        _attempt_admission_protocol = 1
         _call_cost_history = None
         def is_budget_exhausted(self):
             return False
         def generate_structured(self, prompt, schema, **kwargs):
+            assert kwargs.pop('accounting_attempt_admission')() is True
             assert kwargs['task_type'] == 'audit', 'caller context must not buy a study call'
             calls.append(prompt)
             if len(calls) == 1:

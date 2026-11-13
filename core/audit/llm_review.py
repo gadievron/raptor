@@ -749,7 +749,10 @@ REVIEW_SCHEMA = {
                 "properties": {
                     "file": {"type": "string"},
                     "function": {"type": "string"},
-                    "line_start": {"type": "integer", "minimum": 1},
+                    "line_start": {"type": "integer", "minimum": 0,
+                                   "description": "Source start line, or zero for an explicitly addressed binary caller."},
+                    "address": {"type": "integer", "minimum": 0,
+                                "description": "Binary caller start address from recorded context; omit for source callers."},
                     "reason": {"type": "string", "description": "What additional review needs this code; a question is allowed."},
                 },
                 "required": ["file", "function", "line_start", "reason"],
@@ -1059,7 +1062,9 @@ _SYSTEM_PROMPT_TEMPLATE = (
     "assessment while requesting materially missing knowledge in the same response. "
     "Use caller_context_requests when additional code from a known caller is needed "
     "to review the current function. Supply its observed file, function, start line "
-    "and the review question. Do not invent an unknown caller identity. Missing "
+    "and the review question. For binary views, supply the same observed module file key, "
+    "caller function and recorded start address, with line_start zero; do not invent source lines. "
+    "Do not invent an unknown caller identity. Missing "
     "caller code is not evidence that all callers enforce a bound; keep the premise "
     "unverified. Caller requests do not belong on the study reading list. "
     "Use reading_list for unfamiliar source identifiers or target concepts, such as "

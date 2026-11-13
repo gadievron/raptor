@@ -618,8 +618,10 @@ def assemble_binary_context(
             metadata.setdefault("signature", func.signature)
     ctx["metadata"] = metadata
 
-    ctx["callers"] = _binary_callers(db, func)
-    ctx["callees"] = _binary_callees(db, func)
+    # Accepted analysis can retain its old path after a hash-valid move.
+    # Relation identities belong to this reviewed module key, not that label.
+    ctx["callers"] = [{**entry, "file": file_path} for entry in _binary_callers(db, func)]
+    ctx["callees"] = [{**entry, "file": file_path} for entry in _binary_callees(db, func)]
     ctx["existing_annotation"] = _load_annotation(
         annotations_dir, file_path, function_name, out_dir,
     )

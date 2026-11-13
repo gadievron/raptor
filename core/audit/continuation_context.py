@@ -10,6 +10,7 @@ _CONTEXT_INPUTS = {
     "live_sinks": ("live_sinks", "live_sinks"),
     "disagreement": ("disagreement_override", "disagreement_override"),
     "binary_target_semantics": ("binary_subject_context", "binary_subject_context"),
+    "binary_callers": ("binary_caller_context", "binary_caller_context"),
     "deepen_quality": ("deepen_quality_selection", "deepen_quality"),
     "callee_contract": ("callee_contract_violation", "callee_contract"),
 }
@@ -29,6 +30,10 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         from .binary_subjects import render_binary_subject_context
 
         value = render_binary_subject_context(value, ctx)
+    if kind == "binary_callers":
+        from .binary_callers import render_binary_caller_context
+
+        value = render_binary_caller_context(value, ctx)
     if kind == "callee_contract":
         from .callee_review_context import render_callee_context
         from .context import _defend_identifier
