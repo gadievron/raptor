@@ -55,6 +55,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 
@@ -266,7 +268,7 @@ def is_elf(path: "Path | str") -> bool:
     auto-detect), so refusal and absence collapse to the same answer.
     """
     try:
-        with open(path, "rb") as f:
+        with preserving_stream_error(open(path, "rb")) as f:
             return f.read(4) == _ELF_MAGIC
     except OSError:
         return False
