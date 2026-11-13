@@ -213,7 +213,7 @@ def containerized_build(
         # reservation can be removed here.
         try:
             keep.rmdir()
-        except OSError:
+        except BaseException:
             pass
         raise
     try:
