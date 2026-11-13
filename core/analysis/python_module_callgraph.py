@@ -798,6 +798,7 @@ def module_dynamic_namespace(
     # imported inside a function. Once exposed, an alias can replace builtin
     # decorators or callable names without any ordinary module assignment.
     builtin_namespace_names = {"__builtins__"}
+    dynamic_import_names = {"__import__"}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -808,6 +809,10 @@ def module_dynamic_namespace(
             builtin_namespace_names.update(
                 alias.asname or alias.name for alias in node.names
                 if alias.name == "__dict__"
+            )
+            dynamic_import_names.update(
+                alias.asname or alias.name for alias in node.names
+                if alias.name == "__import__"
             )
 
     imap = module_import_map(tree)
@@ -883,7 +888,10 @@ def module_dynamic_namespace(
                     and node.value.id in sys_aliases):
                 whole = True
         elif isinstance(node, ast.Name):
-            if node.id in modules_aliases or node.id in builtin_namespace_names:
+            if (node.id in modules_aliases or node.id in builtin_namespace_names
+                    or (isinstance(node.ctx, ast.Load) and node.id in dynamic_import_names)):
+                # A loader exposes shared modules without an ordinary
+                # import binding whose later member stores we can follow.
                 whole = True
         elif isinstance(node, ast.Call):
             func = node.func
