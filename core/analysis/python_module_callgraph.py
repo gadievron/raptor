@@ -1200,6 +1200,10 @@ def module_dynamic_namespace(
                 return sequence
         return None
 
+    def literal_member_receiver(value: ast.AST) -> ast.AST | None:
+        receiver = selected_literal_copy_receiver(value)
+        return receiver if receiver is not None else literal_list_pop_receiver(value)
+
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
     def literal_collection_operation(value: ast.AST) -> tuple[type[ast.AST] | None, tuple[ast.AST, ...]]:
@@ -1275,7 +1279,7 @@ def module_dynamic_namespace(
             elif isinstance(cursor, ast.Subscript) and not isinstance(cursor.slice, ast.Slice):
                 source = selected_literal_value(cursor)
                 if source is None:
-                    source = selected_literal_member(selected_literal_copy_receiver(cursor.value), cursor.slice)
+                    source = selected_literal_member(literal_member_receiver(cursor.value), cursor.slice)
                 if source is not None:
                     if not expanded:
                         pending.append((cursor, True))
@@ -1310,8 +1314,8 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr == "__getitem__" and len(cursor.args) == 1
                   and not cursor.keywords
-                  and isinstance(selected_literal_copy_receiver(cursor.func.value), (ast.Tuple, ast.List))):
-                sequence = selected_literal_copy_receiver(cursor.func.value)
+                  and isinstance(literal_member_receiver(cursor.func.value), (ast.Tuple, ast.List))):
+                sequence = literal_member_receiver(cursor.func.value)
                 key = cursor.args[0]
                 index = None
                 if isinstance(key, ast.Constant) and type(key.value) is int:
