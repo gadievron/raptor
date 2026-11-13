@@ -1251,7 +1251,8 @@ def module_dynamic_namespace(
                         and all(isinstance(item, (ast.Tuple, ast.Dict))
                                 or collection_operation_cache[item][0] in (ast.List, ast.Set)
                                 or (isinstance(item, ast.Call) and isinstance(item.func, ast.Name)
-                                    and item.func.id in iterator_wrapper_names
+                                    and (item.func.id in iterator_wrapper_names
+                                         or item.func.id in sequence_copy_names)
                                     and len(item.args) == 1 and not item.keywords)
                                 for item in cursor.args)):
                     kind = ast.Set
