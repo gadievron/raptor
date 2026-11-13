@@ -1105,9 +1105,12 @@ def module_dynamic_namespace(
                         selected = selected_literal_value(cursor)
                         if selected is not None:
                             children = (selected,)
-                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.BitOr)
+                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, (ast.BitOr, ast.BitXor))
                           and isinstance(cursor.left, ast.Set) and isinstance(cursor.right, ast.Set)):
                         children = (cursor.left, cursor.right)
+                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, (ast.BitAnd, ast.Sub))
+                          and isinstance(cursor.left, ast.Set) and isinstance(cursor.right, ast.Set)):
+                        children = (cursor.left,)
                     elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
                           and isinstance(cursor.left, (ast.Tuple, ast.List))
                           and type(cursor.left) is type(cursor.right)):
