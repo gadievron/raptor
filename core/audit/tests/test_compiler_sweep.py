@@ -3059,10 +3059,17 @@ class TestChangePointOwners:
 
     def test_layer2_walk_memory_is_not_per_line(self, tmp_path):
         import tracemalloc
+
+        if tracemalloc.is_tracing():
+            from core.audit.tests._compiler_walk_memory import run_memory_proof
+
+            run_memory_proof(tmp_path)
+            return
+
         tu = _write(tmp_path, "t.c", "int t;\n")
         pp = f'# 1 "{tu}"\n' + ";\n" * 300_000
-        tracemalloc.start()
         try:
+            tracemalloc.start()
             got = compiler_sweep._l2_closure(pp, tmp_path, tu)
             peak = tracemalloc.get_traced_memory()[1]
         finally:
