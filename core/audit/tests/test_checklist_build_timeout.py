@@ -26,6 +26,7 @@ wins unclamped in both directions.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
 import os
 import subprocess
 import sys
@@ -35,6 +36,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+
+from core.testing.module_views import scoped_function_imports
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SCRIPT = _REPO_ROOT / "libexec" / "raptor-audit"
@@ -80,13 +83,44 @@ def _sparse(path: Path, size: int, head: bytes = b"") -> Path:
 
 @pytest.fixture(autouse=True)
 def _no_override(monkeypatch):
+    from core.audit import run_lock
+
     monkeypatch.delenv(ENV, raising=False)
     monkeypatch.setattr(sys.modules[__name__], "_CLI_MOD", None)
-    yield
+    inherited = tuple(run_lock._HELD)
+    acquired = []
+    acquire = run_lock.acquire_run_lock
+
+    def acquire_owned(*args, **kwargs):
+        handle = acquire(*args, **kwargs)
+        if all(handle is not existing for existing in (*inherited, *acquired)):
+            acquired.append(handle)
+        return handle
+
+    def release_owned():
+        for handle in reversed(acquired):
+            handle.release()
+
+    with ExitStack() as scopes:
+        scopes.callback(release_owned)
+
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("cmd_run", "cmd_gaps"),
+                {"subprocess": subprocess, "core.audit.run_lock": run_lock},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+            monkeypatch.setattr(getattr(imports, "core.audit.run_lock"),
+                                "acquire_run_lock", acquire_owned)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def test_gaps_checklist_build_timeout_reported(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, _no_override):
     mod = _load_cli()
     out_dir = tmp_path / "out"
     out_dir.mkdir()
@@ -97,7 +131,7 @@ def test_gaps_checklist_build_timeout_reported(
     def fake_run(cmd, **kwargs):
         raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 300))
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _no_override(mod, fake_run)
     # Only out/target are read before the timeout path returns.
     rc = mod.cmd_gaps(SimpleNamespace(out=str(out_dir), target=str(target)))
     captured = capsys.readouterr()
@@ -106,7 +140,7 @@ def test_gaps_checklist_build_timeout_reported(
 
 
 def test_run_checklist_build_timeout_fails_lifecycle(
-        tmp_path, monkeypatch, capsys):
+        tmp_path, monkeypatch, capsys, _no_override):
     mod = _load_cli()
     out_dir = tmp_path / "run"
     out_dir.mkdir()
@@ -127,7 +161,7 @@ def test_run_checklist_build_timeout_fails_lifecycle(
             raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout", 300))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    _no_override(mod, fake_run)
     rc = mod.cmd_run(SimpleNamespace(
         target=str(target), out=str(out_dir),
     ))
@@ -362,18 +396,18 @@ class TestRunPathWiring:
     fails actionably — the exact live-hit surface."""
 
     def _invoke(self, mod, monkeypatch, target: Path, out: Path,
-                behaviour: str = "timeout") -> tuple[int, _FakeRun]:
+                behaviour: str = "timeout", *, _no_override) -> tuple[int, _FakeRun]:
         out.mkdir(parents=True, exist_ok=True)
         fake = _FakeRun(out, behaviour)
-        monkeypatch.setattr(subprocess, "run", fake)
+        _no_override(mod, fake)
         rc = mod.cmd_run(_run_args(target, out))
         return rc, fake
 
     def test_large_target_gets_the_scaled_bound(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         mod = _load_cli()
         target = _sparse(tmp_path / "huge.bin", 500 * _MIB, head=b"\x7fELF")
-        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out")
+        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out", _no_override=_no_override)
         assert rc == 1
         # The flat 300s live-failed here; the ceiling-clamped scaled
         # bound must reach the child.
@@ -389,30 +423,30 @@ class TestRunPathWiring:
         assert any("fail" in c for c in fake.lifecycle_cmds[-1])
 
     def test_small_target_keeps_the_floor_bound(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         mod = _load_cli()
         target = _sparse(tmp_path / "small.bin", 1 * _MIB, head=b"\x7fELF")
-        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out")
+        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out", _no_override=_no_override)
         assert rc == 1
         assert fake.build_timeouts == [300]
         assert "checklist build timed out after 300s" in \
             capsys.readouterr().err
 
     def test_override_reaches_the_child_verbatim(
-            self, tmp_path: Path, monkeypatch):
+            self, tmp_path: Path, monkeypatch, _no_override):
         mod = _load_cli()
         monkeypatch.setenv(ENV, "7200")
         target = _sparse(tmp_path / "small.bin", 1 * _MIB, head=b"\x7fELF")
-        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out")
+        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out", _no_override=_no_override)
         assert rc == 1
         assert fake.build_timeouts == [7200]
 
     def test_invalid_override_fails_the_run_loudly(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         mod = _load_cli()
         monkeypatch.setenv(ENV, "banana")
         target = _sparse(tmp_path / "small.bin", 1 * _MIB, head=b"\x7fELF")
-        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out")
+        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out", _no_override=_no_override)
         assert rc == 1
         # Refused before any builder spawn, run recorded failed.
         assert fake.build_timeouts == []
@@ -420,7 +454,7 @@ class TestRunPathWiring:
         assert any("fail" in c for c in fake.lifecycle_cmds[-1])
 
     def test_oversized_override_never_wedges_the_run(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         """The empirically-proven wedge: a 309+-digit override passes
         an isdigit()/>0 validator, then subprocess.run(timeout=...)
         raises OverflowError ('int too large to convert to float'),
@@ -431,7 +465,7 @@ class TestRunPathWiring:
         monkeypatch.setenv(ENV, "1" + "0" * 400)
         target = _sparse(tmp_path / "small.bin", 1 * _MIB, head=b"\x7fELF")
         # No OverflowError may escape cmd_run.
-        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out")
+        rc, fake = self._invoke(mod, monkeypatch, target, tmp_path / "out", _no_override=_no_override)
         assert rc == 1
         assert fake.build_timeouts == []
         err = capsys.readouterr().err
@@ -446,13 +480,13 @@ class TestGapsPathWiring:
     bound and the actionable timeout message."""
 
     def test_timeout_message_names_the_workaround(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         mod = _load_cli()
         target = _sparse(tmp_path / "huge.bin", 500 * _MIB, head=b"\x7fELF")
         out = tmp_path / "out"
         out.mkdir()
         fake = _FakeRun(out)
-        monkeypatch.setattr(subprocess, "run", fake)
+        _no_override(mod, fake)
         rc = mod.cmd_gaps(SimpleNamespace(out=str(out), target=str(target)))
         assert rc == 1
         assert fake.build_timeouts == [3600]
@@ -462,7 +496,7 @@ class TestGapsPathWiring:
         assert ENV in err
 
     def test_invalid_override_refused_before_spawn(
-            self, tmp_path: Path, monkeypatch, capsys):
+            self, tmp_path: Path, monkeypatch, capsys, _no_override):
         mod = _load_cli()
         monkeypatch.setenv(ENV, "-1")
         target = tmp_path / "src"
@@ -471,7 +505,7 @@ class TestGapsPathWiring:
         out = tmp_path / "out"
         out.mkdir()
         fake = _FakeRun(out)
-        monkeypatch.setattr(subprocess, "run", fake)
+        _no_override(mod, fake)
         rc = mod.cmd_gaps(SimpleNamespace(out=str(out), target=str(target)))
         assert rc == 1
         assert fake.build_timeouts == []
