@@ -1846,6 +1846,7 @@ def _spawn_pidns_tier(
     death_r: int | None = None
     death_w: int | None = None
     p_sock: socket.socket | None = None
+    a_sock: socket.socket | None = None
     try:
         out_fd, out_owned = _resolve_stdio_fd(stdout, "stdout")
         if out_owned:
@@ -1874,7 +1875,8 @@ def _spawn_pidns_tier(
             finally:
                 os._exit(87)  # _supervisor_main never returns
         # ---- caller ----
-        a_sock.close()
+        caller_sock, a_sock = a_sock, None
+        caller_sock.close()
         if death_r is not None:
             os.close(death_r)
             death_r = None
@@ -1892,6 +1894,9 @@ def _spawn_pidns_tier(
         death_w = None  # ownership moved to the handle
         return handle
     finally:
+        if a_sock is not None:
+            with contextlib.suppress(OSError):
+                a_sock.close()
         for fd in owned:
             with contextlib.suppress(OSError):
                 os.close(fd)
