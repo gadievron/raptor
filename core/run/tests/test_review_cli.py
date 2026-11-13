@@ -6,12 +6,33 @@ invisible to CI without a direct test.
 """
 
 import importlib.util
+from contextlib import ExitStack
+import subprocess
 import sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
+from core.testing.module_views import scoped_function_imports
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture()
+def _private_delegate(monkeypatch):
+    with ExitStack() as scopes:
+        def install(mod, fake_call):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("cmd_note", "cmd_edit"), {"subprocess": subprocess},
+            ))
+            monkeypatch.setattr(imports.subprocess, "call", fake_call)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def _load_review_module():
@@ -66,23 +87,22 @@ class TestNoteEditWriteBase:
             json.dumps({"command": "audit"}), encoding="utf-8")
         return run
 
-    def _capture_delegate(self, mod, monkeypatch):
-        import subprocess
+    def _capture_delegate(self, mod, monkeypatch, _private_delegate):
         calls = []
 
         def fake_call(cmd, env=None):
             calls.append(cmd)
             return 0
 
-        monkeypatch.setattr(subprocess, "call", fake_call)
+        _private_delegate(mod, fake_call)
         return calls
 
-    def test_note_derives_base_from_out(self, tmp_path, monkeypatch):
+    def test_note_derives_base_from_out(self, tmp_path, monkeypatch, _private_delegate):
         import argparse
 
         import pytest
         mod = _load_review_module()
-        calls = self._capture_delegate(mod, monkeypatch)
+        calls = self._capture_delegate(mod, monkeypatch, _private_delegate)
         run = self._run_dir(tmp_path)
         args = argparse.Namespace(
             file="src/a.c", function="f", body="note", status=None,
@@ -95,12 +115,12 @@ class TestNoteEditWriteBase:
         base = cmd[cmd.index("--base") + 1]
         assert base == str(run.parent / "annotations")
 
-    def test_edit_derives_base_from_out(self, tmp_path, monkeypatch):
+    def test_edit_derives_base_from_out(self, tmp_path, monkeypatch, _private_delegate):
         import argparse
 
         import pytest
         mod = _load_review_module()
-        calls = self._capture_delegate(mod, monkeypatch)
+        calls = self._capture_delegate(mod, monkeypatch, _private_delegate)
         run = self._run_dir(tmp_path)
         args = argparse.Namespace(
             file="src/a.c", function="f",
@@ -113,12 +133,12 @@ class TestNoteEditWriteBase:
         assert cmd[cmd.index("--base") + 1] == str(
             run.parent / "annotations")
 
-    def test_explicit_base_wins(self, tmp_path, monkeypatch):
+    def test_explicit_base_wins(self, tmp_path, monkeypatch, _private_delegate):
         import argparse
 
         import pytest
         mod = _load_review_module()
-        calls = self._capture_delegate(mod, monkeypatch)
+        calls = self._capture_delegate(mod, monkeypatch, _private_delegate)
         run = self._run_dir(tmp_path)
         args = argparse.Namespace(
             file="src/a.c", function="f", body=None, status=None,
