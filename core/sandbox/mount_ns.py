@@ -632,9 +632,11 @@ def _phase_trace(marker: bytes) -> None:
         # a symlink swap at the final component rather than append
         # through it (same defence the safe-open pattern uses
         # elsewhere in this module).
+        # A diagnostic FIFO may have no reader or a full buffer. Tracing
+        # is best-effort and must not park setup waiting for that peer.
         fd = os.open(path,
                      os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                     | os.O_NOFOLLOW, 0o600)
+                     | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
         try:
             os.write(fd, b"mount_ns t=%dns: %s\n"
                      % (time.monotonic_ns(), marker))
