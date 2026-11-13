@@ -1009,6 +1009,12 @@ def module_dynamic_namespace(
                   and cursor.func.id in object_namespace_names
                   and len(cursor.args) == 1 and not cursor.keywords):
                 children = (cursor.args[0],)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and not cursor.keywords
+                  and ((cursor.func.attr == "get" and len(cursor.args) in {1, 2})
+                       or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
+                  and possible_namespace_dict_value(cursor.func.value)):
+                children = (cursor.func.value, *cursor.args[1:])
             else:
                 children = ()
             if not children:
