@@ -1105,6 +1105,10 @@ def module_dynamic_namespace(
                         selected = selected_literal_value(cursor)
                         if selected is not None:
                             children = (selected,)
+                    elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
+                          and isinstance(cursor.left, (ast.Tuple, ast.List))
+                          and type(cursor.left) is type(cursor.right)):
+                        children = (cursor.left, cursor.right)
                     elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
                         for operand, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
                             if (isinstance(operand, (ast.Tuple, ast.List)) and isinstance(count, ast.Constant)
