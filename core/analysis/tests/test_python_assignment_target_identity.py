@@ -33,8 +33,8 @@ def test_raw_subscript_key_cannot_borrow_the_sanitized_stored_value():
     ('store[(tmp := raw)]', set()),
     ('store[pick(tmp := raw)]', set()),
     ('store[(tmp := raw)].field', set()),
-    ('left, store[(tmp := raw)]', {'left'}),
-    ('[left, *rest]', {'left', 'rest'}),
+    ('left, store[(tmp := raw)]', set()),
+    ('[left, *rest]', set()),
     ('tmp', {'tmp'}),
 ])
 def test_only_binding_target_positions_receive_the_call_return(target, expected):
@@ -46,6 +46,10 @@ def test_only_binding_target_positions_receive_the_call_return(target, expected)
     assert call.assigned_names == frozenset(expected)
     if 'tmp :=' in target:
         assert 'tmp' in node.defs
+    if target.startswith('left,'):
+        assert 'left' in node.defs
+    if target.startswith('[left,'):
+        assert {'left', 'rest'} <= node.defs
 
 
 def test_chained_assignment_credits_the_direct_target_but_not_the_raw_key():
