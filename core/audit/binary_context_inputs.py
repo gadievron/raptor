@@ -49,6 +49,21 @@ def capture_binary_context_inputs(ctx: dict, origin: BinaryKnowledgeOrigin, deli
 
 def binary_context_record_digest(record: object) -> str | None:
     """Digest bounded historical data only; even a matching digest grants no reuse."""
+    if (isinstance(record, dict) and set(record) == {"version", "role", "inputs", "complete"}
+            and type(record.get("version")) is int and record["version"] == 1
+            and record.get("role") == _ROLE and type(record.get("complete")) is bool
+            and isinstance(record.get("inputs"), list)):
+        try:
+            # A bounded union is still only history. Live publication requires
+            # every contributor to match the Runtime's original receipt store.
+            if any(not isinstance(row, dict) or "inputs" in row or binary_context_record_digest(row) is None
+                   for row in record["inputs"]):
+                return None
+            json.dumps(record, allow_nan=False)
+            encoded = dumps_canonical(record).encode()
+            return sha256(encoded).hexdigest() if len(encoded) <= MAX_SNAPSHOT_BYTES else None
+        except (ValueError, TypeError, UnicodeEncodeError, RecursionError, OverflowError):
+            return None
     if (not isinstance(record, dict) or set(record) != {"version", "role", "origin", "contexts"}
             or type(record.get("version")) is not int or record["version"] != 1
             or record.get("role") != _ROLE or not isinstance(record.get("origin"), dict)

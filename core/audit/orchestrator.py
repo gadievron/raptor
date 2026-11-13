@@ -28305,9 +28305,13 @@ def _run_disagreement_continuations(result, config, review_fn, prepared, runtime
             history = read_history((outcome.review_result or {}).get("review_claims"))
             if history is not None:
                 origin = reservation.origin
-                incomplete = context_inputs_from_sources(
-                    [("target", origin.file, origin.source_identity.sha256)], complete=False)
-                history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), incomplete)
+                if origin.source_identity is not None:
+                    incomplete = context_inputs_from_sources(
+                        [("target", origin.file, origin.source_identity.sha256)], complete=False)
+                    history["source_inputs"] = merge_context_inputs(history.get("source_inputs"), incomplete)
+                # Binary history was captured from this invocation's exact
+                # owned fitting receipts. It stays cold-nonreusable without
+                # pretending that the view is a source-language translation.
                 outcome.review_result = {**(outcome.review_result or {}), "review_claims": history}
             if outcome.status in ("finding", "suspicious"):
                 disposition = _publish_study_outcome(
@@ -35895,7 +35899,7 @@ def _retain_delivered_context_history(prior: ReviewOutcome, fresh: ReviewOutcome
     if (prior.file, prior.function, prior.line) != (fresh.file, fresh.function, fresh.line):
         return None
     fresh_history = read_history((fresh.review_result or {}).get("review_claims"))
-    if fresh_history is None or "source_inputs" not in fresh_history:
+    if fresh_history is None or not any(key in fresh_history for key in ("source_inputs", "binary_inputs")):
         return None
     review = deepcopy(prior.review_result or {})
     history = merge_history(review.get("review_claims"), fresh_history)
@@ -35909,6 +35913,20 @@ def _retain_delivered_context_history(prior: ReviewOutcome, fresh: ReviewOutcome
                    tokens_out=(prior.tokens_out or 0) + (fresh.tokens_out or 0),
                    cache_read_tokens=(prior.cache_read_tokens or 0) + (fresh.cache_read_tokens or 0),
                    cache_write_tokens=(prior.cache_write_tokens or 0) + (fresh.cache_write_tokens or 0))
+
+
+def _bind_binary_context_publication(runtime, reservation, candidate) -> bool:
+    """Use only the original Runtime owner and its actual delivery records."""
+    from .binary_review_scope import BinaryKnowledgeOrigin
+
+    if not isinstance(reservation.origin, BinaryKnowledgeOrigin):
+        return reservation.origin.source_identity is not None
+    scope = runtime.publication_binary_scope(reservation, candidate)
+    if scope is None:
+        return False
+    candidate.binary_publication_scope = scope
+    candidate.review_result = {**(candidate.review_result or {}), "binary_review_binding": scope.record()}
+    return True
 
 
 def _publish_study_candidates(
@@ -35928,7 +35946,7 @@ def _publish_study_candidates(
         index = next((i for i, current in enumerate(result.outcomes) if current is prior), None)
         if index is None:
             return "canonical_outcome_changed"
-        if not runtime.can_publish(reservation) or reservation.origin.source_identity is None:
+        if not runtime.can_publish(reservation):
             return "source_changed"
         # Snapshot construction belongs to the same ownership boundary as
         # the append: even an in-place update must not be overwritten.
@@ -35946,6 +35964,8 @@ def _publish_study_candidates(
                             or input_scope is None):
             return "study_context_input_scope_unavailable"
         candidate.review_input_scope = input_scope
+        if not _bind_binary_context_publication(runtime, reservation, candidate):
+            return "binary_context_input_scope_unavailable"
         # Capture exact object identity before a write can commit. This is
         # not an ACK: cancellation recovery must still find this object in
         # canonical state, which is assigned only after the checked ACK.
@@ -35958,17 +35978,27 @@ def _publish_study_candidates(
             run_id=_resolved_run_id(config.out_dir), outcome=candidate, gap=gap,
             verification_scope=(VerificationScope(candidate.file, candidate.function, candidate.line,
                                                   candidate.hypothesis, reservation.origin.source_identity)
-                                if candidate.hypothesis else None),
+                                if candidate.hypothesis and reservation.origin.source_identity is not None else None),
             publication_scope=ReviewPublicationScope(reservation.origin.file, reservation.origin.function,
-                reservation.origin.line_start, reservation.origin.line_end, reservation.origin.source_identity),
+                reservation.origin.line_start, reservation.origin.line_end, reservation.origin.source_identity)
+                if reservation.origin.source_identity is not None else None,
         )
         if acknowledgement is None:
             return "candidate_journal_write_failed"
-        if known_bound and getattr(acknowledgement, "review_claims", None) != candidate_history:
+        binary_bound = isinstance(candidate_history, dict) and "binary_inputs" in candidate_history
+        if (known_bound or binary_bound) and getattr(acknowledgement, "review_claims", None) != candidate_history:
             return "candidate_history_ack_mismatch"
         if (acknowledgement.file, acknowledgement.function, acknowledgement.line_start) != (
                 candidate.file, candidate.function, candidate.line):
             return "candidate_journal_ack_mismatch"
+        if reservation.origin.source_identity is None:
+            from .collector import journal_acknowledges_outcome
+            if read_history((candidate.review_result or {}).get("review_claims")) != candidate_history:
+                return "candidate_history_changed"
+            if not journal_acknowledges_outcome(acknowledgement, candidate, gap) or not runtime.can_publish(reservation):
+                return "candidate_journal_ack_mismatch"
+            if config._verdicts_finalized or result.outcomes[index] is not prior:
+                return "canonical_outcome_changed"
         result.outcomes[index] = candidate
     return "published"
 
@@ -35998,7 +36028,7 @@ def _publish_study_outcome(
         origin = reservation.origin
         if (origin.file, origin.function, origin.line_start) != (candidate.file, candidate.function, candidate.line):
             return "study_publication_scope_mismatch"
-        if not runtime.can_publish(reservation) or origin.source_identity is None:
+        if not runtime.can_publish(reservation):
             return "source_changed"
         candidate.verification_tier = candidate.compute_tier(target_path=config.target_path)
         candidate_history = read_history((candidate.review_result or {}).get("review_claims"))
@@ -36010,25 +36040,35 @@ def _publish_study_outcome(
                             or input_scope is None):
             return "study_context_input_scope_unavailable"
         candidate.review_input_scope = input_scope
+        if not _bind_binary_context_publication(runtime, reservation, candidate):
+            return "binary_context_input_scope_unavailable"
         acknowledgement = append_journal_for_outcome(
             out_dir=config.out_dir, target_path=config.target_path, run_id=_resolved_run_id(config.out_dir),
             source_roots=runtime.source_roots(),
             review_input_scope=input_scope,
             outcome=candidate, gap=gap,
             publication_scope=ReviewPublicationScope(origin.file, origin.function, origin.line_start,
-                                                      origin.line_end, origin.source_identity),
+                                                      origin.line_end, origin.source_identity)
+                if origin.source_identity is not None else None,
         )
         if acknowledgement is None:
             return "study_journal_write_failed"
         if not isinstance(acknowledgement, ReviewJournalEntry):
             return "study_journal_ack_mismatch"
-        source_anchor = parse_source_anchor(acknowledgement.source_hash)
-        if ((acknowledgement.file, acknowledgement.function, acknowledgement.line_start,
-             acknowledgement.line_end, acknowledgement.verdict) != (
-                candidate.file, candidate.function, candidate.line, origin.line_end, candidate.status)
-                or source_anchor is None or source_anchor[0] != origin.source_identity.sha256):
-            return "study_journal_ack_mismatch"
+        if origin.source_identity is None:
+            from .collector import journal_acknowledges_outcome
+            if not journal_acknowledges_outcome(acknowledgement, candidate, gap):
+                return "study_journal_ack_mismatch"
+        else:
+            source_anchor = parse_source_anchor(acknowledgement.source_hash)
+            if ((acknowledgement.file, acknowledgement.function, acknowledgement.line_start,
+                 acknowledgement.line_end, acknowledgement.verdict) != (
+                    candidate.file, candidate.function, candidate.line, origin.line_end, candidate.status)
+                    or source_anchor is None or source_anchor[0] != origin.source_identity.sha256):
+                return "study_journal_ack_mismatch"
         expected_history = read_history((candidate.review_result or {}).get("review_claims"))
+        if origin.source_identity is None and expected_history != candidate_history:
+            return "study_history_changed"
         if expected_history is not None and acknowledgement.review_claims != expected_history:
             return "study_history_ack_mismatch"
         if config._verdicts_finalized:

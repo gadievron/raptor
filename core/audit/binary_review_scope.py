@@ -61,15 +61,35 @@ class BinaryReviewPublicationScope:
     function: str
     address: int
     size: int
+    context_digest: str | None = None
+    # Transient pipeline view ownership, never reconstructed from journal data.
+    view_context: dict | None = field(default=None, compare=False, repr=False)
+    view_identity: BinaryInputIdentity | None = None
 
     def record(self) -> dict:
-        return {"version": 1, "domain": "binary_module", "file": self.file,
-                "function": self.function, "module_sha256": self.module.sha256,
-                "address": self.address, "size": self.size}
+        value = {"version": 1, "domain": "binary_module", "file": self.file,
+                 "function": self.function, "module_sha256": self.module.sha256,
+                 "address": self.address, "size": self.size}
+        return {**value, "context_digest": self.context_digest} if self.context_digest is not None else value
 
     def matches(self, outcome, gap: dict) -> bool:
         from .record import _as_int
 
+        from .binary_context_inputs import binary_context_record_digest
+
+        result = getattr(outcome, "review_result", None) or {}
+        history = result.get("review_claims")
+        has_context = isinstance(history, dict) and "binary_inputs" in history
+        if has_context != (self.context_digest is not None):
+            return False
+        if has_context:
+            from .review_claims import read_history
+
+            retained = read_history(history)
+            if (retained is None or not isinstance(self.context_digest, str)
+                    or _SHA256.fullmatch(self.context_digest) is None
+                    or binary_context_record_digest(retained.get("binary_inputs")) != self.context_digest):
+                return False
         metadata = gap.get("metadata")
         metadata = metadata if isinstance(metadata, dict) else {}
         address = gap.get("address", metadata.get("address"))
@@ -89,11 +109,36 @@ class BinaryReviewPublicationScope:
 
     def current(self, target_path) -> bool:
         try:
-            return Path(target_path).absolute() == self.module.path and self.module.current()
+            if Path(target_path).absolute() != self.module.path or not self.module.current():
+                return False
+            if self.view_context is None and self.view_identity is None:
+                # A contextual assessment cannot fall back to the legacy
+                # module-only capability after a lossy transient-field copy.
+                return self.context_digest is None
+            ctx = self.view_context
+            if not isinstance(ctx, dict) or self.view_identity is None:
+                return False
+            metadata = ctx.get("metadata")
+            view_target = ctx.get("target_path")
+            if not isinstance(view_target, (str, Path)):
+                return False
+            return (ctx.get("_binary_module_snapshot") is self.module
+                    and Path(view_target).absolute() == self.module.path
+                    and (ctx.get("file"), ctx.get("function"), ctx.get("address"))
+                        == (self.file, self.function, self.address)
+                    and type(ctx.get("address")) is int
+                    and isinstance(metadata, dict) and type(metadata.get("size")) is int
+                    and metadata["size"] == self.size
+                    and capture_binary_input_identity(ctx, self) == self.view_identity)
         except (TypeError, ValueError, OSError, RuntimeError):
             return False
 
     def anchor(self) -> str:
+        plain = self.module_anchor()
+        return (f"bin:ctx1:{self.context_digest}:{plain[4:]}"
+                if self.context_digest is not None else plain)
+
+    def module_anchor(self) -> str:
         from .record import binary_item_hash
 
         value = binary_item_hash({"sha256": self.module.sha256},
@@ -113,7 +158,10 @@ def capture_binary_publication_scope(ctx: dict, module: BinaryModuleSnapshot) ->
             or not isinstance(function, str) or not function
             or type(address) is not int or address < 0 or type(size) is not int or size <= 0):
         return None
-    return BinaryReviewPublicationScope(module, file, function, address, size)
+    scope = BinaryReviewPublicationScope(module, file, function, address, size)
+    identity = capture_binary_input_identity(ctx, scope)
+    return (BinaryReviewPublicationScope(module, file, function, address, size,
+                view_context=ctx, view_identity=identity) if identity is not None else scope)
 
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
