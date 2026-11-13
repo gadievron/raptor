@@ -209,7 +209,7 @@ class TestOutcomeContract:
             patch("cve_env.utils.lifecycle.acquire_lock",
                   return_value=tmp_path / "lock"),
             patch("cve_env.utils.lifecycle.release_lock"),
-            patch("builtins.print", _broken_print),
+            patch.object(cli_mod, "print", _broken_print, create=True),
         ):
             with pytest.raises(BrokenPipeError):
                 cli_mod.main(["build", CVE, "--silent",
