@@ -193,6 +193,8 @@ def test_waiter_timeout_does_not_cancel_or_replace_owner(monkeypatch, binary):
 
 
 def test_old_waiters_do_not_receive_or_overwrite_new_generation(monkeypatch, binary):
+    from core.testing.threads import retiring_threads
+
     old_started, release_old = threading.Event(), threading.Event()
     waiting, new_done = threading.Event(), threading.Event()
     old = SimpleNamespace(proxy_hosts=["old.example"])
@@ -222,28 +224,29 @@ def test_old_waiters_do_not_receive_or_overwrite_new_generation(monkeypatch, bin
     owner = threading.Thread(target=call, args=(old_results,), daemon=True)
     waiter = threading.Thread(target=call, args=(waiter_results,), daemon=True)
     newer = threading.Thread(target=call, args=(new_results, new_done), daemon=True)
-    owner.start()
-    try:
-        assert old_started.wait(5)
-        entry = next(iter(memo._CACHE.values()))
-        real_wait = entry.ready.wait
+    with retiring_threads((owner, waiter, newer), release=release_old.set, timeout=5):
+        owner.start()
+        try:
+            assert old_started.wait(5)
+            entry = next(iter(memo._CACHE.values()))
+            real_wait = entry.ready.wait
 
-        def observed_wait(*args, **kwargs):
-            waiting.set()
-            return real_wait(*args, **kwargs)
+            def observed_wait(*args, **kwargs):
+                waiting.set()
+                return real_wait(*args, **kwargs)
 
-        monkeypatch.setattr(entry.ready, "wait", observed_wait)
-        waiter.start()
-        assert waiting.wait(5)
-        monkeypatch.setenv("CAL_IDENTITY_TEST", "new")
-        newer.start()
-        assert new_done.wait(5), "new inputs blocked behind an obsolete generation"
-        assert new_results == [new]
-    finally:
-        release_old.set()
-        for thread in (owner, waiter, newer):
-            if thread.ident is not None:
-                thread.join(5)
+            monkeypatch.setattr(entry.ready, "wait", observed_wait)
+            waiter.start()
+            assert waiting.wait(5)
+            monkeypatch.setenv("CAL_IDENTITY_TEST", "new")
+            newer.start()
+            assert new_done.wait(5), "new inputs blocked behind an obsolete generation"
+            assert new_results == [new]
+        finally:
+            release_old.set()
+            for thread in (owner, waiter, newer):
+                if thread.ident is not None:
+                    thread.join(5)
     assert not errors
     assert old_results == [None]
     assert waiter_results == [None]
