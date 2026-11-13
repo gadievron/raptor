@@ -1176,6 +1176,14 @@ def module_dynamic_namespace(
                 kinds = tuple(collection_operation_cache[operand][0] for operand in operands)
                 if kinds and kinds[0] is not None and all(operand_kind is kinds[0] for operand_kind in kinds):
                     kind, sources = kinds[0], operands
+            elif isinstance(cursor, ast.Subscript) and isinstance(cursor.slice, ast.Slice):
+                source = cursor.value
+                if not expanded:
+                    pending.append((cursor, True))
+                    pending.append((source, False))
+                    continue
+                if collection_operation_cache[source][0] is ast.List:
+                    kind, sources = ast.List, (source,)
             elif isinstance(cursor, ast.Subscript) and not isinstance(cursor.slice, ast.Slice):
                 source = selected_literal_value(cursor)
                 if source is not None:
