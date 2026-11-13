@@ -33866,11 +33866,17 @@ def _relog_final_statuses(
     row is invisible to the join — correction decisions come from
     genuine history alone (a legacy unstamped trail simply gets no
     corrections, the never-logged shape).
+
+    Canonical line-qualified keys remain distinct. Signed bare legacy keys
+    supply a fallback only without positioned history or competing current
+    outcomes for that name; a sibling's positioned row never supplies it.
     """
     if not config.out_dir:
         return 0
     try:
         last_status: dict[str, str] = {}
+        legacy_status: dict[str, str] = {}
+        positioned_bases: set[str] = set()
         for entry in load_verified_audit_log(config.out_dir):
             if entry.get("action") not in (
                 "orchestrator_review", "sweep_promotion",
@@ -33880,23 +33886,37 @@ def _relog_final_statuses(
             if not key:
                 continue
             head, _, tail = key.rpartition(":")
-            base = head if (head and tail.isdigit()) else key
-            last_status[base] = str(entry.get("status", ""))
+            if head and tail.isdigit():
+                last_status[key] = str(entry.get("status", ""))
+                positioned_bases.add(head)
+            else:
+                legacy_status[key] = str(entry.get("status", ""))
     except Exception:
         logger.debug("re-log: audit log read failed", exc_info=True)
         return 0
 
+    # Bare legacy records carry no site. Keep their compatibility fallback
+    # only when neither positioned history nor competing current outcomes
+    # can make that name ambiguous. This is not a global key-format migration.
+    current_counts: dict[str, int] = {}
+    for outcome in result.outcomes:
+        base = f"{outcome.file}:{outcome.function}"
+        current_counts[base] = current_counts.get(base, 0) + 1
     updated = 0
     for outcome in result.outcomes:
         if outcome.status == "error":
             continue
         base = f"{outcome.file}:{outcome.function}"
-        prior = last_status.get(base)
+        line = outcome.line if type(outcome.line) is int and outcome.line > 0 else 0
+        key = f"{base}:{line}"
+        prior = last_status.get(key)
+        if prior is None and base not in positioned_bases and current_counts.get(base) == 1:
+            prior = legacy_status.get(base)
         if prior is None or prior == outcome.status:
             continue
         entry = {
             "action": "orchestrator_review",
-            "key": f"{outcome.file}:{outcome.function}:{outcome.line or 0}",
+            "key": key,
             "status": outcome.status,
             "prior_status": prior,
             "final_status_correction": True,
