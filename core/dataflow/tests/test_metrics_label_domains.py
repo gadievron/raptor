@@ -5,7 +5,7 @@ import csv
 import pytest
 
 from core.dataflow.corpus_metrics import compute
-from core.dataflow.label import VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE
+from core.dataflow.label import FP_DEAD_CODE, VERDICT_FALSE_POSITIVE, VERDICT_TRUE_POSITIVE
 from core.dataflow.run_corpus import CSV_HEADER
 
 
@@ -20,7 +20,8 @@ def test_metrics_label_domains(tmp_path):
                 writer.writerow({**dict.fromkeys(CSV_HEADER, ""), **row})
 
     valid = [
-        {"label_verdict": label, "validator_label": predicted}
+        {"label_verdict": label, "validator_label": predicted,
+         "fp_category": FP_DEAD_CODE if label == VERDICT_FALSE_POSITIVE else ""}
         for label in (VERDICT_TRUE_POSITIVE, VERDICT_FALSE_POSITIVE)
         for predicted in (VERDICT_TRUE_POSITIVE, VERDICT_FALSE_POSITIVE, "uncertain")
     ]
