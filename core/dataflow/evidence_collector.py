@@ -59,7 +59,13 @@ def collect_sanitizer_evidence(
     5. Return a :class:`SanitizerEvidence` with no verdict — the
        validator pipeline (PR1c) decides exploitability with this
        evidence as input, not as a substitute.
+
+    Raises:
+        ValueError: ``max_files`` is not a non-negative integer.
     """
+    if isinstance(max_files, bool) or not isinstance(max_files, int) or max_files < 0:
+        raise ValueError("max_files must be a non-negative integer")
+
     paths_in_order = list(_unique_file_paths(finding))
     truncated = len(paths_in_order) > max_files
     scoped_paths = paths_in_order[:max_files]
