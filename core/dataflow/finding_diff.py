@@ -18,6 +18,7 @@ This module does NOT run CodeQL. PR2b-2 wires the subprocess.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
 
@@ -27,7 +28,6 @@ from core.sarif.parser import get_run_execution_diagnostics, SARIF_MAX_BYTES
 from core.source import read_text_gated
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from pathlib import Path
 
 
@@ -140,12 +140,24 @@ def diff_sarif_files(
 def _sarif_finding_ids(sarif: Mapping[str, Any]) -> set[str]:
     """Return the set of stable ``finding_id``s for every dataflow
     result in the SARIF document."""
+    if not isinstance(sarif, Mapping):
+        raise ValueError("SARIF document must be an object")
+    runs = sarif.get("runs", [])
+    if not isinstance(runs, (list, tuple)):
+        raise ValueError("SARIF runs must be an array")
     ids: set[str] = set()
-    for run in sarif.get("runs", []) or []:
+    for run in runs:
+        if not isinstance(run, Mapping):
+            raise ValueError("SARIF run must be an object")
         diagnostics = get_run_execution_diagnostics(run)
         if any(diagnostics.values()):
             raise ValueError(f"cannot compare incomplete SARIF run: {diagnostics}")
-        for result in run.get("results", []) or []:
+        results = run.get("results", [])
+        if not isinstance(results, (list, tuple)):
+            raise ValueError("SARIF results must be an array")
+        for result in results:
+            if not isinstance(result, Mapping):
+                raise ValueError("SARIF result must be an object")
             finding = from_sarif_result(result)
             if finding is None:
                 continue
