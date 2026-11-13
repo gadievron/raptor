@@ -419,7 +419,7 @@ class TestConfigAndSafety:
         def _boom(*a, **kw):
             raise RuntimeError("listdir exploded")
 
-        monkeypatch.setattr(os, "listdir", _boom)
+        patch_module_attribute(monkeypatch, _reaper_module, "os", "listdir", _boom)
         assert reap_stale_tmp() == []
 
 
