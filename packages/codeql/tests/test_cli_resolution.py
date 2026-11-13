@@ -9,7 +9,9 @@ from pathlib import Path
 if __name__ == "__main__":
     sys.path.insert(0, str(Path(__file__).parents[3]))
 
+from packages import codeql
 from packages.codeql import _resolve_cli
+from core.testing.module_bindings import patch_module_attribute
 
 
 def test_invalid_codeql_cli_override_warns(tmp_path, monkeypatch, caplog):
@@ -17,8 +19,8 @@ def test_invalid_codeql_cli_override_warns(tmp_path, monkeypatch, caplog):
     DatabaseManager._detect_codeql_cli warned on the same condition —
     the QueryRunner path masked exactly the mistake the DM surfaced."""
     monkeypatch.setenv("CODEQL_CLI", str(tmp_path / "nope" / "codeql"))
-    import shutil as _shutil
-    monkeypatch.setattr(_shutil, "which", lambda name: "/usr/bin/codeql")
+    patch_module_attribute(monkeypatch, codeql, "shutil", "which",
+                           lambda name: "/usr/bin/codeql")
     with caplog.at_level(logging.WARNING):
         resolved = _resolve_cli()
     assert resolved == "/usr/bin/codeql"
