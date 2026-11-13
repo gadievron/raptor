@@ -1074,7 +1074,9 @@ def main(argv: list[str]) -> int:
         # newline="" — no universal-newline translation (a raw \r in
         # the capture must not become a line break before the \n-only
         # section scanner runs; see _nl_lines).
-        with open(args.live, encoding="utf-8", newline="") as fh:
+        fh = open(args.live, encoding="utf-8", newline="")
+        read_failed = False
+        try:
             raw = fh.read(_MAX_CAPTURE_CHARS + 1)
             if len(raw) > _MAX_CAPTURE_CHARS:
                 # Server-emitted capture past any legitimate payload
@@ -1089,6 +1091,15 @@ def main(argv: list[str]) -> int:
             # duplicate-header rejection must fire before any mode acts
             # on a possibly-injected capture.
             live = parse_sections(raw)
+        except BaseException:
+            read_failed = True
+            raise
+        finally:
+            try:
+                fh.close()
+            except BaseException:
+                if not read_failed:
+                    raise
     except OSError as exc:
         print(f"boot_payload_review: cannot read live capture: {exc}",
               file=sys.stderr)
