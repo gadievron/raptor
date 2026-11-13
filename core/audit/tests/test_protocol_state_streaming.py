@@ -24,8 +24,8 @@ def test_large_line_does_not_retain_all_match_objects():
     sources = {'a.c': ' '.join('obj->field = 7;' for _ in range(20000))}
     # Warm imports and helper caches outside the measured interval.
     ps.build_state_field_index({'a.c': 'obj->field = 7;'})
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = ps.build_state_field_index(sources)
         _, peak = tracemalloc.get_traced_memory()
     finally:
