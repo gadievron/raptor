@@ -382,7 +382,9 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     return value is captured into a fresh LHS name at this stmt.
 
     Covers ``Assign`` (any LHS shape), ``AnnAssign`` with a value,
-    and standalone named expressions capturing a direct call.
+    and standalone named expressions capturing a direct call. A single
+    bare assignment target can also capture a direct-call named-expression
+    RHS, with both names retaining that same return value.
     Augmented assignments combine the call's return with the previous
     target value, so they do not establish return-value identity.
     ``y, z = f(), g()`` pairs plain tuple/list targets with same-position
@@ -392,6 +394,14 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     an earlier chained target could expose and mutate that list.
     """
     result: dict[int, frozenset[str]] = {}
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and isinstance(stmt.value, ast.NamedExpr):
+        targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+        named = stmt.value
+        if len(targets) == 1 and isinstance(named.value, ast.Call):
+            outer_names = _assign_target_names(targets[0])
+            inner_names = _assign_target_names(named.target)
+            if outer_names and inner_names:
+                result[id(named.value)] = outer_names | inner_names
     if isinstance(stmt, ast.Assign):
         lhs_names: set[str] = set()
         for target in stmt.targets:
@@ -425,7 +435,7 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
             result[id(stmt.value)] = frozenset({stmt.target.id})
     elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.NamedExpr):
         # Only this root shape executes and captures the call unconditionally.
-        # Nested/conditional walruses need a separate evaluation-order model.
+        # Other expression shapes need a separate evaluation-order model.
         named = stmt.value
         if isinstance(named.value, ast.Call):
             result[id(named.value)] = _assign_target_names(named.target)
