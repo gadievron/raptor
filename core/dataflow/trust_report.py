@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.dataflow.label import VALID_FP_CATEGORIES, VALID_VERDICTS
+from core.dataflow.run_corpus import verdict_to_label
 from core.dataflow.validator import ValidatorVerdict
 
 # FP categories whose root cause is "taint neutralised on the path" — the
@@ -96,6 +97,8 @@ def report(
                 raise ValueError(f"invalid fp_category at CSV line {reader.line_num}: {category!r}")
             if label == _TP and category != "":
                 raise ValueError(f"fp_category must be empty for true_positive at CSV line {reader.line_num}")
+            if "validator_label" in columns and row["validator_label"] != verdict_to_label(ValidatorVerdict(verdict)):
+                raise ValueError(f"validator_label inconsistent with validator_verdict at CSV line {reader.line_num}")
             total += 1
             suppressed = verdict == _SUPPRESS
             is_trust_fp = label == _FP and category in trust_categories
