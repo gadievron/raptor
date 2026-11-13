@@ -808,6 +808,7 @@ def module_dynamic_namespace(
     reflective_write_names = {"setattr", "delattr"}
     reflective_read_names = {"getattr"}
     object_namespace_names = {"vars"}
+    mapping_copy_names = {"dict"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
@@ -824,6 +825,9 @@ def module_dynamic_namespace(
             )
             object_namespace_names.update(
                 alias for alias, target in bindings.items() if target == "builtins.vars"
+            )
+            mapping_copy_names.update(
+                alias for alias, target in bindings.items() if target == "builtins.dict"
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -934,6 +938,16 @@ def module_dynamic_namespace(
                 and value.func.attr == "copy" and not value.args and not value.keywords
                 and possible_namespace_dict_value(value.func.value)):
             return value.func.value
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id in mapping_copy_names):
+            source = None
+            if len(value.args) == 1 and not value.keywords:
+                source = value.args[0]
+            elif (not value.args and len(value.keywords) == 1
+                  and value.keywords[0].arg is None):
+                source = value.keywords[0].value
+            if source is not None and possible_namespace_dict_value(source):
+                return source
         if isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr):
             for source, empty in ((value.left, value.right), (value.right, value.left)):
                 if (isinstance(empty, ast.Dict) and not empty.keys
