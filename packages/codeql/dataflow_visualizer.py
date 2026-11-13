@@ -765,7 +765,7 @@ class DataflowVisualizer:
         # character. A 61-character prefix therefore determines both the
         # displayed first 57 characters and whether the 60-character cap
         # needs an ellipsis, without copying/escaping a discarded suffix.
-        prefix = []
+        prefix: list[str] = []
         separated = False
         for char in str(text):
             if char.isspace():
