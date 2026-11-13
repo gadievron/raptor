@@ -1226,6 +1226,27 @@ def module_dynamic_namespace(
                     kind = collection_operation_cache[source][0]
                     if kind is not None:
                         sources = (source,)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr == "get" and len(cursor.args) in (1, 2)
+                  and not cursor.keywords):
+                dictionary = selected_literal_value(cursor.func.value)
+                key = cursor.args[0]
+                if (isinstance(dictionary, ast.Dict) and isinstance(key, ast.Constant)
+                        and isinstance(key.value, str)
+                        and all(isinstance(item, ast.Constant) and isinstance(item.value, str)
+                                for item in dictionary.keys)):
+                    source = cursor.args[1] if len(cursor.args) == 2 else None
+                    for item, candidate in zip(dictionary.keys, dictionary.values):
+                        if item.value == key.value:
+                            source = candidate
+                    if source is not None:
+                        if not expanded:
+                            pending.append((cursor, True))
+                            pending.append((source, False))
+                            continue
+                        kind = collection_operation_cache[source][0]
+                        if kind is not None:
+                            sources = (source,)
             elif (isinstance(cursor, ast.NamedExpr)
                   or (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                       and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords)):
@@ -1299,6 +1320,11 @@ def module_dynamic_namespace(
                         operation_sources = literal_list_operation_sources(cursor)
                     if operation_sources is not None:
                         children = operation_sources
+                        if (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                                and cursor.func.attr in {"get", "__getitem__"}
+                                and isinstance(selected_literal_value(cursor.func.value),
+                                               (ast.Dict, ast.Tuple, ast.List))):
+                            children += literal_member_result_values(cursor) or ()
                     elif isinstance(cursor, ast.NamedExpr):
                         children = (cursor.value,)
                     elif isinstance(cursor, ast.IfExp):
