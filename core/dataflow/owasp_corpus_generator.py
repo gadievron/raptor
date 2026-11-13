@@ -73,9 +73,16 @@ def parse_expected_results(csv_path: Path) -> dict[str, tuple[int, bool]]:
             if not test_name.startswith("BenchmarkTest"):
                 continue
             try:
-                mapping[test_name] = (int(cwe), real.lower() == "true")
+                cwe_id = int(cwe)
             except ValueError:
                 continue
+            truth = real.lower()
+            if truth not in {"true", "false"}:
+                raise ValueError(f"Invalid truth flag for {test_name}: {real!r}")
+            expected = (cwe_id, truth == "true")
+            if test_name in mapping and mapping[test_name] != expected:
+                raise ValueError(f"conflicting expected labels for {test_name}")
+            mapping[test_name] = expected
     return mapping
 
 
