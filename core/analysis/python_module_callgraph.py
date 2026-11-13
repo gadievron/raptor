@@ -1467,15 +1467,20 @@ def module_dynamic_namespace(
         elif isinstance(statement, ast.NamedExpr):
             targets = [statement.target]
             value = statement.value
-        elif (isinstance(statement, (ast.For, ast.comprehension))
-              and isinstance(statement.iter, (ast.Tuple, ast.List))):
+        elif (isinstance(statement, ast.For)
+              or (isinstance(statement, ast.comprehension)
+                  and isinstance(statement.iter, (ast.Tuple, ast.List)))):
             targets = [statement.target]
             value = statement.iter
         else:
             continue
         if isinstance(statement, (ast.For, ast.comprehension)):
-            pending = [(statement.target, item) for item in statement.iter.elts
-                       if not isinstance(item, ast.Starred)]
+            if isinstance(statement.iter, (ast.Tuple, ast.List)):
+                items = tuple(item for item in statement.iter.elts
+                              if not isinstance(item, ast.Starred))
+            else:
+                items = sequence_iteration_values(statement.iter) or ()
+            pending = [(statement.target, item) for item in items]
         else:
             pending = [(target, value) for target in targets]
         while pending:
