@@ -68,7 +68,14 @@ def _read_corpus_json(path: Path) -> str:
 def iter_corpus(corpus_dir: Path) -> Iterable[tuple[Finding, GroundTruth]]:
     """Yield paired records, refusing mismatched or duplicate finding IDs."""
     seen_ids: set[str] = set()
-    for fp in sorted(corpus_dir.glob("*.json")):
+    paths = sorted(corpus_dir.glob("*.json"))
+    path_set = set(paths)
+    for label_path in paths:
+        if label_path.name.endswith(".label.json"):
+            finding_path = label_path.with_name(label_path.name.removesuffix(".label.json") + ".json")
+            if finding_path not in path_set:
+                raise ValueError(f"orphan corpus label without finding: {label_path}")
+    for fp in paths:
         if fp.name.endswith(".label.json"):
             continue
         finding = Finding.from_json(_read_corpus_json(fp))
