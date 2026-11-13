@@ -386,9 +386,10 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
     Augmented assignments combine the call's return with the previous
     target value, so they do not establish return-value identity.
     ``y, z = f(), g()`` pairs plain tuple/list targets with same-position
-    Tuple RHS calls only when cardinalities match and neither side has
+    Tuple/list RHS calls only when cardinalities match and neither side has
     starred expansion. Unknown positions, nested calls and non-call RHS
-    expressions get no entry.
+    expressions get no entry. A list RHS requires one assignment target:
+    an earlier chained target could expose and mutate that list.
     """
     result: dict[int, frozenset[str]] = {}
     if isinstance(stmt, ast.Assign):
@@ -398,7 +399,8 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
         all_lhs = frozenset(lhs_names)
         if isinstance(stmt.value, ast.Call):
             result[id(stmt.value)] = all_lhs
-        elif isinstance(stmt.value, ast.Tuple):
+        elif (isinstance(stmt.value, ast.Tuple)
+              or (isinstance(stmt.value, ast.List) and len(stmt.targets) == 1)):
             # Grant only established positions. Starred expansion or
             # mixed cardinalities cannot give every target one call's value.
             sequence_targets = [
