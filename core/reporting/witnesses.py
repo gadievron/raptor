@@ -44,7 +44,8 @@ def build_witness_summary(
           "by_source": {<source>: int, ...},
           "by_outcome": {<outcome>: int, ...},
           "executed": int,    # how many witnesses observed an
-                              # outcome other than NOT_RUN
+                              # outcome other than NOT_RUN, excluding
+                              # explicit environment-refusal UNKNOWN
           "compiled": int,    # how many had compiled=True in
                               # outcome_detail (LLM-emit-run only)
         }``
@@ -68,7 +69,7 @@ def build_witness_summary(
         return empty
 
     try:
-        from core.witness import WitnessStore, WitnessOutcome
+        from core.witness import UNVERIFIABLE_ENVIRONMENT, WitnessStore, WitnessOutcome
     except ImportError as e:
         logger.debug("core.witness unavailable (%s) — empty summary", e)
         return {**empty, "enumeration_incomplete": True}
@@ -96,7 +97,10 @@ def build_witness_summary(
             out = w.observed_outcome.value
             by_source[src] = by_source.get(src, 0) + 1
             by_outcome[out] = by_outcome.get(out, 0) + 1
-            if w.observed_outcome is not WitnessOutcome.NOT_RUN:
+            refused = (w.observed_outcome is WitnessOutcome.UNKNOWN
+                       and isinstance(w.outcome_detail, dict)
+                       and w.outcome_detail.get("status") == UNVERIFIABLE_ENVIRONMENT)
+            if w.observed_outcome is not WitnessOutcome.NOT_RUN and not refused:
                 executed += 1
             if src == "llm_emit_run" and isinstance(w.outcome_detail, dict) \
                     and w.outcome_detail.get("compiled") is True:
