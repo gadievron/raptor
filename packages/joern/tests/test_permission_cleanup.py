@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
+import core.atomic_fs as atomic_fs
+from core.testing.module_bindings import patch_module_attribute
 from core.testing.restricted_tree import restricted_tree
 from packages.joern import runner, client
 from packages.joern.models import JoernCPG
@@ -67,7 +69,8 @@ def test_failed_removal_does_not_log_success(tmp_path, monkeypatch, caplog, kind
     )
     tree.mkdir()
     os.utime(tree, (time.time() - 60 * 86400,) * 2)
-    monkeypatch.setattr("shutil.rmtree", lambda *args, **kw: None)
+    patch_module_attribute(monkeypatch, atomic_fs, "shutil", "rmtree",
+                           lambda *args, **kw: None)
     monkeypatch.setattr(runner, "_CPG_SCOPED_SLOTS_KEEP", 0)
     with caplog.at_level(logging.INFO, logger=runner.__name__):
         if kind == "slot":
