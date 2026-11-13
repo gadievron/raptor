@@ -54,7 +54,7 @@ def _read_corpus_json(path: Path) -> str:
     truncated row skews every rate computed downstream, so unreadable
     and over-cap both refuse instead of degrading.
     """
-    got = read_text_capped(path)
+    got = read_text_capped(path, errors="strict")
     if got is None:
         msg = f"corpus record unreadable: {path}"
         raise OSError(msg)
