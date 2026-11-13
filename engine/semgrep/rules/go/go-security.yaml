@@ -105,16 +105,16 @@ rules:
 
   - id: raptor.go.insecure-tls-min-version
     message: >-
-      TLS MinVersion allows negotiation of deprecated protocol versions
-      (SSLv3, TLS 1.0, TLS 1.1). Set MinVersion to tls.VersionTLS12 or
-      tls.VersionTLS13.
+      TLS MinVersion requires review. Explicit legacy minimums can permit
+      deprecated protocols, while zero selects Go's version-dependent default.
+      Check the target Go version and configuration before treating zero as
+      a weak minimum; use an explicit supported minimum when policy requires it.
     languages: [go]
     severity: HIGH
-    # Real-world bad configs name the deprecated version constants;
-    # an explicit literal 0 is kept for completeness. Known residual
-    # (undetectable in a struct-literal pattern): OMITTING MinVersion
-    # yields the zero value with the same effect — absence of a field
-    # cannot be matched here (U12-F107).
+    # Explicit legacy constants and a zero/default configuration are distinct
+    # review cases. An omitted MinVersion also uses the default but is not
+    # matched by this struct-literal pattern. Neither zero nor omission alone
+    # establishes a downgrade; the target Go version/configuration matters.
     pattern-either:
       - pattern: |
           tls.Config{..., MinVersion: tls.VersionSSL30, ...}
