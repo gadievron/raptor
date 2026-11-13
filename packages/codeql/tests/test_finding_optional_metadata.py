@@ -293,3 +293,35 @@ def test_unavailable_message_text_preserves_selected_identity_and_source(tmp_pat
     assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
     assert finding.start_line == result['locations'][0]['physicalLocation']['region']['startLine']
     assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('level,default,expected', [
+    pytest.param(None, 'error', 'error', id='null-level'),
+    pytest.param([], 'error', 'error', id='array-level'),
+    pytest.param({}, 'error', 'error', id='object-level'),
+    pytest.param(7, 'error', 'error', id='numeric-level'),
+    pytest.param(None, None, 'warning', id='unavailable-default'),
+    pytest.param('note', 'error', 'note', id='explicit-note'),
+    pytest.param('none', 'error', 'none', id='explicit-none'),
+])
+def test_unavailable_result_level_uses_rule_default_in_severity_slot(tmp_path, level, default, expected):
+    from core.security.prompt_defense_profiles import CONSERVATIVE
+    from core.security.prompt_envelope import TaintedString, build_prompt
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    result['level'] = level
+    run = _run(result)
+    run['tool']['driver']['rules'][0]['defaultConfiguration'] = {'level': default}
+    path = _write(tmp_path, 'level-shape.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+    bundle = build_prompt(system='Owned severity control', profile=CONSERVATIVE,
+                          slots={'severity': TaintedString(value=finding.level, trust='untrusted')})
+    assert finding.level == expected
+    assert any(expected in message.content for message in bundle.messages)
+    assert finding.rule_id == result['ruleId']
+    assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
+    assert json.loads(path.read_text())['runs'][0] == run
