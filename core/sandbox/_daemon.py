@@ -514,6 +514,14 @@ def _parse_bytes_to_int(raw: bytes) -> int | None:
 
 
 def _build_fmtstr_write(spec: dict, bindings: dict) -> bytes:
+    raw_writes = spec.get("writes") or {}
+    if not isinstance(raw_writes, dict) or not raw_writes:
+        raise ValueError("writes dict required")
+    # Bound raw entries before expression evaluation and formatter expansion;
+    # different expressions may resolve to the same address only afterwards.
+    if len(raw_writes) > _MAX_FMTSTR_WRITES:
+        raise ValueError(
+            f"format write count {len(raw_writes)} exceeds cap {_MAX_FMTSTR_WRITES}")
     from pwn import context, fmtstr_payload  # type: ignore[import-untyped, import-not-found]
     prev_arch = getattr(context, "arch", None)
     context.arch = "amd64"
@@ -529,10 +537,6 @@ def _build_fmtstr_write(spec: dict, bindings: dict) -> bytes:
     write_size = spec.get("write_size", "short")
     if write_size not in ("byte", "short", "int"):
         msg = f"write_size invalid: {write_size!r}"
-        raise ValueError(msg)
-    raw_writes = spec.get("writes") or {}
-    if not raw_writes:
-        msg = "writes dict required"
         raise ValueError(msg)
     resolved: dict[int, int] = {}
     for addr_expr, value_expr in raw_writes.items():
@@ -1655,6 +1659,7 @@ def _handle_conversation(payload: dict) -> dict:
 # be well above any legitimate use; anything larger is a
 # programming error or an attack.
 _MAX_STEPS = 64
+_MAX_FMTSTR_WRITES = 4096      # raw entries, before address aliases collapse
 _MAX_SEND_BYTES = 512 * 1024   # 512 KiB per send
 _MAX_PER_RECV_TIMEOUT = 60.0
 _MAX_TOTAL_WAIT_SECONDS = 120.0
