@@ -208,6 +208,12 @@ def _gunzip_ratio_guarded(
         fetched += len(chunk)
         data = bytes(chunk)
         while data:
+            if decomp.eof:
+                # Keep the completed decoder across chunk boundaries; the
+                # next gzip member may start in a later transport chunk.
+                if not data.strip(b"\x00"):
+                    return
+                decomp = zlib.decompressobj(31)
             try:
                 out = decomp.decompress(data, step)
             except zlib.error as exc:
@@ -218,12 +224,7 @@ def _gunzip_ratio_guarded(
                 _check_budget()
                 yield out
             if decomp.eof:
-                # Concatenated gzip members (pigz-style multi-stream
-                # layers). Trailing NUL padding is not a new member.
                 data = decomp.unused_data
-                if not data.strip(b"\x00"):
-                    return
-                decomp = zlib.decompressobj(31)
                 continue
             data = decomp.unconsumed_tail
     if not decomp.eof:
