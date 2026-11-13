@@ -19,6 +19,8 @@ from typing import Any
 
 import pytest
 
+from core.testing.threads import retiring_threads
+
 import core.audit.orchestrator as _orch
 from core.audit.environment import (
     make_dispatch_gate,
@@ -223,17 +225,18 @@ class TestCollectReviewsDispatchGate:
             ))
 
         t = threading.Thread(target=run)
-        t.start()
-        # Every worker blocks inside the paused tick before its first
-        # dispatch, so no review can have run while the pause holds.
-        t.join(timeout=0.3)
-        assert t.is_alive()
-        with calls_lock:
-            assert calls == []
-        guard.resume()
-        t.join(timeout=10.0)
-        assert not t.is_alive()
-        assert sorted(out[0]) == [0, 1, 2, 3]
+        with retiring_threads((t,), release=guard.resume, timeout=10):
+            t.start()
+            # Every worker blocks inside the paused tick before its first
+            # dispatch, so no review can have run while the pause holds.
+            t.join(timeout=0.3)
+            assert t.is_alive()
+            with calls_lock:
+                assert calls == []
+            guard.resume()
+            t.join(timeout=10.0)
+            assert not t.is_alive()
+            assert sorted(out[0]) == [0, 1, 2, 3]
 
     def test_parallel_no_gate_is_the_pre_existing_path(self):
         calls: list[int] = []
