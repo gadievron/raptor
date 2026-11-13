@@ -230,7 +230,11 @@ def _git_diff(repo: Path, parent: str, fix: str, uri: str,
         return ""
     if r.returncode != 0:
         return ""
-    return "\n".join(r.stdout.splitlines()[:cap])
+    lines = r.stdout.splitlines()
+    excerpt = lines[:cap]
+    if cap > 0 and len(lines) > cap:
+        excerpt.append(f"... [diff truncated; line cap {cap} hit]")
+    return "\n".join(excerpt)
 
 
 def _git_touched_files(repo: Path, parent: str, fix: str,
