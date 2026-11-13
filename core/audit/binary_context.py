@@ -543,6 +543,7 @@ def assemble_binary_context(
     annotations_dir: Path | None = None,
     out_dir: Path | None = None,
     db=None,
+    cached_only: bool = False,
 ) -> dict[str, Any]:
     """Assemble a context slice for one binary function.
 
@@ -600,7 +601,8 @@ def assemble_binary_context(
         "target_path": str(target_path),
     }
 
-    source, representation = _read_binary_source(func, target_path, out_dir)
+    source, representation = (_read_binary_source(func, target_path, out_dir, cached_only=True)
+                              if cached_only else _read_binary_source(func, target_path, out_dir))
     ctx["source"] = source
     ctx["representation"] = representation
 
@@ -720,13 +722,13 @@ def _find_item(checklist, file_path, function_name):
     return None
 
 
-def _read_binary_source(func, target_path=None, out_dir=None):
+def _read_binary_source(func, target_path=None, out_dir=None, *, cached_only=False):
     """Return (source_text, representation)."""
     if func is None:
         return "(function not found in the binary database)", "unknown"
     if func.decompilation:
         return func.decompilation, "decompilation"
-    if target_path is not None:
+    if target_path is not None and not cached_only:
         code = _lazy_decompile(
             str(target_path), func.name, func.address, out_dir,
         )
