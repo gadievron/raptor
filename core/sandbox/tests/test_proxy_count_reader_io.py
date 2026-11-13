@@ -9,6 +9,7 @@ from core.sandbox import context, proxy, telemetry_mac
 
 import core.sandbox.context as _os_fault_consumer
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import scoped_function_imports
 
 
 @pytest.fixture
@@ -72,8 +73,9 @@ def test_recursion_error_is_invalid_sidecar(sidecar, monkeypatch):
     def too_deep(*args, **kwargs):
         raise RecursionError('decoder nesting limit')
 
-    monkeypatch.setattr(json, 'loads', too_deep)
-    assert read(sidecar) == (None, set(), True)
+    with scoped_function_imports(context, ('_read_proxy_count_sidecar',), {'json': json}) as private:
+        monkeypatch.setattr(private.json, 'loads', too_deep)
+        assert read(sidecar) == (None, set(), True)
 
 
 @pytest.mark.parametrize('read_fails', [False, True])
