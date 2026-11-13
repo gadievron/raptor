@@ -1,5 +1,7 @@
 """Ordered aggregation contracts and bounded journal-selection memory."""
 
+import builtins
+from types import ModuleType
 import tracemalloc
 
 import pytest
@@ -7,6 +9,7 @@ import pytest
 from core.audit import journal, sibling_analysis, survival
 from core.audit.journal import ReviewJournalEntry
 from core.audit.source_view import _HeredocTerminators
+from core.testing.module_views import module_function_view
 
 
 def _entry(ts, tools, *, correction=False):
@@ -18,11 +21,25 @@ def _entry(ts, tools, *, correction=False):
     )
 
 
+
+def _survival_with_entries(monkeypatch, entries):
+    loader = ModuleType(journal.__name__)
+    vars(loader).update(vars(journal))
+    monkeypatch.setattr(loader, "load_entries", lambda _: entries)
+
+    def import_local(name, globals=None, locals=None, fromlist=(), level=0):
+        if level == 1 and name == "journal" and tuple(fromlist) == ("load_entries",):
+            return loader
+        return builtins.__import__(name, globals, locals, fromlist, level)
+
+    return module_function_view(survival, import_hook=import_local).aggregate_survival
+
+
 def test_journal_selection_preserves_first_entry_at_equal_timestamps(monkeypatch, tmp_path):
     entries = [_entry("1", ["smt:first"]), _entry("1", ["semgrep:second"]),
                _entry("3", ["codeql:future"]), _entry("2", [], correction=True)]
-    monkeypatch.setattr(journal, "load_entries", lambda _: entries)
-    assert survival.aggregate_survival(tmp_path) == {
+    aggregate = _survival_with_entries(monkeypatch, entries)
+    assert aggregate(tmp_path) == {
         "smt": {"survived": 1, "disproven": 0, "unknown": 0}}
 
 
@@ -31,10 +48,10 @@ def test_journal_selection_does_not_copy_eligible_history(monkeypatch, tmp_path)
         pytest.skip("requires ownership of allocation tracing")
     claim = _entry("1", ["smt:claim"])
     entries = [claim] * 50000 + [_entry("2", [], correction=True)]
-    monkeypatch.setattr(journal, "load_entries", lambda _: entries)
-    tracemalloc.start()
+    aggregate = _survival_with_entries(monkeypatch, entries)
     try:
-        result = survival.aggregate_survival(tmp_path)
+        tracemalloc.start()
+        result = aggregate(tmp_path)
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
