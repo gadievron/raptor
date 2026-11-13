@@ -780,6 +780,19 @@ def module_dynamic_namespace(
         for child in ast.iter_child_nodes(node):
             parents[child] = node
 
+    # Function-local variable annotations never execute or survive for
+    # later evaluation. Keep targets/RHS and module/class behavior intact.
+    local_annotation_nodes: set[ast.AST] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AnnAssign):
+            continue
+        owner = parents.get(node)
+        while owner is not None and not isinstance(
+                owner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Module)):
+            owner = parents.get(owner)
+        if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local_annotation_nodes.update(ast.walk(node.annotation))
+
     # Builtins are process-wide mutable namespace objects, including when
     # imported inside a function. Once exposed, an alias can replace builtin
     # decorators or callable names without any ordinary module assignment.
@@ -819,6 +832,8 @@ def module_dynamic_namespace(
         return True
 
     for node in ast.walk(tree):
+        if node in local_annotation_nodes:
+            continue
         if isinstance(node, ast.ImportFrom):
             if any(alias.name == "*" for alias in node.names):
                 whole = True
