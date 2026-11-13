@@ -225,6 +225,10 @@ class ArrayTableIndex:
         # (b) the base of an array_access READ
         if parent.type == _ARRAY_ACCESS and self._spans_match(
                 parent.child_by_field_name("array"), ident):  # type: ignore[arg-type]
+            # Parentheses preserve an array element's variable identity.
+            # Inspect the containing expression before accepting it as a read.
+            while grandparent is not None and grandparent.type == "parenthesized_expression":
+                parent, grandparent = grandparent, grandparent.parent
             if grandparent is not None \
                     and grandparent.type == _ASSIGNMENT \
                     and self._spans_match(
