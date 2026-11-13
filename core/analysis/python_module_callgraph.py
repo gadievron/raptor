@@ -1063,17 +1063,21 @@ def module_dynamic_namespace(
                   and isinstance(receiver.func, ast.Name) and receiver.func.id in mapping_copy_names
                   and len(receiver.args) <= 1):
                 constructor_members = []
-                sources = list(receiver.args)
+                sources = [(source, False) for source in receiver.args]
                 for item in receiver.keywords:
                     if item.arg is None:
-                        sources.append(item.value)
+                        sources.append((item.value, True))
                     else:
                         constructor_members.append(item.value)
-                for source in sources:
+                for source, expanded in sources:
                     dictionary_source = selected_literal_value(source)
-                    if not isinstance(dictionary_source, ast.Dict):
-                        break
-                    constructor_members.extend(literal_member_values(dictionary_source) or ())
+                    if isinstance(dictionary_source, ast.Dict):
+                        constructor_members.extend(literal_member_values(dictionary_source) or ())
+                    else:
+                        pair_values = explicit_pair_values(source) if not expanded else None
+                        if pair_values is None:
+                            break
+                        constructor_members.extend(pair_values)
                 else:
                     recognised = True
                     members.extend(constructor_members)
