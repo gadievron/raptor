@@ -289,6 +289,8 @@ def write_corpus(pairs: Sequence[tuple[Finding, GroundTruth]], out_dir: Path) ->
     for finding, label in pairs:
         if any(char in finding.finding_id for char in ("/", "\\", ":", "\x00")):
             raise ValueError(f"corpus finding id must be a filename component: {finding.finding_id!r}")
+        if finding.finding_id.endswith(".label"):
+            raise ValueError(f"corpus finding id uses reserved .label suffix: {finding.finding_id!r}")
         if finding.finding_id != label.finding_id:
             raise ValueError(f"corpus finding/label id mismatch: {finding.finding_id!r}, {label.finding_id!r}")
         if finding.finding_id in seen:
