@@ -6,6 +6,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List
 
+from core.testing.processes import run_in_process_group as _run_memory_process
+
 from packages.sca.suppressions import (
     SUPPRESS_FILENAME,
     SuppressionEntry,
@@ -337,6 +339,53 @@ def test_apply_no_entries_no_changes() -> None:
 # Hostile-overlay read substrate: bounded, never symlink-following
 # ---------------------------------------------------------------------------
 
+def _run_suppression_memory_proof(tmp_path):
+    """Measure the real overlay refusal without consuming a caller trace."""
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.testing.module_views import module_function_view
+from packages.sca import suppressions as producer
+from packages.sca.tests import test_suppressions as native
+assert not tracemalloc.is_tracing()
+assert producer._HAS_YAML and producer._yaml is not None
+owned = Path(sys.argv[2])
+read_calls = []
+real_read = producer.read_bounded
+def observe_read(path, **kwargs):
+    result = real_read(path, **kwargs)
+    read_calls.append((path, kwargs, result, path.stat().st_size))
+    return result
+load_view = module_function_view(producer, bindings={"read_bounded": observe_read})
+test_view = module_function_view(native, bindings={"load": load_view.load})
+assert load_view.load.__code__ is producer.load.__code__
+assert test_view.test_load_refuses_oversized_overlay_without_reading_it.__code__ is native.test_load_refuses_oversized_overlay_without_reading_it.__code__
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    test_view.test_load_refuses_oversized_overlay_without_reading_it(owned)
+assert read_calls == [(owned / ".raptor-sca-suppress.yml", {"follow_symlinks": False}, None, 60 * 1024 * 1024)]
+print("suppression-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "suppression-memory-proof-ok", result.stdout
+
+
 def test_load_refuses_oversized_overlay_without_reading_it(
     tmp_path: Path,
 ) -> None:
@@ -345,11 +394,15 @@ def test_load_refuses_oversized_overlay_without_reading_it(
     pre-fix a 122 MB overlay allocated ~246 MB before returning."""
     import tracemalloc
 
+    if tracemalloc.is_tracing():
+        _run_suppression_memory_proof(tmp_path)
+        return
+
     p = tmp_path / ".raptor-sca-suppress.yml"
     with p.open("wb") as fh:
         fh.truncate(60 * 1024 * 1024)       # sparse: cheap to create
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         entries = load(p)
         _, peak = tracemalloc.get_traced_memory()
     finally:
