@@ -52,7 +52,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-_TESTNAME_RE = re.compile(r"BenchmarkTest\d{5}")
+_TESTNAME_RE = re.compile(r"(?:^|/)(BenchmarkTest[0-9]{5})\.java\Z")
 
 
 def parse_expected_results(csv_path: Path) -> dict[str, tuple[int, bool]]:
@@ -96,7 +96,7 @@ def _test_name_for_finding(finding: Finding) -> str | None:
     for step in (finding.source, finding.sink, *finding.intermediate_steps):
         m = _TESTNAME_RE.search(step.file_path)
         if m:
-            return m.group(0)
+            return m.group(1)
     return None
 
 
