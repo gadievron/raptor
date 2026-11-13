@@ -1136,21 +1136,41 @@ def module_dynamic_namespace(
             sequence_container_cache[node] = result
         return result
 
+    list_operation_cache: dict[ast.AST, tuple[ast.AST, ...] | None] = {}
+
     def literal_list_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
-        if (isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add)
-                and isinstance(value.left, ast.List) and isinstance(value.right, ast.List)
-                and type(value.left) is type(value.right)):
-            return (value.left, value.right)
-        if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Mult):
-            for source, count in ((value.left, value.right), (value.right, value.left)):
-                if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
-                        and type(count.value) is int and count.value > 0):
-                    return (source,)
-        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
-                and value.func.attr == "copy" and isinstance(value.func.value, ast.List)
-                and not value.args and not value.keywords):
-            return (value.func.value,)
-        return None
+        pending = [(value, False)]
+        while pending:
+            cursor, expanded = pending.pop()
+            if cursor in list_operation_cache:
+                continue
+            if isinstance(cursor, ast.List):
+                # A literal List is an origin anchor with no operation edges.
+                list_operation_cache[cursor] = ()
+            elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
+                  and isinstance(cursor.left, ast.List) and isinstance(cursor.right, ast.List)
+                  and type(cursor.left) is type(cursor.right)):
+                list_operation_cache[cursor] = (cursor.left, cursor.right)
+            elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
+                sources = None
+                for source, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
+                    if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
+                            and type(count.value) is int and count.value > 0):
+                        sources = (source,)
+                        break
+                list_operation_cache[cursor] = sources
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
+                source = cursor.func.value
+                if expanded:
+                    list_operation_cache[cursor] = ((source,) if list_operation_cache[source] is not None
+                                                    else None)
+                else:
+                    pending.append((cursor, True))
+                    pending.append((source, False))
+            else:
+                list_operation_cache[cursor] = None
+        return list_operation_cache[value]
 
     def literal_set_operation_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         if (isinstance(value, ast.BinOp) and isinstance(value.left, ast.Set)
