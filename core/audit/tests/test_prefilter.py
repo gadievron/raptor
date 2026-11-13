@@ -3116,15 +3116,16 @@ class TestPhpSqlInjectionFailSafe:
                 self._SRC, 1)
 
         thread = threading.Thread(target=first, name="reserving")
-        thread.start()
         try:
+            thread.start()
             assert started.wait(10)
             results["second"] = _prefilter._php_sql_injection_lines(
                 self._SRC, 1)
             assert _prefilter._php_sql_additions_warned is True
         finally:
             go.set()
-            thread.join(10)
+            if thread.ident is not None:
+                thread.join(10)
         assert not thread.is_alive()
         assert results == {"first": {3}, "second": {3}}
         assert warned_by == ["reserving"]
