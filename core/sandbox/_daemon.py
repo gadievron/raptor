@@ -484,6 +484,11 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
         if isinstance(op, ast.FloorDiv):
             return left // right
         if isinstance(op, ast.Mod):
+            # Field widths can expand a tiny format before result admission.
+            # Keep modulo arithmetic instead of admitting sequence formatting.
+            if isinstance(left, (bytes, str)):
+                raise ValueError(
+                    f"compute string formatting is not allowed in {expr!r}")
             return left % right
         if isinstance(op, ast.BitAnd):
             return left & right
