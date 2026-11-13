@@ -159,25 +159,29 @@ class TestFuzzingTelemetry(unittest.TestCase):
 
     def test_thread_safe_snapshot(self):
         import threading
+        from core.testing.threads import retiring_threads
         with tempfile.TemporaryDirectory() as tmp:
             tel = FuzzingTelemetry(out_dir=Path(tmp))
             tel.start()
 
-            stop = threading.Event()
+            try:
+                stop = threading.Event()
 
-            def updater():
-                while not stop.is_set():
-                    tel.update_stats(total_executions=tel.stats.total_executions + 1)
-                    time.sleep(0.001)
+                def updater():
+                    while not stop.is_set():
+                        tel.update_stats(total_executions=tel.stats.total_executions + 1)
+                        time.sleep(0.001)
 
-            t = threading.Thread(target=updater, daemon=True)
-            t.start()
-            for _ in range(50):
-                snapshot = tel.snapshot()
-                self.assertIsInstance(snapshot["total_executions"], int)
-            stop.set()
-            t.join(timeout=2)
-            tel.stop()
+                t = threading.Thread(target=updater, daemon=True)
+                with retiring_threads((t,), release=stop.set, timeout=2):
+                    t.start()
+                    for _ in range(50):
+                        snapshot = tel.snapshot()
+                        self.assertIsInstance(snapshot["total_executions"], int)
+                    stop.set()
+                    t.join(timeout=2)
+            finally:
+                tel.stop()
 
     def test_on_event_callback_invoked(self):
         captured = []
