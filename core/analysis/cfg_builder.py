@@ -413,6 +413,18 @@ def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
             and isinstance(stmt.value, ast.Call)
         ):
             result[id(stmt.value)] = frozenset({stmt.target.id})
+    if isinstance(stmt, ast.Assign):
+        # Targets execute after the RHS, left to right. A later target
+        # (including a walrus in a subscript) can overwrite a name that
+        # received a call's return earlier in the same statement.
+        stores: dict[str, int] = {}
+        for target in stmt.targets:
+            for child in ast.walk(target):
+                if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                    stores[child.id] = stores.get(child.id, 0) + 1
+        rebound = {name for name, count in stores.items() if count > 1}
+        if rebound:
+            result = {call: names - rebound for call, names in result.items()}
     return result
 
 
