@@ -13,6 +13,8 @@ from typing import Any
 
 import pytest
 
+from core.testing.threads import retiring_threads
+
 from core.audit.environment import (
     BREAKER_MAX_PROBE_WAIT_S,
     BREAKER_TRIP_COUNT,
@@ -1109,6 +1111,26 @@ class TestFanOutPauseParity:
     environment), and one thread's conclusion must release the other
     waiters promptly."""
 
+    @pytest.fixture(autouse=True)
+    def _retire_tick_workers(self, monkeypatch):
+        workers = []
+        guards = {}
+        monkeypatch.setattr(self, "_tick_workers", workers, raising=False)
+        monkeypatch.setattr(self, "_tick_guards", guards, raising=False)
+
+        def release():
+            for worker, guard in guards.items():
+                if worker.is_alive():
+                    guard._conclude("test worker retirement")
+
+        with retiring_threads(workers, release=release, timeout=10):
+            yield
+
+    def _own_tick_worker(self, guard: EnvironmentGuard, worker: Any) -> Any:
+        self._tick_workers.append(worker)
+        self._tick_guards[worker] = guard
+        return worker
+
     def _dirs(self, tmp_path: Path) -> tuple[Path, Path]:
         t = tmp_path / "t"
         o = tmp_path / "o"
@@ -1130,7 +1152,9 @@ class TestFanOutPauseParity:
             g.tick()
             done.set()
 
-        th = _threading.Thread(target=_run, daemon=True)
+        th = self._own_tick_worker(
+            g, _threading.Thread(target=_run, daemon=True),
+        )
         th.start()
         return th, done
 
@@ -1186,7 +1210,9 @@ class TestFanOutPauseParity:
             g.tick()
             released.set()
 
-        th = _threading.Thread(target=_run, daemon=True)
+        th = self._own_tick_worker(
+            g, _threading.Thread(target=_run, daemon=True),
+        )
         th.start()
         assert fs.paused_measure.wait(timeout=10)
         assert not released.is_set()  # inside the pause loop
@@ -1217,7 +1243,9 @@ class TestFanOutPauseParity:
             g.tick()
             released.set()
 
-        th = _threading.Thread(target=_run, daemon=True)
+        th = self._own_tick_worker(
+            g, _threading.Thread(target=_run, daemon=True),
+        )
         th.start()
         # Barrier: the tripped breaker's first measurement happens
         # inside the probe loop (the probe runs before any backoff).
@@ -1248,7 +1276,9 @@ class TestFanOutPauseParity:
             g.tick()
             released.set()
 
-        th = _threading.Thread(target=_run, daemon=True)
+        th = self._own_tick_worker(
+            g, _threading.Thread(target=_run, daemon=True),
+        )
         th.start()
         assert fs.paused_measure.wait(timeout=10)
         assert not released.is_set()  # inside the pause loop
