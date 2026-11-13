@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from core.llm import detection
+from core.testing.module_views import scoped_function_imports
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -50,13 +51,18 @@ def test_lazy_flags_validate_real_import_once(monkeypatch, flag, module, availab
             raise ImportError('broken SDK installation')
         return object()
 
-    monkeypatch.setattr(importlib, 'import_module', probe)
-    assert getattr(detection, flag) is available
-    assert getattr(detection, flag) is available
-    assert calls == [module]
-    monkeypatch.setitem(vars(detection), flag, not available)
-    assert detection._sdk_available(flag) is (not available)
-    assert calls == [module]
+    with (
+        scoped_function_imports(detection, ('_sdk_available',),
+                                {'importlib': importlib}) as imports,
+        pytest.MonkeyPatch.context() as scope,
+    ):
+        scope.setattr(imports.importlib, 'import_module', probe)
+        assert getattr(detection, flag) is available
+        assert getattr(detection, flag) is available
+        assert calls == [module]
+        monkeypatch.setitem(vars(detection), flag, not available)
+        assert detection._sdk_available(flag) is (not available)
+        assert calls == [module]
 
 
 def test_missing_selected_sdk_is_not_advertised(monkeypatch):
@@ -70,9 +76,15 @@ def test_missing_selected_sdk_is_not_advertised(monkeypatch):
         assert name == 'openai'
         raise ImportError('broken SDK installation')
 
-    monkeypatch.setattr(importlib, 'import_module', missing)
-    assert config._build_openai_compat_config('openai') is None
-    assert config.OPENAI_SDK_AVAILABLE is False
+    with (
+        scoped_function_imports(detection, ('_sdk_available',),
+                                {'importlib': importlib}) as imports,
+        pytest.MonkeyPatch.context() as scope,
+    ):
+        scope.setattr(imports.importlib, 'import_module', missing)
+        scope.setattr(config, '_sdk_available', detection._sdk_available)
+        assert config._build_openai_compat_config('openai') is None
+        assert config.OPENAI_SDK_AVAILABLE is False
 
 
 def test_availability_names_remain_discoverable_without_sdk_probes(monkeypatch):
