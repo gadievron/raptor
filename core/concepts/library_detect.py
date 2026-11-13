@@ -125,7 +125,7 @@ def harvest_system_includes(target_path: Path) -> set[str]:
                     continue
                 fpath = Path(root) / fname
                 try:
-                    with open(fpath, errors="replace") as fh:
+                    with preserving_stream_error(open(fpath, errors="replace")) as fh:
                         text = fh.read(_MAX_SOURCE_READ_BYTES)
                 except OSError:
                     continue
