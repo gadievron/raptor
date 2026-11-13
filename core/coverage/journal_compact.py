@@ -365,8 +365,10 @@ def _file_spend(path: Path) -> float:
     ``_row_cost`` over parsed rows in file order; unparseable and
     over-long lines contribute nothing, matching the loader's
     ``journal_spend_usd`` view."""
+    from core.source.streams import preserving_stream_error
+
     total = 0.0
-    with path.open("rb") as fh:
+    with preserving_stream_error(path.open("rb")) as fh:
         for raw_line, overlong in _iter_lines(fh):
             if overlong:
                 continue
