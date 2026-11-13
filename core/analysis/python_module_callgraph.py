@@ -930,19 +930,75 @@ def module_dynamic_namespace(
                         members.append(item)
         return tuple(members)
 
+    def explicit_namespace_dict_value(value: ast.AST) -> bool:
+        if isinstance(value, ast.Attribute) and value.attr == "__dict__":
+            return True
+        if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and not value.keywords:
+            if value.func.id in object_namespace_names and len(value.args) == 1:
+                return True
+            if (value.func.id in reflective_read_names and len(value.args) in {2, 3}
+                    and isinstance(value.args[1], ast.Constant)
+                    and value.args[1].value == "__dict__"):
+                return True
+        return False
+
+    def container_member_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        members: list[ast.AST] = []
+        pending = [(value, False)]
+        recognised = False
+        while pending:
+            container, copied = pending.pop()
+            literal_members = literal_member_values(container)
+            if literal_members is not None:
+                recognised = True
+                members.extend(literal_members)
+            elif isinstance(container, ast.NamedExpr):
+                pending.append((container.value, copied))
+            elif isinstance(container, ast.IfExp):
+                pending.extend((branch, copied) for branch in (container.body, container.orelse))
+            elif isinstance(container, ast.BoolOp):
+                pending.extend((branch, copied) for branch in container.values)
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Attribute)
+                  and container.func.attr == "copy" and not container.args and not container.keywords):
+                pending.append((container.func.value, True))
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
+                  and container.func.id in mapping_copy_names
+                  and len(container.args) == 1 and not container.keywords):
+                pending.append((container.args[0], True))
+            elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
+                  and container.func.id in mapping_copy_names and not container.args
+                  and len(container.keywords) == 1 and container.keywords[0].arg is None):
+                pending.append((container.keywords[0].value, True))
+            elif isinstance(container, ast.BinOp) and isinstance(container.op, ast.BitOr):
+                for source, empty in ((container.left, container.right), (container.right, container.left)):
+                    if isinstance(empty, ast.Dict) and not empty.keys:
+                        pending.append((source, True))
+                        break
+                else:
+                    if not copied:
+                        members.append(container)
+            elif explicit_namespace_dict_value(container):
+                members.append(container)
+                recognised |= copied
+            elif not copied:
+                # Preserve existing object possibilities from ordinary branches;
+                # opaque copy calls do not establish their argument's identity.
+                members.append(container)
+        return tuple(members) if recognised else None
+
     def literal_member_result_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
         if isinstance(value, ast.Subscript):
             if isinstance(value.slice, ast.Slice):
                 # A sequence slice returns a container, not an element.
                 return None
-            return literal_member_values(value.value)
+            return container_member_sources(value.value)
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
                 and not value.keywords):
             receiver = value.func.value
-            if ((value.func.attr == "get" and isinstance(receiver, ast.Dict)
+            if ((value.func.attr == "get" and not isinstance(receiver, (ast.Tuple, ast.List))
                  and len(value.args) in {1, 2})
                     or (value.func.attr == "__getitem__" and len(value.args) == 1)):
-                members = literal_member_values(receiver)
+                members = container_member_sources(receiver)
                 if members is not None:
                     return (*members, *value.args[1:])
         return None
@@ -953,18 +1009,9 @@ def module_dynamic_namespace(
             cursor, expanded = pending_values.pop()
             if cursor in namespace_dict_value_cache:
                 continue
-            if isinstance(cursor, ast.Attribute) and cursor.attr == "__dict__":
+            if explicit_namespace_dict_value(cursor):
                 namespace_dict_value_cache[cursor] = True
                 continue
-            if isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name) and not cursor.keywords:
-                if cursor.func.id in object_namespace_names and len(cursor.args) == 1:
-                    namespace_dict_value_cache[cursor] = True
-                    continue
-                if (cursor.func.id in reflective_read_names and len(cursor.args) in {2, 3}
-                        and isinstance(cursor.args[1], ast.Constant)
-                        and cursor.args[1].value == "__dict__"):
-                    namespace_dict_value_cache[cursor] = True
-                    continue
             literal_members = literal_member_result_values(cursor)
             if literal_members is not None:
                 children = literal_members
@@ -1090,9 +1137,7 @@ def module_dynamic_namespace(
             literal_members = literal_member_result_values(cursor)
             copied_namespace = (namespace_copy_receiver(cursor.value)
                                 if isinstance(cursor, ast.Subscript) else None)
-            if literal_members is not None:
-                children = literal_members
-            elif copied_namespace is not None:
+            if copied_namespace is not None:
                 children = (copied_namespace,)
             elif isinstance(cursor, (ast.Attribute, ast.Subscript, ast.NamedExpr)):
                 children = (cursor.value,)
@@ -1121,6 +1166,10 @@ def module_dynamic_namespace(
                             *cursor.args[1:])
             else:
                 children = ()
+            if literal_members is not None:
+                # Partial projections add possibilities; they must not erase
+                # an existing copy source or ordinary receiver possibility.
+                children = (*children, *literal_members)
             if not children:
                 import_value_cache[cursor] = False
             elif expanded:
