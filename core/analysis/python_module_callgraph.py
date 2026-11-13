@@ -886,6 +886,17 @@ def module_dynamic_namespace(
             return node.func.value
         return None
 
+    def direct_callee(node: ast.AST) -> bool:
+        parent = parents.get(node)
+        return isinstance(parent, ast.Call) and parent.func is node
+
+    def escaped_setter_receiver(node: ast.AST) -> ast.AST | None:
+        if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+                and node.attr in {"__setattr__", "__delattr__"}
+                and not direct_callee(node)):
+            return node.value
+        return None
+
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
@@ -910,12 +921,20 @@ def module_dynamic_namespace(
                     and isinstance(node.value, ast.Name)
                     and node.value.id in sys_aliases):
                 whole = True
+            receiver = escaped_setter_receiver(node)
+            while isinstance(receiver, (ast.Attribute, ast.Subscript)):
+                receiver = receiver.value
+            if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                whole = True
         elif isinstance(node, ast.Name):
             if (node.id in modules_aliases or node.id in builtin_namespace_names
                     or (isinstance(node.ctx, ast.Load) and node.id in dynamic_import_names)):
                 # A loader exposes shared modules without an ordinary
                 # import binding whose later member stores we can follow.
                 whole = True
+            if (isinstance(node.ctx, ast.Load) and node.id in reflective_write_names
+                    and not direct_callee(node)):
+                whole = True  # A saved setter can later receive an unknown object.
         elif isinstance(node, ast.Call):
             func = node.func
             for receiver in (namespace_dict_receiver(node), reflective_receiver(node)):
@@ -949,6 +968,10 @@ def module_dynamic_namespace(
                     receiver_write = False
                     while True:
                         container = parents.get(cursor)
+                        if (isinstance(container, ast.Attribute) and container.value is cursor
+                                and escaped_setter_receiver(container) is not None):
+                            receiver_write = True
+                            break
                         if (isinstance(container, ast.Call) and container.func is cursor
                                 and namespace_dict_receiver(container) is not None):
                             receiver_write = True
