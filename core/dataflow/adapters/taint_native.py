@@ -66,7 +66,7 @@ def _step_from_location(
     region = physical.get("region") or {}
     uri = artifact.get("uri") or ""
     line = region.get("startLine") or 0
-    if not uri or not isinstance(line, int) or line < 1:
+    if not uri or isinstance(line, bool) or not isinstance(line, int) or line < 1:
         return None
     return Step(
         file_path=uri,
