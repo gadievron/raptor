@@ -51,8 +51,8 @@ def test_large_views_do_not_expand_temporary_storage(dense_newlines):
         pytest.skip('requires isolated allocation tracing')
     source = ('/*' + '\n' * 20000 + '*/' if dense_newlines
               else 'int live;\n' * 100000 + '/* hide */')
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = sanitized_view_with_status(source, 'a.c')
         _, peak = tracemalloc.get_traced_memory()
     finally:
@@ -68,8 +68,8 @@ def test_dense_tiny_comments_retain_legacy_allocation_bound():
     if tracemalloc.is_tracing():
         pytest.skip('requires isolated allocation tracing')
     source = '/**/' * 20000
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = sanitized_view_with_status(source, 'a.c')
         _, peak = tracemalloc.get_traced_memory()
     finally:
@@ -92,8 +92,8 @@ def test_large_ascii_comment_avoids_per_line_string_allocation():
     if tracemalloc.is_tracing():
         pytest.skip('requires isolated allocation tracing')
     source = 'int live;\n/*' + ('a' * 80 + '\n') * 10000 + '*/\n'
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = sanitized_view_with_status(source, 'a.c')
         _, peak = tracemalloc.get_traced_memory()
     finally:
