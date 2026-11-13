@@ -52,6 +52,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 ESTIMATOR_VERSION = "audit-seeded-v1"
@@ -575,7 +577,7 @@ def append_calibration(path: Path, entry: dict[str, Any]) -> None:
                 "forecast: %s over size cap — not appending", path)
             return
         line = json.dumps(entry, sort_keys=True)
-        with open(path, "a", encoding="utf-8") as fh:
+        with preserving_stream_error(open(path, "a", encoding="utf-8")) as fh:
             fh.write(line + "\n")
             fh.flush()
             os.fsync(fh.fileno())
