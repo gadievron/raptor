@@ -17,10 +17,10 @@ from typing import Iterator
 from urllib.parse import unquote, urlsplit
 
 from core.atomic_fs import write_bytes_atomically
-from core.json import load_json
 from core.json.bounded import loads_bounded
 from core.security.capped_read import read_capped
 from core.source.beneath import open_dir_beneath, open_regular_beneath
+from core.source.gated import read_text_gated
 from core.source.streams import preserving_stream_error
 from .document import MAX_JSON_BYTES, ReportContext, ReportDocument, digest, encode
 from .options import ReportOptions
@@ -316,7 +316,10 @@ def write_summary(summary: OperatorSummary, output_dir: Path) -> None:
 def load_document(path: Path) -> ReportDocument:
     if Path(path).is_dir():
         return load_committed_report(Path(path))[1]
-    data = load_json(Path(path), max_bytes=MAX_JSON_BYTES)
+    try:
+        data = loads_bounded(read_text_gated(Path(path), MAX_JSON_BYTES), max_bytes=MAX_JSON_BYTES)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ValueError("Report document could not be loaded") from exc
     if not isinstance(data, dict):
         raise ValueError("Report document could not be loaded")
     return ReportDocument.from_dict(data)
@@ -325,7 +328,10 @@ def load_document(path: Path) -> ReportDocument:
 def load_context(path: Path) -> ReportContext:
     if Path(path).is_dir():
         return load_committed_report(Path(path))[0]
-    data = load_json(Path(path), max_bytes=MAX_JSON_BYTES)
+    try:
+        data = loads_bounded(read_text_gated(Path(path), MAX_JSON_BYTES), max_bytes=MAX_JSON_BYTES)
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ValueError("Report context could not be loaded") from exc
     return ReportContext.from_dict(data)
 
 
