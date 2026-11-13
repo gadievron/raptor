@@ -28,8 +28,8 @@ def test_conditional_file_without_definitions_avoids_dense_metadata(tmp_path):
     (tmp_path / 'a.c').write_text(source)
     # Import and helper caches should not contribute to measured workspace.
     cr._scan_definitions(tmp_path)
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         definitions = cr._scan_definitions(tmp_path)
         _, peak = tracemalloc.get_traced_memory()
     finally:
