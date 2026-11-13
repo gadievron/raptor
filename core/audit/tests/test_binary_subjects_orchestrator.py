@@ -18,7 +18,8 @@ from packages.ghidra.model import REDatabase, REFunction, REType
 
 
 @pytest.mark.slow
-def test_binary_subject_request_reaches_scheduler_continuation(tmp_path, monkeypatch, sdk_clients):
+@pytest.mark.parametrize("context_source", ["explicit", "default", "foreign"])
+def test_binary_subject_request_reaches_scheduler_continuation(tmp_path, monkeypatch, sdk_clients, context_source):
     import core.audit.binary_context as context_module
     import core.inventory.binary_builder as builder
 
@@ -57,7 +58,13 @@ def test_binary_subject_request_reaches_scheduler_continuation(tmp_path, monkeyp
         contexts.append(ctx)
         return ctx
 
-    monkeypatch.setattr(orchestrator, "_build_context", build)
+    if context_source == "explicit":
+        monkeypatch.setattr(orchestrator, "_build_context", build)
+    else:
+        recorded = db.to_dict()
+        if context_source == "foreign":
+            recorded["metadata"]["binary_sha256"] = "0" * 64
+        (out / "re-database.json").write_text(dumps_canonical(recorded))
     bundle = sdk_clients(cap=20.0, token_cap=1000000, run_dir=out)
 
     def transform(row):
@@ -87,6 +94,18 @@ def test_binary_subject_request_reaches_scheduler_continuation(tmp_path, monkeyp
         dynamic_validation=False, library_replay=False, cross_run_import=False,
         annotations_read=False, llm_budget_client=bundle.client)
     result = run_orchestrator(config, review)
+    if context_source == "foreign":
+        assert not bundle.state["requests"]
+        assert result.clean == result.findings == 0
+        assert len(result.outcomes) == 1 and result.outcomes[0].status == "deferred"
+        assert "implementation view" in result.outcomes[0].body
+        assert result.reviewed == 0
+        assert result.outcomes[0].body in result.processing_limitations
+        assert not load_entries(out, fresh=True)
+        assert not any(row.get("stage") in {"admitted", "reported"}
+                       for row in load_verified_audit_log(out))
+        assert bundle.client.reported_spend_usd == 0
+        return
     assert len(bundle.state["requests"]) == 2, "binary request did not receive one scheduler-owned continuation"
     prompts = [json.loads(req.content)["messages"] for req in bundle.state["requests"]]
     second = "\n".join(msg["content"] for msg in prompts[1] if msg["role"] == "user")
