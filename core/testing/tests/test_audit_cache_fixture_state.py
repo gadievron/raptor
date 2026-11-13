@@ -17,6 +17,7 @@ CASES = [
     ("core/audit/tests/test_compiler_tu_cache.py", "_fresh_caches", "compiler", 3),
     ("core/audit/tests/test_compile_probe.py", "_toolchain", "toolchain", 2),
     ("core/audit/tests/test_codeql_sweep_memo.py", "_fresh_memo", "codeql", 1),
+    ("core/audit/tests/test_codeql_sweep_confinement.py", "_fresh_memo", "codeql", 1),
     (
         "core/audit/tests/test_substrate_vocabulary.py",
         "_fresh_codeql_memo",
