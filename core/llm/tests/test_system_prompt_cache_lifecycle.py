@@ -227,15 +227,18 @@ def test_concurrent_cleanup_and_creation_keep_new_owner(sysprompt_cache, monkeyp
 
     monkeypatch.setattr(sysprompt_cache, "rmtree_hardened", remove_slowly)
     workers = [threading.Thread(target=cleanup), threading.Thread(target=create)]
-    try:
-        workers[0].start()
-        assert entered.wait(3), "cleanup did not start"
-        workers[1].start()
-    finally:
-        release.set()
-        for worker in workers:
-            if worker.ident is not None:
-                worker.join(timeout=3)
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads(workers, release=release.set, timeout=3):
+        try:
+            workers[0].start()
+            assert entered.wait(3), "cleanup did not start"
+            workers[1].start()
+        finally:
+            release.set()
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(timeout=3)
     assert not any(worker.is_alive() for worker in workers), "owned workers did not exit"
     assert not errors
     assert len(paths) == 1 and paths[0].read_text() == "new"
