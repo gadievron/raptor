@@ -133,6 +133,8 @@ class TestBuildIsPrivateThenPromoted:
 
 class TestSlotLockSerialises:
     def test_concurrent_same_target_builds_pay_one_build(self, tmp_path):
+        from core.testing.threads import retiring_threads
+
         # Two sessions miss the same slot at once. The slot lock
         # serialises them and the loser's double-checked reload turns
         # its miss into a hit — exactly ONE build runs.
@@ -159,20 +161,24 @@ class TestSlotLockSerialises:
             results.append(build_cpg_cached(
                 target, cache, subprocess_runner=slow_runner))
 
-        t1 = threading.Thread(target=worker)
-        t1.start()
-        assert build_started.wait(timeout=30)
-        t2 = threading.Thread(target=worker)
-        t2.start()  # queues on the slot lock while t1 builds
-        release_build.set()
-        t1.join(timeout=60)
-        t2.join(timeout=60)
-        assert len(results) == 2
-        assert build_count == 1
-        slot_cpg = _slot(cache, target) / "cpg.bin"
-        for r in results:
-            assert not r.build_failed
-            assert r.path == slot_cpg
+        workers = []
+        with retiring_threads(workers, release=release_build.set, timeout=60):
+            t1 = threading.Thread(target=worker)
+            workers.append(t1)
+            t1.start()
+            assert build_started.wait(timeout=30)
+            t2 = threading.Thread(target=worker)
+            workers.append(t2)
+            t2.start()  # queues on the slot lock while t1 builds
+            release_build.set()
+            t1.join(timeout=60)
+            t2.join(timeout=60)
+            assert len(results) == 2
+            assert build_count == 1
+            slot_cpg = _slot(cache, target) / "cpg.bin"
+            for r in results:
+                assert not r.build_failed
+                assert r.path == slot_cpg
 
 
 class TestConcurrentDifferentTargets:
