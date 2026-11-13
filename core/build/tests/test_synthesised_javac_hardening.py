@@ -22,7 +22,11 @@ import sys
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
+
+from core.build import build_detector
 from core.build.build_detector import BuildDetector
+from core.testing.module_views import module_function_view, scoped_function_imports
 
 
 def _write_java_script(tmp_path):
@@ -109,8 +113,6 @@ def test_cc_suggest_flags_passes_read_confinement(tmp_path, monkeypatch):
             stderr="",
         )
 
-    monkeypatch.setattr(shutil_mod, "which",
-                        lambda name: "/usr/bin/claude")
     monkeypatch.setattr(cc_trust, "check_repo_claude_trust",
                         lambda p: False)
     monkeypatch.setattr(cc_adapter, "cc_subprocess_env",
@@ -123,9 +125,22 @@ def test_cc_suggest_flags_passes_read_confinement(tmp_path, monkeypatch):
     with mock.patch(
         "core.build.build_detector._sandbox_run", side_effect=fake_run,
     ):
-        BuildDetector(tmp_path)._cc_suggest_flags(
-            [{"file": "a.c", "error": "missing header"}], "cpp",
-        )
+        view = module_function_view(build_detector, bindings={
+            "_owned_cc_suggest_flags": BuildDetector._cc_suggest_flags,
+        })
+        with (
+            scoped_function_imports(view, ("_owned_cc_suggest_flags",),
+                                    {"shutil": shutil_mod}) as imports,
+            pytest.MonkeyPatch.context() as scope,
+        ):
+            scope.setattr(imports.shutil, "which", lambda name: "/usr/bin/claude")
+            def suggest_flags(self, failures, language):
+                return view._owned_cc_suggest_flags(self, failures, language)
+
+            scope.setattr(BuildDetector, "_cc_suggest_flags", suggest_flags)
+            BuildDetector(tmp_path)._cc_suggest_flags(
+                [{"file": "a.c", "error": "missing header"}], "cpp",
+            )
 
     assert captured.get("restrict_reads") is True
     assert captured.get("readable_paths") == ["/opt/cc-floor"]
