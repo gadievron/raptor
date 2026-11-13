@@ -267,9 +267,9 @@ def test_teardown_snapshot_precedes_shutdown(tmp_path: Path) -> None:
 
 
 def test_teardown_no_ops_on_thread_pool() -> None:
-    pool = ThreadPoolExecutor(max_workers=1)
-    pool.submit(lambda: None).result(timeout=30)
-    _shutdown_pool_nowait(pool)  # must not raise
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(lambda: None).result(timeout=30)
+        _shutdown_pool_nowait(pool)  # must not raise
 
 
 def _report_sigterm_is_default() -> bool:
