@@ -190,8 +190,14 @@ def from_dataflow_path(
     sink = _step_from_dp_step(dp.sink)
     intermediate = tuple(_step_from_dp_step(s) for s in dp.intermediate_steps)
 
-    rule_id = getattr(dp, "rule_id", "") or "unknown"
-    message = getattr(dp, "message", "") or "(no message)"
+    rule_id = getattr(dp, "rule_id", None)
+    if rule_id is None or rule_id == "":
+        rule_id = "unknown"
+    if not isinstance(rule_id, str):
+        raise ValueError("DataflowPath.rule_id must be a string")
+    message = getattr(dp, "message", None)
+    if message is None or message == "":
+        message = "(no message)"
 
     if finding_id is None:
         finding_id = make_finding_id(rule_id, source, sink, producer=producer)
@@ -219,5 +225,5 @@ def _step_from_dp_step(s: Any) -> Step:
         line=s.line,
         column=s.column,
         snippet=s.snippet,
-        label=(s.label or None),
+        label=None if s.label is None or s.label == "" else s.label,
     )
