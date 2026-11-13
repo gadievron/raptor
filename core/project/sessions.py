@@ -1010,28 +1010,45 @@ def _ledger_lock_nb(pid: int,
                 exc_info=True)
             yield True
             return
+        failed = False
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            os.close(fd)
-            _time.sleep(interval)
-            continue
-        try:
-            held = os.fstat(fd)
-            current = os.stat(str(lock_path))
-            same = (held.st_ino == current.st_ino
-                    and held.st_dev == current.st_dev)
-        except OSError:
-            same = False
-        if same:
             try:
-                yield True
-            finally:
-                with contextlib.suppress(OSError):
-                    fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
-            return
-        os.close(fd)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                owned, fd = fd, -1
+                os.close(owned)
+                _time.sleep(interval)
+                continue
+            try:
+                held = os.fstat(fd)
+                current = os.stat(str(lock_path))
+                same = (held.st_ino == current.st_ino
+                        and held.st_dev == current.st_dev)
+            except OSError:
+                same = False
+            if same:
+                try:
+                    yield True
+                except BaseException:
+                    failed = True
+                    raise
+                finally:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except BaseException as exc:
+                        if not failed and not isinstance(exc, OSError):
+                            raise
+                return
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except BaseException:
+                    if not failed:
+                        raise
     yield False
 
 
