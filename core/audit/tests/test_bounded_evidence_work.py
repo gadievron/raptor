@@ -45,8 +45,8 @@ def test_parity_does_not_materialize_linked_or_outside_read_lists():
         pytest.skip("requires ownership of allocation tracing")
     read = FieldRead("b.c", 20, "read", "old")
     census = _census([read] * 50000)
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = detect_field_parity_deviations(census, min_cluster=3)
         _, peak = tracemalloc.get_traced_memory()
     finally:
@@ -105,8 +105,8 @@ def test_alarm_does_not_copy_unused_native_tier_items():
     review = {G2_BYPASS_KEY: ["inv"],
               "g2_invariant_bypass_tiers": {str(i): "xref_backed" for i in range(50000)}}
     _alarm({G2_BYPASS_KEY: ["warm"]})
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         record = _alarm(review)
         _, peak = tracemalloc.get_traced_memory()
     finally:
