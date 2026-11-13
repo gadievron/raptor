@@ -569,7 +569,10 @@ def run_landlock_audit(
                  out_r, out_w, err_r, err_w)
         p_go_r = p_go_w = t_ready_r = t_ready_w = -1
         out_r = out_w = err_r = err_w = -1
-        _retire_parent_resources(*(lambda fd=fd: _close_safely(fd) for fd in owned))
+        _retire_parent_resources(
+            *(lambda fd=fd: _close_safely(fd) for fd in owned),
+            primary_error=None,
+        )
 
     def _retire_config() -> None:
         nonlocal config_fd
@@ -599,6 +602,7 @@ def run_landlock_audit(
             with contextlib.suppress(OSError):
                 _kill_and_reap(pid)
 
+    _operation_error: BaseException | None = None
     try:
         audit_config = _build_audit_config(
             audit_verbose=audit_verbose,
@@ -1052,9 +1056,13 @@ def run_landlock_audit(
         )
         result.evidence_verified = evidence_ok  # type: ignore[attr-defined]
         return result
+    except BaseException as error:
+        _operation_error = error
+        raise
     finally:
         # Every callback runs, even after a pipe or child retirement interrupt.
         # Config/evidence follow both child owners; capture verification stays
         # on the existing result path and early setup closes without it.
         _retire_parent_resources(_cleanup_fds, _retire_target, _retire_tracer,
-                                 _retire_config, _retire_evidence)
+                                 _retire_config, _retire_evidence,
+                                 primary_error=_operation_error)
