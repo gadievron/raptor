@@ -83,6 +83,7 @@ from typing import TYPE_CHECKING, NoReturn
 from . import _pathpin, state
 from ._exec_signals import restore_exec_signals
 from ._stdio import preserve_output_sources as _preserve_output_sources
+from ._stdio import preserve_stdin_source as _preserve_stdin_source
 from ._retirement import retire_parent_resources as _retire_parent_resources
 from ._pipe_poll import readable_fds as _readable_fds
 from ._tracer_launch import prepare_tracer_launch
@@ -2928,71 +2929,74 @@ def run_sandboxed(
             if _capture_any:
                 os.close(out_r)  # type: ignore[arg-type]
                 os.close(err_r)  # type: ignore[arg-type]
-            # Establish stdout before stderr so STDOUT follows its final sink.
-            with _preserve_output_sources(
-                    stdout, stderr, capture_stdout=_capture_stdout,
-                    capture_stderr=_capture_stderr) as (_stdout_source, _stderr_source):
-                for _redir, _fdnum, _capture_stream, _writer in (
-                        (_stdout_source, 1, _capture_stdout, out_w),
-                        (_stderr_source, 2, _capture_stderr, err_w)):
-                    if _capture_stream:
-                        os.dup2(_writer, _fdnum)  # type: ignore[arg-type]
-                        continue
-                    if _redir is None:
-                        continue
-                    if _redir == subprocess.DEVNULL:
-                        _redirect_devnull(_fdnum, os.O_WRONLY)
-                        continue
-                    if _fdnum == 2 and _redir == subprocess.STDOUT:
-                        os.dup2(1, 2)
-                        continue
-                    _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
-                    if _rfd != _fdnum:
-                        os.dup2(_rfd, _fdnum)
-            if _capture_any:
-                os.close(out_w)  # type: ignore[arg-type]
-                os.close(err_w)  # type: ignore[arg-type]
-            # stdin: caller-supplied fd/file if any, else /dev/null (defence
-            # against tty-based escapes — a child with an inherited tty can
-            # TIOCSTI-inject or ^Z into the parent's job control). The
-            # Landlock-only path honours stdin=; the mount-ns path MUST do
-            # the same or it silently drops input (bug previously hit by
-            # packages/binary_analysis/debugger.py passing `stdin=open(...)`
-            # for gdb's crash-replay input).
-            # Map the caller's stdin= into fd 0. Handles the same cases
-            # subprocess.Popen does:
-            #   - None or subprocess.DEVNULL → /dev/null
-            #   - subprocess.PIPE without input → EOF via /dev/null for
-            #     synchronous run(). context.py converts non-None input=
-            #     into a read-only spool before native dispatch. This gives
-            #     read-EOF semantics, not a pipe descriptor for inspection.
-            #   - int fd (real)    → dup2 onto 0
-            #   - file-like object → dup2 on .fileno() onto 0
-            _use_devnull = (
-                stdin is None
-                or stdin == subprocess.DEVNULL
-                or stdin == subprocess.PIPE
-            )
-            if _use_devnull:
-                _redirect_devnull(0, os.O_RDONLY)
-            else:
-                try:
-                    stdin_fd = stdin if isinstance(stdin, int) else stdin.fileno()
-                    os.dup2(stdin_fd, 0)
-                    # Close the original fd so the child doesn't inherit a
-                    # duplicate (the caller's file object may not have
-                    # O_CLOEXEC, in which case execvpe would leave both
-                    # fds pointing at the same file). dup2 clears CLOEXEC
-                    # on fd 0, which is what we want — stdin stays open
-                    # across exec. A descriptor explicitly in pass_fds
-                    # must also survive under its original number.
-                    if stdin_fd != 0 and stdin_fd not in pass_fds:
-                        try:
-                            os.close(stdin_fd)
-                        except OSError:
-                            pass
-                except (AttributeError, OSError):
+            with _preserve_stdin_source(stdin) as (_stdin_source, _owned_stdin):
+                # Establish stdout before stderr so STDOUT follows its final sink.
+                with _preserve_output_sources(
+                        stdout, stderr, capture_stdout=_capture_stdout,
+                        capture_stderr=_capture_stderr) as (_stdout_source, _stderr_source):
+                    for _redir, _fdnum, _capture_stream, _writer in (
+                            (_stdout_source, 1, _capture_stdout, out_w),
+                            (_stderr_source, 2, _capture_stderr, err_w)):
+                        if _capture_stream:
+                            os.dup2(_writer, _fdnum)  # type: ignore[arg-type]
+                            continue
+                        if _redir is None:
+                            continue
+                        if _redir == subprocess.DEVNULL:
+                            _redirect_devnull(_fdnum, os.O_WRONLY)
+                            continue
+                        if _fdnum == 2 and _redir == subprocess.STDOUT:
+                            os.dup2(1, 2)
+                            continue
+                        _rfd = _redir if isinstance(_redir, int) else _redir.fileno()
+                        if _rfd != _fdnum:
+                            os.dup2(_rfd, _fdnum)
+                if _capture_any:
+                    os.close(out_w)  # type: ignore[arg-type]
+                    os.close(err_w)  # type: ignore[arg-type]
+                # stdin: caller-supplied fd/file if any, else /dev/null (defence
+                # against tty-based escapes — a child with an inherited tty can
+                # TIOCSTI-inject or ^Z into the parent's job control). The
+                # Landlock-only path honours stdin=; the mount-ns path MUST do
+                # the same or it silently drops input (bug previously hit by
+                # packages/binary_analysis/debugger.py passing `stdin=open(...)`
+                # for gdb's crash-replay input).
+                # Map the caller's stdin= into fd 0. Handles the same cases
+                # subprocess.Popen does:
+                #   - None or subprocess.DEVNULL → /dev/null
+                #   - subprocess.PIPE without input → EOF via /dev/null for
+                #     synchronous run(). context.py converts non-None input=
+                #     into a read-only spool before native dispatch. This gives
+                #     read-EOF semantics, not a pipe descriptor for inspection.
+                #   - int fd (real)    → dup2 onto 0
+                #   - file-like object → dup2 on .fileno() onto 0
+                _use_devnull = (
+                    _stdin_source is None
+                    or _stdin_source == subprocess.DEVNULL
+                    or _stdin_source == subprocess.PIPE
+                )
+                if _use_devnull:
                     _redirect_devnull(0, os.O_RDONLY)
+                else:
+                    try:
+                        stdin_fd = _stdin_source if isinstance(_stdin_source, int) else _stdin_source.fileno()
+                        os.dup2(stdin_fd, 0)
+                        # Close the original fd so the child doesn't inherit a
+                        # duplicate (the caller's file object may not have
+                        # O_CLOEXEC, in which case execvpe would leave both
+                        # fds pointing at the same file). dup2 clears CLOEXEC
+                        # on fd 0, which is what we want — stdin stays open
+                        # across exec. A descriptor explicitly in pass_fds
+                        # must also survive under its original number.
+                        # The surrounding context retires its temporary once.
+                        if (stdin_fd != 0 and stdin_fd not in pass_fds
+                                and stdin_fd != _owned_stdin):
+                            try:
+                                os.close(stdin_fd)
+                            except OSError:
+                                pass
+                    except (AttributeError, OSError):
+                        _redirect_devnull(0, os.O_RDONLY)
             # New session → no controlling tty. Honoured only when caller
             # explicitly or implicitly opts in — subprocess.run defaults to
             # start_new_session=False (session inherited) and callers relying
