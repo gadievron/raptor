@@ -1012,6 +1012,12 @@ def module_dynamic_namespace(
             literal_selection_cache[cursor] = selected
         return literal_selection_cache[value]
 
+    def literal_dictionary_keys(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        dictionary = selected_literal_value(value)
+        if isinstance(dictionary, ast.Dict):
+            return tuple(key for key in dictionary.keys if key is not None)
+        return None
+
     def container_member_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         members: list[ast.AST] = []
         pending = [(value, False)]
@@ -1055,6 +1061,10 @@ def module_dynamic_namespace(
                     if sequence_values is not None:
                         recognised = True
                         members.extend(sequence_values)
+                    dictionary_keys = literal_dictionary_keys(container.args[0])
+                    if dictionary_keys is not None:
+                        recognised = True
+                        members.extend(dictionary_keys)
                 if container.func.id in mapping_copy_names:
                     pair_values = explicit_pair_values(container.args[0])
                     if pair_values is not None:
