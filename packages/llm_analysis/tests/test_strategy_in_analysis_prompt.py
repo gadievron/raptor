@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from core.testing.module_views import module_function_view
+from packages.llm_analysis.prompts import analysis
 from packages.llm_analysis.prompts.analysis import (
     build_analysis_prompt_bundle,
     build_analysis_prompt_bundle_from_finding,
@@ -223,17 +225,17 @@ class TestRobustness:
                 raise ImportError("substrate missing")
             return real_import(name, *args, **kwargs)
 
-        with patch.object(builtins, "__import__", fake_import):
-            bundle = build_analysis_prompt_bundle(
-                rule_id="x", level="warning",
-                file_path="src/foo.py",
-                start_line=1, end_line=5,
-                message="m",
-                cwe_id="CWE-78",
-            )
-            sys = _system_message(bundle)
-            # Base prompt intact.
-            assert "ASSUME-EXPLOIT" in sys
+        owner = module_function_view(analysis, import_hook=fake_import)
+        bundle = owner.build_analysis_prompt_bundle(
+            rule_id="x", level="warning",
+            file_path="src/foo.py",
+            start_line=1, end_line=5,
+            message="m",
+            cwe_id="CWE-78",
+        )
+        sys = _system_message(bundle)
+        # Base prompt intact.
+        assert "ASSUME-EXPLOIT" in sys
 
 
 # ---------------------------------------------------------------------------
