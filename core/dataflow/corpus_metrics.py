@@ -75,7 +75,15 @@ def compute(csv_path: Path) -> Metrics:
         columns = reader.fieldnames or []
         if len(columns) != len(set(columns)):
             raise ValueError("duplicate CSV column names")
+        seen_ids: set[str] = set()
         for row in reader:
+            if "finding_id" in columns:
+                finding_id = row.get("finding_id")
+                if not isinstance(finding_id, str) or not finding_id.strip():
+                    raise ValueError(f"invalid finding_id at CSV line {reader.line_num}")
+                if finding_id in seen_ids:
+                    raise ValueError(f"duplicate finding_id at CSV line {reader.line_num}: {finding_id!r}")
+                seen_ids.add(finding_id)
             label = row["label_verdict"]
             v = row["validator_label"]
             if label not in VALID_VERDICTS:

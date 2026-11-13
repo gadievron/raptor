@@ -13,8 +13,8 @@ def _write(path, categories, label=VERDICT_FALSE_POSITIVE):
     with path.open("w", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=CSV_HEADER)
         writer.writeheader()
-        for category in categories:
-            writer.writerow({**dict.fromkeys(CSV_HEADER, ""), "label_verdict": label,
+        for index, category in enumerate(categories):
+            writer.writerow({**dict.fromkeys(CSV_HEADER, ""), "finding_id": f"fixture-{index}", "label_verdict": label,
                              "validator_label": VERDICT_TRUE_POSITIVE, "fp_category": category})
 
 
