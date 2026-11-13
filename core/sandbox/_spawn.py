@@ -1784,6 +1784,14 @@ def run_sandboxed(
     and refer to the same resources until this synchronous call returns;
     callers must not close/replace them concurrently with setup or exec.
     """
+    # Validate before acquiring owners or allowing target execution.
+    # Effective per-stream capture ceiling: callers that only consume
+    # bounded tails (SandboxHandle.exec keeps kilobytes) request a
+    # tighter transient bound than the 64 MiB default; never above
+    # the module ceiling.
+    _capture_cap = _CAPTURE_CAP
+    if max_capture_bytes is not None:
+        _capture_cap = max(0, min(int(max_capture_bytes), _CAPTURE_CAP))
     # Non-image cwd follows subprocess semantics, relative to this caller.
     # The later pivot changes cwd to /; retain the original base first.
     # Empty cwd remains an error, and image cwd belongs to the image view.
@@ -4545,13 +4553,6 @@ def run_sandboxed(
     # .raptor-sbx-* dir under /tmp.
     stdout_buf = b"" if _capture_any else None
     stderr_buf = b"" if _capture_any else None
-    # Effective per-stream capture ceiling: callers that only consume
-    # bounded tails (SandboxHandle.exec keeps kilobytes) request a
-    # tighter transient bound than the 64 MiB default; never above
-    # the module ceiling.
-    _capture_cap = _CAPTURE_CAP
-    if max_capture_bytes is not None:
-        _capture_cap = max(0, min(int(max_capture_bytes), _CAPTURE_CAP))
     _truncated = {1: False, 2: False}
     # Raw wait-status once the capture loop's exit poll reaps the
     # child (None = not yet reaped there).
