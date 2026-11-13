@@ -1166,10 +1166,14 @@ def module_dynamic_namespace(
                   and cursor.func.id in set_constructor_names
                   and len(cursor.args) == 1 and not cursor.keywords):
                 kind, sources = ast.Set, (cursor.args[0],)
-            elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add)
-                  and isinstance(cursor.left, ast.List) and isinstance(cursor.right, ast.List)
-                  and type(cursor.left) is type(cursor.right)):
-                kind, sources = ast.List, (cursor.left, cursor.right)
+            elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Add):
+                operands = (cursor.left, cursor.right)
+                if not expanded:
+                    pending.append((cursor, True))
+                    pending.extend((operand, False) for operand in operands)
+                    continue
+                if all(collection_operation_cache[operand][0] is ast.List for operand in operands):
+                    kind, sources = ast.List, operands
             elif isinstance(cursor, ast.BinOp) and isinstance(cursor.op, ast.Mult):
                 for source, count in ((cursor.left, cursor.right), (cursor.right, cursor.left)):
                     if (isinstance(source, ast.List) and isinstance(count, ast.Constant)
