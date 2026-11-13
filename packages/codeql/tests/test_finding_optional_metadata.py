@@ -259,3 +259,37 @@ def test_unavailable_descriptor_name_retains_readable_rule_identity(tmp_path, na
     assert any(expected in message.content for message in bundle.messages)
     assert finding.rule_id == result['ruleId']
     assert json.loads(path.read_text())['runs'][0] == run
+
+
+@pytest.mark.parametrize('message,expected', [
+    pytest.param(['unavailable'], '', id='array-message'),
+    pytest.param('unavailable', '', id='text-wrapper'),
+    pytest.param({'text': []}, '', id='array-text-field'),
+    pytest.param({'text': None}, '', id='null-text-field'),
+    pytest.param({'id': 'unresolved-template'}, '', id='unresolved-id'),
+    pytest.param({'text': 'Owned warning'}, 'Owned warning', id='valid-text'),
+])
+def test_unavailable_message_text_preserves_selected_identity_and_source(tmp_path, message, expected):
+    from core.security.prompt_defense_profiles import CONSERVATIVE
+    from core.security.prompt_envelope import UntrustedBlock, build_prompt
+    from packages.codeql.tests.test_finding_selection import _located_result, _run, _write
+
+    result = _located_result()
+    result['message'] = message
+    run = _run(result)
+    path = _write(tmp_path, 'message-shape.sarif', run)
+    selected, count, duplicates = select_findings_for_analysis([path], 1)
+    assert (len(selected), count, duplicates) == (1, 1, 0)
+    parser = object.__new__(AutonomousCodeQLAnalyzer)
+
+    finding = parser.parse_sarif_finding(selected[0].result, selected[0].run)
+
+    assert finding.message == expected
+    bundle = build_prompt(system='Owned message control', profile=CONSERVATIVE,
+                          untrusted_blocks=(UntrustedBlock(content=finding.message,
+                                                           kind='scanner-message', origin='owned'),))
+    assert bundle.messages
+    assert finding.rule_id == result['ruleId']
+    assert finding.file_path == result['locations'][0]['physicalLocation']['artifactLocation']['uri']
+    assert finding.start_line == result['locations'][0]['physicalLocation']['region']['startLine']
+    assert json.loads(path.read_text())['runs'][0] == run
