@@ -852,7 +852,7 @@ def module_dynamic_namespace(
     def namespace_dict_receiver(node: ast.AST) -> ast.AST | None:
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                 and node.func.attr in {"update", "clear", "pop", "popitem", "setdefault",
-                                       "__setitem__", "__delitem__"}
+                                       "__setitem__", "__delitem__", "__ior__", "__init__"}
                 and isinstance(node.func.value, ast.Attribute)
                 and node.func.value.attr == "__dict__"):
             return node.func.value.value
