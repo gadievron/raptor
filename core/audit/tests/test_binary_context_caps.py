@@ -58,3 +58,44 @@ def test_adjacency_keeps_reference_identity_order_and_append_invalidation():
     assert rebuilt_in is not incoming
     assert rebuilt_out[main.address][-1] is extra
     assert rebuilt_in[0x9999] == [extra]
+
+
+@pytest.mark.parametrize("change", ["replace", "mutate", "reorder"])
+def test_adjacency_rebuilds_after_same_length_edge_change(change):
+    functions = [REFunction(name=name, address=address, size=64, source_tool="fixture")
+                 for name, address in [("target", 0x1000), ("first", 0x2000), ("second", 0x3000)]]
+    target, first, second = functions
+    db = REDatabase(source_tool="fixture", binary_path="/owned/module.bin", functions=functions,
+                    xrefs=[REXref(from_addr=first.address + 4, to_addr=target.address, kind="call"),
+                           REXref(from_addr=second.address + 4, to_addr=target.address, kind="call")])
+    assert [row["name"] for row in context._binary_callers(db, target)] == ["first", "second"]
+    original_count = len(db.xrefs)
+    if change == "replace":
+        db.xrefs[0] = REXref(from_addr=first.address + 4, to_addr=second.address, kind="call")
+        expected = ["second"]
+    elif change == "mutate":
+        db.xrefs[0].kind = "data"
+        expected = ["second"]
+    else:
+        db.xrefs.reverse()
+        expected = ["second", "first"]
+    assert len(db.xrefs) == original_count
+    assert [row["name"] for row in context._binary_callers(db, target)] == expected
+    incoming, _ = context._xref_call_adjacency(db)
+    assert incoming[target.address] == [ref for ref in db.xrefs if ref.kind == "call" and ref.to_addr == target.address]
+
+
+def test_adjacency_replaces_equal_edge_with_current_object():
+    db, main = _database(False)
+    original = db.xrefs[0]
+    incoming, outgoing = context._xref_call_adjacency(db)
+    replacement = REXref(from_addr=original.from_addr, to_addr=original.to_addr, kind=original.kind)
+    assert replacement == original and replacement is not original
+    db.xrefs[0] = replacement
+    rebuilt_in, rebuilt_out = context._xref_call_adjacency(db)
+    assert rebuilt_in is not incoming and rebuilt_out is not outgoing
+    assert rebuilt_out[main.address][0] is replacement
+    assert rebuilt_in[replacement.to_addr][0] is replacement
+    # An unchanged subsequent call reuses the rebuilt index by identity.
+    repeated_in, repeated_out = context._xref_call_adjacency(db)
+    assert repeated_in is rebuilt_in and repeated_out is rebuilt_out
