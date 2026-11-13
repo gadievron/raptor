@@ -836,6 +836,7 @@ class QueryRunner:
             if not isinstance(runs, list) or any(
                 not isinstance(run, dict)
                 or not isinstance(run.get("results", []), list)
+                or any(not isinstance(row, dict) for row in run.get("results", []))
                 for run in runs
             ):
                 # rc==0 but no readable SARIF: a missing / oversized /
@@ -1648,6 +1649,8 @@ class QueryRunner:
                 return None
             results = run.get("results", [])
             if not isinstance(results, list):
+                return None
+            if any(not isinstance(result, dict) for result in results):
                 return None
             total += len(results)
         return total
