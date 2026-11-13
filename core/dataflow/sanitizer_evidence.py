@@ -49,11 +49,13 @@ if TYPE_CHECKING:
 SCHEMA_VERSION = 1
 
 
-def _coerce_float(v: Any, default: float = 0.0) -> float:
+def _coerce_float(v: Any) -> float:
+    if isinstance(v, bool):
+        raise ValueError("confidence must be numeric, not boolean")
     try:
         return float(v)
-    except (TypeError, ValueError):
-        return default
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("confidence must be a number in [0, 1]") from exc
 
 
 SEMANTICS_SQL_ESCAPE = "sql_escape"
@@ -162,7 +164,7 @@ class CandidateValidator:
                 f"{sorted(VALID_EXTRACTION_PROVENANCE)!r}"
             )
             raise ValueError(msg)
-        if not (0.0 <= self.confidence <= 1.0):
+        if isinstance(self.confidence, bool) or not (0.0 <= self.confidence <= 1.0):
             msg = f"confidence must be in [0, 1], got {self.confidence!r}"
             raise ValueError(msg)
         if isinstance(self.source_line, bool) or not isinstance(self.source_line, int) or self.source_line < 1:
