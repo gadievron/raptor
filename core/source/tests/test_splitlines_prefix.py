@@ -49,8 +49,8 @@ def test_large_unused_tail_is_not_split_or_copied():
     if tracemalloc.is_tracing():
         pytest.skip("requires ownership of allocation tracing")
     text = "header\n" * 20 + "unused tail\n" * 100000
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         result = splitlines_prefix(text, 20)
         _, peak = tracemalloc.get_traced_memory()
     finally:
