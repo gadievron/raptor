@@ -562,6 +562,8 @@ def assemble_binary_context(
         except (OSError, ValueError, KeyError):
             logger.warning("could not select analysis cache", exc_info=True)
 
+    analysis_projection = database_projection_digest(db, _MAX_REDB_BYTES) if db is not None else None
+
     item = _find_item(checklist, file_path, function_name)
     address = (item or {}).get("address")
     if address is None:
@@ -706,6 +708,12 @@ def assemble_binary_context(
 
     # Keep the original physical version through assembly. Never recapture a
     # changed module as if it produced the implementation view already read.
+    analysis_current = (analysis_projection is None or
+                        database_projection_digest(db, _MAX_REDB_BYTES) == analysis_projection)
+    ctx["_binary_analysis_database"] = db if analysis_current else None
+    # Retain a known original digest even after assembly drift. It must refuse
+    # that binding, rather than acquiring legacy unknown-projection capability.
+    ctx["_binary_analysis_projection_sha256"] = analysis_projection
     ctx["_binary_module_snapshot"] = (module_snapshot if module_snapshot is not None
                                       and module_snapshot.current() else None)
     return ctx

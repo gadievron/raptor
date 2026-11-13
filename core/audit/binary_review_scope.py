@@ -173,6 +173,8 @@ class BinaryInputIdentity:
 
     The physical version is an in-run observation. The view digest covers
     supplied raw text, not its postfit delivery or machine-code fidelity.
+    A known analysis digest conservatively versions the full parsed database;
+    it does not authenticate recovered facts or external context inputs.
     """
     module_sha256: str
     module_version: tuple[int, ...]
@@ -180,6 +182,7 @@ class BinaryInputIdentity:
     size: int
     representation: str
     view_sha256: str
+    analysis_sha256: str | None = None
     domain: str = field(default="binary_view", init=False)
 
     def __post_init__(self):
@@ -189,7 +192,9 @@ class BinaryInputIdentity:
                 or any(type(value) is not int for value in self.module_version)
                 or type(self.address) is not int or self.address < 0
                 or type(self.size) is not int or self.size <= 0
-                or self.representation not in ("decompilation", "disassembly")):
+                or self.representation not in ("decompilation", "disassembly")
+                or (self.analysis_sha256 is not None and
+                    (not isinstance(self.analysis_sha256, str) or _SHA256.fullmatch(self.analysis_sha256) is None))):
             raise ValueError("binary identity requires complete original input stamps")
 
 
@@ -197,7 +202,9 @@ def binary_view_anchor(identity: BinaryInputIdentity | None) -> str | None:
     """Persist view text identity, without turning its physical epoch into proof."""
     if not isinstance(identity, BinaryInputIdentity):
         return None
-    return (f"bin:view1:{identity.representation}:{identity.view_sha256}:"
+    prefix = (f"bin:inputs1:{identity.analysis_sha256}" if identity.analysis_sha256 is not None
+              else "bin:view1")
+    return (f"{prefix}:{identity.representation}:{identity.view_sha256}:"
             f"{identity.module_sha256}:{identity.address:x}:{identity.size:x}")
 
 
@@ -226,9 +233,22 @@ def capture_binary_input_identity(ctx: dict, scope: BinaryReviewPublicationScope
             or not isinstance(representation, str) or representation not in ("decompilation", "disassembly")
             or not scope.module.current()):
         return None
+    analysis = ctx.get("_binary_analysis_projection_sha256")
+    # Unknown projections retain legacy live view-only review capability, but
+    # their view1 anchors never earn current automatic cache credit. Losing a
+    # previously known digest still changes the immutable identity and refuses
+    # the original scope; this is not a known-to-unknown downgrade.
+    if analysis is not None:
+        from .binary_context import _MAX_REDB_BYTES
+        from .redb_read_scope import database_projection_digest
+        database = ctx.get("_binary_analysis_database")
+        if (not isinstance(analysis, str) or _SHA256.fullmatch(analysis) is None
+                or database is None or database_projection_digest(database, _MAX_REDB_BYTES) != analysis):
+            return None
     try:
         return BinaryInputIdentity(scope.module.sha256, scope.module.version,
-            scope.address, scope.size, representation, sha256(source.encode("utf-8")).hexdigest())
+            scope.address, scope.size, representation, sha256(source.encode("utf-8")).hexdigest(),
+            analysis_sha256=analysis)
     except (UnicodeEncodeError, ValueError):
         return None
 

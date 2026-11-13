@@ -2376,7 +2376,7 @@ def _build_covered_set(
                 continue
             stored_hash = fa.get("hash")
             if (file_path.startswith("binary:") and tool not in {"mark", "annotations"}
-                    and (not isinstance(stored_hash, str) or not stored_hash.startswith("bin:view1:")
+                    and (not isinstance(stored_hash, str) or not stored_hash.startswith("bin:inputs1:")
                          or (_binary_view_hashes or {}).get(make_function_key(file_path, func_name))
                             != stored_hash)):
                 stale_binary_rows += 1
@@ -4005,7 +4005,7 @@ def _verify_entries_fold(
                     producer == "mark" and getattr(entry, "model", None) == "operator")
         if (isinstance(entry.file, str) and entry.file.startswith("binary:") and not operator
                 and (not isinstance(entry.source_hash, str)
-                     or not entry.source_hash.startswith("bin:view1:")
+                     or not entry.source_hash.startswith("bin:inputs1:")
                      or (binary_view_hashes or {}).get(key) != entry.source_hash)):
             continue
         if entry.source_hash and entry.source_hash.startswith("bin:"):
