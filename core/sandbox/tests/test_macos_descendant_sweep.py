@@ -208,6 +208,7 @@ class _FakePopen:
     """Stand-in for the seatbelt shim process — never spawns."""
 
     behaviour = "normal"
+    stdin = stdout = stderr = None
 
     def __init__(self, cmd, **kwargs):
         self.cmd = cmd

@@ -1248,6 +1248,7 @@ def run_sandboxed(cmd: list[str], *,
     status_r = status_w = death_r = death_w = None
     _status_bytes = b""
     _launched = False
+    _abort_reap_unconfirmed = False
 
     # Parent-copy fd closes, exactly once per NUMBER: the teardown
     # path closes death_w to fire the shim's death-pipe watcher, and
@@ -1298,7 +1299,7 @@ def run_sandboxed(cmd: list[str], *,
 
     def _finish_parent_status() -> None:
         nonlocal _status_bytes
-        if _launched:
+        if _launched and not _abort_reap_unconfirmed:
             _status_bytes = _harvest_status()
         else:
             _retire_parent_resources(
@@ -1458,76 +1459,71 @@ def run_sandboxed(cmd: list[str], *,
         # timeout path fire the DESIGNED teardown channel first — closing
         # death_w makes the still-alive shim killpg the sandbox group and
         # exit — with a killpg of the shim's own session as the backstop.
-        def _teardown_shim_tree(process) -> None:
-            """Kill the shim and its sandbox subtree on timeout/abort."""
-            # 0. Snapshot the process table FIRST, while the tree is still
-            #    alive: a fork+setsid descendant has left both kill groups
-            #    below, but its ppid chain back to the shim is intact until
-            #    its ancestors die — after the kills it reparents to
-            #    launchd and a fresh snapshot can no longer attribute it.
-            try:
-                _live_table = _ps_snapshot()
-            except Exception:
-                _live_table = None
-            # 1. Death-pipe EOF: the shim's watcher loop (0.1s poll) reads
-            #    EOF and SIGKILLs the sandbox process group + child, then
-            #    exits. This reaches the sandbox-exec pgrp, which is NOT
-            #    in the shim's own process group.
-            _close_parent_fd_once(death_w)
-            try:
-                process.wait(timeout=5)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
-            # 2. Backstop: SIGKILL the shim's whole session-leader group
-            #    (start_new_session=True → pgid == shim pid; killpg cannot
-            #    reach this orchestrator). Without a new session the shim
-            #    shares our pgrp — fall back to killing just the shim.
-            if start_new_session:
+        def _teardown_shim_tree(process, failure: BaseException) -> None:
+            """Attempt every abort owner without replacing the original error."""
+            nonlocal _abort_reap_unconfirmed
+            issues = []
+
+            def attempt(callback, label):
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError, OSError):
+                    return True, callback()
+                except BaseException as error:
+                    issues.append(label + ": " + type(error).__name__)
+                    return False, None
+
+            # Capture lineage before killing ancestors. A cancelled snapshot
+            # must not prevent the independent death-pipe and kill backstops.
+            snapshot_ok, live_table = attempt(_ps_snapshot, "snapshot")
+            group_ok = True
+            death_closed, _ = attempt(
+                lambda: _close_parent_fd_once(death_w), "death pipe")
+            confirmed, _ = attempt(lambda: process.wait(timeout=5), "grace reap")
+            if start_new_session:
+                group_ok, _ = attempt(
+                    lambda: os.killpg(process.pid, signal.SIGKILL), "group kill")
+            kill_ok, _ = attempt(process.kill, "shim kill")
+            if not confirmed:
+                confirmed, _ = attempt(lambda: process.wait(timeout=10), "final reap")
+            _abort_reap_unconfirmed = not confirmed
+
+            # A killed process is not necessarily reaped. Its status writer
+            # may still be open: never block harvesting that channel when
+            # reap is unconfirmed. The final parent owner closes both ends.
+            group = None
+            status_ok = True
+            parse_ok = True
+            if confirmed:
+                status_ok, report = attempt(_harvest_status, "status harvest")
+                if report is not None:
+                    parse_ok, group = attempt(
+                        lambda: _parse_group_report(report), "group report")
+            sweep_ok, _ = attempt(lambda: _sweep_descendants(
+                process.pid, live_snapshot=live_table,
+                extra_pgids=(group,) if group else ()), "descendant sweep")
+
+            pending = []
+            for attr in ("stdout", "stderr", "stdin"):
+                stream = getattr(process, attr, None)
+                if stream is not None:
+                    closed, _ = attempt(stream.close, attr + " close")
+                    if not closed and not stream.closed:
+                        pending.append(stream)
+                    # No implicit Popen.__exit__ may repeat a failed close
+                    # or perform an unbounded wait while unwinding this abort.
+                    setattr(process, attr, None)
+            setattr(failure, "sandbox_cleanup_pending",
+                    not all((death_closed, confirmed, snapshot_ok, group_ok,
+                             kill_ok, status_ok, parse_ok, sweep_ok)) or bool(pending))
+            if not confirmed:
+                setattr(failure, "sandbox_process", process)
+                issues.append("shim reap unconfirmed; retry sandbox_process.wait()")
+            if pending:
+                setattr(failure, "sandbox_pipes", pending)
+            for issue in issues:
+                try:
+                    failure.add_note("macOS sandbox cleanup: " + issue)
+                except BaseException:
                     pass
-            try:
-                process.kill()
-            except OSError:
-                pass
-            # 3. Post-wait descendant sweep, independent of process group:
-            #    catches setsid escapees the two killpg's above cannot
-            #    reach. The shim is dead by now, so the status channel is
-            #    drainable — the G report lets the sweep attribute sandbox
-            #    process-group members even though their ppid link to the
-            #    (dead) shim is gone. Best-effort with logging — teardown
-            #    must never raise over sweep failure.
-            try:
-                _grp = _parse_group_report(_harvest_status())
-                _sweep_descendants(process.pid, live_snapshot=_live_table,
-                                   extra_pgids=(_grp,) if _grp else ())
-            except Exception:
-                logger.warning(
-                    "macOS sandbox teardown: descendant sweep failed",
-                    exc_info=True,
-                )
-            # 4. The abort exception — not a cleanup crash — must reach
-            #    the caller: after this teardown returns, the re-raise
-            #    unwinds through Popen.__exit__, which re-closes whatever
-            #    file objects are still on .stdout/.stderr/.stdin. A pipe
-            #    fd invalidated behind the file object's back (observed
-            #    on a darwin CI host: EBADF out of __exit__'s
-            #    stdout.close() on the fail-closed audit-scoping refusal,
-            #    replacing the SandboxSetupError the caller was owed)
-            #    turns that close into a crash that masks the refusal.
-            #    Close each stream via its file object exactly once with
-            #    OSError suppressed, then detach the attribute so
-            #    __exit__ skips it. The abort paths never return output,
-            #    so nothing downstream reads these streams.
-            for _attr in ("stdout", "stderr", "stdin"):
-                _stream = getattr(process, _attr, None)
-                if _stream is not None:
-                    try:
-                        _stream.close()
-                    except OSError:
-                        pass
-                    setattr(process, _attr, None)
 
         _popen_stdin = subprocess.PIPE if input is not None else stdin
         # Loader-variable quarantine: the seatbelt shim is an UNSANDBOXED
@@ -1559,7 +1555,7 @@ def run_sandboxed(cmd: list[str], *,
                     "never point grants at attacker-writable parents.",
                     setup_category="P",
                 )
-        with subprocess.Popen(
+        _process = subprocess.Popen(
             sandbox_cmd,
             env=child_env,
             cwd=cwd,
@@ -1572,65 +1568,60 @@ def run_sandboxed(cmd: list[str], *,
             preexec_fn=preexec,
             start_new_session=start_new_session,
             pass_fds=(status_w, death_r, *tuple(pass_fds or ())),
-        ) as _process:
-            _launched = True
-            try:
-                # Register the workload root with the audit streamer's
-                # scope gate: everything the sandboxed workload does
-                # descends from the shim process, so registering its
-                # PID (plus lineage widening inside the streamer) is
-                # what keeps host-wide kext events from unrelated
-                # sandboxed processes out of this run's JSONL. When
-                # the run's evidence MUST be attributable — observe
-                # mode feeds derived allowlists, audit_required is an
-                # explicit fail-closed contract — a registration
-                # failure refuses the run rather than proceeding
-                # unscoped (the raise lands in the BaseException arm
-                # below, which tears down the shim tree).
-                if audit_streamer is not None:
-                    try:
-                        audit_streamer.register_target_pid(_process.pid)
-                    except Exception as _scope_exc:
-                        logger.warning(
-                            "seatbelt audit: failed to register the "
-                            "workload root with the log streamer; "
-                            "audit records will be dropped as "
-                            "unattributable",
-                            exc_info=True,
-                        )
-                        if observe_mode or audit_required:
-                            from .errors import SandboxSetupError
-                            raise SandboxSetupError(
-                                f"audit scoping could not be "
-                                f"established for the sandboxed "
-                                f"workload "
-                                f"({type(_scope_exc).__name__}: "
-                                f"{_scope_exc}) — refusing to run "
-                                f"with host-wide, unattributable "
-                                f"audit evidence.",
-                                "check the log-streamer state, or "
-                                "drop observe/audit_required to "
-                                "accept unattributed degradation.",
-                            ) from _scope_exc
-                _stdout, _stderr = _process.communicate(
-                    input, timeout=timeout,
-                )
-            except subprocess.TimeoutExpired:
-                _teardown_shim_tree(_process)
+        )
+        _launched = True
+        try:
+            # Register the workload root with the audit streamer's
+            # scope gate: everything the sandboxed workload does
+            # descends from the shim process, so registering its
+            # PID (plus lineage widening inside the streamer) is
+            # what keeps host-wide kext events from unrelated
+            # sandboxed processes out of this run's JSONL. When
+            # the run's evidence MUST be attributable — observe
+            # mode feeds derived allowlists, audit_required is an
+            # explicit fail-closed contract — a registration
+            # failure refuses the run rather than proceeding
+            # unscoped (the raise lands in the BaseException arm
+            # below, which tears down the shim tree).
+            if audit_streamer is not None:
                 try:
-                    _process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    logger.debug(
-                        "macOS sandbox: killed shim process did "
-                        "not exit within 10s; abandoning reap",
+                    audit_streamer.register_target_pid(_process.pid)
+                except Exception as _scope_exc:
+                    logger.warning(
+                        "seatbelt audit: failed to register the "
+                        "workload root with the log streamer; "
+                        "audit records will be dropped as "
+                        "unattributable",
+                        exc_info=True,
                     )
-                raise
-            except BaseException:
-                # Mirror subprocess.run: never leave the tree running
-                # on KeyboardInterrupt or any other abort either.
-                _teardown_shim_tree(_process)
-                raise
+                    if observe_mode or audit_required:
+                        from .errors import SandboxSetupError
+                        raise SandboxSetupError(
+                            f"audit scoping could not be "
+                            f"established for the sandboxed "
+                            f"workload "
+                            f"({type(_scope_exc).__name__}: "
+                            f"{_scope_exc}) — refusing to run "
+                            f"with host-wide, unattributable "
+                            f"audit evidence.",
+                            "check the log-streamer state, or "
+                            "drop observe/audit_required to "
+                            "accept unattributed degradation.",
+                        ) from _scope_exc
+            _stdout, _stderr = _process.communicate(
+                input, timeout=timeout,
+            )
             _retcode = _process.poll()
+        except BaseException as failure:
+            _teardown_shim_tree(_process, failure)
+            raise
+        # Successful communicate has already reaped the child. Retire streams
+        # without an implicit abort-time Popen context owner.
+        _retire_parent_resources(
+            *(stream.close for stream in (_process.stdout, _process.stderr, _process.stdin)
+              if stream is not None),
+            primary_error=None,
+        )
         # Post-wait descendant sweep on the NORMAL-completion path
         # too — pre-fix, normal completion just reaped the shim and a
         # fork+setsid descendant survived the run outright. By this
