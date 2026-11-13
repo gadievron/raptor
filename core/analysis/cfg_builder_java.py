@@ -599,6 +599,12 @@ def _payload_from_local_var_decl(decl, resolver):
     uses: set[str] = set()
     calls: set[str] = set()
     css: list[CallSite] = []
+    # Declarators share a CFG node. An embedded write in another
+    # initializer must not borrow an earlier call's return identity.
+    rebound: set[str] = set()
+    for child in decl.children:
+        if child.type == _VAR_DECLARATOR:
+            rebound |= _embedded_store_names(child.child_by_field_name("value"))
     for child in decl.children:
         if child.type != _VAR_DECLARATOR:
             continue
@@ -608,7 +614,7 @@ def _payload_from_local_var_decl(decl, resolver):
             defs.add(tgt)
         val = child.child_by_field_name("value")
         if val is not None:
-            assigned = frozenset({tgt}) if tgt else frozenset()
+            assigned = frozenset({tgt}) if tgt and tgt not in rebound else frozenset()
             css.extend(_walk_call_sites(
                 val, resolver, assigned_for_root=assigned))
             uses |= _walk_uses(val, resolver)
