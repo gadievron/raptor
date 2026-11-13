@@ -1275,7 +1275,13 @@ def module_dynamic_namespace(
                   and ((cursor.func.attr in {"get", "pop", "setdefault"} and len(cursor.args) in (1, 2))
                        or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
                   and not cursor.keywords):
-                dictionary = selected_literal_value(cursor.func.value)
+                dictionary_receiver = cursor.func.value
+                while (isinstance(dictionary_receiver, ast.Call)
+                       and isinstance(dictionary_receiver.func, ast.Attribute)
+                       and dictionary_receiver.func.attr == "copy"
+                       and not dictionary_receiver.args and not dictionary_receiver.keywords):
+                    dictionary_receiver = dictionary_receiver.func.value
+                dictionary = selected_literal_value(dictionary_receiver)
                 key = cursor.args[0]
                 if (isinstance(dictionary, ast.Dict) and isinstance(key, ast.Constant)
                         and isinstance(key.value, str)
