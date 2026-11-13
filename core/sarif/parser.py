@@ -1887,7 +1887,10 @@ def get_run_execution_diagnostics(run: dict[str, Any]) -> dict[str, int]:
                 if not isinstance(note, dict):
                     counts["sarif_input_errors"] += 1
                     continue
-                failed |= note.get("level") == "error"
+                level = note.get("level", "warning")
+                if not isinstance(level, str) or level not in ("none", "note", "warning", "error"):
+                    counts["sarif_input_errors"] += 1
+                failed |= level == "error"
                 limitation = _as_dict(note.get("properties")).get("coverage_limitation")
                 # Legacy compiler review candidates are informational, not a
                 # declaration that analysis was incomplete.
