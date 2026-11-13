@@ -73,11 +73,11 @@ class Step:
 
     def __post_init__(self) -> None:
         _require_nonempty("Step.file_path", self.file_path)
-        if self.line < 1:
-            msg = f"Step.line must be >= 1, got {self.line}"
+        if isinstance(self.line, bool) or not isinstance(self.line, int) or self.line < 1:
+            msg = f"Step.line must be an integer >= 1, got {self.line}"
             raise ValueError(msg)
-        if self.column < 0:
-            msg = f"Step.column must be >= 0, got {self.column}"
+        if isinstance(self.column, bool) or not isinstance(self.column, int) or self.column < 0:
+            msg = f"Step.column must be an integer >= 0, got {self.column}"
             raise ValueError(msg)
 
     def to_dict(self) -> dict[str, Any]:
