@@ -691,26 +691,28 @@ class TestQueueDrainCancellation:
 
     def test_drain_cancelled_future_never_notifies_waiters(self):
         gate = threading.Event()
-        pool = ThreadPoolExecutor(max_workers=1)
-        try:
-            running = pool.submit(gate.wait, 10)  # occupies the worker
-            queued = pool.submit(lambda: None)    # sits in the queue
-            pool.shutdown(wait=False, cancel_futures=True)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            running = None
+            try:
+                running = pool.submit(gate.wait, 10)  # occupies the worker
+                queued = pool.submit(lambda: None)    # sits in the queue
+                pool.shutdown(wait=False, cancel_futures=True)
 
-            # The drain cancelled it — visible to .cancelled() ...
-            assert queued.cancelled()
+                # The drain cancelled it — visible to .cancelled() ...
+                assert queued.cancelled()
 
-            # ... but as_completed never yields it,
-            with pytest.raises(concurrent.futures.TimeoutError):
-                next(concurrent.futures.as_completed([queued], timeout=0.2))
+                # ... but as_completed never yields it,
+                with pytest.raises(concurrent.futures.TimeoutError):
+                    next(concurrent.futures.as_completed([queued], timeout=0.2))
 
-            # and wait() still classifies it as not_done.
-            done, not_done = concurrent.futures.wait(
-                {queued}, timeout=0.2,
-                return_when=concurrent.futures.FIRST_COMPLETED,
-            )
-            assert done == set()
-            assert not_done == {queued}
-        finally:
-            gate.set()
-            assert running.result(timeout=5) is True
+                # and wait() still classifies it as not_done.
+                done, not_done = concurrent.futures.wait(
+                    {queued}, timeout=0.2,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                assert done == set()
+                assert not_done == {queued}
+            finally:
+                gate.set()
+                if running is not None:
+                    assert running.result(timeout=5) is True
