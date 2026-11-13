@@ -9,7 +9,7 @@ from core.sandbox import _daemon as daemon
 from core.testing.module_views import module_function_view
 
 
-def _private(limit=640):
+def _private(limit=640, converter=int):
     groups = []
 
     class Match:
@@ -38,6 +38,7 @@ def _private(limit=640):
     private = module_function_view(daemon, bindings={
         "re": SimpleNamespace(search=search),
         "sys": SimpleNamespace(get_int_max_str_digits=lambda: limit),
+        "int": converter,
     })
     return private, groups
 
@@ -65,9 +66,16 @@ def test_active_limit_refuses_over_budget_digit_run(text):
 
 
 def test_disabled_limit_does_not_introduce_a_new_threshold():
-    private, groups = _private(limit=0)
+    converted = []
+
+    def convert(value):
+        converted.append(value)
+        return 7
+
+    private, groups = _private(limit=0, converter=convert)
     text = "9" * 641
-    assert private._parse_bytes_to_int(("prefix " + text).encode()) == int(text)
+    assert private._parse_bytes_to_int(("prefix " + text).encode()) == 7
+    assert converted == [text]
     assert groups == [641]
 
 
