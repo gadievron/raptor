@@ -292,6 +292,9 @@ _SAFE_EVAL_CALLABLES = {"p64", "p32", "p16", "u64", "u32", "u16", "int"}
 _MAX_HEX_DIGITS = 128
 _INT_BIT_CEILING = 1 << 20
 _COMPUTE_DEADLINE_S = 2.0
+# Bound parser input before it can allocate an AST. This still admits a
+# ceiling-sized hexadecimal integer plus ample arithmetic syntax.
+_MAX_COMPUTE_EXPR_CHARS = 1 << 20
 
 
 def _cap_result(value: Any, expr: str) -> Any:
@@ -317,11 +320,23 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
     intermediate result is magnitude-capped as it is produced, the
     fast-blowup operators (int*int, <<) are pre-checked so the
     oversized value is never materialised, and a wall-clock deadline
-    bounds the whole expression. The node/callable allowlists are
-    unchanged from the eval-based predecessor.
+    starts before parsing and is checked during validation and evaluation.
+    Source admission bounds parser input; the deadline cannot interrupt the
+    parser mid-call. The node/callable allowlists are unchanged.
     """
+    if len(expr) > _MAX_COMPUTE_EXPR_CHARS:
+        raise ValueError(
+            f"compute expression exceeds {_MAX_COMPUTE_EXPR_CHARS}-character budget")
+    deadline = time.monotonic() + _COMPUTE_DEADLINE_S
+
+    def check_deadline() -> None:
+        if time.monotonic() > deadline:
+            raise ValueError("compute deadline exceeded")
+
     tree = ast.parse(expr, mode="eval")
+    check_deadline()
     for node in ast.walk(tree):
+        check_deadline()
         cls_name = type(node).__name__
         if cls_name not in _SAFE_EVAL_NODES:
             msg = f"disallowed node: {cls_name} in {expr!r}"
@@ -363,12 +378,8 @@ def _safe_eval(expr: str, bindings: dict) -> Any:
         "int": int,
     }
 
-    deadline = time.monotonic() + _COMPUTE_DEADLINE_S
-
     def _ev(node: ast.AST) -> Any:
-        if time.monotonic() > deadline:
-            msg = f"compute deadline exceeded in {expr!r}"
-            raise ValueError(msg)
+        check_deadline()
         if isinstance(node, ast.Constant):
             return _cap_result(node.value, expr)
         if isinstance(node, ast.Name):
