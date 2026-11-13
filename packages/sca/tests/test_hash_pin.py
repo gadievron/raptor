@@ -4,13 +4,16 @@ The resolver routes through :func:`core.git.ls_remote` (sandbox +
 egress allowlist); tests stub the sandbox spawn seam
 ``core.sandbox.run_untrusted_networked`` so the real substrate code
 (URL validation, argv construction, token-to-env plumbing) stays
-exercised while nothing actually spawns.
+exercised while no resolver process runs. The workflow-memory proof uses
+an owned Python child only when allocation tracing is borrowed.
 """
 
 from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+
+from core.testing.processes import run_in_process_group as _run_memory_process
 
 import core.sandbox
 from packages.sca.hash_pin import hash_pin_workflows
@@ -527,11 +530,81 @@ def test_disallowed_host_refused(monkeypatch) -> None:
     assert _resolve_sha("owner", "repo", "v4", {}, None) is None
 
 
+def _run_workflow_read_memory_proof(tmp_path):
+    """Measure refused workflow reads without borrowing tracing or credentials."""
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+import builtins
+import os
+from pathlib import Path
+from types import ModuleType
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.testing.module_views import module_function_view
+from packages.sca import hash_pin as producer
+from packages.sca.tests import test_hash_pin as native
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+reads, lookups, denied = [], [], []
+class Environment(dict):
+    def get(self, key, default=None):
+        lookups.append(key)
+        raise AssertionError("workflow memory proof consulted inherited credentials")
+owned_os = ModuleType("os")
+vars(owned_os).update(vars(os))
+owned_os.environ = Environment()
+real_read = producer.read_bounded
+def observe_read(path, **kwargs):
+    result = real_read(path, **kwargs)
+    reads.append((path.name, kwargs, result, path.is_symlink()))
+    return result
+def refuse(*args, **kwargs):
+    denied.append(True)
+    raise AssertionError("refused workflow reached rewrite or resolution")
+product = module_function_view(producer, bindings={"os": owned_os, "read_bounded": observe_read, "_rewrite_file": refuse, "_resolve_sha": refuse})
+def importer(name, globals=None, locals=None, fromlist=(), level=0):
+    if name == "packages.sca.hash_pin":
+        return product
+    return builtins.__import__(name, globals, locals, fromlist, level)
+view = module_function_view(native, import_hook=importer)
+assert view.test_workflow_read_is_bounded_and_no_follow.__code__ is native.test_workflow_read_is_bounded_and_no_follow.__code__
+assert product.hash_pin_workflows.__code__ is producer.hash_pin_workflows.__code__
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    view.test_workflow_read_is_bounded_and_no_follow(owned)
+assert reads == [("huge.yml", {"follow_symlinks": False}, None, False), ("linked.yml", {"follow_symlinks": False}, None, True)]
+assert not lookups and not denied
+assert (owned / "repo/.github/workflows/huge.yml").stat().st_size == 60 * 1024 * 1024
+assert (owned / "outside.yml").read_text() == "on: push" + chr(10)
+print("workflow-read-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        env.pop("GITHUB_TOKEN", None)
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "workflow-read-memory-proof-ok", result.stdout
+
+
 def test_workflow_read_is_bounded_and_no_follow(tmp_path) -> None:
     """Workflow files come from the scanned tree: an oversized file is
     refused by stat (not slurped) and a symlinked one is never
     followed — both were bare read_text before."""
     import tracemalloc
+
+    if tracemalloc.is_tracing():
+        _run_workflow_read_memory_proof(tmp_path)
+        return
 
     from packages.sca.hash_pin import hash_pin_workflows
 
@@ -544,9 +617,9 @@ def test_workflow_read_is_bounded_and_no_follow(tmp_path) -> None:
     outside.write_text("on: push\n", encoding="utf-8")
     (wf_dir / "linked.yml").symlink_to(outside)
 
-    tracemalloc.start()
     try:
-        result = hash_pin_workflows(target)
+        tracemalloc.start()
+        result = hash_pin_workflows(target, github_token="owned-workflow-memory")
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
