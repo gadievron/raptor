@@ -457,6 +457,7 @@ def test_v1_to_v2_migration_race_loser_treated_as_done(tmp_path: Path):
     """Two connections racing the v1→v2 rebuild: the loser must land
     on the migrated schema instead of erroring out mid-upgrade."""
     import threading
+    from core.testing.threads import retiring_threads
 
     db = tmp_path / "graph.sqlite"
     _make_v1_db(db)
@@ -469,10 +470,11 @@ def test_v1_to_v2_migration_race_loser_treated_as_done(tmp_path: Path):
             errors.append(f"{type(exc).__name__}: {exc}")
 
     threads = [threading.Thread(target=opener) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
+    with retiring_threads(threads, release=lambda: None, timeout=30):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
     assert not errors, errors
     conn = sqlite3.connect(db)
     try:
