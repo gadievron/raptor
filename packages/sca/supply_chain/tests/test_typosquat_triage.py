@@ -512,6 +512,7 @@ def test_apply_auto_legit_concurrent_writers_lose_nothing(tmp_path):
     rows, and the last writer dropped the other's. The sidecar lock
     serialises the read-modify-write."""
     import threading
+    from core.testing.threads import retiring_threads
 
     rl = tmp_path / "reviewed_legit.json"
     names = [f"legitpkg{i}" for i in range(16)]
@@ -527,10 +528,11 @@ def test_apply_auto_legit_concurrent_writers_lose_nothing(tmp_path):
         apply_auto_legit(outcomes, "npm", rl, model="t")
 
     threads = [threading.Thread(target=_file, args=(n,)) for n in names]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    with retiring_threads(threads, release=lambda: None, timeout=30):
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
     raw = json.loads(rl.read_text(encoding="utf-8"))
     assert sorted(raw["npm"].keys()) == sorted(names)
 
