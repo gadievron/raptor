@@ -431,7 +431,7 @@ class AuditKnowledgeRuntime:
                 self.notify()
                 raise KnowledgeCallRefused(reason)
             self._register(origin, ctx, outcome.review_result, delivered_references=reference_manifest)
-            self._register_caller_requests(origin, outcome.review_result)
+            self._register_caller_requests(origin, outcome.review_result, ctx=ctx)
             self.notify()
             return outcome
 
@@ -808,9 +808,74 @@ class AuditKnowledgeRuntime:
         except Exception:
             return False, "caller_context_validation_error"
 
-    def _register_caller_requests(self, origin: KnowledgeOrigin, review_result) -> None:
+    def _register_binary_callers(self, origin: BinaryKnowledgeOrigin, ctx: dict | None, batch) -> None:
+        """Resolve recorded binary related code without source caller packets."""
+        from .binary_callers import BinaryCallerContext, resolve_binary_callers
+        from .continuation_context import context_version
+
+        key = self._key(origin)
+        with self._lock:
+            self._events.append({"event": "caller_requests_registered", "origin": asdict(origin),
+                                 "accepted": [asdict(r) for r in batch.accepted],
+                                 "rejected": [asdict(r) for r in batch.rejected]})
+            for request in batch.accepted:
+                self._caller_requests[request.request_id] = request
+            owned = next((scope for scope, original in self._binary_review_scopes.values()
+                          if original == origin), None)
+            refusal = ("runtime_closed" if self._closed else
+                       "deadline" if monotonic() >= self.deadline else
+                       "model_call_count_unavailable" if key in self._unknown_calls else "")
+        addressed = []
+        for request in batch.accepted:
+            reason = ("binary_context_binding_unavailable" if request.caller_address is None else
+                      refusal or ("binary_original_input_unavailable" if ctx is None or owned is None
+                                  or not owned.current(self.target_root) else ""))
+            if reason:
+                answer = CallerContextAnswer(request.request_id, origin, None, "deferred", reason)
+                with self._lock:
+                    self._caller_answers[request.request_id] = answer
+                    self._request_status[request.request_id] = {"state": "deferred", "reason": reason}
+                    self._events.append({"event": "caller_context_answer", "answer": asdict(answer),
+                                         "changed_information": False})
+            else:
+                addressed.append(request)
+        if not addressed or ctx is None or owned is None:
+            return
+        resolved = resolve_binary_callers(tuple(addressed), ctx, owned)
+        if resolved is None:
+            with self._lock:
+                for request in addressed:
+                    self._request_status[request.request_id] = {
+                        "state": "deferred", "reason": "binary_original_input_unavailable"}
+            return
+        previous = ctx.get("binary_caller_context")
+        if isinstance(previous, BinaryCallerContext) and previous.current(ctx):
+            merged = resolve_binary_callers((*previous.requests, *resolved.requests), ctx, owned)
+            if merged is None:
+                return
+            resolved = merged
+        with self._lock:
+            for binary_answer in resolved.answers:
+                self._request_status[binary_answer.request_id] = {
+                    "state": "resolved_partial" if binary_answer.status == "partial" else "unavailable",
+                    "reason": binary_answer.reason}
+                request = self._caller_requests[binary_answer.request_id]
+                self._events.append({"event": "binary_caller_answer", "origin": asdict(request.origin),
+                    "request_id": binary_answer.request_id, "status": binary_answer.status, "reason": binary_answer.reason,
+                    "material": binary_answer.material, "role": "binary_related_code_context_not_evidence"})
+        rendered = resolved.render()
+        if not rendered or not resolved.current(ctx):
+            return
+        offered = dict(ctx)
+        offered["binary_caller_context"] = resolved
+        self.offer_context_delta(offered, kind="binary_callers", version=context_version(rendered))
+
+    def _register_caller_requests(self, origin: KnowledgeOrigin, review_result, *, ctx: dict | None = None) -> None:
         batch = register_caller_context_requests(review_result, origin)
         if not batch.accepted and not batch.rejected:
+            return
+        if isinstance(origin, BinaryKnowledgeOrigin):
+            self._register_binary_callers(origin, ctx, batch)
             return
         key = self._key(origin)
         with self._lock:
@@ -820,16 +885,6 @@ class AuditKnowledgeRuntime:
             for request in batch.accepted:
                 self._caller_requests[request.request_id] = request
             if not batch.accepted:
-                return
-            if isinstance(origin, BinaryKnowledgeOrigin):
-                for request in batch.accepted:
-                    answer = CallerContextAnswer(request.request_id, origin, None, "deferred",
-                                                 "binary_context_binding_unavailable")
-                    self._caller_answers[request.request_id] = answer
-                    self._request_status[request.request_id] = {
-                        "state": "deferred", "reason": answer.reason}
-                    self._events.append({"event": "caller_context_answer", "answer": asdict(answer),
-                                         "changed_information": False})
                 return
             cycle = self._cycles.get(key)
             if cycle is None:
@@ -1059,7 +1114,7 @@ class AuditKnowledgeRuntime:
         binary_owned = None
         external_payload: tuple[str, object] | None = None
         if isinstance(origin, BinaryKnowledgeOrigin):
-            if kind not in ("disagreement", "binary_target_semantics"):
+            if kind not in ("disagreement", "binary_target_semantics", "binary_callers"):
                 return False
             with self._lock:
                 binary_owned = next(((scope, original) for scope, original in self._binary_review_scopes.values()
@@ -1076,6 +1131,12 @@ class AuditKnowledgeRuntime:
                 if not isinstance(value, BinarySubjectContext) or not value.current(ctx):
                     return False
                 payload: object = value
+            elif kind == "binary_callers":
+                from .binary_callers import BinaryCallerContext
+                value = ctx.get(field)
+                if not isinstance(value, BinaryCallerContext) or not value.current(ctx):
+                    return False
+                payload = value
             else:
                 value = ctx.get(field)
                 if not isinstance(value, dict):
@@ -1188,6 +1249,11 @@ class AuditKnowledgeRuntime:
                 field, payload = retained
                 if spec["kind"] == "binary_target_semantics":
                     if not isinstance(payload, BinarySubjectContext) or not payload.current(ctx):
+                        return False
+                    ctx[field] = payload
+                elif spec["kind"] == "binary_callers":
+                    from .binary_callers import BinaryCallerContext
+                    if not isinstance(payload, BinaryCallerContext) or not payload.current(ctx):
                         return False
                     ctx[field] = payload
                 elif spec["kind"] == "disagreement" and type(payload) is dict:

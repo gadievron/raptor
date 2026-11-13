@@ -302,7 +302,7 @@ def knowledge_processing_lines(report: dict) -> list[str]:
                      "Request identities do not identify historical answer versions or establish assessment basis.")
     if record.get("partial_binary_requests", 0):
         lines.append(
-            f"Recovered binary subjects: {record['partial_binary_requests']} partially resolved request records; "
+            f"Binary context requests: {record['partial_binary_requests']} partially resolved request records; "
             "their prompt delivery is counted in context updates, not source-study delivery."
         )
     return lines

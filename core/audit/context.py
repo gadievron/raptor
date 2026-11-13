@@ -1596,7 +1596,14 @@ def format_context_for_prompt(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
                 max_length=512,
             )
-            cp.append(f"- `{ident}` (line {line})")
+            if ctx.get("is_binary"):
+                address = c.get("address")
+                location = (f"recorded start address 0x{address:x}"
+                            if type(address) is int and 0 <= address < 2 ** 64
+                            else "recorded address unavailable")
+                cp.append(f"- `{ident}` ({location}; recorded relation, not execution proof)")
+            else:
+                cp.append(f"- `{ident}` (line {line})")
             if c.get("caller_entry"):
                 cp.append("Caller signature and initial setup:")
                 cp.append(_fenced(c["caller_entry"]))
@@ -1612,7 +1619,14 @@ def format_context_for_prompt(
                 f"{c.get('file', '?')}:{c.get('name', '?')}",
                 max_length=512,
             )
-            cp.append(f"- `{ident}` (line {line})")
+            if ctx.get("is_binary"):
+                address = c.get("address")
+                location = (f"recorded start address 0x{address:x}"
+                            if type(address) is int and 0 <= address < 2 ** 64
+                            else "recorded address unavailable")
+                cp.append(f"- `{ident}` ({location}; recorded relation, not execution proof)")
+            else:
+                cp.append(f"- `{ident}` (line {line})")
             if c.get("source_snippet"):
                 cp.append(_fenced(c["source_snippet"]))
         sections.append(PromptSection("callees", "\n".join(cp), 1))
@@ -2864,6 +2878,10 @@ def format_context_for_prompt(
     binary_subject_block = render_binary_subject_context(ctx.get("binary_subject_context"), ctx)
     if binary_subject_block:
         sections.append(PromptSection("binary_subject_context", binary_subject_block, 1))
+    from .binary_callers import render_binary_caller_context
+    binary_caller_block = render_binary_caller_context(ctx.get("binary_caller_context"), ctx)
+    if binary_caller_block:
+        sections.append(PromptSection("binary_caller_context", binary_caller_block, 1))
 
     from .disagreement_review_context import render_disagreement_context
     disagreement_block = render_disagreement_context(
