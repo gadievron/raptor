@@ -141,11 +141,15 @@ def render_operator_summary(summary: OperatorSummary, *, markdown: bool = False,
             for r in summary.rows:
                 lines.append("| " + " | ".join(safe(v) for v in (r["ref"], f"{r['tool']} / {r['rule']}", r["location"], r["status"], r["level"])) + " |")
         else:
+            def card(value):
+                text = safe(value)
+                return "  " + (text if len(text) <= width - 2 else text[:width - 3] + "…")
+
             for r in summary.rows:
                 # Cards keep status/location readable on narrow terminals.
                 lines.extend([f"{safe(r['ref'])}  {safe(r['status'])}  [{safe(r['level'])}]",
-                              "  " + safe(f"{r['tool']} / {r['rule']}")[:width - 2],
-                              "  " + safe(r["location"])[:width - 2]])
+                              card(f"{r['tool']} / {r['rule']}"),
+                              card(r["location"])])
     for note in summary.diagnostics:
         lines.append("Warning: " + safe(note))
     for action in summary.actions:
