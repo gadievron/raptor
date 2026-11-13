@@ -14,6 +14,10 @@ from .availability import z3
 from ._validation import require_bool, require_bv, require_width
 
 
+# Keep decimal diagnostic bounds short; this is not a profile width limit.
+_MAX_RENDERED_BOUND_BITS = 1024
+
+
 def bv_to_int(raw: int, width: int, signed: bool) -> int:
     """Reinterpret an ``as_long()`` result as two's-complement when ``signed``.
 
@@ -41,12 +45,13 @@ def bv_to_int(raw: int, width: int, signed: bool) -> int:
     require_bool(signed, argument="signed")
     if type(raw) is not int:
         raise ValueError("bv_to_int: raw must be an integer")
-    upper = 1 << width
-    if not 0 <= raw < upper:
+    bits = raw.bit_length()
+    if raw < 0 or bits > width:
+        upper = str(1 << width) if width <= _MAX_RENDERED_BOUND_BITS else f"2**{width}"
         msg = f"bv_to_int: raw={raw} out of range [0, {upper}) for width={width}"
         raise ValueError(msg)
-    if signed and raw >= (1 << (width - 1)):
-        return raw - upper
+    if signed and bits == width:
+        return raw - (1 << width)
     return raw
 
 
