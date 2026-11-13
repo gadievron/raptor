@@ -98,7 +98,7 @@ def build_witness_summary(
             by_outcome[out] = by_outcome.get(out, 0) + 1
             if w.observed_outcome is not WitnessOutcome.NOT_RUN:
                 executed += 1
-            if isinstance(w.outcome_detail, dict) \
+            if src == "llm_emit_run" and isinstance(w.outcome_detail, dict) \
                     and w.outcome_detail.get("compiled") is True:
                 compiled += 1
     except Exception as e:  # noqa: BLE001 — best-effort iteration
