@@ -19,7 +19,7 @@ from core.concepts.subject_study import SubjectExplanation
 from core.language_reference import ReferenceAnswer
 
 from .caller_review_context import CallerContextAnswer, CallerContextRequest
-from .binary_review_scope import same_review_snapshot
+from .binary_review_scope import BinaryInputIdentity, BinaryKnowledgeOrigin, same_review_snapshot
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin
 from .refutation_source import SourceIdentity
 
@@ -256,6 +256,7 @@ class KnowledgeCycle:
         self, *, now: float, current_source: SourceIdentity | None,
         admission: Callable[[], bool], all_model_calls: int | None, required_calls: int = 1,
         required_context_ids: tuple[str, ...] = (),
+        current_binary: BinaryInputIdentity | None = None,
     ) -> KnowledgeContinuation | None:
         if type(required_calls) is not int or required_calls < 1:
             raise ValueError("invalid required call count")
@@ -278,13 +279,33 @@ class KnowledgeCycle:
             if max(all_model_calls, 1 + self.started) + required_calls > self.max_model_calls:
                 self._defer("model_call_limit")
                 return None
-            if self.origin.source_identity is None:
-                self._defer("source_identity_unavailable")
-                return None
-            if current_source != self.origin.source_identity:
-                self._events.append(KnowledgeCycleEvent("source_changed", tuple(sorted(self._delta))))
-                self._retired = True
-                return None
+            if isinstance(self.origin, BinaryKnowledgeOrigin):
+                # This layer compares typed observations only. Runtime must
+                # retain and recheck the original live module/view capability;
+                # persisted binary identity data cannot recreate that owner.
+                if current_source is not None or not isinstance(current_binary, BinaryInputIdentity):
+                    self._defer("binary_identity_unavailable")
+                    return None
+                if current_binary != self.origin.binary_identity:
+                    self._events.append(KnowledgeCycleEvent("binary_input_changed", tuple(sorted(self._delta))))
+                    self._retired = True
+                    return None
+                advisory = self._external_latest.get("disagreement")
+                if (self.requests or self.caller_requests or self._references or self._explanations
+                        or advisory is None or not self._delta <= {advisory}):
+                    self._defer("binary_external_context_unavailable")
+                    return None
+            else:
+                if current_binary is not None:
+                    self._defer("review_input_domain_mismatch")
+                    return None
+                if self.origin.source_identity is None:
+                    self._defer("source_identity_unavailable")
+                    return None
+                if current_source != self.origin.source_identity:
+                    self._events.append(KnowledgeCycleEvent("source_changed", tuple(sorted(self._delta))))
+                    self._retired = True
+                    return None
             first_ready = self._first_ready
             if first_ready is None:
                 return None
