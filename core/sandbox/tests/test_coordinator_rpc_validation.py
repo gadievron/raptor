@@ -113,7 +113,7 @@ def test_run_child_default_timeout_matches_main_join_bound(monkeypatch):
     assert captured["timeout"] == _nc._DEFAULT_CHILD_TIMEOUT_S
 
 
-def _drive_main_hermetic(request, monkeypatch):
+def _drive_main_hermetic(request, monkeypatch, *, validate_join_timeout=False):
     """Drive main() with namespaces and children stubbed out (no forks,
     no privileges needed). Returns (errors, responses, join_timeouts,
     exit_code) — exit_code is None when main() returned normally."""
@@ -128,6 +128,12 @@ def _drive_main_hermetic(request, monkeypatch):
 
         def join(self, timeout=None):
             join_timeouts.append(timeout)
+            if validate_join_timeout:
+                # Validate the real threading timeout conversion without a
+                # thread or a wait: this lock is owned and uncontended.
+                lock = _nc.threading.Lock()
+                assert lock.acquire(timeout=max(0, timeout))
+                lock.release()
 
     monkeypatch.setattr(_nc, "_setup_namespaces", lambda: "test")
     patch_module_attribute(monkeypatch, _nc, 'sys', "stdin", io.StringIO(json.dumps(request)))
@@ -354,3 +360,33 @@ def test_main_accepts_trusted_tool_spec_without_boundary(monkeypatch):
     assert errors == []
     assert exit_code is None
     assert len(responses) == 1
+
+
+@pytest.mark.parametrize("timeout", [1e100, _nc.threading.TIMEOUT_MAX],
+                         ids=["huge-finite", "no-room-for-grace"])
+def test_main_refuses_target_timeout_outside_join_range(monkeypatch, timeout):
+    request = {
+        "target": {"cmd": ["/bin/x"], "profile": "target_run",
+                   "output": "/tmp/coord-test-out", "timeout_s": timeout},
+        "exploit": {"cmd": ["/bin/x"], "profile": "frida"},
+    }
+    errors, responses, joins, exit_code = _drive_main_hermetic(
+        request, monkeypatch, validate_join_timeout=True,
+    )
+    assert exit_code == 2 and errors[0][0] == "bad_request"
+    assert not responses and not joins
+
+
+@pytest.mark.parametrize("timeout", [0.25, _nc.threading.TIMEOUT_MAX - 1.0],
+                         ids=["ordinary", "largest-join-bound"])
+def test_main_accepts_representable_target_join_timeout(monkeypatch, timeout):
+    request = {
+        "target": {"cmd": ["/bin/x"], "profile": "target_run",
+                   "output": "/tmp/coord-test-out", "timeout_s": timeout},
+        "exploit": {"cmd": ["/bin/x"], "profile": "frida"},
+    }
+    errors, responses, joins, exit_code = _drive_main_hermetic(
+        request, monkeypatch, validate_join_timeout=True,
+    )
+    assert exit_code is None and not errors and len(responses) == 1
+    assert joins == [timeout + 1.0]

@@ -619,6 +619,10 @@ def main() -> None:
         _emit_error("bad_request", "request timeouts must be finite")
         sys.exit(2)
 
+    if target_timeout + 1.0 > threading.TIMEOUT_MAX:
+        _emit_error("bad_request", "target timeout exceeds the supported join range")
+        sys.exit(2)
+
     # Fail-closed isolation floor: a hostile-code profile with no
     # filesystem boundary is refused before either child starts.
     for role, spec in (("target", target_spec), ("exploit", exploit_spec)):
