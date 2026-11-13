@@ -1364,11 +1364,16 @@ class AuditKnowledgeRuntime:
                 return None
             reservation = KnowledgeReservation(cycle.origin, packet)
             with self._lock:
-                self._active[packet.pass_id] = reservation
-                self._active_units[key] = reservation
-                self._events.append({"event": "continuation_reserved", "origin": asdict(cycle.origin),
-                                     "pass_id": packet.pass_id, "delta_ids": list(packet.delta_ids),
-                                     "pending_ids": list(packet.pending_ids), "required_calls": required_calls})
+                closed = self._closed
+                if not closed:
+                    self._active[packet.pass_id] = reservation
+                    self._active_units[key] = reservation
+                    self._events.append({"event": "continuation_reserved", "origin": asdict(cycle.origin),
+                                         "pass_id": packet.pass_id, "delta_ids": list(packet.delta_ids),
+                                         "pending_ids": list(packet.pending_ids), "required_calls": required_calls})
+            if closed:
+                cycle.failed(packet.pass_id, reason="runtime_closed")
+                return None
             return reservation
         except BaseException as error:
             try:
