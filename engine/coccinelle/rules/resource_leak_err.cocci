@@ -1,8 +1,8 @@
-// resource_leak_err.cocci — Find allocations not freed on error paths.
+// resource_leak_err.cocci — Review allocation origins at conditional returns.
 //
-// The pattern: a function allocates memory (kmalloc, kzalloc, etc.)
-// into a local variable, then a later error check returns without
-// freeing it. Classic error-path resource leak.
+// The pattern links a local allocation to a later conditional return without
+// recognized cleanup. The return need not be an error, and syntax alone does
+// not establish allocation success, ownership transfer or helper cleanup.
 //
 // Allocation and error return are matched in ONE rule so both sit in
 // the same function: a name-only join across two rules let an
@@ -298,5 +298,5 @@ for _p in p_ret:
     _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
           "line_end": int(_p.line_end), "col_end": int(_p.column_end),
           "rule": "resource_leak_err",
-          "message": "'%s' allocated at line %s not freed before return on error path" % (ptr, _first)}
+          "message": "Candidate: allocation-origin '%s' from line %s reaches a conditional return without recognized cleanup; review allocation success, ownership transfers and cleanup helpers (CWE-401)" % (ptr, _first)}
     sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
