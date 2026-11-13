@@ -54,9 +54,9 @@ def test_prediction_vs_violation_through_application_paths(tmp_path, monkeypatch
     setattr(result, "dormant" if status == "dark" else "suspicious", len(outcomes))
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
     if lane == "early":
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(lambda: observation)
-        orch._drain_dark_probes(result, config, outcomes, [future], executor)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(lambda: observation)
+            orch._drain_dark_probes(result, config, outcomes, [future], executor)
     else:
         monkeypatch.setattr(dv, "parse_witness_response", lambda *args, **kw: SimpleNamespace(finding_key=f"{kw['file']}:{kw['function']}"))
         monkeypatch.setattr(dv, "execute_witness", lambda spec, *args, **kw: replace(observation, finding_key=spec.finding_key))
