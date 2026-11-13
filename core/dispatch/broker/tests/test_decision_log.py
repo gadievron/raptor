@@ -8,6 +8,7 @@ import threading
 import pytest
 
 from core.dispatch.broker.decision_log import DecisionLog, DecisionRecord
+from core.testing.threads import retiring_threads
 
 
 @pytest.fixture()
@@ -113,10 +114,11 @@ class TestDecisionLog:
             threading.Thread(target=writer, args=(f"model-{i}", 50))
             for i in range(4)
         ]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         assert not errors
         assert log.count == 200
