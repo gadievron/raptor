@@ -152,7 +152,7 @@ def _rewrite_word_operators(code: str) -> str:
                     before -= 1
                 if before < 0 or not (code[before].isalnum() or code[before] in '_)]'):
                     return match.group()
-        return ' ' + _WORD_OPERATORS[match.group(1).lower()] + ' '
+        return ' ' + _WORD_OPERATORS[match.group(1).casefold()] + ' '
 
     return _WORD_OPERATOR_RE.sub(replace, code)
 
