@@ -17,6 +17,8 @@ from core.audit.orchestrator import (
     OrchestratorResult,
 )
 
+from core.testing.threads import retiring_threads
+
 
 def _config(tmp_path: Path, *, immediate_verify: bool = True) -> OrchestratorConfig:
     d = tmp_path / "out"
@@ -135,10 +137,11 @@ class TestParallelPhaseIDispatch:
 
         ta = threading.Thread(target=lane_a)
         tb = threading.Thread(target=lane_b)
-        ta.start()
-        tb.start()
-        ta.join()
-        tb.join()
+        with retiring_threads((ta, tb), release=lambda: None, timeout=5):
+            ta.start()
+            tb.start()
+            ta.join()
+            tb.join()
 
         assert result.suspicious == 100 - iterations + iterations  # 100
         assert result.findings == iterations  # 500
