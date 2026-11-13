@@ -310,6 +310,9 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp)):
             if _comprehension_writes_enclosing_frame(node):
                 return "comprehension conditionally assigns an enclosing-frame name"
+        if isinstance(node, ast.Assert) and node.msg is not None:
+            if _expression_roots_write_enclosing_frame([node.msg]):
+                return "assertion message conditionally assigns an enclosing-frame name"
         if isinstance(node, ast.IfExp):
             if _expression_roots_write_enclosing_frame([node.body, node.orelse]):
                 return "expression conditionally assigns an enclosing-frame name"
@@ -335,7 +338,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
     * An optional assignment expression in a conditional expression,
-      short-circuit operand, chained comparison or eager comprehension: it may not overwrite
+      short-circuit operand, chained comparison, assertion message or eager
+      comprehension: it may not overwrite
       the incoming local value.
     * A generator function: iteration output is not a normal return value.
     * A generator expression with a deferred assignment expression: its
