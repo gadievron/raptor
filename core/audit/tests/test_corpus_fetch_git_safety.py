@@ -9,7 +9,7 @@ bare ``["git", ...]`` lists.
 
 from __future__ import annotations
 
-import subprocess
+from core.testing.module_bindings import patch_module_attribute
 from types import SimpleNamespace
 
 from core.audit.corpus import run_corpus
@@ -39,7 +39,7 @@ def test_rev_parse_uses_strict_readonly_pins(tmp_path, monkeypatch):
     _make_repo_dir(tmp_path, "proj")
     monkeypatch.setattr(run_corpus, "FIXTURES_DIR", tmp_path)
     rec = _Recorder(head_sha=_SHA)
-    monkeypatch.setattr(subprocess, "run", rec)
+    patch_module_attribute(monkeypatch, run_corpus, "subprocess", "run", rec)
 
     dest = run_corpus._fetch_source("proj", _SHA)
 
@@ -61,7 +61,7 @@ def test_fetch_and_checkout_use_safe_pins(tmp_path, monkeypatch):
     _make_repo_dir(tmp_path, "proj")
     monkeypatch.setattr(run_corpus, "FIXTURES_DIR", tmp_path)
     rec = _Recorder(head_sha=_OTHER)  # mismatch → re-fetch + checkout
-    monkeypatch.setattr(subprocess, "run", rec)
+    patch_module_attribute(monkeypatch, run_corpus, "subprocess", "run", rec)
 
     run_corpus._fetch_source("proj", _SHA)
 
