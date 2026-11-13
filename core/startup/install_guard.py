@@ -491,9 +491,20 @@ def _save_bytecode(cache: Path, expected: bytes | None) -> None:
         return
     # Never unmarshal existing cache data in the unconfined launcher.
     if cache.exists():
-        with cache.open("rb") as stream:
+        stream = cache.open("rb")
+        failed = False
+        try:
             if stream.read(len(expected) + 1) == expected:
                 return
+        except BaseException:
+            failed = True
+            raise
+        finally:
+            try:
+                stream.close()
+            except BaseException:
+                if not failed:
+                    raise
     cache.parent.mkdir(parents=True, exist_ok=True)
     node, temporary = tempfile.mkstemp(prefix=".raptor-pyc-", dir=cache.parent)
     try:
