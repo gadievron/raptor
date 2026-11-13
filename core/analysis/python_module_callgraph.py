@@ -942,6 +942,20 @@ def module_dynamic_namespace(
                 return True
         return False
 
+    def explicit_pair_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        sequence = value
+        while isinstance(sequence, ast.Subscript) and isinstance(sequence.slice, ast.Slice):
+            sequence = sequence.value
+        if not isinstance(sequence, (ast.Tuple, ast.List)):
+            return None
+        pairs = literal_member_values(value)
+        if pairs is None or not all(
+                isinstance(pair, (ast.Tuple, ast.List)) and len(pair.elts) == 2
+                and not any(isinstance(item, ast.Starred) for item in pair.elts)
+                for pair in pairs):
+            return None
+        return tuple(pair.elts[1] for pair in pairs)
+
     def container_member_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         members: list[ast.AST] = []
         pending = [(value, False)]
@@ -972,6 +986,11 @@ def module_dynamic_namespace(
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names
                   and len(container.args) == 1 and not container.keywords):
+                pair_values = explicit_pair_values(container.args[0])
+                if pair_values is not None:
+                    recognised = True
+                    members.extend(pair_values)
+                # Pair projection adds values without erasing old possibilities.
                 pending.append((container.args[0], True))
             elif (isinstance(container, ast.Call) and isinstance(container.func, ast.Name)
                   and container.func.id in mapping_copy_names and not container.args
