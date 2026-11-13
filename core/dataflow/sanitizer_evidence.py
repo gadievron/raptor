@@ -223,6 +223,8 @@ class StepAnnotation:
             ("variables_referenced", self.variables_referenced),
             ("inlined_helpers", self.inlined_helpers),
         ):
+            if isinstance(value, (str, bytes, Mapping)):
+                raise ValueError(f"{type(self).__name__}.{label} must be an iterable of entries")
             if not isinstance(value, tuple):
                 object.__setattr__(self, label, tuple(value))
             for item in getattr(self, label):
@@ -279,12 +281,16 @@ class SanitizerEvidence:
             ("candidate_pool", self.candidate_pool, CandidateValidator),
             ("step_annotations", self.step_annotations, StepAnnotation),
         ):
+            if isinstance(value, (str, bytes, Mapping)):
+                raise ValueError(f"{type(self).__name__}.{label} must be an iterable of entries")
             if not isinstance(value, tuple):
                 object.__setattr__(self, label, tuple(value))
             for item in getattr(self, label):
                 if not isinstance(item, ty):
                     msg = f"SanitizerEvidence.{label} must contain {ty.__name__} instances"
                     raise TypeError(msg)
+        if isinstance(self.extraction_failures, (str, bytes, Mapping)):
+            raise ValueError("SanitizerEvidence.extraction_failures must be an iterable of entries")
         if not isinstance(self.extraction_failures, tuple):
             object.__setattr__(self, "extraction_failures", tuple(self.extraction_failures))
         for f in self.extraction_failures:
