@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from core.testing.processes import run_in_process_group as _run_memory_process
+
 from core.orchestration.context_map_taint import (
     build_taint_pairs,
     enrich_with_taint_flows,
@@ -256,6 +258,40 @@ class TestIrisSpecs:
         assert ctx["taint_summary"]["iris_sinks_loaded"] == 0
 
 
+def _run_taint_pair_memory_proof():
+    """Measure native bounded enumeration without consuming a caller trace."""
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from core.orchestration.tests.test_context_map_taint import TestBoundedMaterialisation
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    TestBoundedMaterialisation().test_cap_bounds_materialisation_memory()
+print("taint-pair-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), env["TMPDIR"]],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "taint-pair-memory-proof-ok", result.stdout
+
+
 class TestBoundedMaterialisation:
     """The cap bounds ENUMERATION cost, not just downstream use.
 
@@ -279,11 +315,17 @@ class TestBoundedMaterialisation:
     def test_cap_bounds_materialisation_memory(self):
         import tracemalloc
 
+        if tracemalloc.is_tracing():
+            _run_taint_pair_memory_proof()
+            return
+
         ctx = self._dense_map(1000)
-        tracemalloc.start()
-        pairs = build_taint_pairs(ctx, None, max_pairs=500)
-        _cur, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
+        try:
+            tracemalloc.start()
+            pairs = build_taint_pairs(ctx, None, max_pairs=500)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
         assert len(pairs) == 500
         # Full-product materialisation of this fixture peaks ~147MB;
         # bounded enumeration stays well under 32MB even with
