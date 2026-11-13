@@ -1501,6 +1501,15 @@ def module_dynamic_namespace(
                     members = sequence_iteration_values(value)
                     if members is not None:
                         pending.extend((target.elts[0], member) for member in members)
+                elif (isinstance(value, (ast.Tuple, ast.List))
+                      and any(isinstance(item, ast.Starred) for item in value.elts)
+                      and len(target.elts) == 1 and isinstance(target.elts[0], ast.Name)):
+                    for item in value.elts:
+                        if isinstance(item, ast.Starred):
+                            members = sequence_iteration_values(item.value) or ()
+                            pending.extend((target.elts[0], member) for member in members)
+                        else:
+                            pending.append((target.elts[0], item))
                 continue
             if not isinstance(target, ast.Name):
                 continue
