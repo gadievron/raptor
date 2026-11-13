@@ -681,3 +681,26 @@ def test_native_capped_source_cannot_create_unscoped_suppression(tmp_path):
     metrics = generate_scan_metrics([str(report)])
     assert metrics["total_findings"] == 2
     assert metrics["nosemgrep_suppressed_count"] == 0
+
+
+@pytest.mark.parametrize('indexed', [False, True])
+@pytest.mark.parametrize('directive_at_source', [False, True])
+def test_suppression_reads_the_run_owned_source(tmp_path, indexed, directive_at_source):
+    source_dir = tmp_path / 'src'
+    source_dir.mkdir()
+    directive = 'x = value  # nosemgrep: test.rule owned directive\n'
+    plain = 'x = value\n'
+    (tmp_path / 'owned.py').write_text(plain if directive_at_source else directive)
+    (source_dir / 'owned.py').write_text(directive if directive_at_source else plain)
+    result = _make_result('owned.py', 1)
+    artifact = result['locations'][0]['physicalLocation']['artifactLocation']
+    artifact['uriBaseId'] = 'SOURCE'
+    sarif = _make_sarif_data([result])
+    run = sarif['runs'][0]
+    run['originalUriBaseIds'] = {'SOURCE': {'uri': 'src/'}}
+    if indexed:
+        run['artifacts'] = [{'location': dict(artifact)}]
+        result['locations'][0]['physicalLocation']['artifactLocation'] = {'index': 0}
+
+    assert annotate_sarif(sarif, str(tmp_path)) == int(directive_at_source)
+    assert bool(result.get('properties', {}).get('nosemgrep')) is directive_at_source

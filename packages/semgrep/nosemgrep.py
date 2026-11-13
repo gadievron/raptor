@@ -24,7 +24,8 @@ import logging
 import re
 from pathlib import Path
 
-from core.paths import confine, strip_file_uri
+from core.paths import confine
+from core.sarif.parser import ArtifactUriResolver, sarif_uri_path
 from core.source import read_text_capped, split_lines
 
 logger = logging.getLogger(__name__)
@@ -183,6 +184,7 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
         results = run.get("results", [])
         if not isinstance(results, list):
             continue
+        uri_resolver = ArtifactUriResolver(run)
         for result in results:
             if not isinstance(result, dict):
                 continue
@@ -193,7 +195,7 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
             if not isinstance(loc, dict):
                 continue
             phys = _dget(loc, "physicalLocation")
-            uri = _dget(phys, "artifactLocation").get("uri", "")
+            uri = sarif_uri_path(uri_resolver.resolve(_dget(phys, "artifactLocation")))
             line = _dget(phys, "region").get("startLine", 0)
             if not isinstance(uri, str) or not uri:
                 continue
@@ -207,7 +209,7 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
             # files and quote them into properties.nosemgrep (the
             # codeql siblings' read_source_context /
             # read_vulnerable_code enforce the same root).
-            resolved = confine(root, strip_file_uri(uri))
+            resolved = confine(root, uri)
             if resolved is None:
                 continue
             abs_path = str(resolved)
