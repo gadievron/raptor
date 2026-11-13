@@ -1176,12 +1176,16 @@ def module_dynamic_namespace(
                             and type(count.value) is int and count.value > 0):
                         kind, sources = ast.List, (source,)
                         break
-            elif (isinstance(cursor, ast.BinOp) and isinstance(cursor.left, ast.Set)
-                  and isinstance(cursor.right, ast.Set)):
-                if isinstance(cursor.op, (ast.BitOr, ast.BitXor)):
-                    kind, sources = ast.Set, (cursor.left, cursor.right)
-                elif isinstance(cursor.op, (ast.BitAnd, ast.Sub)):
-                    kind, sources = ast.Set, (cursor.left,)
+            elif (isinstance(cursor, ast.BinOp)
+                  and isinstance(cursor.op, (ast.BitOr, ast.BitXor, ast.BitAnd, ast.Sub))):
+                operands = (cursor.left, cursor.right)
+                if not expanded:
+                    pending.append((cursor, True))
+                    pending.extend((operand, False) for operand in operands)
+                    continue
+                if all(collection_operation_cache[operand][0] is ast.Set for operand in operands):
+                    kind = ast.Set
+                    sources = operands if isinstance(cursor.op, (ast.BitOr, ast.BitXor)) else (cursor.left,)
             elif isinstance(cursor, (ast.IfExp, ast.BoolOp)):
                 operands = ((cursor.body, cursor.orelse) if isinstance(cursor, ast.IfExp)
                             else tuple(cursor.values))
