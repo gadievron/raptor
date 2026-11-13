@@ -227,13 +227,16 @@ def test_parallel_flush_threads_keep_all_entries(tmp_path: Path):
 
     threads = [threading.Thread(target=writer, args=(t,))
                for t in ("a", "b")]
-    for t in threads:
-        t.start()
-    # Deadline, not a bare join: a wedged writer must FAIL the test,
-    # not hang the whole suite.
-    for t in threads:
-        t.join(timeout=60)
-    assert not any(t.is_alive() for t in threads), "writer thread hung"
+    from core.testing.threads import retiring_threads
+
+    with retiring_threads(threads, release=lambda: None, timeout=60):
+        for t in threads:
+            t.start()
+        # Deadline, not a bare join: a wedged writer must FAIL the test,
+        # not hang the whole suite.
+        for t in threads:
+            t.join(timeout=60)
+        assert not any(t.is_alive() for t in threads), "writer thread hung"
 
     reloaded = FuzzingMemory(memory_file=memory_file)
     for tag in ("a", "b"):
