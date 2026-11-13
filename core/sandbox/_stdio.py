@@ -37,6 +37,12 @@ def preserve_output_sources(stdout, stderr, *, capture_stdout, capture_stderr):
             out_source = stdout if isinstance(stdout, int) else stdout.fileno()
         if not capture_stderr and stderr not in (None, subprocess.DEVNULL, subprocess.STDOUT):
             err_source = stderr if isinstance(stderr, int) else stderr.fileno()
+        # Same-number dup2 does not clear CLOEXEC. Only explicit
+        # self-redirections request an inheritable installed output.
+        if not capture_stdout and isinstance(out_source, int) and out_source == 1:
+            os.set_inheritable(1, True)
+        if not capture_stderr and isinstance(err_source, int) and err_source == 2:
+            os.set_inheritable(2, True)
         needs_copy = (not capture_stderr and err_source == 1
                       and (capture_stdout or out_source not in (None, 1)))
         with _owned_duplicate(1 if needs_copy else None) as preserved:

@@ -112,13 +112,16 @@ def test_captured_stderr_does_not_consult_unused_file_object():
 
 def test_unchanged_explicit_stdout_needs_no_temporary_descriptor():
     file = StdoutFile()
+    inherited = []
     private = module_function_view(_stdio, bindings={
+        'os': SimpleNamespace(set_inheritable=lambda fd, enabled: inherited.append((fd, enabled))),
         'fcntl': SimpleNamespace(fcntl=lambda *a: pytest.fail('unneeded duplicate')),
     })
     with private.preserve_output_sources(file, 1, capture_stdout=False,
                                          capture_stderr=False) as sources:
         assert sources == (1, 1)
     assert file.lookups == 1
+    assert inherited == [(1, True)]
 
 
 @pytest.mark.parametrize('primary_kind', [ValueError, KeyboardInterrupt], ids=['error', 'interrupt'])
@@ -145,3 +148,74 @@ def test_cleanup_interrupt_does_not_replace_active_failure(primary_kind):
     assert caught is primary
     assert caught.__cause__ is cleanup
     assert closed == [41]
+
+
+@pytest.mark.parametrize('descriptor', [1, 2], ids=['stdout', 'stderr'])
+@pytest.mark.parametrize('filelike', [False, True], ids=['integer', 'file'])
+def test_explicit_self_alias_is_inheritable(descriptor, filelike):
+    inherited = {1: False, 2: False}
+    calls, lookups = [], []
+
+    def set_inheritable(fd, enabled):
+        calls.append((fd, enabled))
+        inherited[fd] = enabled
+
+    class OutputFile:
+        def fileno(self):
+            lookups.append(descriptor)
+            return descriptor
+
+    supplied = OutputFile() if filelike else descriptor
+    stdout = supplied if descriptor == 1 else None
+    stderr = supplied if descriptor == 2 else None
+    private = module_function_view(_stdio, bindings={
+        'os': SimpleNamespace(set_inheritable=set_inheritable),
+        'fcntl': SimpleNamespace(fcntl=lambda *a: pytest.fail('self alias needs no duplicate')),
+    })
+    with private.preserve_output_sources(stdout, stderr, capture_stdout=False,
+                                         capture_stderr=False) as sources:
+        assert sources == ((1, None) if descriptor == 1 else (None, 2))
+        assert inherited[descriptor] is True
+        assert inherited[3 - descriptor] is False
+    assert calls == [(descriptor, True)]
+    assert lookups == ([descriptor] if filelike else [])
+
+
+def test_unspecified_outputs_keep_original_inheritability():
+    private = module_function_view(_stdio, bindings={
+        'os': SimpleNamespace(set_inheritable=lambda *a: pytest.fail('None is not explicit redirection')),
+        'fcntl': SimpleNamespace(fcntl=lambda *a: pytest.fail('unexpected duplicate')),
+    })
+    with private.preserve_output_sources(None, None, capture_stdout=False,
+                                         capture_stderr=False) as sources:
+        assert sources == (None, None)
+
+
+@pytest.mark.parametrize('descriptor', [1, 2], ids=['stdout', 'stderr'])
+def test_output_inheritability_failure_refuses_setup(descriptor):
+    problem = OSError('owned inheritability failure')
+
+    def refused(fd, enabled):
+        assert fd == descriptor and enabled is True
+        raise problem
+
+    private = module_function_view(_stdio, bindings={'os': SimpleNamespace(set_inheritable=refused)})
+    with pytest.raises(OSError) as caught:
+        with private.preserve_output_sources(1 if descriptor == 1 else None,
+                                             2 if descriptor == 2 else None,
+                                             capture_stdout=False, capture_stderr=False):
+            pytest.fail('failed explicit redirection must not proceed')
+    assert caught.value is problem
+
+
+@pytest.mark.parametrize('descriptor', [1, 2], ids=['stdout', 'stderr'])
+def test_capture_overrides_do_not_change_source_inheritability(descriptor):
+    private = module_function_view(_stdio, bindings={
+        'os': SimpleNamespace(set_inheritable=lambda *a: pytest.fail('captured source is unused')),
+        'fcntl': SimpleNamespace(fcntl=lambda *a: pytest.fail('captured source needs no duplicate')),
+    })
+    with private.preserve_output_sources(1 if descriptor == 1 else None,
+                                         2 if descriptor == 2 else None,
+                                         capture_stdout=descriptor == 1,
+                                         capture_stderr=descriptor == 2) as sources:
+        assert sources == ((1, None) if descriptor == 1 else (None, 2))
