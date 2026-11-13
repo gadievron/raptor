@@ -655,6 +655,9 @@ def _payload_from_assignment(
         # never assigned_names; see _embedded_store_names.
         defs = defs | _embedded_store_names(rhs)
     if lhs is not None and lhs.type != _IDENT:
+        # Evaluating the store location can itself rebind another local.
+        # These writes are definers, never captures of the outer RHS.
+        defs = defs | _embedded_store_names(lhs)
         uses |= _walk_uses(lhs, resolver)
     calls = {cs.name for cs in css}
     return frozenset(calls), defs, frozenset(uses), tuple(css)
@@ -1216,10 +1219,8 @@ class _JavaCFGBuilder:
                 calls, defs, uses, css = _payload_from_assignment(
                     inner, self.resolver, self._local_scopes)
             elif inner is not None and inner.type == _UPDATE:
-                tgt = _base_ident(inner)
-                defs = frozenset({tgt}) if tgt else frozenset()
-                uses = defs
-                calls, css = frozenset(), ()
+                calls, defs, uses, css = _payload_from_subtree(
+                    inner, self.resolver)
             else:
                 calls, defs, uses, css = _payload_from_subtree(
                     inner, self.resolver)
