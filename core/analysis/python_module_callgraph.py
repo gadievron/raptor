@@ -1100,6 +1100,10 @@ def module_dynamic_namespace(
                     elif (isinstance(cursor, ast.Subscript) and isinstance(cursor.slice, ast.Slice)
                           and potential_sequence_container(cursor.value)):
                         children = (cursor.value,)
+                    elif isinstance(cursor, ast.Subscript) and not isinstance(cursor.slice, ast.Slice):
+                        selected = selected_literal_value(cursor)
+                        if selected is not None:
+                            children = (selected,)
                     elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
                           and (cursor.func.id in sequence_copy_names
                                or cursor.func.id in iterator_wrapper_names)
