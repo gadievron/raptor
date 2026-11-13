@@ -74,7 +74,8 @@ def diff_sarif_data(
     structure) are skipped — the data-extensions approach is about
     sanitizer modelling, which is meaningful only for path-aware
     findings. Non-dataflow results count toward neither baseline nor
-    augmented totals.
+    augmented totals. Malformed dataflow paths raise ``ValueError``;
+    dropping them could misreport a parse failure as suppression.
     """
     baseline_ids = _sarif_finding_ids(baseline)
     augmented_ids = _sarif_finding_ids(augmented)
@@ -138,10 +139,7 @@ def _sarif_finding_ids(sarif: Mapping[str, Any]) -> set[str]:
     ids: set[str] = set()
     for run in sarif.get("runs", []) or []:
         for result in run.get("results", []) or []:
-            try:
-                finding = from_sarif_result(result)
-            except ValueError:
-                continue
+            finding = from_sarif_result(result)
             if finding is None:
                 continue
             ids.add(finding.finding_id)
