@@ -1349,7 +1349,12 @@ class AuditKnowledgeRuntime:
             if self._closed or key in self._busy or key in self._active_units or key in self._reserving:
                 return None
             self._reserving.add(key)
+        reservation = None
+        previous_pass_id = None
+        previous_pass_known = False
         try:
+            previous_pass_id = cycle.state_record()["active_pass_id"]
+            previous_pass_known = True
             packet = cycle.reserve(now=now, current_source=capture_source_identity(self.target_root, key[0]),
                                    current_binary=(self._current_binary_cycle_input(cycle.origin)
                                        if isinstance(cycle.origin, BinaryKnowledgeOrigin) else None),
@@ -1365,6 +1370,19 @@ class AuditKnowledgeRuntime:
                                      "pass_id": packet.pass_id, "delta_ids": list(packet.delta_ids),
                                      "pending_ids": list(packet.pending_ids), "required_calls": required_calls})
             return reservation
+        except BaseException as error:
+            try:
+                try:
+                    if previous_pass_known:
+                        active_pass_id = cycle.state_record()["active_pass_id"]
+                        if active_pass_id is not None and active_pass_id != previous_pass_id:
+                            cycle.failed(active_pass_id, reason="reservation_install_interrupted")
+                finally:
+                    if reservation is not None:
+                        self._release(reservation)
+            except BaseException as cleanup_error:
+                error.add_note("Reservation cleanup also failed: " + type(cleanup_error).__name__)
+            raise
         finally:
             with self._lock:
                 self._reserving.discard(key)
