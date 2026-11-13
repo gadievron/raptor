@@ -873,6 +873,8 @@ class OrchestratorConfig:
     # Operator-selected target integer ABI. Never infer from the audit host
     # or let a hypothesis/tool configuration supply this assertion.
     integer_abi: IntegerABIInput = None
+    # Pipeline-owned descriptive comparison, never a checker receipt.
+    integer_abi_context: dict[str, Any] | None = field(default=None, kw_only=True)
     # Run-owned measured preparation inputs. Missing facts remain per-claim
     # unknown; this does not authorise another checker or public verdict.
     prepared_claim_pipeline: Any = field(default=None, kw_only=True, repr=False)

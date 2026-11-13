@@ -449,6 +449,12 @@ def _build_orchestrator_config(
     from .integer_abi import resolve_integer_abi, select_integer_abi
     opts.integer_abi = select_integer_abi(opts.integer_abi, target_path=opts.target_path)
     abi = resolve_integer_abi(opts.integer_abi)
+    from .integer_abi_context import compare_integer_abi
+    abi_context = compare_integer_abi(opts.integer_abi, target_path=opts.target_path)
+    if abi_context is not None and abi_context["status"] == "contradictory":
+        logger.warning("Selected integer ABI contradicts known binary platform fields %s; "
+                       "results under this override are conditional, not actual-binary guarantees",
+                       ", ".join(abi_context["contradicted_fields"]))
     if abi is None:
         logger.info("Target integer ABI unknown: source overflow/array SMT is inconclusive")
     elif abi.source == "host-assumption":
@@ -472,6 +478,7 @@ def _build_orchestrator_config(
         pins=opts.pins,
         strategy_filter=opts.strategy_filter,
         integer_abi=opts.integer_abi if abi is not None else None,
+        integer_abi_context=abi_context,
         models=models,
         multi_model=len(models) > 1,
         adversarial=opts.adversarial,
@@ -579,6 +586,12 @@ def run_audit_pipeline(opts: AuditPipelineOpts):
         mode=opts.mode, out_dir=opts.out_dir,
     )
     config = _build_orchestrator_config(opts, client, models, opts.mode)
+    if config.integer_abi_context is not None and config.out_dir is not None:
+        from .record import append_audit_log
+        Path(config.out_dir).mkdir(parents=True, exist_ok=True)
+        append_audit_log(config.out_dir, {"action": "integer_abi_context",
+                         "role": "conditional_assumption_not_verification_evidence",
+                         "context": config.integer_abi_context})
     config.pre_export_hooks = [dampen_pileup_pre_export]
 
     if len(models) > 1:
