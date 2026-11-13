@@ -704,3 +704,21 @@ def test_suppression_reads_the_run_owned_source(tmp_path, indexed, directive_at_
 
     assert annotate_sarif(sarif, str(tmp_path)) == int(directive_at_source)
     assert bool(result.get('properties', {}).get('nosemgrep')) is directive_at_source
+
+
+@pytest.mark.parametrize('reference,applies', [
+    ({'ruleIndex': 0}, True),
+    ({'ruleIndex': 1}, False),
+    ({'ruleIndex': True}, False),
+    ({'rule': {'index': 0}}, True),
+])
+def test_scoped_directive_uses_validated_rule_reference(tmp_path, reference, applies):
+    (tmp_path / 'owned.py').write_text('x = value  # nosemgrep: test.rule scoped\n')
+    result = _make_result('owned.py', 1)
+    del result['ruleId']
+    result.update(reference)
+    sarif = _make_sarif_data([result], 'semgrep')
+    sarif['runs'][0]['tool']['driver']['rules'] = [{'id': 'test.rule'}, {'id': 'other.rule'}]
+
+    assert annotate_sarif(sarif, str(tmp_path)) == int(applies)
+    assert bool(result.get('properties', {}).get('nosemgrep')) is applies
