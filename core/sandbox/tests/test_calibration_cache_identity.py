@@ -151,6 +151,8 @@ def test_missing_binary_memo_retries_when_binary_appears(monkeypatch, tmp_path):
 
 
 def test_waiter_timeout_does_not_cancel_or_replace_owner(monkeypatch, binary):
+    from core.testing.threads import retiring_threads
+
     started, release, waiter_done = threading.Event(), threading.Event(), threading.Event()
     owner_results, waiter_results, errors = [], [], []
     profile = SimpleNamespace(proxy_hosts=["ready.example"])
@@ -172,18 +174,19 @@ def test_waiter_timeout_does_not_cancel_or_replace_owner(monkeypatch, binary):
     monkeypatch.setattr(cal, "load_or_calibrate", load)
     owner = threading.Thread(target=call, args=(owner_results, 20), daemon=True)
     waiter = threading.Thread(target=call, args=(waiter_results, 0, waiter_done), daemon=True)
-    owner.start()
-    try:
-        assert started.wait(5)
-        waiter.start()
-        assert waiter_done.wait(5), "waiter ignored its own advisory timeout"
-        assert waiter_results == [None]
-        assert owner.is_alive()
-    finally:
-        release.set()
-        owner.join(5)
-        if waiter.ident is not None:
-            waiter.join(5)
+    with retiring_threads((owner, waiter), release=release.set, timeout=5):
+        owner.start()
+        try:
+            assert started.wait(5)
+            waiter.start()
+            assert waiter_done.wait(5), "waiter ignored its own advisory timeout"
+            assert waiter_results == [None]
+            assert owner.is_alive()
+        finally:
+            release.set()
+            owner.join(5)
+            if waiter.ident is not None:
+                waiter.join(5)
     assert not errors
     assert owner_results == [profile]
     assert memo.calibrated_profile(str(binary), (), timeout=0) is profile
