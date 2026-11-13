@@ -1240,7 +1240,7 @@ def module_dynamic_namespace(
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and cursor.func.attr in {"union", "difference", "intersection", "symmetric_difference"}
                   and not cursor.keywords
-                  and all(isinstance(item, ast.Set) for item in cursor.args)
+                  and all(isinstance(item, (ast.Set, ast.Tuple, ast.List)) for item in cursor.args)
                   and (cursor.func.attr != "symmetric_difference" or len(cursor.args) == 1)):
                 source = cursor.func.value
                 if not expanded:
