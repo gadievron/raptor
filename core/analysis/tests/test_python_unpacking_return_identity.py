@@ -50,3 +50,35 @@ def test_exact_plain_return_positions_keep_value_bound_controls(statement):
     assert call.assigned_names == frozenset({'tmp'})
     assert result.value_bound_bindings
     assert result.suppress is True
+
+
+def test_unpacking_a_call_result_does_not_capture_the_whole_return():
+    source = "import shlex\ndef handle(raw):\n    left, tmp, right = shlex.quote(raw)\n"
+    cfg = build_python_cfg(source, "handle")
+    assert cfg is not None
+    assignment = next(n for n in cfg.nodes() if "shlex.quote" in n.calls)
+    site = next(cs for cs in assignment.call_sites if cs.name == "shlex.quote")
+    assert assignment.defs == frozenset({"left", "tmp", "right"})
+    assert site.arg_names == frozenset({"raw"})
+    assert not site.assigned_names
+
+
+@pytest.mark.parametrize("statement", [
+    "[left, tmp, right] = shlex.quote(raw)",
+    "left, *tmp = shlex.quote(raw)",
+    "(left, tmp), other = shlex.quote(raw), raw",
+])
+def test_destructured_return_elements_have_no_whole_return_identity(statement):
+    cfg = build_python_cfg("import shlex\ndef handle(raw):\n    " + statement + "\n", "handle")
+    assert cfg is not None
+    assignment = next(n for n in cfg.nodes() if "shlex.quote" in n.calls)
+    assert "tmp" in assignment.defs
+    assert not next(cs for cs in assignment.call_sites if cs.name == "shlex.quote").assigned_names
+
+
+def test_chained_whole_return_keeps_identity_without_crediting_unpacking():
+    cfg = build_python_cfg("import shlex\ndef handle(raw):\n    whole = left, tmp, right = shlex.quote(raw)\n", "handle")
+    assert cfg is not None
+    assignment = next(n for n in cfg.nodes() if "shlex.quote" in n.calls)
+    assert assignment.defs == frozenset({"whole", "left", "tmp", "right"})
+    assert next(cs for cs in assignment.call_sites if cs.name == "shlex.quote").assigned_names == frozenset({"whole"})

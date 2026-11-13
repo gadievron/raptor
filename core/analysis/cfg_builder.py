@@ -358,25 +358,16 @@ def _arg_surface_names(call: ast.Call) -> frozenset[str]:
 
 
 def _assign_target_names(target: ast.AST) -> frozenset[str]:
-    """Collect ``Store``-context bare names from one assignment target.
+    """Bare names that receive this exact RHS value, without unpacking.
 
-    Handles ``Name``, ``Tuple``, ``List`` and ``Starred`` binding
-    positions. Attribute/subscript targets do not capture the return
-    as a fresh bare name. Their evaluated expressions may contain
-    walruses, but those names receive their own RHS, not this call's
-    return value. The symbol walk records those definitions separately.
+    A tuple/list/starred target receives iterable elements or a collected
+    list, not the call's complete return. Attribute/subscript expressions
+    also do not capture it into a fresh bare name. The symbol walker still
+    records all target definitions separately.
     """
-    names: set[str] = set()
-    pending = [target]
-    while pending:
-        child = pending.pop()
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
-            names.add(child.id)
-        elif isinstance(child, (ast.Tuple, ast.List)):
-            pending.extend(child.elts)
-        elif isinstance(child, ast.Starred):
-            pending.append(child.value)
-    return frozenset(names)
+    if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
+        return frozenset({target.id})
+    return frozenset()
 
 
 def _statement_assigned_map(stmt: ast.stmt) -> dict[int, frozenset[str]]:
