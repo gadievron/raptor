@@ -152,7 +152,7 @@ def render(m: Metrics) -> str:
     )
     lines.append(
         f"  Recall:    {r:.3f}" if r is not None
-        else "  Recall:    undefined (no positives in labels)"
+        else "  Recall:    undefined (no classified positive labels)"
     )
     lines.append(
         f"  F1:        {fone:.3f}" if fone is not None
