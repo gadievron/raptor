@@ -71,7 +71,10 @@ class TestProgressTrend:
     def test_fifo_trail_refused_without_blocking(self, tmp_path):
         import os
         import threading
-        os.mkfifo(tmp_path / "coverage-progress.jsonl")
+        from core.coverage.tests.test_reader_fd_discipline import _retiring_fifo_thread
+
+        fifo = tmp_path / "coverage-progress.jsonl"
+        os.mkfifo(fifo)
         done = threading.Event()
 
         def _render() -> None:
@@ -79,8 +82,9 @@ class TestProgressTrend:
             done.set()
 
         t = threading.Thread(target=_render, daemon=True)
-        t.start()
-        assert done.wait(5), "trend render wedged on a planted FIFO"
+        with _retiring_fifo_thread(t, done, fifo, writer=False):
+            t.start()
+            assert done.wait(5), "trend render wedged on a planted FIFO"
 
 
 class TestVerifiedOutcomesTrail:
