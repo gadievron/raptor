@@ -272,7 +272,7 @@ def test_parent_raises_typed_error_on_missing_confirmation(
         pytest.skip("spawn backend not dispatched on this host "
                     "(refused before the status seam)")
     assert excinfo.value.setup_category == "!"
-    assert "died during setup" in str(excinfo.value)
+    assert "could not be confirmed" in str(excinfo.value)
     assert "rc=-9" in str(excinfo.value)
     assert len(calls) == 1, "the '!' category must not ride any ladder"
 
@@ -370,7 +370,7 @@ def test_involuntary_child_death_raises_typed_error(tmp_path, monkeypatch):
                      output=str(tmp_path), timeout=60)
     except SandboxSetupError as e:
         assert e.setup_category == "!", str(e)
-        assert "died during setup" in str(e)
+        assert "could not be confirmed" in str(e)
         return
     except (pytest.skip.Exception, pytest.fail.Exception):
         raise
