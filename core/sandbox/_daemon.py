@@ -584,7 +584,14 @@ def _render_compose(chunks, recvs):
                 raise IndexError(msg)
             raw = recvs[idx].decode("utf-8", errors="replace").strip()
             tok = raw.split()[0] if raw.split() else ""
-            tok = tok.removeprefix("0x")
+            negative = tok.startswith("-")
+            if tok[:1] in ("+", "-"):
+                tok = tok[1:]
+            if (len(tok) >= 2 and tok[1] in ("x", "X")
+                    and tok[0].isdecimal() and int(tok[0]) == 0):
+                tok = tok[2:]
+                if tok.startswith("_"):
+                    tok = tok[1:]
             if not tok:
                 msg = f"recv_le64: recvs[{idx}] is empty after tokenization"
                 raise ValueError(msg)
@@ -595,14 +602,18 @@ def _render_compose(chunks, recvs):
             # multi-megabit int materialisation per chunk before the
             # 64-bit mask discarded it. Only 64 bits survive the LE64
             # pack and 16 hex digits carry exactly those bits —
-            # validating the whole token then parsing its last 16
-            # digits is value-identical to the unbounded parse+mask
-            # (and non-hex input still raises, as int() did).
-            if re.fullmatch(r"[0-9a-fA-F]+", tok) is None:
+            # Retain int()'s sign, prefix, separator and decimal-digit
+            # syntax. Separate underscore checks avoid repeated regex
+            # groups on a large token; malformed prefixes still refuse.
+            if (tok.startswith("_") or tok.endswith("_") or "__" in tok
+                    or re.fullmatch(r"[\da-fA-F_]+", tok) is None):
                 msg = (f"recv_le64: recvs[{idx}] first token is not "
                        f"a hex integer")
                 raise ValueError(msg)
-            out += _struct.pack("<Q", int(tok[-16:], 16))
+            # With only single separators, 31 trailing characters contain
+            # the last 16 digits. Never normalise or parse the whole token.
+            value = int(tok[-31:].replace("_", "")[-16:], 16)
+            out += _struct.pack("<Q", (-value if negative else value) & 0xFFFFFFFFFFFFFFFF)
         else:
             msg = f"unknown compose chunk kind: {kind!r}"
             raise ValueError(msg)
