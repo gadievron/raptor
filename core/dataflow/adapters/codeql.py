@@ -25,12 +25,10 @@ JSON entries can later be re-parsed by the same adapter without loss.
 from __future__ import annotations
 
 import hashlib
-from typing import Any, TYPE_CHECKING
+from collections.abc import Mapping
+from typing import Any
 
 from core.dataflow.finding import Finding, Step
-
-if TYPE_CHECKING:
-    from collections.abc import Mapping
 
 
 PRODUCER = "codeql"
@@ -86,6 +84,8 @@ def from_sarif_result(
     if not code_flows:
         return None
 
+    if not isinstance(code_flows[0], Mapping):
+        raise ValueError("SARIF codeFlows entry must be an object")
     thread_flows = code_flows[0].get("threadFlows")
     if thread_flows is not None and not isinstance(thread_flows, (list, tuple)):
         raise ValueError("SARIF threadFlows must be an array")
@@ -93,6 +93,8 @@ def from_sarif_result(
     if not thread_flows:
         return None
 
+    if not isinstance(thread_flows[0], Mapping):
+        raise ValueError("SARIF threadFlows entry must be an object")
     locations = thread_flows[0].get("locations")
     if locations is not None and not isinstance(locations, (list, tuple)):
         raise ValueError("SARIF locations must be an array")
@@ -102,6 +104,8 @@ def from_sarif_result(
 
     steps: list[Step] = []
     for loc_wrapper in locations:
+        if not isinstance(loc_wrapper, Mapping):
+            raise ValueError("SARIF locations entry must be an object")
         loc = loc_wrapper.get("location") or {}
         physical_loc = loc.get("physicalLocation") or {}
         region = physical_loc.get("region") or {}
