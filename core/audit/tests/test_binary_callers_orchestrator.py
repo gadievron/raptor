@@ -25,10 +25,34 @@ from packages.ghidra.model import REDatabase, REFunction, REType, REXref
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("change", ["healthy", "changed_caller", "coalesced"])
+@pytest.mark.parametrize("change", ["healthy", "changed_caller", "coalesced",
+                                    "coalesced_omitted_subject", "coalesced_omitted_caller"])
 def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk_clients, change):
     import core.audit.binary_context as context_module
+    import core.audit.llm_review as review_module
     import core.inventory.binary_builder as builder
+
+    coalesced = change.startswith("coalesced")
+    omitted_field = {"coalesced_omitted_subject": "binary_subject_context",
+                     "coalesced_omitted_caller": "binary_caller_context"}.get(change)
+    formatted_omissions = []
+    if omitted_field is not None:
+        original_formatter = review_module.format_context_for_prompt
+
+        def omit_one_context(ctx, **kwargs):
+            if "binary_subject_context" in ctx and "binary_caller_context" in ctx:
+                omitted_context = ctx[omitted_field]
+                fitted_ctx = dict(ctx)
+                del fitted_ctx[omitted_field]
+                prompt = original_formatter(fitted_ctx, **kwargs)
+                assert ctx[omitted_field] is omitted_context
+                formatted_omissions.append(omitted_field)
+                return prompt
+            return original_formatter(ctx, **kwargs)
+
+        # Own only the review consumer binding; the real formatter and all
+        # invocation-owned delivery sinks still decide what reached the prompt.
+        monkeypatch.setattr(review_module, "format_context_for_prompt", omit_one_context)
 
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setattr(orchestrator, "_run_mechanical_detectors", lambda *a, **k: ({}, set()))
@@ -50,7 +74,7 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             REFunction(name="caller", address=8192, size=32, source_tool="fixture",
                        decompilation="unsigned caller(unsigned n) { return f(n); }"),
         ], xrefs=[REXref(from_addr=8196, to_addr=4096, kind="call", source_tool="fixture")])
-    if change == "coalesced":
+    if coalesced:
         database.types.append(REType(name="Packet", kind="struct", size=16, source_tool="fixture",
             fields=[{"name": "length", "type": "unsigned int", "offset": None}]))
     checklist = build_binary_checklist(database, binary_path=target)
@@ -105,7 +129,7 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             caller, = identities["callers"]
             assert caller == {"function": "caller", "address": 8192}
             assert "return f(n);" not in prompt and "Binary related-code context" not in prompt
-            if change == "coalesced":
+            if coalesced:
                 assert "Packet" not in prompt and "Recovered binary type context" not in prompt
             selected_caller.update(file=identities["module_file"], function=caller["function"],
                                    address=caller["address"], line_start=0)
@@ -113,7 +137,7 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
         payload = {"status": "clean", "body": "Recorded related code is partial context, not verification.",
                    "caller_context_requests": [{**selected_caller,
                        "reason": "Inspect input handling" if first else "Inspect the same recorded caller"}]}
-        if change == "coalesced":
+        if coalesced:
             payload["reading_list"] = [{"subject": "Packet", "resolution": "identifier",
                 "context": "field layout" if first else "interpret the same recorded fields"}]
         message = response["choices"][0]["message"]
@@ -131,7 +155,7 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
             "address": {"type": "integer", "minimum": 0}, "line_start": {"type": "integer", "minimum": 0},
             "reason": {"type": "string"}}, "required": ["file", "function", "address", "line_start", "reason"]}},
     }, "required": ["status", "body"]}
-    if change == "coalesced":
+    if coalesced:
         schema["properties"]["reading_list"] = {"type": "array", "items": {"type": "object", "properties": {
             "subject": {"type": "string"}, "context": {"type": "string"},
             "resolution": {"type": "string"}}, "required": ["subject", "context", "resolution"]}}
@@ -150,14 +174,22 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
     assert len(bundle.state["requests"]) == bundle.client._governed_calls == 2
     prompts = [json.loads(request.content)["messages"] for request in bundle.state["requests"]]
     second = "\n".join(message["content"] for message in prompts[1] if message["role"] == "user")
-    assert "Binary related-code context" in second and "return f(n);" in second
-    assert '"caller_address":8192' in second
-    assert "recorded_direct_call_xref_not_execution" in second
+    if omitted_field == "binary_caller_context":
+        assert "Binary related-code context" not in second and "return f(n);" not in second
+        assert '"caller_address":8192' not in second
+    else:
+        assert "Binary related-code context" in second and "return f(n);" in second
+        assert '"caller_address":8192' in second
+        assert "recorded_direct_call_xref_not_execution" in second
     assert "binary:previous-name" not in second
-    if change == "coalesced":
+    if omitted_field == "binary_subject_context":
+        assert "Recovered binary type context" not in second
+        assert '"subject":"Packet"' not in second and '"name":"length"' not in second
+    elif coalesced:
         assert "Recovered binary type context" in second
         assert '"subject":"Packet"' in second and '"name":"length"' in second
         assert "recovered_binary_type_context_not_evidence" in second
+    assert formatted_omissions == ([omitted_field] if omitted_field is not None else [])
     history = json.loads((out / "knowledge-results.json").read_text())
     attempts = [event for event in history["events"] if event["event"] == "review_attempt"]
     assert len(attempts) == 2
@@ -191,6 +223,15 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
     completed = [event for event in history["events"] if event["event"] == "continuation_completed"]
     caller_answers = [event for event in history["events"] if event["event"] == "binary_caller_answer"]
     assert caller_answers and caller_answers[0]["material"]["caller_address"] == 8192
+    if coalesced:
+        assert all(answer["status"] == "partial" for answer in caller_answers)
+        subject_answers = [event for event in history["events"] if event["event"] == "binary_subject_answer"]
+        assert subject_answers and all(answer["status"] == "partial" for answer in subject_answers)
+        material = subject_answers[0]["material"]
+        assert material["subject"] == "Packet" and material["fields"][0]["name"] == "length"
+        assert material["fields"][0]["offset_bytes"] is None
+        assert material["fields"][0]["size_bytes"] is None and material["signedness"] == "unknown"
+        assert "source_quote" not in material
     if change in ("healthy", "coalesced"):
         assert not changed and result.clean == 1
         assert len(context_entries) == len(completed) == 1
@@ -198,19 +239,20 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
         assert completed[0]["published_status"] == "clean"
         context = context_entries[0].review_claims["binary_inputs"]
         assert context["origin"] == origins[1]
-        if change == "coalesced":
+        if coalesced:
             assert {row["kind"] for row in context["contexts"]} == {
                 "binary_target_semantics", "binary_callers"}
             assert len(context["contexts"]) == 2
-            subject_answers = [event for event in history["events"] if event["event"] == "binary_subject_answer"]
-            assert subject_answers and all(answer["status"] == "partial" for answer in subject_answers)
-            material = subject_answers[0]["material"]
-            assert material["subject"] == "Packet" and material["fields"][0]["name"] == "length"
-            assert material["fields"][0]["offset_bytes"] is None
-            assert material["fields"][0]["size_bytes"] is None and material["signedness"] == "unknown"
-            assert "source_quote" not in material
         else:
             assert [row["kind"] for row in context["contexts"]] == ["binary_callers"]
+    elif omitted_field is not None:
+        assert not changed
+        assert not context_entries and not completed
+        accepted = load_redb_binding(artifact)
+        assert accepted.current() and accepted.projection_sha256 == original_analysis
+        assert artifact.read_bytes() == original_artifact_bytes
+        # A producer answer is historical availability, not evidence that both
+        # contexts reached this invocation. Earlier ordinary assessments remain.
     else:
         assert changed == [True]
         assert not context_entries and not completed
