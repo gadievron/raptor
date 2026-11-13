@@ -3806,6 +3806,8 @@ def _review_one_function_impl(
         chain = _collect_chain_findings(
             gap_key, call_edges, reviewed_outcomes,
             call_edge_index=call_edge_index,
+            occurrence=(gap["file"], gap["name"], gap.get("line_start", 0)),
+            occurrences=shared.chain_occurrences,
         )
         if chain:
             ctx["chain_findings"] = chain
@@ -29179,6 +29181,9 @@ def _collect_chain_findings(
     call_edges: list,
     reviewed_outcomes: dict[str, ReviewOutcome],
     call_edge_index: dict[str, list] | None = None,
+    *,
+    occurrence: tuple[str, str, int] | None = None,
+    occurrences=None,
 ) -> list[dict[str, str]]:
     """Collect findings from 1-hop neighbours for chain context.
 
@@ -29188,8 +29193,17 @@ def _collect_chain_findings(
 
     When *call_edge_index* is provided (built once at loop setup),
     only edges involving *fn_key* are examined instead of the full
-    edge list.
+    edge list. The review pipeline also supplies its original occurrence
+    inventory: bare edges cannot choose between duplicate declarations or
+    borrow a compatibility alias from another line. Legacy direct callers
+    without a scheduled occurrence retain their existing advisory behaviour.
     """
+    if occurrence is not None and (
+        occurrences is None or type(occurrence[2]) is not int or occurrence[2] <= 0
+        or fn_key != f"{occurrence[0]}:{occurrence[1]}"
+        or occurrences.get(occurrence[:2]) != occurrence[2]
+    ):
+        return []
     edges = call_edge_index.get(fn_key, ()) if call_edge_index else call_edges
     chain: list[dict[str, str]] = []
     seen: set = set()
@@ -29213,6 +29227,12 @@ def _collect_chain_findings(
 
         prior = reviewed_outcomes.get(neighbour)
         if prior and prior.status in ("finding", "suspicious"):
+            if occurrence is not None and (
+                type(prior.line) is not int or prior.line <= 0
+                or occurrences.get((prior.file, prior.function)) != prior.line
+                or neighbour != f"{prior.file}:{prior.function}"
+            ):
+                continue
             entry: dict[str, str] = {
                 "function": f"{prior.file}:{prior.function}",
                 "status": prior.status,
