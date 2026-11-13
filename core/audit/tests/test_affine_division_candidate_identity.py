@@ -16,11 +16,17 @@ def discover(body, language="c"):
     "return Value/(Count-1);",
     "return (Value)/((Count-1));",
     "return Value/(Count-0x1);",
-    "return sizeof(Value/(Count-1));",
     "{void *Value=0;return Value/(Count-1);}",
-], ids=["duplicate", "parenthesized", "numeric-offset", "unevaluated", "type-refused"])
+], ids=["duplicate", "parenthesized", "numeric-offset", "type-refused"])
 def test_ambiguous_affine_division_has_no_discovery_objective(second, language):
     assert discover("if(Value==0)return Value/(Count-1);" + second, language) == []
+
+
+@pytest.mark.parametrize("language", ["c", "cpp"])
+def test_unevaluated_duplicate_does_not_obscure_one_runtime_site(language):
+    assert discover("if(Value==0)return Value/(Count-1);return sizeof(Value/(Count-1));", language) == [
+        ("Value", "Count", "-", 1, "/", "zero-divisor"),
+    ]
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
