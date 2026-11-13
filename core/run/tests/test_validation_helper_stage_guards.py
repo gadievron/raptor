@@ -8,6 +8,8 @@ ids. Colocated with the run-lifecycle CLI tests.
 """
 
 import importlib.util
+from contextlib import ExitStack
+import subprocess
 import json
 import os
 import sys
@@ -17,9 +19,26 @@ from unittest.mock import patch
 
 import pytest
 
+from core.testing.module_views import scoped_function_imports
+
 from core.json import load_json
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture()
+def _private_discovery(monkeypatch):
+    with ExitStack() as scopes:
+        def install(mod, fake_run):
+            imports = scopes.enter_context(scoped_function_imports(
+                mod, ("_discover_executables",), {"subprocess": subprocess},
+            ))
+            monkeypatch.setattr(imports.subprocess, "run", fake_run)
+
+        try:
+            yield install
+        finally:
+            monkeypatch.undo()
 
 
 def _load_helper():
@@ -303,28 +322,26 @@ class TestBinaryDiscoveryFailuresAreLoud:
     itself failed."""
 
     def test_timeout_warns_and_returns_empty(self, tmp_path, capsys,
-                                             monkeypatch):
-        import subprocess
+                                             monkeypatch, _private_discovery):
         mod = _load_helper()
 
         def fake_run(*a, **kw):
             raise subprocess.TimeoutExpired(cmd="find", timeout=30)
 
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        _private_discovery(mod, fake_run)
         result = mod._discover_executables(str(tmp_path))
         assert result == {}
         err = capsys.readouterr().err
         assert "binary discovery timed out" in err
 
     def test_oserror_warns_and_returns_empty(self, tmp_path, capsys,
-                                             monkeypatch):
-        import subprocess
+                                             monkeypatch, _private_discovery):
         mod = _load_helper()
 
         def fake_run(*a, **kw):
             raise OSError("find: command not found")
 
-        monkeypatch.setattr(subprocess, "run", fake_run)
+        _private_discovery(mod, fake_run)
         result = mod._discover_executables(str(tmp_path))
         assert result == {}
         err = capsys.readouterr().err
