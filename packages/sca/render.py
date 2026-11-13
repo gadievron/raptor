@@ -108,7 +108,7 @@ def main(argv: Sequence[str]) -> int:
         except (OSError, ValueError) as exc:
             print(f"raptor-sca render: SARIF write failed: {_sft(str(exc))}", file=sys.stderr)
             sarif_errors.append("SARIF export failed; the operator summary and requested reports are generated independently.")
-    from .reporting import build_sca_document
+    from .reporting import InvalidSuppressionError, build_sca_document
     from core.reporting.service import capture_failure_summary, complete_reporting
     try:
         try:
@@ -120,6 +120,8 @@ def main(argv: Sequence[str]) -> int:
                                                      "reachability": args.reachability, "only_reachable": args.only_reachable,
                                                      "hide_not_reachable": args.hide_not_reachable})
         except (ValueError, TypeError) as exc:
+            if isinstance(exc, InvalidSuppressionError):
+                print("raptor-sca render: portable capture refused: suppressed must be JSON true or false, or omitted", file=sys.stderr)
             result = capture_failure_summary(
                 "sca", base_dir.name, str(target), base_dir, cause=exc,
                 artifacts=[{"path": str(findings_path)}, {"path": str(sarif_path)}], stream=sys.stdout,
