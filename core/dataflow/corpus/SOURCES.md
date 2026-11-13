@@ -242,6 +242,7 @@ Pinned upstream sources for the source_intel arc's memory-corruption seed (PR0 s
 
 - Upstream: https://github.com/torvalds/linux (tag `v5.1`)
 - Fix sha: `9f1f1a2dab38d4ce87a13565cf4dc1b73bef3a5f` (drm-misc)
+- Pinned sha (vulnerable, v5.1): `e93c9c99a629c61837d5a7fc2120cd2b6c70dbdd`
 - Local path: `out/dataflow-corpus-fixtures/linux-cve-2019-12382/`
 - Bug location: `drivers/gpu/drm/drm_edid_load.c`, function `drm_load_edid_firmware`, line 292
 - CWE: CWE-476 (kstrdup result stored without NULL check → subsequent strsep derefs NULL on alloc failure)
@@ -252,6 +253,7 @@ Pinned upstream sources for the source_intel arc's memory-corruption seed (PR0 s
 
 - Upstream: https://github.com/torvalds/linux (tag `v5.1`)
 - Fix sha: `efa9ace68e487ddd29c2b4d6dd23242158f1f607` (powerpc)
+- Pinned sha (vulnerable, v5.1): `e93c9c99a629c61837d5a7fc2120cd2b6c70dbdd`
 - Local path: `out/dataflow-corpus-fixtures/linux-cve-2019-12614/`
 - Bug location: `arch/powerpc/platforms/pseries/dlpar.c`, function `dlpar_parse_cc_property`, line 63
 - CWE: CWE-476 (same shape as 12382: kstrdup result stored without NULL check; downstream deref of prop->name)
@@ -261,6 +263,7 @@ Pinned upstream sources for the source_intel arc's memory-corruption seed (PR0 s
 
 - Upstream: https://github.com/torvalds/linux (tag `v5.1`)
 - Fix sha: `80caf43549e7e41a695c6d1e11066286538b336f` (sparc)
+- Pinned sha (vulnerable, v5.1): `e93c9c99a629c61837d5a7fc2120cd2b6c70dbdd`
 - Local path: `out/dataflow-corpus-fixtures/linux-cve-2019-12615/`
 - Bug location: `arch/sparc/kernel/mdesc.c`, function `get_vdev_port_node_info`, line 358
 - CWE: CWE-476 (kstrdup_const result stored without NULL check; downstream deref)
