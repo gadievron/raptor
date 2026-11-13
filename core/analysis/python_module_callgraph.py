@@ -1296,7 +1296,8 @@ def module_dynamic_namespace(
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
                 and not value.keywords):
             receiver = value.func.value
-            if ((value.func.attr == "get" and not isinstance(receiver, (ast.Tuple, ast.List))
+            if ((value.func.attr in {"get", "pop", "setdefault"}
+                 and not isinstance(receiver, (ast.Tuple, ast.List))
                  and len(value.args) in {1, 2})
                     or (value.func.attr == "__getitem__" and len(value.args) == 1)):
                 members = container_member_sources(receiver)
