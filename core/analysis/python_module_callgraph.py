@@ -1018,6 +1018,52 @@ def module_dynamic_namespace(
             return tuple(key for key in dictionary.keys if key is not None)
         return None
 
+    sequence_iteration_cache: dict[ast.AST, tuple[bool, tuple[ast.AST, ...]] | None] = {}
+
+    def sequence_iteration_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
+        members: list[ast.AST] = []
+        pending = [value]
+        seen: set[ast.AST] = set()
+        recognised = False
+        while pending:
+            cursor = pending.pop()
+            if cursor in seen:
+                continue
+            seen.add(cursor)
+            if cursor not in sequence_iteration_cache:
+                sequence_values = literal_sequence_values(cursor)
+                dictionary_keys = literal_dictionary_keys(cursor)
+                if sequence_values is not None or dictionary_keys is not None:
+                    values = sequence_values if sequence_values is not None else dictionary_keys
+                    sequence_iteration_cache[cursor] = (True, values)
+                else:
+                    children = ()
+                    if isinstance(cursor, ast.NamedExpr):
+                        children = (cursor.value,)
+                    elif isinstance(cursor, ast.IfExp):
+                        children = (cursor.body, cursor.orelse)
+                    elif isinstance(cursor, ast.BoolOp):
+                        children = tuple(cursor.values)
+                    elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
+                          and cursor.func.id in sequence_copy_names
+                          and len(cursor.args) == 1 and not cursor.keywords):
+                        children = (cursor.args[0],)
+                    elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                          and cursor.func.attr == "copy" and not cursor.args and not cursor.keywords):
+                        children = (cursor.func.value,)
+                    # Keep graph links rather than duplicating transitive members.
+                    sequence_iteration_cache[cursor] = (False, children) if children else None
+            descriptor = sequence_iteration_cache[cursor]
+            if descriptor is None:
+                continue
+            direct_members, sources = descriptor
+            if direct_members:
+                recognised = True
+                members.extend(sources)
+            else:
+                pending.extend(sources)
+        return tuple(members) if recognised else None
+
     def container_member_sources(value: ast.AST) -> tuple[ast.AST, ...] | None:
         members: list[ast.AST] = []
         pending = [(value, False)]
@@ -1057,14 +1103,10 @@ def module_dynamic_namespace(
                   and (container.func.id in mapping_copy_names or container.func.id in sequence_copy_names)
                   and len(container.args) == 1 and not container.keywords):
                 if container.func.id in sequence_copy_names:
-                    sequence_values = literal_sequence_values(container.args[0])
+                    sequence_values = sequence_iteration_values(container.args[0])
                     if sequence_values is not None:
                         recognised = True
                         members.extend(sequence_values)
-                    dictionary_keys = literal_dictionary_keys(container.args[0])
-                    if dictionary_keys is not None:
-                        recognised = True
-                        members.extend(dictionary_keys)
                 if container.func.id in mapping_copy_names:
                     pair_values = explicit_pair_values(container.args[0])
                     if pair_values is not None:
