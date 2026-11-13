@@ -25,12 +25,13 @@ def read_json_artifact(root: Path, path: Path):
     import os
     from core.json.bounded import loads_bounded
     from core.source.beneath import open_regular_beneath
+    from core.source.streams import preserving_stream_error
     from .document import MAX_JSON_BYTES
     stream = open_regular_beneath(root, path.relative_to(root), mode="rb")
     if stream is None:
         return None
     try:
-        with stream:
+        with preserving_stream_error(stream):
             if os.fstat(stream.fileno()).st_size > MAX_JSON_BYTES:
                 raise ValueError("Reporting artifact exceeds capture limit")
             raw = stream.read(MAX_JSON_BYTES + 1)
