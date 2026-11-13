@@ -23,6 +23,7 @@ import pytest
 from core.inventory import _ts_cache, call_graph, extractors
 from core.testing.threads import retiring_threads
 from core.testing.module_views import module_function_view
+from core.testing.module_bindings import patch_module_attribute
 
 _FAKE = "tree_sitter_zz_nonexistent"
 
@@ -48,7 +49,7 @@ def import_counter(monkeypatch):
             raise ImportError(f"forced absent: {name}")
         return real(name, *a, **kw)
 
-    monkeypatch.setattr(importlib, "import_module", _counting)
+    patch_module_attribute(monkeypatch, _ts_cache, "importlib", "import_module", _counting)
     return calls
 
 
@@ -121,7 +122,7 @@ def test_success_is_cached_and_absence_is_not_sticky(fresh_caches, monkeypatch):
             return sentinel
         return real_import(name, *a, **kw)
 
-    monkeypatch.setattr(importlib, "import_module", _fake_import)
+    patch_module_attribute(monkeypatch, _ts_cache, "importlib", "import_module", _fake_import)
     mod = _ts_cache.import_grammar("tree_sitter_fakesuccess")
     assert mod is sentinel
     assert _ts_cache.import_grammar("tree_sitter_fakesuccess") is mod
