@@ -83,6 +83,8 @@ class AuditKnowledgeRuntime:
         self._binary_initial_guarded: set[str] = set()
         self._binary_subject_pending: dict[tuple[str, str, int], object] = {}
         self._binary_subject_locks: dict[tuple[str, str, int], Lock] = {}
+        self._binary_caller_pending: dict[tuple[str, str, int], object] = {}
+        self._binary_caller_locks: dict[tuple[str, str, int], Lock] = {}
         self._source_answers: dict[str, list[SubjectExplanation]] = {}
         self._active: dict[str, KnowledgeReservation] = {}
         self._active_units: dict[tuple[str, str, int], KnowledgeReservation] = {}
@@ -948,12 +950,6 @@ class AuditKnowledgeRuntime:
                     self._request_status[request.request_id] = {
                         "state": "deferred", "reason": "binary_original_input_unavailable"}
             return
-        previous = ctx.get("binary_caller_context")
-        if isinstance(previous, BinaryCallerContext) and previous.current(ctx):
-            merged = resolve_binary_callers((*previous.requests, *resolved.requests), ctx, owned)
-            if merged is None:
-                return
-            resolved = merged
         with self._lock:
             for binary_answer in resolved.answers:
                 self._request_status[binary_answer.request_id] = {
@@ -963,12 +959,49 @@ class AuditKnowledgeRuntime:
                 self._events.append({"event": "binary_caller_answer", "origin": asdict(request.origin),
                     "request_id": binary_answer.request_id, "status": binary_answer.status, "reason": binary_answer.reason,
                     "material": binary_answer.material, "role": "binary_related_code_context_not_evidence"})
-        rendered = resolved.render()
-        if not rendered or not resolved.current(ctx):
-            return
-        offered = dict(ctx)
-        offered["binary_caller_context"] = resolved
-        self.offer_context_delta(offered, kind="binary_callers", version=context_version(rendered))
+            caller_lock = self._binary_caller_locks.setdefault(key, Lock())
+
+        def defer_union(why: str) -> None:
+            with self._lock:
+                for request in addressed:
+                    self._request_status[request.request_id] = {"state": "deferred", "reason": why}
+                    self._events.append({"event": "binary_caller_context_deferred",
+                        "request_id": request.request_id, "origin": asdict(request.origin), "reason": why})
+
+        # Keep fresh initial contexts untouched while retaining all ready views.
+        # Serializing union plus offer prevents a slower earlier registration
+        # from replacing a newer packet. No global lock covers read callbacks.
+        with caller_lock:
+            previous = self._binary_caller_pending.get(key, ctx.get("binary_caller_context"))
+            if isinstance(previous, BinaryCallerContext) and previous.current(ctx):
+                requests = {request.request_id: request for request in previous.requests}
+                answers = {answer.request_id: answer for answer in previous.answers}
+                for request in resolved.requests:
+                    if request.request_id in requests and requests[request.request_id] != request:
+                        defer_union("binary_caller_observation_conflict")
+                        return
+                    requests[request.request_id] = request
+                for binary_answer in resolved.answers:
+                    if binary_answer.request_id in answers and answers[binary_answer.request_id] != binary_answer:
+                        defer_union("binary_caller_observation_conflict")
+                        return
+                    answers[binary_answer.request_id] = binary_answer
+                combined = BinaryCallerContext(origin, owned, tuple(requests.values()), tuple(answers.values()))
+                if not combined.render():
+                    defer_union("binary_caller_context_budget")
+                    return
+                merged = resolve_binary_callers(combined.requests, ctx, owned)
+                if merged is None:
+                    defer_union("binary_caller_context_changed")
+                    return
+                resolved = merged
+            rendered = resolved.render()
+            if not rendered or not resolved.current(ctx):
+                return
+            self._binary_caller_pending[key] = resolved
+            offered = dict(ctx)
+            offered["binary_caller_context"] = resolved
+            self.offer_context_delta(offered, kind="binary_callers", version=context_version(rendered))
 
     def _register_caller_requests(self, origin: KnowledgeOrigin, review_result, *, ctx: dict | None = None) -> None:
         batch = register_caller_context_requests(review_result, origin)
