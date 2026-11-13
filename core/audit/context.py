@@ -3368,12 +3368,70 @@ def _format_seed_hypotheses(seeds: Any) -> str:
     return "\n".join(lines)
 
 
+def _glance_binary_caller_index(ctx: dict[str, Any]) -> str:
+    """Expose requestable identities without code or delivery/proof credit."""
+    from core.json import dumps_canonical
+    from .caller_review_context import _MAX_REQUESTS
+    from .review_context_inputs import MAX_SNAPSHOT_BYTES
+
+    module = ctx.get("file")
+    rows = ctx.get("callers")
+    if (ctx.get("is_binary") is not True or type(module) is not str
+            or not module.startswith("binary:") or not 0 < len(module) <= 512
+            or module != module.strip() or any(c in module for c in ("\0", "\n", "\r"))
+            or type(rows) not in (list, tuple) or not rows):
+        return ""
+    try:
+        module.encode("utf-8")
+    except UnicodeError:
+        return ""
+    identities = set()
+    invalid = duplicates = 0
+    for row in rows[:MAX_CALL_SITE_CALLERS]:
+        if type(row) is not dict:
+            invalid += 1
+            continue
+        name, address = row.get("name"), row.get("address")
+        if (row.get("file") != module or type(name) is not str or not 0 < len(name) <= 256
+                or name != name.strip() or any(c in name for c in ("\0", "\n", "\r"))
+                or type(address) is not int or not 0 <= address < 2 ** 64):
+            invalid += 1
+            continue
+        try:
+            name.encode("utf-8")
+        except UnicodeError:
+            invalid += 1
+            continue
+        identity = address, name
+        if identity in identities:
+            duplicates += 1
+        identities.add(identity)
+    shown = sorted(identities)[:_MAX_REQUESTS]
+    data = {"role": "recorded_binary_caller_identities_not_code_or_execution",
+            "module_file": module,
+            "callers": [{"function": name, "address": address} for address, name in shown],
+            "caller_coverage": "not_exhaustive",
+            "additional_provided_identities": len(identities) - len(shown),
+            "unavailable_provided_rows": invalid,
+            "duplicate_provided_rows": duplicates,
+            "uninspected_provided_rows": max(0, len(rows) - MAX_CALL_SITE_CALLERS)}
+    # Escaped angles preserve the identifier's JSON value without forming
+    # an envelope tag; dynamic fencing protects names containing backticks.
+    encoded = dumps_canonical(data).replace("<", "\\u003c").replace(">", "\\u003e")
+    text = ("\n### Binary caller identities\n"
+            "Untrusted recorded names and addresses only, not caller code, execution "
+            "or complete caller coverage. Implementation may be unavailable. "
+            "A binary caller request uses this module key, function and address with line_start zero.\n"
+            + _fenced(encoded, "json"))
+    return text if len(text.encode("utf-8")) <= MAX_SNAPSHOT_BYTES else ""
+
+
 def _format_glance_prompt(ctx: dict[str, Any]) -> str:
     """Minimal prompt for GLANCE-bucket functions.
 
-    Source code + one-line triage question.  No callers, callees,
-    evidence, or strategy context — the LLM just decides if this
-    function warrants further investigation.
+    Implementation text and a triage question, without related-code bodies,
+    evidence or strategy context. Binary caller identities remain available
+    as bounded metadata for address-based requests, never delivery credit.
     """
     mode = ctx.get("review_mode", "security")
     if mode == "quality":
@@ -3401,6 +3459,9 @@ def _format_glance_prompt(ctx: dict[str, Any]) -> str:
         _source_heading(ctx),
         _fenced(ctx.get("source", "(not available)")),
     ]
+    binary_identities = _glance_binary_caller_index(ctx)
+    if binary_identities:
+        parts.append(binary_identities)
     summary = _glance_caller_contract_line(ctx.get("caller_contract"))
     if summary:
         parts.append(summary)

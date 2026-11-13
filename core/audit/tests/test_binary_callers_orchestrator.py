@@ -1,11 +1,13 @@
 """Scripted caller requests through the actual scheduler and default analysis lookup.
 
-The captured model response names a fixture-owned recorded caller. This tests
-request routing and publication, not whether a model would discover that caller,
-binary extraction, build correspondence, native execution or concurrent panels.
+The scripted response selects a recorded identity from the actual first prompt.
+This tests metadata availability, request routing and publication, not model
+judgment, binary extraction, build correspondence, native execution or concurrent
+panels.
 """
 import hashlib
 import json
+import re
 
 import pytest
 
@@ -62,6 +64,7 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
     original_artifact_bytes = artifact.read_bytes()
     bundle = sdk_clients(cap=20.0, token_cap=1000000, run_dir=out)
     changed = []
+    selected_caller = {}
 
     def during_wire(request):
         count = len(bundle.state["requests"])
@@ -83,9 +86,28 @@ def test_binary_caller_request_reaches_main_scheduler(tmp_path, monkeypatch, sdk
 
     def transform(response):
         first = len(bundle.state["requests"]) == 1
+        if first:
+            messages = json.loads(bundle.state["requests"][0].content)["messages"]
+            prompt = "\n".join(message["content"] for message in messages if message["role"] == "user")
+            index_text = prompt.split("### Binary caller identities\n", 1)[1]
+            lines = index_text.splitlines()
+            start = next(index for index, line in enumerate(lines) if re.fullmatch(r"`{3,}json", line))
+            fence = lines[start][:-4]
+            end = next(index for index in range(start + 1, len(lines)) if lines[index] == fence)
+            identities = json.loads("\n".join(lines[start + 1:end]))
+            assert identities["role"] == "recorded_binary_caller_identities_not_code_or_execution"
+            assert identities["caller_coverage"] == "not_exhaustive"
+            assert identities["module_file"] == entry["path"]
+            assert "previous-name" not in identities["module_file"]
+            caller, = identities["callers"]
+            assert caller == {"function": "caller", "address": 8192}
+            assert "return f(n);" not in prompt and "Binary related-code context" not in prompt
+            selected_caller.update(file=identities["module_file"], function=caller["function"],
+                                   address=caller["address"], line_start=0)
+        assert len(selected_caller) == 4
         payload = {"status": "clean", "body": "Recorded related code is partial context, not verification.",
-                   "caller_context_requests": [{"file": entry["path"], "function": "caller", "address": 8192,
-                       "line_start": 0, "reason": "Inspect input handling" if first else "Inspect the same recorded caller"}]}
+                   "caller_context_requests": [{**selected_caller,
+                       "reason": "Inspect input handling" if first else "Inspect the same recorded caller"}]}
         message = response["choices"][0]["message"]
         if message.get("tool_calls"):
             message["tool_calls"][0]["function"]["arguments"] = json.dumps(payload)
