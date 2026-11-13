@@ -1189,7 +1189,7 @@ class CodeQLAgent:
                     n_candidates = len(diff.new_ids)
             out[lang] = {
                 "rows_written": measurement.pack.rows_written,
-                "rows_rejected": len(measurement.pack.rejected),
+                "rows_rejected": len(conv.rejected) + len(measurement.pack.rejected),
                 "baseline_count": diff.baseline_count,
                 "augmented_count": diff.augmented_count,
                 "suppressed_ids": list(diff.suppressed_ids),
