@@ -9,6 +9,7 @@ checklist writer silently and forever.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 import os
 import threading
 from pathlib import Path
@@ -17,6 +18,7 @@ import pytest
 
 from core.testing.module_bindings import patch_module_attribute
 from core.testing.poll_clock import install_poll_clock
+from core.testing.threads import retiring_threads
 
 import core.atomic_fs.fs_lock as fs_lock
 from core.inventory import _checklist_lock
@@ -102,11 +104,18 @@ def test_fifo_at_lock_path_fails_the_update_promptly(tmp_path: Path):
             done.set()
 
     thread = threading.Thread(target=updater, daemon=True)
-    thread.start()
-    try:
-        assert done.wait(timeout=10), (
-            "updater wedged opening the planted FIFO lock path"
-        )
-        assert errors, "the FIFO lock path was neither refused nor hung"
-    finally:
-        thread.join(timeout=10)
+    with ExitStack() as cleanup:
+        def release_writer():
+            if thread.ident is not None and thread.is_alive():
+                peer = os.open(tmp_path / "checklist.lock", os.O_RDONLY | os.O_NONBLOCK)
+                cleanup.callback(os.close, peer)
+
+        with retiring_threads([thread], release=release_writer, timeout=10):
+            thread.start()
+            try:
+                assert done.wait(timeout=10), (
+                    "updater wedged opening the planted FIFO lock path"
+                )
+                assert errors, "the FIFO lock path was neither refused nor hung"
+            finally:
+                thread.join(timeout=10)
