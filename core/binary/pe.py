@@ -841,7 +841,7 @@ def extract_pe_facts(path: Path) -> PeFacts | None:
     ``caps_hit`` marker.
     """
     try:
-        with Path(path).open("rb") as f:
+        with preserving_stream_error(Path(path).open("rb")) as f:
             file_size = os.fstat(f.fileno()).st_size
             return _extract_facts_stream(f, file_size)
     except OSError as e:

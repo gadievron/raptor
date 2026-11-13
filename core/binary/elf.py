@@ -825,7 +825,7 @@ def extract_elf_facts(path: Path) -> ElfFacts | None:
     unavailable.
     """
     try:
-        with Path(path).open("rb") as f:
+        with preserving_stream_error(Path(path).open("rb")) as f:
             facts = _extract_facts_stream(f)
     except OSError as e:
         logger.debug("core.binary.elf: facts read failed for %s: %s",
