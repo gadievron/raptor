@@ -33,9 +33,9 @@ def test_nonreproduction_preserves_verdict_evidence_and_counts(tmp_path, monkeyp
     config = orch.OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
     witness = SimpleNamespace(verdict="refuted", match_detail="predicted exception did not occur")
     if lane == "early":
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(lambda: witness)
-        orch._drain_dark_probes(result, config, [outcome], [future], executor)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(lambda: witness)
+            orch._drain_dark_probes(result, config, [outcome], [future], executor)
         filename = "dark-verify-early-results.json"
     else:
         monkeypatch.setattr(dv, "execute_witness", lambda *args, **kwargs: witness)
