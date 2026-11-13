@@ -115,8 +115,10 @@ def _duplicate_key(
                 "threadFlowLocations", "webRequests", "webResponses",
                 "externalPropertyFileReferences", "versionControlProvenance",
             ) if key in run},
-            "working_directories": [invocation.get("workingDirectory")
-                                    for invocation in run.get("invocations", [])
+            # Result provenance refers to invocation indexes. Filtering sparse
+            # entries must not move a directory into another invocation's slot.
+            "working_directories": [(index, invocation.get("workingDirectory"))
+                                    for index, invocation in enumerate(run.get("invocations", []))
                                     if isinstance(invocation, dict) and "workingDirectory" in invocation]
             if isinstance(run.get("invocations"), list) else [],
         }, stream=True)

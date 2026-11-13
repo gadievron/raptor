@@ -784,3 +784,36 @@ def test_weaker_candidates_skip_ranking_hashes_but_keep_duplicate_counts(monkeyp
     assert (count, duplicates) == (3, 1)
     assert [candidate.result for candidate in selected] == [high]
     assert ranked == [high]
+
+
+def test_sparse_invocation_indexes_are_part_of_duplicate_context(tmp_path):
+    first = _run(_located_result())
+    first["results"][0]["provenance"] = {"invocationIndex": 0}
+    first["invocations"] = [
+        {"executionSuccessful": True},
+        {"executionSuccessful": True, "workingDirectory": {"uri": "file:///a/"}},
+    ]
+    second = copy.deepcopy(first)
+    second["invocations"].reverse()
+    path = _write(tmp_path, "sparse-invocations.sarif", first, second)
+
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+
+    assert (len(selected), count, duplicates) == (2, 2, 0)
+    assert {"workingDirectory" in candidate.run["invocations"][0]
+            for candidate in selected} == {False, True}
+    assert json.loads(path.read_text())["runs"] == [first, second]
+
+
+def test_equal_sparse_invocation_context_still_merges(tmp_path):
+    run = _run(_located_result())
+    run["results"][0]["provenance"] = {"invocationIndex": 0}
+    run["invocations"] = [
+        {"executionSuccessful": True},
+        {"executionSuccessful": True, "workingDirectory": {"uri": "file:///a/"}},
+    ]
+    path = _write(tmp_path, "equal-sparse-invocations.sarif", run, copy.deepcopy(run))
+
+    selected, count, duplicates = select_findings_for_analysis([path], 2)
+
+    assert (len(selected), count, duplicates) == (1, 2, 1)
