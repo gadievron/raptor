@@ -565,15 +565,28 @@ def _render_compose(chunks, recvs):
     token of ``recvs[N]`` parsed as a hex int, packed little-endian
     to 8 bytes). Kept here rather than reused from tools.py because
     the daemon has NO raptor-engine imports.
+
+    Enforce the caller's per-send allowance before binary decoding.
     """
     import struct as _struct
     out = bytearray()
+
+    def check_room(size: int) -> None:
+        if size > _MAX_SEND_BYTES - len(out):
+            raise ValueError(f"compose output exceeds cap {_MAX_SEND_BYTES} bytes")
+
     for chunk in chunks:
         kind = chunk.get("kind")
         if kind == "hex":
-            out += bytes.fromhex(
-                chunk["value"].replace(" ", "").replace("\n", ""),
-            )
+            text = chunk["value"].replace(" ", "").replace("\n", "")
+            # Admit output before either splitting or decoding. Compact only
+            # valid byte-separated whitespace so decoder input stays bounded.
+            hex_chars = len(text) - sum(text.count(ws) for ws in "\t\r\v\f")
+            check_room((hex_chars + 1) // 2)
+            parts = re.split(r"[\t\r\v\f]+", text)
+            if any(len(part) % 2 for part in parts):
+                raise ValueError("compose hex data must contain complete byte pairs")
+            out += bytes.fromhex("".join(parts))
         elif kind == "recv_le64":
             idx = chunk["recv_index"]
             if idx >= len(recvs):
@@ -582,6 +595,7 @@ def _render_compose(chunks, recvs):
                     f"{len(recvs)} recv(s) available"
                 )
                 raise IndexError(msg)
+            check_room(8)
             raw = recvs[idx].decode("utf-8", errors="replace").strip()
             tok = raw.split()[0] if raw.split() else ""
             negative = tok.startswith("-")
@@ -601,7 +615,7 @@ def _render_compose(chunks, recvs):
             # hostile target minting megabytes of hex used to cost a
             # multi-megabit int materialisation per chunk before the
             # 64-bit mask discarded it. Only 64 bits survive the LE64
-            # pack and 16 hex digits carry exactly those bits —
+            # pack, and 16 hex digits carry exactly those bits.
             # Retain int()'s sign, prefix, separator and decimal-digit
             # syntax. Separate underscore checks avoid repeated regex
             # groups on a large token; malformed prefixes still refuse.
