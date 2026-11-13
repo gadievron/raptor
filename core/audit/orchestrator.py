@@ -9754,8 +9754,13 @@ def _run_audit_body(
                     "binary_view_identity_unavailable":
                         "Binary implementation input could not be bound; review deferred",
                 }.get(refusal.reason, "Knowledge review allowance exhausted"))
-                return ReviewOutcome(gap["file"], gap["name"], "deferred",
-                                     reason, line=gap.get("line_start", 0))
+                deferred = ReviewOutcome(gap["file"], gap["name"], "deferred",
+                                         reason, line=gap.get("line_start", 0))
+                with result._lock:
+                    result.outcomes.append(deferred)
+                    if reason not in result.processing_limitations:
+                        result.processing_limitations.append(reason)
+                return deferred
         reservation = owned[1]
         try:
             _re_review_study_enriched(
