@@ -535,11 +535,11 @@ class DataflowValidator:
         """
         Extract dataflow path from SARIF result.
 
-        Every (codeFlow, threadFlow) combination is parsed — the first
+        Every (codeFlow, threadFlow) combination is parsed. The first
         usable path is returned as the primary DataflowPath with the
-        rest attached as ``alternatives``, so the SMT pre-check can
-        refute a finding only when every path is infeasible rather
-        than declaring it dead on path 1 alone.
+        rest attached as ``alternatives`` for per-path observations.
+        Extracted predicate models remain diagnostics; they cannot establish
+        a source-path refutation or replace the primary SARIF path.
 
         Args:
             result: SARIF result object
