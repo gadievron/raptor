@@ -903,11 +903,32 @@ def module_dynamic_namespace(
             value = value.value
         if sliced and not isinstance(value, (ast.Tuple, ast.List)):
             return None
-        if isinstance(value, ast.Dict):
-            return tuple(item for key, item in zip(value.keys, value.values) if key is not None)
-        if isinstance(value, (ast.Tuple, ast.List)):
-            return tuple(item for item in value.elts if not isinstance(item, ast.Starred))
-        return None
+        if not isinstance(value, (ast.Dict, ast.Tuple, ast.List)):
+            return None
+        members: list[ast.AST] = []
+        pending = [value]
+        while pending:
+            container = pending.pop()
+            if isinstance(container, ast.Dict):
+                for key, item in zip(container.keys, container.values):
+                    if key is None and isinstance(item, ast.Dict):
+                        pending.append(item)
+                    else:
+                        # An expanded namespace may supply shared member objects.
+                        members.append(item)
+            else:
+                for item in container.elts:
+                    if isinstance(item, ast.Starred):
+                        source = item.value
+                        while isinstance(source, ast.Subscript) and isinstance(source.slice, ast.Slice):
+                            source = source.value
+                        if isinstance(source, (ast.Tuple, ast.List)):
+                            pending.append(source)
+                        else:
+                            members.append(item.value)
+                    else:
+                        members.append(item)
+        return tuple(members)
 
     def literal_member_result_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
         if isinstance(value, ast.Subscript):
