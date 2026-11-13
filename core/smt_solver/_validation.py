@@ -53,4 +53,6 @@ def require_symbol_name(name: Any, *, argument: str = "symbol name") -> str:
         raise ValueError(f"{argument} must be a string")
     if "\x00" in name:
         raise ValueError(f"{argument} must not contain NUL")
+    if any(0xD800 <= ord(char) <= 0xDFFF for char in name):
+        raise ValueError(f"{argument} must not contain surrogate code points")
     return name
