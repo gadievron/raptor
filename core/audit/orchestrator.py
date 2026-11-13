@@ -27120,7 +27120,11 @@ def _journal_provisional_promotion(
         except Exception:
             gap = None
     jgap: dict[str, Any] = {"line_start": outcome.line or 0}
-    if gap:
+    # A bare-name lookup can return another same-named declaration. Keep
+    # the outcome's site and omit unavailable span/strategy metadata instead
+    # of relocating the journal row to that other declaration.
+    if (gap and type(outcome.line) is int and outcome.line > 0
+            and type(gap.get("line_start")) is int and gap["line_start"] == outcome.line):
         jgap = {
             "line_start": gap.get("line_start", outcome.line or 0),
             "line_end": gap.get("line_end"),
