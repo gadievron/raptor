@@ -79,15 +79,24 @@ def from_sarif_result(
     (empty URI, ``startLine`` < 1). Better to surface than to silently
     coerce.
     """
-    code_flows = result.get("codeFlows") or []
+    code_flows = result.get("codeFlows")
+    if code_flows is not None and not isinstance(code_flows, (list, tuple)):
+        raise ValueError("SARIF codeFlows must be an array")
+    code_flows = code_flows or []
     if not code_flows:
         return None
 
-    thread_flows = code_flows[0].get("threadFlows") or []
+    thread_flows = code_flows[0].get("threadFlows")
+    if thread_flows is not None and not isinstance(thread_flows, (list, tuple)):
+        raise ValueError("SARIF threadFlows must be an array")
+    thread_flows = thread_flows or []
     if not thread_flows:
         return None
 
-    locations = thread_flows[0].get("locations") or []
+    locations = thread_flows[0].get("locations")
+    if locations is not None and not isinstance(locations, (list, tuple)):
+        raise ValueError("SARIF locations must be an array")
+    locations = locations or []
     if len(locations) < 2:
         return None
 
