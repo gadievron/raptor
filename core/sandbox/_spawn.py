@@ -1898,7 +1898,7 @@ def run_sandboxed(
         if _evidence_file is not None:
             handle, _evidence_file = _evidence_file, None
             if verify:
-                _evidence_mod.finalize_capture(handle)
+                _evidence_mod.finalize_capture(handle, preserve_active_error=False)
             else:
                 handle.close(verify=False)
 

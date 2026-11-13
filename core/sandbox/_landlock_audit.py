@@ -581,7 +581,7 @@ def run_landlock_audit(
         handle, evidence_file = evidence_file, None
         if handle is not None:
             if verify_evidence:
-                return _evidence_mod.finalize_capture(handle)
+                return _evidence_mod.finalize_capture(handle, preserve_active_error=False)
             handle.close(verify=False)
         return None
 
