@@ -32,6 +32,7 @@ from typing import Any
 import pytest
 
 from packages.frida import runner
+from core.testing.module_views import module_function_view
 
 
 class FakeScript:
@@ -474,8 +475,8 @@ def test_spawn_env_strips_session_credential_without_config(monkeypatch):
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-secret-do-not-leak")
     monkeypatch.setenv("RAPTOR_SESSION_TOKEN", "session-secret")
-    monkeypatch.setattr(builtins, "__import__", _no_core_config)
-    env = runner._spawn_env()
+    private = module_function_view(runner, import_hook=_no_core_config)
+    env = private._spawn_env()
     assert "ANTHROPIC_API_KEY" not in env
     assert "RAPTOR_SESSION_TOKEN" not in env
     assert "PATH" in env
