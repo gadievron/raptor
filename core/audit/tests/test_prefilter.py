@@ -2998,8 +2998,8 @@ class TestPhpSqlInjectionFailSafe:
         )
 
     def _log_with(self, monkeypatch, warning, debug):
-        monkeypatch.setattr(_prefilter.logger, "warning", warning)
-        monkeypatch.setattr(_prefilter.logger, "debug", debug)
+        monkeypatch.setitem(vars(_prefilter.logger), "warning", warning)
+        monkeypatch.setitem(vars(_prefilter.logger), "debug", debug)
 
     @pytest.mark.parametrize("failing", ["warning", "debug", "both"])
     @pytest.mark.parametrize("error", _LOGGING_ERRORS,
