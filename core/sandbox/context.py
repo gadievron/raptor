@@ -3776,12 +3776,18 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             if '_input_spool_files' in kwargs:
                 raise TypeError('_input_spool_files is an internal sandbox argument')
             files = ExitStack()
+            operation_failed = True
             try:
-                return execute(cmd, _input_spool_files=files, **kwargs)
+                result = execute(cmd, _input_spool_files=files, **kwargs)
+                operation_failed = False
+                return result
             finally:
                 # Exceptions retain frames. File lifetime must end with this
                 # call, even while the caller keeps an execution traceback.
-                retire_parent_resources(files.close)
+                if operation_failed:
+                    retire_parent_resources(files.close)
+                else:
+                    files.close()
         return owned
 
     @_own_input_spools
