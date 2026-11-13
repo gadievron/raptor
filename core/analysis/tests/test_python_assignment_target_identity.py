@@ -61,3 +61,33 @@ def test_chained_assignment_credits_the_direct_target_but_not_the_raw_key():
     assert raw_result.suppress is False
     _assignment, clean_result = evaluate(statement)
     assert clean_result.suppress is True
+
+
+def test_later_target_walrus_overwrites_credited_sanitizer_return():
+    assignment, result = evaluate('tmp = store[(tmp := raw)] = werkzeug.utils.secure_filename(raw)')
+    assert assignment.defs == frozenset({'tmp'})
+    assert {'raw', 'store'} <= assignment.uses
+    assert result.all_matched_bindings
+    assert result.suppress is False
+    call = next(cs for cs in assignment.call_sites if cs.name == 'werkzeug.utils.secure_filename')
+    assert not call.assigned_names
+
+
+@pytest.mark.parametrize('statement', [
+    'tmp, tmp = werkzeug.utils.secure_filename(raw), raw',
+    'tmp, store[(tmp := raw)] = werkzeug.utils.secure_filename(raw), raw',
+    'tmp = (tmp, other) = werkzeug.utils.secure_filename(raw)',
+])
+def test_repeated_target_stores_cannot_establish_exact_return_identity(statement):
+    assignment, result = evaluate(statement)
+    assert 'tmp' in assignment.defs
+    call = next(cs for cs in assignment.call_sites if cs.name == 'werkzeug.utils.secure_filename')
+    assert not call.assigned_names
+    assert result.suppress is False
+
+
+def test_distinct_chained_names_still_capture_the_same_complete_return():
+    assignment, result = evaluate('other = tmp = werkzeug.utils.secure_filename(raw)')
+    call = next(cs for cs in assignment.call_sites if cs.name == 'werkzeug.utils.secure_filename')
+    assert call.assigned_names == frozenset({'other', 'tmp'})
+    assert result.suppress is True
