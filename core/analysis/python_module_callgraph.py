@@ -807,6 +807,7 @@ def module_dynamic_namespace(
     dynamic_import_names = {"__import__"}
     reflective_write_names = {"setattr", "delattr"}
     reflective_read_names = {"getattr"}
+    object_namespace_names = {"vars"}
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             bindings = module_import_map(ast.Module(body=[node], type_ignores=[]))
@@ -820,6 +821,9 @@ def module_dynamic_namespace(
             )
             reflective_read_names.update(
                 alias for alias, target in bindings.items() if target == "builtins.getattr"
+            )
+            object_namespace_names.update(
+                alias for alias, target in bindings.items() if target == "builtins.vars"
             )
         if isinstance(node, ast.Import):
             builtin_namespace_names.update(
@@ -950,6 +954,10 @@ def module_dynamic_namespace(
                   and isinstance(cursor.args[1], ast.Constant)
                   and isinstance(cursor.args[1].value, str)):
                 children = (cursor.args[0], *cursor.args[2:])
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
+                  and cursor.func.id in object_namespace_names
+                  and len(cursor.args) == 1 and not cursor.keywords):
+                children = (cursor.args[0],)
             else:
                 children = ()
             if not children:
