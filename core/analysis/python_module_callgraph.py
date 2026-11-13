@@ -1227,6 +1227,28 @@ def module_dynamic_namespace(
                     if kind is not None:
                         sources = (source,)
             elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
+                  and cursor.func.attr == "__getitem__" and len(cursor.args) == 1
+                  and not cursor.keywords
+                  and isinstance(selected_literal_value(cursor.func.value), (ast.Tuple, ast.List))):
+                sequence = selected_literal_value(cursor.func.value)
+                key = cursor.args[0]
+                index = None
+                if isinstance(key, ast.Constant) and type(key.value) is int:
+                    index = key.value
+                elif (isinstance(key, ast.UnaryOp) and isinstance(key.op, ast.USub)
+                      and isinstance(key.operand, ast.Constant) and type(key.operand.value) is int):
+                    index = -key.operand.value
+                if (index is not None and not any(isinstance(item, ast.Starred) for item in sequence.elts)
+                        and -len(sequence.elts) <= index < len(sequence.elts)):
+                    source = sequence.elts[index]
+                    if not expanded:
+                        pending.append((cursor, True))
+                        pending.append((source, False))
+                        continue
+                    kind = collection_operation_cache[source][0]
+                    if kind is not None:
+                        sources = (source,)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Attribute)
                   and ((cursor.func.attr == "get" and len(cursor.args) in (1, 2))
                        or (cursor.func.attr == "__getitem__" and len(cursor.args) == 1))
                   and not cursor.keywords):
