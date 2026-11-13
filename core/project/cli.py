@@ -9,6 +9,7 @@ import contextlib
 import os
 import sys
 from typing import Any
+from types import TracebackType
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -815,6 +816,9 @@ def main() -> None:
         sys.exit(1)
 
     _op_guard = None
+    _op_exception: tuple[
+        type[BaseException] | None, BaseException | None, TracebackType | None
+    ] = (None, None, None)
     try:
         # Operation-granular project lock: mutating subcommands hold
         # <project_dir>/.op.lock for the mutation's duration so two
@@ -1818,14 +1822,27 @@ def main() -> None:
             _do_merge(p, args.type, args.yes)
 
     except (ValueError, FileExistsError, OpLockContention) as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        try:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
+        except BaseException:
+            _op_exception = sys.exc_info()
+            raise
     except KeyboardInterrupt:
-        print("\nCancelled.")
-        sys.exit(130)
+        try:
+            print("\nCancelled.")
+            sys.exit(130)
+        except BaseException:
+            _op_exception = sys.exc_info()
+            raise
+    except BaseException:
+        _op_exception = sys.exc_info()
+        raise
     finally:
         if _op_guard is not None:
-            _op_guard.__exit__(None, None, None)
+            # Only this dispatch's escaping error belongs to the guard;
+            # sys.exc_info() here could instead describe a caller's handler.
+            _op_guard.__exit__(*_op_exception)
 
 
 def _mutation_lock_target(mgr, args: argparse.Namespace):
