@@ -200,7 +200,29 @@ def _budgeted_tarinfo(budget: int, consumed: dict[str, int]) -> type:
     declared sizes into the same budget.
     """
 
+    class _SparseMetadataReader:
+        def __init__(self, source):
+            self.source = source
+
+        def read(self, size=-1):
+            if size < 0 or consumed["total"] + size > budget:
+                raise TarTotalBytesExceeded(
+                    f"tar sparse metadata exceeds {budget} bytes; refusing")
+            consumed["total"] += size
+            return self.source.read(size)
+
+        def __getattr__(self, name):
+            return getattr(self.source, name)
+
     class _BudgetedTarInfo(tarfile.TarInfo):
+        def _proc_sparse(self, tarobj):
+            source = tarobj.fileobj
+            tarobj.fileobj = _SparseMetadataReader(source)
+            try:
+                return super()._proc_sparse(tarobj)
+            finally:
+                tarobj.fileobj = source
+
         def _proc_member(self, tarobj):
             if self.type in _METADATA_MEMBER_TYPES:
                 consumed["total"] += tarfile.BLOCKSIZE + self._block(
