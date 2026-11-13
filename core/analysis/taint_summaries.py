@@ -260,6 +260,27 @@ _UNKNOWN_CALLABLES = frozenset({
 })
 
 
+def _generator_writes_enclosing_frame(node: ast.GeneratorExp) -> bool:
+    """Deferred walruses can rewrite the enclosing frame on consumption."""
+    pending: list[ast.AST] = [node.elt]
+    for index, generator in enumerate(node.generators):
+        if index:
+            pending.append(generator.iter)
+        pending.extend(generator.ifs)
+    while pending:
+        child = pending.pop()
+        if isinstance(child, ast.NamedExpr):
+            return True
+        if isinstance(child, ast.Lambda):
+            # Defaults run in the generator's frame; its body owns a
+            # separate local binding even when that body has a walrus.
+            pending.extend(child.args.defaults)
+            pending.extend(d for d in child.args.kw_defaults if d is not None)
+            continue
+        pending.extend(ast.iter_child_nodes(child))
+    return False
+
+
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -271,6 +292,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
+    * A generator expression with a deferred assignment expression: its
+      enclosing-frame writes depend on consumption, which is not modelled.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
       the local frame is not a local: any call between the tracked
       assignment and the return can rewrite it (module slot /
@@ -282,6 +305,10 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     doesn't poison the outer summary.
     """
     for node in ast.walk(fn_ast):
+        if (isinstance(node, ast.GeneratorExp)
+                and not _inside_nested_function(node, fn_ast)
+                and _generator_writes_enclosing_frame(node)):
+            return "generator defers an enclosing-frame assignment"
         if isinstance(node, ast.Nonlocal):
             # A nested def's ``nonlocal`` rebinds an ENCLOSING frame —
             # possibly this function's locals — behind the
