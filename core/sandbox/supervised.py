@@ -2067,7 +2067,16 @@ def _resolve_stdio_fd_probe(stream: _StdioArg, label: str) -> None:
     if isinstance(stream, int):
         if stream < 0:
             raise ValueError(f"{label}: negative fd {stream}")
-        return
-    if getattr(stream, "fileno", None) is None:
-        raise TypeError(f"{label}: expected fd, file object, "
-                        f"subprocess.DEVNULL, or None — got {stream!r}")
+        fd = stream
+    else:
+        fileno = getattr(stream, "fileno", None)
+        if fileno is None:
+            raise TypeError(f"{label}: expected fd, file object, "
+                            f"subprocess.DEVNULL, or None — got {stream!r}")
+        fd = fileno()
+    # A closed caller number could otherwise be reused by the DEVNULL
+    # open or socketpair before the child maps its output descriptors.
+    try:
+        os.fstat(fd)
+    except OSError as exc:
+        raise ValueError(f"{label}: fd {fd} is not a valid open file descriptor") from exc
