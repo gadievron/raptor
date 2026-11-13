@@ -491,7 +491,6 @@ def _parse_bytes_to_int(raw: bytes) -> int | None:
     text = raw.decode("utf-8", errors="replace")
     m = re.search(r"0x([0-9a-fA-F]+)", text)
     if m:
-        digits = m.group(1)
         # Hex parsing is EXEMPT from CPython's int_max_str_digits
         # guard, so a hostile target printing "0x" + megabytes of hex
         # used to mint a multi-megabit int binding in one call. Budget
@@ -499,9 +498,10 @@ def _parse_bytes_to_int(raw: bytes) -> int | None:
         # match (never silently truncated to a wrong-but-plausible
         # value) and the decimal branch below still applies (bounded
         # by int_max_str_digits).
-        if len(digits) <= _MAX_HEX_DIGITS:
+        # Inspect the span first: group() would copy an oversized run.
+        if m.end(1) - m.start(1) <= _MAX_HEX_DIGITS:
             try:
-                return int(digits, 16)
+                return int(m.group(1), 16)
             except ValueError:
                 pass
     m = re.search(r"(-?\d{2,})", text)
