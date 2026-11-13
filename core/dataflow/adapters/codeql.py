@@ -102,28 +102,31 @@ def from_sarif_result(
     if len(locations) < 2:
         return None
 
+    def object_or_empty(value: Any, field: str) -> Mapping[str, Any]:
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            raise ValueError(f"SARIF {field} must be an object")
+        return value
+
     steps: list[Step] = []
     for loc_wrapper in locations:
         if not isinstance(loc_wrapper, Mapping):
             raise ValueError("SARIF locations entry must be an object")
-        loc = loc_wrapper.get("location") or {}
-        physical_loc = loc.get("physicalLocation") or {}
-        region = physical_loc.get("region") or {}
-        artifact = physical_loc.get("artifactLocation") or {}
+        loc = object_or_empty(loc_wrapper.get("location"), "location")
+        physical_loc = object_or_empty(loc.get("physicalLocation"), "physicalLocation")
+        region = object_or_empty(physical_loc.get("region"), "region")
+        artifact = object_or_empty(physical_loc.get("artifactLocation"), "artifactLocation")
 
-        message_text = (loc.get("message") or {}).get("text") or ""
-        # ``or`` fallbacks rather than ``.get`` defaults throughout:
-        # some SARIF emitters write explicit JSON nulls, and
-        # ``.get(key, default)`` returns None for those — a null
-        # snippet would then raise AttributeError instead of the
-        # documented ValueError, escaping consumers' skip-one-entry
-        # ``except ValueError`` handlers.
+        message_text = object_or_empty(loc.get("message"), "location.message").get("text") or ""
+        # Explicit null objects retain their empty defaults; malformed
+        # scalar objects must use the caller's ValueError refusal path.
         steps.append(
             Step(
                 file_path=artifact.get("uri") or "",
                 line=region.get("startLine") or 0,
                 column=region.get("startColumn") or 0,
-                snippet=(region.get("snippet") or {}).get("text") or "",
+                snippet=object_or_empty(region.get("snippet"), "snippet").get("text") or "",
                 label=message_text or None,
             )
         )
@@ -133,9 +136,8 @@ def from_sarif_result(
     intermediate = tuple(steps[1:-1])
 
     rule_id = result.get("ruleId") or "unknown"
-    # ``or {}``: an explicit ``"message": null`` must not escape as
-    # AttributeError (same rule as the step fields above).
-    message_obj = result.get("message") or {}
+    # Explicit null messages retain the documented default.
+    message_obj = object_or_empty(result.get("message"), "result.message")
     message = message_obj.get("text") or "(no message)"
 
     if finding_id is None:
