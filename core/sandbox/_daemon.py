@@ -605,8 +605,9 @@ def _render_compose(chunks, recvs):
             if packed is not None:
                 out += packed
                 continue
-            raw = received.decode("utf-8", errors="replace").strip()
-            tok = raw.split()[0] if raw.split() else ""
+            raw = received.decode("utf-8", errors="replace")
+            word_match = re.search(r"\S+", raw)
+            tok = word_match.group(0) if word_match is not None else ""
             negative = tok.startswith("-")
             if tok[:1] in ("+", "-"):
                 tok = tok[1:]
