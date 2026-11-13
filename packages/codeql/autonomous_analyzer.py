@@ -36,7 +36,7 @@ from core.security.prompt_envelope import (
     UntrustedBlock,
     build_prompt,
 )
-from core.sarif.parser import get_result_rule, rule_default_level
+from core.sarif.parser import _as_dict, get_result_rule, rule_default_level
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowValidation, DataflowValidator
 from packages.codeql.dataflow_visualizer import DataflowVisualizer
@@ -497,7 +497,7 @@ class AutonomousCodeQLAnalyzer:
         # in the same SARIF file. isinstance() guard skips
         # malformed tags and continues the loop.
         cwe = None
-        properties = rule.get("properties", {})
+        properties = _as_dict(rule.get("properties"))
         tags = properties.get("tags", [])
         if isinstance(tags, list):
             for tag in tags:
