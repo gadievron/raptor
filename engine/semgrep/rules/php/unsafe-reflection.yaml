@@ -15,12 +15,11 @@ rules:
     languages: [php]
     severity: HIGH
     message: >
-      Request data is used to select the code to execute (variable
-      function, call_user_func callable, dynamic class instantiation,
-      or variable method name). An attacker can invoke any defined
-      function/class, e.g. system or an autoloadable gadget class.
-      Route through a fixed allowlist (in_array($v, [...], true) or a
-      literal-keyed dispatch map) before the call.
+      Request data selects a function, callable, class or method name.
+      Review the available targets, receiver, visibility and argument
+      constraints to determine which actions an attacker can invoke.
+      Route through a fixed allowlist or literal-keyed dispatch map of
+      explicitly permitted actions before the call.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
