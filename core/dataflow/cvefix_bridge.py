@@ -395,7 +395,12 @@ def _extract_proposal(
                     body = "\n".join(lines)
                 else:
                     lo = max(0, line - 1 - _WINDOW)
-                    body = "\n".join(lines[lo:line - 1 + _WINDOW])
+                    hi = min(len(lines), line - 1 + _WINDOW)
+                    body = "\n".join(lines[lo:hi])
+                    body += (
+                        f"\n\n# Source window: lines {lo + 1}-{hi}; "
+                        "surrounding source omitted."
+                    )
                 diff = _git_diff(repo_root, pair.parent_hash, pair.fix_hash, _norm_uri(raw_uri))
                 # Cross-file fix-diff context: other non-test fix-touched
                 # files often contain the validator the fix added (the sink
