@@ -23,6 +23,8 @@ from packages.binary_analysis._artifact_lock import run_artifacts_lock
 
 class TestRunArtifactsLock:
     def test_mutual_exclusion_across_threads(self, tmp_path):
+        from core.testing.threads import retiring_threads
+
         order: list[str] = []
         entered = threading.Event()
 
@@ -39,10 +41,11 @@ class TestRunArtifactsLock:
 
         threads = [threading.Thread(target=holder),
                    threading.Thread(target=contender)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+        with retiring_threads(threads, release=lambda: None, timeout=10):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
         assert order == ["holder-exit", "contender-enter"]
 
     def test_degrades_when_lock_uncreatable(self, tmp_path):
