@@ -24,6 +24,7 @@ from unittest.mock import MagicMock
 
 from packages.sca.models import Confidence, Dependency, Manifest, PinStyle
 from packages.sca.resolvers import ResolverResult
+from core.testing.processes import run_in_process_group as _run_memory_process
 from packages.sca.transitive import (
     _collapse_cargo_workspaces,
     _is_cargo_workspace_root,
@@ -1084,6 +1085,39 @@ class TestParentMapProducerClosure:
         assert mapping["redis"] == ["celery", "kombu"]
 
 
+def _run_requirements_memory_proof(tmp_path):
+    """Measure the include reader without consuming a borrowed tracing session."""
+    import subprocess
+    import sys
+
+    from core.testing.standalone_cli import standalone_cli_env
+
+    root = Path(__file__).resolve().parents[3]
+    script = """\
+import sys
+import tracemalloc
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from pytest import MonkeyPatch
+from core.testing.state_isolation import pin_user_state_dirs
+from packages.sca.tests.test_transitive import test_requirements_include_scan_refuses_oversized_file
+assert not tracemalloc.is_tracing()
+owned = Path(sys.argv[2])
+with MonkeyPatch.context() as patch:
+    pin_user_state_dirs(patch, owned / "memory-child-state")
+    test_requirements_include_scan_refuses_oversized_file(owned)
+print("requirements-memory-proof-ok")
+"""
+    with standalone_cli_env() as env:
+        result = _run_memory_process(
+            [sys.executable, "-I", "-c", script, str(root), str(tmp_path)],
+            timeout=30, env=env, cwd=root,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "requirements-memory-proof-ok", result.stdout
+
+
 def test_requirements_include_scan_refuses_oversized_file(
     tmp_path,
 ) -> None:
@@ -1092,13 +1126,17 @@ def test_requirements_include_scan_refuses_oversized_file(
     before this read was bounded."""
     import tracemalloc
 
+    if tracemalloc.is_tracing():
+        _run_requirements_memory_proof(tmp_path)
+        return
+
     from packages.sca.transitive import _requirements_include_targets
 
     p = tmp_path / "requirements.txt"
     with p.open("wb") as fh:
         fh.truncate(60 * 1024 * 1024)       # sparse: cheap to create
-    tracemalloc.start()
     try:
+        tracemalloc.start()
         targets = _requirements_include_targets(p)
         _, peak = tracemalloc.get_traced_memory()
     finally:
