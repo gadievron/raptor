@@ -355,9 +355,13 @@ class JavaConstIndex:
                         self._defs[akey] = right
                         self._note_creation(lname, right)
             elif n.type == "update_expression":
-                for ch in n.children:
-                    if ch.type == "identifier":
-                        self._compound_writers.add(ch.text.decode())
+                # Parentheses preserve the updated scalar variable. Missing
+                # this writer can let its same-line initializer serve the
+                # update node's reaching definition as well.
+                operands = n.named_children
+                operand = _paren_unwrap(operands[0]) if len(operands) == 1 else None
+                if operand is not None and operand.type == "identifier":
+                    self._compound_writers.add(operand.text.decode())
             elif n.type in ("enhanced_for_statement", "resource",
                             "instanceof_expression", "formal_parameter",
                             "spread_parameter"):
