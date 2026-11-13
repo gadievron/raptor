@@ -62,6 +62,7 @@ from pathlib import Path
 from typing import Literal
 
 from core.json import save_json
+from core.source.streams import preserving_stream_error
 from core.llm.scorecard import integrity
 from core.llm.scorecard.freshness import (
     bucket_key,
@@ -1767,7 +1768,7 @@ class ModelScorecard:
             # have exclusive access to the rename-replace dance.
             content = ""
             try:
-                with open(path, encoding="utf-8") as data_fh:
+                with preserving_stream_error(open(path, encoding="utf-8")) as data_fh:
                     content = data_fh.read()
             except FileNotFoundError:
                 pass
