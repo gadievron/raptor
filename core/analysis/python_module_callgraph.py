@@ -1080,6 +1080,21 @@ def module_dynamic_namespace(
                     saved_namespace_dict_values.add(target.id)
     import_roots.update(saved_import_values)
 
+    def imported_mutation_receiver(receiver: ast.AST | None) -> bool:
+        if receiver is None:
+            return False
+        root = receiver
+        while isinstance(root, (ast.Attribute, ast.Subscript)):
+            if (isinstance(root, ast.Subscript) and isinstance(root.value, ast.Call)
+                    and isinstance(root.value.func, ast.Name)
+                    and root.value.func.id in {"globals", "vars", "locals"}
+                    and not root.value.args and not root.value.keywords):
+                # Preserve the namespace walk's more precise named-root policy.
+                return False
+            root = root.value
+        return ((isinstance(root, ast.Name) and root.id in import_roots)
+                or possible_import_value(receiver))
+
     for node in ast.walk(tree):
         if node in local_annotation_nodes:
             continue
@@ -1088,14 +1103,10 @@ def module_dynamic_namespace(
             parent = parents.get(node)
             annotation_only = (isinstance(parent, ast.AnnAssign)
                                and parent.target is node and parent.value is None)
-            if not annotation_only:
-                receiver: ast.AST = node
-                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                    receiver = receiver.value
-                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
-                    # Direct imported-object mutations can rewrite a shared
-                    # callable namespace without rebinding its import name.
-                    whole = True
+            if not annotation_only and imported_mutation_receiver(node.value):
+                # Direct imported-object mutations can rewrite a shared
+                # callable namespace without rebinding its import name.
+                whole = True
         if isinstance(node, ast.ImportFrom):
             if any(alias.name == "*" for alias in node.names):
                 whole = True
@@ -1106,9 +1117,7 @@ def module_dynamic_namespace(
                 whole = True
             for receiver in (escaped_setter_receiver(node),
                              escaped_dictionary_mutator_receiver(node)):
-                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                    receiver = receiver.value
-                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                if imported_mutation_receiver(receiver):
                     whole = True
         elif isinstance(node, ast.Name):
             if (node.id in modules_aliases or node.id in builtin_namespace_names
@@ -1122,11 +1131,7 @@ def module_dynamic_namespace(
         elif isinstance(node, ast.Call):
             func = node.func
             for receiver in (namespace_dict_receiver(node), reflective_receiver(node)):
-                if receiver is None:
-                    continue
-                while isinstance(receiver, (ast.Attribute, ast.Subscript)):
-                    receiver = receiver.value
-                if isinstance(receiver, ast.Name) and receiver.id in import_roots:
+                if imported_mutation_receiver(receiver):
                     # These calls can replace imported members with
                     # no Store node or rebinding of the import name.
                     whole = True
