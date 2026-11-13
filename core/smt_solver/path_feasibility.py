@@ -1760,6 +1760,8 @@ def _validate_var_registry(vars_, profile, *, context=None):
     """Validate all bindings before parsing or mutating an encoder registry."""
     if not isinstance(vars_, dict):
         raise ValueError("variable registry must be a mutable dictionary")
+    if dict.__len__(vars_) == 0:
+        return
     context = z3.main_ctx() if context is None else context
     for name, value in vars_.items():
         _validate_var_binding(name, value, profile, context)
