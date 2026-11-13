@@ -1152,8 +1152,10 @@ def module_dynamic_namespace(
                   and value.func.attr == "copy" and not value.args and not value.keywords):
                 value = value.func.value
             else:
-                break
-        return selected_literal_value(value)
+                selected = selected_literal_value(value)
+                if selected is value or selected is None:
+                    return selected
+                value = selected
 
     collection_operation_cache: dict[ast.AST, tuple[type[ast.AST] | None, tuple[ast.AST, ...]]] = {}
 
