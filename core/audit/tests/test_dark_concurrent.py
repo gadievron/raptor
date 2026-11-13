@@ -204,25 +204,27 @@ class TestDrainDarkProbes:
         result = OrchestratorResult(outcomes=[o], dormant=1)
         import concurrent.futures
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        barrier = threading.Event()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            barrier = threading.Event()
 
-        def _slow():
-            barrier.wait(timeout=10)
-            return _VerifyResult("confirmed")
+            def _slow():
+                barrier.wait(timeout=10)
+                return _VerifyResult("confirmed")
 
-        fut = executor.submit(_slow)
+            try:
+                fut = executor.submit(_slow)
 
-        handled = _drain_dark_probes(
-            result, _config(tmp_path),
-            dark_outcomes=[o], futures=[fut], executor=executor,
-            timeout=0.1,
-        )
-        barrier.set()  # Release the blocked thread.
-        assert id(o) not in handled
-        assert o.status == "dark"
-        assert result.dormant == 1
-        executor.shutdown(wait=True)
+                handled = _drain_dark_probes(
+                    result, _config(tmp_path),
+                    dark_outcomes=[o], futures=[fut], executor=executor,
+                    timeout=0.1,
+                )
+                barrier.set()  # Release the blocked thread.
+                assert id(o) not in handled
+                assert o.status == "dark"
+                assert result.dormant == 1
+            finally:
+                barrier.set()
 
     def test_counter_consistency_under_concurrency(self, tmp_path):
         """Multiple confirmed probes applied serially maintain counter
