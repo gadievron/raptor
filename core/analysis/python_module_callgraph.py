@@ -1215,16 +1215,27 @@ def module_dynamic_namespace(
             defaults = ()
         else:
             return None
-        while isinstance(iterator, ast.NamedExpr):
-            iterator = iterator.value
-        members = None
-        if (isinstance(iterator, ast.Call) and isinstance(iterator.func, ast.Name)
-                and iterator.func.id in iterator_wrapper_names
-                and len(iterator.args) == 1 and not iterator.keywords):
-            members = sequence_iteration_values(iterator)
-        if members is None and not defaults:
+        pending = [iterator]
+        members = []
+        known_members = False
+        while pending:
+            cursor = pending.pop()
+            if isinstance(cursor, ast.NamedExpr):
+                pending.append(cursor.value)
+            elif isinstance(cursor, ast.IfExp):
+                pending.extend((cursor.body, cursor.orelse))
+            elif isinstance(cursor, ast.BoolOp):
+                pending.extend(cursor.values)
+            elif (isinstance(cursor, ast.Call) and isinstance(cursor.func, ast.Name)
+                  and cursor.func.id in iterator_wrapper_names
+                  and len(cursor.args) == 1 and not cursor.keywords):
+                sources = sequence_iteration_values(cursor)
+                if sources is not None:
+                    known_members = True
+                    members.extend(sources)
+        if not known_members and not defaults:
             return None
-        return (*(members or ()), *defaults)
+        return (*members, *defaults)
 
     def literal_member_result_values(value: ast.AST) -> tuple[ast.AST, ...] | None:
         advancement = iterator_advance_sources(value)
