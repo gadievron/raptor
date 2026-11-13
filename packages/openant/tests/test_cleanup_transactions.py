@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.testing.module_bindings import patch_module_attribute
 from core.testing.restricted_tree import restricted_tree
 from packages.openant import resume, scanner
 
@@ -168,7 +169,7 @@ def test_failed_credential_stage_leaves_no_partial_config(
         def fail(*args, **kwargs):
             raise error("publish failed")
 
-        monkeypatch.setattr(os, "rename", fail)
+        patch_module_attribute(monkeypatch, scanner, "os", "rename", fail)
     with pytest.raises(error):
         scanner._stage_llm_config(out, "sonnet")
     assert list(out.iterdir()) == []
