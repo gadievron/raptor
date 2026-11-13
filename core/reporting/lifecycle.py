@@ -203,7 +203,7 @@ def apply_input_selection(context, directory):
         context.diagnostics.append(f"{record['input_rows'] - len(selected)} selected input observation(s) have unknown occurrence lineage")
     by_id = {}
     for row in selected if isinstance(selected, list) else []:
-        if isinstance(row, dict) and isinstance(row.get("id"), str):
+        if isinstance(row, dict) and (isinstance(row.get("id"), str) or type(row.get("id")) is int):
             by_id.setdefault(row.get("id"), []).append(row)
     links = context.extensions.setdefault("raptor.lineage", {})
     for finding in context.findings:
