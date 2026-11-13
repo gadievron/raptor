@@ -66,6 +66,8 @@ def test_snapshot_history_keeps_each_counts_matching_flags(tmp_path):
 
 
 def test_snapshot_survives_an_update_from_another_thread(tmp_path):
+    from core.testing.threads import retiring_threads
+
     summary.record_proxy_persist_state(tmp_path, expected_count=1, flags=["first"])
     release = threading.Event()
     errors = []
@@ -78,18 +80,19 @@ def test_snapshot_survives_an_update_from_another_thread(tmp_path):
             errors.append(exc)
 
     thread = threading.Thread(target=update, daemon=True)
-    thread.start()
-    try:
-        snapshot = summary.get_proxy_persist_state(tmp_path)
-        release.set()
-        thread.join(5)
-        assert not thread.is_alive()
-        assert not errors
-        assert snapshot == {"expected_count": 1, "flags": ["first"]}
-        assert summary.get_proxy_persist_state(tmp_path)["expected_count"] == 2
-    finally:
-        release.set()
-        thread.join(5)
+    with retiring_threads((thread,), release=release.set, timeout=5):
+        thread.start()
+        try:
+            snapshot = summary.get_proxy_persist_state(tmp_path)
+            release.set()
+            thread.join(5)
+            assert not thread.is_alive()
+            assert not errors
+            assert snapshot == {"expected_count": 1, "flags": ["first"]}
+            assert summary.get_proxy_persist_state(tmp_path)["expected_count"] == 2
+        finally:
+            release.set()
+            thread.join(5)
 
 
 def test_missing_run_has_no_snapshot(tmp_path):
