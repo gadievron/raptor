@@ -763,7 +763,7 @@ def module_dynamic_namespace(
       and aliasing makes name-level tracking unsound → whole module.
     * ``globals()`` / ``vars()`` / module-scope ``locals()``:
       a constant-key subscript STORE/DELETE poisons exactly that
-      name; a LOAD used as a direct attribute/item store receiver
+      name; a LOAD used as a direct or reflective attribute/item store receiver
       also poisons that name; plain lookup reads stay unpoisoned. Every other use
       (non-constant key store, aliasing the dict, ``.update(…)``,
       passing it on) → whole module.
@@ -903,12 +903,18 @@ def module_dynamic_namespace(
             if (isinstance(parent, ast.Subscript)
                     and parent.value is node):
                 if isinstance(parent.ctx, ast.Load):
-                    # A lookup can be the receiver of an attribute/item
-                    # store, even though the lookup itself is a Load.
+                    # A lookup can be the receiver of an ordinary or
+                    # reflective store, although the lookup itself is a Load.
                     cursor: ast.AST = parent
                     receiver_write = False
                     while True:
                         container = parents.get(cursor)
+                        if (isinstance(container, ast.Call)
+                                and isinstance(container.func, ast.Name)
+                                and container.func.id in {"setattr", "delattr"}
+                                and container.args and container.args[0] is cursor):
+                            receiver_write = True
+                            break
                         if not isinstance(container, (ast.Attribute, ast.Subscript)) \
                                 or container.value is not cursor:
                             break
