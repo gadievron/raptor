@@ -97,10 +97,12 @@ import sys
 import threading
 import time
 from typing import IO, Callable, NamedTuple, NoReturn, Union
+from functools import partial
 
 from . import probes
 from ._fork_safe_warn import warn_post_fork
 from ._proxy_bridge import _bring_up_loopback
+from ._retirement import retire_parent_resources
 from ._stdio import preserve_output_sources as _preserve_output_sources
 from ._spawn import (
     _DEATH_W_LOCK,
@@ -1773,37 +1775,34 @@ def _recv_ready(p_sock: socket.socket, a_pid: int,
     raises SandboxSetupError (after cleaning up A and the tree — A's
     SIGKILL propagates through the PDEATHSIG chain) otherwise."""
 
+    reap_without_signal = False
+
     def _fail(reason: str, category: str | None,
               *, reap_only: bool = False) -> NoReturn:
-        if reap_only:
-            with contextlib.suppress(OSError):
-                os.waitpid(a_pid, 0)
-        else:
-            _kill_and_reap(a_pid)
-        if death_w is not None:
-            close_death_w(death_w)
+        nonlocal reap_without_signal
+        reap_without_signal = reap_only
         raise SandboxSetupError(
             f"supervised spawn failed: {reason}",
             setup_category=category)
 
-    p_sock.settimeout(_READY_DEADLINE_S)
     fds: list[int] = []
     try:
-        msg, ancdata, _flags, _addr = p_sock.recvmsg(
-            512, socket.CMSG_SPACE(array.array("i", [0]).itemsize))
-        for cmsg_level, cmsg_type, cmsg_data in ancdata:
-            if (cmsg_level == socket.SOL_SOCKET
-                    and cmsg_type == socket.SCM_RIGHTS):
-                arr = array.array("i")
-                usable = len(cmsg_data) - (len(cmsg_data) % arr.itemsize)
-                arr.frombytes(cmsg_data[:usable])
-                fds.extend(arr)
-    except TimeoutError:
-        _fail(f"no ready message within {_READY_DEADLINE_S}s", None)
-    except OSError as e:
-        _fail(f"status socket error: {e}", None)
+        p_sock.settimeout(_READY_DEADLINE_S)
+        try:
+            msg, ancdata, _flags, _addr = p_sock.recvmsg(
+                512, socket.CMSG_SPACE(array.array("i", [0]).itemsize))
+            for cmsg_level, cmsg_type, cmsg_data in ancdata:
+                if (cmsg_level == socket.SOL_SOCKET
+                        and cmsg_type == socket.SCM_RIGHTS):
+                    arr = array.array("i")
+                    usable = len(cmsg_data) - (len(cmsg_data) % arr.itemsize)
+                    arr.frombytes(cmsg_data[:usable])
+                    fds.extend(arr)
+        except TimeoutError:
+            _fail(f"no ready message within {_READY_DEADLINE_S}s", None)
+        except OSError as e:
+            _fail(f"status socket error: {e}", None)
 
-    try:
         if msg == b"":
             # A died without reaching any reporting site — the
             # synthetic '!' category, mirroring _spawn's vocabulary.
@@ -1822,9 +1821,18 @@ def _recv_ready(p_sock: socket.socket, a_pid: int,
             _fail(f"malformed ready message: {text!r}", None)
         return int(parts[2]), int(parts[3]), fds[0]
     except BaseException:
-        for fd in fds:
-            with contextlib.suppress(OSError):
-                os.close(fd)
+        # Until a handle is returned, startup owns A even in survive mode.
+        # Retire once here for cancellation as well as typed refusals.
+        callbacks: list[Callable[[], object]] = []
+        if reap_without_signal:
+            callbacks.append(lambda: os.waitpid(a_pid, 0))
+        else:
+            callbacks.append(lambda: _kill_and_reap(a_pid))
+        if death_w is not None:
+            write_fd = death_w
+            callbacks.append(lambda: close_death_w(write_fd))
+        callbacks.extend(partial(os.close, fd) for fd in fds)
+        retire_parent_resources(*callbacks)
         raise
 
 
