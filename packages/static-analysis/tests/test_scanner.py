@@ -1,5 +1,6 @@
 """Tests for packages/static-analysis/scanner.py."""
 
+from contextlib import contextmanager
 import importlib.util
 import sys
 from pathlib import Path
@@ -562,50 +563,48 @@ class TestJoinCodeQLStage:
     """
 
     @staticmethod
+    @contextmanager
     def _future(target):
         from concurrent.futures import ThreadPoolExecutor
-        pool = ThreadPoolExecutor(max_workers=1)
-        try:
-            return pool.submit(target)
-        finally:
-            pool.shutdown(wait=False)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            yield pool.submit(target)
 
     def test_keyboard_interrupt_runs_abort_and_reraises(self):
         def _stage():
             raise KeyboardInterrupt
 
         aborted = []
-        future = self._future(_stage)
-        with pytest.raises(KeyboardInterrupt):
-            _scanner_mod._join_codeql_stage(
-                future, lambda: aborted.append(True),
+        with self._future(_stage) as future:
+            with pytest.raises(KeyboardInterrupt):
+                _scanner_mod._join_codeql_stage(
+                    future, lambda: aborted.append(True),
+                )
+            assert aborted, (
+                "abort not invoked on KeyboardInterrupt — the codeql "
+                "agent's process group stays alive and the shutdown join "
+                "wedges"
             )
-        assert aborted, (
-            "abort not invoked on KeyboardInterrupt — the codeql "
-            "agent's process group stays alive and the shutdown join "
-            "wedges"
-        )
 
     def test_stage_exception_demoted_no_abort(self, capsys):
         def _stage():
             raise RuntimeError("db build failed")
 
         aborted = []
-        future = self._future(_stage)
-        result = _scanner_mod._join_codeql_stage(
-            future, lambda: aborted.append(True),
-        )
-        assert result == []
-        assert not aborted
-        assert "CodeQL stage failed" in capsys.readouterr().err
+        with self._future(_stage) as future:
+            result = _scanner_mod._join_codeql_stage(
+                future, lambda: aborted.append(True),
+            )
+            assert result == []
+            assert not aborted
+            assert "CodeQL stage failed" in capsys.readouterr().err
 
     def test_success_passes_sarifs_through(self):
         def _fail_abort():
             raise AssertionError("abort must not run on a successful join")
 
-        future = self._future(lambda: ["a.sarif", "b.sarif"])
-        result = _scanner_mod._join_codeql_stage(future, _fail_abort)
-        assert result == ["a.sarif", "b.sarif"]
+        with self._future(lambda: ["a.sarif", "b.sarif"]) as future:
+            result = _scanner_mod._join_codeql_stage(future, _fail_abort)
+            assert result == ["a.sarif", "b.sarif"]
 
     def test_run_codeql_interrupt_mid_communicate_killpgs_and_reraises(
         self, tmp_path,
