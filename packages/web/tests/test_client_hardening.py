@@ -415,42 +415,46 @@ def test_transport_failures_are_counted_and_scope_refusals_are_not():
 
 
 def test_transport_error_counting_is_atomic_under_threads():
-    client = WebClient("http://t.example", rate_limit=0)
-    threads = [
-        threading.Thread(
-            target=lambda: [client.note_transport_error() for _ in range(500)],
-        )
-        for _ in range(8)
-    ]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(timeout=10)
-    assert client.transport_errors == 4000
-    client.close()
+    from core.testing.threads import retiring_threads
+
+    with WebClient("http://t.example", rate_limit=0) as client:
+        threads = [
+            threading.Thread(
+                target=lambda: [client.note_transport_error() for _ in range(500)],
+            )
+            for _ in range(8)
+        ]
+        with retiring_threads(threads, release=lambda: None, timeout=10):
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+        assert client.transport_errors == 4000
 
 
 def test_get_stats_snapshots_history_under_the_append_lock():
-    client = WebClient("http://t.example", rate_limit=0)
-    stop = threading.Event()
+    from core.testing.threads import retiring_threads
 
-    def _appender():
-        response = requests.Response()
-        response.status_code = 200
-        response._content = b""
-        while not stop.is_set():
-            client._log_request("GET", "http://t.example/", response, 0.01)
+    with WebClient("http://t.example", rate_limit=0) as client:
+        stop = threading.Event()
 
-    thread = threading.Thread(target=_appender)
-    thread.start()
-    try:
-        for _ in range(200):
-            stats = client.get_stats()
-            assert stats == {} or stats["total_requests"] > 0
-    finally:
-        stop.set()
-        thread.join(timeout=10)
-        client.close()
+        def _appender():
+            response = requests.Response()
+            response.status_code = 200
+            response._content = b""
+            while not stop.is_set():
+                client._log_request("GET", "http://t.example/", response, 0.01)
+
+        thread = threading.Thread(target=_appender)
+        with retiring_threads((thread,), release=stop.set, timeout=10):
+            thread.start()
+            try:
+                for _ in range(200):
+                    stats = client.get_stats()
+                    assert stats == {} or stats["total_requests"] > 0
+            finally:
+                stop.set()
+                thread.join(timeout=10)
 
 
 def test_rate_limiter_ignores_wall_clock_steps(monkeypatch):
