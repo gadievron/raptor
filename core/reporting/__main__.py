@@ -95,7 +95,9 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("Requested lineage mapping could not be loaded")
             if lineage is not None and (not isinstance(lineage, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in lineage.items())):
                 raise ValueError("Lineage must map candidate occurrence strings to baseline occurrence strings")
-            context, document = build_delta(before, after, lineage=lineage)
+            inputs = [args.baseline, args.candidate, *([args.lineage] if args.lineage else [])]
+            context, document = build_delta(before, after, lineage=lineage,
+                                            artifacts=[{"path": str(path.resolve())} for path in inputs])
         result = complete_reporting(context, args.out, document=document, options=options, stream=sys.stdout)
         return 1 if result.errors or (args.command == "sarif" and not context.artifacts) else 0
     except (OSError, ValueError, TypeError) as exc:
