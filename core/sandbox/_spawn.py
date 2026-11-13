@@ -182,6 +182,24 @@ def _close_setup_fds(*fds: int | None) -> None:
     _retire_parent_resources(*(partial(close_one, fd) for fd in fds if fd is not None))
 
 
+
+def _redirect_devnull(destination: int, flags: int) -> None:
+    """Install devnull on a standard descriptor without closing that sink."""
+    descriptor = os.open("/dev/null", flags)
+    if descriptor == destination:
+        os.set_inheritable(descriptor, True)
+        return
+    try:
+        os.dup2(descriptor, destination)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+    os.close(descriptor)
+
+
 def _open_capture_pipes() -> tuple[int, int, int, int]:
     """(out_r, out_w, err_r, err_w) for output capture.
 
@@ -2919,9 +2937,7 @@ def run_sandboxed(
                 if _redir is None:
                     continue
                 if _redir == subprocess.DEVNULL:
-                    _dn = os.open("/dev/null", os.O_WRONLY)
-                    os.dup2(_dn, _fdnum)
-                    os.close(_dn)
+                    _redirect_devnull(_fdnum, os.O_WRONLY)
                     continue
                 if _fdnum == 2 and _redir == subprocess.STDOUT:
                     os.dup2(1, 2)
@@ -2954,9 +2970,7 @@ def run_sandboxed(
                 or stdin == subprocess.PIPE
             )
             if _use_devnull:
-                devnull = os.open("/dev/null", os.O_RDONLY)
-                os.dup2(devnull, 0)
-                os.close(devnull)
+                _redirect_devnull(0, os.O_RDONLY)
             else:
                 try:
                     stdin_fd = stdin if isinstance(stdin, int) else stdin.fileno()
@@ -2974,9 +2988,7 @@ def run_sandboxed(
                         except OSError:
                             pass
                 except (AttributeError, OSError):
-                    devnull = os.open("/dev/null", os.O_RDONLY)
-                    os.dup2(devnull, 0)
-                    os.close(devnull)
+                    _redirect_devnull(0, os.O_RDONLY)
             # New session → no controlling tty. Honoured only when caller
             # explicitly or implicitly opts in — subprocess.run defaults to
             # start_new_session=False (session inherited) and callers relying
