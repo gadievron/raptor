@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
+import errno
 import json
 
 import pytest
 
 from core.build.macro_config import MacroConfig, extract_macro_config
+from core.testing.threads import retiring_threads
 
 
 def _write_cc(tmp_path, entries):
@@ -229,10 +232,23 @@ def test_read_bounded_fifo_refused_without_blocking(tmp_path):
             outcome.append("refused")
 
     t = threading.Thread(target=_attempt, daemon=True)
-    t.start()
-    t.join(timeout=10)
-    assert not t.is_alive(), "_read_bounded blocked opening a FIFO"
-    assert outcome == ["refused"]
+    with ExitStack() as cleanup:
+        def release_reader():
+            if t.ident is None or not t.is_alive():
+                return
+            try:
+                peer = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+            else:
+                cleanup.callback(os.close, peer)
+
+        with retiring_threads([t], release=release_reader, timeout=10):
+            t.start()
+            t.join(timeout=10)
+            assert not t.is_alive(), "_read_bounded blocked opening a FIFO"
+            assert outcome == ["refused"]
 
 
 class TestNestingBombs:
