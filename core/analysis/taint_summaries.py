@@ -281,10 +281,10 @@ def _generator_writes_enclosing_frame(node: ast.GeneratorExp) -> bool:
     return False
 
 
-def _has_deferred_generator_write(fn_ast: ast.AST) -> bool:
+def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
     """Visit this frame, including defaults of nested definitions."""
     if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        return False  # Synthetic lambda entries use the existing shape refusal.
+        return None  # Synthetic lambda entries use the existing shape refusal.
     pending: list[ast.AST] = list(fn_ast.body)
     while pending:
         node = pending.pop()
@@ -294,10 +294,12 @@ def _has_deferred_generator_write(fn_ast: ast.AST) -> bool:
             if not isinstance(node, ast.Lambda):
                 pending.extend(node.decorator_list)
             continue
+        if isinstance(node, (ast.Yield, ast.YieldFrom)):
+            return "generator iteration outputs are not modelled"
         if isinstance(node, ast.GeneratorExp) and _generator_writes_enclosing_frame(node):
-            return True
+            return "generator defers an enclosing-frame assignment"
         pending.extend(ast.iter_child_nodes(node))
-    return False
+    return None
 
 
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
@@ -311,6 +313,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
+    * A generator function: iteration output is not a normal return value.
     * A generator expression with a deferred assignment expression: its
       enclosing-frame writes depend on consumption, which is not modelled.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
@@ -323,8 +326,9 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     definitions are summarised separately so their dynamic dispatch
     doesn't poison the outer summary.
     """
-    if _has_deferred_generator_write(fn_ast):
-        return "generator defers an enclosing-frame assignment"
+    deferred_reason = _deferred_frame_summary_reason(fn_ast)
+    if deferred_reason is not None:
+        return deferred_reason
     for node in ast.walk(fn_ast):
         if isinstance(node, ast.Nonlocal):
             # A nested def's ``nonlocal`` rebinds an ENCLOSING frame —
