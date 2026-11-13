@@ -96,3 +96,49 @@ def test_diagnostic_counts_do_not_retain_unused_notification_payloads():
     gc.collect(0)
     assert reference() is None
     assert counts['tool_execution_failures'] == 1
+
+
+@pytest.mark.parametrize('channel', ['toolExecutionNotifications', 'toolConfigurationNotifications'])
+@pytest.mark.parametrize('level', [
+    pytest.param(None, id='null'), pytest.param([], id='array'),
+    pytest.param({}, id='object'), pytest.param(False, id='boolean'),
+    pytest.param(7, id='number'), pytest.param('fatal', id='unknown-string'),
+    pytest.param('ERROR', id='wrong-case'), pytest.param('', id='empty'),
+])
+def test_unavailable_notification_level_cannot_claim_clean_execution(tmp_path, channel, level):
+    from packages.semgrep.models import SemgrepResult, parse_sarif_data
+
+    run = {'tool': {'driver': {'name': 'Semgrep'}},
+           'results': [{'ruleId': 'kept', 'message': {'text': 'retained finding'}}],
+           'invocations': [{'executionSuccessful': True,
+                            channel: [{'level': level, 'message': {'text': 'owned notice'}}]}]}
+    original = copy.deepcopy(run)
+    path = tmp_path / 'notification-level.sarif'
+    path.write_text(json.dumps({'runs': [run]}))
+
+    metrics = generate_scan_metrics([str(path)])
+    errors = []
+    findings = parse_sarif_data({'runs': [run]}, errors=errors)
+
+    assert metrics['total_findings'] == 1
+    assert metrics['sarif_input_errors'] == 1
+    assert metrics['tool_execution_failures'] == {}
+    assert scan_execution_status(metrics) == 'partial'
+    assert [finding.rule_id for finding in findings] == ['kept']
+    assert errors and not SemgrepResult(findings=findings, errors=errors).ok
+    assert run == original
+
+
+@pytest.mark.parametrize('channel', ['toolExecutionNotifications', 'toolConfigurationNotifications'])
+@pytest.mark.parametrize('notice,failures', [
+    pytest.param({}, 0, id='omitted-default'),
+    pytest.param({'level': 'none'}, 0, id='none'),
+    pytest.param({'level': 'note'}, 0, id='note'),
+    pytest.param({'level': 'warning'}, 0, id='warning'),
+    pytest.param({'level': 'error'}, 1, id='error'),
+])
+def test_supported_notification_levels_keep_existing_execution_meaning(channel, notice, failures):
+    run = {'invocations': [{'executionSuccessful': True, channel: [notice]}]}
+    assert get_run_execution_diagnostics(run) == {
+        'tool_execution_failures': failures, 'tool_coverage_limitations': 0, 'sarif_input_errors': 0,
+    }
