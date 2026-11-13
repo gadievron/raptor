@@ -15101,6 +15101,9 @@ def _outcome_to_panel_result(
         result["hypotheses"] = outcome.hypotheses
     if outcome.review_result:
         result.update(outcome.review_result)
+    # The producer may normalise an invalid model status without rewriting
+    # the raw review payload. Panel votes use that canonical outcome value.
+    result["status"] = outcome.status
     return result
 
 
