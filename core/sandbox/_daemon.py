@@ -1279,9 +1279,21 @@ def _handle_ping(payload: dict) -> dict:
             "dumpable": _get_dumpable()}
 
 
+def _hex_output_size(text: str) -> int:
+    """Size of valid hexadecimal output, rounded up before syntax validation."""
+    hex_chars = len(text) - sum(text.count(ws) for ws in " \t\n\r\v\f")
+    return (hex_chars + 1) // 2
+
+
 def _handle_spawn(payload: dict) -> dict:
     argv = payload["argv"]
-    stdin_bytes = bytes.fromhex(payload.get("stdin_hex", ""))
+    stdin_hex = payload.get("stdin_hex", "")
+    decoded_size = _hex_output_size(stdin_hex)
+    if decoded_size > _MAX_STDIN_BYTES:
+        return {"ok": False,
+                "error": f"stdin_bytes={decoded_size} exceeds "
+                         f"{_MAX_STDIN_BYTES}"}
+    stdin_bytes = bytes.fromhex(stdin_hex)
     if len(stdin_bytes) > _MAX_STDIN_BYTES:
         return {"ok": False,
                 "error": f"stdin_bytes={len(stdin_bytes)} exceeds "
@@ -1393,7 +1405,14 @@ def _handle_probe(payload: dict) -> dict:
 
             send_bytes: bytes | None = None
             if "send_hex" in step:
-                send_bytes = bytes.fromhex(step["send_hex"].replace(" ", ""))
+                text = step["send_hex"].replace(" ", "")
+                decoded_size = _hex_output_size(text)
+                if decoded_size > _MAX_SEND_BYTES:
+                    return {"ok": False,
+                            "error": (f"step {i} send_hex "
+                                      f"{decoded_size} > {_MAX_SEND_BYTES}"),
+                            "steps_completed": steps_completed}
+                send_bytes = bytes.fromhex(text)
                 if len(send_bytes) > _MAX_SEND_BYTES:
                     return {"ok": False,
                             "error": (f"step {i} send_hex "
@@ -1583,8 +1602,7 @@ def _handle_conversation(payload: dict) -> dict:
             text = hexstr.replace(" ", "").replace("\n", "")
             # Valid hex has two non-whitespace characters per output byte.
             # Refuse oversized sends before allocating their binary form.
-            hex_chars = len(text) - sum(text.count(ws) for ws in "\t\r\v\f")
-            decoded_size = (hex_chars + 1) // 2
+            decoded_size = _hex_output_size(text)
             if decoded_size > _MAX_SEND_BYTES:
                 return {"ok": False,
                         "error": (f"sends[{i}] {decoded_size} > "
