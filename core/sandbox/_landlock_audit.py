@@ -57,6 +57,7 @@ import warnings
 from collections.abc import Callable, Iterable
 
 from ._exec_signals import restore_exec_signals
+from ._stdio import preserve_output_sources as _preserve_output_sources
 from ._retirement import retire_parent_resources as _retire_parent_resources
 
 from . import evidence as _evidence_mod
@@ -676,26 +677,29 @@ def run_landlock_audit(
                     _close_safely(err_r)
                 try:
                     # Establish stdout first: STDERR=STDOUT follows its final sink.
-                    for _redir, _fdnum, _capture_stream, _writer in (
-                            (stdout, 1, _capture_stdout, out_w),
-                            (stderr, 2, _capture_stderr, err_w)):
-                        if _capture_stream:
-                            os.dup2(_writer, _fdnum)
-                            continue
-                        if _redir is None:
-                            continue
-                        if _redir == subprocess.DEVNULL:
-                            _dn = os.open("/dev/null", os.O_WRONLY)
-                            os.dup2(_dn, _fdnum)
-                            os.close(_dn)
-                            continue
-                        if _fdnum == 2 and _redir == subprocess.STDOUT:
-                            os.dup2(1, 2)
-                            continue
-                        _rfd = (_redir if isinstance(_redir, int)
-                                else _redir.fileno())
-                        if _rfd != _fdnum:
-                            os.dup2(_rfd, _fdnum)
+                    with _preserve_output_sources(
+                            stdout, stderr, capture_stdout=_capture_stdout,
+                            capture_stderr=_capture_stderr) as (_stdout_source, _stderr_source):
+                        for _redir, _fdnum, _capture_stream, _writer in (
+                                (_stdout_source, 1, _capture_stdout, out_w),
+                                (_stderr_source, 2, _capture_stderr, err_w)):
+                            if _capture_stream:
+                                os.dup2(_writer, _fdnum)
+                                continue
+                            if _redir is None:
+                                continue
+                            if _redir == subprocess.DEVNULL:
+                                _dn = os.open("/dev/null", os.O_WRONLY)
+                                os.dup2(_dn, _fdnum)
+                                os.close(_dn)
+                                continue
+                            if _fdnum == 2 and _redir == subprocess.STDOUT:
+                                os.dup2(1, 2)
+                                continue
+                            _rfd = (_redir if isinstance(_redir, int)
+                                    else _redir.fileno())
+                            if _rfd != _fdnum:
+                                os.dup2(_rfd, _fdnum)
                 finally:
                     if _capture_any:
                         _close_safely(out_w)
