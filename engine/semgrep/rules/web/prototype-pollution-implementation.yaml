@@ -66,18 +66,20 @@ rules:
       tags: ["security", "web", "prototype-pollution", "taint"]
 
   # JS/TS — recursive merge implementation with no __proto__ guard
-  # anywhere in its body. The definition itself is the risk surface (any
-  # caller passing parsed user JSON pollutes); pattern-not-regex excludes
-  # implementations that mention __proto__ / hasOwnProperty, the two
-  # canonical guard idioms. Object.keys is deliberately NOT excluded:
+  # anywhere in its body. This recursive-call shape is a review candidate;
+  # property writes and caller input still need independent confirmation.
+  # pattern-not-regex excludes __proto__ / hasOwnProperty text markers,
+  # without proving that a mentioned guard is effective. Object.keys is
+  # deliberately NOT excluded:
   # JSON.parse yields an own __proto__ key that Object.keys enumerates,
   # so iterating it guards nothing.
   - id: raptor.web.prototype-pollution.unguarded-merge-impl.javascript
     message: >-
-      Recursive merge implementation without a __proto__ /
-      hasOwnProperty guard. Any call site that passes attacker-influenced
-      objects pollutes Object.prototype. Skip __proto__, constructor and
-      prototype keys, or copy onto Object.create(null).
+      Recursive property access without recognised key-check markers is a
+      prototype-pollution review candidate. Confirm property writes, target
+      prototypes and untrusted callers before treating it as a vulnerability.
+      Reject __proto__, constructor and prototype keys where untrusted
+      properties are copied.
     languages: [javascript, typescript]
     severity: MEDIUM
     patterns:
