@@ -91,9 +91,7 @@ rules:
       - pattern-either:
           # net/http
           - pattern: http.Redirect($W, $R, $URL, ...)
-          # gin
-          - pattern: $CTX.Redirect($CODE, $URL)
-          # echo
+          # gin / echo
           - pattern: $CTX.Redirect($CODE, $URL)
           # Manual header set
           - pattern: $W.Header().Set("Location", $URL)
