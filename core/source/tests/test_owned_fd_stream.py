@@ -1,13 +1,16 @@
 """Descriptor ownership remains explicit while an IO wrapper borrows it."""
 
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import errno
 import os
+import sys
+from types import ModuleType
 
 import pytest
 
 from core.source import streams
 from core.testing.module_bindings import patch_module_attribute
+from core.testing.module_views import module_function_view
 
 
 def assert_closed(fd):
@@ -20,21 +23,52 @@ def assert_closed(fd):
 def owned_fd(tmp_path):
     path = tmp_path / "owned"
     path.write_bytes(b"owned bytes")
+    closer = os.close
+    state = {"pending": True, "identity": None, "yielded": False}
+
+    def retire(descriptor):
+        if not state["pending"]:
+            return
+        if state["yielded"] and state["identity"] is not None:
+            try:
+                current = os.fstat(descriptor)
+            except OSError:
+                return
+            if (current.st_dev, current.st_ino) != state["identity"]:
+                return
+        state["pending"] = False
+        closer(descriptor)
+
     with ExitStack() as setup:
         fd = os.open(path, os.O_RDWR)
-        setup.callback(os.close, fd)
+        setup.callback(retire, fd)
         info = os.fstat(fd)
-        try:
-            setup.pop_all()
+        state["identity"] = (info.st_dev, info.st_ino)
+
+        def consume(descriptor):
+            if descriptor == fd:
+                state["pending"] = False
+            closer(descriptor)
+
+        operations = ModuleType(os.__name__)
+        vars(operations).update(vars(os))
+        operations.close = consume
+        raw = {
+            name: getattr(streams, name).__wrapped__
+            for name in ("owned_fd", "open_owned_fd", "preserving_stream_error")
+        }
+        private = module_function_view(streams, bindings={
+            "os": operations,
+            **{f"_fixture_{name}": body for name, body in raw.items()},
+        })
+        for name in raw:
+            setattr(private, name, contextmanager(getattr(private, f"_fixture_{name}")))
+        # Body patches remain on this owned namespace, including late undo.
+        with pytest.MonkeyPatch.context() as scope:
+            scope.setattr(sys.modules[__name__], "os", operations)
+            scope.setattr(sys.modules[__name__], "streams", private)
+            state["yielded"] = True
             yield fd, path
-        finally:
-            try:
-                current = os.fstat(fd)
-            except OSError:
-                pass
-            else:
-                if (current.st_dev, current.st_ino) == (info.st_dev, info.st_ino):
-                    os.close(fd)
 
 
 @pytest.mark.parametrize("primary_type", [None, RuntimeError, KeyboardInterrupt, SystemExit])
