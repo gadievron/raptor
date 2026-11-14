@@ -234,7 +234,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
     candidate_names: set[str] = set()
     for names in family_to_aliases.values():
         candidate_names.update(names)
-    usage_counts = _count_usage(scan_roots, candidate_names)
+    usage_counts, sources_scanned = _count_usage_with_scan_count(scan_roots, candidate_names)
 
     # Phase 4: sort within each family by usage frequency desc, cap.
     out: dict[str, tuple[str, ...]] = {}
@@ -254,9 +254,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
     return DiscoveryResult(
         aliases_by_family=out,
         headers_scanned=headers_seen,
-        sources_scanned=(
-            sum(1 for _ in _iter_source_files(scan_roots)) if candidate_names else 0
-        ),
+        sources_scanned=sources_scanned,
     )
 
 
@@ -349,6 +347,13 @@ def _iter_source_files(scan_roots: list[Path]):
 
 
 def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
+    """Return lexical usage counts; see :func:`_count_usage_with_scan_count`."""
+    return _count_usage_with_scan_count(scan_roots, names)[0]
+
+
+def _count_usage_with_scan_count(
+    scan_roots: list[Path], names: set[str],
+) -> tuple[dict[str, int], int]:
     """Count word-boundary macro mentions in admitted code views.
 
     The defined name on its own ``#define NAME …`` line is excluded;
@@ -357,11 +362,12 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
     input contributes no counted mentions, not proof of macro absence.
 
     Counts remain lexical heuristics, not actual macro invocation or
-    preprocessing activity. Returns zero for names not counted.
+    preprocessing activity. Returns zero for names not counted, plus the
+    number of admitted source entries, including read/view refusals.
     """
     counts: dict[str, int] = dict.fromkeys(names, 0)
     if not names:
-        return counts
+        return counts, 0
 
     # Compile one large regex with all the candidate names. Word
     # boundaries on both sides eliminate substring false positives.
@@ -375,7 +381,9 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
         r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\b",
     )
 
+    sources_scanned = 0
     for entry in _iter_source_files(scan_roots):
+        sources_scanned += 1
         got = read_text_capped(entry)
         if got is None:
             continue
@@ -402,5 +410,4 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
                     # Define line for this macro — not usage.
                     continue
                 counts[token] += 1
-    return counts
-
+    return counts, sources_scanned
