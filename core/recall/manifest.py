@@ -287,7 +287,8 @@ def parse_manifest(data: Any) -> RecallManifest:
     if not isinstance(data, dict):
         msg = "manifest root must be an object"
         raise ManifestError(msg)
-    if data.get("schema_version") != SCHEMA_VERSION:
+    if (isinstance(data.get("schema_version"), bool)
+            or data.get("schema_version") != SCHEMA_VERSION):
         errors.append(
             f"schema_version must be {SCHEMA_VERSION} "
             f"(got {data.get('schema_version')!r})")
