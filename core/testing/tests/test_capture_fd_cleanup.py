@@ -1,6 +1,6 @@
 """Capture rollback and independent descriptor teardown own every handle."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import errno
 import fcntl
 import os
@@ -80,7 +80,12 @@ def test_capture_dup_failure_rolls_back_only_current_call(
             calls.append(fd)
             if len(calls) == failing_call:
                 raise error("injected capture duplicate failure")
-            return record(os.dup(fd))
+            duplicate = os.dup(fd)
+            with ExitStack() as setup:
+                setup.callback(os.close, duplicate)
+                registered = record(duplicate)
+                setup.pop_all()
+                return registered
 
         fixture = None
         try:
@@ -127,7 +132,12 @@ def test_capture_fixture_closes_retained_fds_on_every_exit(finish, monkeypatch):
                 return (*pairs[0], *pairs[1])
 
         def dup(fd):
-            return record(os.dup(fd))
+            duplicate = os.dup(fd)
+            with ExitStack() as setup:
+                setup.callback(os.close, duplicate)
+                registered = record(duplicate)
+                setup.pop_all()
+                return registered
 
         fixture = None
         try:
