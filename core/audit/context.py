@@ -5310,7 +5310,7 @@ def _resolve_macros(
 # deliberate and pinned by test_language_map_alignment.
 _LANG_PATTERN_EXT_MAP = {
     ".c": "c", ".h": "c",
-    ".cpp": "c", ".cc": "c", ".cxx": "c", ".hpp": "c", ".hxx": "c",
+    ".cpp": "c", ".cc": "c", ".cxx": "c", ".hh": "c", ".hpp": "c", ".hxx": "c",
     ".py": "python",
     ".go": "go",
     ".rs": "rust",

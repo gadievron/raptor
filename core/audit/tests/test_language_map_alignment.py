@@ -50,6 +50,7 @@ _VALUE_DIVERGENCES: dict[str, dict[tuple[str, str], str]] = {
         (".cpp", "c"): "C family shares tiers/patterns/c.md",
         (".cc", "c"): "C family shares tiers/patterns/c.md",
         (".cxx", "c"): "C family shares tiers/patterns/c.md",
+        (".hh", "c"): "C family shares tiers/patterns/c.md",
         (".hpp", "c"): "C family shares tiers/patterns/c.md",
         (".hxx", "c"): "C family shares tiers/patterns/c.md",
         (".ts", "javascript"): "TS shares javascript.md",
