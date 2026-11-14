@@ -25,7 +25,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from core.source import open_regular
+from core.security.capped_read import read_capped_text
 
 #: Byte ceiling on files admitted to the view. The whole file is read
 #: and scanned per (path, mtime, size); a planted multi-GB "source
@@ -68,18 +68,12 @@ def _sanitized_source_cached(
         resolved = Path(file_path).resolve()
     except OSError:
         return None
-    f = open_regular(resolved, "r", encoding="utf-8",
-                     errors="replace")
-    if f is None:
-        return None
-    try:
-        with f:
-            # Re-capped at read time: the file may have grown between
-            # the stat gate and this read (target-writable trees).
-            text = f.read(MAX_SOURCE_BYTES + 1)
-    except OSError:
-        return None
-    if len(text) > MAX_SOURCE_BYTES:
+    # Recheck the opened file in bytes: text-mode read counts characters
+    # and could admit non-ASCII growth beyond the initial byte-size gate.
+    text = read_capped_text(
+        resolved, MAX_SOURCE_BYTES, errors="replace", universal_newlines=True,
+    )
+    if text is None:
         return None
     from core.audit.source_view import sanitized_view
 
