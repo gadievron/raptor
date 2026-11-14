@@ -38,7 +38,7 @@ def load_suppression_records(path: Path) -> list[dict[str, Any]]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return records
-    for line in text.splitlines():
+    for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue
