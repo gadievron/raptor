@@ -3699,6 +3699,7 @@ def main() -> None:
                     config_resolved_sarifs = [_cr_sarif]
             except Exception as e:  # noqa: BLE001
                 logger.warning("config-resolved stage failed: %s", e)
+                config_resolved_stats = {"stage_error": 1}
 
         # Merge SARIFs if more than one
         sarif_inputs = (
@@ -3849,6 +3850,10 @@ def main() -> None:
         # Additive config-resolved stage stats (None when disabled) —
         # files scanned, emissions, per-refusal resolver counts.
         metrics["config_resolved"] = config_resolved_stats
+        if config_resolved_stats and config_resolved_stats.get("stage_error"):
+            metrics.setdefault("tool_execution_failures", {})["raptor-config-resolved"] = (
+                config_resolved_stats["stage_error"]
+            )
         metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         metrics["sarif_merge_failed"] = bool(sarif_inputs and not merge_completed)
         metrics["codeql_no_output"] = bool(run_codeql_stage and not any(
