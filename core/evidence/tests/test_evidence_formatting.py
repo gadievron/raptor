@@ -112,7 +112,7 @@ class TestTaintSummaryProse:
         )
         prose = format_evidence_prose(_record(taint_summary=summary))
         assert "param `s` taints return value" in prose
-        assert "(no sanitizer)" in prose
+        assert "(no callable effect recorded)" in prose
 
     def test_return_taint_lists_sanitizers(self):
         summary = TaintSummary(
@@ -121,8 +121,28 @@ class TestTaintSummaryProse:
             return_effects=frozenset({(0, "html.escape", 0)}),
         )
         prose = format_evidence_prose(_record(taint_summary=summary))
-        assert "sanitized by: html.escape" in prose
-        assert "(no sanitizer)" not in prose
+        assert "callable effects: html.escape; sanitisation unverified" in prose
+        assert "(no callable effect recorded)" not in prose
+        assert "direct flow also recorded" not in prose
+
+    def test_mixed_return_effects_disclose_direct_flow_without_certification(self):
+        summary = TaintSummary(
+            function="render", params=("s",),
+            return_effects=frozenset({(0, "", -1), (0, "html.escape", 0)}),
+        )
+        prose = format_evidence_prose(_record(taint_summary=summary))
+        assert "callable effects: html.escape; direct flow also recorded" in prose
+        assert "sanitisation unverified" in prose
+        assert "sanitized by:" not in prose
+
+    def test_arbitrary_return_callable_is_not_labelled_a_sanitizer(self):
+        summary = TaintSummary(
+            function="render", params=("s",),
+            return_effects=frozenset({(0, "str", 0)}),
+        )
+        prose = format_evidence_prose(_record(taint_summary=summary))
+        assert "callable effects: str; sanitisation unverified" in prose
+        assert "sanitized by:" not in prose
 
     def test_summary_unknown_warns_against_trusting_absence(self):
         summary = TaintSummary(
