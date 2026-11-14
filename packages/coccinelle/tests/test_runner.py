@@ -3793,3 +3793,22 @@ def test_rule_discovery_preserves_glob_names_and_order(tmp_path, monkeypatch):
     results = run_rules(target, rules)
     assert seen == expected
     assert [r.rule_path for r in results] == [str(p) for p in expected]
+
+
+@pytest.mark.parametrize('count', [0, 1, 2])
+def test_batched_missing_requested_rules_are_refusals(tmp_path, monkeypatch, count):
+    rules = [tmp_path / f'owned-missing-{index}.cocci' for index in range(count)]
+    monkeypatch.setattr(runner_mod, 'is_available', lambda: True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('missing-rule control must not probe versions or execute spatch')
+
+    monkeypatch.setattr(runner_mod, 'version', forbidden)
+    monkeypatch.setattr(runner_mod, '_sandboxed_run', forbidden)
+    results = runner_mod.run_rules_batched(tmp_path, rules, _installed_version=forbidden)
+    assert set(results) == {p.stem for p in rules}
+    for result in results.values():
+        assert result.returncode == -1
+        assert result.errors
+        assert result.files_examined == []
+        assert result.matches == []
