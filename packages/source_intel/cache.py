@@ -1,17 +1,16 @@
-"""Content-addressed cache for :class:`SourceIntelResult`.
+"""Metadata-validated cache for :class:`SourceIntelResult`.
 
 Phase 2 ships an in-memory cache; persistence to disk lands in axis-N
 PRs when cocci run-cost becomes the dominant cross-stage cost.
 
 Cache key composition:
 
-  rules_hash :  sha256 of the contents of every ``.cocci`` file under
-                the rules dir, sorted by name. Captures rule-corpus
-                version.
-  target_hash : sha256 of the target's source-file tree. Every file's
-                name + (mtime, size) participates; content hashes are
-                bounded to a deterministic (sorted-path) subset for
-                cost, so any edit still flips the key.
+  rules_hash :  sorted rule and pack contents, with a metadata-validated
+                memo to avoid repeated content reads.
+  target_hash : sorted source paths, with content hashes for a bounded
+                prefix and metadata for the remaining files. Metadata-
+                preserving changes can evade freshness checks; this is
+                not a security-relevant fingerprint.
   schema_version : module-level constant, bumped when the result shape
                 changes meaningfully.
 
@@ -25,6 +24,8 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source import open_regular_gated
 
 from packages.source_intel.analyze import (
     C_CPP_EXTS,
@@ -380,12 +381,12 @@ def _file_hash(path: Path) -> str:
     """SHA-256 of a single file's contents."""
     h = hashlib.sha256()
     try:
-        with path.open("rb") as f:  # raw-open: RAPTOR-owned cache file written by this module
+        with open_regular_gated(path, follow_symlinks=True) as f:
             while True:
                 chunk = f.read(65536)
                 if not chunk:
                     break
                 h.update(chunk)
-    except OSError:
+    except (OSError, ValueError):
         return "read-error"
     return h.hexdigest()
