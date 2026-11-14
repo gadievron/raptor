@@ -295,6 +295,16 @@
     "kind": "literal",
     "note": "structured finding-dict field names (line refs, counter reg, CWE) for the asm zero-length-loop check - not a name vocabulary"
   },
+  "core/audit/binary_callee_assessments.py::_assessment": {
+    "count": 24,
+    "kind": "literal",
+    "note": "Fixed serialized binary-callee prior-assessment record keys: selected view/material digests, excerpt sizes, assumptions and recorded xref limitations. These encode context identity and explicitly prior_model_assessment_not_verification; not learned target function names or permission to grant verdict authority."
+  },
+  "core/audit/binary_callers.py::material": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Fixed binary-caller context JSON field manifest (body excerpt byte counts, original view digest, recorded call-site metadata and partial-coverage limitations), not target function-name vocabulary; caller identity values remain data."
+  },
   "core/audit/binary_layer0.py::_CALLEE_KEYWORDS": {
     "count": 40,
     "kind": "literal",
@@ -319,6 +329,11 @@
   "core/audit/binary_layer0.py::_SENSITIVE_STACK_RE": {
     "count": 10,
     "kind": "alternation"
+  },
+  "core/audit/binary_subjects.py::material": {
+    "count": 11,
+    "kind": "literal",
+    "note": "Fixed recovered binary-type context JSON keys (type metadata, unknown signedness and omitted fields); explicitly context_not_evidence. This serializer field manifest is not a learned target name taxonomy."
   },
   "core/audit/block_review.py::_get_dangerous_targets": {
     "count": 16,
@@ -379,9 +394,9 @@
     "note": "verification_summary JSON field schema in findings-graded.json: artifact/export status, event admission, source-validation withdrawals and rejected inputs, finding/clean-review counts, observation summaries and limitations. Fixed report keys, not target function/API names or detection vocabulary; produced by write_check_results and read back by source-freshness/check-trace tests. Source-validation metadata withdraws applicability and grants no proof authority. Current role review (previous baseline count 10; reviewed count 11): 10to11 verification_summary reportfields addsclaim_observations sidecar/status. Structural schema; no domain-vocabulary change."
   },
   "core/audit/claim_adjudication.py::publication_shadow": {
-    "count": 10,
+    "count": 11,
     "kind": "literal",
-    "note": "Closed shadow publication schema fields preserve missing authority/history gaps and unchanged legacy projections; not function-name matching vocabulary. Closed publication artifact schema fields for diagnostic shadow comparison; keys encode explicit non-authority, completeness limitations and quarantines, not detector names or learned matching vocabulary."
+    "note": "Closed shadow publication schema fields preserve missing authority/history gaps and unchanged legacy projections; not function-name matching vocabulary. Closed publication artifact schema fields for diagnostic shadow comparison; keys encode explicit non-authority, completeness limitations and quarantines, not detector names or learned matching vocabulary. Reviewed final1259 extension: Fixed shadow adjudication report field manifest, including quarantined event identifiers and preparation availability. authoritative=False and history_complete=False preserve missing claim/source-admission limits; not learned target function names."
   },
   "core/audit/claim_comparison_inputs.py::comparison_inputs": {
     "count": 10,
@@ -689,9 +704,9 @@
     "reviewed": "2026-10-31"
   },
   "core/audit/evidence_grade.py::PIPELINE_OWNED_REVIEW_KEYS": {
-    "count": 81,
+    "count": 90,
     "kind": "literal",
-    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced. Reviewed additions: external_context_delivery is an invocation-owned post-fit delivery receipt; publication_failure and review_recovery are pipeline-owned publication/recovery processing diagnostics. Model-supplied copies of these three fields are dropped before pipeline-owned values are inserted; novel semantic concerns remain model-authored and unverified.",
+    "note": "closed schema-key manifest: the review_result keys only pipeline code may set (machine flags, receipts, stage records, panel identity/accounting); the review and edge-review parse boundaries drop them from model output so a model cannot mint a machine signal by emitting the key; kept in lockstep with the code by the same closure test \u2014 persistence/schema keys, not a learned name vocabulary Reviewed addition: ondemand_synth_hypothesis is pipeline-owned late-synthesis diagnostic state, not a model-authored key or a learned identifier. Current role review (previous baseline count 71; reviewed count 77): Closed trusted-field exclusion schema: drop_pipeline_owned removes model attempts to supply pipeline delivery/history/deferral fields before owned values are inserted. These keys do not match target APIs and do not confer evidence through model text. Reviewed current producer/consumer contract: Closed trusted pipeline-output exclusion schema; drop_pipeline_owned removes model attempts to supply machine-owned keys before owned delivery/history/evidence fields are inserted. Existing review note must be preserved verbatim and extended, not replaced. Reviewed additions: external_context_delivery is an invocation-owned post-fit delivery receipt; publication_failure and review_recovery are pipeline-owned publication/recovery processing diagnostics. Model-supplied copies of these three fields are dropped before pipeline-owned values are inserted; novel semantic concerns remain model-authored and unverified. Reviewed final1259 extension: Closed pipeline-owned review-field authority boundary: drop_pipeline_owned strips these keys from model-authored dictionaries before pipeline publication. Added delivery/binary-binding/context fields remain pipeline-owned; no arbitrary field or model claim gains authority. This is a fixed protocol-key taxonomy, not target function-name vocabulary.",
     "reviewed": "2026-11-09"
   },
   "core/audit/evidence_grade.py::_CLASSIFIER_FALLBACK_VERIFICATION": {
@@ -710,9 +725,9 @@
     "reviewed": "2026-11-08"
   },
   "core/audit/evidence_trace.py::build_verification_trace": {
-    "count": 15,
+    "count": 16,
     "kind": "literal",
-    "note": "verification_trace JSON serializer field names (claim, scope, channel bookkeeping, receipt markers and limitations), not target function names or detection vocabulary; the normal findings-graded.json export tests consume these schema keys Includes hypothesis_reviews for explicitly unassessed model judgments and candidate claim-check references.",
+    "note": "verification_trace JSON serializer field names (claim, scope, channel bookkeeping, receipt markers and limitations), not target function names or detection vocabulary; the normal findings-graded.json export tests consume these schema keys Includes hypothesis_reviews for explicitly unassessed model judgments and candidate claim-check references. Reviewed final1259 extension: Fixed reporting-only verification trace record keys, including claim/lineage observations; export records source_revalidated_at_export=False and does not infer checks from tool names. Serializer manifest, not learned target names.",
     "reviewed": "2026-11-07"
   },
   "core/audit/executor.py::_process_glance_batch_inner": {
@@ -820,6 +835,11 @@
     "kind": "literal",
     "note": "language-keyword / prose stopword list for the G2 structural-anchor matcher \u2014 tokens that anchor NOTHING (keywords, stock types, ubiquitous prose), not an API vocabulary; the anchors themselves come from study receipt quotes"
   },
+  "core/audit/invariant_smt.py::_ALTERNATIVE_OPERATOR": {
+    "count": 11,
+    "kind": "alternation",
+    "note": "Closed C++ alternative-token language taxonomy: not/compl/and/or/bitand/bitor/xor/not_eq/and_eq/or_eq/xor_eq. The parser refuses unsupported operator prefixes/suffixes; these standard-language operator spellings are not a target function-name heuristic."
+  },
   "core/audit/iris_specs.py::_SECURITY_NAME_PATTERNS": {
     "count": 47,
     "kind": "literal"
@@ -834,9 +854,9 @@
     "kind": "literal"
   },
   "core/audit/knowledge_reporting.py::load_knowledge_processing": {
-    "count": 13,
+    "count": 14,
     "kind": "literal",
-    "note": "Closed bounded-count projection from saved schema-checked knowledge-results; report.py consumes it and knowledge_processing_lines emits counts/limitations, not raw prompt text or safety proof."
+    "note": "Closed bounded-count projection from saved schema-checked knowledge-results; report.py consumes it and knowledge_processing_lines emits counts/limitations, not raw prompt text or safety proof. Reviewed final1259 extension: Fixed validated knowledge-processing summary record keys derived from bounded persisted requests/events/units; unknown/invalid present records remain unavailable. Persistence/report schema, not learned target function names."
   },
   "core/audit/knowledge_requests.py::_QUESTION_START": {
     "count": 19,
@@ -1256,6 +1276,11 @@
     "kind": "literal",
     "note": "Fixed C/decompiler TYPE-name -> byte-size table (Ghidra undefinedN spellings included) - language constants like the libc/POSIX allowance, not learnable target-API vocabulary.",
     "reviewed": "2026-08-29"
+  },
+  "core/audit/study_job_ledger.py::snapshot": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Fixed descriptive execution-lease snapshot row keys (lease/owner/request/input identities, job generations, activity/accounting/publication state and admission counts). Snapshot is copied descriptive state, never a publication receipt; not learned function names."
   },
   "core/audit/sweep.py::_PROSE_STOP_WORDS": {
     "count": 51,
@@ -1712,9 +1737,9 @@
     "kind": "alternation"
   },
   "core/json/__init__.py::_LAZY_EXPORTS": {
-    "count": 20,
+    "count": 21,
     "kind": "literal",
-    "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface"
+    "note": "PEP 562 lazy re-export map (public name -> submodule attribute), not a domain vocabulary; grows only when core.json gains public API surface Reviewed final1259 extension: Closed public core.json facade export routing table mapping supported helper names to internal module/attribute pairs. It implements explicit Python API exports, not a target-name detection vocabulary."
   },
   "core/labeled_attempts/test_pruning_reader_ownership.py::state": {
     "count": 11,
@@ -2395,9 +2420,9 @@
     "reviewed": "2026-11-01"
   },
   "libexec/raptor-audit::_run_config_from_args": {
-    "count": 58,
+    "count": 59,
     "kind": "literal",
-    "note": "Serialised run-option field names for audit-run-config.json, including the operator-selected integer ABI pinned for resume. Closed CLI/run-state schema, not target API vocabulary."
+    "note": "Serialised run-option field names for audit-run-config.json, including the operator-selected integer ABI pinned for resume. Closed CLI/run-state schema, not target API vocabulary. Reviewed final1259 extension: Fixed resolved audit-run configuration serialization keys for same-run resume, including the explicit integer ABI selection. Target inventory and accounting are re-read from owned artifacts; CLI/config schema, not learned target function names."
   },
   "libexec/raptor-audit::dispatch": {
     "count": 15,
