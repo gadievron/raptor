@@ -296,7 +296,12 @@ def deduplicate_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]
         key = (name, origin)
         if key not in scopes:
             tool = _normalise_tool_name(name)
-            scopes[key] = dumps_canonical([tool, origin]) if origin else tool
+            scope = dumps_canonical([tool, origin]) if origin else tool
+            # Raw tool names must not alias encoded scope/location arrays.
+            # Escape the escape prefix too, keeping the raw namespace injective.
+            if not origin and scope.startswith(("[", "\\")):
+                scope = "\\" + scope
+            scopes[key] = scope
         return scopes[key]
 
     def column_identity(finding):
