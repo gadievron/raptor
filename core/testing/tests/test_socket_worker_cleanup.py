@@ -1,6 +1,6 @@
 """Duplicated-socket test workers own startup and honest thread settlement."""
 
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 import errno
 import importlib
 import os
@@ -67,8 +67,11 @@ def test_socket_worker_setup_releases_duplicate_and_thread(
         if fault == "dup":
             return fail()
         result = real_dup(fd)
-        stat = os.fstat(result)
-        duplicates.append((result, (stat.st_dev, stat.st_ino)))
+        with ExitStack() as setup:
+            setup.callback(os.close, result)
+            stat = os.fstat(result)
+            duplicates.append((result, (stat.st_dev, stat.st_ino)))
+            setup.pop_all()
         return result
 
     def adopt_socket(*args, **kwargs):
