@@ -1231,17 +1231,46 @@ def _literal_star_lambda_arguments(arguments: list[ast.expr]) -> tuple[ast.expr,
     return tuple(expanded)
 
 
-def _immediate_lambda_retains_reflective_reader(
-    node: ast.AST, inherited: frozenset[str], *, defining: frozenset[str] | None = None,
-) -> bool:
-    """Negative retention for explicit lambda bindings, never trusted identity.
+def _local_function_return_expression(node: ast.AST) -> ast.expr | None:
+    """Closed source-body boundary for additional negative function candidates."""
+    if (not isinstance(node, ast.FunctionDef) or node.decorator_list
+            or getattr(node, "type_params", ()) or getattr(node, "returns", None) is not None
+            or getattr(node, "type_comment", None)):
+        return None
+    args = node.args
+    parameters = (*args.posonlyargs, *args.args, *args.kwonlyargs,
+                  *(arg for arg in (args.vararg, args.kwarg) if arg is not None))
+    if any(getattr(arg, "annotation", None) is not None
+           or getattr(arg, "type_comment", None) for arg in parameters):
+        return None
+    statements = node.body
+    if (statements and isinstance(statements[0], ast.Expr)
+            and isinstance(statements[0].value, ast.Constant)
+            and isinstance(statements[0].value.value, str)):
+        statements = statements[1:]
+    if (len(statements) != 1 or not isinstance(statements[0], ast.Return)
+            or statements[0].value is None):
+        return None
+    expression = statements[0].value
+    if any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(expression)):
+        return None
+    return expression
 
-    Actual arguments use the call-site candidates. Saved defaults and free
-    body names use their defining frame, which coincides for an immediate call.
+
+def _source_callable_retains_reflective_reader(
+    prototype: ast.Lambda | ast.FunctionDef, node: ast.Call, inherited: frozenset[str],
+    *, defining: frozenset[str] | None = None,
+) -> bool:
+    """Bind possible source candidates only to withhold certification.
+
+    Actual arguments use call-site candidates. Saved defaults and free body
+    names use their defining frame; neither context grants trusted identity.
     """
-    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Lambda):
+    expression = (prototype.body if isinstance(prototype, ast.Lambda)
+                  else _local_function_return_expression(prototype))
+    if expression is None:
         return False
-    args = node.func.args
+    args = prototype.args
     definition_candidates = inherited if defining is None else defining
     arguments = _literal_star_lambda_arguments(node.args)
     if arguments is None or any(keyword.arg is None for keyword in node.keywords):
@@ -1304,12 +1333,22 @@ def _immediate_lambda_retains_reflective_reader(
     readers |= frozenset(name for name, value in values.items()
                          if _attribute_chain_str(value) in origins[name]
                          or _scoped_expression_loads(value) & origins[name])
-    return bool(_scoped_expression_loads(node.func.body) & readers)
+    return bool(_scoped_expression_loads(expression) & readers)
+
+
+def _immediate_lambda_retains_reflective_reader(
+    node: ast.AST, inherited: frozenset[str], *, defining: frozenset[str] | None = None,
+) -> bool:
+    """Negative retention for explicit lambda bindings, never trusted identity."""
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Lambda)
+            and _source_callable_retains_reflective_reader(
+                node.func, node, inherited, defining=defining,
+            ))
 
 
 def _comprehension_retains_reflective_reader(
     node: ast.AST, inherited: frozenset[str], *, immediate_lambdas: bool = False,
-    local_lambdas: dict[str, frozenset[ast.Lambda]] | None = None,
+    local_lambdas: dict[str, frozenset[ast.Lambda | ast.FunctionDef]] | None = None,
     defining: frozenset[str] | None = None,
 ) -> bool:
     """Recognise negative retention while preserving local expression scopes.
@@ -1324,10 +1363,11 @@ def _comprehension_retains_reflective_reader(
         if (local_lambdas is not None and isinstance(current, ast.Call)
                 and isinstance(current.func, ast.Name) and current.func.id not in callback_masks):
             for prototype in local_lambdas.get(current.func.id, ()):
-                # A read-only call view preserves the original argument and
-                # lambda nodes. It grants no resolved or trusted identity.
-                view = ast.Call(func=prototype, args=current.args, keywords=current.keywords)
-                if _immediate_lambda_retains_reflective_reader(view, candidates, defining=defining):
+                # Original source and call nodes stay read-only. Candidate
+                # alternatives grant no resolved or trusted callable identity.
+                if _source_callable_retains_reflective_reader(
+                    prototype, current, candidates, defining=defining,
+                ):
                     return True
         if immediate_lambdas and _immediate_lambda_retains_reflective_reader(current, candidates):
             return True
@@ -1378,16 +1418,20 @@ def _comprehension_retains_reflective_reader(
     return False
 
 
-def _function_local_lambda_candidates(fn_ast: ast.AST) -> dict[str, frozenset[ast.Lambda]]:
+def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[ast.Lambda | ast.FunctionDef]]:
     """Finite own-frame source candidates, not resolved callable identities."""
     if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return {}
-    candidates: dict[str, set[ast.Lambda]] = {}
+    candidates: dict[str, set[ast.Lambda | ast.FunctionDef]] = {}
     aliases: dict[str, set[str]] = {}
     pending: list[ast.AST] = list(fn_ast.body)
     while pending:
         node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+        if isinstance(node, ast.FunctionDef):
+            if _local_function_return_expression(node) is not None:
+                candidates.setdefault(node.name, set()).add(node)
+            continue
+        if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -1410,24 +1454,37 @@ def _function_local_lambda_candidates(fn_ast: ast.AST) -> dict[str, frozenset[as
     return {name: frozenset(values) for name, values in candidates.items()}
 
 
+def _function_local_lambda_candidates(fn_ast: ast.AST) -> dict[str, frozenset[ast.Lambda]]:
+    """Lambda-only view retains the existing negative-candidate contract."""
+    return {name: frozenset(value for value in values if isinstance(value, ast.Lambda))
+            for name, values in _function_local_callable_candidates(fn_ast).items()
+            if any(isinstance(value, ast.Lambda) for value in values)}
+
+
 def _function_comprehension_retains_reflective_reader(
     fn_ast: ast.AST, inherited: frozenset[str], *, immediate_lambdas: bool = False,
-    local_lambdas: bool = False,
+    local_lambdas: bool = False, local_functions: bool = False,
 ) -> bool:
     """Defaults use the defining frame; body aliases apply only to the body."""
     if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return False
-    if not local_lambdas and any(_comprehension_retains_reflective_reader(
+    if not (local_lambdas or local_functions) and any(_comprehension_retains_reflective_reader(
         default, inherited, immediate_lambdas=immediate_lambdas,
     )
            for default in (*fn_ast.args.defaults, *fn_ast.args.kw_defaults)
            if default is not None):
         return True
     body_readers = _function_reflective_readers(fn_ast, inherited)
+    catalogue = None
+    if local_lambdas or local_functions:
+        catalogue = {name: frozenset(value for value in values
+                                     if (local_lambdas and isinstance(value, ast.Lambda))
+                                     or (local_functions and isinstance(value, ast.FunctionDef)))
+                     for name, values in _function_local_callable_candidates(fn_ast).items()}
     return _comprehension_retains_reflective_reader(
         ast.Module(body=list(fn_ast.body), type_ignores=[]),
         body_readers, immediate_lambdas=immediate_lambdas,
-        local_lambdas=_function_local_lambda_candidates(fn_ast) if local_lambdas else None,
+        local_lambdas=catalogue,
         defining=body_readers,
     )
 
@@ -1528,6 +1585,10 @@ def _detect_summary_unknown(
         fn_ast, frozenset({"getattr", "hasattr"}) | reflective_reader_aliases,
         local_lambdas=True,
     )
+    local_function_reader_use = _function_comprehension_retains_reflective_reader(
+        fn_ast, frozenset({"getattr", "hasattr"}) | reflective_reader_aliases,
+        local_functions=True,
+    )
     annotation_metadata_read = False
     for node in ast.walk(fn_ast):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
@@ -1605,6 +1666,9 @@ def _detect_summary_unknown(
                         )
                         or _function_comprehension_retains_reflective_reader(
                             definition, reflective_readers, local_lambdas=True,
+                        )
+                        or _function_comprehension_retains_reflective_reader(
+                            definition, reflective_readers, local_functions=True,
                         )
                         or any(
                             isinstance(child, ast.Call)
@@ -1693,6 +1757,8 @@ def _detect_summary_unknown(
         return "immediate lambda retains an unmodelled reflective reader"
     if local_lambda_reader_use:
         return "local lambda call retains an unmodelled reflective reader"
+    if local_function_reader_use:
+        return "local function call retains an unmodelled reflective reader"
     return None
 
 
