@@ -959,10 +959,14 @@ def run_rule(
                 # set alone cannot witness a complete parse.
                 files_examined = sorted(str(f) for f in file_set)
             else:
-                files_examined = _collect_files_examined(
-                    target, {m.file for m in matches}, tree_files=tree_files,
-                    no_includes=no_includes,
-                )
+                try:
+                    files_examined = _collect_files_examined(
+                        target, {m.file for m in matches}, tree_files=tree_files,
+                        no_includes=no_includes,
+                    )
+                except OSError as exc:
+                    errors.append(_source_inventory_error(exc))
+                    files_examined = sorted({m.file for m in matches})
         else:
             files_examined = sorted({m.file for m in matches})
 
@@ -1040,7 +1044,13 @@ def run_rules(
     # between rules) — enumerate once here instead of once per rule:
     # N rules previously meant 2N full recursive globs of the target.
     target = Path(target)
-    tree_files = _walk_c_h(target) if target.is_dir() else None
+    try:
+        tree_files = _walk_c_h(target) if target.is_dir() else None
+    except OSError as exc:
+        return [SpatchResult(
+            rule=path.stem, rule_path=str(path), returncode=-1,
+            errors=[_source_inventory_error(exc)],
+        ) for path in rule_paths if path.stem not in exclude_rules]
 
     results = []
     installed_version = _rule_version_probe()
@@ -1148,10 +1158,17 @@ def run_rules_batched(
             for r in rules
         }
 
+    inventory_error: str | None = None
+
     def target_inventory() -> set[str] | None:
-        nonlocal tree_files
-        if tree_files is None and target.is_dir():
-            tree_files = _walk_c_h(target)
+        nonlocal tree_files, inventory_error
+        if tree_files is None:
+            try:
+                if target.is_dir():
+                    tree_files = _walk_c_h(target)
+            except OSError as exc:
+                tree_files = set()
+                inventory_error = _source_inventory_error(exc)
         return tree_files
 
     parts = []
@@ -1227,7 +1244,7 @@ def run_rules_batched(
 
     def _individual_results(selected: list[Path]) -> dict[str, SpatchResult]:
         return {
-            r.stem: run_rule(
+            r.stem: _record_inventory_error(run_rule(
                 target, r,
                 include_dirs=include_dirs,
                 no_includes=no_includes,
@@ -1237,7 +1254,7 @@ def run_rules_batched(
                 allow_scripting=allow_scripting,
                 tree_files=target_inventory(),
                 _installed_version=installed_version,
-            )
+            ), inventory_error)
             for r in selected
         }
 
@@ -1266,7 +1283,7 @@ def run_rules_batched(
             if isolated:
                 out.update(_individual_results(selected))
             else:
-                out.update(run_rules_batched(
+                grouped = run_rules_batched(
                     target, selected,
                     include_dirs=include_dirs, no_includes=no_includes,
                     timeout=timeout, env=env, defines=defines,
@@ -1274,7 +1291,11 @@ def run_rules_batched(
                     allow_scripting=allow_scripting,
                     tree_files=target_inventory(),
                     _installed_version=installed_version,
-                ))
+                )
+                out.update({
+                    stem: _record_inventory_error(result, inventory_error)
+                    for stem, result in grouped.items()
+                })
         out.update(refused)
         return {r.stem: out[r.stem] for r in rules if r.stem in out}
 
@@ -1419,12 +1440,16 @@ def run_rules_batched(
             out = _individual_results(batched_rules)
             out.update(refused)
             return out
-        batch_examined = _collect_files_examined(
-            target, {m.file for m in all_matches},
-            no_includes=no_includes, tree_files=target_inventory(),
-        )
+        try:
+            batch_examined = _collect_files_examined(
+                target, {m.file for m in all_matches},
+                no_includes=no_includes, tree_files=target_inventory(),
+            )
+        except OSError as exc:
+            inventory_error = _source_inventory_error(exc)
+            batch_examined = []
         out = {
-            s: SpatchResult(
+            s: _record_inventory_error(SpatchResult(
                 rule=s, rule_path=str(r),
                 matches=by_rule.get(s, []),
                 files_examined=list(batch_examined),
@@ -1432,7 +1457,7 @@ def run_rules_batched(
                 elapsed_ms=elapsed,
                 returncode=proc.returncode,
                 forged_markers=forged,
-            )
+            ), inventory_error)
             for s, r in zip(rule_stems, batched_rules)
         }
         out.update(refused)
@@ -1494,6 +1519,18 @@ def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:
         if key not in seen:
             seen.add(key)
             result.append(m)
+    return result
+
+
+def _source_inventory_error(exc: OSError) -> str:
+    return f"Coccinelle source inventory unavailable: {type(exc).__name__}"
+
+
+def _record_inventory_error(result: SpatchResult, error: str | None) -> SpatchResult:
+    if error:
+        if error not in result.errors:
+            result.errors.append(error)
+        result.files_examined = sorted({match.file for match in result.matches})
     return result
 
 
