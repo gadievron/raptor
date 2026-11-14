@@ -491,3 +491,30 @@ def test_install_marker_accepts_ordinary_complete_document(tmp_path):
     (target / ".raptor-install.json").write_text(json.dumps(
         {"version": state["VERSION"], "sha256": "owned-digest"}))
     assert state["_installed_path"](target, "owned-digest") == cli
+
+
+@pytest.mark.parametrize("case", ["valid", "exact-limit", "over-whitespace",
+                                 "over-invalid", "boolean-schema", "float-schema"])
+def test_release_pins_require_complete_bounded_integer_schema(tmp_path, case):
+    script = tmp_path / "codeql-bootstrap.py"
+    script.write_bytes(INSTALLER.read_bytes())
+    pins = json.loads(INSTALLER.with_name("github-release-pins.json").read_text())
+    if case == "boolean-schema":
+        pins["schema_version"] = True
+    elif case == "float-schema":
+        pins["schema_version"] = 1.0
+    content = json.dumps(pins)
+    if case in ("exact-limit", "over-whitespace", "over-invalid"):
+        content += " " * (65536 - len(content))
+    if case == "over-whitespace":
+        content += " "
+    elif case == "over-invalid":
+        content += "INVALID TRAILING JSON"
+    script.with_name("github-release-pins.json").write_text(content)
+    with patch.object(sys, "path", sys.path.copy()):
+        if case in ("valid", "exact-limit"):
+            state = runpy.run_path(str(script))
+            assert state["RELEASE_TAG"] == pins["tools"]["codeql"]["version"]
+        else:
+            with pytest.raises(SystemExit, match="release pins unavailable or invalid"):
+                runpy.run_path(str(script))

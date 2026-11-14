@@ -26,9 +26,13 @@ import tarfile
 # this script in source checkouts. SCA updates its release pins as generic data.
 try:
     with Path(__file__).resolve().with_name('github-release-pins.json').open(encoding='utf-8') as _stream:
-        _manifest = json.loads(_stream.read(64 * 1024))
+        _manifest_text = _stream.read(64 * 1024 + 1)
+    if len(_manifest_text) > 64 * 1024:
+        raise ValueError('release pins exceed the document size limit')
+    _manifest = json.loads(_manifest_text)
     _pins = _manifest['tools']['codeql']
-    if _manifest['schema_version'] != 1 or (_pins['repository'] != 'github/codeql-action'
+    if (type(_manifest['schema_version']) is not int or _manifest['schema_version'] != 1
+            or _pins['repository'] != 'github/codeql-action'
             or _pins.get('release_tag_prefix') != 'codeql-bundle-v'):
         raise ValueError('expected schema v1 and the official CodeQL repository')
     RELEASE_TAG = _pins['version']
