@@ -15,8 +15,9 @@ and produces one :class:`StepAnnotation` per step recording:
   (``on_path_validators``)
 * which other identifiers the snippet references (``variables_referenced``,
   approximate via a regex over identifier-shaped tokens)
-* which calls the snippet makes that the annotator did *not* match
-  to any candidate (``inlined_helpers``)
+* which calls the snippet makes that the annotator could not attribute
+  to a candidate identity (``inlined_helpers``), including ambiguous
+  short-name matches
 
 Language-aware via :func:`core.inventory.languages.detect_language`.
 Per-language call extraction reuses the AST/tree-sitter machinery
@@ -150,9 +151,13 @@ def _annotate_step(
             # short names; an earlier unrelated bare match must not hide it.
             match = max(qualified, key=lambda c: len(c.qualified_name.split(".")))
         else:
-            match = next(
-                (c for c in candidates if _chain_matches_candidate(chain, c)), None,
-            )
+            short_matches = [
+                c for c in candidates if _chain_matches_candidate(chain, c)
+            ]
+            identities = {c.qualified_name for c in short_matches}
+            # A shared short name does not identify which definition was
+            # called. Keep the call as an unresolved helper in that case.
+            match = short_matches[0] if len(identities) == 1 else None
         if match is not None:
             on_path.add(match.qualified_name)
         else:
