@@ -11,6 +11,7 @@ import math
 import os
 import re
 import stat as stat_mod
+from itertools import chain
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from collections.abc import Mapping
@@ -99,14 +100,22 @@ def _sanitize_step_properties(props: Any) -> dict[str, Any]:
     Keeps only value shapes the step contract uses — strings
     (escaped + capped), bools, ints, and lists of strings (each
     escaped + capped, list capped) — under capped, escaped string
-    keys. Everything else is dropped: an unexpected nested object or
-    float in an untrusted SARIF earns no ride into ``dataflow_path``.
+    keys. Unsupported explicit tiers use null to preserve their unknown
+    status without retaining arbitrary content. Truncated tags also make an
+    otherwise static or absent tier unknown. Other nested objects or floats
+    are dropped.
     Returns ``{}`` (caller omits the key) for non-dict input.
     """
     if not isinstance(props, dict):
         return {}
     out: dict[str, Any] = {}
-    for key, value in props.items():
+    items = props.items()
+    priority = tuple(key for key in ("tier", "tags") if key in props)
+    if priority:
+        # Provenance must not disappear behind unrelated display metadata.
+        items = chain(((key, props[key]) for key in priority),
+                      ((key, value) for key, value in props.items() if key not in priority))
+    for key, value in items:
         if len(out) >= _STEP_PROPS_MAX_KEYS:
             break
         if not isinstance(key, str):
@@ -125,6 +134,11 @@ def _sanitize_step_properties(props: Any) -> dict[str, Any]:
                 for item in value[:_STEP_PROPS_MAX_LIST]
                 if isinstance(item, str)
             ]
+            if (key == "tags" and len(value) > _STEP_PROPS_MAX_LIST
+                    and out.get("tier", "resolved_static") == "resolved_static"):
+                out["tier"] = None
+        elif key == "tier":
+            out[safe_key] = None
     return out
 
 
