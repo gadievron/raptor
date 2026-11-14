@@ -202,6 +202,11 @@ def _run_git(
     )
 
 
+def _validate_max_commits(max_commits: int) -> None:
+    if isinstance(max_commits, bool) or not isinstance(max_commits, int) or max_commits < 0:
+        raise ValueError("max_commits must be a non-negative integer")
+
+
 def harvest_git_repo(
     source: HarvestSource,
     *,
@@ -210,7 +215,10 @@ def harvest_git_repo(
 ) -> HarvestResult:
     """Walk CVE-referencing commits of a local clone and extract the
     public parser-API functions their fix diffs touch."""
+    _validate_max_commits(max_commits)
     result = HarvestResult(library=source.library)
+    if max_commits == 0:
+        return result
     assert source.repo_dir is not None
     repo = str(Path(source.repo_dir).resolve())
     patterns = source.compiled_patterns()
@@ -485,6 +493,10 @@ def main(argv: list[str] | None = None) -> int:
         help="print the merged pack to stdout instead of writing",
     )
     args = parser.parse_args(argv)
+    try:
+        _validate_max_commits(args.max_commits)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         sources = load_sources(args.sources)
