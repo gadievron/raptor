@@ -2454,7 +2454,12 @@ class TreeSitterExtractor:
 
     def extract(
         self, filepath: str, content: str, _tree=None, *, _tree_cache: dict | None = None,
+        raise_on_error: bool = False,
     ) -> list[FunctionInfo]:
+        """Extract spans, optionally propagating parse and function metadata errors.
+
+        Recovery from syntax errors or unnamed nodes remains unchanged.
+        """
         if _tree is None:
             try:
                 # parse_origin: a budget-abandoned parse must name
@@ -2464,6 +2469,8 @@ class TreeSitterExtractor:
                     _tree = self.parser.parse(content.encode())
             except Exception as e:  # noqa: BLE001 — caller falls back to regex
                 logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
+                if raise_on_error:
+                    raise
                 return []  # Caller will fall back to regex extractor
         # \n-model split: consumers index this list with
         # tree-sitter rows, which count \n only — a
@@ -2473,7 +2480,8 @@ class TreeSitterExtractor:
         self._seen_cache = (0, set())
         self._php_recovered: list[FunctionInfo] = []
         functions: list[FunctionInfo] = []
-        self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
+        self._walk(_tree.root_node, functions, class_name=None, class_attributes=(),
+                   raise_on_error=raise_on_error)
         if self.language == "php" and self._php_recovered:
             # Resolve the spans the lone-token recovery deferred and
             # clamp parsed spans that error-recovery inflated over a
@@ -2656,7 +2664,7 @@ class TreeSitterExtractor:
         return out
 
     def _walk(self, node, functions: list[FunctionInfo], class_name: str | None,
-              class_attributes: Sequence[str] = ()) -> None:
+              class_attributes: Sequence[str] = (), *, raise_on_error: bool = False) -> None:
         # Iterative (explicit stack), not recursive: real source parses
         # deeply enough to blow Python's recursion limit (openssl's
         # s3_lib.c reaches ~1000 levels), and the resulting
@@ -2794,6 +2802,8 @@ class TreeSitterExtractor:
                         functions.append(fi)
                 except Exception as e:  # noqa: BLE001 — skip one node, keep walking
                     logger.debug("tree-sitter: failed to extract function at line %d: %s", child.start_point[0]+1, e)
+                    if raise_on_error:
+                        raise
                 _descend(child, class_name, class_attributes)
             elif child.type == "decorated_definition":
                 # Python: walk into decorated definitions
