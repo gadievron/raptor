@@ -93,13 +93,16 @@ def _foreign_changes(owner):
 
     def run():
         worker = threading.Thread(target=publish)
-        try:
-            worker.start()
-        finally:
-            if worker.ident is not None:
-                worker.join(5)
-                assert not worker.is_alive(), 'module-cache writer survived'
-        assert not errors
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads([worker], release=lambda: None, timeout=5):
+            try:
+                worker.start()
+            finally:
+                if worker.ident is not None:
+                    worker.join(5)
+                    assert not worker.is_alive(), 'module-cache writer survived'
+            assert not errors
 
     def check():
         assert sys.modules.get(names[0]) is published, 'unrelated new import was removed'
