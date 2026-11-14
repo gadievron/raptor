@@ -293,19 +293,21 @@ def _enclosing_function_state(
     caller at all (the arrow-function / extractor-gap shape: the span
     extractor sees ``const run = (x) => {…}`` as function ``run``
     while the call-graph extractor tags its calls ``caller=None``) —
+    or when multiple graph callers share the same source line,
     or when span extraction itself failed, leaving "module level"
     indistinguishable from "could not tell".  An unresolved
     attribution must never ground a broken-link refutation: filtering
     ``graph.calls`` by a caller name the graph never uses finds
     vacuous emptiness, not evidence.
     """
-    callers_at = [c.caller for c in graph.calls
-                  if c.caller and c.line == line]
+    line_callers = [c.caller for c in graph.calls if c.line == line]
+    callers_at = [caller for caller in line_callers if caller]
     if callers_at:
-        # The graph itself speaks for this line, and the link check
-        # filters on the same vocabulary — self-consistent by
-        # construction.
-        return callers_at[0], True
+        # A line can contain calls from several functions or module scope.
+        # Keep the existing positive-match heuristic, but an arbitrary first
+        # caller cannot establish absence when location attribution is ambiguous.
+        caller = callers_at[0]
+        return caller, all(other == caller for other in line_callers)
 
     span_name: str | None = None
     span_lo = span_hi = 0
