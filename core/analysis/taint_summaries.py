@@ -548,7 +548,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
-        elif isinstance(statement, (ast.Assign, ast.For, ast.AsyncFor)):
+        elif isinstance(statement, (ast.Assign, ast.AugAssign, ast.For, ast.AsyncFor)):
             targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
             for target in targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
@@ -557,7 +557,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 # These stores share the function scope; the caller masks all
                 # own bindings rather than creating a target-local scope here.
                 target_reads.update(scope[1])
-            if isinstance(statement, ast.Assign):
+            if isinstance(statement, (ast.Assign, ast.AugAssign)):
                 expressions.append(statement.value)
             else:
                 expressions.append(statement.iter)
