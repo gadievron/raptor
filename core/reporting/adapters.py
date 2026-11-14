@@ -184,7 +184,7 @@ def context_from_sarif(paths: list[Path], *, kind: str = "scan", target: str = "
             # Same guarded read supplies bytes provenance and parsed content.
             identity = metadata["sha256"]
             from .lifecycle import input_digest
-            context.artifacts.append({"path": str(path), "digest": identity, "digest_kind": "sha256-bytes", "media_type": "application/sarif+json",
+            context.artifacts.append({"path": str(path.resolve()), "digest": identity, "digest_kind": "sha256-bytes", "media_type": "application/sarif+json",
                                       "canonical_digest": input_digest(data)})
             if identity in seen_digests:
                 context.diagnostics.append(f"Duplicate SARIF input omitted: {path.name}")
