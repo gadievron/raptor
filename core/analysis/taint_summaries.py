@@ -1171,8 +1171,18 @@ def _function_reflective_readers(
             continue
         if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = {target.id for target in targets
-                     if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store)}
+            names: set[str] = set()
+            binding_targets = list(targets)
+            while binding_targets:
+                target = binding_targets.pop()
+                if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
+                    names.add(target.id)
+                elif isinstance(target, (ast.Tuple, ast.List)):
+                    binding_targets.extend(target.elts)
+                elif isinstance(target, ast.Starred):
+                    binding_targets.append(target.value)
+                # Attribute/subscript addresses bind no bare target here.
+                # Their nested expression scopes are not unpacked locals.
             for source in _scoped_expression_loads(node.value):
                 assignments.setdefault(source, set()).update(names)
         pending.extend(ast.iter_child_nodes(node))
