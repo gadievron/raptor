@@ -860,3 +860,19 @@ def test_boolean_scores_cannot_take_the_numeric_analysis_slot(tmp_path, value):
     assert (len(selected), count, duplicates) == (1, 2, 0)
     assert selected[0].result["ruleId"] == "numeric"
     assert json.loads(path.read_text())["runs"][0]["results"] == [boolean, numeric]
+
+
+def test_driver_only_indexed_selection_does_not_enumerate_rule_owners(tmp_path, monkeypatch):
+    from packages.codeql import finding_selection as selection
+
+    class IndexedOnly(list):
+        def __iter__(self):
+            raise AssertionError('driver-only indexed lookup enumerated descriptor owners')
+
+    result = _located_result()
+    run = _run(result)
+    result['ruleIndex'] = 0
+    run['results'].append(copy.deepcopy(result))
+    run['tool']['driver']['rules'] = IndexedOnly(run['tool']['driver']['rules'])
+    monkeypatch.setattr(selection, 'load_sarif', lambda path: {'runs': [run]})
+    assert selection.select_findings_for_analysis([tmp_path / 'owned.sarif'], 0) == ([], 2, 1)

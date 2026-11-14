@@ -192,9 +192,15 @@ def _scan_file(
             return rule_resolver.resolve(result)
 
         tool = run.get("tool")
+        driver_owner = None
         if isinstance(tool, dict):
             extensions = tool.get("extensions")
-            components = [tool.get("driver"), *(extensions if isinstance(extensions, list) else [])]
+            if not isinstance(extensions, list) or not extensions:
+                # Every resolved descriptor belongs to the sole driver.
+                # Indexed results need no all-descriptor identity table.
+                driver_owner = tool.get("driver")
+            components = ([] if driver_owner is not None else
+                          [tool.get("driver"), *(extensions if isinstance(extensions, list) else [])])
             for component in components:
                 if isinstance(component, dict) and isinstance(component.get("rules"), list):
                     rule_owners.update({id(rule): component for rule in component["rules"]
@@ -203,7 +209,8 @@ def _scan_file(
         for result in chain(prefix, results):
             candidate_count += 1
             rule = resolve_rule(result)
-            duplicate_key = _duplicate_key(run, result, rule, rule_owners.get(id(rule)), context_keys)
+            owner = driver_owner if driver_owner is not None else rule_owners.get(id(rule))
+            duplicate_key = _duplicate_key(run, result, rule, owner, context_keys)
             if duplicate_key is not None:
                 if duplicate_key in seen_duplicates:
                     duplicate_count += 1
