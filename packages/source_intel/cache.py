@@ -247,9 +247,12 @@ def _hash_target_tree_cached(target: Path) -> str:
 
 
 def clear_key_memo() -> None:
-    """Drop the key-derivation memos — explicit reset for
-    orchestrators. Signature-based auto-invalidation already covers
-    file edits."""
+    """Drop key-derivation memos without clearing retained result entries.
+
+    Automatic reuse follows recorded target/rule metadata, not every
+    content edit or dependency change. This reset does not establish
+    complete input coverage or replace :meth:`SourceIntelCache.invalidate`.
+    """
     _TREE_HASH_MEMO.clear()
     _RULES_HASH_MEMO.clear()
 
