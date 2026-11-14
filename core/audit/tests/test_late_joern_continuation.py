@@ -18,6 +18,20 @@ from core.audit.review_cycle import KnowledgeCycle
 from core.language_reference import ReferenceContext, lookup
 from core.llm.providers import StructuredResponse
 
+
+@pytest.fixture(autouse=True)
+def _owned_formatter_catalog(monkeypatch):
+    from core.audit import context as context_module
+
+    # Retain the borrowed slot and restore its original identity on every exit.
+    monkeypatch.setattr(context_module, "_tool_catalog_cache", context_module._tool_catalog_cache)
+    monkeypatch.setattr(context_module, "_get_tool_catalog", lambda: "")
+
+    def forbidden_catalog():
+        raise AssertionError("owned formatter control must not discover host tools or import a solver")
+
+    monkeypatch.setattr(context_module, "_build_tool_catalog", forbidden_catalog)
+
 SOURCE = "def owned(value):\n    return value\n"
 
 

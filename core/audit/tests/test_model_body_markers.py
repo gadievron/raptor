@@ -1952,7 +1952,7 @@ class TestAgentRecordCliRecordsUnchanged:
 def test_new_processing_and_delivery_fields_are_pipeline_owned_only():
     from core.audit.evidence_grade import drop_pipeline_owned
 
-    owned = {"external_context_delivery", "publication_failure", "review_recovery"}
+    owned = {"external_context_delivery", "publication_failure", "review_recovery", "synthesis_review_context"}
     assert owned <= PIPELINE_OWNED_REVIEW_KEYS
     novel = {"novel_semantic_concern": {"statement": "Requires manual review"}}
     forged = {**novel, **{key: {"complete": True, "delivered": True} for key in owned}}

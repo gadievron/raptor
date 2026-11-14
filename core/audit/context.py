@@ -1303,6 +1303,16 @@ def format_context_for_prompt(
         if caller_requests:
             deliver_caller_context([], omission_reason="glance_packet")
         glance = _format_glance_prompt(ctx)
+        from .synthesis_review_context import render_synthesis_review_context
+        synthesis_context = render_synthesis_review_context(ctx.get("synthesis_review_context"))
+        if synthesis_context:
+            from core.llm.prompt_budget import PromptSection
+            from .continuation_context import context_delivery
+
+            rendered = [PromptSection("synthesis_match", synthesis_context, 0)]
+            if external_delivery_sink is not None and ctx.get("continuation_context_inputs"):
+                external_delivery_sink(context_delivery(ctx, rendered, rendered))
+            glance += "\n" + synthesis_context
         return abi_owner.render() + "\n\n" + glance if isinstance(abi_owner, BinaryIntegerContext) else glance
 
     from core.llm.prompt_budget import PromptSection, fit_to_budget_report
@@ -2105,6 +2115,12 @@ def format_context_for_prompt(
         sections.append(PromptSection(
             "fail_open_leads", "\n".join(lines_fo), 1,
         ))
+
+    from .synthesis_review_context import render_synthesis_review_context
+
+    synthesis_context = render_synthesis_review_context(ctx.get("synthesis_review_context"))
+    if synthesis_context:
+        sections.append(PromptSection("synthesis_match", synthesis_context, 0))
 
     from .deepen_continuation import render_deepen_selection
 

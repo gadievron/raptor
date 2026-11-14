@@ -6,6 +6,7 @@ from typing import cast
 
 # Each adapted producer names its actual existing prompt input and section.
 _CONTEXT_INPUTS = {
+    "synthesis_match": ("synthesis_review_context", "synthesis_match"),
     "late_joern": ("mechanical_evidence", "evidence"),
     "live_sinks": ("live_sinks", "live_sinks"),
     "disagreement": ("disagreement_override", "disagreement_override"),
@@ -27,6 +28,17 @@ def context_spec(ctx: dict, *, kind: str, version: str) -> dict | None:
         return None
     key, section = fields
     value = ctx.get(key)
+    if kind == "synthesis_match":
+        from .synthesis_review_context import SynthesisReviewContext, render_synthesis_review_context
+
+        if (not isinstance(value, SynthesisReviewContext)
+                or type(ctx.get("line_start")) is not int or type(ctx.get("line_end")) is not int
+                or (value.file, value.function, value.line_start, value.line_end)
+                != (ctx.get("file"), ctx.get("function"), ctx.get("line_start"), ctx.get("line_end"))
+                or not render_synthesis_review_context(value) or value.version != version):
+            return None
+        return {"context_id": f"context:{kind}:{version}", "kind": kind, "version": version,
+                "context_key": key, "section": section}
     if kind == "binary_target_semantics":
         from .binary_subjects import render_binary_subject_context
 
