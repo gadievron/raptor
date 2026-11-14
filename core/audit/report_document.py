@@ -121,6 +121,8 @@ def build_audit_document(report, out_dir: Path, *, target_path=None, model="", d
             Block("paragraph", text=f"{int(conf.get('quarantine_total', 0) or 0)} tree file(s) quarantined as unparseable. {int(sweep.get('rules_errored', 0) or 0)} rule file(s) errored — their silence is not coverage. See decomp-tree-conformance.json and decomp-sweep.json."),
             *result_blocks(sweep, title="Recorded sweep evidence"),
         ]))
+    from .analysis_observation_reporting import analysis_observation_blocks
+    blocks.extend(analysis_observation_blocks(report))
     from .binary_inventory_reporting import binary_inventory_blocks
     blocks.extend(binary_inventory_blocks(report))
     gaps = report.get("analysis_gaps")

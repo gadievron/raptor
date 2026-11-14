@@ -495,6 +495,9 @@ def generate_report(
     if phase_aborts:
         report["phase_aborts"] = phase_aborts
 
+    from .analysis_observation_reporting import load_analysis_observations
+    report["analysis_observations"] = load_analysis_observations(out_dir)
+
     from .binary_inventory_reporting import load_binary_inventory
     binary_inventory = load_binary_inventory(out_dir)
     if binary_inventory is not None:
