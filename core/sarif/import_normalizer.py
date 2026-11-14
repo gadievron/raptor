@@ -778,10 +778,10 @@ def _step_to_threadflow_location(step: dict[str, Any]) -> dict[str, Any]:
     snippet}) back to a SARIF threadFlow location object."""
     region: dict[str, Any] = {}
     line = step.get("line")
-    if isinstance(line, int) and line > 0:
+    if isinstance(line, int) and not isinstance(line, bool) and line > 0:
         region["startLine"] = line
     column = step.get("column")
-    if isinstance(column, int) and column > 0:
+    if isinstance(column, int) and not isinstance(column, bool) and column > 0:
         region["startColumn"] = column
     snippet = step.get("snippet")
     if isinstance(snippet, str) and snippet:
