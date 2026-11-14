@@ -194,11 +194,13 @@ def _index_pack(pack: str) -> dict[str, str] | None:
                     with preserving_stream_error(io.TextIOWrapper(
                         raw, encoding="utf-8", errors="replace",
                     )) as fh:
-                        header = fh.read(_HEADER_READ_BYTES)
+                        # Look ahead once to detect a cut ID token; only
+                        # token ends within the original prefix are admitted.
+                        header = fh.read(_HEADER_READ_BYTES + 1)
             except (OSError, ValueError):
                 continue
             m = _ID_HEADER_RE.search(header)
-            if m and m.group(1) not in index:
+            if m and m.end(1) <= _HEADER_READ_BYTES and m.group(1) not in index:
                 index[m.group(1)] = str(ql)
     return index
 
