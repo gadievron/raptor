@@ -56,6 +56,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from numbers import Number
 from pathlib import Path
 from collections.abc import Iterable, Mapping, Sequence
 
@@ -403,8 +404,13 @@ def _validate_common(row: ModelRow) -> str | None:
         return f"role {row.role!r} not in {sorted(VALID_ROLES)}"
     if not _KIND_RE.match(row.model_kind or ""):
         return f"model_kind {row.model_kind!r} fails kind grammar"
-    if not (0.0 <= row.confidence <= 1.0):
-        return f"confidence {row.confidence!r} outside [0, 1]"
+    if isinstance(row.confidence, bool) or not isinstance(row.confidence, Number):
+        return f"confidence {row.confidence!r} must be numeric"
+    try:
+        if not (0.0 <= row.confidence <= 1.0):
+            return f"confidence {row.confidence!r} outside [0, 1]"
+    except (TypeError, ValueError, ArithmeticError):
+        return f"confidence {row.confidence!r} is not an ordered real number"
     return None
 
 
