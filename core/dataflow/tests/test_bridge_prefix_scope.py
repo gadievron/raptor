@@ -17,16 +17,16 @@ def test_bridge_discloses_truncated_source_prefix(tmp_path, monkeypatch):
     pair = CveFixPair("CVE-FIXTURE", "CWE-22", "https://example.invalid/fixture", "Python", "fixture-fix", "fixture-parent")
     monkeypatch.setattr(cvefix_bridge, "_git_diff", lambda *args, **kwargs: "")
     monkeypatch.setattr(cvefix_bridge, "_git_diff_other_files", lambda *args, **kwargs: "")
-    original_reader = cvefix_bridge.read_text_capped
+    original_reader = cvefix_bridge.read_contained_text_capped
     cap = 20
     flags = []
 
-    def reader(path, **kwargs):
-        result = original_reader(path, cap, **kwargs)
+    def reader(root, path, **kwargs):
+        result = original_reader(root, path, max_chars=cap, **kwargs)
         flags.append(result[1])
         return result
 
-    monkeypatch.setattr(cvefix_bridge, "read_text_capped", reader)
+    monkeypatch.setattr(cvefix_bridge, "read_contained_text_capped", reader)
     prefix = cvefix_bridge._extract_proposal(sarif, repo, pair)
     assert prefix is not None and prefix[2] == 1
     assert flags == [True]

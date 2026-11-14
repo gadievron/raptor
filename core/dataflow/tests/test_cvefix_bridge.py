@@ -121,12 +121,12 @@ def test_extract_proposal_source_read_is_capped(monkeypatch, tmp_path):
     monkeypatch.setattr(cvefix_bridge, "_git_diff", lambda *a, **k: "")
     monkeypatch.setattr(
         cvefix_bridge, "_git_diff_other_files", lambda *a, **k: "")
-    real = cvefix_bridge.read_text_capped
+    real = cvefix_bridge.read_contained_text_capped
 
-    def tiny_cap(path, max_chars=None, **kw):
-        return real(path, 256, **kw)
+    def tiny_cap(root, path, max_chars=None, **kw):
+        return real(root, path, max_chars=256, **kw)
 
-    monkeypatch.setattr(cvefix_bridge, "read_text_capped", tiny_cap)
+    monkeypatch.setattr(cvefix_bridge, "read_contained_text_capped", tiny_cap)
     root = tmp_path / "repo"
     root.mkdir()
     (root / "app.py").write_text(

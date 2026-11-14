@@ -23,6 +23,7 @@ from core.source.contained import (
     read_bytes_capped,
     read_contained,
     read_contained_bytes,
+    read_contained_text_capped,
     read_text_capped,
 )
 from core.source.gated import (
@@ -60,6 +61,7 @@ __all__ = [
     "read_bytes_gated",
     "read_contained",
     "read_contained_bytes",
+    "read_contained_text_capped",
     "read_context",
     "read_lines",
     "read_text_capped",
