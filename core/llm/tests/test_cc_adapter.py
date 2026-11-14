@@ -1417,16 +1417,23 @@ class TestNeutralCwd:
         results: list[str] = []
 
         def _call():
-            entered.wait()
+            try:
+                entered.wait()
+            except threading.BrokenBarrierError:
+                return
             results.append(cc_adapter.neutral_cwd())
 
         threads = [threading.Thread(target=_call) for _ in range(8)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=10)
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=entered.abort, timeout=10):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
         assert len(set(results)) == 1
         assert len(created) == 1
+
 
 
 class TestResolveClaudeCli:
