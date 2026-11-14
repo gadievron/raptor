@@ -1,5 +1,6 @@
 """Inline logging captures release owned resources without touching pytest logs."""
 
+from contextlib import ExitStack
 import logging
 from importlib import import_module
 from types import SimpleNamespace
@@ -32,10 +33,13 @@ def owners(tmp_path):
     def factory(cls):
         return lambda *args, **kwargs: instrument(cls(*args, **kwargs))
 
-    yield SimpleNamespace(created=created, instrument=instrument, factory=factory)
-    for handler, stream in created:
-        handler.close()
-        stream.close()
+    try:
+        yield SimpleNamespace(created=created, instrument=instrument, factory=factory)
+    finally:
+        with ExitStack() as cleanup:
+            for handler, stream in reversed(created):
+                cleanup.callback(stream.close)
+                cleanup.callback(handler.close)
 
 
 @pytest.fixture
@@ -54,13 +58,16 @@ def private_log(monkeypatch):
             ),
         )
 
-    yield SimpleNamespace(
-        logger=logger, borrowed=borrowed, route=route
-    )
-    for handler in list(logger.handlers):
-        logger.removeHandler(handler)
-        handler.close()
-    borrowed.close()
+    try:
+        yield SimpleNamespace(
+            logger=logger, borrowed=borrowed, route=route
+        )
+    finally:
+        with ExitStack() as cleanup:
+            cleanup.callback(borrowed.close)
+            for handler in reversed(tuple(logger.handlers)):
+                cleanup.callback(handler.close)
+                cleanup.callback(logger.removeHandler, handler)
 
 
 def assert_released(owners, private_log):

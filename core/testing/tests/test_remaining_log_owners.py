@@ -1,6 +1,7 @@
 """Native capture scopes release handlers, streams, proxies and borrowed flags."""
 
 import io
+from contextlib import ExitStack
 import logging
 from contextlib import contextmanager
 from importlib import import_module
@@ -75,22 +76,25 @@ def private_logs(monkeypatch, tmp_path):
             assert logger.propagate == propagate, "logger propagation leaked"
             assert not handler._closed, "borrowed handler was closed"
 
-    yield SimpleNamespace(
-        root=root,
-        loggers=loggers,
-        borrowed=borrowed,
-        created=created,
-        instrument=instrument,
-        verify=verify,
-    )
-    for handler, stream in created:
-        for logger in [root, *loggers.values()]:
-            logging.Logger.removeHandler(logger, handler)
-        handler.close()
-        stream.close()
-    for logger, (handler, _, _) in borrowed.items():
-        logging.Logger.removeHandler(logger, handler)
-        handler.close()
+    try:
+        yield SimpleNamespace(
+            root=root,
+            loggers=loggers,
+            borrowed=borrowed,
+            created=created,
+            instrument=instrument,
+            verify=verify,
+        )
+    finally:
+        with ExitStack() as cleanup:
+            for logger, (handler, _, _) in reversed(tuple(borrowed.items())):
+                cleanup.callback(handler.close)
+                cleanup.callback(logging.Logger.removeHandler, logger, handler)
+            for handler, stream in reversed(created):
+                cleanup.callback(stream.close)
+                cleanup.callback(handler.close)
+                for logger in reversed((root, *loggers.values())):
+                    cleanup.callback(logging.Logger.removeHandler, logger, handler)
 
 
 @contextmanager
