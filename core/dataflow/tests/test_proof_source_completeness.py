@@ -16,14 +16,14 @@ def test_tier0_rejects_truncated_source_even_when_sink_is_visible(tmp_path, monk
                      sink_uri="app.py", sink_line=4, sink_class="xss", language="python")
     complete = sb.try_tier0(**arguments)
     assert complete.status is sb.Tier0Status.NOT_APPLICABLE
-    real = sb.read_text_capped
+    real = sb.read_contained_bytes
 
-    def capped(path, **kwargs):
-        result = real(path, len(PREFIX), **kwargs)
-        assert result == (PREFIX, True)
+    def capped(root, path, cap):
+        result = real(root, path, len(PREFIX))
+        assert result == (PREFIX.encode(), True)
         return result
 
-    monkeypatch.setattr(sb, "read_text_capped", capped)
+    monkeypatch.setattr(sb, "read_contained_bytes", capped)
     result = sb.try_tier0(**arguments)
     assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
     assert "truncated" in result.reasoning
