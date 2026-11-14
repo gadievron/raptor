@@ -1413,12 +1413,18 @@ def semgrep_scan_sequential(
 
     for idx, (name, config) in enumerate(configs, 1):
         logger.info("Running scan %s/%d: %s", idx, len(configs), name)
-        sarif_path, success = run_single_semgrep(
-            name, config, repo_path, out_dir, timeout,
-            extra_config_readable_paths=list(extra_configs or []),
-        )
-        sarif_paths.append(sarif_path)
-        if not success:
+        try:
+            sarif_path, success = run_single_semgrep(
+                name, config, repo_path, out_dir, timeout,
+                extra_config_readable_paths=list(extra_configs or []),
+            )
+            sarif_paths.append(sarif_path)
+            if not success:
+                failed_scans.append(name)
+        except SandboxSetupError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — match parallel per-pack recovery
+            logger.error("Semgrep scan '%s' raised exception: %s", name, exc)
             failed_scans.append(name)
 
     # Detect silent drops the same way semgrep_scan_parallel does —
