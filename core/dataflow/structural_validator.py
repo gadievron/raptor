@@ -154,9 +154,10 @@ def _resolve_file(step: dict, repo_path: Path) -> Path | None:
     raw = step.get("file") or ""
     if not raw:
         return None
-    if ".." in raw:
-        return None
     p = Path(raw)
+    # Parent traversal is a path segment, not literal dots in a filename.
+    if ".." in p.parts:
+        return None
     try:
         repo_resolved = repo_path.resolve()
         candidate = (p if p.is_absolute() else repo_path / p).resolve()
