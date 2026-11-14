@@ -82,7 +82,7 @@ def verify_enforced(
             continue
         verdict = str(rec.get("verdict", ""))
         if verdict == "sanitizer_dominated" or include_candidates:
-            if not rec.get("file_path"):
+            if not isinstance(rec.get("file_path"), str) or not rec.get("file_path"):
                 unlocatable += 1
             live.append(rec)
 
