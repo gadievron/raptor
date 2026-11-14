@@ -2,6 +2,12 @@
  "_comment": "Accepted canonical-JSON findings. Keys are rule:file:symbol (no line numbers). Every entry is a deliberately-raw json.dumps site whose byte form is frozen (MAC canonical form, persisted hash identity, digest-keyed cache, byte-stability contract) or a display/artifact site inside a canonical module whose writer surface has not been migrated. Add an entry ONLY with a note; check_canonical_json.py fails CI on any finding not listed here and warns on stale entries.",
  "version": 1,
  "entries": {
+  "dumps_flows_to_hash:core/dataflow/adapters/codeql.py:make_finding_id": {
+   "note": "Frozen CodeQL finding-ID v2 protocol: delimiter-bearing components use the ordered producer/rule/source-file/source-line/sink-file/sink-line array, stdlib ASCII escapes and compact separators before SHA-256[:12] with the v2_ marker; ordinary IDs retain their legacy bytes. Current dumps_canonical byte-matches declared string/integer payloads. Keep this explicit persisted-ID encoder rather than coupling its admission and bytes to generic sort_keys/default=str behavior for non-string runtime producer objects."
+  },
+  "dumps_flows_to_hash:core/dataflow/adapters/taint_native.py:make_finding_id": {
+   "note": "Frozen taint-crossfile finding-ID v2 protocol, independently owned by the native adapter: delimiter-bearing components use the ordered producer/rule/source-file/source-line/sink-file/sink-line array, stdlib ASCII escapes and compact separators before SHA-256[:12] with the v2_ marker; ordinary IDs retain their legacy bytes. Current dumps_canonical byte-matches declared string/integer payloads. Preserve this producer namespace and explicit persisted-ID encoder without generic sort_keys/default=str admission changes for non-string runtime producer objects."
+  },
   "substrate_dumps_flows_to_hash:core/inventory/__init__.py:_write_sharded_checklist": {
    "note": "shard-file integrity checksum: sha256 over the EXACT bytes written to the shard file, verified against the same on-disk bytes at read — a file checksum, not a content address, so encoder-dependence is immaterial (hash and file always come from the one serialization instance)"
   },
