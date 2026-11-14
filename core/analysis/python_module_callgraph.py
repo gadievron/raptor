@@ -64,6 +64,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 from pathlib import Path
+from collections import deque
 from collections.abc import Iterable
 
 
@@ -166,7 +167,7 @@ class PyModuleCallGraph:
 
     _scope_bindings: dict[ast.AST, frozenset[str]] = field(default_factory=dict)
 
-    # Negative-only source-order candidates for retained annotation evaluators.
+    # Negative-only candidates for retained annotation evaluators.
     # These never establish trusted import or callable identities.
     annotation_evaluator_aliases: frozenset[str] = frozenset()
 
@@ -682,14 +683,15 @@ def module_import_map(tree: ast.Module) -> dict[str, str]:
 def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
     """Module names and dotted projections that may retain an evaluator.
 
-    Collect import candidates and simple assignments in source order, keeping
-    candidates after overwrites and across conditional branches. This is a
-    negative guard, not trusted identity or complete alias analysis. Nested
-    scope bodies, container aliases and loop-carried aliases are not modelled.
+    Close simple assignment edges over module/evaluator candidates. Ignoring
+    order, overwrites and conditional execution is conservative: candidates
+    only withhold certification, never establish trusted identities. Nested
+    scope bodies, containers, destructuring and returned aliases are excluded.
     """
-    candidates = {"annotationlib.get_annotations", "inspect.get_annotations"}
+    modules = {"annotationlib", "inspect"}
+    evaluators = {name + ".get_annotations" for name in modules}
     bound_evaluators: set[str] = set()
-    module_candidates = {"annotationlib", "inspect"}
+    assignments: dict[str, set[str]] = {}
     pending: list[ast.AST] = list(reversed(tree.body))
     while pending:
         node = pending.pop()
@@ -699,8 +701,8 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
             for alias in node.names:
                 if alias.name in ("annotationlib", "inspect"):
                     bound = alias.asname or alias.name
-                    module_candidates.add(bound)
-                    candidates.add(bound + ".get_annotations")
+                    modules.add(bound)
+                    evaluators.add(bound + ".get_annotations")
                     if alias.asname:
                         bound_evaluators.add(bound + ".get_annotations")
         elif (isinstance(node, ast.ImportFrom) and not node.level
@@ -708,25 +710,36 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
             for alias in node.names:
                 if alias.name == "get_annotations":
                     bound = alias.asname or alias.name
-                    candidates.add(bound)
+                    evaluators.add(bound)
                     bound_evaluators.add(bound)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             value = node.value
             chain = _attribute_chain(value) if value is not None else None
-            source = ".".join(chain) if chain is not None else None
-            if source in candidates or source in module_candidates:
+            if chain is not None:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for target in targets:
-                    if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
-                        if source in module_candidates:
-                            module_candidates.add(target.id)
-                            projection = target.id + ".get_annotations"
-                            candidates.add(projection)
-                            bound_evaluators.add(projection)
-                        else:
-                            candidates.add(target.id)
-                            bound_evaluators.add(target.id)
+                names = {t.id for t in targets
+                         if isinstance(t, ast.Name) and isinstance(t.ctx, ast.Store)}
+                assignments.setdefault(".".join(chain), set()).update(names)
         pending.extend(reversed(list(ast.iter_child_nodes(node))))
+
+    # Each typed name is queued once; module facts create one evaluator
+    # projection, never another module projection. Cycles cannot grow facts
+    # beyond the finite assignment names and their evaluator projections.
+    work = deque([(False, name) for name in modules]
+                 + [(True, name) for name in evaluators])
+    while work:
+        is_evaluator, name = work.popleft()
+        if not is_evaluator:
+            projection = name + ".get_annotations"
+            if projection not in evaluators:
+                evaluators.add(projection)
+                work.append((True, projection))
+        for target in assignments.get(name, ()):
+            known = evaluators if is_evaluator else modules
+            bound_evaluators.add(target if is_evaluator else target + ".get_annotations")
+            if target not in known:
+                known.add(target)
+                work.append((is_evaluator, target))
     return frozenset(bound_evaluators)
 
 
