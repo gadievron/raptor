@@ -100,7 +100,7 @@ def test_adjacent_child_default_uses_defining_frame():
 
 
 @pytest.mark.parametrize('call', [
-    '(lambda read: read)(*(getattr,))',
+    '(lambda read: read)(*values)',
     '(lambda read: read)()',
 ])
 def test_opaque_or_incomplete_binding_is_outside_additional_check(call):
