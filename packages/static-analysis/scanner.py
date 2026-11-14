@@ -23,11 +23,12 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING, TypedDict, cast
 
 if TYPE_CHECKING:
     from core.coverage.record import SemgrepOutputSummary
     from core.detectors.setup import AnalysisSetup
+    from packages.semgrep.runtime import SnapRuntime
 
 # Python path safety: the only permitted sys.path addition is the
 # launcher-pinned RAPTOR_DIR (hard lookup — a KeyError here means the
@@ -41,7 +42,7 @@ from core.git import clone_repository
 from core.hash import sha256_bytes, sha256_fileobj, sha256_tree
 from core.json import load_json, loads, save_json
 from core.source import open_regular_gated, read_bytes_gated
-from core.logging import get_logger
+from core.logging import RaptorLogger, get_logger
 from core.run.output import unique_run_suffix
 from core.run.scratch import scratch_dir
 from core.run.parent_liveness import maybe_start_orphan_watchdog
@@ -59,7 +60,7 @@ from core.sarif.parser import count_results
 from core.sarif.parser import generate_scan_metrics, merge_sarif, validate_sarif
 from packages import semgrep as semgrep_pkg
 
-logger = get_logger()
+logger = cast(RaptorLogger, get_logger())
 
 # Byte budgets: semgrep registry pack caches are capped at download
 # time (32 MiB socket cap in cache-packs) — 64 MiB leaves headroom;
@@ -714,6 +715,31 @@ def _sanitize_pack_name(name: str) -> str:
     return re.sub(r'[^A-Za-z0-9._-]', '_', name)
 
 
+class _ScannerSandboxIOKwargs(TypedDict, total=False):
+    fake_home: bool
+    readable_paths: list[Path]
+
+
+class _ScannerSandboxEnvironmentKwargs(TypedDict, total=False):
+    strict_env: bool
+    env_caller_filtered: bool
+
+
+class _ScannerSandboxNetworkKwargs(TypedDict, total=False):
+    use_egress_proxy: bool
+    proxy_hosts: list[str]
+    caller_label: str
+    block_network: bool
+
+
+class _SemgrepRuntimeKwargs(TypedDict, total=False):
+    runtime: "SnapRuntime"
+
+
+class _ScanMetricKwargs(TypedDict, total=False):
+    on_source_report: Callable[[str, dict[str, Any] | None], None]
+
+
 def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         target=None, output=None, proxy_hosts=None, caller_label=None,
         fake_home: bool=False, readable_paths=None, semgrep_runtime=None):
@@ -735,7 +761,7 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         than block_network=True.
     """
     from core.sandbox import run as sandbox_run
-    net_kwargs = (
+    net_kwargs: _ScannerSandboxNetworkKwargs = (
         {"use_egress_proxy": True, "proxy_hosts": list(proxy_hosts),
          "caller_label": caller_label or "scanner"}
         if proxy_hosts else
@@ -761,7 +787,7 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         for p in python_runtime_tool_paths():
             if p not in tool_paths:
                 tool_paths.append(p)
-    sandbox_kwargs = {}
+    sandbox_kwargs: _ScannerSandboxIOKwargs = {}
     if fake_home:
         sandbox_kwargs["fake_home"] = True
     if readable_paths:
@@ -784,14 +810,17 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
     # scan run. The strip is a no-op for us (``get_safe_env`` already
     # excludes DANGEROUS_ENV_VARS) but the flag is also the documented
     # "I'm aware of the bypass" marker.
-    p = sandbox_run(
+    runtime_kwargs: _ScannerSandboxEnvironmentKwargs = (
+        {"env_caller_filtered": True} if semgrep_runtime is not None
+        else {"strict_env": True}
+    )
+    completed = sandbox_run(
         cmd,
         target=target,
         output=output,
         cwd=cwd,
         env=env or RaptorConfig.get_safe_env(),
-        **({"env_caller_filtered": True} if semgrep_runtime is not None
-           else {"strict_env": True}),
+        **runtime_kwargs,
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -799,7 +828,7 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         **sandbox_kwargs,
         **net_kwargs,
     )
-    return p.returncode, p.stdout, p.stderr
+    return completed.returncode, completed.stdout, completed.stderr
 
 
 def _compute_python_tool_paths(cmd) -> list:
@@ -930,6 +959,9 @@ def run_single_semgrep(
             _warn_scope_isolation_once(logger, semgrep_cmd)
         else:
             _warn_scope_isolation_once(logger)
+    runtime_options: _SemgrepRuntimeKwargs = (
+        {"runtime": semgrep_runtime} if semgrep_runtime is not None else {}
+    )
     cmd = semgrep_pkg.build_cmd(
         repo_path,
         config,
@@ -942,7 +974,7 @@ def run_single_semgrep(
             or None
         ),
         scope_isolation=scope_ok,
-        **({"runtime": semgrep_runtime} if semgrep_runtime is not None else {}),
+        **runtime_options,
     )
 
     # Create clean environment without venv contamination or dangerous vars.
@@ -1019,6 +1051,8 @@ def run_single_semgrep(
         _ph_spec = _importlib_util.spec_from_file_location(
             "static_analysis_proxy_hosts", _ph_path,
         )
+        if _ph_spec is None or _ph_spec.loader is None:
+            raise ImportError("Semgrep proxy-host helper loader unavailable")
         _ph = _importlib_util.module_from_spec(_ph_spec)
         _ph_spec.loader.exec_module(_ph)
         # ``fake_home=True``: sandbox layer materialises HOME + four
@@ -2696,8 +2730,8 @@ def run_source_wrapper_stage(
     except Exception as exc:  # noqa: BLE001
         logger.warning("source-wrappers: run failed: %s", exc)
         return failed_report("source-wrapper Semgrep invocation failed")
-    diagnostic = _semgrep_stage_diagnostic(res, "source-wrapper")
-    if diagnostic:
+    execution_diagnostic = _semgrep_stage_diagnostic(res, "source-wrapper")
+    if execution_diagnostic:
         print("⚠️  source-wrapper stage incomplete; execution diagnostics retained in SARIF", file=sys.stderr)
     findings = [("wrapper", f.to_dict()) for f in res.findings]
     sarif_path = Path(out_dir) / "source-wrappers.sarif"
@@ -2716,7 +2750,7 @@ def run_source_wrapper_stage(
         },
     )
     paths = _write_stage_report(sarif_path, doc,
-                                [*summary_diagnostics, *([diagnostic] if diagnostic else [])])
+                                [*summary_diagnostics, *([execution_diagnostic] if execution_diagnostic else [])])
     # The qualified wrapper names are run-scoped learned vocabulary:
     # the sanitizer-cut post-pass's source locator only knows the
     # direct servlet getters, so a finding whose taint enters via
@@ -3661,6 +3695,7 @@ def main() -> None:
                 # No-ops after an abort (idempotent shutdown; filter
                 # removal tolerates absence). Symmetric with the
                 # addFilter above (raptor logger).
+                assert _codeql_pool is not None
                 _codeql_pool.shutdown(wait=False)
                 logging.getLogger("raptor").removeFilter(_stage_tag)
             print(f"⏱  CodeQL stage finished "
@@ -3739,7 +3774,7 @@ def main() -> None:
         # Source-wrapper projection (default-on, opt-out): helper
         # methods that provably return servlet-request data become
         # additional taint sources for the in-repo java sink profiles.
-        source_wrapper_sarifs = []
+        source_wrapper_sarifs: list[str] = []
         source_wrapper_names: list[str] = []
         if not args.no_source_wrappers:
             source_wrapper_sarifs, source_wrapper_names = (
@@ -3839,7 +3874,7 @@ def main() -> None:
                 )
                 merged_exists = merge_completed
                 postpass_inputs = (
-                    [merged] if merged_exists else list(sarif_inputs)
+                    [merged] if merged_exists else [Path(path) for path in sarif_inputs]
                 )
                 enforce_on = (
                     RaptorConfig.SANITIZER_CUT_ENFORCE_ENABLED
@@ -3893,11 +3928,12 @@ def main() -> None:
             if codeql_coverage is not None and Path(path) in codeql_report_paths:
                 codeql_coverage.add_report(data)
 
-        metric_options = {"on_source_report": collect_codeql_coverage} if codeql_coverage is not None else {}
+        metric_options: _ScanMetricKwargs = {"on_source_report": collect_codeql_coverage} if codeql_coverage is not None else {}
+        metric_paths = [str(path) for path in sarif_inputs]
         if merge_completed:
-            metrics = generate_scan_metrics([str(merged)], file_count_paths=sarif_inputs, **metric_options)
+            metrics = generate_scan_metrics([str(merged)], file_count_paths=metric_paths, **metric_options)
         else:
-            metrics = generate_scan_metrics(sarif_inputs, **metric_options)
+            metrics = generate_scan_metrics(metric_paths, **metric_options)
         # Record per-engine failure surfaces so downstream readers
         # can distinguish a clean run from one where N packs silently
         # dropped. Empty list is intentional (positive marker — "we

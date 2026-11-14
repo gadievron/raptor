@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import ast
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -280,7 +281,7 @@ def _comprehension_writes_enclosing_frame(
     return _expression_roots_write_enclosing_frame(roots)
 
 
-def _expression_roots_write_enclosing_frame(roots: list[ast.AST]) -> bool:
+def _expression_roots_write_enclosing_frame(roots: Sequence[ast.AST]) -> bool:
     pending = list(roots)
     while pending:
         child = pending.pop()
@@ -852,7 +853,10 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         elif isinstance(node, (ast.JoinedStr, getattr(ast, "TemplateStr", ast.Constant))):
             part_type = (ast.FormattedValue if isinstance(node, ast.JoinedStr)
                          else getattr(ast, "Interpolation", None))
-            for value in node.values:
+            values = getattr(node, "values", None)
+            if not isinstance(values, list):
+                return False
+            for value in values:
                 if isinstance(value, ast.Constant) and type(value.value) is str:
                     continue
                 if (part_type is None or not isinstance(value, part_type)
@@ -1203,7 +1207,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
         frame_bindings: frozenset[str] | None = None
         for definition, returned in zip(fn_ast.body, fn_ast.body[1:]):
             if (not isinstance(definition, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    or definition.decorator_list or getattr(definition, "type_params", ())
+                    or definition.decorator_list or getattr(definition, "type_params", [])
                     or not isinstance(returned, ast.Return)):
                 continue
             value = returned.value

@@ -137,7 +137,7 @@ def _rewrite_finding_paths_and_snippets(
             # The capped reader retains a raw prefix when an over-cap
             # first line has no LF. It is context, not a complete snippet.
             complete = got is not None and (not got[1] or "\n" in got[0])
-            line_cache[full] = split_lines(got[0]) if complete else []
+            line_cache[full] = split_lines(got[0]) if got is not None and complete else []
         lines = line_cache[full]
         if 1 <= line <= len(lines):
             return lines[line - 1].strip()

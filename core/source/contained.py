@@ -52,7 +52,7 @@ from __future__ import annotations
 import os
 import stat
 from pathlib import Path
-from typing import IO, TypeVar
+from typing import IO, BinaryIO, Literal, TypeVar, overload
 
 from core.paths import confine
 from core.source.beneath import open_regular_beneath
@@ -75,6 +75,14 @@ __all__ = [
 # every character decodes from at least one byte, so the cap bounds
 # in-memory size within a small constant factor of the byte count.
 DEFAULT_MAX_SOURCE_CHARS = 10 * 1024 * 1024
+
+
+@overload
+def open_regular(path: str | Path, mode: Literal["rb"], **kwargs) -> BinaryIO | None: ...
+
+
+@overload
+def open_regular(path: str | Path, mode: str, **kwargs) -> IO | None: ...
 
 
 def open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:

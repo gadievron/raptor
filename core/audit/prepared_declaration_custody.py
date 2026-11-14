@@ -149,8 +149,8 @@ class DeclarationOwner:
         self._max_retained_bytes = max_retained_bytes
         self._max_captures = max_captures
         self._max_selections = max_selections
-        self._captures = {}
-        self._selections = {}
+        self._captures: dict[int, tuple[DeclarationCapture, int]] = {}
+        self._selections: dict[int, tuple[SelectedDeclaration, int]] = {}
         self._retained_bytes = 0
         self._closed = False
         self._lock = RLock()
