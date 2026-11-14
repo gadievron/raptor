@@ -1997,14 +1997,14 @@ def _regen_expected(workers: int = 8) -> int:
     _EXPECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "_comment": (
-            "Pinned trailing-span/anchor-restart census members: "
-            "static proposals (Rule C / Rule R) the pump oracle "
-            "measured linear, keyed file\x1fname with pattern "
-            "digests. Regenerate with: python3 "
-            ".github/tests/test_redos_idiom_census.py "
-            "--regen-trailing-span  (the tool refuses superlinear "
-            "members; hand-editing a verdict is caught by the "
-            "nightly oracle re-check)."
+            'Pinned trailing-span/anchor-restart census members (Rule C / Rule '
+            'R), keyed file\\x1fname with exact pattern/flags/mode digests. '
+            'Records contain pump-oracle dispositions or explicit '
+            'source-specific static adjudications documented in note. A null exp '
+            'carries no measured exponent. Regenerate with: python3 '
+            '.github/tests/test_redos_idiom_census.py --regen-trailing-span '
+            '(refuses superlinear members; preserves matching review notes). '
+            'Nightly oracle re-check remains independent validation.'
         ),
         "members": dict(sorted(rows.items())),
     }
