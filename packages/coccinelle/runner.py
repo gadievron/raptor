@@ -483,6 +483,7 @@ def is_available() -> bool:
 # rule-integrity parse test gates on this so it skips — rather than
 # false-fails — on a host whose spatch predates the floor.
 MIN_SPATCH_VERSION = (1, 3)
+_MAX_VERSION_TEXT_CHARS = 64 * 1024
 
 
 def version() -> str | None:
@@ -497,6 +498,10 @@ def version() -> str | None:
     for stream in (info.stdout, info.stderr):
         if not isinstance(stream, str):
             continue
+        # A retained prefix cannot exclude a conflicting banner in the
+        # discarded tail. Refuse the shared probe's retention ceiling.
+        if len(stream) >= _MAX_VERSION_TEXT_CHARS:
+            return None
         for line in stream.splitlines():
             line = line.strip()
             if line.startswith("spatch version "):
