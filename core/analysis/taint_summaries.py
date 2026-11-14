@@ -436,11 +436,11 @@ def _comprehension_target_scope(
 def _scoped_comprehension_target_parts(
     target: ast.AST,
 ) -> tuple[frozenset[str], tuple[ast.expr, ...]] | None:
-    """Target read expressions in a closed lambda-aware grammar."""
+    """Target read expressions in a closed lambda/await grammar."""
     scope = _comprehension_target_parts(target)
     if scope is None:
         return None
-    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg)
+    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg, ast.Await)
     if not all(isinstance(node, allowed) for part in scope[1] for node in ast.walk(part)):
         return None
     return scope

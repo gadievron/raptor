@@ -65,8 +65,8 @@ def test_legacy_strict_wrapper_and_statement_targets_are_unchanged():
 
 @pytest.mark.parametrize("expression", ["[0 for box[(lambda: (value := raw))()] in ()]",
                                        "[0 for box[[raw for item in ()]] in ()]",
-                                       "[0 for box[await raw] in ()]"],
-                         ids=["named-write", "nested-comprehension", "await"])
+                                       "[0 for box[await (lambda: (value := raw))()] in ()]"],
+                         ids=["named-write", "nested-comprehension", "awaited-write"])
 def test_excluded_target_descendants_invalidate_scoped_scan(expression):
     # AST admission controls; no compiled-source claim for these expressions.
     node = ast.parse(expression, mode="eval").body
