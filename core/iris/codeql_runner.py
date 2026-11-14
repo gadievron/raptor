@@ -209,10 +209,12 @@ def make_codeql_tool_runner(
                 # runs under block_network — registry resolution can
                 # never happen there. The vendored `<lang>-all` root
                 # inside the cached standard query pack resolves the
-                # dep entirely offline (single-version tree, full
-                # transitive closure); when nothing is cached,
-                # run_local_pack's lazy proxy-routed `pack install`
-                # is the fallback that CAN reach the registry.
+                # dep without registry access when its contents are
+                # complete. Discovery checks candidate directories;
+                # it does not verify their transitive dependencies.
+                # CodeQL analysis reports resolution failures. When
+                # no root is found, run_local_pack may instead use
+                # its proxy-routed `pack install` fallback.
                 vendored = vendored_stdlib_roots(language)
                 result = runner.run_local_pack(
                     language,
