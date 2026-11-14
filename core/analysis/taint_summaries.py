@@ -429,7 +429,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
       whose sole return reads an enclosing cell through a bounded expression grammar
-      or a bounded comprehension read,
+      or a bounded lambda/comprehension read,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -509,6 +509,20 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if len(body) == 1 and isinstance(body[0], ast.Return):
                 names = _scope_free_expression_loads(body[0].value)
                 cell_read = body[0].value
+                if isinstance(cell_read, ast.Lambda):
+                    args = cell_read.args
+                    parameters = {
+                        arg.arg for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs)
+                    }
+                    parameters.update(
+                        arg.arg for arg in (args.vararg, args.kwarg) if arg is not None
+                    )
+                    # Defaults belong to this frame; only body reads are
+                    # shadowed by the lambda's arguments. The bounded grammar
+                    # still excludes additional binders and nested scopes.
+                    for default in (*args.defaults, *args.kw_defaults):
+                        names |= _scope_free_expression_loads(default)
+                    names |= _scope_free_expression_loads(cell_read.body) - parameters
                 if (isinstance(cell_read, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
                         and cell_read.generators):
                     # The first iterable evaluates in this function's frame,
