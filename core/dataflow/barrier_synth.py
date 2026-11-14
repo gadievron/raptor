@@ -201,7 +201,10 @@ class SynthResult:
 
     @property
     def is_sound(self) -> bool:
-        """The proposed barrier suppressed the FP AND kept the TP."""
+        """Zero post-fix results and at least one pre-fix result remain.
+
+        These scoped counts do not establish retention of every true positive.
+        """
         return self.suppressed_fp and self.preserved_tp
 
     @property
@@ -951,7 +954,7 @@ def render_corpus_report(r: CorpusSynthReport) -> str:
     rate = "n/a" if r.suppression_rate is None else f"{r.suppression_rate * 100:.0f}%"
     return (
         f"Trust barrier synthesis over {r.total} FP(s)\n"
-        f"  sound barrier:   {r.sound}  ({rate} of FPs suppressed, zero TP loss)\n"
+        f"  sound barrier:   {r.sound}  ({rate} meet scoped count checks)\n"
         f"  not sound:       {r.not_sound}  (compiled but failed the soundness check)\n"
         f"  no barrier:      {r.no_barrier}  (no compilable barrier after retries)"
     )
