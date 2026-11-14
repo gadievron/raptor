@@ -57,15 +57,15 @@ def test_bare_return_after_docstring_contributes_no_reads():
     assert _bounded_body_expression_loads(ast.parse('def child():\n "docs"\n return').body) == frozenset()
 
 
-@pytest.mark.parametrize("body", ['"docs"', '"docs"\n "second"\n return raw',
+@pytest.mark.parametrize("body", ['"docs"\n "second"\n return raw',
                                   'b"docs"\n return raw', 'f"{raw}"\n return 0',
                                   't"{raw}"\n return 0'],
-                         ids=["docstring-only", "second-string", "bytes", "formatted", "template"])
-def test_other_child_body_shapes_stay_excluded(body):
+                         ids=["second-string", "bytes", "formatted", "template"])
+def test_other_child_expressions_keep_their_reads(body):
     if body.startswith('t"') and not hasattr(ast, "TemplateStr"):
         pytest.skip("Template string syntax requires Python 3.14")
     source = "def child():\n " + body
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(ast.parse(source).body) == frozenset({"raw"})
 
 
 def test_documented_child_annotations_remain_excluded():
@@ -78,3 +78,7 @@ def test_keyword_expansion_keeps_prior_reason():
         "            return raw\n        return child\n    return nested(**{})\n"
     )["handle"]
     assert result.summary_unknown_reason == "forwards **kwargs"
+
+
+def test_docstring_only_child_stays_excluded():
+    assert _bounded_body_expression_loads(ast.parse('def child():\n "docs"').body) is None
