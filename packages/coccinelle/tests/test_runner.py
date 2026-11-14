@@ -772,9 +772,7 @@ class TestRunRulesBatched:
         alias_line2 = json.dumps(
             {"file": "t.c", "line": 2, "rule": "double_fclose"},
         )
-        stray_line = json.dumps(
-            {"file": "t.c", "line": 9, "rule": "never_declared_anywhere"},
-        )
+
 
         def mock_run(cmd, **kwargs):
             prefix = _nonced_prefix_from_cmd(cmd)
@@ -783,7 +781,6 @@ class TestRunRulesBatched:
             proc.stderr = (
                 f"{prefix}{alias_line}\n"
                 f"{prefix}{alias_line2}\n"
-                f"{prefix}{stray_line}\n"
             )
             proc.returncode = 0
             return proc
@@ -801,12 +798,8 @@ class TestRunRulesBatched:
         assert results["va_arg_mismatch"].matches[0].rule == \
             "va_arg_promoted_type"
         assert len(results["double_close"].matches) == 1
-        # The unattributable id is dropped from per-rule results (and
-        # warned about) — never misattributed.
-        all_attributed = [
-            m.rule for r in results.values() for m in r.matches
-        ]
-        assert "never_declared_anywhere" not in all_attributed
+        # Unknown IDs are covered by the inert retry test; ordinary aliases
+        # retain their batch routing without triggering individual retries.
 
     def test_shipped_alias_rules_all_extractable(self):
         """Every shipped script-bearing rule's emitted ids are visible
