@@ -1,5 +1,6 @@
 """Append teardown preserves the primary operation and consumes its descriptor."""
 
+from contextlib import ExitStack
 import errno
 import json
 import os
@@ -15,14 +16,29 @@ from core.testing.module_bindings import patch_module_attribute
 def trail_writer(tmp_path, monkeypatch):
     path = tmp_path / "trail.jsonl"
     retained, closed = [], []
+    generations = []
     real_open, real_close, real_write, real_fstat = os.open, os.close, os.write, os.fstat
 
     def install(stage, primary, cleanup):
         def opened(*args, **kwargs):
-            fd = real_open(*args, **kwargs)
-            info = real_fstat(fd)
-            retained.append((fd, (info.st_dev, info.st_ino)))
-            return fd
+            transferred, generation = False, None
+
+            def retire_setup(descriptor):
+                if not transferred:
+                    if generation is not None:
+                        generation['pending'] = False
+                    real_close(descriptor)
+
+            with ExitStack() as setup:
+                fd = real_open(*args, **kwargs)
+                setup.callback(retire_setup, fd)
+                info = real_fstat(fd)
+                identity = (info.st_dev, info.st_ino)
+                generation = {'fd': fd, 'identity': identity, 'pending': True}
+                generations.append(generation)
+                retained.append((fd, identity))
+                transferred = True
+                return fd
 
         def fstat(fd):
             if stage == "fstat":
@@ -37,6 +53,10 @@ def trail_writer(tmp_path, monkeypatch):
             return real_write(fd, data)
 
         def close(fd):
+            for generation in reversed(generations):
+                if generation['fd'] == fd and generation['pending']:
+                    generation['pending'] = False
+                    break
             real_close(fd)
             closed.append(fd)
             raise cleanup
@@ -48,7 +68,10 @@ def trail_writer(tmp_path, monkeypatch):
         return path, retained, closed
 
     yield install
-    for fd, identity in retained:
+    for generation in generations:
+        if not generation['pending']:
+            continue
+        fd, identity = generation['fd'], generation['identity']
         try:
             info = real_fstat(fd)
         except OSError:
