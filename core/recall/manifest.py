@@ -310,7 +310,12 @@ def parse_manifest(data: Any) -> RecallManifest:
         errors.append(
             f"profile must be one of {sorted(PROFILES)} (got {profile!r})")
 
-    tol_raw = data.get("tolerance") or {}
+    tol_raw = data.get("tolerance")
+    if tol_raw is None:
+        tol_raw = {}
+    elif not isinstance(tol_raw, dict):
+        errors.append("tolerance must be an object")
+        tol_raw = {}
     drift = tol_raw.get("line_drift", DEFAULT_LINE_DRIFT)
     fam = tol_raw.get("cwe_family_match", True)
     if not isinstance(drift, int) or isinstance(drift, bool) or drift < 0:
@@ -338,9 +343,15 @@ def parse_manifest(data: Any) -> RecallManifest:
         if dupes:
             errors.append(f"duplicate expected ids: {sorted(dupes)}")
 
+    raw_clean = data.get("clean_regions")
+    if raw_clean is None:
+        raw_clean = []
+    elif not isinstance(raw_clean, list):
+        errors.append("clean_regions must be a list")
+        raw_clean = []
     clean: list[ExpectedFinding] = [
         _parse_expected(e, f"clean_regions[{i}]", errors)
-        for i, e in enumerate(data.get("clean_regions") or [])
+        for i, e in enumerate(raw_clean)
     ]
     if corpus_kind == "fp-only" and not clean:
         errors.append("an fp-only manifest needs clean_regions")
