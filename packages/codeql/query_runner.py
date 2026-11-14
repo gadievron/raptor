@@ -926,8 +926,18 @@ class QueryRunner:
 
         from core.sandbox import run as sandbox_run
 
-        candidates = (sorted(query_path.rglob("*.ql")) if query_path.is_dir()
-                      else [query_path] if query_path.suffix == ".ql" else [])
+        def enumeration_error(error):
+            raise error
+
+        try:
+            candidates = (sorted(
+                Path(directory) / name
+                for directory, dirnames, filenames in os.walk(query_path, onerror=enumeration_error)
+                for name in [*filenames, *dirnames]
+                if Path(name).match("*.ql")
+            ) if query_path.is_dir() else [query_path] if query_path.suffix == ".ql" else [])
+        except OSError as exc:
+            return [], [f"custom rules skipped: query enumeration failed ({type(exc).__name__})"]
 
         # Keep one version answer and one metadata decision per selection.
         # Unknown versions are retried by the next invocation, rather than
