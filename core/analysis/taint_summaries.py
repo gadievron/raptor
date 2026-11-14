@@ -691,15 +691,20 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         node = pending.pop()
         if _match_literal_expression(node):
             continue
-        if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd)
-                and isinstance(node.operand, ast.Constant)
-                and type(node.operand.value) in (int, float, complex)):
-            continue
-        if (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub))
-                and isinstance(node.left, ast.UnaryOp) and isinstance(node.left.op, ast.UAdd)
-                and isinstance(node.left.operand, ast.Constant)
-                and type(node.left.operand.value) in (int, float)
-                and isinstance(node.right, ast.Constant) and type(node.right.value) is complex):
+        if isinstance(node, (ast.UnaryOp, ast.BinOp)):
+            numeric_pending: list[ast.expr] = [node]
+            while numeric_pending:
+                numeric = numeric_pending.pop()
+                if isinstance(numeric, ast.Constant) and type(numeric.value) in (int, float, complex):
+                    continue
+                if isinstance(numeric, ast.UnaryOp) and isinstance(numeric.op, (ast.UAdd, ast.USub)):
+                    numeric_pending.append(numeric.operand)
+                elif (isinstance(numeric, ast.BinOp)
+                      and isinstance(numeric.op, (ast.Add, ast.Sub, ast.Mult, ast.Div,
+                                                  ast.FloorDiv, ast.Mod, ast.Pow))):
+                    numeric_pending.extend((numeric.left, numeric.right))
+                else:
+                    return False
             continue
         if isinstance(node, (ast.Tuple, ast.List)):
             if not isinstance(node.ctx, ast.Load):
