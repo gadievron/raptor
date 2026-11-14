@@ -327,7 +327,10 @@ def parse_manifest(data: Any) -> RecallManifest:
     if not isinstance(drift, int) or isinstance(drift, bool) or drift < 0:
         errors.append("tolerance.line_drift must be a non-negative int")
         drift = DEFAULT_LINE_DRIFT
-    tolerance = Tolerance(line_drift=drift, cwe_family_match=bool(fam))
+    if not isinstance(fam, bool):
+        errors.append("tolerance.cwe_family_match must be a bool")
+        fam = True
+    tolerance = Tolerance(line_drift=drift, cwe_family_match=fam)
 
     corpus_kind = data.get("corpus_kind", "recall")
     if corpus_kind not in ("recall", "fp-only"):
