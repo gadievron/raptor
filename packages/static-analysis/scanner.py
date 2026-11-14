@@ -2498,11 +2498,13 @@ def run_source_wrapper_stage(
     silently when the tree yields no summaries or tree-sitter java
     is unavailable.
     """
+    summary_diagnostics: list[dict] = []
+
     def failed_report(reason):
         document = _stage_findings_to_sarif([], tool_name="raptor-source-wrappers",
                                             rule_prefix="source-wrapper")
         return _write_stage_report(Path(out_dir) / "source-wrappers.sarif", document,
-                                   [_stage_diagnostic(reason, failed=True)]), []
+                                   [*summary_diagnostics, _stage_diagnostic(reason, failed=True)]), []
 
     try:
         from core.analysis.java_source_summaries import scan_tree
@@ -2514,6 +2516,20 @@ def run_source_wrapper_stage(
     except Exception as exc:  # noqa: BLE001 — stage must not kill the scan
         logger.warning("source-wrappers: scan failed: %s", exc)
         return failed_report("source-wrapper summary analysis failed")
+    # Unsupported method shapes are ordinary nonqualification; input caps
+    # and unreadable files instead mean the summary census was incomplete.
+    incomplete = {reason: refusals[reason] for reason in
+                  ("file_cap_hit", "source_cap_hit", "unreadable")
+                  if refusals.get(reason)}
+    if incomplete:
+        diagnostic = _stage_diagnostic("source-wrapper input analysis incomplete")
+        diagnostic["toolExecutionNotifications"][0]["properties"]["source_wrapper_refusals"] = incomplete
+        summary_diagnostics.append(diagnostic)
+    if not summaries and summary_diagnostics:
+        document = _stage_findings_to_sarif([], tool_name="raptor-source-wrappers",
+                                            rule_prefix="source-wrapper")
+        return _write_stage_report(Path(out_dir) / "source-wrappers.sarif", document,
+                                   summary_diagnostics), []
     if not summaries:
         logger.debug(
             "source-wrappers: no qualifying wrappers "
@@ -2567,7 +2583,8 @@ def run_source_wrapper_stage(
             ".xpath": "CWE-643",
         },
     )
-    paths = _write_stage_report(sarif_path, doc, [diagnostic] if diagnostic else [])
+    paths = _write_stage_report(sarif_path, doc,
+                                [*summary_diagnostics, *([diagnostic] if diagnostic else [])])
     # The qualified wrapper names are run-scoped learned vocabulary:
     # the sanitizer-cut post-pass's source locator only knows the
     # direct servlet getters, so a finding whose taint enters via
