@@ -372,3 +372,37 @@ def test_graduated_export_retains_two_distinct_direct_source_spans(tmp_path, mon
         {'startLine': 7, 'endLine': 7, 'startColumn': 2, 'endColumn': 5},
         {'startLine': 7, 'endLine': 7, 'startColumn': 8, 'endColumn': 11},
     ]
+
+
+def test_graduated_enumeration_refusal_is_failed_invocation(tmp_path, monkeypatch):
+    import os
+    from packages.semgrep import runner
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+
+    repo, out, rules = (tmp_path / name for name in ('repo', 'out', 'rules'))
+    for directory in (repo, out, rules):
+        directory.mkdir()
+    (rules / 'owned.yaml').write_text('rules: []\n')
+    original = os.scandir
+    calls = []
+
+    def refused(path):
+        if os.path.normpath(os.fspath(path)) == str(rules):
+            calls.append(str(path))
+            raise PermissionError('owned enumeration refusal')
+        return original(path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('enumeration refusal reached a Semgrep probe or runner')
+
+    monkeypatch.setattr(os, 'scandir', refused)
+    monkeypatch.setattr(runner, 'is_available', forbidden)
+    monkeypatch.setattr(runner, 'run_rule', forbidden)
+    paths = _scanner.run_graduated_rules_stage(repo, out, rules_dir=rules)
+    assert calls
+    assert paths
+    metrics = generate_scan_metrics(paths)
+    assert metrics['total_findings'] == 0
+    assert metrics['tool_execution_failures']
+    assert scan_execution_status(metrics) == 'partial'
