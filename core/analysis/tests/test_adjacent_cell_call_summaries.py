@@ -79,3 +79,38 @@ def test_existing_generator_refusal_keeps_priority_for_returned_call():
         "def handle(raw):\n    def nested(value=(yield raw)):\n        return raw\n    return nested()\n"
     )["handle"]
     assert result.summary_unknown_reason == "generator iteration outputs are not modelled"
+
+
+@pytest.mark.parametrize(
+    "signature, actual",
+    [("unused", "0"), ("*, unused", "unused=0"), ("*unused", "*[0]")],
+    ids=["positional", "keyword", "starred"],
+)
+def test_arguments_do_not_remove_an_adjacent_captured_cell(signature, actual):
+    result = summaries(
+        f"import html\ndef helper(raw):\n    def nested({signature}):\n"
+        f"        return raw\n    return nested({actual})\n"
+        "def handle(raw):\n    return html.escape(raw) + helper(raw)\n"
+    )
+    assert result["helper"].summary_unknown
+    assert result["helper"].summary_unknown_reason == (
+        "returned local call depends on an unmodelled enclosing cell"
+    )
+    assert result["handle"].param_taints_return(0)
+    assert not _param_cleanly_sanitized(result["handle"], 0, {"html.escape"})
+
+
+def test_explicit_argument_shadow_is_not_a_captured_cell():
+    result = summaries(
+        "def handle(raw):\n    def nested(raw):\n        return raw\n    return nested(0)\n"
+    )["handle"]
+    assert not result.summary_unknown
+    assert not result.param_taints_return(0)
+
+
+def test_keyword_expansion_keeps_earlier_refusal_priority():
+    result = summaries(
+        "def handle(raw):\n    def nested(**unused):\n        return raw\n"
+        "    return nested(**{})\n"
+    )["handle"]
+    assert result.summary_unknown_reason == "forwards **kwargs"
