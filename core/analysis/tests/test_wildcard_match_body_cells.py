@@ -50,8 +50,8 @@ def test_whole_function_bindings_mask_match_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("pattern", ["value", "-1.5", "[value, _]", "{0: value}", "Value(value)", "0 | -1.5"],
-                         ids=["capture", "value", "sequence", "mapping", "class", "or"])
+@pytest.mark.parametrize("pattern", ["value", "(-1.5) as value", "[value, _]", "{0: value}", "Value(value)", "(0 | -1.5) as value"],
+                         ids=["capture", "value-capture", "sequence", "mapping", "class", "or-capture"])
 def test_unsupported_pattern_invalidates_complete_scan(pattern):
     body = f"raw\nmatch 0:\n case _ if False:\n  raw\n case {pattern}:\n  return raw"
     assert _bounded_body_expression_loads(ast.parse(body).body) is None
