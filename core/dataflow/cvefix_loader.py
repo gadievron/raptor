@@ -69,7 +69,8 @@ def _single_parent(parents_repr: str | None) -> str | None:
     except (ValueError, SyntaxError):
         return None
     if isinstance(parents, (list, tuple)) and len(parents) == 1:
-        return str(parents[0])
+        parent = parents[0]
+        return parent if isinstance(parent, str) and parent.strip() else None
     return None
 
 
