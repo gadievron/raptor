@@ -168,17 +168,12 @@ def harvest_wur_declarations(
 
 
 _WUR_SCAN_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
-# Header-count budget: per-file cost is a capped read + regex sweep,
-# so the file count is proportional to wall time.  The cap must cover
-# kernel-scale trees (Linux ~795 headers) with headroom, while still
-# sampling hostile trees with millions of header-suffixed files.  When
-# it binds, the budget is spread EVENLY across the sorted tree —
-# index-based even selection that fills the budget EXACTLY — rather
-# than taking the alphabetical prefix (a kernel tree sorts
-# arch/alpha/... first, so a prefix slice reads one corner of the
-# tree), and the selection ratio is disclosed with a warning.
+# Header-read budget: all matching paths are enumerated and sorted first,
+# so this cap does not bound traversal work or retained path count. When
+# sampling is needed, the read budget is spread evenly across the sorted
+# tree and the selection ratio is disclosed with a warning.
 _MAX_WUR_SCAN_FILES = 4_000
-_MAX_WUR_FILE_BYTES = 400_000
+_MAX_WUR_FILE_CHARS = 400_000  # decoded characters, not UTF-8 bytes
 
 
 def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
@@ -217,7 +212,7 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
         resolved = confine(target_path, p)
         if resolved is None:
             continue
-        got = read_text_capped(resolved, _MAX_WUR_FILE_BYTES)
+        got = read_text_capped(resolved, _MAX_WUR_FILE_CHARS)
         if got is None or got[1]:
             continue
         # Harvest each admitted text before reading the next header; the

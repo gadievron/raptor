@@ -14,7 +14,7 @@ from core.paths import confine
 def target_harvest():
     path = Path(__file__).resolve().parents[1] / "return_contracts.py"
     tree = ast.parse(path.read_text())
-    names = {"_WUR_SCAN_SUFFIXES", "_MAX_WUR_SCAN_FILES", "_MAX_WUR_FILE_BYTES"}
+    names = {"_WUR_SCAN_SUFFIXES", "_MAX_WUR_SCAN_FILES", "_MAX_WUR_FILE_CHARS"}
     selected = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "harvest_wur_from_target":
@@ -37,7 +37,7 @@ def test_header_spellings_reach_existing_harvester(tmp_path, target_harvest, suf
     reads = []
 
     def read(path, cap):
-        assert path == header and cap == namespace["_MAX_WUR_FILE_BYTES"]
+        assert path == header and cap == namespace["_MAX_WUR_FILE_CHARS"]
         reads.append(path)
         return "owned header text", False
 
