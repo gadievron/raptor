@@ -59,8 +59,8 @@ def test_unsupported_deletion_tree_invalidates_earlier_capture(body):
     assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None
 
 
-def test_nested_scope_delete_stays_excluded_from_bounded_body():
-    assert _bounded_body_expression_loads(ast.parse("def child():\n del raw").body) is None
+def test_nested_scope_unsupported_delete_stays_excluded():
+    assert _bounded_body_expression_loads(ast.parse("def child():\n del slots[(lambda: raw)()]").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
