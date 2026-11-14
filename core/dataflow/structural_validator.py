@@ -23,6 +23,7 @@ from __future__ import annotations
 import ast
 import logging
 import re
+import unicodedata
 import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
@@ -313,7 +314,9 @@ def _enclosing_function_state(
         funcs = _extract_functions_cached(language, content)
         for f in funcs:
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
-                span_name = f.name
+                # Python AST identifiers use NFKC; spans retain source spelling.
+                span_name = (unicodedata.normalize("NFKC", f.name)
+                             if language == "python" else f.name)
                 span_lo = f.line_start
                 span_hi = f.line_end if f.line_end is not None else line
                 break
