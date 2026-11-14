@@ -41,7 +41,7 @@ def test_module_evaluator_alias_does_not_forge_clean_path(kind):
 
 
 @pytest.mark.parametrize('bindings,expected', [
-    ('import annotationlib as annotations\nsaved = annotations.get_annotations\n', {'saved'}),
+    ('import annotationlib as annotations\nsaved = annotations.get_annotations\n', {'saved', 'annotations.get_annotations'}),
     ('from inspect import get_annotations as read\nsaved: object = read\n', {'read', 'saved'}),
     ('import inspect\nfirst = second = inspect.get_annotations\nlast = second\n', {'first', 'second', 'last'}),
     ('if flag:\n    from inspect import get_annotations as read\nelse:\n    read = None\nsaved = read\n', {'read', 'saved'}),
