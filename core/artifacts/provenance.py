@@ -292,6 +292,9 @@ def provenance_of(data: Any) -> dict:
         }
     if isinstance(data, list):
         views = [provenance_of(i) for i in data if isinstance(i, dict)]
+        if len(views) != len(data):
+            # Non-object elements have no stamp; a neighbour cannot certify them.
+            views.append(provenance_of(None))
         if not views:
             return {
                 "generator": "unknown",
