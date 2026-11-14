@@ -82,7 +82,11 @@ def _tree(root: Path, *, copy_to: Path | None = None, source=False):
     records: dict[str, dict[str, str | int]] = {}
     total = 0
     directory_count = 0
-    for current, dirs, files in os.walk(root, followlinks=False):
+
+    def refuse_walk_error(error: OSError) -> None:
+        raise ValueError(f'cannot enumerate transfer tree directory: {error.filename}') from error
+
+    for current, dirs, files in os.walk(root, followlinks=False, onerror=refuse_walk_error):
         for name in dirs:
             if (Path(current) / name).is_symlink():
                 raise ValueError(f'symlink in transfer tree: {Path(current) / name}')
