@@ -789,12 +789,12 @@ def test_tier1b_source_read_is_capped(tmp_path: Path, monkeypatch):
         + "    abs_path = safe_join(BASE, path)\n"
         + "    return open(abs_path)\n"
     )
-    real = t1.read_text_capped
+    real = t1.read_contained_bytes
 
-    def tiny_cap(path, max_chars=None, **kw):
-        return real(path, 256, **kw)
+    def tiny_cap(root, path, max_bytes):
+        return real(root, path, 256)
 
-    monkeypatch.setattr(t1, "read_text_capped", tiny_cap)
+    monkeypatch.setattr(t1, "read_contained_bytes", tiny_cap)
     diff = (
         "+from werkzeug.security import safe_join\n"
         "+    abs_path = safe_join(BASE, path)\n"
