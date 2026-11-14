@@ -1545,12 +1545,13 @@ def run_codeql(
             languages). Default False adds no flag.
 
     Returns:
-        List of absolute SARIF paths the agent wrote. Empty on any
-        ordinary failure (logged). Raises ``SandboxSetupError`` when
-        the agent reports the sandbox could not engage (fail-loud
-        exit-3 contract), and re-raises ``KeyboardInterrupt`` /
-        other non-``Exception`` aborts after killing the agent's
-        process group.
+        Absolute paths of new or changed language SARIFs, plus a separate
+        execution diagnostic when the agent exits unsuccessfully. Unchanged
+        prior reports remain on disk but are excluded. Missing prerequisites
+        and timeouts return no reports. Diagnostic-write failures are logged
+        while recovered reports remain eligible. Raises ``SandboxSetupError``
+        when the sandbox could not engage (exit 3), and re-raises interrupts
+        and other non-``Exception`` aborts after killing the agent group.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     if shutil.which("codeql") is None:
@@ -1707,8 +1708,8 @@ def run_codeql(
         except (OSError, ValueError):
             logger.warning("Could not persist CodeQL execution diagnostic; recovered reports retained")
         # Don't return early — the agent may have produced partial
-        # SARIFs (one language succeeded, another failed). Glob and
-        # return whatever's there.
+        # SARIFs (one language succeeded, another failed). Keep the
+        # recovered outputs that pass the freshness check below.
 
     # Glob for the agent's SARIF outputs. Naming matches the old
     # in-tree runner so downstream code (SARIF merge, coverage
@@ -2878,9 +2879,9 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
         sarif_sha256 = ""
         findings = None
 
-    # Exit code: only semgrep packs write a .exit file. CodeQL only emits
-    # a SARIF on rc==0 (run_codeql appends only on success), so 0 is
-    # accurate when we can see the SARIF.
+    # Semgrep packs retain a .exit sidecar. Ordinary CodeQL language
+    # reports describe successful analyses; the separate stage diagnostic
+    # carries the unsuccessful agent invocation's exit code.
     if tool == "semgrep":
         exit_file = out_dir / f"{stem}.exit"
         parsed_exit = _pack_exit_code(exit_file)
