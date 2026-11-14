@@ -426,18 +426,67 @@ class TestSummarizeAndWrite:
         object, and flag the summary as tampered."""
         fifo = tmp_path / summary_mod.DENIALS_FILE
         os.mkfifo(fifo)
+        import errno
+        import stat
+        import time
+        from contextlib import ExitStack
+        from core.testing.threads import retiring_threads
+
         done = []
+        finished = threading.Event()
+        identity = fifo.stat()
 
         def _run():
-            done.append(summary_mod.summarize_and_write(tmp_path))
+            try:
+                done.append(summary_mod.summarize_and_write(tmp_path))
+            finally:
+                finished.set()
 
         t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=10)
-        assert not t.is_alive(), (
-            "summarize_and_write hung on a planted FIFO at the legacy "
-            "denials path"
-        )
+        with ExitStack() as peers:
+            peer = None
+
+            def release_reader():
+                nonlocal peer
+                if peer is not None or t.ident is None:
+                    return
+                deadline = time.monotonic() + 5
+                while t.is_alive() and not finished.is_set():
+                    paths = [fifo, *tmp_path.glob(f"{fifo.name}.summarising.*")]
+                    for path in paths:
+                        try:
+                            stamp = path.lstat()
+                        except FileNotFoundError:
+                            continue
+                        if not stat.S_ISFIFO(stamp.st_mode) or (
+                            stamp.st_dev, stamp.st_ino
+                        ) != (identity.st_dev, identity.st_ino):
+                            continue
+                        try:
+                            peer = os.open(
+                                path, os.O_WRONLY | os.O_NONBLOCK
+                                | getattr(os, "O_NOFOLLOW", 0),
+                            )
+                        except OSError as error:
+                            if error.errno not in (errno.ENXIO, errno.ENOENT):
+                                raise
+                        else:
+                            peers.callback(os.close, peer)
+                            opened = os.fstat(peer)
+                            assert (opened.st_dev, opened.st_ino) == (
+                                identity.st_dev, identity.st_ino,
+                            )
+                            return
+                    assert time.monotonic() < deadline, "summary reader never offered a peer"
+                    finished.wait(0.005)
+
+            with retiring_threads([t], release=release_reader, timeout=10):
+                t.start()
+                t.join(timeout=10)
+                assert not t.is_alive(), (
+                    "summarize_and_write hung on a planted FIFO at the legacy "
+                    "denials path"
+                )
         result = done[0]
         assert result is not None
         assert "non-regular" in result["planted_object"]
