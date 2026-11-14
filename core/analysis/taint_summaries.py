@@ -433,17 +433,45 @@ def _comprehension_target_scope(
     return scope[0], frozenset(reads)
 
 
-def _scoped_comprehension_target_parts(
-    target: ast.AST,
-) -> tuple[frozenset[str], tuple[ast.expr, ...]] | None:
-    """Target read expressions in a closed lambda/await grammar."""
-    scope = _comprehension_target_parts(target)
-    if scope is None:
-        return None
-    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg, ast.Await)
-    if not all(isinstance(node, allowed) for part in scope[1] for node in ast.walk(part)):
-        return None
-    return scope
+def _validated_expression_targets(
+    expression: ast.expr | None,
+) -> dict[ast.AST, tuple[frozenset[str], tuple[ast.expr, ...]]] | None:
+    """Validate once, retaining target parts for the scoped read traversal.
+
+    Target address expressions have their own closed grammar. The flag
+    follows all descendants, including nested comprehension scopes, so
+    assignment expressions and yields cannot hide beneath a nested payload.
+    """
+    targets: dict[ast.AST, tuple[frozenset[str], tuple[ast.expr, ...]]] = {}
+    if expression is None:
+        return targets
+    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
+               ast.Store, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)
+    pending: list[tuple[ast.AST, bool]] = [(expression, False)]
+    while pending:
+        node, target_read = pending.pop()
+        if target_read and isinstance(node, (ast.NamedExpr, ast.Yield, ast.YieldFrom)):
+            return None
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            if not node.generators:
+                return None
+            for gen in node.generators:
+                scope = _comprehension_target_parts(gen.target)
+                if scope is None:
+                    return None
+                targets[gen.target] = scope
+                pending.extend((part, True) for part in scope[1])
+                pending.append((gen.iter, target_read))
+                pending.extend((condition, target_read) for condition in gen.ifs)
+            payload = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
+            pending.extend((part, target_read) for part in payload)
+        else:
+            if not isinstance(node, allowed):
+                return None
+            if isinstance(node, ast.NamedExpr) and not isinstance(node.target, ast.Name):
+                return None
+            pending.extend((child, target_read) for child in ast.iter_child_nodes(node))
+    return targets
 
 
 def _lambda_body_bindings(body: ast.expr) -> frozenset[str] | None:
@@ -483,6 +511,9 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     Unsupported nodes never certify absence; existing refusals stay active.
     """
     if expr is None:
+        return frozenset()
+    targets = _validated_expression_targets(expr)
+    if targets is None:
         return frozenset()
     allowed = _scope_free_expression_nodes()
     names: set[str] = set()
@@ -524,7 +555,7 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             if not node.generators:
                 return frozenset()
             scopes = [
-                _scoped_comprehension_target_parts(gen.target)
+                targets[gen.target]
                 for gen in node.generators
             ]
             if any(scope is None for scope in scopes):
@@ -559,20 +590,7 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
 
 def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     """Closed child-expression grammar with complete comprehension targets."""
-    if expression is None:
-        return True
-    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
-               ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
-               ast.comprehension, ast.Store, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)
-    for node in ast.walk(expression):
-        if not isinstance(node, allowed):
-            return False
-        if isinstance(node, ast.NamedExpr) and not isinstance(node.target, ast.Name):
-            return False
-        if (isinstance(node, ast.comprehension)
-                and _scoped_comprehension_target_parts(node.target) is None):
-            return False
-    return True
+    return _validated_expression_targets(expression) is not None
 
 
 def _match_literal_expression(expression: ast.expr) -> bool:

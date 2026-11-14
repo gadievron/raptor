@@ -51,8 +51,8 @@ def test_lambda_parameters_mask_outer_cell(default):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("default", ["lambda: [raw for slots[[raw for item in ()]] in ()]", "lambda: (yield [raw for box[[raw for item in ()]] in ()])",
-                                    "lambda: (lambda value=[raw for slots[[raw for item in ()]] in ()]: value)"],
+@pytest.mark.parametrize("default", ["lambda: [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]", "lambda: (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])",
+                                    "lambda: (lambda value=[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]: value)"],
                          ids=["comprehension", "generator-output", "nested-default"])
 def test_unsupported_lambda_descendant_invalidates_complete_body(default):
     source = f"raw\ndef child(value={default}):\n return value"
@@ -60,7 +60,7 @@ def test_unsupported_lambda_descendant_invalidates_complete_body(default):
 
 
 def test_child_return_comprehension_stays_outside_body_grammar():
-    source = "def child(value=lambda: raw):\n return [raw for slots[[raw for item in ()]] in ()]"
+    source = "def child(value=lambda: raw):\n return [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]"
     assert _bounded_body_expression_loads(ast.parse(source).body) is None
 
 
