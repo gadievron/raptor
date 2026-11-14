@@ -106,14 +106,21 @@ def test_fifo_never_wedges_the_copy(tmp_path, monkeypatch, src_tree):
         done.set()
 
     t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    assert done.wait(10), "_copy_etc_tree blocked on the FIFO"
+    from core.testing.threads import retiring_threads
 
-    fifo = dst / "wedge.fifo"
-    assert stat.S_ISFIFO(os.lstat(fifo).st_mode)
-    assert stat.S_IMODE(os.lstat(fifo).st_mode) == 0o620
-    # The rest of the tree still copied.
-    assert (dst / "restricted.conf").read_text() == "secret=1\n"
+    with retiring_threads([t], release=lambda: None, timeout=10):
+        try:
+            t.start()
+            assert done.wait(10), "_copy_etc_tree blocked on the FIFO"
+
+            fifo = dst / "wedge.fifo"
+            assert stat.S_ISFIFO(os.lstat(fifo).st_mode)
+            assert stat.S_IMODE(os.lstat(fifo).st_mode) == 0o620
+            # The rest of the tree still copied.
+            assert (dst / "restricted.conf").read_text() == "secret=1\n"
+        finally:
+            if t.ident is not None:
+                t.join(timeout=10)
 
 
 def test_socket_entries_skipped_silently(tmp_path, monkeypatch):
