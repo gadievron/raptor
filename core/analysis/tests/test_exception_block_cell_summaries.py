@@ -60,8 +60,8 @@ def test_own_bindings_mask_exception_block_cells(header, body):
 @pytest.mark.parametrize("body", [
     "try:\n pass\nexcept Exception as error:\n pass",
     "try:\n pass\nexcept* Exception:\n raw",
-    "try:\n pass\nfinally:\n import module",
-], ids=["bound-handler", "exception-group", "later-import"])
+    "try:\n pass\nfinally:\n global unsupported",
+], ids=["bound-handler", "exception-group", "later-declaration"])
 def test_unsupported_exception_tree_invalidates_earlier_capture(body):
     assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None
 

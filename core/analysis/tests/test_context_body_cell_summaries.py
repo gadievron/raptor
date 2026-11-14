@@ -67,7 +67,7 @@ def test_whole_function_bindings_mask_context_cells(header, body):
 @pytest.mark.parametrize("body", [
     "with manager as slots[(lambda: raw)()]:\n pass",
     "with manager as slots[(raw := 0)]:\n pass",
-    "with raw:\n import module",
+    "with raw:\n global unsupported",
 ], ids=["lambda-target", "walrus-target", "body-import"])
 def test_unsupported_context_tree_invalidates_earlier_capture(body):
     assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None

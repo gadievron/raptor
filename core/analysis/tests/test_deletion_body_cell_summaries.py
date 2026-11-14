@@ -53,8 +53,8 @@ def test_own_bindings_mask_deletion_cells(header, body):
 
 
 @pytest.mark.parametrize("body", ["del slots[(lambda: raw)()]", "del slots[(raw := 0)]",
-                                  "del raw.member\nimport module"],
-                         ids=["lambda-target", "walrus-target", "later-import"])
+                                  "del raw.member\nglobal unsupported"],
+                         ids=["lambda-target", "walrus-target", "later-declaration"])
 def test_unsupported_deletion_tree_invalidates_earlier_capture(body):
     assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None
 
