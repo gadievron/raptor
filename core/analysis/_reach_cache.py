@@ -441,6 +441,10 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
         value = data.get(key, [])
         if not isinstance(value, list):
             raise ValueError(f"field {key} must be a list")
+        # test_paths is the sole scalar-list field; every other field
+        # encodes records as arrays, never iterable strings or objects.
+        if key != "test_paths" and any(not isinstance(row, list) for row in value):
+            raise ValueError(f"field {key} records must be lists")
         return value
 
     return _AdjacencyIndex(
