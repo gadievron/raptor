@@ -99,6 +99,10 @@ class TaintSummary:
     Absence of a ``param_idx`` from the set means that param does
     NOT taint return.
 
+    Async functions also retain every parameter directly in the returned
+    coroutine's frame. Body-return effects are conservatively unioned with
+    that retention; they do not imply the body ran at coroutine creation.
+
     ``call_arg_taint`` is a frozenset of ``(callee_name, arg_idx,
     param_idx)`` triples — for each call site in this function,
     which of MY params, if tainted at the call, taints the arg at
@@ -1332,6 +1336,12 @@ def _compute_one_summary(
                     )
                     for pi, _ in arg_state:
                         call_arg_taint.add((callable_name, arg_idx, pi))
+
+    if isinstance(fn_ast, ast.AsyncFunctionDef):
+        # Calling an async function returns a coroutine retaining its frame
+        # arguments, even when its eventual body result ignores them. Await
+        # currently shares these effects and remains conservative too.
+        return_effects.update((pi, "", -1) for pi in range(len(params)))
 
     # Binding-shape facts for callers' positional/keyword mapping
     # (params lists vararg/kwonly/kwarg names as ordinary entries).
