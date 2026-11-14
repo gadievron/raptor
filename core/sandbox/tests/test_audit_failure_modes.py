@@ -567,9 +567,11 @@ class TestStaleAuditConfigSweep:
             prefix="raptor-audit-cfg-test-", suffix=".json",
             dir=tempfile.gettempdir(),
         )
-        os.write(fd, b"{}")
-        os.close(fd)
         try:
+            try:
+                os.write(fd, b"{}")
+            finally:
+                os.close(fd)
             _sweep_stale_audit_configs()
             assert os.path.exists(p), "sweep deleted a fresh config"
         finally:
