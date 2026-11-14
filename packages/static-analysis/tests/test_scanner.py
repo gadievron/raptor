@@ -146,14 +146,16 @@ class TestRunCodeqlDelegation:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         # Simulate the agent having written two language SARIFs.
-        (out_dir / "codeql_cpp.sarif").write_text("{}")
-        (out_dir / "codeql_python.sarif").write_text("{}")
+        def complete(**kwargs):
+            (out_dir / "codeql_cpp.sarif").write_text("{}")
+            (out_dir / "codeql_python.sarif").write_text("{}")
+            return "", ""
         # And a non-matching file we must NOT pick up.
         (out_dir / "scan_metrics.json").write_text("{}")
 
         with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
-            mock_proc.return_value = _fake_popen()
+            mock_proc.return_value = _fake_popen(communicate_side_effect=complete)
             result = run_codeql(tmp_path, out_dir, languages=None)
 
         assert sorted(result) == sorted([
@@ -167,12 +169,14 @@ class TestRunCodeqlDelegation:
         successful one's findings."""
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        (out_dir / "codeql_python.sarif").write_text("{}")
+        def complete(**kwargs):
+            (out_dir / "codeql_python.sarif").write_text("{}")
+            return "", "cpp build failed"
 
         with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen(
-                returncode=1, stderr="cpp build failed",
+                returncode=1, communicate_side_effect=complete,
             )
             result = run_codeql(tmp_path, out_dir, languages=["python", "cpp"])
 
@@ -810,3 +814,58 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     if not merge_fails:
         assert len(parse_sarif_findings(out / 'combined.sarif')) == expected_count
     assert all(Path(path).exists() for path in inputs)
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_codeql_excludes_unchanged_prior_reports(tmp_path, returncode):
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "codeql_python.sarif"
+    report.write_text('{"version":"2.1.0","runs":[]}')
+    before = report.read_bytes()
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+         mock_module_attribute(_scanner_mod, "subprocess", "Popen",
+                               return_value=_fake_popen(returncode=returncode)) as spawn:
+        assert run_codeql(tmp_path, out) == []
+    spawn.assert_called_once()
+    assert report.read_bytes() == before
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_codeql_accepts_replaced_report_with_same_bytes(tmp_path, returncode):
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "codeql_python.sarif"
+    content = '{"version":"2.1.0","runs":[]}'
+    report.write_text(content)
+    replacement = out / "replacement"
+    replacement.write_text(content)
+    def complete(**kwargs):
+        replacement.replace(report)
+        return "", ""
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+         mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
+             returncode=returncode, communicate_side_effect=complete)) as spawn:
+        assert run_codeql(tmp_path, out) == [str(report)]
+    spawn.assert_called_once()
+    assert report.read_text() == content
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_codeql_accepts_report_rewritten_in_place(tmp_path, returncode):
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "codeql_python.sarif"
+    report.write_text("old")
+    inode = report.stat().st_ino
+    content = '{"version":"2.1.0","runs":[]}'
+    def complete(**kwargs):
+        report.write_text(content)
+        return "", ""
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+         mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
+             returncode=returncode, communicate_side_effect=complete)) as spawn:
+        assert run_codeql(tmp_path, out) == [str(report)]
+    spawn.assert_called_once()
+    assert report.stat().st_ino == inode
+    assert report.read_text() == content
