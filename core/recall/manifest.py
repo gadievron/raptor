@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -351,8 +352,8 @@ def parse_manifest(data: Any) -> RecallManifest:
             _parse_expected(e, f"expected[{i}]", errors)
             for i, e in enumerate(raw_expected)
         ]
-        ids = [e.id for e in expected if e.id]
-        dupes = {i for i in ids if ids.count(i) > 1}
+        ids = Counter(e.id for e in expected if isinstance(e.id, str) and e.id)
+        dupes = {ident for ident, count in ids.items() if count > 1}
         if dupes:
             errors.append(f"duplicate expected ids: {sorted(dupes)}")
 
