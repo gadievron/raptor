@@ -521,6 +521,9 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             pending.append(_ExpressionScopeEvent(bindings, True, reads))
         elif isinstance(node, ast.Await):
             pending.append(node.value)
+        elif isinstance(node, (ast.Yield, ast.YieldFrom)):
+            if node.value is not None:
+                pending.append(node.value)
         elif isinstance(node, ast.NamedExpr):
             if not isinstance(node.target, ast.Name):
                 return frozenset()
@@ -538,7 +541,7 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
         return True
     allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
                ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
-               ast.comprehension, ast.Store, ast.NamedExpr, ast.Await)
+               ast.comprehension, ast.Store, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)
     for node in ast.walk(expression):
         if not isinstance(node, allowed):
             return False
