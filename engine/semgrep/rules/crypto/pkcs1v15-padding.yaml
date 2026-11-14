@@ -4,8 +4,10 @@ rules:
 
   - id: raptor.crypto.rsa.pkcs1v15-encrypt.java
     message: >
-      RSA with PKCS#1 v1.5 padding is vulnerable to Bleichenbacher oracle attacks.
-      Use RSA/ECB/OAEPWithSHA-256AndMGF1Padding instead.
+      RSA cipher construction is a padding-oracle review candidate. Check the
+      selected provider's defaults for bare RSA, the operation performed and
+      whether the surrounding protocol exposes distinguishable decryption
+      failures. Prefer an explicit OAEP transformation for new encryption.
     languages: [java, kotlin]
     severity: HIGH
     patterns:
@@ -23,8 +25,10 @@ rules:
 
   - id: raptor.crypto.rsa.pkcs1v15-encrypt.python
     message: >
-      PKCS1_v1_5 encryption is vulnerable to Bleichenbacher oracle attacks.
-      Use Crypto.Cipher.PKCS1_OAEP instead.
+      PKCS1_v1_5 cipher construction is a padding-oracle review candidate.
+      Check how the object is used and whether the surrounding protocol exposes
+      distinguishable decryption failures. Prefer Crypto.Cipher.PKCS1_OAEP for
+      new encryption.
     languages: [python]
     severity: HIGH
     pattern: Crypto.Cipher.PKCS1_v1_5.new(...)
@@ -101,8 +105,10 @@ rules:
 
   - id: raptor.crypto.rsa.pkcs1v15.node
     message: >
-      RSA_PKCS1_PADDING is vulnerable to Bleichenbacher oracle attacks.
-      Use RSA_PKCS1_OAEP_PADDING instead.
+      RSA_PKCS1_PADDING use is a padding-oracle review candidate. Review the
+      encryption/decryption operation, runtime protections and whether the
+      surrounding protocol exposes distinguishable decryption failures.
+      Prefer RSA_PKCS1_OAEP_PADDING for new encryption.
     languages: [javascript, typescript]
     severity: HIGH
     pattern-either:
