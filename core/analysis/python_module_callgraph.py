@@ -170,6 +170,8 @@ class PyModuleCallGraph:
     # Negative-only candidates for retained annotation evaluators.
     # These never establish trusted import or callable identities.
     annotation_evaluator_aliases: frozenset[str] = frozenset()
+    # Separate negative aliases for reflective attribute readers/checks.
+    reflective_reader_aliases: frozenset[str] = frozenset()
 
     def binding_names(self, function: ast.AST) -> frozenset[str]:
         """Identities bound in this function or its enclosing function frames."""
@@ -680,17 +682,21 @@ def module_import_map(tree: ast.Module) -> dict[str, str]:
     return out
 
 
-def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
-    """Module names and dotted projections that may retain an evaluator.
+def _module_callable_aliases(
+    tree: ast.Module, *, module_names: frozenset[str],
+    attributes: tuple[str, ...], direct_names: tuple[str, ...] = (),
+) -> frozenset[str]:
+    """Negative module-level callable candidates from simple assignment edges.
 
-    Close simple assignment edges over module/evaluator candidates. Ignoring
-    order, overwrites and conditional execution is conservative: candidates
-    only withhold certification, never establish trusted identities. Nested
-    scope bodies, containers, destructuring and returned aliases are excluded.
+    Order, overwrites and conditional execution are ignored conservatively.
+    Candidates only withhold certification, never establish trusted identities.
+    Nested scope bodies, containers, destructuring and returned aliases are
+    excluded. Each module/callable fact is queued once; only module facts
+    create the fixed attribute projections, so cycles remain finite.
     """
-    modules = {"annotationlib", "inspect"}
-    evaluators = {name + ".get_annotations" for name in modules}
-    bound_evaluators: set[str] = set()
+    modules = set(module_names)
+    callables = set(direct_names) | {f"{name}.{attr}" for name in modules for attr in attributes}
+    bound_callables: set[str] = set()
     assignments: dict[str, set[str]] = {}
     pending: list[ast.AST] = list(reversed(tree.body))
     while pending:
@@ -699,19 +705,20 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
             continue
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in ("annotationlib", "inspect"):
+                if alias.name in module_names:
                     bound = alias.asname or alias.name
                     modules.add(bound)
-                    evaluators.add(bound + ".get_annotations")
+                    projections = {f"{bound}.{attr}" for attr in attributes}
+                    callables.update(projections)
                     if alias.asname:
-                        bound_evaluators.add(bound + ".get_annotations")
+                        bound_callables.update(projections)
         elif (isinstance(node, ast.ImportFrom) and not node.level
-              and node.module in ("annotationlib", "inspect")):
+              and node.module in module_names):
             for alias in node.names:
-                if alias.name == "get_annotations":
+                if alias.name in attributes:
                     bound = alias.asname or alias.name
-                    evaluators.add(bound)
-                    bound_evaluators.add(bound)
+                    callables.add(bound)
+                    bound_callables.add(bound)
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             value = node.value
             chain = _attribute_chain(value) if value is not None else None
@@ -722,25 +729,42 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
                 assignments.setdefault(".".join(chain), set()).update(names)
         pending.extend(reversed(list(ast.iter_child_nodes(node))))
 
-    # Each typed name is queued once; module facts create one evaluator
-    # projection, never another module projection. Cycles cannot grow facts
-    # beyond the finite assignment names and their evaluator projections.
     work = deque([(False, name) for name in modules]
-                 + [(True, name) for name in evaluators])
+                 + [(True, name) for name in callables])
     while work:
-        is_evaluator, name = work.popleft()
-        if not is_evaluator:
-            projection = name + ".get_annotations"
-            if projection not in evaluators:
-                evaluators.add(projection)
-                work.append((True, projection))
+        is_callable, name = work.popleft()
+        if not is_callable:
+            for attr in attributes:
+                projection = f"{name}.{attr}"
+                if projection not in callables:
+                    callables.add(projection)
+                    work.append((True, projection))
         for target in assignments.get(name, ()):
-            known = evaluators if is_evaluator else modules
-            bound_evaluators.add(target if is_evaluator else target + ".get_annotations")
+            known = callables if is_callable else modules
+            if is_callable:
+                bound_callables.add(target)
+            else:
+                bound_callables.update(f"{target}.{attr}" for attr in attributes)
             if target not in known:
                 known.add(target)
-                work.append((is_evaluator, target))
-    return frozenset(bound_evaluators)
+                work.append((is_callable, target))
+    return frozenset(bound_callables)
+
+
+def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
+    """Negative aliases of the SDK annotation-evaluation APIs."""
+    return _module_callable_aliases(
+        tree, module_names=frozenset({"annotationlib", "inspect"}),
+        attributes=("get_annotations",),
+    )
+
+
+def _module_reflective_reader_aliases(tree: ast.Module) -> frozenset[str]:
+    """Negative aliases of reflective attribute readers/checks."""
+    return _module_callable_aliases(
+        tree, module_names=frozenset({"builtins"}),
+        attributes=("getattr", "hasattr"), direct_names=("getattr", "hasattr"),
+    )
 
 
 def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
@@ -2595,6 +2619,7 @@ def build_python_module_callgraph(
         namespace_unprovable=dyn_whole,
         _scope_bindings=scope_bindings,
         annotation_evaluator_aliases=_module_annotation_evaluator_aliases(tree),
+        reflective_reader_aliases=_module_reflective_reader_aliases(tree),
     )
 
 
