@@ -82,7 +82,7 @@ def test_owned_report_inputs_keep_partitions_optional_without_broad_upload(tmp_p
 
 def test_artifact_names_distinguish_existing_callers_paths_and_attempts():
     callers = []
-    for workflow in (ROOT / '.github/workflows').glob('*.yml'):
+    for workflow in (ROOT / '.github/workflows').glob('*.y*ml'):
         for block in re.split(r'(?=^  [a-z][a-z0-9_-]*:\n)', workflow.read_text(), flags=re.M):
             if 'uses: ./.github/workflows/_tier.yml' in block:
                 callers.append(field(block, 'tier'))
