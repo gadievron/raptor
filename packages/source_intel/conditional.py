@@ -59,10 +59,11 @@ def _index_file(path_str: str) -> tuple[ConditionalBlock, ...]:
 
     Returns an empty tuple when the file can't be read or contains
     no preprocessor conditionals. The cache key includes the file's
-    (mtime_ns, size) alongside the path, so an edited file re-parses
-    automatically — a path-only key would keep serving pre-edit
-    blocks to fresh analyze() runs in long-lived processes, attaching
-    wrong #if conditions to new match lines.
+    (mtime_ns, size) alongside the path, so changes to those metadata
+    values select a fresh entry. This is a metadata heuristic, not a
+    content identity check: same-size edits with preserved timestamps
+    can reuse earlier blocks, and the key does not bind a concurrent
+    read to the stat snapshot.
     """
     try:
         st = Path(path_str).stat()
@@ -145,6 +146,6 @@ def enclosing_condition(file_path: str, line: int) -> str | None:
 
 
 def clear_cache() -> None:
-    """Drop the file-index cache. Stat-keyed invalidation already
-    covers file edits; this is the explicit whole-cache reset."""
+    """Drop the file-index cache, including entries whose content may
+    have changed without changing the recorded stat metadata."""
     _index_file_stat.cache_clear()
