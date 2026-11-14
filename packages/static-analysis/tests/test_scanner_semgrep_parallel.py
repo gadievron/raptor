@@ -825,11 +825,11 @@ def test_parallel_scanner_and_runner_share_one_scope_warning(tmp_path, monkeypat
     log = Mock()
     monkeypatch.setattr(runner, "_scope_upgrade_warned", False)
     monkeypatch.setattr(runner, "is_available", lambda: True)
-    monkeypatch.setattr(runner, "scope_isolation_available", lambda: False)
+    monkeypatch.setattr(runner, "scope_isolation_available", lambda *args: False)
     monkeypatch.setattr(runner, "version", lambda: "1.79.0")
     monkeypatch.setattr(runner, "logger", log)
     monkeypatch.setattr(_scanner_mod, "logger", log)
-    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "scope_isolation_available", lambda: False)
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "scope_isolation_available", lambda *args: False)
     monkeypatch.setattr(_scanner_mod.semgrep_pkg, "build_cmd", stop)
     monkeypatch.setattr(runner, "build_cmd", stop)
 
