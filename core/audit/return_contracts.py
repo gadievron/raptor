@@ -189,7 +189,7 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
     try:
         paths = sorted(
             p for p in Path(target_path).rglob("*")
-            if p.is_file() and p.suffix in _WUR_SCAN_SUFFIXES
+            if p.is_file() and p.suffix.lower() in _WUR_SCAN_SUFFIXES
         )
     except OSError:
         return frozenset()
