@@ -552,14 +552,18 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             if args.kwarg is not None:
                 parameters.append(args.kwarg)
             if (statement.decorator_list or statement.type_params
-                    or statement.returns is not None or args.defaults
-                    or any(default is not None for default in args.kw_defaults)
+                    or statement.returns is not None
                     or any(parameter.annotation is not None for parameter in parameters)
                     or len(statement.body) != 1 or not isinstance(statement.body[0], ast.Return)):
                 return None
+            defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
+            allowed = _scope_free_expression_nodes()
+            if not all(isinstance(node, allowed) for default in defaults for node in ast.walk(default)):
+                return None
+            # Defaults belong to the enclosing scope, before child parameters.
+            expressions.extend(defaults)
             value = statement.body[0].value
             if value is not None:
-                allowed = _scope_free_expression_nodes()
                 if not all(isinstance(node, allowed) for node in ast.walk(value)):
                     return None
                 target_reads.update(
