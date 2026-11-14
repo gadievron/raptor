@@ -106,10 +106,14 @@ class TestGenerateFridaScript:
 class TestParseObservations:
     def _write_log(self, lines):
         fd, path = tempfile.mkstemp(suffix=".jsonl")
-        os.close(fd)
         p = Path(path)
-        p.write_text("\n".join(lines))
-        return p
+        try:
+            os.close(fd)
+            p.write_text("\n".join(lines))
+            return p
+        except BaseException:
+            p.unlink(missing_ok=True)
+            raise
 
     def test_parses_call_and_return(self):
         log = self._write_log([
