@@ -182,3 +182,58 @@ def test_generated_source_export_does_not_rebind_backwards_end_column():
     rows = document['runs'][0]['results']
     assert len(rows) == 1
     assert rows[0]['locations'][0]['physicalLocation']['region'] == {'startLine': 8, 'startColumn': 9}
+
+
+@pytest.mark.parametrize("reason", ["file_cap_hit", "source_cap_hit", "unreadable"])
+def test_empty_wrapper_summary_retains_input_limitations(tmp_path, monkeypatch, reason):
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    _wire_stage(monkeypatch, FakeSemgrepResult())
+    monkeypatch.setattr("core.analysis.java_source_summaries.scan_tree",
+                        lambda _path: ([], {reason: 1}, 1))
+    def unexpected(*args, **kwargs):
+        pytest.fail("incomplete empty summary must not invoke Semgrep")
+    monkeypatch.setattr("packages.semgrep.runner.is_available", unexpected)
+    monkeypatch.setattr("packages.semgrep.runner.run_rule", unexpected)
+    paths, names = _scanner.run_source_wrapper_stage(repo, out)
+    assert names == []
+    assert paths == [str(out / "source-wrappers.sarif")]
+    run = json.loads(Path(paths[0]).read_text())["runs"][0]
+    assert run["results"] == []
+    note = run["invocations"][0]["toolExecutionNotifications"][0]
+    assert note["properties"]["source_wrapper_refusals"] == {reason: 1}
+    assert scan_execution_status(generate_scan_metrics(paths)) == "partial"
+
+
+def test_nonqualifying_wrapper_summary_remains_empty(tmp_path, monkeypatch):
+    _wire_stage(monkeypatch, FakeSemgrepResult())
+    monkeypatch.setattr("core.analysis.java_source_summaries.scan_tree",
+                        lambda _path: ([], {"overload_ambiguity": 1}, 1))
+    assert _scanner.run_source_wrapper_stage(tmp_path, tmp_path / "out") == ([], [])
+
+
+def test_partial_wrapper_summary_retains_findings_and_refusal_counts(tmp_path, monkeypatch):
+    from core.reporting.scan_coverage import scan_execution_status
+    from core.sarif.parser import generate_scan_metrics
+    from packages.semgrep.models import SemgrepFinding, SemgrepResult
+
+    out = tmp_path / "out"
+    out.mkdir()
+    _wire_stage(monkeypatch, SemgrepResult(findings=[
+        SemgrepFinding("App.java", 1, rule_id="wrapper.xss"),
+    ]))
+    monkeypatch.setattr("core.analysis.java_source_summaries.scan_tree",
+                        lambda _path: ([SimpleNamespace(name="getTheParameter")],
+                                       {"source_cap_hit": 2, "overload_ambiguity": 3}, 5))
+    paths, names = _scanner.run_source_wrapper_stage(tmp_path, out)
+    assert names == ["getTheParameter"]
+    run = json.loads(Path(paths[0]).read_text())["runs"][0]
+    assert len(run["results"]) == 1
+    note = run["invocations"][0]["toolExecutionNotifications"][0]
+    assert note["properties"]["source_wrapper_refusals"] == {"source_cap_hit": 2}
+    assert scan_execution_status(generate_scan_metrics(paths)) == "partial"
