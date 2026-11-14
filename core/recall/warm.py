@@ -49,6 +49,8 @@ def load_suppression_records(path: Path) -> list[dict[str, Any]]:
             continue
         if isinstance(rec, dict):
             records.append(rec)
+        else:
+            records.append({"_malformed": True})
     return records
 
 
