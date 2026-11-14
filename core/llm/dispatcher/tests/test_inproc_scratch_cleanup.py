@@ -50,8 +50,17 @@ def _owned_dir(prefix: str, pid: int, request: pytest.FixtureRequest) -> Path:
     d = Path(tempfile.gettempdir()) / (
         f"{prefix}{uuid.uuid4().hex[:8]}-fixture"
     )
+    from contextlib import ExitStack, suppress
+
     d.mkdir()
-    request.addfinalizer(lambda: shutil.rmtree(d, ignore_errors=True))
+    cleanup = ExitStack()
+    cleanup.callback(shutil.rmtree, d, ignore_errors=True)
+    try:
+        request.addfinalizer(cleanup.close)
+    except BaseException:
+        with suppress(BaseException):
+            cleanup.close()
+        raise
     (d / OWNER_MARKER_NAME).write_text(
         json.dumps({"pid": pid, "created": time.time()}),
         encoding="utf-8",
