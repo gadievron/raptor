@@ -691,6 +691,10 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         node = pending.pop()
         if _match_literal_expression(node):
             continue
+        if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd)
+                and isinstance(node.operand, ast.Constant)
+                and type(node.operand.value) in (int, float, complex)):
+            continue
         if isinstance(node, (ast.Tuple, ast.List)):
             if not isinstance(node.ctx, ast.Load):
                 return False
