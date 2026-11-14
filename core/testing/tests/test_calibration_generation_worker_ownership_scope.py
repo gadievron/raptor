@@ -13,46 +13,46 @@ def exercise(phase, tmp_path):
     borrowed = (native.memo._CACHE, native.cal._CACHE_DIR, native.cal.load_or_calibrate)
     borrowed_env = {key: value for key, value in native.os.environ.items() if key == "CAL_IDENTITY_TEST"}
     patch = pytest.MonkeyPatch()
-    native.isolated_cache.__wrapped__(tmp_path, patch)
-    binary = native.binary.__wrapped__(tmp_path)
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            state = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.errors = state["errors"]
-            self.loader = native.cal.load_or_calibrate
-            cells = dict(zip(self.loader.__code__.co_freevars, (c.cell_contents for c in self.loader.__closure__)))
-            self.started, self.release = cells["old_started"], cells["release_old"]
-            self.old, self.new, self.calls = cells["old"], cells["new"], cells["calls"]
-            self.results = kwargs["args"][0]
-            self.index = len(threads)
-            self.completed, self.joins = False, []
-            def running(*args, **kwargs):
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if self.index == 0 and phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if self.index == 0 and phase.startswith("after-"):
-                assert self.started.wait(5), "actual local loader was not entered"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            assert native.cal.load_or_calibrate is self.loader
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.test_old_waiters_do_not_receive_or_overwrite_new_generation
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        native.isolated_cache.__wrapped__(tmp_path, patch)
+        binary = native.binary.__wrapped__(tmp_path)
+        class Thread(real):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                state = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.errors = state["errors"]
+                self.loader = native.cal.load_or_calibrate
+                cells = dict(zip(self.loader.__code__.co_freevars, (c.cell_contents for c in self.loader.__closure__)))
+                self.started, self.release = cells["old_started"], cells["release_old"]
+                self.old, self.new, self.calls = cells["old"], cells["new"], cells["calls"]
+                self.results = kwargs["args"][0]
+                self.index = len(threads)
+                self.completed, self.joins = False, []
+                def running(*args, **kwargs):
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if self.index == 0 and phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if self.index == 0 and phase.startswith("after-"):
+                    assert self.started.wait(5), "actual local loader was not entered"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                assert native.cal.load_or_calibrate is self.loader
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.test_old_waiters_do_not_receive_or_overwrite_new_generation
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(patch, binary), threads
     finally:
         try:
