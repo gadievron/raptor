@@ -6,9 +6,9 @@ rules:
 
   - id: raptor.crypto.nonce.reuse.spec.java
     message: >
-      Potential nonce reuse. The same GCMParameterSpec instance initialises two
-      Cipher operations, so both use the same IV under (typically) the same key.
-      Generate a fresh nonce per encryption.
+      Candidate nonce reuse: two init calls share a GCMParameterSpec expression.
+      Confirm the receiver APIs, encryption modes, effective keys and value
+      stability before concluding that encryption operations reuse a nonce.
     languages: [java, kotlin]
     severity: HIGH
     patterns:
