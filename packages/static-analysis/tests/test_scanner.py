@@ -645,6 +645,8 @@ class TestJoinCodeQLStage:
     for merge_fails in (False, True) for removed_lines in ([], [1], [1, 2])
 ] + [
     (True, [], 0, False, {}, False, 'merge-log-refused', None),
+    (False, [], 0, False, {}, False, 'config-error', None),
+    (False, [], 0, False, {}, False, 'config-write-refused', None),
     (False, [], 1, False, {}, False, False, None),
     (False, [], 2, False, {}, False, False, None),
     (False, [], 1, False, {}, True, False, None),
@@ -739,6 +741,20 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     }))
     if stage_mode == 'merge-log-refused':
         (out / 'sarif_merge.stderr.log').mkdir()
+    if stage_mode in ('config-error', 'config-write-refused'):
+        from core.analysis import config_resolved_findings as config_stage
+
+        monkeypatch.setattr(_scanner_mod.RaptorConfig, 'CONFIG_RESOLVED_ENABLED', True)
+        def forbidden_parser(*args, **kwargs):
+            pytest.fail('config failure controls must not parse Java')
+        monkeypatch.setattr(config_stage, '_parser', forbidden_parser)
+        monkeypatch.setattr(config_stage, 'scan_java_source', forbidden_parser)
+        if stage_mode == 'config-error':
+            def fail_config(*args, **kwargs):
+                raise OSError('owned config stage refusal')
+            monkeypatch.setattr(config_stage, 'run_config_resolved_stage', fail_config)
+        else:
+            (out / 'config-resolved.sarif').mkdir()
     # An earlier run's report must not become authoritative on merge failure.
     (out / 'combined.sarif').write_text(json.dumps({'version': '2.1.0', 'runs': []}))
     monkeypatch.setattr(core.sandbox, 'apply_cli_args', lambda *a, **kw: None)
@@ -774,14 +790,15 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     monkeypatch.setattr(sys, 'argv', ['scanner', '--repo', str(repo), '--out', str(out),
                                      '--sequential', '--codeql' if stage_mode in ('multi', 'empty', 'configuration') else '--no-codeql',
                                      *([] if stage_mode == 'cocci' else ['--no-cocci']),
-                                     '--no-source-wrappers', '--no-config-resolved',
+                                     '--no-source-wrappers',
+                                     *([] if stage_mode in ('config-error', 'config-write-refused') else ['--no-config-resolved']),
                                      '--no-graduated-rules'])
     with pytest.raises(SystemExit) as exit_info:
         _scanner_mod.main()
     expected_exit = 4 if failed_count == 2 or (offline and failed_count) else 0
     assert exit_info.value.code == expected_exit
     metrics = json.loads((out / 'scan_metrics.json').read_text())
-    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or stage_mode in ('empty', 'configuration') or metadata_state else 'ok'
+    status = 'error' if expected_exit else 'partial' if merge_fails or failed_count or dropped or gaps or stage_mode in ('empty', 'configuration', 'config-error', 'config-write-refused') or metadata_state else 'ok'
     assert metrics['execution_status'] == status
     stdout = capsys.readouterr().out
     result = json.loads(stdout[stdout.rfind('\n{') + 1:])
@@ -789,7 +806,10 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     assert metrics['sarif_merge_failed'] is merge_fails
     assert metrics['analysis_gaps'] == gaps
     assert metrics['codeql_no_output'] is (stage_mode == 'empty')
-    assert metrics['tool_execution_failures'] == ({'codeql': 1} if stage_mode == 'configuration' else {})
+    assert metrics['tool_execution_failures'] == ({'codeql': 1} if stage_mode == 'configuration' else
+                                                  {'raptor-config-resolved': 1} if stage_mode in ('config-error', 'config-write-refused') else {})
+    if stage_mode in ('config-error', 'config-write-refused'):
+        assert metrics['config_resolved']['stage_error'] == 1
     assert metrics['semgrep_metadata_errors'] == (2 if metadata_state == 'missing' else 0)
     assert metrics['semgrep_partial_files'] == (1 if metadata_state == 'partial' else 0)
     assert metrics['semgrep_skipped_rules'] == (2 if metadata_state in ('incompatible', 'incompatible-path') else 0)
@@ -1051,3 +1071,26 @@ def test_c_family_probe_readable_sibling_still_admits_stage(tmp_path, monkeypatc
     assert _scanner_mod._skip_stage_without_c_cpp_source('cocci', tmp_path) is False
     assert refused
     assert 'enumeration failed' not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('refuse_report', [False, True])
+def test_config_stage_empty_repo_report_status(tmp_path, monkeypatch, refuse_report):
+    from core.analysis import config_resolved_findings as stage
+
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir()
+    out.mkdir()
+    if refuse_report:
+        (out / 'config-resolved.sarif').mkdir()
+
+    def forbidden_parser(*args, **kwargs):
+        pytest.fail('empty repository must not invoke Java parsing')
+
+    monkeypatch.setattr(stage, '_parser', forbidden_parser)
+    monkeypatch.setattr(stage, 'scan_java_source', forbidden_parser)
+    path, stats = stage.run_config_resolved_stage(repo, out)
+    assert stats.get('stage_error', 0) == int(refuse_report)
+    if refuse_report:
+        assert path is None
+    else:
+        assert path is not None and path.is_file()

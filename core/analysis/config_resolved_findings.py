@@ -316,6 +316,7 @@ def run_config_resolved_stage(
         save_json(sarif_path, document)
     except OSError as e:
         logger.warning("config-resolved stage: SARIF write failed: %s", e)
+        stats["stage_error"] += 1
         return None, dict(stats)
     logger.info(
         "config-resolved stage: %d Java file(s) scanned, %d finding(s) "
