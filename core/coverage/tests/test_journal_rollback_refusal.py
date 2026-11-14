@@ -23,8 +23,11 @@ def rollback_probe(tmp_path, monkeypatch):
              "unlocked": [], "rollback_error": OSError("owned rollback refusal"),
              "cleanup_fault": None, "after_effect": False}
 
+    live = set()
+
     def native_open(*args, **kwargs):
         fd = os.open(*args, **kwargs)
+        live.add(fd)
         state["opened"].append(fd)
         return fd
 
@@ -52,6 +55,7 @@ def rollback_probe(tmp_path, monkeypatch):
                 raise OSError("owned unlock after-effect failure")
 
     def native_close(fd):
+        live.discard(fd)
         os.close(fd)
         state["closed"].append(fd)
         if state["cleanup_fault"] in ("close", "both"):
@@ -66,13 +70,14 @@ def rollback_probe(tmp_path, monkeypatch):
     try:
         yield state
     finally:
-        for fd in state["opened"]:
+        for fd in list(live):
             try:
                 os.fstat(fd)
             except OSError as exc:
                 assert exc.errno == errno.EBADF
             else:
                 os.close(fd)
+                live.discard(fd)
 
 
 def assert_rollback_refused(state):
