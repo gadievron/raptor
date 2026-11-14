@@ -59,6 +59,9 @@ Refusal taxonomy: ``parser_unavailable``, ``not_getproperty``,
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterator
+import fnmatch
+import os
 from dataclasses import dataclass, field
 from glob import escape as escape_glob
 from pathlib import Path
@@ -147,17 +150,35 @@ class _FileIndex:
         self._parsed: dict[Path, _FileEntry] = {}
         self._located: dict[str, tuple[list[Path], bool]] = {}
 
+    def _candidate_paths(self, basename: str) -> Iterator[Path]:
+        def refuse_walk_error(error):
+            raise error
+
+        pattern = escape_glob(basename)
+        for directory, dirnames, filenames in os.walk(
+            self._root, followlinks=False, onerror=refuse_walk_error,
+        ):
+            dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR_PARTS]
+            for entries in (filenames, dirnames):
+                for name in entries:
+                    if fnmatch.fnmatch(name, pattern):
+                        yield Path(directory) / name
+
     def locate(self, basename: str) -> tuple[list[Path], bool]:
         """(matches, capped). Hidden/build directories are skipped so a
         vendored or generated copy cannot shadow the source of truth
-        silently — if both survive the skip list, ambiguity refuses."""
+        silently — if both survive the skip list, ambiguity refuses.
+        Enumeration failure discards partial candidates: a surviving file
+        alone cannot establish uniqueness across an unreadable subtree.
+        The candidate cap bounds retention, not total directory traversal.
+        """
         cached = self._located.get(basename)
         if cached is not None:
             return cached
         matches: list[Path] = []
         capped = False
         try:
-            for p in self._root.rglob(escape_glob(basename)):
+            for p in self._candidate_paths(basename):
                 # Relative to the search root: the root's own parent
                 # dirs (a checkout under out/, build/, ...) must not
                 # hide every candidate file.

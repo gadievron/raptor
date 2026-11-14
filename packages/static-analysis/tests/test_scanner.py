@@ -1179,3 +1179,77 @@ def test_config_source_cap_counts_only_eligible_entries(tmp_path, monkeypatch, c
     assert path is not None
     assert bool(stats.get('file_cap_hit')) is (count > 1)
     assert stats.get('stage_error', 0) == 0
+
+
+def test_config_index_discards_partial_listing_candidates(tmp_path, monkeypatch):
+    import os
+    from core.analysis import config_resolve_java as resolver
+
+    visible = tmp_path / 'a_visible'
+    blocked = tmp_path / 'z_blocked'
+    deeper = blocked / 'deeper'
+    visible.mkdir()
+    deeper.mkdir(parents=True)
+    for directory, value in ((visible, 'left'), (deeper, 'right')):
+        (directory / 'owned.properties').write_text(f'owned_key={value}\n')
+    original = os.scandir
+    denied = []
+
+    def scoped_scandir(path):
+        if os.path.normpath(os.fspath(path)) == str(blocked):
+            denied.append(str(path))
+            raise PermissionError('owned nested property-index refusal')
+        return original(path)
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    index = resolver._FileIndex(tmp_path)
+    assert index.locate('owned.properties') == ([], False)
+    assert denied
+    calls = len(denied)
+    assert index.locate('owned.properties') == ([], False)
+    assert len(denied) == calls
+
+
+@pytest.mark.parametrize('relative', [False, True])
+def test_config_index_preserves_literal_basename_and_prunes(tmp_path, monkeypatch, relative):
+    import os
+    from glob import escape
+    from core.analysis import config_resolve_java as resolver
+
+    root = tmp_path / 'repo'
+    root.mkdir()
+    for dirname in ('a', 'b', 'build'):
+        directory = root / dirname
+        directory.mkdir()
+        for name in ('owned[1].properties', 'owned1.properties'):
+            (directory / name).write_text('owned_key=value\n')
+    if relative:
+        monkeypatch.chdir(tmp_path)
+        root = Path('repo')
+    expected = {p for p in root.rglob(escape('owned[1].properties'))
+                if p.is_file() and not any(part in resolver._SKIP_DIR_PARTS for part in p.relative_to(root).parts)}
+    excluded = (root / 'build').absolute()
+    original = os.scandir
+
+    def scoped_scandir(path):
+        assert Path(path).absolute() != excluded, 'excluded property subtree was enumerated'
+        return original(path)
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    matches, capped = resolver._FileIndex(root).locate('owned[1].properties')
+    assert not capped
+    assert set(matches) == expected
+
+
+@pytest.mark.parametrize('count', [0, 1, 3])
+def test_config_index_candidate_cap_still_refuses_excess(tmp_path, monkeypatch, count):
+    from core.analysis import config_resolve_java as resolver
+
+    for index in range(count):
+        directory = tmp_path / f'branch{index}'
+        directory.mkdir()
+        (directory / 'owned.properties').write_text('owned_key=value\n')
+    monkeypatch.setattr(resolver, '_CANDIDATE_CAP', 1)
+    matches, capped = resolver._FileIndex(tmp_path).locate('owned.properties')
+    assert len(matches) == min(count, 2)
+    assert capped is (count > 1)
