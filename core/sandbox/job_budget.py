@@ -8,6 +8,7 @@ FDs are never selected for inheritance by the payload.
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 import errno
 import hashlib
@@ -330,7 +331,8 @@ class Job:
                 try:
                     self.close()
                 except BaseException as cleanup_error:
-                    exc.add_note('job preparation cleanup: ' + type(cleanup_error).__name__)
+                    with suppress(BaseException):
+                        exc.add_note('job preparation cleanup: ' + type(cleanup_error).__name__)
                 cleanup = {k: self.record[k] for k in ('cleanup', 'cleanup_error') if k in self.record}
             else:
                 cleanup = _finish_scope(self.scope) if self.scope is not None else {}
@@ -341,7 +343,8 @@ class Job:
                 try:
                     self.receipt_handle.close()
                 except BaseException as receipt_error:
-                    exc.add_note('job receipt cleanup: ' + type(receipt_error).__name__)
+                    with suppress(BaseException):
+                        exc.add_note('job receipt cleanup: ' + type(receipt_error).__name__)
                 self.receipt_handle = None
             if not isinstance(exc, Exception):
                 raise
