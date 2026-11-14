@@ -26,8 +26,9 @@ Correctness stance:
   carry identical ``file`` fields), same cwd (the file's parent
   directory), same ``defines={}`` / ``allow_scripting=True`` /
   rule identity (``rule_id`` is always the SOURCE rule path, never a
-  rendered tempfile), same confirmed-iff-matches classification.
-* Only ``confirmed`` / ``refuted`` verdicts are pinned. A failed or
+  rendered tempfile), same confirm-only role and match classification.
+* Successful ``confirmed`` / ``refuted`` verdicts and confirm-only
+  ``inconclusive`` outcomes are pinned. A failed or
   timed-out batch pins NOTHING — those files fall back to the plain
   per-file path, which computes (and classifies) them itself. Files
   the substrate gate would skip are never batched, so their skip
@@ -51,7 +52,7 @@ from pathlib import Path
 from typing import Any
 
 from ._util import safe_join
-from .sweep import SweepResult, file_substrate_coverage
+from .sweep import SweepResult, file_substrate_coverage, is_confirm_only_coccinelle_rule
 from .sweep_memo import SweepMemo, hash_file
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,7 @@ def _pin_chunk(
 ) -> int:
     """Pin per-file verdicts into the memo; count of pinned entries."""
     pinned = 0
+    confirm_only = is_confirm_only_coccinelle_rule(rule_source)
     for fp in members:
         per = demuxed.get(fp)
         if per is None:
@@ -264,12 +266,16 @@ def _pin_chunk(
             m.to_dict() if hasattr(m, "to_dict") else {"raw": str(m)}
             for m in per.matches
         ]
+        details: dict[str, Any] | None = {"confirm_only": True} if confirm_only else None
+        if details is not None and not matches:
+            details["reason"] = "curated confirm-only rule: no match does not refute the hypothesis"
         sweep_result = SweepResult(
             tool="coccinelle",
             file_path=fp,
             function_name="",
-            outcome="confirmed" if matches else "refuted",
+            outcome="confirmed" if matches else ("inconclusive" if confirm_only else "refuted"),
             matches=matches,
+            details=details,
             # Always the SOURCE rule path — a rendered tempfile path
             # would poison the memoized result once it is unlinked.
             rule_id=rule_source,
