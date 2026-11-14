@@ -59,3 +59,49 @@ def test_ambiguous_view_does_not_donate_facts(harvest, monkeypatch):
 def test_no_alias_prefilter_avoids_code_view(harvest, monkeypatch):
     monkeypatch.setattr(source_view, "sanitized_view_with_status", lambda *args: pytest.fail("unexpected view"))
     assert harvest({"owned.h": "int victim(void);"}) == frozenset()
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("raw, code", [
+    ('#define __wur __attribute__((warn_unused_result))\nint victim(void);\n', None),
+    ('#define OWNED \\\n__attribute__((warn_unused_result))\nint victim(void);\n', None),
+    ('#de\\\nfine __wur __attribute__((warn_unused_result))\nint victim(void);\n', None),
+    ('#if defined(__wur)\nint victim(void);\n', None),
+    ('#pragma owned __wur\nint victim(void);\n', None),
+    ('#define OWNED /* text \\\n*/ __wur\nint victim(void);\n', '#define OWNED          \n   __wur\nint victim(void);\n'),
+], ids=['definition', 'continued', 'spliced-keyword', 'conditional', 'pragma', 'comment-splice'])
+def test_preprocessor_alias_lines_do_not_donate_names(harvest, monkeypatch, newline, raw, code):
+    raw = raw.replace("\n", newline)
+    code = raw if code is None else code.replace("\n", newline)
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda text, path: SimpleNamespace(text=code, ambiguous=False))
+    assert harvest({"owned.h": raw}) == frozenset()
+
+
+def test_directive_candidate_is_ignored_but_real_window_declaration_survives(harvest, monkeypatch):
+    text = "__wur\n#define decoy() 1\nint victim(void);\n"
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda raw, path: SimpleNamespace(text=raw, ambiguous=False))
+    assert harvest({"owned.h": text}) == frozenset({"victim"})
+
+
+def test_continued_directive_blanking_preserves_physical_window_distance(harvest, monkeypatch):
+    text = "__wur\n#define OWNED \\\ndecoy()\nint victim(void);\n"
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda raw, path: SimpleNamespace(text=raw, ambiguous=False))
+    assert harvest({"owned.h": text}) == frozenset()
+
+
+def test_directive_continuation_ends_before_live_alias(harvest, monkeypatch):
+    text = "#define OWNED \\\n ordinary\n__wur int victim(void);\n"
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda raw, path: SimpleNamespace(text=raw, ambiguous=False))
+    assert harvest({"owned.h": text}) == frozenset({"victim"})
+
+
+def test_no_directive_marker_avoids_raw_line_walk(harvest, monkeypatch):
+    import core.source.lines as source_lines
+    monkeypatch.setattr(source_lines, "iter_source_lines", lambda text: pytest.fail("unexpected raw walk"))
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda raw, path: SimpleNamespace(text=raw, ambiguous=False))
+    assert harvest({"owned.h": "__wur int victim(void);"}) == frozenset({"victim"})
