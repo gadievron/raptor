@@ -75,14 +75,13 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
         with:
           enable-cache: true
-          # Parser jobs must not hit a base-only immutable uv cache. Keep
-          # contract-only cells on the shared lockfile cache; parser cells
-          # additionally fingerprint their actual installation requirements.
+          # Keep parser-built wheels separate from base-only immutable caches.
+          cache-suffix: ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && 'sandbox-wrappers' || 'base' }}
+          # All Python parser tools are resolved by the project lockfile.
           cache-dependency-glob: |
             uv.lock
             pyproject.toml
             uv.toml
-            ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '.github/scripts/requirements-sandbox-wrappers.txt' || '' }}
           # macOS ARM builds Unicorn from source. Retain built wheels without
           # uploading the much larger set of downloadable binary wheels.
           prune-cache: ${{ runner.os == 'macOS' && (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) }}
@@ -91,9 +90,10 @@ jobs:
       - uses: ./.github/actions/setup-venv
         with:
           cache-key-prefix: venv-sandbox-wrappers-browser
-          uv-export-extra-args: --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
+          uv-export-extra-args: >-
+            --extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web
+            ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '--group sandbox-wrappers' || '' }}
           save-on-rebuild: 'true'
-          requirements-file: ${{ (contains(matrix.families, 'gadget-parsers') || contains(matrix.families, 'elf-worker')) && '.github/scripts/requirements-sandbox-wrappers.txt' || '' }}
       - name: Install Linux parser tools and Chromium dependencies
         # Contracts include a real confinement check; keep libseccomp2 even
         # when no native family is selected.

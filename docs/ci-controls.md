@@ -385,12 +385,15 @@ fallback sources to the job summary. Contract-only selections skip optional pars
 installation, retaining Linux confinement prerequisites. Native selections retain base platform tools, adding radare2 only
 for its family and Ruby only for the gadget-parser family. Python parser
 dependencies serve both gadget-parser and ELF-worker families; full selections
-retain every required tool. Parser dependencies come from
-[their pinned requirements](../.github/scripts/requirements-sandbox-wrappers.txt),
-which enters the uv cache key only for parser families. Contract-only jobs retain
-the shared lockfile cache. macOS parser jobs prune downloadable wheels before
-saving, retaining source-built wheels for subsequent runs; cache misses still
-perform the complete install. Requirements changes retain full wrapper acceptance.
+retain every required tool. Python parser tools are declared in the
+`sandbox-wrappers` dependency group in [pyproject.toml](../pyproject.toml)
+and resolved by `uv.lock`. Parser-family jobs select that group as part of the
+locked environment build; contract-only jobs omit it. The lockfile, project
+configuration and selected groups enter the environment cache identity.
+The uv artifact cache also separates parser-group and base-only jobs.
+macOS parser jobs prune downloadable wheels before saving, retaining source-built
+wheels for subsequent runs; cache misses rebuild the complete locked environment.
+Project dependency and lockfile changes retain full wrapper acceptance.
 Parser setup steps have eight-minute limits within the existing thirty-minute acceptance job.
 Native acceptance runs at most two families concurrently on each existing runner,
 with separate homes, scratch directories, registries and reports. A failed family
