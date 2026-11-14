@@ -8900,7 +8900,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 if failure is None:
                     failure = cleanup_error
                     raise
-                failure.add_note('job cleanup: ' + type(cleanup_error).__name__)
+                with suppress(BaseException):
+                    failure.add_note('job cleanup: ' + type(cleanup_error).__name__)
             finally:
                 budget_record = (job.record if job is not None else
                                  getattr(failure, 'job_budget', {}))
