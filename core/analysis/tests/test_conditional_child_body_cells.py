@@ -55,9 +55,9 @@ def test_whole_child_bindings_mask_conditional_reads(header, body):
 
 @pytest.mark.parametrize("body", ["if raw:\n  global unsupported",
                                   "if raw:\n  return raw\n else:\n  global other",
-                                  "if raw:\n  def deeper():\n   return raw",
+                                  "if raw:\n  def deeper(value: raw):\n   return raw",
                                   "if raw:\n  for obj[(lambda: raw)()] in ():\n   pass"],
-                         ids=["then-declaration", "else-global", "nested-definition", "indirect-loop"])
+                         ids=["then-declaration", "else-global", "deeper-annotation", "indirect-loop"])
 def test_unsupported_child_branch_invalidates_complete_body(body):
     source = "raw\ndef child():\n " + body
     assert _bounded_body_expression_loads(ast.parse(source).body) is None
