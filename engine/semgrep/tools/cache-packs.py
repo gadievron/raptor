@@ -323,7 +323,7 @@ def _read_member_bounded(zf: zipfile.ZipFile, name: str) -> bytes | None:
     total = 0
     with zf.open(name) as fh:
         while True:
-            chunk = fh.read(65536)
+            chunk = fh.read(min(65536, MAX_PACK_BYTES - total + 1))
             if not chunk:
                 break
             total += len(chunk)
