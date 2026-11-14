@@ -1483,13 +1483,24 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
             continue
         if isinstance(node, (ast.Assign, ast.AnnAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = {target.id for target in targets
-                     if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store)}
-            if isinstance(node.value, ast.Lambda):
-                for name in names:
-                    candidates.setdefault(name, set()).add(node.value)
-            elif isinstance(node.value, ast.Name):
-                aliases.setdefault(node.value.id, set()).update(names)
+            bindings = [(target, node.value) for target in targets]
+            while bindings:
+                target, value = bindings.pop()
+                if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
+                    if isinstance(value, ast.Lambda):
+                        candidates.setdefault(target.id, set()).add(value)
+                    elif isinstance(value, ast.Name):
+                        aliases.setdefault(value.id, set()).add(target.id)
+                elif (isinstance(target, (ast.Tuple, ast.List))
+                      and isinstance(target.ctx, ast.Store)
+                      and isinstance(value, (ast.Tuple, ast.List))
+                      and len(target.elts) == len(value.elts)
+                      and not any(isinstance(element, ast.Starred)
+                                  for element in (*target.elts, *value.elts))):
+                    # Explicit literal projection retains original source
+                    # prototypes only as negative candidates. Opaque iterable
+                    # and starred binding shapes remain outside this check.
+                    bindings.extend(zip(target.elts, value.elts, strict=True))
         pending.extend(ast.iter_child_nodes(node))
     work = deque((name, prototype) for name, values in candidates.items() for prototype in values)
     while work:
