@@ -26,7 +26,7 @@ def test_weak_capability_grade_is_informational(grade, style, monkeypatch):
     assert "ROOT-EQUIVALENT" not in text
 
 
-def test_dominates_capability_rendering_retains_existing_tier(monkeypatch):
+def test_dominates_capability_rendering_withholds_enforcement_claim(monkeypatch):
     calls = []
 
     def owned_lookup(*args):
@@ -39,5 +39,9 @@ def test_dominates_capability_rendering_retains_existing_tier(monkeypatch):
         grade="dominates", enclosing_function="owned",
     )
     text = render._render_capability_line(record, "stage_d")
-    assert "ROOT-EQUIVALENT" in text
-    assert calls == [("owned.c", 7)]
+    assert "`capable(...)`" in text and "owned.c:7" in text
+    assert "recorded heuristic grade `dominates`" in text
+    assert "does not establish privilege gating or sink reachability" in text
+    assert "denial polarity" in text and "terminating denial branch" in text
+    assert "ROOT-EQUIVALENT" not in text
+    assert calls == []
