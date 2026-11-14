@@ -6,6 +6,9 @@ import __future__
 from pathlib import Path
 import re
 from typing import cast
+from types import SimpleNamespace
+
+from core.audit import source_view
 
 import pytest
 
@@ -39,7 +42,9 @@ def _owned_helper(relative_path, name, namespace):
 
 @pytest.mark.parametrize("consumer", ["same-file", "harvest"])
 @pytest.mark.parametrize("annotation", [False, True], ids=["embedded", "real-alias"])
-def test_actual_consumer_helpers_do_not_promote_embedded_identifier(consumer, annotation):
+def test_actual_consumer_helpers_do_not_promote_embedded_identifier(consumer, annotation, monkeypatch):
+    monkeypatch.setattr(source_view, "sanitized_view_with_status",
+                        lambda text, path: SimpleNamespace(text=text, ambiguous=False))
     text = "__wur int victim(void);\n" if annotation else "int ordinary__wur_suffix;\nint victim(void);\n"
     namespace = {"re": re, "split_lines": lambda source: source.split("\n"),
                  "_SEGMENT_TYPE_IMPL": type, "cast": cast, "deque": deque}

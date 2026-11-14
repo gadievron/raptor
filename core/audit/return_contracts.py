@@ -101,12 +101,12 @@ class ContractEvidence:
 def harvest_wur_declarations(
     source_texts: dict[str, str],
 ) -> frozenset[str]:
-    """Function names the scanned sources declare warn-unused-result.
+    """Candidate function names near WUR spellings in admitted code views.
 
-    A cheap bulk form of the fail-open channel's TU-declaration check:
-    any line carrying a known WUR alias donates the function names
-    declared within a ±2-line window. Names, not positions — the
-    census owns positions.
+    A known alias donates nearby declaration names within the existing
+    ±2-line heuristic. Comments and strings are blanked; ambiguous input
+    donates no names, not proof of annotation absence. Names, not positions
+    or preprocessing semantics — the census owns positions.
     """
     try:
         from packages.source_intel.aliases import wur_alias_in
@@ -115,10 +115,14 @@ def harvest_wur_declarations(
 
     decl_re = re.compile(r"\b([A-Za-z_]\w{1,})\s*\(")
     names: set[str] = set()
-    for source in source_texts.values():
+    for file_path, source in source_texts.items():
         if not wur_alias_in(source):
             continue
-        lines = split_lines(source)
+        from core.audit.source_view import sanitized_view_with_status
+        view = sanitized_view_with_status(source, file_path)
+        if view.ambiguous:
+            continue
+        lines = split_lines(view.text)
         for idx, line in enumerate(lines):
             if not wur_alias_in(line):
                 continue
