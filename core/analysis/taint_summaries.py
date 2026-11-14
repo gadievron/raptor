@@ -567,19 +567,29 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
                 return None
             pending.extend((child, False) for child in current.patterns)
         elif isinstance(current, ast.MatchMapping):
-            if (current.rest is not None or len(current.keys) != len(current.patterns)
-                    or not all(isinstance(key, ast.Constant) for key in current.keys)):
+            if current.rest is not None or len(current.keys) != len(current.patterns):
                 return None
+            for key in current.keys:
+                if isinstance(key, ast.Constant):
+                    continue
+                if not isinstance(key, ast.Attribute) or _attribute_chain_str(key) is None:
+                    return None
+                expressions.append(key)
             pending.extend((child, False) for child in current.patterns)
         elif isinstance(current, ast.MatchSequence):
             pending.extend((child, True) for child in current.patterns)
+        elif isinstance(current, ast.MatchValue):
+            if isinstance(current.value, ast.Constant):
+                continue
+            if not isinstance(current.value, ast.Attribute) or _attribute_chain_str(current.value) is None:
+                return None
+            expressions.append(current.value)
         elif isinstance(current, ast.MatchStar):
             if not in_sequence or current.name is not None:
                 return None
         elif not (isinstance(current, ast.MatchAs)
                   and current.pattern is None and current.name is None
-                  or isinstance(current, ast.MatchSingleton)
-                  or isinstance(current, ast.MatchValue) and isinstance(current.value, ast.Constant)):
+                  or isinstance(current, ast.MatchSingleton)):
             return None
     names: set[str] = set()
     for expression in expressions:

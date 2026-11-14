@@ -48,8 +48,8 @@ def test_or_pattern_parameter_masks_outer_cell(child):
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["root", "child"])
-@pytest.mark.parametrize("pattern", ["0 | raw.member", "0 | -1", "[value] | (value,)", "Value(value) | Other(value)", "[0 | raw.member]", "{0: 0 | raw.member}"],
-                         ids=["dotted", "unary", "consistent-captures", "class", "nested-dotted", "mapping-dotted"])
+@pytest.mark.parametrize("pattern", ["0 | -1.5", "0 | -1", "[value] | (value,)", "Value(value) | Other(value)", "[0 | -1.5]", "{0: 0 | -1.5}"],
+                         ids=["unary-float", "unary", "consistent-captures", "class", "nested-unary-float", "mapping-unary-float"])
 def test_unsupported_or_child_invalidates_complete_scan(pattern, child):
     tree = ast.parse(source_for(pattern, child))
     assert _bounded_body_expression_loads(tree.body[0].body[0].body) is None
