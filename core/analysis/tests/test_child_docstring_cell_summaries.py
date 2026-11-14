@@ -80,5 +80,5 @@ def test_keyword_expansion_keeps_prior_reason():
     assert result.summary_unknown_reason == "forwards **kwargs"
 
 
-def test_docstring_only_child_stays_excluded():
-    assert _bounded_body_expression_loads(ast.parse('def child():\n "docs"').body) is None
+def test_docstring_only_child_contributes_no_body_reads():
+    assert _bounded_body_expression_loads(ast.parse('def child():\n "docs"').body) == frozenset()

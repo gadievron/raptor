@@ -719,13 +719,13 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             operations.append(statement)
             continue
         if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not statement.body:
+                return None
             child_body = statement.body
             if (child_body and isinstance(child_body[0], ast.Expr)
                     and isinstance(child_body[0].value, ast.Constant)
                     and isinstance(child_body[0].value.value, str)):
                 child_body = child_body[1:]
-            if not child_body:
-                return None
             args = statement.args
             parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
             parameters.extend(arg for arg in (args.vararg, args.kwarg) if arg is not None)
@@ -850,6 +850,8 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
         elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not statement.body:
+                return None
             child_body = statement.body
             if (child_body and isinstance(child_body[0], ast.Expr)
                     and isinstance(child_body[0].value, ast.Constant)
@@ -872,7 +874,9 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 return None
             # Header expressions belong to the defining frame, before child parameters.
             expressions.extend(header_reads)
-            child_reads = _bounded_child_body_expression_loads(child_body)
+            # A parsed docstring-only body has no remaining lexical reads.
+            child_reads = (_bounded_child_body_expression_loads(child_body)
+                           if child_body else frozenset())
             if child_reads is None:
                 return None
             target_reads.update(child_reads - local_binding_names(statement))

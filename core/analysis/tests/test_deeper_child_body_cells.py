@@ -73,8 +73,8 @@ def test_deeper_async_function_keeps_lexical_cell():
 
 
 @pytest.mark.parametrize("definition", ["def deeper(value: raw):\n return 0", "@raw\ndef deeper(value: raw):\n return 0",
-                                        "def deeper():\n global raw\n return raw", "def deeper():\n 'docs'"],
-                         ids=["annotation", "decorated-annotation", "unsupported-body", "docstring-only"])
+                                        "def deeper():\n global raw\n return raw", "def deeper() -> raw:\n 'docs'"],
+                         ids=["annotation", "decorated-annotation", "unsupported-body", "documented-return-annotation"])
 def test_unsupported_deeper_tree_invalidates_complete_scan(definition):
     source = "raw\ndef child():\n " + definition.replace("\n", "\n ")
     tree = ast.parse(source)
