@@ -634,8 +634,11 @@ def run_rule(
         rule_timeout: Per-rule timeout (semgrep --timeout).
         env: Subprocess environment. Defaults to current environment.
             Untrusted-target callers should pass RaptorConfig.get_safe_env().
-        json_output_path: Optional path for --json-output. If None, a
-            temporary file is used and removed after parsing.
+        json_output_path: Optional destination for current JSON metadata.
+            The tool writes a private sidecar, removed after parsing; with
+            an injected runner, that sidecar is a sibling of this destination.
+            The runner must permit writes in that parent directory. Current
+            nonempty metadata is published atomically to the destination.
         semgrep_bin: Override semgrep binary path.
         extra_args: Additional semgrep arguments.
         subprocess_runner: Optional callable replacing the default
@@ -710,18 +713,22 @@ def run_rule(
 
     # The scanner must write its sidecar inside the SAME output directory
     # the sandbox grants. Host /tmp is not writable in a scoped invocation.
-    # External output paths remain parent-owned; never grant their directory
-    # to a tool parsing target-controlled source.
+    # Default sandbox output stays private; external destinations remain
+    # parent-owned. Injected runners retain their caller-owned output scope.
+    # Always use a fresh sidecar so an unchanged prior destination cannot
+    # supply coverage for the current invocation.
     sandbox_output = (_invocation_scratch_dir()
                       if subprocess_runner is None and not unsandboxed else None)
     cleanup_json = False
-    json_path = None if sandbox_output is not None else json_output_path
+    json_path = None
     # Protect sidecar setup too: allocating the invocation directory
     # precedes sidecar allocation, whose setup can itself fail.
     try:
         if json_path is None:
             json_path = write_temp_text(
-                "", prefix="semgrep_", suffix=".json", dir=sandbox_output,
+                "", prefix="semgrep_", suffix=".json",
+                dir=(sandbox_output if sandbox_output is not None else
+                     str(Path(json_output_path).parent) if json_output_path is not None else None),
             )
             cleanup_json = True
 
@@ -843,7 +850,7 @@ def run_rule(
             budget_errors.append(
                 "semgrep --json metadata missing or empty; scan coverage unavailable"
             )
-        if sandbox_output is not None and json_output_path is not None and json_text:
+        if json_output_path is not None and json_text:
             from core.atomic_fs import write_text_atomically
             try:
                 write_text_atomically(json_output_path, json_text)
