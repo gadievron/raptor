@@ -276,8 +276,10 @@ def _extract_functions_cached(language: str, content: str) -> tuple[Any, ...] | 
     from core.inventory import extractors
     try:
         if language == "python":
-            return tuple(extractors.extract_functions(
-                "<structural-validator>", language, content))
+            # Match the AST syntax domain and identifier spelling of the graph.
+            return tuple(item for item in extractors.PythonExtractor().extract(
+                "<structural-validator>", content)
+                if isinstance(item, extractors.FunctionInfo))
         # Native regex fallback can omit a scope while the graph still has its
         # calls. Parse explicitly so span failures remain unresolved attribution.
         from core.run.gaps import parse_origin
@@ -286,7 +288,8 @@ def _extract_functions_cached(language: str, content: str) -> tuple[Any, ...] | 
             tree = extractor.parser.parse(content.encode())
         if tree is None:
             raise RuntimeError("Function-span parser returned no tree")
-        return tuple(extractor.extract("<structural-validator>", content, _tree=tree))
+        return tuple(extractor.extract("<structural-validator>", content, _tree=tree,
+                                       raise_on_error=True))
     except Exception:
         logger.debug("function-span extraction failed", exc_info=True)
         return None

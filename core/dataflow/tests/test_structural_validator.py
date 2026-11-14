@@ -860,20 +860,20 @@ class TestStepCap:
 class TestEnclosingFunctionMemo:
     def test_span_extraction_parses_each_file_once(
             self, tmp_path, monkeypatch):
-        """Module-level steps take the extract_functions span path;
+        """Module-level steps take the Python AST span path;
         pre-memo every step re-parsed the whole file (O(steps × parse)
         — 256 steps on a 20k-line file cost minutes of wall time)."""
         import core.dataflow.structural_validator as sv
         import core.inventory.extractors as ex
 
-        real = ex.extract_functions
+        real = ex.PythonExtractor.extract
         calls: list[str] = []
 
-        def counting(filepath, language, content):
+        def counting(self, filepath, content):
             calls.append(filepath)
-            return real(filepath, language, content)
+            return real(self, filepath, content)
 
-        monkeypatch.setattr(ex, "extract_functions", counting)
+        monkeypatch.setattr(ex.PythonExtractor, "extract", counting)
         sv._extract_functions_cached.cache_clear()
 
         # Module-level calls: the call graph attributes them to no
