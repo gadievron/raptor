@@ -104,8 +104,8 @@ def harvest_wur_declarations(
     """Candidate function names near WUR spellings in admitted code views.
 
     A known alias donates nearby declaration names within the existing
-    ±2-line heuristic. Comments and strings are blanked; ambiguous input
-    donates no names, not proof of annotation absence. Names, not positions
+    ±2-line heuristic. Comments, strings and preprocessor directive rows
+    are excluded; ambiguous input donates no names, not proof of annotation absence. Names, not positions
     or preprocessing semantics — the census owns positions.
     """
     try:
@@ -123,6 +123,16 @@ def harvest_wur_declarations(
         if view.ambiguous:
             continue
         lines = split_lines(view.text)
+        if "#" in view.text:
+            from core.source.lines import iter_source_lines
+            continued_directive = False
+            for idx, (line, raw_line) in enumerate(zip(lines, iter_source_lines(source))):
+                if continued_directive or line.lstrip().startswith("#"):
+                    # Blank rather than remove rows: declaration windows use
+                    # physical coordinates. Raw splices can survive inside
+                    # comments that the code view has already blanked.
+                    lines[idx] = ""
+                    continued_directive = raw_line.endswith("\\")
         for idx, line in enumerate(lines):
             if not wur_alias_in(line):
                 continue
