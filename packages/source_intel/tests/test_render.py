@@ -217,8 +217,7 @@ def test_nonnull_evidence_renders_with_two_edged_caveat():
 
 
 def test_nonnull_caveat_preserved_when_delete_null_checks_off():
-    """With kernel's -fno-delete-null-pointer-checks observed, the
-    caveat changes — defensive null checks ARE preserved."""
+    """An observed disabling flag does not prove compiled check retention."""
     bf = BuildFlagsContext(
         source="compile_commands.json",
         extraction_confidence="high",
@@ -228,12 +227,11 @@ def test_nonnull_caveat_preserved_when_delete_null_checks_off():
     lines = derive_evidence_strings(r, build_flags=bf)
     text = "\n".join(lines)
     assert "preserved" in text.lower()
+    assert "does not establish" in text
 
 
 def test_nonnull_caveat_warns_when_delete_null_checks_on():
-    """With explicit -fdelete-null-pointer-checks, the renderer warns
-    that the compiler may eliminate null guards — a NULL deref would
-    actually fire."""
+    """An observed enabling flag warrants review of compiled null checks."""
     bf = BuildFlagsContext(
         source="compile_commands.json",
         extraction_confidence="high",
