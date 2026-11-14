@@ -65,6 +65,7 @@ printf '%s\\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"sage_turn"},
 class _BashHarness(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
 
     def tearDown(self):
