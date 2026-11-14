@@ -65,9 +65,9 @@ def test_unsupported_binder_does_not_become_a_certified_read_scan():
     assert not _scoped_expression_loads(expression)
 
 
-def test_target_expressions_remain_outside_new_scoped_scan():
+def test_supported_target_expression_uses_strict_scope_contract():
     expression = ast.parse("lambda: [raw for target[0] in ()]", mode="eval").body
-    assert not _scoped_expression_loads(expression)
+    assert _scoped_expression_loads(expression) == frozenset({"raw", "target"})
 
 
 def test_existing_direct_base_refusal_survives_unsupported_scoped_part():

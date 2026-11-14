@@ -387,6 +387,7 @@ def _comprehension_target_scope(
     target: ast.AST,
     *,
     allow_indirect_stores: bool = True,
+    require_scope_free_reads: bool = False,
 ) -> tuple[frozenset[str], frozenset[str]] | None:
     """Bare bindings and known scope-free reads for supported target stores.
 
@@ -394,9 +395,12 @@ def _comprehension_target_scope(
     read expressions contribute nothing; this does not certify their absence.
     Unsupported target structures return None. Binding-only consumers can
     reject indirect stores rather than rely on partial expression reads.
+    Strict consumers can instead require all target read expressions to fit
+    the scope-free grammar before using the returned reads.
     """
     names: set[str] = set()
     reads: set[str] = set()
+    allowed = _scope_free_expression_nodes() if require_scope_free_reads else ()
     pending = [target]
     while pending:
         node = pending.pop()
@@ -406,15 +410,16 @@ def _comprehension_target_scope(
             pending.append(node.value)
         elif isinstance(node, (ast.Tuple, ast.List)):
             pending.extend(node.elts)
-        elif isinstance(node, ast.Attribute):
+        elif isinstance(node, (ast.Attribute, ast.Subscript)):
             if not allow_indirect_stores:
                 return None
-            reads.update(_scope_free_expression_loads(node.value))
-        elif isinstance(node, ast.Subscript):
-            if not allow_indirect_stores:
-                return None
-            reads.update(_scope_free_expression_loads(node.value))
-            reads.update(_scope_free_expression_loads(node.slice))
+            parts = [node.value] + ([node.slice] if isinstance(node, ast.Subscript) else [])
+            for part in parts:
+                if require_scope_free_reads and not all(
+                    isinstance(child, allowed) for child in ast.walk(part)
+                ):
+                    return None
+                reads.update(_scope_free_expression_loads(part))
         else:
             return None
     return frozenset(names), frozenset(reads)
@@ -425,8 +430,8 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
 
     An unsupported node aborts this additional scan. Empty results never
     certify absence; existing expression and direct-base refusals stay active.
-    Only binding-only comprehension targets are admitted here; existing
-    target-store checks remain independent.
+    Target base/index expressions must fit the scope-free grammar; existing
+    partial target-store checks remain independent.
     """
     if expr is None:
         return frozenset()
@@ -448,13 +453,16 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             if not node.generators:
                 return frozenset()
             scopes = [
-                _comprehension_target_scope(gen.target, allow_indirect_stores=False)
+                _comprehension_target_scope(gen.target, require_scope_free_reads=True)
                 for gen in node.generators
             ]
             if any(scope is None for scope in scopes):
                 return frozenset()
             targets = {name for scope in scopes if scope is not None for name in scope[0]}
             inner = bound | targets
+            for scope in scopes:
+                if scope is not None:
+                    names.update(scope[1] - inner)
             pending.append((node.generators[0].iter, bound))
             for index, gen in enumerate(node.generators):
                 if index:
