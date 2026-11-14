@@ -133,6 +133,7 @@ def get_items(file_entry):
 
 def iter_checklist_items(
     checklist: Any,
+    *, require_complete: bool = False,
 ) -> "Iterator[tuple[str, dict, dict]]":
     """Single authority for walking ``checklist["files"][*]`` items.
 
@@ -153,14 +154,18 @@ def iter_checklist_items(
     exactly like ``read_checklist``). The streaming path holds the
     checklist flock for the duration of the walk — do not read or
     write the same checklist through the accessors from inside the
-    loop (flock self-deadlock).
+    loop (flock self-deadlock). With ``require_complete=True``, an
+    unreadable/refused disk frame or shard raises ChecklistIntegrityError
+    instead of ending a partial walk. Consumers must finish traversal
+    successfully before publishing totals; already yielded rows are not
+    a complete inventory when an error follows. Default behaviour is unchanged.
 
     Consumers joining on the checklist shape must walk through this
     function rather than hand-rolling the two-level read — flat
     top-level ``items`` reads silently see nothing on real artifacts.
     """
     if isinstance(checklist, (str, os.PathLike)):
-        yield from _iter_checklist_items_from_dir(checklist)  # type: ignore[arg-type]
+        yield from _iter_checklist_items_from_dir(checklist, require_complete=require_complete)  # type: ignore[arg-type]
         return
     yield from _iter_items_of(checklist)
 
@@ -1317,6 +1322,7 @@ def read_checklist_meta(output_dir: "str | Path") -> dict[str, Any]:
 
 def _iter_checklist_items_from_dir(
     output_dir: "str | Path",
+    *, require_complete: bool = False,
 ) -> "Iterator[tuple[str, dict, dict]]":
     """Stream checklist items from an output dir, one shard in memory.
 
@@ -1330,6 +1336,8 @@ def _iter_checklist_items_from_dir(
     from core.json import load_json
 
     if not _checklist_slot_present(output_dir):
+        if require_complete:
+            raise ChecklistIntegrityError("checklist slot missing")
         return
     checklist_path = _resolve_checklist_path(output_dir)
     with _checklist_lock(checklist_path, create=False):
@@ -1342,6 +1350,8 @@ def _iter_checklist_items_from_dir(
                     files = _read_shard_files(shard_dir, row)
                     yield from _iter_items_of({"files": files})
             except ChecklistIntegrityError as exc:
+                if require_complete:
+                    raise
                 logger.warning(
                     "iter_checklist_items: sharded checklist at %s "
                     "refused (%s) — walk truncated",
@@ -1349,8 +1359,12 @@ def _iter_checklist_items_from_dir(
                 )
             return
         data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    if require_complete and not isinstance(data, dict):
+        raise ChecklistIntegrityError("checklist frame is unreadable or not an object")
     if isinstance(data, dict) and not _single_file_frame_gate(
             data, checklist_path, "iter_checklist_items"):
+        if require_complete:
+            raise ChecklistIntegrityError("checklist frame authentication refused")
         # Same degrade direction as the sharded refusal above: the
         # walk ends having yielded nothing from the refused frame.
         return
