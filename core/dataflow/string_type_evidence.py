@@ -78,8 +78,8 @@ def exact_str_default_call_evidence(
 
     Admit literal strings, adjacent literal bindings, or a direct exact-type
     guard before the containing function-body statement. Reuse scope and
-    rebinding facts; refuse loop/comprehension epochs and explicit frame
-    introspection. This scoped primitive fact is not a vulnerability proof.
+    rebinding facts; refuse loop/comprehension and deferred type-alias epochs
+    and explicit frame introspection. This fact is not a vulnerability proof.
     """
     from core.analysis.python_module_callgraph import (
         function_scope_bindings, local_binding_names, module_distrusted_roots,
@@ -119,7 +119,7 @@ def exact_str_default_call_evidence(
         cursor: ast.AST = call
         while cursor in parents and parents[cursor] is not function:
             cursor = parents[cursor]
-            if isinstance(cursor, (ast.For, ast.AsyncFor, ast.While, ast.Lambda, ast.ClassDef,
+            if isinstance(cursor, (ast.For, ast.AsyncFor, ast.While, ast.Lambda, ast.ClassDef, ast.TypeAlias,
                                    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
                 return None
         statements = [node for node in function.body
