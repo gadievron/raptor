@@ -37,7 +37,7 @@ from core.dataflow.codeql_augmented_run import (
 from core.json import load_json
 from core.llm.coerce import extract_fenced_code
 from core.run.scratch import scratch_dir
-from core.sarif.parser import SARIF_MAX_BYTES, count_results
+from core.sarif.parser import SARIF_MAX_BYTES, count_results, get_run_execution_diagnostics
 
 # CodeQL SARIF over corpus code — the SARIF budget class shared with
 # core.sarif.parser.load_sarif (one constant, aliased for the local
@@ -499,22 +499,63 @@ def _count_results_for_target(sarif_path: Path, target_uri: str | None = None,
     scoped to the SPECIFIC flagged finding rather than all findings in the file
     (a file with N unrelated findings shouldn't make a correct single-flow
     barrier look unsound). The preserve check stays file-scoped (the pre-fix vuln
-    sits at a different line after the patch's line shifts)."""
+    sits at a different line after the patch's line shifts). Malformed run or
+    result containers and incomplete-run diagnostics refuse adjudication;
+    scoped counts also require usable location metadata."""
     data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
     if not isinstance(data, dict):
-        return 0
+        raise ValueError("SARIF document must be an object")
+    runs = data.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("SARIF runs must be a non-empty array")
+    for run in runs:
+        if not isinstance(run, dict):
+            raise ValueError("SARIF run must be an object")
+        diagnostics = get_run_execution_diagnostics(run)
+        if any(diagnostics.values()):
+            raise ValueError(f"cannot adjudicate incomplete SARIF run: {diagnostics}")
+        results = run.get("results", [])
+        if not isinstance(results, list):
+            raise ValueError("SARIF results must be an array")
+        if any(not isinstance(result, dict) for result in results):
+            raise ValueError("SARIF result must be an object")
     if target_uri is None:
-        # Unscoped mode is exactly the shared tolerant counter.
+        # The shared counter is tolerant for summary consumers; synthesis
+        # can use it only after the authoritative boundary checks above.
         return count_results(data)
     n = 0
-    for run in (data.get("runs") or []):
-        for res in (run.get("results") or []):
-            for loc in (res.get("locations") or []):
+    for run in runs:
+        for res in run.get("results", []):
+            locations = res.get("locations", [])
+            if not isinstance(locations, list) or not locations:
+                raise ValueError("SARIF locations must be a non-empty array for scoped counts")
+            for loc in locations:
+                if not isinstance(loc, dict):
+                    raise ValueError("SARIF location must be an object")
                 phys = loc.get("physicalLocation", {})
-                if phys.get("artifactLocation", {}).get("uri") != target_uri:
+                if not isinstance(phys, dict):
+                    raise ValueError("SARIF physicalLocation must be an object")
+                artifact = phys.get("artifactLocation", {})
+                if not isinstance(artifact, dict):
+                    raise ValueError("SARIF artifactLocation must be an object")
+                uri = artifact.get("uri")
+                if not isinstance(uri, str) or not uri:
+                    raise ValueError("SARIF scoped location must have a URI")
+                region = phys.get("region", {})
+                if not isinstance(region, dict):
+                    raise ValueError("SARIF region must be an object")
+                line = region.get("startLine")
+                if "startLine" in region and (
+                    isinstance(line, bool) or not isinstance(line, int) or line < 1
+                ):
+                    raise ValueError("SARIF startLine must be a positive integer")
+                if uri != target_uri:
                     continue
-                if target_line is not None and phys.get("region", {}).get("startLine") != target_line:
-                    continue
+                if target_line is not None:
+                    if line is None:
+                        raise ValueError("SARIF scoped location has no startLine")
+                    if line != target_line:
+                        continue
                 n += 1
                 break  # count each result at most once
     return n
