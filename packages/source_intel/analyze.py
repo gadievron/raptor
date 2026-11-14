@@ -2664,7 +2664,15 @@ def _scan_project_alias_observations(
         got = read_text_capped(resolved)
         if got is None:
             continue
-        text = got[0]
+        # Use the already-capped text: adopting the file-view cache here
+        # would change this scanner's read/admission contract. Comments
+        # and literals cannot establish that an alias applies to code;
+        # an ambiguous lexical view cannot mint an attribute fact either.
+        from core.audit.source_view import sanitized_view_with_status
+        view = sanitized_view_with_status(got[0], str(resolved))
+        if view.ambiguous:
+            continue
+        text = view.text
         file_lines = text.split("\n")  # line-model: universal-newline read_text_capped above
         for family, alias_name in alias_pairs:
             # Word-boundary check; substring would risk false positives
