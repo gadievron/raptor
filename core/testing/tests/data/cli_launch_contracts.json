@@ -120,6 +120,7 @@
     ".github/tests/test_sca_gate_file_shapes.py": "f1c2f839553cffb16617f9ae1142048c73b2f372cc20e4f366df7d52bf749d78",
     ".github/tests/test_sca_pr_baseline.py": "7d7aa0383c56b1daa53f9312ca260c8bf6fd1ae0333b1923bc61c215907a1196",
     ".github/tests/test_sca_pr_comment.py": "0c2ebbe32732c6f77142752d3508cc7f75076aaa29a3b5fc50a1b3d1448ad7e0",
+    ".github/tests/test_sca_self_bump_report.py": "12c19cc5f4ada9f709d3eec25b56d1efef0eeeadd59b5b7b2cf1aa58a5b6cd9b",
     ".github/tests/test_scan_restart_identity.py": "91073d4a33c48713d0453835179214a313c7ff547d12a941b7361f04ad878485",
     ".github/tests/test_scheduled_ci_provisioning.py": "f60b1987b0c7c0e03cabba3490387af0282d2ad7ecdaa5dceae126c5a1eb41dd",
     ".github/tests/test_setup_venv_cache.py": "b8a2aeb88d93dda48b7c32db9cc178e23082f8759611ed14654a970e4fefd94d",
@@ -128,6 +129,7 @@
     ".github/tests/test_test_impact.py": "00c5342ea68d19cb91ab0f1014e5559a06e86ca1af6c13ff4ad2186d3f98e2ad",
     ".github/tests/test_test_scope.py": "3af9820722f22dd01eec55430cb4c43f9ee57e5808586bd15d5585c9770570b5",
     ".github/tests/test_tier_marker_selection.py": "fd9c9ce9778b0a21370a71bdcbc54d47495c2a764f2524f6febc2ce121420367",
+    ".github/tests/test_ubuntu_apt_fallback.py": "2b7e2dd4697c5d5144f56b2fe2901f12969edd641e3fa9af68c559ee08af73a6",
     ".github/tests/test_use_system_node.py": "dbb2861e0b135ef93d6cf101c976d76e632424556f679f8ccfa65a3c0d4d869e",
     ".github/tests/test_wall_budget_marker.py": "ee0b97df7553b2962c235233c5709a395e30c3a08df3556715bc7c514e56d1be",
     ".github/tests/test_wrapper_fixture_collection.py": "672db7e98b81f2f1215cbef8dcdbf6c783b19f401f7f3cbd1dd3aedb351ae421",
@@ -137,7 +139,7 @@
     "core/analysis/tests/test_binary_oracle.py": "75f3c5acc7b52adfd5811fbe8d6360dce56b315128855ba6f2be916f62acd5f4",
     "core/analysis/tests/test_binary_oracle_autodetect.py": "d904a18148c4e074694d6bbd9f35a555656f3e56e24b2ce0977453604c7b0534",
     "core/analysis/tests/test_binary_oracle_cli.py": "9f2691e424be637aaec1a4edc6449129837f7bd4b1649200f74d6a57a03bc97e",
-    "core/analysis/tests/test_binary_oracle_e2e.py": "9d0745298efbb6b2a0581666c181b567a275553dad6546e3eb3e5b751d027fd3",
+    "core/analysis/tests/test_binary_oracle_e2e.py": "9e4703f92a1a7f3bcfab65b066dea82fb086eb5d0b3c6e9db4ede37572728dec",
     "core/analysis/tests/test_binary_oracle_edges.py": "f9534cc5ca5768d533a21de041f520e0a0f4e8b6996e505c358d2fcc42456399",
     "core/analysis/tests/test_binary_oracle_floor.py": "6a0c10740b8885fd858744e56db8f3178375802cec732dca3538d51081355dfe",
     "core/analysis/tests/test_binary_oracle_output.py": "42583e13c76a665e2445f933de759e30435726bb06e6eef176b17c721a3e81a6",
@@ -212,7 +214,7 @@
     "core/audit/tests/test_joern_verify_live.py": "b2f9a0c3811d53df9b582c63237c8a80bb288dfeab0e85ff5fe36f5c85afb43c",
     "core/audit/tests/test_journal.py": "d1c4c21aa6d0eae894f25f9573ce30c864fc79236e58f9327a7d6feab240549b",
     "core/audit/tests/test_knowledge_finalization_console.py": "be7ec269d483c40da1ac1f38481333704749b32ce7909b1813851b392ee2b4c5",
-    "core/audit/tests/test_knowledge_reporting.py": "8cb10d1228e25710c1c274ffcdb3e622b408e5b4e07d248de5b9e2e673a180e7",
+    "core/audit/tests/test_knowledge_reporting.py": "f73f39148afb99c6bfa88fd69d91732dbe3a44c324fa4773366513456533bdf8",
     "core/audit/tests/test_legacy_smt_query_contracts.py": "815e9ac4aee146e80fb3d02e1c5d4acfa67c075145ced5dc6a84dd90e0e1d3a8",
     "core/audit/tests/test_lifecycle_call_timeouts.py": "bda89548d819a3e32575c938d8e2cd5daa6211d89b127e7fefc74426ab230b24",
     "core/audit/tests/test_live_transport_guards.py": "5a1b0e2e474c4508747372bfb180509eb3b81ea49871716b6e1a99082f62d34b",
@@ -227,7 +229,7 @@
     "core/audit/tests/test_processing_finalization_negative_controls.py": "f3c61695e43287b9349ce2d8efe410bd0df80b170c4bac98fe29804386376728",
     "core/audit/tests/test_processing_history_persistence.py": "ef760f7169480d1765a749b6982412c4311b93fe5f17489424c9be27e22ff59a",
     "core/audit/tests/test_processing_limitations.py": "0bcd63630200b6f12ef84acd1594d03dad47fe369117f8330fe8d697cf5695c7",
-    "core/audit/tests/test_prose_never_clean.py": "f63df1ecd47dcbdb097e9202500896330330abd85b25fbae0fd869f7fe872148",
+    "core/audit/tests/test_prose_never_clean.py": "2a805de934c9807c53fcf37bccf6241282cf41af47d3e73859e461c568c884e7",
     "core/audit/tests/test_publication_finalization_integration.py": "04446b6fb01fea84e2d6c235729146b50906cb8054e78110c77a6f7311222b7e",
     "core/audit/tests/test_record_g7_inventory.py": "6d0a4bac237669e50c5abc5a914c6b4b3f4f312c3bfa54e0b34508c154cc2ae7",
     "core/audit/tests/test_record_legacy_checklist_keys.py": "d055e640380bcf9517c4b58397159b431a348e9f03f2257ef98bf33be8746a9e",
@@ -1132,9 +1134,7 @@
     "packages/web/tests/test_poc.py": "ea6315d58681dd2916b17b68683d53df66cf907ae3c8eaee3c34dfb1a3398170",
     "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
     "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
-    "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b",
-    ".github/tests/test_ubuntu_apt_fallback.py": "2b7e2dd4697c5d5144f56b2fe2901f12969edd641e3fa9af68c559ee08af73a6",
-    ".github/tests/test_sca_self_bump_report.py": "12c19cc5f4ada9f709d3eec25b56d1efef0eeeadd59b5b7b2cf1aa58a5b6cd9b"
+    "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b"
   },
   "sites": [
     {
