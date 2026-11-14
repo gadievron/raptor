@@ -130,9 +130,12 @@ def _read_json(path: Path, limit: int = MAX_JSON_BYTES, *, root: Path | None = N
         raise ValueError("Invalid committed reporting JSON") from exc
 
 
-def _protected(context: ReportContext, output_dir: Path) -> set[Path]:
+def _protected(context: ReportContext, output_dir: Path, document: ReportDocument | None = None) -> set[Path]:
     protected = set()
-    for artifact in context.artifacts:
+    artifacts = context.artifacts
+    if document is not None and isinstance(document.extensions, dict):
+        artifacts = [*artifacts, *document.extensions.get("raptor.artifacts", [])]
+    for artifact in artifacts:
         if not isinstance(artifact, dict):
             raise ValueError("Invalid reporting artifact reference")
         for name in ("path", "uri"):
@@ -176,7 +179,7 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
     if not options.enabled:
         ReportDocument.from_dict(document.to_dict())
     output_dir = Path(os.path.abspath(output_dir))
-    blocked = _protected(context, output_dir)
+    blocked = _protected(context, output_dir, document)
     destinations = {}
     filenames = dict(options.filenames)
     destination_paths = set()
@@ -297,13 +300,13 @@ def publish_report(context: ReportContext, document: ReportDocument, output_dir:
 
 
 def publish_summary(summary: OperatorSummary, output_dir: Path, *, context: ReportContext,
-                    expected_generation: str | None = None, summary_writer=None) -> None:
+                    document: ReportDocument | None = None, expected_generation: str | None = None, summary_writer=None) -> None:
     output_dir = Path(os.path.abspath(output_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
     owned = _owned_dir(output_dir / ".reporting", output_dir)
     with _lock(owned):
         _guard(output_dir, expected_generation)
-        if any((output_dir / name).resolve() in _protected(context, output_dir) for name in ("summary.json", "summary.md")):
+        if any((output_dir / name).resolve() in _protected(context, output_dir, document) for name in ("summary.json", "summary.md")):
             raise ValueError("Summary persistence failed: input artifact preserved")
         (summary_writer or write_summary)(summary, output_dir)
 
