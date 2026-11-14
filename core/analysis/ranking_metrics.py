@@ -21,6 +21,7 @@ def auc(scored: Sequence[tuple[float, bool]]) -> float | None:
     negative), with ties counted half — 0.5 is chance, 1.0 is perfect
     separation, 0.0 is perfectly inverted. Returns ``None`` when either
     class is empty (AUC is undefined, not zero).
+    When both classes are present, NaN scores raise ``ValueError``.
 
     Tie-aware: tied scores receive their average rank, so a constant
     score yields exactly 0.5 rather than an order-dependent artefact.
@@ -31,6 +32,8 @@ def auc(scored: Sequence[tuple[float, bool]]) -> float | None:
     n_neg = len(pairs) - n_pos
     if n_pos == 0 or n_neg == 0:
         return None
+    if any(score != score for score, _ in pairs):
+        raise ValueError("AUC cannot rank NaN scores")
     order = sorted(range(len(pairs)), key=lambda i: pairs[i][0])
     ranks = [0.0] * len(pairs)
     i = 0
