@@ -3708,7 +3708,10 @@ def main() -> None:
                 logger.info("Merged SARIF created: %s", merged)
             except Exception as e:  # noqa: BLE001
                 logger.warning("SARIF merge failed, using individual files: %s", e)
-                (out_dir / "sarif_merge.stderr.log").write_text(str(e), encoding="utf-8")
+                try:
+                    (out_dir / "sarif_merge.stderr.log").write_text(str(e), encoding="utf-8")
+                except OSError:
+                    logger.warning("Could not persist SARIF merge diagnostic; using individual files")
 
         # Sanitizer-cut post-pass: value-bound gate verdicts land in
         # suppressions.jsonl. Candidate verdicts are always evidence
