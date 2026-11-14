@@ -1131,13 +1131,29 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
 def _function_reflective_readers(
     fn_ast: ast.AST, inherited: frozenset[str],
 ) -> frozenset[str]:
-    """Negative reader candidates in one existing function-body AST view."""
+    """Negative reader candidates in an existing, compiler-valid function AST.
+
+    Defaults belong to the defining frame: resolve their origins against
+    inherited candidates before collecting this function's body aliases.
+    """
     if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return inherited
+    args = fn_ast.args
+    positional = (*args.posonlyargs, *args.args)
+    start = len(positional) - len(args.defaults)
+    readers = set(inherited)
+    # Source ASTs have aligned bindings; strict pairing avoids silently
+    # certifying absence if an internal caller supplies a malformed AST.
+    for parameters, defaults in (
+        (positional[start:], args.defaults), (args.kwonlyargs, args.kw_defaults),
+    ):
+        for parameter, default in zip(parameters, defaults, strict=True):
+            if default is not None and _attribute_chain_str(default) in inherited:
+                readers.add(parameter.arg)
     body_view = ast.Module(body=list(fn_ast.body), type_ignores=[])
-    return inherited | _module_callable_aliases(
+    return frozenset(readers) | _module_callable_aliases(
         body_view, module_names=frozenset({"builtins"}),
-        attributes=("getattr", "hasattr"), direct_names=tuple(inherited),
+        attributes=("getattr", "hasattr"), direct_names=tuple(readers),
     )
 
 
