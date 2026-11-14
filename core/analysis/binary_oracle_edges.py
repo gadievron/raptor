@@ -142,7 +142,7 @@ def _cache_path_for(build_id: str) -> Path | None:
     binary defines its own identity bytes (``.note.gnu.build-id``,
     LC_UUID, RSDS record) and could otherwise drive cache-file path
     composition. Validate at use-site, not just at production."""
-    if not isinstance(build_id, str) or not _BUILD_ID_RE.match(build_id):
+    if not isinstance(build_id, str) or not _BUILD_ID_RE.fullmatch(build_id):
         return None
     return _edge_cache_dir() / f"{build_id}.json"
 
