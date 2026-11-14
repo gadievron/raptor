@@ -1,5 +1,6 @@
 """Expected-crash scaffolding owns pipes and its tracer even after setup errors."""
 
+from contextlib import ExitStack
 import ctypes
 import errno
 import json
@@ -43,7 +44,12 @@ def test_trace_setup_pipe_closes_after_fork_or_read_failure(stage, error, monkey
 
     def pipe():
         pair = os.pipe()
-        owned.extend((fd, _identity(fd)) for fd in pair)
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            recorded = [(fd, _identity(fd)) for fd in pair]
+            owned.extend(recorded)
+            setup.pop_all()
         return pair
 
     def fork():
