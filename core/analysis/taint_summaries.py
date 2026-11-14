@@ -1148,7 +1148,13 @@ def _function_reflective_readers(
         (positional[start:], args.defaults), (args.kwonlyargs, args.kw_defaults),
     ):
         for parameter, default in zip(parameters, defaults, strict=True):
-            if default is not None and _attribute_chain_str(default) in inherited:
+            if default is not None and (
+                _attribute_chain_str(default) in inherited
+                or _scoped_expression_loads(default) & inherited
+            ):
+                # Computed defaults can retain a reader without calling it.
+                # Scoped reads mask lambda-owned names; this is only negative
+                # provenance, never proof of the resulting callable's identity.
                 readers.add(parameter.arg)
     body_view = ast.Module(body=list(fn_ast.body), type_ignores=[])
     return frozenset(readers) | _module_callable_aliases(
