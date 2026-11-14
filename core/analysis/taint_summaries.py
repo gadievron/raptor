@@ -544,6 +544,10 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
         statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, ast.Raise):
+            expressions.extend([statement.exc, statement.cause])
+        elif isinstance(statement, ast.Assert):
+            expressions.extend([statement.test, statement.msg])
         elif isinstance(statement, (ast.If, ast.While)):
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
