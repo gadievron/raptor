@@ -1494,13 +1494,13 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
     every memory-corruption finding below it. Preprocessor lines are
     skipped too: a ``#define OPEN {`` is not control flow.
     """
-    if not file_path or not call_line:
+    if not file_path or not call_line or call_line < 1:
         return GRADE_SAME_FUNCTION
     from packages.source_intel._source_view import sanitized_lines
     lines = sanitized_lines(file_path)
     if lines is None:
         return GRADE_SAME_FUNCTION
-    if call_line < 1 or call_line > len(lines):
+    if call_line > len(lines):
         return GRADE_SAME_FUNCTION
 
     call_idx = call_line - 1  # 0-indexed
