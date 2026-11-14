@@ -680,8 +680,12 @@ def adjudicate(
     ql = pack / "SynthBarrier.ql"
     ql.write_text(query_ql, encoding="utf-8")
     extra = ["--additional-packs", search_path] if search_path else []
+    output = pack / "out.sarif"
+    # A reused scratch directory must not supply evidence from an older query
+    # when the current analysis fails to produce its promised output.
+    output.unlink(missing_ok=True)
     result = analyze(
-        db_path, [str(ql)], pack / "out.sarif",
+        db_path, [str(ql)], output,
         codeql_bin=codeql_bin, runner=runner, extra_args=extra,
     )
     return _count_results_for_target(Path(result.sarif_path), target_uri, target_line)
