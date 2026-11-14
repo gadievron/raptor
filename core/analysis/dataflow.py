@@ -25,9 +25,9 @@ list; call graphs and synthetic CFGs without a ``params`` attribute
 fall through with empty params, which is correct for those graph
 shapes (parameters aren't a call-graph concept).
 
-This module is pure: no IO, no logging, no global state. Termination
-is guaranteed by the monotone-framework property of reaching-defs
-(the IN-sets grow monotonically toward a least fixed point).
+This module is pure: no IO, no logging, no global state. For a finite,
+static CFG, termination follows from the IN-sets growing monotonically
+over a finite set of symbol/definer pairs toward a least fixed point.
 """
 from __future__ import annotations
 
@@ -102,8 +102,10 @@ def reaching_defs(cfg: Any) -> ReachingDefs:
     * ``OUT[n] = GEN[n] ∪ {(s, m) ∈ IN[n] | s ∉ defs(n)}``
     * ``IN[n] = ⋃ {OUT[p] | p ∈ preds(n)}``
 
-    Worst-case complexity ``O((V + E) * |Symbols|)``; termination
-    guaranteed by monotonicity.
+    Work and storage depend on distinct symbol/definer facts, not only
+    the number of symbols: one symbol can have many defining nodes.
+    Set sizes and repeated worklist visits contribute to the cost.
+    Termination assumes a finite, static CFG.
     """
     nodes = list(cfg.nodes())
     if not nodes:
