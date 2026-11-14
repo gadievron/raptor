@@ -400,7 +400,7 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
     Scope rules:
 
     * Parameters, assignment/augmented/annotated targets (including
-      tuple/list/star destructuring), walrus targets, ``for`` /
+      tuple/list/star destructuring), bare deletion targets, walrus targets, ``for`` /
       ``async for`` targets, ``with … as`` targets, ``except … as``
       names, import aliases, ``match`` capture names, and the NAMES
       of nested function/class definitions all bind locally.
@@ -442,6 +442,9 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 _add_target(t)
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
         elif isinstance(node, ast.NamedExpr):
