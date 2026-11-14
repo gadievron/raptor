@@ -3,9 +3,12 @@
 from concurrent.futures import ThreadPoolExecutor
 from copy import copy, deepcopy
 from dataclasses import FrozenInstanceError
+import inspect
+import sys
 
 import pytest
 
+from core.audit import prepared_execution_attempt as attempt_module
 from core.audit.prepared_execution_attempt import ExecutionAttemptReference, ExecutionInputOwner
 from core.audit.prepared_execution_inputs import InputsUnavailable
 
@@ -174,3 +177,63 @@ def test_interrupted_publication_cannot_leave_retained_bytes_uncharged():
     with pytest.raises(InputsUnavailable, match="retained_input_byte_budget"):
         reserve(subject)
     subject.close()
+
+
+@pytest.mark.parametrize("operation", ["reserve", "close"])
+def test_reentry_during_capture_refuses_nested_public_operation(monkeypatch, operation):
+    subject = owner(max_attempts=1)
+    real_snapshot = attempt_module.snapshot_parent_inputs
+    reached = False
+
+    def snapshot_with_reentry(*args, **kwargs):
+        nonlocal reached
+        reached = True
+        action = (lambda: reserve(subject)) if operation == "reserve" else subject.close
+        with pytest.raises(InputsUnavailable, match="input_owner_reentered"):
+            action()
+        return real_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(attempt_module, "snapshot_parent_inputs", snapshot_with_reentry)
+    reference = reserve(subject)
+    assert reached and reference.ordinal == 0
+    assert subject.handoff_for_dispatch(reference).attempt is reference
+    subject.close()
+
+
+def test_reentrant_handoff_cannot_return_same_inputs_twice():
+    subject = owner()
+    reference = reserve(subject)
+    method = ExecutionInputOwner.handoff_for_dispatch
+    lines, start = inspect.getsourcelines(method)
+    target = start + next(i for i, line in enumerate(lines) if "record.dispatched = True" in line)
+    reached = False
+
+    def enter_between_check_and_set(frame, event, arg):
+        nonlocal reached
+        if frame.f_code is method.__code__ and event == "line" and frame.f_lineno == target:
+            reached = True
+            with pytest.raises(InputsUnavailable, match="input_owner_reentered"):
+                subject.handoff_for_dispatch(reference)
+        return enter_between_check_and_set
+
+    previous = sys.gettrace()
+    try:
+        sys.settrace(enter_between_check_and_set)
+        handoff = subject.handoff_for_dispatch(reference)
+    finally:
+        sys.settrace(previous)
+    assert reached and handoff.attempt is reference
+
+
+def test_capture_interruption_releases_reentry_guard(monkeypatch):
+    subject = owner()
+    real_snapshot = attempt_module.snapshot_parent_inputs
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt("snapshot interrupted")
+
+    monkeypatch.setattr(attempt_module, "snapshot_parent_inputs", interrupted)
+    with pytest.raises(KeyboardInterrupt, match="snapshot interrupted"):
+        reserve(subject)
+    monkeypatch.setattr(attempt_module, "snapshot_parent_inputs", real_snapshot)
+    assert reserve(subject).ordinal == 0
