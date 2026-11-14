@@ -1,4 +1,18 @@
+import functools
+
+import pytest
+
+from core.dataflow import structural_validator
 from core.dataflow.structural_validator import validate_structurally
+from core.testing.module_state import isolated_module_state
+
+
+@pytest.fixture(autouse=True)
+def _private_function_span_memo():
+    original = structural_validator._extract_functions_cached
+    private = functools.lru_cache(**original.cache_parameters())(original.__wrapped__)
+    with isolated_module_state(structural_validator, {"_extract_functions_cached": private}):
+        yield
 
 
 def test_unresolved_cross_file_hop_does_not_report_complete_link_coverage(tmp_path):
