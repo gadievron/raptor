@@ -1127,7 +1127,9 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
     return frozenset(names)
 
 
-def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
+def _detect_summary_unknown(
+    fn_ast: ast.AST, import_map: dict[str, str] | None = None,
+) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
 
@@ -1161,6 +1163,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       enclosing-frame writes depend on consumption, which is not modelled.
     * An annotation metadata protocol read: ``__annotations__`` and
       ``__annotate__`` can evaluate code whose effects are not modelled.
+      The same applies to recognised ``annotationlib.get_annotations`` and
+      ``inspect.get_annotations`` calls, including import aliases.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
       the local frame is not a local: any call between the tracked
       assignment and the return can rewrite it (module slot /
@@ -1176,6 +1180,25 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     deferred_reason = _deferred_frame_summary_reason(fn_ast)
     if deferred_reason is not None:
         return deferred_reason
+    # These candidates only withhold certification: shadowing cannot make a
+    # match trusted. The module map is not a complete alias-history resolver.
+    annotation_api_names = {"annotationlib.get_annotations", "inspect.get_annotations"}
+
+    def add_annotation_import(bound: str, source: str) -> None:
+        if source in ("annotationlib", "inspect"):
+            annotation_api_names.add(bound + ".get_annotations")
+        elif source in ("annotationlib.get_annotations", "inspect.get_annotations"):
+            annotation_api_names.add(bound)
+
+    for bound, source in (import_map or {}).items():
+        add_annotation_import(bound, source)
+    for node in ast.walk(fn_ast):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                add_annotation_import(alias.asname or alias.name.split(".", 1)[0], alias.name)
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            for alias in node.names:
+                add_annotation_import(alias.asname or alias.name, f"{node.module}.{alias.name}")
     annotation_metadata_read = False
     for node in ast.walk(fn_ast):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
@@ -1202,6 +1225,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             return f"declares global {', '.join(node.names)}"
         if not isinstance(node, ast.Call):
             continue
+        if _attribute_chain_str(node.func) in annotation_api_names:
+            annotation_metadata_read = True
         # Skip calls inside nested function definitions — those will
         # have their own summary entries.
         if _inside_nested_function(node, fn_ast):
@@ -2045,7 +2070,7 @@ def _compute_one_summary(
     # Dynamic-dispatch check is one-shot per AST — re-checking each
     # iteration is wasteful but cheap, and it keeps the call graph's
     # responsibility narrow.
-    unknown_reason = _detect_summary_unknown(fn_ast)
+    unknown_reason = _detect_summary_unknown(fn_ast, cg.import_map)
     if unknown_reason is not None:
         return TaintSummary(
             function=qualified_name,
