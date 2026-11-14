@@ -4,10 +4,10 @@
 //   * "call:<name>" at every call site that is NOT a definition
 //
 // The Python ``prereqs`` module derives:
-//   * function_exists(name): finding's claimed function is a real C
-//     function in the tree (not a macro the LLM hallucinated as one)
-//   * function_has_callers(name): function is called from somewhere
-//     other than itself (orphan-static-helper detection)
+//   * function_exists(name): the name appears in the definition inventory
+//   * function_has_callers(name): at least one matching call-site name exists
+// Self-recursion can count. Bare-name maps do not establish unique symbol
+// identity, external entry points, indirect calls or runtime reachability.
 //
 // The rule is intentionally narrow — defs and calls only. Anything
 // richer (taint, escape, scope shadowing) overlaps with CodeQL or
