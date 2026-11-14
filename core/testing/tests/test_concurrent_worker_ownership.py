@@ -22,45 +22,46 @@ def test_group_retires_every_worker(finish, cleanup_fault, count):
     failure = RuntimeError('owned cleanup failure')
     body_error = KeyboardInterrupt('owned body interrupted') if finish == 'interrupt' else ValueError('owned body failed')
     borrowed = threading.Thread(target=borrowed_stop.wait)
-    borrowed.start()
+    with retiring_threads([borrowed], release=borrowed_stop.set, timeout=2):
+        borrowed.start()
 
-    class Worker(threading.Thread):
-        def join(self, timeout=None):
-            super().join(timeout)
-            joined.append(self)
-            if cleanup_fault == 'join' and self is workers[0]:
+        class Worker(threading.Thread):
+            def join(self, timeout=None):
+                super().join(timeout)
+                joined.append(self)
+                if cleanup_fault == 'join' and self is workers[0]:
+                    raise failure
+
+        def release():
+            stop.set()
+            if cleanup_fault == 'release':
                 raise failure
 
-    def release():
-        stop.set()
-        if cleanup_fault == 'release':
-            raise failure
-
-    observed = None
-    try:
-        with retiring_threads(workers, release=release, timeout=2):
-            for _ in range(count):
-                worker = Worker(target=stop.wait)
-                workers.append(worker)
-                worker.start()
-            if finish != 'normal':
-                raise body_error
-    except BaseException as error:
-        observed = error
-    finally:
-        # Record the owner's result before this outer safety-net cleanup.
-        retired = all(not worker.is_alive() for worker in workers)
-        visited = set(joined)
-        borrowed_alive = borrowed.is_alive()
-        stop.set()
-        for worker in workers:
-            threading.Thread.join(worker, 2)
-        borrowed_stop.set()
-        borrowed.join(2)
-    assert retired
-    assert visited == set(workers)
-    assert borrowed_alive
-    assert observed is (failure if cleanup_fault != 'none' else None if finish == 'normal' else body_error)
+        observed = None
+        try:
+            with retiring_threads(workers, release=release, timeout=2):
+                for _ in range(count):
+                    worker = Worker(target=stop.wait)
+                    workers.append(worker)
+                    worker.start()
+                if finish != 'normal':
+                    raise body_error
+        except BaseException as error:
+            observed = error
+        finally:
+            # Record the owner's result before this outer safety-net cleanup.
+            retired = all(not worker.is_alive() for worker in workers)
+            visited = set(joined)
+            borrowed_alive = borrowed.is_alive()
+            stop.set()
+            for worker in workers:
+                threading.Thread.join(worker, 2)
+            borrowed_stop.set()
+            borrowed.join(2)
+        assert retired
+        assert visited == set(workers)
+        assert borrowed_alive
+        assert observed is (failure if cleanup_fault != 'none' else None if finish == 'normal' else body_error)
 
 
 def test_unstarted_workers_are_not_joined():
