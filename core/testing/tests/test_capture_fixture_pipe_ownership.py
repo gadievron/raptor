@@ -1,5 +1,5 @@
 """Native pipes remain owned through actual capture fixture setup."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import os
 from types import FunctionType, ModuleType
 
@@ -27,10 +27,16 @@ def _exercise(monkeypatch, caller, phase=None, error=None, after=False):
             fired = True
             raise failure
         pair = borrowed_pipe()
-        pairs.append(pair)
-        for fd in pair:
-            stat = os.fstat(fd)
-            identities[fd] = (stat.st_dev, stat.st_ino)
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            recorded = {}
+            for fd in pair:
+                stat = os.fstat(fd)
+                recorded[fd] = (stat.st_dev, stat.st_ino)
+            identities.update(recorded)
+            pairs.append(pair)
+            setup.pop_all()
         return pair
 
     private = ModuleType("os")
