@@ -49,7 +49,7 @@ from core.dataflow.cvefix_loader import CveFixPair
 from core.git import safe_git_readonly_command
 from core.sarif.parser import SARIF_MAX_BYTES
 from core.paths import confine, strip_file_uri
-from core.source import read_text_capped
+from core.source import read_contained_text_capped
 from typing import TYPE_CHECKING
 from core.source.lines import split_lines
 
@@ -384,7 +384,7 @@ def _extract_proposal(
                 # bounds check below and the finding is skipped.
                 # newline="" + split_lines keep the \n-only line
                 # model the SARIF line numbers were counted in.
-                got = read_text_capped(src, errors="strict", newline="")
+                got = read_contained_text_capped(repo_root, src, errors="strict", newline="")
                 if got is None:
                     continue
                 lines = split_lines(got[0])

@@ -239,7 +239,7 @@ def read_contained(
     be read. An in-cap read returns the full text; an over-cap file
     returns the capped prefix (trailing partial line dropped) —
     callers that must distinguish truncation use
-    :func:`read_text_capped` with :func:`core.paths.confine`.
+    :func:`read_contained_text_capped`.
 
     The open is ANCHORED: after ``confine`` proves containment, the
     confined path is re-walked relative to the root fd
@@ -252,14 +252,33 @@ def read_contained(
     contract as :func:`read_text_capped`): scanner-paired callers
     pass ``newline=""`` so a plantable bare ``\r`` stays in-line.
     """
+    got = read_contained_text_capped(
+        root, candidate, max_chars=max_chars, errors=errors, newline=newline,
+    )
+    return None if got is None else got[0]
+
+
+def read_contained_text_capped(
+    root: str | Path,
+    candidate: str | Path,
+    *,
+    max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
+    errors: str = "replace",
+    newline: str | None = None,
+) -> tuple[str, bool] | None:
+    """Anchored text read retaining the capped reader's truncation flag.
+
+    Uses the same containment, decoding and prefix shaping as
+    :func:`read_contained`; the flag distinguishes a complete file from
+    a prefix. Unavailable or escaping source returns ``None``.
+    """
     anchored = _open_contained(
         root, candidate, "r", encoding="utf-8", errors=errors,
         newline=newline,
     )
     if anchored is None:
         return None
-    got = _text_capped_from(anchored, max_chars)
-    return None if got is None else got[0]
+    return _text_capped_from(anchored, max_chars)
 
 
 def read_contained_bytes(
