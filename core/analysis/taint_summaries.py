@@ -1164,7 +1164,8 @@ def _detect_summary_unknown(
     * An annotation metadata protocol read: ``__annotations__`` and
       ``__annotate__`` can evaluate code whose effects are not modelled.
       The same applies to recognised ``annotationlib.get_annotations`` and
-      ``inspect.get_annotations`` calls, including import aliases.
+      ``inspect.get_annotations`` references, including import aliases:
+      retained evaluators may later be called through another local name.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
       the local frame is not a local: any call between the tracked
       assignment and the return can rewrite it (module slot /
@@ -1223,10 +1224,15 @@ def _detect_summary_unknown(
                 # rebound_names / distrusted_roots).
                 continue
             return f"declares global {', '.join(node.names)}"
+        if (isinstance(node, (ast.Name, ast.Attribute))
+                and isinstance(node.ctx, ast.Load)
+                and _attribute_chain_str(node) in annotation_api_names):
+            # Retaining the evaluator can hide its eventual call behind a
+            # local alias or callable default. Acquisition is not evaluation,
+            # but the summary does not model the retained callable's effects.
+            annotation_metadata_read = True
         if not isinstance(node, ast.Call):
             continue
-        if _attribute_chain_str(node.func) in annotation_api_names:
-            annotation_metadata_read = True
         # Skip calls inside nested function definitions — those will
         # have their own summary entries.
         if _inside_nested_function(node, fn_ast):
