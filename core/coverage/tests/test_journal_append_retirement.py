@@ -19,8 +19,11 @@ def append_probe(tmp_path, monkeypatch):
     state = {"opened": [], "unlocked": [], "closed": [], "writes": 0,
              "primary": None, "unlock_error": None, "close_error": None, "run": run}
 
+    live = set()
+
     def native_open(*args, **kwargs):
         fd = os.open(*args, **kwargs)
+        live.add(fd)
         state["opened"].append(fd)
         return fd
 
@@ -40,6 +43,7 @@ def append_probe(tmp_path, monkeypatch):
                 raise state["unlock_error"]
 
     def native_close(fd):
+        live.discard(fd)
         os.close(fd)
         state["closed"].append(fd)
         if state["close_error"] is not None:
@@ -54,13 +58,14 @@ def append_probe(tmp_path, monkeypatch):
     try:
         yield state
     finally:
-        for fd in state["opened"]:
+        for fd in list(live):
             try:
                 os.fstat(fd)
             except OSError as exc:
                 assert exc.errno == errno.EBADF
             else:
                 os.close(fd)
+                live.discard(fd)
 
 
 def assert_retired(state):
