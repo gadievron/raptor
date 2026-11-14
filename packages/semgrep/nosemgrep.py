@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from core.paths import confine
-from core.sarif.parser import ArtifactUriResolver, _result_rule_id, get_result_rule, sarif_uri_path
+from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, get_result_rule, sarif_uri_path
 from core.source import read_text_capped, split_lines
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,28 @@ def extract_nosemgrep(
     return None
 
 
+def _annotation_rule_key(result: dict) -> tuple | None:
+    """Reuse the shared bounded reference key without building a rule index."""
+    if type(result) is not dict:
+        return None
+    reference = result.get("rule")
+    if type(reference) is not dict:
+        return None
+    component = reference.get("toolComponent", {})
+    if type(component) is not dict:
+        return None
+    # Indexed and malformed selectors retain direct validation. They do not
+    # justify retaining potentially large integer values in a memo key.
+    for mapping, name in ((result, "ruleIndex"), (reference, "index"), (component, "index")):
+        if name in mapping and (type(mapping[name]) is not int or mapping[name] != -1):
+            return None
+    for mapping, names in ((result, ("ruleId",)), (reference, ("id", "guid")),
+                           (component, ("name", "guid"))):
+        if any(name in mapping and type(mapping[name]) not in (str, type(None)) for name in names):
+            return None
+    return ResultRuleResolver._reference_key(result)
+
+
 def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
     """Annotate SARIF results in place with nosemgrep suppression metadata.
 
@@ -188,6 +210,10 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
         if not isinstance(results, list):
             continue
         uri_resolver = ArtifactUriResolver(run)
+        # Descriptor metadata is read-only during annotation, matching the
+        # shared resolver's contract. Retain one reference, not result payloads.
+        last_rule_key: tuple | None = None
+        last_rule_id: str | None = None
         for result in results:
             if not isinstance(result, dict):
                 continue
@@ -223,7 +249,15 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
 
             rule_id = result.get("ruleId")
             if not isinstance(rule_id, str) or not rule_id:
-                rule_id = _result_rule_id(result, get_result_rule(run, result))
+                key = _annotation_rule_key(result)
+                if key is not None and key == last_rule_key:
+                    rule_id = last_rule_id
+                else:
+                    rule_id = _result_rule_id(result, get_result_rule(run, result))
+                    if key is not None and (rule_id is None or type(rule_id) is str):
+                        last_rule_key, last_rule_id = key, rule_id
+                    else:
+                        last_rule_key, last_rule_id = None, None
             info = extract_nosemgrep(
                 Path(abs_path), line, _lines=lines,
                 rule_id=rule_id if isinstance(rule_id, str) else "",
