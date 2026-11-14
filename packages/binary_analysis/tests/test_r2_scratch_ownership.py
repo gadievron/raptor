@@ -14,37 +14,37 @@ def session_io(tmp_path, monkeypatch):
     state = {"directories": [], "managers": [], "cleanups": [], "faults": {},
              "quit_error": None, "quits": 0, "spawn_calls": 0}
     native = tempfile.TemporaryFile(dir=tmp_path)
-
-    class Handle:
-        def quit(self):
-            native.close()
-            state["quits"] += 1
-            if state["quit_error"] is not None:
-                raise state["quit_error"]
-
-    @contextmanager
-    def owned_scratch(prefix):
-        manager = tempfile.TemporaryDirectory(prefix=prefix, dir=tmp_path)
-        index = len(state["directories"]) + 1
-        state["managers"].append(manager)
-        state["directories"].append(Path(manager.name))
-        try:
-            yield Path(manager.name)
-        finally:
-            manager.cleanup()
-            state["cleanups"].append(index)
-            if index in state["faults"]:
-                raise state["faults"][index]
-
-    def spawn(*_args):
-        state["spawn_calls"] += 1
-        return Handle()
-
-    analyser = object.__new__(consumer.BinaryUnderstand)
-    monkeypatch.setattr(analyser, "_spawn_r2", spawn)
-    monkeypatch.setattr(scratch, "scratch_dir", owned_scratch)
-    state.update(analyser=analyser, native=native)
     try:
+
+        class Handle:
+            def quit(self):
+                native.close()
+                state["quits"] += 1
+                if state["quit_error"] is not None:
+                    raise state["quit_error"]
+
+        @contextmanager
+        def owned_scratch(prefix):
+            manager = tempfile.TemporaryDirectory(prefix=prefix, dir=tmp_path)
+            index = len(state["directories"]) + 1
+            state["managers"].append(manager)
+            state["directories"].append(Path(manager.name))
+            try:
+                yield Path(manager.name)
+            finally:
+                manager.cleanup()
+                state["cleanups"].append(index)
+                if index in state["faults"]:
+                    raise state["faults"][index]
+
+        def spawn(*_args):
+            state["spawn_calls"] += 1
+            return Handle()
+
+        analyser = object.__new__(consumer.BinaryUnderstand)
+        monkeypatch.setattr(analyser, "_spawn_r2", spawn)
+        monkeypatch.setattr(scratch, "scratch_dir", owned_scratch)
+        state.update(analyser=analyser, native=native)
         yield state
     finally:
         native.close()
