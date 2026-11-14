@@ -1268,3 +1268,36 @@ def test_buildless_diagnostic_read_error_discards_partial_file_count(tmp_path, m
     hits, summary = manager.buildless_degradation_summary(db)
     assert hits == 0
     assert 'without executing the build' in summary
+
+
+def test_buildless_diagnostic_paths_are_consumed_during_discovery(tmp_path, monkeypatch):
+    from packages.codeql import database_manager as manager
+
+    db = tmp_path / 'owned-db'
+    diag = db / 'diagnostic'
+    diag.mkdir(parents=True)
+    files = [diag / 'a.jsonl', diag / 'b.jsonl']
+    for path in files:
+        path.write_text('could not find include owned.h\n')
+    opened = []
+    original_glob, original_open = Path.rglob, Path.open
+
+    def discover(candidate, pattern, *args, **kwargs):
+        if candidate == diag:
+            yield files[0]
+            assert opened == [files[0]], 'retained full diagnostic path listing before reading'
+            yield files[1]
+        else:
+            yield from original_glob(candidate, pattern, *args, **kwargs)
+
+    def tracked_open(candidate, *args, **kwargs):
+        if candidate in files:
+            opened.append(candidate)
+        return original_open(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'rglob', discover)
+    monkeypatch.setattr(Path, 'open', tracked_open)
+    hits, summary = manager.buildless_degradation_summary(db)
+    assert hits == 2
+    assert 'unresolved includes' in summary
+    assert opened == files
