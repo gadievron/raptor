@@ -545,6 +545,11 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
         elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            child_body = statement.body
+            if (child_body and isinstance(child_body[0], ast.Expr)
+                    and isinstance(child_body[0].value, ast.Constant)
+                    and isinstance(child_body[0].value.value, str)):
+                child_body = child_body[1:]
             args = statement.args
             parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
             if args.vararg is not None:
@@ -554,7 +559,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             if (statement.decorator_list or statement.type_params
                     or statement.returns is not None
                     or any(parameter.annotation is not None for parameter in parameters)
-                    or len(statement.body) != 1 or not isinstance(statement.body[0], ast.Return)):
+                    or len(child_body) != 1 or not isinstance(child_body[0], ast.Return)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
             allowed = _scope_free_expression_nodes()
@@ -562,7 +567,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 return None
             # Defaults belong to the enclosing scope, before child parameters.
             expressions.extend(defaults)
-            value = statement.body[0].value
+            value = child_body[0].value
             if value is not None:
                 if not all(isinstance(node, allowed) for node in ast.walk(value)):
                     return None
