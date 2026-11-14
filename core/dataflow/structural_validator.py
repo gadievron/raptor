@@ -314,12 +314,19 @@ def _enclosing_function_state(
         funcs = _extract_functions_cached(language, content)
         for f in funcs:
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
+                # Extractors may list enclosing definitions before nested ones.
+                # Keep the tightest containing span, independent of that order.
+                end = f.line_end if f.line_end is not None else line
+                if span_name is not None and (
+                    f.line_start < span_lo
+                    or (f.line_start == span_lo and end >= span_hi)
+                ):
+                    continue
                 # Python AST identifiers use NFKC; spans retain source spelling.
                 span_name = (unicodedata.normalize("NFKC", f.name)
                              if language == "python" else f.name)
                 span_lo = f.line_start
-                span_hi = f.line_end if f.line_end is not None else line
-                break
+                span_hi = end
     except Exception:
         logger.debug("function-at-line lookup failed", exc_info=True)
         extraction_ok = False
