@@ -274,6 +274,10 @@ def _resolve_expansion(
     if depth >= MAX_RESOLUTION_DEPTH:
         return expansion
     visited = set(visited) if visited else set()
+    # Depth and visited context are fixed within this call. Repeated
+    # occurrences of a token can share its expansion without retaining
+    # results across calls or changing cycle detection.
+    resolved_tokens: dict[str, str] = {}
 
     def _replace_token(match: re.Match) -> str:
         token = match.group(0)
@@ -281,10 +285,12 @@ def _resolve_expansion(
             return token
         if token not in macros:
             return token
-        return _resolve_expansion(
-            macros[token], macros, depth=depth + 1,
-            visited=visited | {token},
-        )
+        if token not in resolved_tokens:
+            resolved_tokens[token] = _resolve_expansion(
+                macros[token], macros, depth=depth + 1,
+                visited=visited | {token},
+            )
+        return resolved_tokens[token]
 
     return _TOKEN_NAME_RE.sub(_replace_token, expansion)
 
