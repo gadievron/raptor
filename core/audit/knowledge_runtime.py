@@ -19,13 +19,14 @@ from time import monotonic
 from uuid import UUID, uuid4, uuid5
 from typing import TypedDict
 
-from core.concepts.subject_study import StudySubjects, SubjectExplanation
+from core.concepts.subject_study import StudySubjects, SubjectExplanation, SubjectPacket, SubjectMaterial
 from core.language_reference import ReferenceAnswer, ReferenceContext, lookup
 from core.source.lines import split_lines
 
 from .caller_review_context import (CallerContextAnswer, CallerContextRequest, register_caller_context_requests,
                                     resolve_caller_context, validate_caller_context)
 from .knowledge_requests import KnowledgeBatch, KnowledgeOrigin, KnowledgeRequest, register_requests
+from .study_job_ledger import SemanticStudyJobLedger, StudyDispatchLease, StudyJobDescriptor
 from .binary_review_scope import (BinaryKnowledgeOrigin, BinaryModuleSnapshot, BinaryReviewPublicationScope,
                                   capture_binary_input_identity, capture_binary_publication_scope,
                                   origin_input_identity, same_review_snapshot)
@@ -53,6 +54,14 @@ class _OwnedUnitLease:
     closed: Event
 
 
+@dataclass(frozen=True)
+class _DeferredSourceDispatch:
+    requests: tuple[KnowledgeRequest, ...]
+    packet: SubjectPacket
+    jobs: tuple[StudyJobDescriptor, ...]
+    replay_context: object
+
+
 class AuditKnowledgeRuntime:
     """One audit's knowledge ownership, using its existing study queue.
 
@@ -63,7 +72,8 @@ class AuditKnowledgeRuntime:
     """
 
     def __init__(self, target_root: Path, study_queue, *, deadline: float, window: float = 10.0,
-                 max_continuations: int = 2, max_model_calls: int = 6, caller_inventory: dict | None = None):
+                 max_continuations: int = 2, max_model_calls: int = 6, caller_inventory: dict | None = None,
+                 study_job_call_limit: int | None = None, required_review_calls: int = 1):
         self.target_root = Path(target_root)
         self.study_queue = study_queue
         self.deadline = deadline
@@ -72,7 +82,11 @@ class AuditKnowledgeRuntime:
         self._foundation_namespace = uuid4().hex
         self._write_lock = Lock()
         self._wakeup = Event()
-        self._required_calls = 1
+        if type(required_review_calls) is not int or required_review_calls < 1:
+            raise ValueError("review reservation requires a positive known dispatch count")
+        self._required_calls = (required_review_calls
+                                if type(study_job_call_limit) is int and study_job_call_limit > 0 else 1)
+        self._initial_review_required_calls = self._required_calls
         self._policy: _CyclePolicy = dict(window=window, max_continuations=max_continuations, max_model_calls=max_model_calls)
         self._busy: dict[tuple[str, str, int], int] = {}
         self._unit_lease: ContextVar[_OwnedUnitLease | None] = ContextVar(
@@ -115,6 +129,293 @@ class AuditKnowledgeRuntime:
         self._caller_requests: dict[str, CallerContextRequest] = {}
         self._caller_answers: dict[str, CallerContextAnswer] = {}
         self._caller_semantic: dict[tuple, str] = {}
+        self._study_jobs = (SemanticStudyJobLedger(study_job_call_limit)
+                            if type(study_job_call_limit) is int and study_job_call_limit > 0 else None)
+        self._source_job_owners: dict[int, tuple[StudySubjects, str]] = {}
+        self._source_dispatch_units: dict[str, tuple[tuple[str, str, int], ...]] = {}
+        self._source_dispatch_inputs: dict[str, tuple[SubjectMaterial, ...]] = {}
+        self._source_dispatch_packets: dict[str, SubjectPacket] = {}
+        self._source_dispatch_tokens: dict[str, StudyDispatchLease] = {}
+        self._source_dispatch_retired: set[str] = set()
+        self._deferred_source_dispatches: dict[tuple[str, ...], _DeferredSourceDispatch] = {}
+        self._deferred_source_dispatch_states: dict[tuple[str, ...], str] = {}
+        self._transient_source_refusal_ids: set[str] = set()
+        self._study_review_credits: dict[tuple[str, str, int], set[str]] = {}
+        self._study_review_finished: set[tuple[str, str, int]] = set()
+        self._study_review_touched: set[tuple[str, str, int]] = set()
+        self._study_review_reservations: dict[tuple[str, str, int], tuple[int, frozenset[str]]] = {}
+
+    @property
+    def study_jobs_enabled(self) -> bool:
+        return self._study_jobs is not None
+
+    def source_job_owner(self, subjects: StudySubjects) -> str:
+        with self._lock:
+            record = self._source_job_owners.get(id(subjects))
+            if record is None:
+                record = (subjects, uuid4().hex)
+                self._source_job_owners[id(subjects)] = record
+            return record[1]
+
+    def _study_review_credit(self, key: tuple[str, str, int], attempt_id: str) -> None:
+        if self._study_jobs is not None:
+            self._study_review_credits.setdefault(key, set()).add(attempt_id)
+
+    def _study_review_returned(self, key: tuple[str, str, int], attempt_id: str, *, success: bool) -> None:
+        if self._study_jobs is None:
+            return
+        with self._lock:
+            if success or attempt_id in self._study_review_credits.get(key, ()):
+                self._study_review_touched.add(key)
+                if not self._busy.get(key):
+                    self._study_review_finished.add(key)
+
+    def _study_reserved_calls(self, key: tuple[str, str, int]) -> int:
+        credits = self._study_review_credits.get(key, set())
+        first = (max(0, self._initial_review_required_calls - len(credits))
+                 if key not in self._study_review_finished else 0)
+        active = self._study_review_reservations.get(key)
+        remaining = max(0, active[0] - len(credits - active[1])) if active else 0
+        # An initial context reservation and its first-review reservation may
+        # name the same planned calls. Do not reserve those calls twice.
+        return max(first, remaining)
+
+    def begin_source_dispatch(self, *, requests: tuple[KnowledgeRequest, ...], packet: SubjectPacket,
+                              jobs: tuple[StudyJobDescriptor, ...], owner_id: str
+                              ) -> tuple[StudyDispatchLease | None, str]:
+        if not isinstance(packet, SubjectPacket):
+            return None, "unowned_study_packet"
+        if self._study_jobs is not None:
+            admitted, reason = self.bindings.admit_inputs(packet.materials)
+            if not admitted:
+                return None, reason
+        with self._lock:
+            if self._study_jobs is None:
+                return None, "study_job_policy_unavailable"
+            if self._closed or self._sources_closed or monotonic() >= self.deadline:
+                return None, "source_study_stopped"
+            if (not requests or not isinstance(packet, SubjectPacket)
+                    or len({r.request_id for r in requests}) != len(requests)
+                    or tuple(s.request_id for s in packet.subjects) != tuple(r.request_id for r in requests)
+                    or type(packet.extra_context_excluded) is not bool
+                    or any((subject.subject, subject.context, subject.resolution, subject.source_file)
+                           != (request.subject, request.context, request.resolution, request.origin.file)
+                           for subject, request in zip(packet.subjects, requests))
+                    or any(self._requests.get(r.request_id) != r for r in requests)):
+                return None, "unowned_study_packet"
+            keys = tuple(sorted({self._key(r.origin) for r in requests}))
+            if any(key not in self._cycles for key in keys):
+                return None, "unowned_study_unit"
+            token, reason = self._study_jobs.begin(
+                owner_id=owner_id, jobs=jobs, request_ids=tuple(r.request_id for r in requests),
+                input_binding_ids=tuple(m.binding_id for m in packet.materials),
+                unit_caps=tuple(self._cycles[key].max_model_calls for key in keys),
+            )
+            if token is not None:
+                self._source_dispatch_units[token.lease_id] = keys
+                self._source_dispatch_inputs[token.lease_id] = packet.materials
+                self._source_dispatch_packets[token.lease_id] = packet
+                self._source_dispatch_tokens[token.lease_id] = token
+                self._events.append({"event": "semantic_study_dispatch", "lease_id": token.lease_id,
+                                     "request_ids": list(token.request_ids)})
+            return token, reason
+
+    def source_dispatch_valid(self, token: StudyDispatchLease | None) -> None:
+        from .knowledge_calls import KnowledgeCallRefused
+
+        if type(token) is not StudyDispatchLease:
+            raise KnowledgeCallRefused("study_job_lease_unavailable")
+        with self._lock:
+            reason = ("source_study_stopped" if self._closed or self._sources_closed
+                      or monotonic() >= self.deadline else
+                      self._study_jobs.validity_rejection(token) if self._study_jobs is not None
+                      else "study_job_policy_unavailable")
+            inputs = self._source_dispatch_inputs.get(token.lease_id, ())
+        if reason:
+            raise KnowledgeCallRefused(reason)
+        admitted, reason = self.bindings.admit_inputs(inputs)
+        if not admitted:
+            raise KnowledgeCallRefused(reason)
+        with self._lock:
+            reason = self._study_jobs.validity_rejection(token) if self._study_jobs else "study_job_policy_unavailable"
+            if self._closed or self._sources_closed or monotonic() >= self.deadline:
+                reason = "source_study_stopped"
+            if reason:
+                raise KnowledgeCallRefused(reason)
+
+    def mark_source_dispatch_unknown(self, token: StudyDispatchLease) -> None:
+        with self._lock:
+            if self._study_jobs is not None:
+                self._study_jobs.mark_unknown(token, "opaque_study_client_attempts")
+
+    def finish_source_dispatch(self, token: StudyDispatchLease) -> None:
+        """Only the actual synchronous invocation's finally retires its lease."""
+        if type(token) is not StudyDispatchLease:
+            return
+        with self._lock:
+            if (self._study_jobs is not None
+                    and self._source_dispatch_tokens.get(token.lease_id) is token
+                    and token.lease_id not in self._source_dispatch_retired):
+                keys = self._source_dispatch_units.get(token.lease_id, ())
+                self._study_jobs.retire(token, accounting_known=bool(keys) and not any(
+                    key in self._unknown_calls for key in keys))
+                self._source_dispatch_retired.add(token.lease_id)
+                self._events.append({"event": "semantic_study_dispatch_retired", "lease_id": token.lease_id})
+        self._queue_retired_source_dispatches()
+
+    def defer_live_source_dispatch(self, *, requests: tuple[KnowledgeRequest, ...], packet: SubjectPacket,
+                                   jobs: tuple[StudyJobDescriptor, ...], replay_context: object) -> bool:
+        """Keep one original packet pending; it cannot borrow another attempt's answer."""
+        copied_context = deepcopy(replay_context)
+        request_ids = tuple(request.request_id for request in requests)
+        with self._lock:
+            if (self._study_jobs is None or self._closed or self._sources_closed
+                    or not request_ids or len(set(request_ids)) != len(request_ids)
+                    or not jobs or any(type(job) is not StudyJobDescriptor for job in jobs)
+                    or tuple(subject.request_id for subject in packet.subjects) != request_ids
+                    or any(self._requests.get(request.request_id) != request
+                           or request.request_id not in self._pending_sources for request in requests)):
+                return False
+            prior = self._deferred_source_dispatches.get(request_ids)
+            if prior is not None and (prior.requests != requests or prior.packet != packet or prior.jobs != jobs):
+                return False
+            if any(set(request_ids) & set(other) for other in self._deferred_source_dispatches
+                   if other != request_ids):
+                return False
+            self._deferred_source_dispatches[request_ids] = prior or _DeferredSourceDispatch(
+                requests, packet, jobs, copied_context)
+            self._deferred_source_dispatch_states[request_ids] = "pending"
+            # The refusing phase may drain after retirement has already
+            # settled or replayed this packet. Its stale transient refusal
+            # must not replace that later owner decision or explanation.
+            self._transient_source_refusal_ids.update(request_ids)
+            for request_id in request_ids:
+                self._request_status[request_id] = {"state": "queued", "reason": "study_job_dispatch_live"}
+            self._events.append({"event": "semantic_study_dispatch_pending", "request_ids": list(request_ids),
+                                 "reason": "study_job_dispatch_live"})
+        # The previous physical call can retire between begin's refusal and
+        # this registration. Recheck after retaining the original packet.
+        self._queue_retired_source_dispatches()
+        self.notify()
+        return True
+
+    def transient_source_request_ids(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(request_id for ids, state in self._deferred_source_dispatch_states.items()
+                             if state in {"pending", "queued"} for request_id in ids)
+
+    def source_dispatch_replays(self, requests: tuple[KnowledgeRequest, ...]):
+        """Expand a queued subset to its original packet and consume it only once."""
+        with self._lock:
+            if self._study_jobs is None:
+                return (), requests
+            selected_ids = {request.request_id for request in requests}
+            replays = []
+            deferred_ids: set[str] = set()
+            for ids, pending in self._deferred_source_dispatches.items():
+                deferred_ids.update(ids)
+                if not selected_ids.intersection(ids):
+                    continue
+                if (self._deferred_source_dispatch_states.get(ids) == "queued"
+                        and all(request_id in self._pending_sources for request_id in ids)):
+                    self._deferred_source_dispatch_states[ids] = "replaying"
+                    replays.append((pending.requests, pending.packet, pending.replay_context))
+            live_ids = {request_id for token in self._source_dispatch_tokens.values()
+                        if token.lease_id not in self._source_dispatch_retired for request_id in token.request_ids}
+            fresh = tuple(request for request in requests if request.request_id in self._pending_sources
+                          and request.request_id not in deferred_ids and request.request_id not in live_ids)
+            return tuple(replays), fresh
+
+    def _pending_dispatch_rejection(self, pending: _DeferredSourceDispatch, jobs: dict) -> str:
+        # Called under the Runtime lock; no source reads or foreign callbacks.
+        if self._closed or self._sources_closed or monotonic() >= self.deadline:
+            return "source_study_stopped"
+        rows: list[dict] = []
+        for job in pending.jobs:
+            row = jobs.get(job.lineage)
+            if row is None:
+                return "study_job_inputs_unavailable"
+            rows.append(row)
+        if not rows:
+            return "study_job_inputs_unavailable"
+        if any(row["active_lease"] is not None for row in rows):
+            return "study_job_dispatch_live"
+        if any(row["accounting_unknown"] for row in rows):
+            return "study_job_accounting_unknown"
+        if any(row["generation"] != job.generation for row, job in zip(rows, pending.jobs)):
+            return "study_job_generation_changed"
+        assert self._study_jobs is not None
+        if any(row["spent"] >= self._study_jobs.job_call_limit for row in rows):
+            return "study_job_call_limit"
+        keys = {self._key(request.origin) for request in pending.requests}
+        if any(key in self._unknown_calls for key in keys):
+            return "model_call_count_unavailable"
+        if any(key not in self._cycles for key in keys):
+            return "unowned_study_unit"
+        if any(self._calls.get(key, 0) + 1 + self._study_reserved_calls(key)
+               > self._cycles[key].max_model_calls for key in keys):
+            return "model_call_limit"
+        return ""
+
+    def _queue_retired_source_dispatches(self) -> None:
+        queued, refused = [], []
+        with self._lock:
+            if self._study_jobs is None:
+                return
+            jobs = {row["lineage"]: row for row in self._study_jobs.snapshot()["jobs"]}
+            for ids, pending in tuple(self._deferred_source_dispatches.items()):
+                if self._deferred_source_dispatch_states.get(ids) != "pending":
+                    continue
+                if not all(request_id in self._pending_sources for request_id in ids):
+                    del self._deferred_source_dispatches[ids]
+                    self._deferred_source_dispatch_states.pop(ids, None)
+                    continue
+                reason = self._pending_dispatch_rejection(pending, jobs)
+                if reason == "study_job_dispatch_live":
+                    continue
+                if reason:
+                    del self._deferred_source_dispatches[ids]
+                    self._deferred_source_dispatch_states.pop(ids, None)
+                    refused.append((pending, reason))
+                else:
+                    self._deferred_source_dispatch_states[ids] = "queued"
+                    queued.append((ids, pending))
+        # Queue and cycle callbacks run outside the Runtime lock. The queue's
+        # batch operation retains the original request group atomically.
+        for ids, pending in queued:
+            enqueue = getattr(self.study_queue, "enqueue_knowledge_batch", None)
+            try:
+                accepted = callable(enqueue) and enqueue(pending.requests) is True
+            except Exception:
+                accepted = False
+            if not accepted:
+                with self._lock:
+                    if self._deferred_source_dispatches.get(ids) is pending:
+                        self._deferred_source_dispatches.pop(ids, None)
+                        self._deferred_source_dispatch_states.pop(ids, None)
+                refused.append((pending, "study_queue_closed"))
+        for pending, reason in refused:
+            for request in pending.requests:
+                with self._lock:
+                    cycle = (self._cycles.get(self._key(request.origin))
+                             if request.request_id in self._pending_sources else None)
+                if cycle is not None:
+                    self._defer_source(request, cycle, reason)
+        if queued or refused:
+            self.notify()
+
+    def _study_answer_scope_owned(self, answer: SubjectExplanation) -> bool:
+        if self._study_jobs is None:
+            return True
+        for lease_id, packet in self._source_dispatch_packets.items():
+            token = self._source_dispatch_tokens[lease_id]
+            if (answer.inputs == packet.materials
+                    and answer.excluded_inputs == packet.excluded_materials
+                    and answer.extra_context_excluded is packet.extra_context_excluded
+                    and self._study_jobs.permits_answer(
+                        answer.request_id, tuple(material.binding_id for material in answer.inputs), token=token)):
+                return True
+        return False
 
     @staticmethod
     def _key(origin: KnowledgeOrigin) -> tuple[str, str, int]:
@@ -163,6 +464,8 @@ class AuditKnowledgeRuntime:
                     self._busy[key] -= 1
                     if not self._busy[key]:
                         del self._busy[key]
+                    if self._study_jobs is not None and key in self._study_review_touched:
+                        self._study_review_finished.add(key)
                 self.notify()
 
         setattr(unit, "_knowledge_unit_owner", self)
@@ -274,6 +577,7 @@ class AuditKnowledgeRuntime:
             with self._lock:
                 if getattr(review_fn, "_knowledge_observed_client_contract", None) is not True:
                     self._calls[key] = self._calls.get(key, 0) + 1
+                    self._study_review_credit(key, attempt_id)
                 if getattr(review_fn, "_knowledge_observed_client_contract", None) is not True:
                     self._unknown_calls.add(key)
                 self._events.append({"event": "review_attempt", "attempt_id": attempt_id, "origin": asdict(origin)})
@@ -284,19 +588,27 @@ class AuditKnowledgeRuntime:
                                          "origin": asdict(origin), "answer": asdict(answer)})
             try:
                 from .knowledge_calls import owned_call_scope
-                with owned_call_scope(lambda purpose, method: self.admit_client_call(
-                        {"file": origin.file, "name": origin.function, "line_start": origin.line_start}, purpose, method),
+                def review_admit(purpose, method):
+                    if self._study_jobs is not None:
+                        return self._admit_client_key(key, purpose, method, review_attempt_id=attempt_id)
+                    return self.admit_client_call(
+                        {"file": origin.file, "name": origin.function, "line_start": origin.line_start},
+                        purpose, method)
+
+                with owned_call_scope(review_admit,
                         work_id="review:" + origin.pass_id, beneficiaries=(origin.pass_id,),
                         validity=self.client_lifetime_valid,
                         on_unobserved_attempts=lambda: self._mark_call_key_unknown(
                             key, "opaque_client_attempts")):
                     outcome = review_fn(ctx, config)
             except BaseException:
+                self._study_review_returned(key, attempt_id, success=False)
                 with self._lock:
                     self._events.append({"event": "review_failed", "attempt_id": attempt_id,
                                          "pass_id": origin.pass_id})
                 self.notify()
                 raise
+            self._study_review_returned(key, attempt_id, success=True)
             from .review_claims import begin_review
             # Pipeline-owned: a model cannot supply the original source stamp.
             outcome.review_result = dict(outcome.review_result or {})
@@ -1103,12 +1415,20 @@ class AuditKnowledgeRuntime:
             self._request_status[request.request_id] = {"state": "deferred", "reason": reason}
             self._events.append({"event": "study_deferred", "request_id": request.request_id, "reason": reason})
 
-    def admit_source_attempt(self, requests: tuple[KnowledgeRequest, ...]) -> bool:
+    def admit_source_attempt(self, requests: tuple[KnowledgeRequest, ...], *,
+                             dispatch_lease: StudyDispatchLease | None = None) -> bool:
         """Count an owned structured dispatch, after the shared throttle admits it.
 
         Hidden provider retries remain the budget client's responsibility. A
         shared call contributes once to every unit whose request it contains.
         """
+        packet_reason = ""
+        if self._study_jobs is not None:
+            from .knowledge_calls import KnowledgeCallRefused
+            try:
+                self.source_dispatch_valid(dispatch_lease)
+            except KnowledgeCallRefused as error:
+                packet_reason = error.reason
         current = {r.origin.file: capture_source_identity(self.target_root, r.origin.file)
                    for r in requests}
         keys = {(r.origin.file, r.origin.function, r.origin.line_start) for r in requests}
@@ -1120,14 +1440,28 @@ class AuditKnowledgeRuntime:
                       "source_changed_before_study" if any(
                           r.origin.source_identity is None or current[r.origin.file] != r.origin.source_identity
                           for r in requests) else
+                      packet_reason if packet_reason else
+                      "study_dispatch_participants_mismatch" if self._study_jobs is not None and (
+                          type(dispatch_lease) is not StudyDispatchLease
+                          or dispatch_lease.request_ids != tuple(r.request_id for r in requests)
+                          or self._source_dispatch_units.get(dispatch_lease.lease_id) != tuple(sorted(keys))) else
                       "model_call_count_unavailable" if keys & self._unknown_calls else
                       "model_call_limit" if any(
                           key not in self._cycles or self._calls.get(key, 0) >= self._cycles[key].max_model_calls
-                          for key in keys) else "")
+                          for key in keys) else
+                      "review_call_reserve" if self._study_jobs is not None and any(
+                          self._calls.get(key, 0) + 1 + self._study_reserved_calls(key)
+                          > self._cycles[key].max_model_calls for key in keys) else "")
+            if not reason and self._study_jobs is not None:
+                reason = (self._study_jobs.admission_rejection(dispatch_lease)
+                          if dispatch_lease is not None else "study_job_lease_unavailable") or ""
             if reason:
                 self._events.append({"event": "study_dispatch_refused", "reason": reason,
                                      "request_ids": [r.request_id for r in requests]})
                 return False
+            if self._study_jobs is not None:
+                assert dispatch_lease is not None
+                self._study_jobs.debit(dispatch_lease)
             for key in keys:
                 self._calls[key] = self._calls.get(key, 0) + 1
             self._events.append({"event": "study_attempt",
@@ -1148,10 +1482,14 @@ class AuditKnowledgeRuntime:
             jobs = tuple(self._source_jobs)
         for subjects in jobs:
             self.record_source_answers(subjects.drain_updates())
+        self._queue_retired_source_dispatches()
 
     def finish_source_job(self, subjects: StudySubjects) -> None:
         self.record_source_answers(subjects.drain_updates())
         with self._lock:
+            owner = self._source_job_owners.get(id(subjects))
+            if self._study_jobs is not None and owner is not None:
+                self._study_jobs.owner_finished(owner[1])
             if subjects in self._source_jobs:
                 self._source_jobs.remove(subjects)
         self.notify()
@@ -1159,24 +1497,50 @@ class AuditKnowledgeRuntime:
     def record_source_answers(self, answers: tuple[SubjectExplanation, ...]) -> None:
         """Retain explanations as context and notify their existing unit cycle."""
         for answer in answers:
+            rejected = False
+            cycle = None
             with self._lock:
                 request = self._requests.get(answer.request_id)
                 if request is None or request.kind != "target_study":
                     self._events.append({"event": "source_answer_rejected", "reason": "unknown_request"})
                     continue
                 key = (request.origin.file, request.origin.function, request.origin.line_start)
-                cycle = self._cycles.get(key)
-                prior = self._source_answers.setdefault(answer.request_id, [])
-                if answer in prior:
+                if (self._study_jobs is not None and answer.reason == "study_job_dispatch_live"
+                        and answer.status == "unavailable" and answer.producer == "pipeline"
+                        and answer.request_id in self._transient_source_refusal_ids):
+                    # The attempted packet never entered a provider. Keep the
+                    # original request and cycle pending for its own replay.
+                    self._events.append({"event": "semantic_study_dispatch_still_pending",
+                                         "request_id": answer.request_id, "reason": answer.reason})
                     continue
-                prior.append(answer)
-                self._pending_sources.discard(answer.request_id)
-                self._request_status[answer.request_id] = {
-                    "state": "context_available" if answer.status in ("answered", "partial") else "unavailable",
-                    "answer_status": answer.status, "reason": answer.reason}
-                self._events.append({"event": "source_answer", "answer": asdict(answer)})
+                if (self._study_jobs is not None and answer.status in {"answered", "partial"}
+                        and not self._study_answer_scope_owned(answer)):
+                    reason = "semantic_study_attempt_scope_unavailable"
+                    self._events.append({"event": "source_answer_rejected", "request_id": answer.request_id,
+                                         "reason": reason})
+                    if answer.request_id in self._pending_sources:
+                        self._pending_sources.discard(answer.request_id)
+                        self._request_status[answer.request_id] = {"state": "deferred", "reason": reason}
+                        cycle = self._cycles.get(key)
+                    rejected = True
+                else:
+                    cycle = self._cycles.get(key)
+                    prior = self._source_answers.setdefault(answer.request_id, [])
+                    if answer in prior:
+                        continue
+                    prior.append(answer)
+                    self._pending_sources.discard(answer.request_id)
+                    self._request_status[answer.request_id] = {
+                        "state": "context_available" if answer.status in ("answered", "partial") else "unavailable",
+                        "answer_status": answer.status, "reason": answer.reason}
+                    self._events.append({"event": "source_answer", "answer": asdict(answer)})
+                for ids in tuple(self._deferred_source_dispatches):
+                    if not any(request_id in self._pending_sources for request_id in ids):
+                        self._deferred_source_dispatches.pop(ids, None)
+                        self._deferred_source_dispatch_states.pop(ids, None)
             if cycle is not None:
-                cycle.explanation(answer, now=monotonic())
+                if not rejected:
+                    cycle.explanation(answer, now=monotonic())
                 cycle.finished(answer.request_id)
         if answers:
             self.notify()
@@ -1394,6 +1758,9 @@ class AuditKnowledgeRuntime:
                 if not closed:
                     self._active[packet.pass_id] = reservation
                     self._active_units[key] = reservation
+                    if self._study_jobs is not None:
+                        self._study_review_reservations[key] = (
+                            required_calls, frozenset(self._study_review_credits.get(key, ())))
                     self._events.append({"event": "continuation_reserved", "origin": asdict(cycle.origin),
                                          "pass_id": packet.pass_id, "delta_ids": list(packet.delta_ids),
                                          "pending_ids": list(packet.pending_ids), "required_calls": required_calls})
@@ -1633,6 +2000,7 @@ class AuditKnowledgeRuntime:
             key = self._key(reservation.origin)
             if self._active_units.get(key) is reservation:
                 self._active_units.pop(key, None)
+                self._study_review_reservations.pop(key, None)
             self._knowledge_deliveries.pop(reservation.packet.pass_id, None)
             self._external_deliveries.pop(reservation.packet.pass_id, None)
             self._caller_deliveries.pop(reservation.packet.pass_id, None)
@@ -1715,6 +2083,10 @@ class AuditKnowledgeRuntime:
     def close_sources(self, reason: str = "source_worker_closed") -> None:
         with self._lock:
             self._sources_closed = True
+            if self._study_jobs is not None:
+                self._study_jobs.close()
+            self._deferred_source_dispatches.clear()
+            self._deferred_source_dispatch_states.clear()
             pending = tuple(self._pending_sources)
         self.record_source_answers(tuple(SubjectExplanation(
             request_id, "unavailable", "", reason, (), producer="pipeline") for request_id in pending))
@@ -1747,6 +2119,14 @@ class AuditKnowledgeRuntime:
                 cycles = tuple(self._cycles.items())
                 counts = dict(self._calls)
                 unknown = set(self._unknown_calls)
+                study_jobs = self._study_jobs.snapshot() if self._study_jobs is not None else None
+                if study_jobs is not None:
+                    study_jobs["dispatch_scopes"] = [
+                        {"lease_id": lease_id, "subjects": [asdict(subject) for subject in packet.subjects],
+                         "input_binding_ids": [material.binding_id for material in packet.materials],
+                         "excluded_inputs": [asdict(material) for material in packet.excluded_materials],
+                         "extra_context_excluded": packet.extra_context_excluded}
+                        for lease_id, packet in self._source_dispatch_packets.items()]
             materials = {}
             for event in events:
                 answer = event.get("answer")
@@ -1768,6 +2148,8 @@ class AuditKnowledgeRuntime:
                        "units": [{"unit": list(key), "owned_dispatch_attempts": counts.get(key, 0),
                                   "all_model_calls": None if key in unknown else counts.get(key, 0),
                                   "cycle": cycle.state_record()} for key, cycle in cycles]}
+            if study_jobs is not None:
+                payload["shared_study_jobs"] = study_jobs
             save_json(out_dir / "knowledge-results.json", payload)
             path_key = str(out_dir.resolve())
             for index in range(self._written_events.get(path_key, 0), len(events)):
@@ -1799,7 +2181,8 @@ class AuditKnowledgeRuntime:
     def admit_client_call(self, gap: dict, purpose: str, method: str) -> bool:
         return self._admit_client_key(self._gap_key(gap), purpose, method)
 
-    def _admit_client_key(self, key: tuple[str, str, int], purpose: str, method: str) -> bool:
+    def _admit_client_key(self, key: tuple[str, str, int], purpose: str, method: str, *,
+                          review_attempt_id: str | None = None) -> bool:
         # Ownership and admission use the same scheduled key throughout the
         # unit lifetime, even when helpers annotate the mutable gap object.
         with self._lock:
@@ -1812,6 +2195,8 @@ class AuditKnowledgeRuntime:
                                      "purpose": purpose, "method": method, "reason": reason})
                 return False
             self._calls[key] = self._calls.get(key, 0) + 1
+            if purpose == "review" and review_attempt_id is not None:
+                self._study_review_credit(key, review_attempt_id)
             self._events.append({"event": "client_call_attempt", "unit": list(key),
                                  "purpose": purpose, "method": method})
             return True

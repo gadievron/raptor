@@ -912,6 +912,9 @@ class OrchestratorConfig:
     # and discovery reviews — the run's primary product — give up
     # real budget to an enrichment pass. 0 disables the slice.
     study_reserve_fraction: float = 0.05
+    # Explicit run-owned study lineage allowance. None preserves the existing
+    # study path; no per-job allowance is inferred from unit or packet caps.
+    study_job_call_limit: int | None = None
     # Slice of the LLM cost cap held back from the PRE-review bulk
     # passes (prep, study, synthesis, summaries) so the per-function
     # review loop is guaranteed headroom. Held on the budget client at
@@ -9846,6 +9849,8 @@ def _run_audit_body(
         deadline=(config.run_deadline_monotonic if config.run_deadline_monotonic is not None
                   else start_time + config.max_seconds if config.max_seconds else float("inf")),
         caller_inventory=(config.inventory if isinstance(config.inventory, dict) else checklist),
+        study_job_call_limit=config.study_job_call_limit,
+        required_review_calls=knowledge_panel_width,
     )
     if review_resources is not None:
         def persist_owned_knowledge():
@@ -16802,8 +16807,26 @@ class StudyQueue:
             self._not_empty.notify()
             return True
 
+    def enqueue_knowledge_batch(self, items: "tuple[KnowledgeRequest, ...]") -> bool:
+        """Requeue one original pending packet without accepting a partial group."""
+        from .knowledge_requests import KnowledgeRequest
+
+        if (not items or type(items) is not tuple
+                or any(not isinstance(item, KnowledgeRequest) or item.kind != "target_study" for item in items)
+                or len({item.request_id for item in items}) != len(items)):
+            return False
+        with self._not_empty:
+            # These requests were registered before producer completion.
+            # Their original packet may become runnable only when another
+            # physical invocation retires during the consumer's drain.
+            if self._consumer_done or self._stop_requested:
+                return False
+            self._queue.extend(items)
+            self._not_empty.notify()
+            return True
+
     def dequeue_batch(
-        self, max_items: int = 15, timeout: float = 30.0,
+        self, max_items: int = 15, timeout: float = 30.0, *, wait_for_pending: bool = False,
     ) -> "list[StudyRequest | KnowledgeRequest]":
         with self._not_empty:
             if self._stop_requested:
@@ -16815,7 +16838,7 @@ class StudyQueue:
                 # the pause never blinds them.
                 self._not_empty.wait(timeout=timeout)
                 return []
-            if not self._queue and not self._producer_done:
+            if not self._queue and (not self._producer_done or wait_for_pending):
                 self._not_empty.wait(timeout=timeout)
             if self._stop_requested or self._pause_requested:
                 return []
@@ -18557,11 +18580,18 @@ def _study_consumer_loop(
     if knowledge_runtime is not None:
         # Typed production is enabled only with this consumer branch. In
         # particular it must never fall through the question-shaped deduper.
-        while not study_queue.is_done():
+        def transient_pending() -> bool:
+            return (getattr(knowledge_runtime, "study_jobs_enabled", False) is True
+                    and bool(knowledge_runtime.transient_source_request_ids()))
+
+        while not study_queue.is_done() or transient_pending():
             study_queue.set_working(False)
             if _check_budget(config, start_time, result) or study_queue.stop_requested:
                 break
-            batch = study_queue.dequeue_batch(max_items=15, timeout=30.0)
+            if transient_pending():
+                batch = study_queue.dequeue_batch(max_items=15, timeout=0.25, wait_for_pending=True)
+            else:
+                batch = study_queue.dequeue_batch(max_items=15, timeout=30.0)
             if not batch:
                 continue
             study_queue.set_working(True)
