@@ -1253,3 +1253,40 @@ def test_config_index_candidate_cap_still_refuses_excess(tmp_path, monkeypatch, 
     matches, capped = resolver._FileIndex(tmp_path).locate('owned.properties')
     assert len(matches) == min(count, 2)
     assert capped is (count > 1)
+
+
+@pytest.mark.parametrize('failure', [PermissionError, FileNotFoundError, NotADirectoryError])
+def test_config_index_distinguishes_unknown_metadata_from_absence(tmp_path, monkeypatch, failure):
+    import os
+    from core.analysis import config_resolve_java as resolver
+
+    visible, refused = tmp_path / 'a', tmp_path / 'b'
+    for directory in (visible, refused):
+        directory.mkdir()
+        (directory / 'owned.properties').write_text('owned_key=value\n')
+    blocked = refused / 'owned.properties'
+    original = os.stat
+    calls = []
+
+    def scoped_stat(path, *args, **kwargs):
+        if os.path.normpath(os.fspath(path)) == str(blocked):
+            calls.append(str(path))
+            raise failure('owned candidate metadata refusal')
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'stat', scoped_stat)
+    matches, capped = resolver._FileIndex(tmp_path).locate('owned.properties')
+    assert calls
+    assert not capped
+    assert matches == ([] if failure is PermissionError else [visible / 'owned.properties'])
+
+
+def test_config_index_ignores_known_nonfile_candidate(tmp_path):
+    from core.analysis import config_resolve_java as resolver
+
+    visible, directory_candidate = tmp_path / 'a', tmp_path / 'b'
+    visible.mkdir()
+    directory_candidate.mkdir()
+    (visible / 'owned.properties').write_text('owned_key=value\n')
+    (directory_candidate / 'owned.properties').mkdir()
+    assert resolver._FileIndex(tmp_path).locate('owned.properties') == ([visible / 'owned.properties'], False)
