@@ -370,10 +370,8 @@ def test_no_caveat_when_unconditional():
     assert "CONDITIONAL" not in text
 
 
-def test_noreturn_renders_dos_only_phrasing():
-    """noreturn marks a function as a guaranteed abort — the rendered
-    line must say "DoS-only" so the LLM understands the implication
-    for exploitability."""
+def test_noreturn_renders_annotation_limits():
+    """The annotation alone does not establish an abort or DoS outcome."""
     from packages.source_intel.analyze import KIND_NORETURN, AttributeEvidence
     ev = AttributeEvidence(
         kind=KIND_NORETURN,
@@ -387,7 +385,8 @@ def test_noreturn_renders_dos_only_phrasing():
     text = "\n".join(lines)
     assert "panic_fn" in text
     assert "noreturn" in text.lower()
-    assert "dos" in text.lower() or "aborts" in text.lower()
+    assert "does not establish" in text
+    assert "the bug becomes DoS-only" not in text
 
 
 def test_malloc_renders_allocator_signal():
