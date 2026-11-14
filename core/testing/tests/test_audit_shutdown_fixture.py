@@ -171,7 +171,7 @@ def test_shutdown_fixture_finishes_workers_before_restoring_state(path):
         try:
             generator.close()
         finally:
-            if worker is not None:
+            if worker is not None and worker.ident is not None:
                 worker.join(5)
                 assert not worker.is_alive(), "owned worker survived fixture cleanup"
     assert observed == [True]
