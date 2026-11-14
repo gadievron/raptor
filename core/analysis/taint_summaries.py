@@ -732,6 +732,13 @@ def _expr_taint(
                 expr.func.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
             )
             recv_stamp = stamp_name or expr.func.attr
+        elif not isinstance(expr.func, (ast.Name, ast.Lambda)):
+            # Calling a computed value consumes that value, even with no
+            # explicit arguments. Its written shape grants no catalogue identity.
+            recv_state = _expr_taint(
+                expr.func, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
+            )
+            recv_stamp = "<callable>"
 
         def _with_receiver(state: TaintState) -> TaintState:
             if not recv_state:
