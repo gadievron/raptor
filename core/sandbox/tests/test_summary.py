@@ -609,10 +609,13 @@ class TestThreadSafety:
 
         threads = [threading.Thread(target=worker, args=(tmp_path / f"d{i}",))
                    for i in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
         # All non-None observations should be one of the four target dirs
         valid = {tmp_path / f"d{i}" for i in range(4)}
         for r in results:
@@ -631,10 +634,13 @@ class TestThreadSafety:
                 summary_mod.record_denial(f"cmd-t{tid}-{i}", 1, "network")
 
         threads = [threading.Thread(target=worker, args=(t,)) for t in range(n_threads)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=5):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
 
         jsonl = _denials_path(tmp_path)
         records = [json.loads(line) for line in jsonl.read_text().splitlines() if line]
