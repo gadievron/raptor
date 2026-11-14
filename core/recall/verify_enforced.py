@@ -47,7 +47,7 @@ def _entry_proximity(rec: dict[str, Any], entry: dict[str, Any],
     rec_line = rec.get("line")
     if start is None:
         return "on_expected"
-    if not isinstance(rec_line, int):
+    if not isinstance(rec_line, int) or isinstance(rec_line, bool):
         return "null_line"
     end = entry.get("line_end") or start
     if start - line_drift <= rec_line <= end + line_drift:
