@@ -351,6 +351,29 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
     return None
 
 
+def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
+    """Loaded names in a bounded expression grammar with no nested scope or binder.
+
+    Unsupported shapes contribute nothing here; the existing direct-base cell
+    check remains independent. This is not a general free-variable analysis.
+    """
+    if expr is None:
+        return frozenset()
+    allowed = (
+        ast.Name, ast.Constant, ast.Attribute, ast.Subscript, ast.Slice,
+        ast.UnaryOp, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
+        ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Call, ast.keyword,
+        ast.Starred, ast.Load, ast.operator, ast.unaryop, ast.boolop, ast.cmpop,
+    )
+    names: set[str] = set()
+    for node in ast.walk(expr):
+        if not isinstance(node, allowed):
+            return frozenset()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            names.add(node.id)
+    return frozenset(names)
+
+
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -371,7 +394,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      whose sole return reads an enclosing-local name, direct attribute or indexed value,
+      whose sole return reads an enclosing cell through a bounded expression grammar,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -441,23 +464,23 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
             # Adjacency and no decorator avoid an intervening binding rewrite
-            # or wrapper. Only a bare name or direct member/index return needs this check.
+            # or wrapper. Keep direct-base detection even when another part of
+            # the expression lies outside the scope-free grammar.
             body = definition.body
             if (body and isinstance(body[0], ast.Expr)
                     and isinstance(body[0].value, ast.Constant)
                     and isinstance(body[0].value.value, str)):
                 body = body[1:]
             if len(body) == 1 and isinstance(body[0], ast.Return):
+                names = _scope_free_expression_loads(body[0].value)
                 cell_read = body[0].value
                 if isinstance(cell_read, (ast.Attribute, ast.Subscript)):
                     cell_read = cell_read.value
-                if not isinstance(cell_read, ast.Name):
-                    continue
-                name = cell_read.id
+                if isinstance(cell_read, ast.Name):
+                    names = names | {cell_read.id}
                 if frame_bindings is None:
                     frame_bindings = local_binding_names(fn_ast)
-                if (name in frame_bindings
-                        and name not in local_binding_names(definition)):
+                if names & (frame_bindings - local_binding_names(definition)):
                     if direct_call:
                         return "returned local call depends on an unmodelled enclosing cell"
                     return "returned function retains an unmodelled enclosing cell"
