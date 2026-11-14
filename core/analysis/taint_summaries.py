@@ -1169,6 +1169,21 @@ def _function_reflective_readers(
         node = pending.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
+        if isinstance(node, ast.Match):
+            captures: set[str] = set()
+            patterns = [case.pattern for case in node.cases]
+            while patterns:
+                pattern = patterns.pop()
+                if isinstance(pattern, (ast.MatchAs, ast.MatchStar)) and pattern.name is not None:
+                    captures.add(pattern.name)
+                elif isinstance(pattern, ast.MatchMapping) and pattern.rest is not None:
+                    captures.add(pattern.rest)
+                # Keys, classes, values and guards are expressions, not
+                # capture-binding structure. Preserve their scope ownership.
+                patterns.extend(child for child in ast.iter_child_nodes(pattern)
+                                if isinstance(child, ast.pattern))
+            for source in _scoped_expression_loads(node.subject):
+                assignments.setdefault(source, set()).update(captures)
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.withitem)):
             if isinstance(node, ast.withitem):
                 value = node.context_expr
