@@ -495,6 +495,11 @@ def generate_report(
     if phase_aborts:
         report["phase_aborts"] = phase_aborts
 
+    from .binary_inventory_reporting import load_binary_inventory
+    binary_inventory = load_binary_inventory(out_dir)
+    if binary_inventory is not None:
+        report["binary_inventory"] = binary_inventory
+
     # Decomp-tree sweep (binary targets): the tree-wide decompiler
     # Semgrep pass writes decomp-sweep.json — including its loud-skip
     # records, which must reach the operator — and the tree's
