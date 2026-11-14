@@ -133,8 +133,8 @@ def direct_ffuf(monkeypatch: pytest.MonkeyPatch):
             env=env,
         )
 
-    monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", _run)
     try:
+        monkeypatch.setattr("packages.web.ffuf.run_untrusted_networked", _run)
         yield captured
     finally:
         _shutil.rmtree(home, ignore_errors=True)

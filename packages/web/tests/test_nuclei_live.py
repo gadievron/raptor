@@ -149,10 +149,10 @@ def direct_nuclei(monkeypatch: pytest.MonkeyPatch):
             env=env,
         )
 
-    monkeypatch.setattr(
-        "packages.web.external_validators.run_untrusted_networked", _run
-    )
     try:
+        monkeypatch.setattr(
+            "packages.web.external_validators.run_untrusted_networked", _run
+        )
         yield captured
     finally:
         shutil.rmtree(home, ignore_errors=True)
