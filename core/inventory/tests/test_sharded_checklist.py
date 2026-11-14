@@ -554,16 +554,21 @@ class TestReadSideEffectFree:
         t = threading.Thread(target=read)
         with lock.open("w") as held:
             fcntl.flock(held, fcntl.LOCK_EX)
-            try:
-                t.start()
-                assert contended.wait(timeout=5), "reader never contended on writer lock"
-                assert not got, "reader returned while writer still held the lock"
-            finally:
+            from core.testing.threads import retiring_threads
+
+            with retiring_threads(
+                [t], release=lambda: fcntl.flock(held, fcntl.LOCK_UN), timeout=10,
+            ):
                 try:
-                    fcntl.flock(held, fcntl.LOCK_UN)
+                    t.start()
+                    assert contended.wait(timeout=5), "reader never contended on writer lock"
+                    assert not got, "reader returned while writer still held the lock"
                 finally:
-                    if t.ident is not None:
-                        t.join(timeout=10)
-                        assert not t.is_alive(), "checklist reader leaked"
+                    try:
+                        fcntl.flock(held, fcntl.LOCK_UN)
+                    finally:
+                        if t.ident is not None:
+                            t.join(timeout=10)
+                            assert not t.is_alive(), "checklist reader leaked"
         assert not errors, errors
         assert got and got[0].get("target_path") == "/t"
