@@ -400,22 +400,12 @@ class CheckedAllocationEvidence:
 
 @dataclass(frozen=True)
 class CapabilityEvidence:
-    """A single observation of a capability-check call (capable,
-    ns_capable, perfmon_capable, etc.). Mirrors AbortEvidence shape:
-    same grading scheme, same per-finding aggregation pattern.
+    """An informational capability-call observation.
 
-    A capability check that dominates a finding's bug primitive
-    means the attacker must already hold that capability before
-    the bug is reachable. For most kernel CWE classes this DOES NOT
-    eliminate the finding (privilege-bearing attackers exist), but
-    it materially reduces severity — the Validator's verdict policy
-    treats this as a **soft** signal: emits NOT_EXPLOITABLE only
-    when the capability is one of the privileged-equivalent classes
-    (CAP_SYS_ADMIN / equivalent) that already grant the attacker
-    enough power to do the harm directly.
-
-    Phase 8 emits same_function grading only; path-domination grading
-    arrives with shared axis-2/axis-4 grading machinery later.
+    Grade, function, condition and location do not establish result
+    consumption, denial polarity, a terminating denial branch or ordering
+    before a relevant sink/call edge. Existing records cannot certify a
+    privilege gate or capability-based suppression.
     """
 
     cap_function: str  # "capable", "ns_capable", "perfmon_capable", etc.
@@ -427,31 +417,11 @@ class CapabilityEvidence:
 
 @dataclass(frozen=True)
 class PrivilegeBackWalkEvidence:
-    """Result of an N-hop privilege back-walk from a finding's
-    enclosing function up through the callgraph.
+    """A recorded caller-walk summary, not reviewed enforcement evidence.
 
-    Computed by :func:`compute_privilege_back_walk_evidence` (which
-    shares the walk logic with the verdict-side
-    :func:`packages.source_intel.adapter._privilege_back_walk_suppresses`)
-    but produces prose-renderable evidence rather than a boolean
-    suppression decision.
-
-    Fields:
-      * ``finding_function`` — the function the walk started from.
-      * ``all_paths_gated`` — True iff every reachable caller-path
-        within ``depth_used`` hops passes through a privileged
-        ``capable()`` check.
-      * ``gating_examples`` — list of ``(caller_function,
-        cap_function, file_path, line)`` records of gates the walk
-        actually found. Examples — not exhaustive when the
-        callgraph is large.
-      * ``ungated_caller`` — when ``all_paths_gated`` is False, the
-        first caller path that lacks a gate (concrete counter-
-        example for the LLM). ``None`` when all gated or when no
-        callers were found.
-      * ``depth_used`` — actual depth budget consumed.
-      * ``no_callers`` — True iff the walk found no callers (finding
-        function is likely a top-level entry; back-walk inapplicable).
+    Current capability records cannot certify all-path gating. Retained
+    summaries must not establish either privilege gating or an ungated path
+    without the required denial-exit relation and edge ordering.
     """
 
     finding_function: str
@@ -2973,84 +2943,13 @@ def compute_privilege_back_walk_evidence(
     *,
     max_depth: int = 3,
 ) -> PrivilegeBackWalkEvidence | None:
-    """Run the multi-hop privilege back-walk from ``finding_function``
-    up through the inverted callgraph and return prose-renderable
-    evidence (not just a boolean verdict signal).
+    """Return no gating summary from call-site-only capability records.
 
-    Returns ``None`` when:
-      * PR-4 prereqs aren't available (``packages.coccinelle`` not
-        importable, spatch missing) — caller falls back to "no
-        back-walk evidence".
-      * ``target`` isn't a directory.
-      * The walk found no callers AND no privileged cap in the
-        finding function itself (a true entry point: callers-axis
-        inapplicable).
-
-    Mirrors the verdict-side
-    :func:`packages.source_intel.adapter._privilege_back_walk_suppresses`
-    walk but produces concrete examples for the LLM prompt — gating
-    sites the walk actually traversed, plus the first ungated path
-    when one exists.
+    Current records lack the reviewed denial-exit relation on every relevant
+    edge. None preserves unknown eligibility without manufacturing an
+    ungated caller, and avoids an otherwise unnecessary prerequisite scan.
     """
-    try:
-        from packages.coccinelle.prereqs import gather_prereqs
-    except ImportError:
-        return None
-    if not target.is_dir():
-        return None
-    try:
-        facts = gather_prereqs(target)
-    except Exception:  # noqa: BLE001
-        return None
-    if facts.is_skipped or not facts.complete:
-        # Both the "all paths gated" and the "no callers" claims
-        # quantify over the caller map — an incomplete sweep (an
-        # errored rule) may be missing exactly the ungated caller.
-        return None
-
-    callers = facts.callers_of(finding_function)
-    if not callers:
-        return PrivilegeBackWalkEvidence(
-            finding_function=finding_function,
-            all_paths_gated=False,
-            no_callers=True,
-        )
-
-    effective_depth = max(1, min(max_depth, 5))
-    visited = {finding_function}
-    gating_examples: list[tuple[str, str, str, int]] = []
-    ungated_caller: str | None = None
-    all_gated = True
-
-    for call_file, call_line in callers:
-        caller_fn = _enclosing_function(call_file, call_line)
-        if not caller_fn:
-            all_gated = False
-            ungated_caller = ungated_caller or "<unknown caller>"
-            continue
-        gated, examples = _path_is_gated_with_examples(
-            caller_fn, facts, result,
-            remaining_depth=effective_depth - 1,
-            visited=visited,
-        )
-        if gated:
-            gating_examples.extend(examples)
-        else:
-            all_gated = False
-            ungated_caller = ungated_caller or caller_fn
-
-    # Cap examples surfaced to the LLM at 3 — concrete enough to be
-    # actionable, bounded enough not to crowd the prompt.
-    capped_examples = tuple(gating_examples[:3])
-
-    return PrivilegeBackWalkEvidence(
-        finding_function=finding_function,
-        all_paths_gated=all_gated,
-        gating_examples=capped_examples,
-        ungated_caller=ungated_caller if not all_gated else None,
-        depth_used=effective_depth,
-        no_callers=False,
-    )
+    return None
 
 
 def _path_is_gated_with_examples(
@@ -3061,14 +2960,10 @@ def _path_is_gated_with_examples(
     remaining_depth: int,
     visited: set,
 ) -> tuple[bool, list[tuple[str, str, str, int]]]:
-    """Recursive walker — same logic as adapter.py's
-    ``_path_is_gated`` but additionally records the concrete gating
-    sites along the way for prose evidence.
-
-    Returns ``(gated, examples)`` where ``examples`` is a list of
-    ``(gating_fn, cap_function, file_path, line)`` tuples for each
-    privileged ``capable()`` call site discovered on a gated path.
-    """
+    """Legacy caller traversal with optional admitted examples. Current records
+    provide no denial-exit relation, so the site helper supplies no gating
+    example. False and an empty list express unknown gating, not an ungated
+    caller or a complete call-graph proof."""
     if fn_name in visited:
         return False, []
     example = _function_privileged_cap_site(fn_name, result)
@@ -3100,27 +2995,11 @@ def _function_privileged_cap_site(
     fn_name: str,
     result: SourceIntelResult,
 ) -> tuple[str, str, str, int] | None:
-    """If ``fn_name`` body contains a privileged ``capable(CAP_X)``
-    call site, return ``(fn_name, cap_function, file_path, line)``
-    for the first one found. Else ``None``.
+    """Withhold a gating example without a reviewed edge-enforcement relation.
 
-    Reuses the line-level privileged-cap check from adapter (defined
-    there to keep the canonical ``_PRIVILEGED_CAP_CONSTANTS`` list
-    single-sourced) when importable; falls back to a local
-    re-implementation otherwise.
+    Capability-call observations remain in result.capabilities. None means
+    gating is unproven, not that no capability call or enforced check exists.
     """
-    try:
-        from packages.source_intel.adapter import _line_uses_privileged_cap
-    except ImportError:
-        _line_uses_privileged_cap = _local_line_uses_privileged_cap
-    for cap in result.capabilities:
-        if cap.enclosing_function != fn_name:
-            continue
-        if cap.cap_function not in _PRIVILEGED_CAP_FUNCTIONS_FOR_EVIDENCE:
-            continue
-        cap_path, cap_line = cap.location
-        if _line_uses_privileged_cap(cap_path, cap_line):
-            return (fn_name, cap.cap_function, cap_path, cap_line)
     return None
 
 
