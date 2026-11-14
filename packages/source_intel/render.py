@@ -1227,9 +1227,8 @@ def _render_noreturn_line(
 ) -> str:
     """Render noreturn evidence.
 
-    Marks the function as a guaranteed abort (panic, _Exit, BUG-style).
-    Strong DoS-vs-RCE discriminator: if the abort sits on the path
-    between source and bug primitive, exploitation collapses to DoS.
+    Records a promise not to return normally, without proving an
+    abort, source-to-sink control flow or exploitability outcome.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1240,14 +1239,15 @@ def _render_noreturn_line(
     if style == "stage_d":
         prefix = "Control-flow signal — noreturn"
     elif style == "exploit_plan":
-        prefix = "DoS-only constraint — noreturn function"
+        prefix = "Control-flow constraint to verify — noreturn annotation"
     else:
         prefix = "Variant hint — noreturn annotation"
 
     return (
-        f"{prefix}: {fn_text} is declared noreturn. If this function "
-        f"is invoked on the path between source and the bug primitive, "
-        f"the program aborts before exploitation; the bug becomes DoS-only."
+        f"{prefix}: {fn_text} is declared noreturn, promising not to return "
+        f"normally. This observation does not establish termination, an "
+        f"abort before the bug primitive, or a DoS-only outcome; inspect "
+        f"the implementation and its relationship to the finding's path."
     )
 
 
