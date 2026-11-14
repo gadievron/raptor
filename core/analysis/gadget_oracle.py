@@ -67,6 +67,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.source.streams import preserving_stream_error
+
 logger = logging.getLogger(__name__)
 
 #: PHP resolves class, method, and function names case-insensitively
@@ -449,7 +451,7 @@ def _skipped_dir_has_php(path: str) -> bool:
                 continue
             content_probes += 1
             try:
-                with open(full, "rb") as fh:
+                with preserving_stream_error(open(full, "rb")) as fh:
                     head = fh.read(_SKIP_PROBE_BYTES)
             except OSError:
                 continue
