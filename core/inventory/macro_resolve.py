@@ -26,9 +26,13 @@ logger = logging.getLogger(__name__)
 # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
 # on blank-line runs in scanned source. Separators and parameters stay
 # within logical lines; build_macro_table joins continuations first.
+# Prefer a non-whitespace body endpoint before a terminal continuation.
+# The fallback preserves the full body when no trailer can be removed,
+# without retrying the whitespace suffix at every position inside a run.
 _MACRO_DEF_RE = re.compile(
     r"^[^\S\n]*#[^\S\n]*define[^\S\n]+(\w+)"
-    r"(?:(\([^)\n]*\))[^\S\n]*|[^\S\n]+)(.+?)(?:[^\S\n]*\\)?$",
+    r"(?:(\([^)\n]*\))[^\S\n]*|[^\S\n]+)"
+    r"([^\n]*[^\s](?=[^\S\n]*\\$)|[^\n]+)(?:[^\S\n]*\\)?$",
     re.MULTILINE,
 )
 _MACRO_DEFINE_PREFIX_RE = re.compile(r"#[^\S\n]*define[^\S\n]")
