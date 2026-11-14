@@ -549,6 +549,28 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
+def _linear_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
+    """Known lexical reads in a complete, non-recursive linear child body."""
+    if not body:
+        return None
+    expressions: list[ast.expr | None] = []
+    for statement in body:
+        if isinstance(statement, (ast.Expr, ast.Return)):
+            expressions.append(statement.value)
+        elif isinstance(statement, ast.Assign) and all(
+            isinstance(target, ast.Name) for target in statement.targets
+        ):
+            expressions.append(statement.value)
+        elif not isinstance(statement, ast.Pass):
+            return None
+    if not all(_child_expression_is_supported(expression) for expression in expressions):
+        return None
+    names: set[str] = set()
+    for expression in expressions:
+        names.update(_scoped_expression_loads(expression))
+    return frozenset(names)
+
+
 def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
     """Known reads in a bounded body grammar, or None for unsupported statements.
 
@@ -577,21 +599,17 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 parameters.append(args.kwarg)
             if (statement.decorator_list or statement.type_params
                     or statement.returns is not None
-                    or any(parameter.annotation is not None for parameter in parameters)
-                    or len(child_body) != 1 or not isinstance(child_body[0], ast.Return)):
+                    or any(parameter.annotation is not None for parameter in parameters)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
             if not all(_child_expression_is_supported(default) for default in defaults):
                 return None
             # Defaults belong to the enclosing scope, before child parameters.
             expressions.extend(defaults)
-            value = child_body[0].value
-            if value is not None:
-                if not _child_expression_is_supported(value):
-                    return None
-                target_reads.update(
-                    _scoped_expression_loads(value) - local_binding_names(statement)
-                )
+            child_reads = _linear_child_body_expression_loads(child_body)
+            if child_reads is None:
+                return None
+            target_reads.update(child_reads - local_binding_names(statement))
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
