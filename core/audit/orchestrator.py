@@ -27140,13 +27140,10 @@ def _proactive_validate(
             format_lifecycle_evidence,
         )
 
-        source_text = _contained_source_text(
-            config.target_path, outcome.file,
-        ) or ""
         lc_findings = check_lifecycle_at_function(
             file_path=outcome.file,
             function_name=outcome.function,
-            source=source_text,
+            source="",
             out_dir=config.out_dir,
         )
         if lc_findings:
