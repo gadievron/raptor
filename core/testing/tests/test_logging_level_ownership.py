@@ -1,5 +1,6 @@
 """Logging setup and cleanup failures preserve borrowed handlers and levels."""
 
+from contextlib import ExitStack
 import logging
 from importlib import import_module
 from types import SimpleNamespace
@@ -65,22 +66,26 @@ def state(tmp_path, monkeypatch):
             logger.level == logging.ERROR for logger in [*sdk.values(), *named.values()]
         ), "named logger level leaked"
 
-    yield SimpleNamespace(
-        root=root,
-        sdk=sdk,
-        named=named,
-        proxy=proxy,
-        created=created,
-        instrument=instrument,
-        assert_restored=assert_restored,
-    )
-    for handler, stream in created:
-        logging.Logger.removeHandler(root, handler)
-        for logger in named.values():
-            logging.Logger.removeHandler(logger, handler)
-        handler.close()
-        stream.close()
-    borrowed.close()
+    try:
+        yield SimpleNamespace(
+            root=root,
+            sdk=sdk,
+            named=named,
+            proxy=proxy,
+            created=created,
+            instrument=instrument,
+            assert_restored=assert_restored,
+        )
+    finally:
+        with ExitStack() as cleanup:
+            cleanup.callback(borrowed.close)
+            for handler, stream in reversed(created):
+                cleanup.callback(stream.close)
+                cleanup.callback(handler.close)
+                for logger in reversed(tuple(named.values())):
+                    cleanup.callback(logging.Logger.removeHandler, logger, handler)
+                cleanup.callback(logging.Logger.removeHandler, root, handler)
+
 
 
 @pytest.mark.parametrize("kind", ["dependencies", "target-shape"])
