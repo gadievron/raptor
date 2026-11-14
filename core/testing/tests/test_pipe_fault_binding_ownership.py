@@ -103,7 +103,7 @@ def test_actual_tier_write_fault_keeps_outer_pipe_tracker(monkeypatch, outcome):
     scopes = 0
 
     def outer_pipe():
-        pair = _record(borrowed_pipe(), identities)
+        pair = _owned_pipe(borrowed_pipe, identities)
         calls.append(pair)
         return pair
 
