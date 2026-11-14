@@ -100,6 +100,8 @@ _MAX_FILES_SOURCE_SCAN: int = 5000
 # Regex matching `#define MACRO_NAME[(args)] EXPANSION` — captures the
 # macro name and its expansion. Multi-line continuations (``\<newline>``)
 # are pre-joined before scanning so the regex sees a single line.
+# Every separator stays on that logical line. Function-like parameters
+# must immediately follow the name; object-like replacements need spacing.
 #
 # Macro names allow both upper and lower case: kernel uses ``__must_check``
 # (lowercase), glibc uses ``__wur``; conventional project macros use
@@ -107,7 +109,8 @@ _MAX_FILES_SOURCE_SCAN: int = 5000
 # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
 # on blank-line runs in scanned source.
 _DEFINE_RE = re.compile(
-    r"^[^\S\n]*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s+(.+?)$",
+    r"^[^\S\n]*#[^\S\n]*define[^\S\n]+([A-Za-z_][A-Za-z0-9_]*)"
+    r"(?:\([^)\n]*\)[^\S\n]*|[^\S\n]+|(?=$))([^\n]*)$",
     re.MULTILINE,
 )
 
