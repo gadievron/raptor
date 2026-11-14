@@ -800,6 +800,7 @@ def run_sandboxed(cmd: list[str], *,
                   # Delegated cgroup ownership is Linux-only. An inactive
                   # controller is harmless; active budgets must be refused.
                   job_controller=None,
+                  _execution_input_owner=None,
                   ) -> subprocess.CompletedProcess:
     """Run ``cmd`` under macOS sandbox-exec with an SBPL profile
     derived from the logical sandbox kwargs.
