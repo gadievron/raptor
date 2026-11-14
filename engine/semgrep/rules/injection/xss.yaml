@@ -4,8 +4,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.xss.taint.python
     message: >-
-      Untrusted data flows into an HTML response without escaping. Use
-      context-aware output encoding or a templating engine with auto-escaping.
+      Request-derived data reaches an HTML-related construction, rendering or
+      response API. Review the matched argument, eventual output context and
+      escaping before treating it as executable markup. Use context-appropriate
+      output encoding and retain template auto-escaping.
     languages: [python]
     severity: CRITICAL
     mode: taint
