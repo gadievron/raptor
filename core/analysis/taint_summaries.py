@@ -530,17 +530,23 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
-def _linear_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
-    """Known reads in a bounded linear body, or None for unsupported statements.
+def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
+    """Known reads in a bounded body grammar, or None for unsupported statements.
 
     Validate the complete statement grammar before inspecting expressions.
     Own-name binding and captured-cell identity are checked by the caller;
     this does not model assignment values or return-value flow.
     """
     expressions: list[ast.expr | None] = []
-    for statement in body:
+    pending = list(reversed(body))
+    while pending:
+        statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, ast.If):
+            expressions.append(statement.test)
+            pending.extend(reversed(statement.orelse))
+            pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Assign) and all(
             isinstance(target, ast.Name) for target in statement.targets
         ):
@@ -573,7 +579,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      whose single return or bounded linear body reads an enclosing cell
+      whose single return or bounded body reads an enclosing cell
       through supported expressions, lambdas or comprehensions,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
@@ -699,10 +705,10 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                 if isinstance(cell_read, ast.Name):
                     names = names | {cell_read.id}
             else:
-                linear_names = _linear_body_expression_loads(body)
-                if linear_names is None or not linear_names:
+                body_names = _bounded_body_expression_loads(body)
+                if body_names is None or not body_names:
                     continue
-                names = linear_names
+                names = body_names
             if frame_bindings is None:
                 frame_bindings = local_binding_names(fn_ast)
             if names & (frame_bindings - local_binding_names(definition)):

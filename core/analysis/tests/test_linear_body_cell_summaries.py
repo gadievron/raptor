@@ -6,7 +6,7 @@ import pytest
 
 from core.analysis.interproc import _param_cleanly_sanitized
 from core.analysis.python_module_callgraph import build_python_module_callgraph
-from core.analysis.taint_summaries import _linear_body_expression_loads, build_taint_summaries
+from core.analysis.taint_summaries import _bounded_body_expression_loads, build_taint_summaries
 
 
 def summaries(source):
@@ -65,7 +65,7 @@ def test_parameter_default_shadow_keeps_existing_admission():
     ids=["global", "annotation", "unpacking", "later-import"],
 )
 def test_unsupported_statement_invalidates_complete_new_scan(body):
-    assert _linear_body_expression_loads(ast.parse(body).body) is None
+    assert _bounded_body_expression_loads(ast.parse(body).body) is None
 
 
 def test_keyword_expansion_keeps_earlier_refusal_reason():
