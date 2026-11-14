@@ -178,6 +178,8 @@ def derive_evidence_strings(
     if style not in _STYLES:
         msg = f"unknown style: {style!r} (expected one of {_STYLES})"
         raise ValueError(msg)
+    if max_lines == 0:
+        return []
 
     lines: list[str] = []
 
