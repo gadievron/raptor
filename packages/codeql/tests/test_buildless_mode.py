@@ -1189,3 +1189,82 @@ class TestExtractionOutcomes:
         assert serialized["databases_created"]["cpp"]["extraction_summary"] == summary
         assert serialized["databases_created"]["cpp"]["success"] is True
         assert serialized["databases_created"]["cpp"]["errors"] == []
+
+
+def test_buildless_diagnostic_summary_reads_bounded_chunks(tmp_path, monkeypatch):
+    import io
+    from packages.codeql import database_manager as manager
+
+    db = tmp_path / 'owned-db'
+    diag = db / 'diagnostic'
+    diag.mkdir(parents=True)
+    path = diag / 'owned.jsonl'
+    path.write_text('owned placeholder\n')
+    text = 'could not find include owned.h\n' + 'x' * 300 + '\n'
+    requests = []
+
+    class Tracked(io.StringIO):
+        def read(self, size=-1):
+            requests.append(size)
+            assert 0 < size <= 65536, 'unbounded diagnostic text read'
+            return super().read(size)
+
+    original = Path.open
+
+    def opened(candidate, *args, **kwargs):
+        return Tracked(text) if candidate == path else original(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', opened)
+    hits, summary = manager.buildless_degradation_summary(db)
+    assert requests
+    assert hits == 1
+    assert 'unresolved includes' in summary
+
+
+@pytest.mark.parametrize('chunk_size', [1, 7, 16, 64])
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
+def test_streaming_include_count_preserves_logical_lines(monkeypatch, chunk_size, separator):
+    import io
+    from packages.codeql import database_manager as manager
+
+    text = separator.join([
+        'could not find include owned.h',
+        'include' + 'x' * 60 + 'could not open',
+        'cannot open' + 'x' * 60 + 'include',
+        'include missing and cannot open include again',
+        'could not find', 'include separate_line.h',
+        'x' * 300, 'include not found',
+    ])
+    expected = sum(bool(manager._UNRESOLVED_INCLUDE_RE.search(line)) for line in text.splitlines())
+    monkeypatch.setattr(manager, '_BUILDLESS_DIAGNOSTIC_CHUNK_CHARS', chunk_size)
+    assert manager._count_unresolved_include_lines(io.StringIO(text)) == expected
+
+
+def test_buildless_diagnostic_read_error_discards_partial_file_count(tmp_path, monkeypatch):
+    import io
+    from packages.codeql import database_manager as manager
+
+    db = tmp_path / 'owned-db'
+    diag = db / 'diagnostic'
+    diag.mkdir(parents=True)
+    path = diag / 'owned.jsonl'
+    path.write_text('owned placeholder\n')
+
+    class Refused(io.StringIO):
+        calls = 0
+
+        def read(self, size=-1):
+            self.calls += 1
+            if self.calls == 1:
+                return 'could not find include owned.h\n'
+            raise OSError('owned later read refusal')
+
+    original = Path.open
+
+    def opened(candidate, *args, **kwargs):
+        return Refused() if candidate == path else original(candidate, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'open', opened)
+    hits, summary = manager.buildless_degradation_summary(db)
+    assert hits == 0
+    assert 'without executing the build' in summary

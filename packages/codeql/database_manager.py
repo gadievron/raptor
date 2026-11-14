@@ -229,6 +229,29 @@ _UNRESOLVED_INCLUDE_RE = re.compile(
 )
 
 
+
+_BUILDLESS_DIAGNOSTIC_CHUNK_CHARS = 64 * 1024
+
+
+def _count_unresolved_include_lines(handle) -> int:
+    """Count matching logical lines without retaining a whole diagnostic file."""
+    hits = 0
+    tail = ""
+    matched = False
+    while chunk := handle.read(_BUILDLESS_DIAGNOSTIC_CHUNK_CHARS):
+        for part in chunk.splitlines(keepends=True):
+            if not matched and _UNRESOLVED_INCLUDE_RE.search(tail + part):
+                hits += 1
+                matched = True
+            if part.endswith(("\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")):
+                tail, matched = "", False
+            else:
+                # The current regex spans at most 81 characters. Keep its
+                # possible cross-chunk prefix; review this bound if it changes.
+                tail = (tail + part)[-128:] if not matched else ""
+    return hits
+
+
 def buildless_degradation_summary(db_path: Path) -> tuple:
     """(hit_count, one-line summary) for a buildless C/C++ database.
 
@@ -248,13 +271,11 @@ def buildless_degradation_summary(db_path: Path) -> tuple:
                 if not f.is_file() or f.suffix.lower() not in (".json", ".jsonl"):
                     continue
                 try:
-                    text = f.read_text(encoding="utf-8", errors="replace")
+                    with f.open(encoding="utf-8", errors="replace") as handle:
+                        file_hits = _count_unresolved_include_lines(handle)
                 except OSError:
                     continue
-                hits += sum(
-                    1 for line in text.splitlines()
-                    if _UNRESOLVED_INCLUDE_RE.search(line)
-                )
+                hits += file_hits
     except OSError:
         hits = 0
     if hits:
