@@ -116,10 +116,11 @@ def _fn_addr(f: dict) -> int | None:
     nightly CI corpus job) keys it as ``offset``. Accept either so the
     extractor works across the r2 versions operators actually have
     installed. Returns ``None`` when neither key holds an int — the
-    caller skips that function rather than crashing on ``f['addr']``."""
+    caller skips that function rather than crashing on ``f['addr']``.
+    JSON booleans are not numeric addresses."""
     for key in ("addr", "offset"):
         v = f.get(key)
-        if isinstance(v, int):
+        if isinstance(v, int) and not isinstance(v, bool):
             return v
     return None
 
