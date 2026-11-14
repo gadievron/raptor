@@ -10,13 +10,14 @@ match the literal attribute form; the Python aggregator (``analyze.py``)
 augments that by scanning the target for known alias macros and
 treating them as the underlying attribute.
 
-A second tier — project-specific alias discovery via header pre-pass —
-is planned for the axis-1-expansion PR. The curated table is the v1
-baseline.
+Project-specific alias discovery in ``discovery.py`` supplements this
+curated table with a bounded header pre-pass.
 
 Public API:
-  * ``WUR_ALIASES`` — known warn_unused_result spellings
-  * ``alias_match(text)`` — does any known alias appear in `text`?
+  * ``WUR_ALIASES_BY_ORIGIN`` — spellings grouped by origin
+  * ``ALL_WUR_ALIASES`` — the flattened spellings
+  * ``wur_alias_in(text)`` — does any known spelling appear in ``text``?
+  * ``wur_alias_origin(spelling)`` — look up a spelling's origin
 """
 
 from __future__ import annotations
