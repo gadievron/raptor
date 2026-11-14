@@ -187,6 +187,7 @@ class TestStackProtectorDecoy:
     def _result(self):
         return SimpleNamespace(
             build_flags=SimpleNamespace(stack_protector_level="strong"),
+            attributes=(),
         )
 
     def test_comment_array_decl_does_not_suppress(self, tmp_path):

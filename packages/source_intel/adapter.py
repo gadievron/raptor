@@ -2321,6 +2321,36 @@ def _stack_protector_suppresses_finding(
     )
     if not any(fixed_array_re.search(lines[i]) for i in range(start, end)):
         return False
+    # An opt-out can override build-wide settings. Only the existing
+    # inventory-backed lookup may establish that an observation
+    # belongs to a different function; record labels and regex fallback
+    # are insufficient to prove disjointness. Unresolved identity vetoes
+    # suppression without assigning an exploitable verdict.
+    sink_function: str | None = None
+    for attribute in result.attributes:
+        if attribute.kind != KIND_NO_STACK_PROTECTOR:
+            continue
+        attribute_path, attribute_line = attribute.location
+        if not attribute_path:
+            return False
+        try:
+            attribute_path_abs = Path(attribute_path)
+            if not attribute_path_abs.is_absolute():
+                attribute_path_abs = (repo_root or _DEFAULT_REPO_ROOT) / attribute_path_abs
+            attribute_path_abs = attribute_path_abs.resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        from packages.source_intel.analyze import _enclosing_function_via_inventory
+        if sink_function is None:
+            sink_function = _enclosing_function_via_inventory(sink_path_abs, sink_line)
+        if not sink_function or attribute_line < 1:
+            return False
+        attribute_function = _enclosing_function_via_inventory(
+            str(attribute_path_abs), attribute_line,
+        )
+        if not attribute_function or attribute_function == sink_function:
+            return False
+
     # Trust gate LAST (declared build config is plantable — see
     # _build_flags_trusted): reaching it means the evidence matched,
     # so the withheld direction gets its visibility notice.
