@@ -1216,6 +1216,21 @@ def _function_reflective_readers(
 
 
 
+def _literal_star_lambda_arguments(arguments: list[ast.expr]) -> tuple[ast.expr, ...] | None:
+    """Expand source-literal stars without evaluating or mutating argument nodes."""
+    expanded: list[ast.expr] = []
+    pending = list(reversed(arguments))
+    while pending:
+        argument = pending.pop()
+        if isinstance(argument, ast.Starred):
+            if not isinstance(argument.value, (ast.Tuple, ast.List)):
+                return None
+            pending.extend(reversed(argument.value.elts))
+        else:
+            expanded.append(argument)
+    return tuple(expanded)
+
+
 def _immediate_lambda_retains_reflective_reader(
     node: ast.AST, inherited: frozenset[str],
 ) -> bool:
@@ -1223,11 +1238,11 @@ def _immediate_lambda_retains_reflective_reader(
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Lambda):
         return False
     args = node.func.args
-    if (any(isinstance(argument, ast.Starred) for argument in node.args)
-            or any(keyword.arg is None for keyword in node.keywords)):
+    arguments = _literal_star_lambda_arguments(node.args)
+    if arguments is None or any(keyword.arg is None for keyword in node.keywords):
         return False  # Opaque binding stays outside this additional check.
     positional = (*args.posonlyargs, *args.args)
-    if len(node.args) > len(positional) and args.vararg is None:
+    if len(arguments) > len(positional) and args.vararg is None:
         return False
     values = {parameter.arg: default for parameter, default in zip(
         positional[len(positional) - len(args.defaults):], args.defaults, strict=True,
@@ -1235,9 +1250,9 @@ def _immediate_lambda_retains_reflective_reader(
     values.update((parameter.arg, default) for parameter, default in zip(
         args.kwonlyargs, args.kw_defaults, strict=True,
     ) if default is not None)
-    supplied = {parameter.arg for parameter in positional[:len(node.args)]}
+    supplied = {parameter.arg for parameter in positional[:len(arguments)]}
     values.update((parameter.arg, argument) for parameter, argument in zip(
-        positional, node.args,
+        positional, arguments,
     ))
     keyword_names = {parameter.arg for parameter in (*args.args, *args.kwonlyargs)}
     collected_keywords: list[ast.expr] = []
@@ -1273,7 +1288,7 @@ def _immediate_lambda_retains_reflective_reader(
     if args.vararg is not None and any(
         _attribute_chain_str(argument) in inherited
         or _scoped_expression_loads(argument) & inherited
-        for argument in node.args[len(positional):]
+        for argument in arguments[len(positional):]
     ):
         # All explicit surplus values share the tuple binding. This preserves
         # negative provenance without resolving any particular tuple element.

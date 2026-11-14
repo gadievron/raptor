@@ -111,7 +111,7 @@ def test_adjacent_child_default_preserves_defining_frame_origin():
 
 @pytest.mark.parametrize('call', [
     '(lambda **read: read)(**mapping)',
-    '(lambda **read: read)(*(getattr,))',
+    '(lambda **read: read)(*values)',
     '(lambda **read: read)(value=getattr, value=getattr)',
 ])
 def test_opaque_or_duplicate_binding_is_outside_added_check(call):
