@@ -16,6 +16,20 @@ from core.testing.audit_shutdown import isolated_audit_shutdown
 from core.testing.module_views import module_function_view
 
 
+@pytest.fixture(autouse=True)
+def _owned_formatter_catalog(monkeypatch):
+    from core.audit import context as context_module
+
+    # Retain the borrowed slot and restore its original identity on every exit.
+    monkeypatch.setattr(context_module, "_tool_catalog_cache", context_module._tool_catalog_cache)
+    monkeypatch.setattr(context_module, "_get_tool_catalog", lambda: "")
+
+    def forbidden_catalog():
+        raise AssertionError("owned formatter control must not discover host tools or import a solver")
+
+    monkeypatch.setattr(context_module, "_build_tool_catalog", forbidden_catalog)
+
+
 @pytest.mark.parametrize("change", ["none", "revision", "rewrite_restore", "write_refused",
     "invalid_ack", "finalized", "prior_replaced", "cancel_before", "cancel_after"])
 def test_late_joern_rechecks_original_scope_after_actual_ack(tmp_path, monkeypatch, change):

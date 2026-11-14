@@ -338,6 +338,14 @@ class AuditKnowledgeRuntime:
                     if origin.source_identity is not None else [],
                     complete=origin.source_identity is not None)
                 study_manifest = merge_context_inputs(study_manifest, primary_manifest)
+            if ctx.get("synthesis_review_context") is not None:
+                from .synthesis_review_context import SynthesisReviewContext
+                if isinstance(ctx["synthesis_review_context"], SynthesisReviewContext):
+                    # The match's producer/source correspondence is not a
+                    # separately validated source dependency. Retain that loss.
+                    study_manifest = merge_context_inputs(study_manifest, context_inputs_from_sources(
+                        [("target", origin.file, origin.source_identity.sha256)]
+                        if origin.source_identity is not None else [], complete=False))
             dependencies = merge_context_inputs(history.get("source_inputs"), study_manifest)
             if dependencies is not None:
                 history["source_inputs"] = dependencies
@@ -1771,6 +1779,22 @@ class AuditKnowledgeRuntime:
         """Observe existing runtime lifetime; no counters, events or source admission."""
         with self._lock:
             return not self._closed and monotonic() < self.deadline
+
+    def has_owned_model_attempts(self, gap: dict) -> bool:
+        """Routing hint only; existing atomic admission still owns dispatch.
+
+        Unknown or malformed state never becomes an unattempted first review.
+        No registry scan, source read, counter reset or evidence is produced.
+        """
+        key = self._gap_key(gap)
+        if (not isinstance(key[0], str) or not key[0]
+                or not isinstance(key[1], str) or not key[1]
+                or type(gap.get("line_start")) is not int or gap["line_start"] < 1):
+            return True
+        with self._lock:
+            calls = self._calls.get(key, 0)
+            return (key in self._unknown_calls or type(calls) is not int or calls != 0
+                    or key in self._busy or key in self._active_units or key in self._reserving)
 
     def admit_client_call(self, gap: dict, purpose: str, method: str) -> bool:
         return self._admit_client_key(self._gap_key(gap), purpose, method)

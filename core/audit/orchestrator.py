@@ -3351,6 +3351,12 @@ def _review_one_function_impl(
         ctx["triage_bucket"] = triage.bucket.value
         ctx["triage_token_budget"] = triage.token_budget
 
+    if gap.get("_synthesis_review_context") is not None:
+        from .synthesis_review_context import bind_initial_synthesis_context
+        if not bind_initial_synthesis_context(ctx, gap["_synthesis_review_context"]):
+            from .knowledge_calls import KnowledgeCallRefused
+            raise KnowledgeCallRefused("synthesis_match_context_unavailable")
+
     gap_key_mech = gap_key
     mech_list = []
     if mechanical_findings and gap_key_mech in mechanical_findings:
@@ -9856,6 +9862,8 @@ def _run_audit_body(
         review_resources.register(lambda: knowledge_runtime.close("run_review_complete"))
     knowledge_gaps: dict[int, tuple[dict, Any, Any]] = {}
     knowledge_ready_frames: dict = {}
+    knowledge_graph = graph
+    synthesis_ready_frames: dict = {}
     knowledge_source_closed = False
 
     def _knowledge_idle() -> float | None:
@@ -9882,6 +9890,24 @@ def _run_audit_body(
             assemble=lambda gap: _build_context(config, gap, checklist, context_map, evidence_index,
                                                 discovered_evidence=discovered_evidence),
         )
+        from .ready_review_context import ReadyReviewFrame
+        with result._lock:
+            canonical = tuple(result.outcomes)
+        for occurrence, prepared_synthesis in tuple(synthesis_ready_frames.items()):
+            frame = prepared_synthesis.frame
+            if not frame.current(canonical, config.target_path):
+                synthesis_ready_frames.pop(occurrence, None)
+                continue
+            shared_frame = ready_frames.get(occurrence)
+            if shared_frame is None:
+                ready_frames[occurrence] = frame
+            elif shared_frame.prior is frame.prior:
+                combined = shared_frame.context()
+                combined["synthesis_review_context"] = prepared_synthesis.payload
+                scopes = (*shared_frame.scopes,
+                          *(scope for scope in frame.scopes
+                            if all(scope is not prior_scope for prior_scope in shared_frame.scopes)))
+                ready_frames[occurrence] = ReadyReviewFrame(combined, frame.prior, scopes)
         for reservation in knowledge_runtime.ready_continuations(
             admission=lambda: not _check_budget(config, start_time, result),
             required_calls=knowledge_panel_width,
@@ -9891,7 +9917,7 @@ def _run_audit_body(
                    "line_start": origin.line_start, "line_end": origin.line_end}
             occurrence = (origin.file, origin.function, origin.line_start)
             knowledge_gaps[id(gap)] = (gap, reservation, ready_frames.get(occurrence))
-            if not graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0, continuation=True):
+            if not knowledge_graph.inject_task(f"knowledge:{reservation.packet.pass_id}", gap, priority=0, continuation=True):
                 knowledge_gaps.pop(id(gap), None)
                 knowledge_runtime.fail(reservation, "continuation_schedule_refused")
         return knowledge_runtime.wake_interval()
@@ -9909,13 +9935,24 @@ def _run_audit_body(
                 # Refusal is local to this unit. No completed verdict is
                 # committed and the run/environment rails remain unchanged.
                 from .review_availability import review_deferral_reason
-                reason = review_deferral_reason(refusal.reason)
+                reason = ("Synthesis review context unavailable"
+                          if refusal.reason == "synthesis_match_context_unavailable"
+                          else review_deferral_reason(refusal.reason))
                 deferred = ReviewOutcome(gap["file"], gap["name"], "deferred",
                                          reason, line=gap.get("line_start", 0))
                 with result._lock:
-                    result.outcomes.append(deferred)
                     if reason not in result.processing_limitations:
                         result.processing_limitations.append(reason)
+                    if gap.get("_synthesis_review_context") is not None:
+                        # Initial replacement retirement already restored any
+                        # prior. A local refusal cannot add a second canonical
+                        # assessment for that same scheduled occurrence.
+                        occurrence = (gap["file"], gap["name"], gap.get("line_start", 0))
+                        retained = [current for current in result.outcomes
+                                    if (current.file, current.function, current.line or 0) == occurrence]
+                        if retained:
+                            return retained[0]
+                    result.outcomes.append(deferred)
                 return deferred
         reservation = owned[1]
         try:
@@ -10211,27 +10248,118 @@ def _run_audit_body(
                 synth_gaps = []
 
             if synth_gaps:
-                synth_graph = TaskGraph.from_workqueue(synth_gaps, call_edges)
-                run_executor_sync(
-                    synth_graph,
-                    review_fn,
-                    shared,
-                    config,
-                    result,
-                    executor_config,
-                    joern_server=joern_server,
-                    audit_log=audit_log,
-                    workqueue=workqueue,
-                    reviewed_set=reviewed_set,
-                    start_time=start_time,
-                    layer_disagreements=layer_disagreements,
-                    on_progress=on_progress,
-                    collector=collector,
-                    budget_check=lambda: _check_budget(config, start_time, result),
-                    # Environment tick per dispatch — the executor's own
-                    # post-tick budget_check re-check handles a conclusion.
-                    on_tick=_make_executor_on_tick(config),
-                )
+                from .synthesis_preparation import prepare_synthesis_frame, PreparedSynthesisFrame
+
+                def _record_synthesis_deferred(occurrence, reason):
+                    limitation = "Synthesis follow-up deferred; its source, context or run admission limits require attention."
+                    with result._lock:
+                        if limitation not in result.processing_limitations:
+                            result.processing_limitations.append(limitation)
+                    try:
+                        append_audit_log(config.out_dir, {
+                            "action": "synthesis_followup_deferred", "reason": reason,
+                            "file": occurrence[0], "function": occurrence[1], "line_start": occurrence[2],
+                            "adjudication": "unverified", "prior_retained": True})
+                    except Exception:
+                        logger.debug("synthesis context limitation could not be recorded", exc_info=True)
+
+                previous_knowledge_gaps = set(knowledge_gaps)
+                synthesis_ready_frames.clear()
+                stage_error = None
+                try:
+                    initial_synthesis_gaps = []
+                    with result._lock:
+                        current_outcomes = tuple(result.outcomes)
+                    for synthesis_gap in synth_gaps:
+                        occurrence = (synthesis_gap.get("file"), synthesis_gap.get("name"),
+                                      synthesis_gap.get("line_start"))
+                        priors = [outcome for outcome in current_outcomes
+                                  if (outcome.file, outcome.function, outcome.line) == occurrence]
+                        if not knowledge_runtime.client_lifetime_valid():
+                            _record_synthesis_deferred(occurrence, "synthesis_owner_unavailable")
+                            continue
+                        if not priors or len(priors) == 1 and not knowledge_runtime.has_owned_model_attempts(synthesis_gap):
+                            from .synthesis_review_context import build_synthesis_review_context
+                            payload = build_synthesis_review_context(synthesis_gap)
+                            if payload is None:
+                                _record_synthesis_deferred(occurrence, "synthesis_match_context_unavailable")
+                                continue
+                            initial_gap = {**synthesis_gap, "_synthesis_review_context": payload}
+                            if priors:
+                                initial_gap["force_review"] = True
+                                reviewed_outcomes[f"{occurrence[0]}:{occurrence[1]}"] = priors[0]
+                            initial_synthesis_gaps.append(initial_gap)
+                            continue
+                        prepared_synthesis = None
+                        preparation_error = ""
+                        if len(priors) == 1:
+                            try:
+                                context = _build_context(config, synthesis_gap, checklist, context_map,
+                                    evidence_index, discovered_evidence=discovered_evidence)
+                                prepared_synthesis = prepare_synthesis_frame(
+                                    gap=synthesis_gap, context=context, prior=priors[0], target_root=config.target_path)
+                            except Exception:
+                                preparation_error = "synthesis_context_preparation_failed"
+                                logger.debug("synthesis context preparation failed for one occurrence", exc_info=True)
+                        if not isinstance(prepared_synthesis, PreparedSynthesisFrame):
+                            reason = preparation_error or getattr(
+                                prepared_synthesis, "reason", "synthesis_canonical_occurrence_ambiguous")
+                            _record_synthesis_deferred(occurrence, reason)
+                            continue
+                        context = prepared_synthesis.frame.context()
+                        if knowledge_runtime.offer_context_delta(context, kind="synthesis_match",
+                                                                  version=prepared_synthesis.payload.version):
+                            synthesis_ready_frames[occurrence] = prepared_synthesis
+                        else:
+                            _record_synthesis_deferred(occurrence, "synthesis_context_offer_refused")
+                    synth_graph = TaskGraph.from_workqueue(
+                        initial_synthesis_gaps, call_edges, review_fairness=True)
+                    knowledge_graph = synth_graph
+                    while not _check_budget(config, start_time, result):
+                        _knowledge_idle()
+                        if synth_graph.pending:
+                            stats = run_executor_sync(
+                                synth_graph, review_fn, shared, config, result, executor_config,
+                                joern_server=joern_server, audit_log=audit_log, workqueue=workqueue,
+                                reviewed_set=reviewed_set, start_time=start_time,
+                                layer_disagreements=layer_disagreements, on_progress=on_progress, collector=collector,
+                                budget_check=lambda: _check_budget(config, start_time, result),
+                                on_tick=_make_executor_on_tick(config), on_idle=_knowledge_idle,
+                                review_one_fn=knowledge_review_one, reviewed_outcomes=reviewed_outcomes,
+                                throttle=throttle, study_queue=study_queue,
+                                concept_index_ref=concept_index_ref, quiescer=journal_quiescer,
+                            )
+                            if stats.budget_stopped:
+                                break
+                            continue
+                        if not knowledge_runtime.has_pending_work():
+                            break
+                        delay = knowledge_runtime.wake_interval()
+                        if delay is None:
+                            break
+                        knowledge_runtime.wait_for_update(delay)
+                except BaseException as error:
+                    stage_error = error
+                    raise
+                finally:
+                    knowledge_graph = graph
+                    try:
+                        for owned_id in set(knowledge_gaps) - previous_knowledge_gaps:
+                            owned = knowledge_gaps.pop(owned_id)
+                            knowledge_runtime.fail(owned[1], "synthesis_followup_deferred")
+                        if stage_error is None:
+                            completed = {identity for event in knowledge_runtime.events()
+                                         if event.get("event") == "continuation_completed"
+                                         for identity in event.get("delivered_request_ids", ())}
+                            for occurrence, prepared_synthesis in synthesis_ready_frames.items():
+                                if prepared_synthesis.context_id not in completed:
+                                    _record_synthesis_deferred(occurrence, "synthesis_followup_not_completed")
+                    except BaseException as cleanup_error:
+                        if stage_error is None:
+                            raise
+                        stage_error.add_note("Synthesis retirement also failed: " + type(cleanup_error).__name__)
+                    finally:
+                        synthesis_ready_frames.clear()
         except Exception as exc:
             logger.warning(
                 "synthesis second pass failed (%s: %s) — keeping main-pass "
@@ -20211,6 +20339,7 @@ def _synthesis_hits_to_gaps(
         if hit.get("priority_score") is not None:
             gap["priority_score"] = hit["priority_score"]
         gap["from_synthesis"] = True
+        gap["synthesis_hit_line"] = line if type(hit.get("line")) is int else None
         if hit.get("snippet"):
             gap["synthesis_snippet"] = hit["snippet"]
         if hit.get("provenance"):
