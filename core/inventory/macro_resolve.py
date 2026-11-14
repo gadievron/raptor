@@ -13,7 +13,7 @@ from __future__ import annotations
 import io
 import logging
 import re
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -285,7 +285,8 @@ def resolve_rust_macros(
 ) -> list[tuple[str, str]]:
     """Find macro_rules! macros invoked in source, resolve transitively.
 
-    Returns list of (name, body) tuples, leaf-first.
+    Returns (name, body) tuples by descending minimum source-root distance,
+    then name.
     """
     if not source:
         return []
@@ -297,11 +298,12 @@ def resolve_rust_macros(
     called = set(_RUST_MACRO_CALL_RE.findall(source)) - _SKIP_IDENTS_RUST
 
     resolved: dict[str, tuple[str, str, int]] = {}
-    worklist = [(name, 0) for name in called if name in table]
+    worklist = deque((name, 0) for name in called if name in table)
     visited: set = set()
 
     while worklist:
-        name, depth = worklist.pop()
+        # Visit shortest source-root distances first, preserving depth budget.
+        name, depth = worklist.popleft()
         if name in visited:
             continue
         visited.add(name)
@@ -395,8 +397,8 @@ def resolve_macros(
 ) -> list[tuple[str, str]]:
     """Find macros used in source, resolve transitively.
 
-    Returns list of (display_name, body) tuples, leaf-first so consumers
-    read primitives before compositions.
+    Returns (display_name, body) tuples by descending minimum source-root
+    distance, then display name.
     """
     if not source:
         return []
@@ -409,11 +411,12 @@ def resolve_macros(
     source_idents = set(_MACRO_IDENT_RE.findall(source)) - _SKIP_IDENTS_C
 
     resolved: dict[str, tuple[str, str, int]] = {}
-    worklist = [(name, 0) for name in source_idents if name in table]
+    worklist = deque((name, 0) for name in source_idents if name in table)
     visited: set = set()
 
     while worklist:
-        name, depth = worklist.pop()
+        # Visit shortest source-root distances first, preserving depth budget.
+        name, depth = worklist.popleft()
         if name in visited:
             continue
         visited.add(name)
