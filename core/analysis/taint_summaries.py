@@ -702,10 +702,10 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                 if isinstance(value, ast.Constant) and type(value.value) is str:
                     continue
                 if (part_type is None or not isinstance(value, part_type)
-                        or not _match_literal_expression(value.value)
                         or type(value.conversion) is not int
                         or value.conversion not in (-1, 97, 114, 115)):
                     return False
+                pending.append(value.value)
                 if value.format_spec is not None:
                     if not isinstance(value.format_spec, ast.JoinedStr):
                         return False
