@@ -56,6 +56,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from core.json import load_json, loads
+from core.source.streams import preserving_stream_error
 
 logger = logging.getLogger(__name__)
 
@@ -134,7 +135,7 @@ def _strip_line_suffix(key: str) -> str:
 
 def _iter_jsonl(path: Path) -> Iterable[dict]:
     try:
-        with Path(path).open() as f:  # raw-open: operator-curated corpus artifact (eval lane)
+        with preserving_stream_error(Path(path).open()) as f:  # raw-open: operator-curated corpus artifact (eval lane)
             for raw in f:
                 raw = raw.strip()
                 if not raw:
