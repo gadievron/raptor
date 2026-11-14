@@ -166,6 +166,10 @@ class PyModuleCallGraph:
 
     _scope_bindings: dict[ast.AST, frozenset[str]] = field(default_factory=dict)
 
+    # Negative-only source-order candidates for retained annotation evaluators.
+    # These never establish trusted import or callable identities.
+    annotation_evaluator_aliases: frozenset[str] = frozenset()
+
     def binding_names(self, function: ast.AST) -> frozenset[str]:
         """Identities bound in this function or its enclosing function frames."""
         names = self._scope_bindings.get(function)
@@ -673,6 +677,45 @@ def module_import_map(tree: ast.Module) -> dict[str, str]:
 
     _walk(tree)
     return out
+
+
+def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
+    """Simple module bindings that may retain an annotation evaluator.
+
+    Collect import candidates and simple assignments in source order, keeping
+    candidates after overwrites and across conditional branches. This is a
+    negative guard, not trusted identity or complete alias analysis. Nested
+    scope bodies, container aliases and loop-carried aliases are not modelled.
+    """
+    candidates = {"annotationlib.get_annotations", "inspect.get_annotations"}
+    bound_evaluators: set[str] = set()
+    pending: list[ast.AST] = list(reversed(tree.body))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("annotationlib", "inspect"):
+                    candidates.add((alias.asname or alias.name) + ".get_annotations")
+        elif (isinstance(node, ast.ImportFrom) and not node.level
+              and node.module in ("annotationlib", "inspect")):
+            for alias in node.names:
+                if alias.name == "get_annotations":
+                    bound = alias.asname or alias.name
+                    candidates.add(bound)
+                    bound_evaluators.add(bound)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            value = node.value
+            chain = _attribute_chain(value) if value is not None else None
+            if chain is not None and ".".join(chain) in candidates:
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
+                        candidates.add(target.id)
+                        bound_evaluators.add(target.id)
+        pending.extend(reversed(list(ast.iter_child_nodes(node))))
+    return frozenset(bound_evaluators)
 
 
 def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
@@ -2526,6 +2569,7 @@ def build_python_module_callgraph(
         import_map=module_import_map(tree),
         namespace_unprovable=dyn_whole,
         _scope_bindings=scope_bindings,
+        annotation_evaluator_aliases=_module_annotation_evaluator_aliases(tree),
     )
 
 

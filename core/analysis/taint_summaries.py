@@ -1129,6 +1129,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
 
 def _detect_summary_unknown(
     fn_ast: ast.AST, import_map: dict[str, str] | None = None,
+    annotation_evaluator_aliases: frozenset[str] = frozenset(),
 ) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -1184,6 +1185,7 @@ def _detect_summary_unknown(
     # These candidates only withhold certification: shadowing cannot make a
     # match trusted. The module map is not a complete alias-history resolver.
     annotation_api_names = {"annotationlib.get_annotations", "inspect.get_annotations"}
+    annotation_api_names.update(annotation_evaluator_aliases)
 
     def add_annotation_import(bound: str, source: str) -> None:
         if source in ("annotationlib", "inspect"):
@@ -2076,7 +2078,9 @@ def _compute_one_summary(
     # Dynamic-dispatch check is one-shot per AST — re-checking each
     # iteration is wasteful but cheap, and it keeps the call graph's
     # responsibility narrow.
-    unknown_reason = _detect_summary_unknown(fn_ast, cg.import_map)
+    unknown_reason = _detect_summary_unknown(
+        fn_ast, cg.import_map, cg.annotation_evaluator_aliases,
+    )
     if unknown_reason is not None:
         return TaintSummary(
             function=qualified_name,
