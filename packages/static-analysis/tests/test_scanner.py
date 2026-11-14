@@ -180,7 +180,8 @@ class TestRunCodeqlDelegation:
             )
             result = run_codeql(tmp_path, out_dir, languages=["python", "cpp"])
 
-        assert result == [str(out_dir / "codeql_python.sarif")]
+        assert result == [str(out_dir / "codeql_python.sarif"),
+                          str(out_dir / "codeql_stage_diagnostics.sarif")]
 
     def test_subprocess_timeout_killpgs_and_returns_empty(self, tmp_path):
         """Agent timeout: SIGKILL the entire process group (so
@@ -826,7 +827,9 @@ def test_codeql_excludes_unchanged_prior_reports(tmp_path, returncode):
     with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen",
                                return_value=_fake_popen(returncode=returncode)) as spawn:
-        assert run_codeql(tmp_path, out) == []
+        paths = run_codeql(tmp_path, out)
+        assert str(report) not in paths
+        assert paths == ([str(out / "codeql_stage_diagnostics.sarif")] if returncode else [])
     spawn.assert_called_once()
     assert report.read_bytes() == before
 
@@ -846,7 +849,9 @@ def test_codeql_accepts_replaced_report_with_same_bytes(tmp_path, returncode):
     with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=returncode, communicate_side_effect=complete)) as spawn:
-        assert run_codeql(tmp_path, out) == [str(report)]
+        paths = run_codeql(tmp_path, out)
+        assert str(report) in paths
+        assert len(paths) == 1 + bool(returncode)
     spawn.assert_called_once()
     assert report.read_text() == content
 
@@ -865,7 +870,67 @@ def test_codeql_accepts_report_rewritten_in_place(tmp_path, returncode):
     with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=returncode, communicate_side_effect=complete)) as spawn:
-        assert run_codeql(tmp_path, out) == [str(report)]
+        paths = run_codeql(tmp_path, out)
+        assert str(report) in paths
+        assert len(paths) == 1 + bool(returncode)
     spawn.assert_called_once()
     assert report.stat().st_ino == inode
     assert report.read_text() == content
+
+
+@pytest.mark.parametrize("with_findings", [False, True])
+def test_codeql_agent_failure_retains_execution_diagnostic(tmp_path, with_findings):
+    import json
+    from core.sarif.parser import generate_scan_metrics, merge_sarif
+    from core.reporting.scan_coverage import scan_execution_status
+
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "codeql_python.sarif"
+    def complete(**kwargs):
+        if with_findings:
+            report.write_text(json.dumps({"version": "2.1.0", "runs": [{
+                "tool": {"driver": {"name": "CodeQL", "rules": []}},
+                "results": [{"ruleId": "owned/rule", "message": {"text": "owned finding"},
+                             "locations": [{"physicalLocation": {
+                                 "artifactLocation": {"uri": "Owned.py"},
+                                 "region": {"startLine": 1}}}]}],
+            }]}))
+        return "", "owned other-language failure"
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+         mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
+             returncode=1, communicate_side_effect=complete)) as spawn:
+        paths = run_codeql(tmp_path, out)
+    spawn.assert_called_once()
+    metrics = generate_scan_metrics(paths)
+    assert metrics["total_findings"] == int(with_findings)
+    assert metrics["tool_execution_failures"] == {"codeql": 1}
+    assert scan_execution_status(metrics) == "partial"
+    diagnostic = out / "codeql_stage_diagnostics.sarif"
+    assert str(diagnostic) in paths
+    assert _scanner_mod._pack_provenance_from_sarif(diagnostic, out)["exit"] == 1
+    combined = out / "combined.sarif"
+    combined.write_text(json.dumps(merge_sarif(paths)))
+    merged_metrics = generate_scan_metrics([str(combined)])
+    assert merged_metrics["total_findings"] == int(with_findings)
+    assert merged_metrics["tool_execution_failures"] == {"codeql": 1}
+    assert scan_execution_status(merged_metrics) == "partial"
+    if with_findings:
+        assert str(report) in paths
+
+
+def test_codeql_diagnostic_write_failure_retains_recovered_report(tmp_path, monkeypatch, caplog):
+    out = tmp_path / "out"
+    out.mkdir()
+    report = out / "codeql_python.sarif"
+    def complete(**kwargs):
+        report.write_text('{"version":"2.1.0","runs":[]}')
+        return "", "owned agent failure"
+    def fail_write(*args, **kwargs):
+        raise OSError("owned diagnostic write failure")
+    monkeypatch.setattr(_scanner_mod, "_write_stage_report", fail_write)
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+         mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
+             returncode=1, communicate_side_effect=complete)):
+        assert run_codeql(tmp_path, out) == [str(report)]
+    assert "Could not persist CodeQL execution diagnostic" in caplog.text
