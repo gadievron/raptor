@@ -11,10 +11,16 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import Dict, List, Sequence
 
+from core.source.gated import read_bytes_gated
+
 logger = logging.getLogger(__name__)
+
+# Enumeration and the opened-file read share the same exclusive byte limit.
+_TEST_FILE_BYTE_LIMIT = 500_000
 
 # ``regress`` covers the OpenBSD/openssh convention (openssh ships a
 # 200+ file ``regress/`` tree; without the pattern the whole suite was
@@ -204,8 +210,12 @@ def discover_tests(
             and _resolves_within(test_file, target)
         )
         try:
-            source = test_file.read_text(errors="replace")
-        except OSError:
+            raw = read_bytes_gated(test_file, max_bytes=_TEST_FILE_BYTE_LIMIT - 1)
+            # Match Path.read_text's default encoding, replacement and
+            # universal-newline behaviour without reopening the pathname.
+            with TextIOWrapper(BytesIO(raw), errors="replace") as text:
+                source = text.read()
+        except (OSError, ValueError):
             continue
 
         suffix = test_file.suffix.lower()
@@ -267,7 +277,9 @@ def _test_tree_fingerprint(target: Path) -> str:
     def _items():
         for f in test_files:
             try:
-                yield str(f.relative_to(target)), f.read_bytes()
+                yield str(f.relative_to(target)), read_bytes_gated(
+                    f, max_bytes=_TEST_FILE_BYTE_LIMIT - 1,
+                )
             except (OSError, ValueError):
                 yield str(f), b""
 
@@ -442,7 +454,7 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
                     # entry used to abort the whole discovery walk
                     # (ALL test evidence for the target lost).
                     continue
-                if size < 500_000:
+                if size < _TEST_FILE_BYTE_LIMIT:
                     if is_test_dir:
                         in_tree_files.append(fpath)
                     else:
