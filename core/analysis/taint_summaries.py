@@ -370,6 +370,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       but enclosing-frame propagation models only the definition header.
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
+    * An immediately returned, undecorated, non-generic local function
+      with a bare enclosing-local return: its function object retains a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
     * A type alias: later access can evaluate its deferred value, which
@@ -423,6 +425,30 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if kw.arg is None:
                 # ``**expr`` — opaque expansion
                 return "forwards **kwargs"
+    if isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        frame_bindings: frozenset[str] | None = None
+        for definition, returned in zip(fn_ast.body, fn_ast.body[1:]):
+            if (not isinstance(definition, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    or definition.decorator_list or getattr(definition, "type_params", ())
+                    or not isinstance(returned, ast.Return)
+                    or not isinstance(returned.value, ast.Name)
+                    or returned.value.id != definition.name):
+                continue
+            # Adjacency and no decorator avoid an intervening binding rewrite
+            # or wrapper. Only a bare return body needs this lexical check.
+            body = definition.body
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                body = body[1:]
+            if (len(body) == 1 and isinstance(body[0], ast.Return)
+                    and isinstance(body[0].value, ast.Name)):
+                name = body[0].value.id
+                if frame_bindings is None:
+                    frame_bindings = local_binding_names(fn_ast)
+                if (name in frame_bindings
+                        and name not in local_binding_names(definition)):
+                    return "returned function retains an unmodelled enclosing cell"
     return None
 
 
