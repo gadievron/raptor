@@ -214,6 +214,7 @@ def test_shutdown_cleanup_attempts_every_owned_worker_after_join_failure():
         release.set()
         generator.close()
         for worker, join in zip(workers, originals):
-            join(5)
+            if worker.ident is not None:
+                join(5)
             assert not worker.is_alive(), f"worker survived cleanup: {worker.name}"
     _restored(owner, snapshot, "clear")
