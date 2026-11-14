@@ -62,9 +62,9 @@ def test_whole_child_bindings_mask_indirect_target_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["slots[(lambda: raw)()] = 0",
-                                  "for slots[(lambda: raw)()] in ():\n  pass",
-                                  "first, slots[(lambda: raw)()] = ()"],
+@pytest.mark.parametrize("body", ["slots[(lambda: (yield raw))()] = 0",
+                                  "for slots[(lambda: (yield raw))()] in ():\n  pass",
+                                  "first, slots[(lambda: (yield raw))()] = ()"],
                          ids=["assignment", "loop", "unpacking"])
 def test_unsupported_target_read_invalidates_complete_body(body):
     assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None

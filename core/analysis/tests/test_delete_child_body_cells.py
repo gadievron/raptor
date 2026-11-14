@@ -51,7 +51,7 @@ def test_whole_child_bindings_mask_deletion_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["del slots[(lambda: raw)()]", "del slots[(index := 0)]",
+@pytest.mark.parametrize("body", ["del slots[(lambda: (yield raw))()]", "del slots[(index := 0)]",
                                   "del raw.member\n global unsupported"],
                          ids=["lambda-index", "assignment-index", "later-declaration"])
 def test_unsupported_deletion_target_invalidates_complete_child(body):

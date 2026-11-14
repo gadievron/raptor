@@ -52,7 +52,7 @@ def test_own_bindings_mask_deletion_cells(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["del slots[(lambda: raw)()]", "del slots[(raw := 0)]",
+@pytest.mark.parametrize("body", ["del slots[(lambda: (yield raw))()]", "del slots[(raw := 0)]",
                                   "del raw.member\nglobal unsupported"],
                          ids=["lambda-target", "walrus-target", "later-declaration"])
 def test_unsupported_deletion_tree_invalidates_earlier_capture(body):
@@ -60,7 +60,7 @@ def test_unsupported_deletion_tree_invalidates_earlier_capture(body):
 
 
 def test_nested_scope_unsupported_delete_stays_excluded():
-    assert _bounded_body_expression_loads(ast.parse("def child():\n del slots[(lambda: raw)()]").body) is None
+    assert _bounded_body_expression_loads(ast.parse("def child():\n del slots[(lambda: (yield raw))()]").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
