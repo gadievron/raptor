@@ -37,6 +37,8 @@ env:
 
 jobs:
   corpus-drivers:
+    # Automatic measurements belong to upstream; forks can opt in manually.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && github.repository == 'gadievron/raptor')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
