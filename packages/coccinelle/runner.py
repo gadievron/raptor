@@ -17,6 +17,7 @@ routes spatch through core.sandbox with network blocked.
 
 import functools
 import json
+import fnmatch
 import logging
 import os
 import re
@@ -1009,7 +1010,15 @@ def run_rules(
     if not rules_dir.is_dir():
         return []
 
-    rule_paths = sorted(rules_dir.glob("*.cocci"))
+    try:
+        rule_paths = sorted(
+            path for path in rules_dir.iterdir() if fnmatch.fnmatch(path.name, "*.cocci")
+        )
+    except OSError as exc:
+        return [SpatchResult(
+            rule="coccinelle", rule_path=str(rules_dir), returncode=-1,
+            errors=[f"Coccinelle rules directory could not be enumerated: {type(exc).__name__}"],
+        )]
     if not rule_paths:
         return []
 

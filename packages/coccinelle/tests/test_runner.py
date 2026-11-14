@@ -3737,3 +3737,59 @@ def test_parse_diagnostics_prevent_zero_exit_false_coverage(tmp_path, mode):
                 assert members["valid.c"].matches
         assert all("--quiet" in cmd and "--parse-error-msg" in cmd
                    and "--very-quiet" not in cmd for cmd in calls)
+
+
+@pytest.mark.parametrize('deny_listing', [True, False])
+def test_rule_discovery_refusal_is_not_empty_directory(tmp_path, monkeypatch, deny_listing):
+    rules = tmp_path / 'owned-rules'
+    rules.mkdir()
+    if deny_listing:
+        (rules / 'owned.cocci').write_text('// inert; never executed\n')
+    original = os.scandir
+    denied = []
+
+    def scoped_scandir(path):
+        if deny_listing and os.path.normpath(os.fspath(path)) == str(rules):
+            denied.append(str(path))
+            raise PermissionError('owned rule enumeration refusal')
+        return original(path)
+
+    def unexpected_probe():
+        pytest.fail('rule discovery control must not reach tool availability')
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    monkeypatch.setattr(runner_mod, 'is_available', unexpected_probe)
+    results = run_rules(tmp_path, rules)
+    if deny_listing:
+        assert denied
+        assert len(results) == 1
+        assert results[0].returncode == -1
+        assert results[0].files_examined == []
+        assert 'enumerat' in results[0].errors[0].lower()
+    else:
+        assert results == []
+
+
+def test_rule_discovery_preserves_glob_names_and_order(tmp_path, monkeypatch):
+    from packages.coccinelle.models import SpatchResult
+
+    rules = tmp_path / 'owned-rules'
+    rules.mkdir()
+    for name in ('z.cocci', '.cocci', 'a.cocci', 'upper.COCCI', 'skip.txt'):
+        (rules / name).write_text('// inert; never executed\n')
+    (rules / 'directory.cocci').mkdir()
+    expected = sorted(rules.glob('*.cocci'))
+    target = tmp_path / 'owned.c'
+    target.write_text('/* inert */\n')
+    seen = []
+
+    def fake_rule(_target, rule, **kwargs):
+        seen.append(rule)
+        return SpatchResult(rule=rule.stem, rule_path=str(rule))
+
+    monkeypatch.setattr(runner_mod, 'is_available', lambda: True)
+    monkeypatch.setattr(runner_mod, '_rule_version_probe', lambda: None)
+    monkeypatch.setattr(runner_mod, 'run_rule', fake_rule)
+    results = run_rules(target, rules)
+    assert seen == expected
+    assert [r.rule_path for r in results] == [str(p) for p in expected]
