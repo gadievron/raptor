@@ -1113,7 +1113,9 @@ def run_rules_batched(
     incomplete batch matches never stand in for those per-rule results.
     """
     target = Path(target)
-    rules = [Path(r).resolve() for r in rules if Path(r).exists()]
+    # Keep every explicitly requested path: missing rules need a refusal,
+    # not silent removal from the batch's result set.
+    rules = [Path(r).resolve() for r in rules]
     if not rules:
         return {}
     installed_version = _installed_version or _rule_version_probe()
