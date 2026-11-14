@@ -40,6 +40,7 @@ class TestSageFuzzingMemoryAPI(unittest.TestCase):
 
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
+        self.addCleanup(self._cleanup_tmpdir)
         self.mem_file = Path(self.tmpdir) / "test_memory.json"
         from core.sage.config import SageConfig
         from core.sage.memory import SageFuzzingMemory
@@ -47,7 +48,7 @@ class TestSageFuzzingMemoryAPI(unittest.TestCase):
         config = SageConfig(enabled=False)
         self.memory = SageFuzzingMemory(memory_file=self.mem_file, sage_config=config)
 
-    def tearDown(self):
+    def _cleanup_tmpdir(self):
         # Pre-fix `setUp` created a tmpdir via mkdtemp but no
         # tearDown removed it — every test method in the class
         # leaked a fresh directory under `$TMPDIR`. Across a
