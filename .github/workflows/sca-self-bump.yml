@@ -9,13 +9,13 @@ name: SCA-gated self-bump
 #      tooling pins — pins / bumps every
 #      loose dep in pyproject.toml and the transitional requirements
 #      compatibility files to the
-#      highest version that passes the full SCA signal set (OSV vulns,
+#      highest version admitted by the available mechanical checks (OSV vulns,
 #      KEV, EPSS, yanked-version detection, license diff, hygiene
 #      checks, supply-chain checks incl. install hooks / typo-squat /
 #      compromised-package feed / maintainer-change / binary-capability
 #      delta, version-diff size, function-level reachability).
-#      ``--self-test`` runs SCA again on the patched worktree to verify
-#      the patch actually reduces findings before emitting it.
+#      ``--self-test`` repeats hardening analysis on the patched worktree
+#      and checks that no actionable candidates remain under its policy.
 #
 #   2. ``raptor-sca bump`` on non-manifest surfaces — Dockerfile ARG
 #      pins, Dockerfile FROM image refs, ``RUN pip install pkg==N``
@@ -140,7 +140,7 @@ jobs:
           # 2026-05-20. ``--git-patch`` emits ``upgrade.patch``
           # alongside ``candidates.json`` + ``report.md`` in the
           # output dir. ``--self-test`` re-runs SCA against the
-          # patched worktree to confirm findings reduced before
+          # patched worktree to check actionable-candidate closure before
           # emitting. ``--no-llm`` keeps the run mechanical-only
           # (no API keys in CI). NO ``--ecosystems`` filter — we
           # want the bump to cover Python (pyproject.toml / requirements.txt),
@@ -187,9 +187,9 @@ jobs:
           # ``--apply`` writes Clean-verdict bumps in place. Review /
           # Block verdicts are never auto-applied — they surface in
           # the report only.
-          # Write the PR body OUTSIDE the worktree ($RUNNER_TEMP persists
+          # Keep the phase report OUTSIDE the worktree ($RUNNER_TEMP persists
           # across steps in the job) so the later ``git add -A`` can't sweep
-          # it into the bump branch — otherwise pr-body.md lands as a
+          # it into the bump branch — otherwise the report lands as a
           # committed file in the PR and the "Detect changes" step always
           # sees a spurious change.
           # Same fixture-protection policy as Phase 1 (see comment
@@ -205,7 +205,7 @@ jobs:
             --exclude '**/fixtures/**' \
             --exclude '**/testdata/**' \
             --exclude 'core/sandbox/scripts/feature-matrix/images/**' \
-            > "$RUNNER_TEMP/pr-body.md"
+            > "$RUNNER_TEMP/bump-proposals.md"
 
       - name: Exclude workflow-file changes (GITHUB_TOKEN can't push them)
         run: |
@@ -215,16 +215,73 @@ jobs:
           # ``workflows`` permission grantable to it (the key doesn't
           # exist), so this can't be fixed with a permissions: block.
           # Revert any workflow-file edits the harden / bump passes applied
-          # so the branch is pushable; pr-body.md still lists them for the
+          # so the branch is pushable; the composed PR body lists them for the
           # operator to pin manually. This also keeps the weekly bot from
           # rewriting CI definitions — consistent with this workflow's
           # threat model (see header). To auto-pin workflow files instead,
           # push with a ``workflows``-scoped PAT / GitHub App token rather
           # than the default GITHUB_TOKEN.
+          git diff --name-only -- .github/workflows/ > "$RUNNER_TEMP/excluded-workflows.txt"
           if [[ -n "$(git status --porcelain -- .github/workflows/)" ]]; then
             git checkout -- .github/workflows/
-            printf '\n---\n**Note:** proposed changes to `.github/workflows/*` were excluded from this PR — GitHub forbids the default `GITHUB_TOKEN` from pushing workflow files. Pin those manually, or run this job with a `workflows`-scoped token.\n' >> "$RUNNER_TEMP/pr-body.md"
           fi
+
+      - name: Assemble self-bump PR report
+        env:
+          HARDEN_PATCH_APPLIED: ${{ steps.harden.outputs.patch_present }}
+          HARDEN_REPORT: /tmp/sca-harden-out/report.md
+        run: |
+          set -euo pipefail
+          # Capture only the remaining worktree edits, after workflow exclusions.
+          git diff --no-ext-diff --binary > "$RUNNER_TEMP/sca-applied.patch"
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import re
+
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          hardening = Path(os.environ["HARDEN_REPORT"]).read_text(encoding="utf-8")
+          proposals = (temporary / "bump-proposals.md").read_text(encoding="utf-8")
+          applied = (temporary / "sca-applied.patch").read_text(encoding="utf-8")
+          excluded = (temporary / "excluded-workflows.txt").read_text(encoding="utf-8")
+
+          def literal(text):
+              fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
+              return fence + "\n" + text.rstrip() + "\n" + fence
+
+          harden_status = (
+              "The Phase 1 hardening patch was applied before Phase 2. The final diff below "
+              "is authoritative after later edits and workflow-file exclusions."
+              if os.environ["HARDEN_PATCH_APPLIED"] == "true" else
+              "No Phase 1 hardening patch was applied. The following is analysis only."
+          )
+          sections = [
+              "# SCA self-bump proposal",
+              "## Manifest hardening (Phase 1)", harden_status, hardening,
+              "## Non-manifest proposals (Phase 2)",
+              "This is proposal analysis, not a list of changes in this PR. `--apply` writes "
+              "only Clean-verdict proposals; Review and Block proposals are not applied. "
+              "Even a Clean proposal may be excluded. Consult the final diff below.",
+              proposals,
+              "## Changes remaining in this PR",
+              literal(applied) if applied.strip() else "No changes remain after exclusions.",
+              "## Skipped and excluded surfaces",
+              "Both passes exclude `**/tests/**`, `**/test/**`, `**/fixtures/**`, "
+              "`**/testdata/**` and `core/sandbox/scripts/feature-matrix/images/**` from writes. "
+              "The phase reports retain their skipped, unsupported and lookup-failure details.",
+              "Workflow-file edits reverted before publication (the default token cannot push them):\n\n"
+              + literal(excluded) if excluded.strip() else "No workflow-file edits were reverted.",
+              "## Validation scope",
+              "Both passes use `--no-llm`. The hardening self-test repeats the mechanical "
+              "analysis on the patched worktree and checks that no actionable candidates remain "
+              "under the same policy. It does not establish functional or native compatibility, "
+              "nor prove that every SCA signal was available or passed. Skipped/excluded surfaces "
+              "remain unverified. This SCA job does not attest the status of PR checks: "
+              "inspect and pass the separate required CI checks, then review the final PR diff "
+              "before merging. Proposal counts do not define the changes.",
+          ]
+          (temporary / "pr-body.md").write_text("\n\n".join(sections) + "\n", encoding="utf-8")
+          PYTHON
 
       - name: Detect changes
         id: changes
@@ -270,9 +327,10 @@ jobs:
           git commit -m "chore: SCA-gated self-bump
 
           Mechanical bump applied by .github/workflows/sca-self-bump.yml.
-          Every change passed the full raptor-sca signal set
-          (vulns / KEV / EPSS / yanked / license / hygiene /
-          supply-chain / capability-delta / reachability)."
+          The hardening self-test checks actionable-candidate closure under
+          its mechanical policy, not functional or native compatibility.
+          Applied edits, unapplied proposals and exclusions are listed
+          separately in the PR body for human review."
           # Replay the bump commit onto current main before opening the
           # PR — a branch cut from the dispatch-time checkout can be
           # merges stale when the SCA automation runs back-to-back, and a
