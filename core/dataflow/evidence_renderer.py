@@ -70,7 +70,12 @@ def _render_candidate_pool(pool: Iterable[CandidateValidator]) -> str:
 
 def _render_step_annotations(annotations: Iterable[StepAnnotation]) -> str:
     annotation_list = list(annotations)
-    lines = ["Path-step annotations:"]
+    lines = [
+        "Path-step annotations:",
+        "  Call matching is best-effort; empty annotations do not prove "
+        "validators are absent. Unsupported or failed parsing can also "
+        "produce an empty annotation.",
+    ]
     if not annotation_list:
         lines.append("  (no steps)")
         return "\n".join(lines)

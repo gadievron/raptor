@@ -32,9 +32,9 @@ an empty annotation when:
   optional dependencies),
 * the snippet doesn't parse cleanly.
 
-Empty annotations are honest signal: the downstream LLM sees that
-this step's call data wasn't recoverable and weighs the rest of the
-evidence accordingly.
+An empty annotation can also come from a successfully parsed snippet
+with no calls. The record does not distinguish these cases, so empty
+annotations do not establish the absence of validators.
 """
 
 from __future__ import annotations
