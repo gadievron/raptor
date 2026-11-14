@@ -812,7 +812,7 @@ def _has_interprocedural_check(
     for i in range(start_idx, end_idx):
         if var_in_if.search(lines[i]):
             # Found an if (... var ...) — look for early-exit within 2 lines.
-            for j in range(i, min(i + 3, len(lines))):
+            for j in range(i, min(i + 3, end_idx)):
                 if early_exit.search(lines[j]):
                     return True
         m = call_with_var.search(lines[i])
@@ -824,10 +824,10 @@ def _has_interprocedural_check(
             )
             # Look for `if (assigned ...)` within next 5 lines,
             # then early-exit within 3 lines after that.
-            for j in range(i + 1, min(i + 6, len(lines))):
+            for j in range(i + 1, min(i + 6, end_idx)):
                 if not if_with_assigned.search(lines[j]):
                     continue
-                for k in range(j, min(j + 3, len(lines))):
+                for k in range(j, min(j + 3, end_idx)):
                     if early_exit.search(lines[k]):
                         return True
     return False
