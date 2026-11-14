@@ -17,9 +17,10 @@ rules:
   # the request URL. $SB.append($X) taints $SB by side effect.
   - id: raptor.web.ssrf.stringbuilder.java
     message: >-
-      Untrusted request data is appended into a string builder that is used
-      as an outbound request URL. Enforce a strict URL allowlist before the
-      request is issued.
+      Request-derived data reaches a URL-related constructor or request API,
+      potentially through mutable string-building operations. Review which URL
+      components are controlled, whether a request is issued and whether its
+      destination passes a strict allowlist.
     languages: [java]
     severity: CRITICAL
     mode: taint
@@ -55,9 +56,10 @@ rules:
   # pattern.
   - id: raptor.web.ssrf.urlbuilder.javascript
     message: >-
-      Untrusted request data flows into a URL object that is used for an
-      outbound request. Enforce a strict URL allowlist before the request
-      is issued.
+      Request-derived data reaches a request API, potentially through URL-object
+      mutation. Review whether it controls the scheme or destination, only a
+      query value, or another component. Enforce a strict destination allowlist
+      where untrusted data can change the request target.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
@@ -105,9 +107,10 @@ rules:
   # then carries taint through the default call propagation.
   - id: raptor.web.ssrf.listjoin.python
     message: >-
-      Untrusted request data is accumulated into a sequence that is joined
-      into an outbound request URL. Enforce a strict URL allowlist before
-      the request is issued.
+      Request-derived data reaches a request URL argument, potentially through
+      mutable collection operations. Review the actual propagation path, URL
+      components and destination checks. Enforce a strict destination allowlist
+      where untrusted data can change the request target.
     languages: [python]
     severity: CRITICAL
     mode: taint
