@@ -385,12 +385,15 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
 
 def _comprehension_target_scope(
     target: ast.AST,
+    *,
+    allow_indirect_stores: bool = True,
 ) -> tuple[frozenset[str], frozenset[str]] | None:
     """Bare bindings and known scope-free reads for supported target stores.
 
     Attribute/subscript bases and indices are reads, not bindings. Unsupported
     read expressions contribute nothing; this does not certify their absence.
-    Unsupported target structures return None.
+    Unsupported target structures return None. Binding-only consumers can
+    reject indirect stores rather than rely on partial expression reads.
     """
     names: set[str] = set()
     reads: set[str] = set()
@@ -404,8 +407,12 @@ def _comprehension_target_scope(
         elif isinstance(node, (ast.Tuple, ast.List)):
             pending.extend(node.elts)
         elif isinstance(node, ast.Attribute):
+            if not allow_indirect_stores:
+                return None
             reads.update(_scope_free_expression_loads(node.value))
         elif isinstance(node, ast.Subscript):
+            if not allow_indirect_stores:
+                return None
             reads.update(_scope_free_expression_loads(node.value))
             reads.update(_scope_free_expression_loads(node.slice))
         else:
@@ -418,8 +425,8 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
 
     An unsupported node aborts this additional scan. Empty results never
     certify absence; existing expression and direct-base refusals stay active.
-    Only bare-name comprehension targets are admitted here; existing target
-    store and unpacking checks remain independent.
+    Only binding-only comprehension targets are admitted here; existing
+    target-store checks remain independent.
     """
     if expr is None:
         return frozenset()
@@ -440,11 +447,13 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
         elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
                 return frozenset()
-            if not all(isinstance(gen.target, ast.Name) for gen in node.generators):
+            scopes = [
+                _comprehension_target_scope(gen.target, allow_indirect_stores=False)
+                for gen in node.generators
+            ]
+            if any(scope is None for scope in scopes):
                 return frozenset()
-            targets = {
-                gen.target.id for gen in node.generators if isinstance(gen.target, ast.Name)
-            }
+            targets = {name for scope in scopes if scope is not None for name in scope[0]}
             inner = bound | targets
             pending.append((node.generators[0].iter, bound))
             for index, gen in enumerate(node.generators):
