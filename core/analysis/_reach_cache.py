@@ -278,7 +278,7 @@ def _cache_path_for(fingerprint: str) -> Path | None:
     # ``../../../tmp/poison`` cannot construct a path outside the
     # cache root. Returns ``None`` on rejection; callers treat it
     # as a cache miss / no-op write.
-    if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.match(fingerprint):
+    if not isinstance(fingerprint, str) or not _FINGERPRINT_RE.fullmatch(fingerprint):
         logger.warning(
             "reach_cache: invalid fingerprint %r; refusing to construct path",
             fingerprint,
