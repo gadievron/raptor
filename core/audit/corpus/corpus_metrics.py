@@ -37,6 +37,7 @@ from typing import Any
 
 from core.security.log_sanitisation import sanitise_for_terminal
 from core.json import load_json
+from core.source.streams import preserving_stream_error
 
 
 @dataclass
@@ -541,7 +542,7 @@ def _read_results(path: Path) -> list[dict[str, Any]]:
     [...]}`` wrapper that ``run_corpus._write_results`` emits.
     """
     if path.suffix.lower() == ".csv":
-        with Path(path).open() as f:  # raw-open: operator-curated corpus artifact (eval lane)
+        with preserving_stream_error(Path(path).open()) as f:  # raw-open: operator-curated corpus artifact (eval lane)
             return list(csv.DictReader(f))
     raw = load_json(path, strict=True, max_bytes=_MAX_RESULTS_BYTES)
     if raw is None:
