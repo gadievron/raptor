@@ -18,6 +18,8 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.source.streams import preserving_stream_error
+
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
     VALID_FP_CATEGORIES,
@@ -74,7 +76,7 @@ class Metrics:
 
 def compute(csv_path: Path) -> Metrics:
     m = Metrics()
-    with csv_path.open(encoding="utf-8", newline="") as f:
+    with preserving_stream_error(csv_path.open(encoding="utf-8", newline="")) as f:
         reader = csv.DictReader(f, strict=True)
         columns = reader.fieldnames or []
         if len(columns) != len(set(columns)):
