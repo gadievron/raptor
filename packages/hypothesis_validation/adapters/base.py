@@ -330,38 +330,54 @@ def make_sandbox_runner(
         scratch = tempfile.TemporaryDirectory(prefix="hv_sandbox_")
         effective_output = Path(scratch.name)
 
-    def _runner(cmd, **kwargs):
-        _ = scratch  # keep the fake-HOME scratch dir alive with the closure
-        sandbox_kwargs: dict[str, Any] = {
-            "block_network": block_network,
-            "target": str(target),
-            "restrict_reads": restrict_reads,
-            "fake_home": fake_home,
-            "caller_label": caller_label,
-            "env_caller_filtered": True,
-        }
-        if effective_output is not None:
-            sandbox_kwargs["output"] = str(effective_output)
-        if readable_paths:
-            sandbox_kwargs["readable_paths"] = list(readable_paths)
-        # tool_paths feeds BOTH the Landlock read allowlist and the
-        # mount-ns bind set, so it is the channel that makes the
-        # toolchain dirs and command-named files actually visible.
-        tool_dirs = _toolchain_read_dirs(cmd)
-        skip = tuple(
-            s for s in (str(target),
-                        str(effective_output) if effective_output else "")
-            if s
-        )
-        for extra in _cmd_file_grants(cmd, skip_prefixes=skip):
-            if extra not in tool_dirs:
-                tool_dirs.append(extra)
-        if tool_dirs:
-            sandbox_kwargs["tool_paths"] = tool_dirs
-        sandbox_kwargs.update({k: v for k, v in kwargs.items() if k != "shell"})
-        return sandbox_run(cmd, **sandbox_kwargs)
+    def _bind_runtime(semgrep_runtime=None):
+        def _runner(cmd, **kwargs):
+            _ = scratch  # keep the fake-HOME scratch dir alive with the closure
+            sandbox_kwargs: dict[str, Any] = {
+                "block_network": block_network,
+                "target": str(target),
+                "restrict_reads": restrict_reads,
+                "fake_home": fake_home,
+                "caller_label": caller_label,
+                "env_caller_filtered": True,
+            }
+            if effective_output is not None:
+                sandbox_kwargs["output"] = str(effective_output)
+            if readable_paths:
+                sandbox_kwargs["readable_paths"] = list(readable_paths)
+            # tool_paths feeds BOTH the Landlock read allowlist and the
+            # mount-ns bind set, so it is the channel that makes the
+            # toolchain dirs and command-named files actually visible.
+            if semgrep_runtime is not None:
+                semgrep_runtime.validate()
+                if tuple(cmd[:2]) != semgrep_runtime.command_prefix:
+                    raise ValueError("Semgrep runtime does not match the selected command")
+                kwargs["env"] = semgrep_runtime.child_environment(kwargs.get("env") or {})
+                tool_dirs = list(semgrep_runtime.tool_paths)
+            else:
+                tool_dirs = _toolchain_read_dirs(cmd)
+            skip = tuple(
+                s for s in (str(target),
+                            str(effective_output) if effective_output else "")
+                if s
+            )
+            # The runtime already grants its interpreter and frontend exactly.
+            # Treating that frontend as an input would grant its whole bin
+            # directory through the generic query-pack sibling policy.
+            input_cmd = ([cmd[0], *cmd[len(semgrep_runtime.command_prefix):]]
+                         if semgrep_runtime is not None else cmd)
+            for extra in _cmd_file_grants(input_cmd, skip_prefixes=skip):
+                if extra not in tool_dirs:
+                    tool_dirs.append(extra)
+            if tool_dirs:
+                sandbox_kwargs["tool_paths"] = tool_dirs
+            sandbox_kwargs.update({k: v for k, v in kwargs.items() if k != "shell"})
+            return sandbox_run(cmd, **sandbox_kwargs)
 
-    return _runner
+        setattr(_runner, "with_semgrep_runtime", _bind_runtime)
+        return _runner
+
+    return _bind_runtime()
 
 
 class ToolAdapter(ABC):

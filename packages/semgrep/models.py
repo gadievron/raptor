@@ -158,9 +158,10 @@ class SemgrepFinding:
 class SemgrepResult:
     """Results from running Semgrep with one config against a target.
 
-    Fields are populated by the runner. SARIF and JSON outputs are kept as
-    raw strings so callers can persist them in their own layout (e.g.
-    scanner.py writes `semgrep_<name>.sarif`).
+    Fields are populated by the runner. JSON preserves the tool's output;
+    SARIF is either native tool output or an explicitly labelled conversion
+    of that same JSON scan. Callers can persist both in their own layout
+    (e.g. scanner.py writes `semgrep_<name>.sarif`).
     """
 
     name: str = ""
@@ -209,6 +210,182 @@ class SemgrepResult:
             "elapsed_ms": self.elapsed_ms,
             "errors": self.errors,
         }
+
+
+def convert_semgrep_json_to_sarif(text: str, *, max_output_bytes: int) -> str:
+    """Convert one complete Semgrep JSON scan, without inventing coverage.
+
+    This supports packaged CLIs that cannot emit SARIF and JSON together.
+    The caller retains the original JSON separately. Required result and
+    coverage shapes are checked before emission; malformed or unsupported
+    data raises ``ValueError`` rather than becoming an empty successful scan.
+    Taint traces require a separate, reviewed flow mapping and are refused.
+    Both input and generated UTF-8 output must fit the caller's byte budget.
+    """
+    from io import BytesIO
+
+    from core.json.projection import project_object
+    from core.json.utils import dumps_artifact
+    from core.sarif import emit
+    from core.sarif.parser import sarif_uri_path
+
+    if type(max_output_bytes) is not int or max_output_bytes <= 0:
+        raise ValueError("Semgrep JSON conversion requires a positive byte budget")
+    if not isinstance(text, str) or len(text) > max_output_bytes:
+        raise ValueError("Semgrep JSON conversion input exceeds its byte budget")
+    try:
+        encoded = text.encode("utf-8")
+        if len(encoded) > max_output_bytes:
+            raise ValueError("Semgrep JSON conversion input exceeds its byte budget")
+        # The strict shared reader rejects duplicate keys and non-finite
+        # values in every object, including arbitrary tool metadata.
+        with BytesIO(encoded) as stream:
+            data, _ = project_object(stream, max_bytes=max_output_bytes)
+    except (UnicodeError, RecursionError) as exc:
+        raise ValueError("Semgrep JSON conversion input is invalid") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Semgrep JSON conversion requires an object")
+    results, errors, paths = data.get("results"), data.get("errors"), data.get("paths")
+    if not isinstance(results, list) or not isinstance(errors, list):
+        raise ValueError("Semgrep JSON requires results and errors arrays")
+    if not isinstance(paths, dict) or not isinstance(paths.get("scanned"), list):
+        raise ValueError("Semgrep JSON requires paths.scanned coverage")
+    version = reported_version(data.get("version"))
+    if not version:
+        raise ValueError("Semgrep JSON requires a valid version label")
+
+    def path_string(value: Any) -> str:
+        if (not isinstance(value, str) or not value
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)
+                or sarif_uri_path(value) != value):
+            raise ValueError("Semgrep JSON contains an unsupported local path")
+        return value
+
+    def coordinate(value: Any) -> int:
+        if type(value) is not int or value <= 0:
+            raise ValueError("Semgrep JSON contains an invalid source coordinate")
+        return value
+
+    scanned = {path_string(path) for path in paths["scanned"]}
+    skipped = paths.get("skipped", [])
+    if not isinstance(skipped, list):
+        raise ValueError("Semgrep JSON paths.skipped must be an array")
+    for entry in skipped:
+        if not isinstance(entry, dict):
+            raise ValueError("Semgrep JSON contains an invalid skipped path")
+        path_string(entry.get("path"))
+        if "reason" in entry and not isinstance(entry["reason"], str):
+            raise ValueError("Semgrep JSON contains an invalid skip reason")
+
+    notifications: list[dict[str, Any]] = []
+    if skipped:
+        notifications.append({
+            "level": "warning",
+            "message": {"text": (
+                f"Semgrep reported {len(skipped)} skipped path(s). "
+                "Scope may include intentional exclusions; this is not an engine failure."
+            )},
+            "properties": {"coverage_limitation": "semgrep_skipped_scope"},
+        })
+    failed = False
+    for diagnostic in errors:
+        if not isinstance(diagnostic, dict):
+            raise ValueError("Semgrep JSON contains an invalid diagnostic")
+        level = _diagnostic_level(diagnostic)
+        if level is None:
+            raise ValueError("Semgrep JSON contains an invalid diagnostic level")
+        if diagnostic.get("path") is not None:
+            path_string(diagnostic["path"])
+        failed |= level in {"error", "fatal"}
+        note: dict[str, Any] = {
+            "level": ("error" if level in {"error", "fatal"}
+                      else "warning" if level in {"warn", "warning"} else "note"),
+            "message": {"text": _render_error(diagnostic)},
+        }
+        if diagnostic.get("path") and not _incompatible_rule(diagnostic):
+            note["properties"] = {"coverage_limitation": "semgrep_file_diagnostic"}
+        notifications.append(note)
+
+    levels = {"ERROR": "error", "WARNING": "warning", "INFO": "note"}
+    rules = emit.RuleIndex()
+    emitted = []
+    for item in results:
+        if not isinstance(item, dict):
+            raise ValueError("Semgrep JSON contains a non-object result")
+        rule_id, path = item.get("check_id"), path_string(item.get("path"))
+        if not isinstance(rule_id, str) or not rule_id:
+            raise ValueError("Semgrep JSON result requires a rule identifier")
+        if path not in scanned:
+            raise ValueError("Semgrep JSON finding is absent from scanned coverage")
+        start, end, extra = item.get("start"), item.get("end"), item.get("extra")
+        if not isinstance(start, dict) or not isinstance(end, dict) or not isinstance(extra, dict):
+            raise ValueError("Semgrep JSON result requires start, end and extra objects")
+        line, column = coordinate(start.get("line")), coordinate(start.get("col"))
+        end_line, end_column = coordinate(end.get("line")), coordinate(end.get("col"))
+        if end_line < line or (end_line == line and end_column < column):
+            raise ValueError("Semgrep JSON contains a reversed source range")
+        message, severity = extra.get("message"), extra.get("severity")
+        if not isinstance(message, str) or not isinstance(severity, str) or severity not in levels:
+            raise ValueError("Semgrep JSON result requires a message and known severity")
+        metadata = extra.get("metadata", {})
+        if not isinstance(metadata, dict):
+            raise ValueError("Semgrep JSON rule metadata must be an object")
+        if "is_ignored" in extra and type(extra["is_ignored"]) is not bool:
+            raise ValueError("Semgrep JSON ignored-result status must be boolean")
+        trace = extra.get("dataflow_trace")
+        if trace is not None and not (isinstance(trace, (dict, list)) and not trace):
+            raise ValueError("Semgrep JSON taint traces require a supported SARIF flow converter")
+        # Rule metadata is tool-controlled, not RAPTOR control state.
+        # Preserve it under a namespace; only reviewed taxonomy fields may
+        # enter the properties interpreted by downstream SARIF consumers.
+        properties: dict[str, Any] = {
+            "semgrep.metadata": metadata,
+            "raptor.outputOrigin": "semgrep-json-conversion",
+        }
+        for key in ("cwe", "cwe_id"):
+            value = metadata.get(key)
+            if isinstance(value, str) or (
+                isinstance(value, list) and all(isinstance(item, str) for item in value)
+            ):
+                properties[key] = value
+        tags = metadata.get("tags")
+        if isinstance(tags, list) and all(isinstance(item, str) for item in tags):
+            properties["tags"] = tags
+        rules.add(emit.minimal_rule(rule_id, full_description=message,
+                                    level=levels[severity], properties=properties))
+        result_properties = dict(properties)
+        result_properties["semgrep.extra"] = extra
+        entry = emit.result(
+            rule_id, message,
+            [emit.location(path, emit.source_region(
+                line, column=column, end_line=end_line, end_column=end_column,
+            ))],
+            level=levels[severity], properties=result_properties,
+        )
+        if extra.get("is_ignored") is True:
+            entry["suppressions"] = [{"kind": "inSource"}]
+        emitted.append(entry)
+
+    run = emit.run("Semgrep", rules.rules(), emitted,
+                   full_name="Semgrep JSON converted to SARIF by RAPTOR")
+    run["tool"]["driver"]["version"] = version
+    run["properties"] = {
+        "raptor.outputOrigin": "semgrep-json-conversion",
+        "semgrep.paths": paths,
+    }
+    run["invocations"] = [{
+        "executionSuccessful": not failed,
+        "toolExecutionNotifications": notifications,
+    }]
+    try:
+        rendered = dumps_artifact(
+            emit.document([run], schema_uri=emit.SCHEMA_URI_COMMITTEE), indent=None,
+        )
+        if len(rendered) > max_output_bytes or len(rendered.encode("utf-8")) > max_output_bytes:
+            raise ValueError("Converted Semgrep SARIF exceeds its byte budget")
+    except (UnicodeError, RecursionError, TypeError) as exc:
+        raise ValueError("Converted Semgrep SARIF is invalid") from exc
+    return rendered
 
 
 def parse_sarif(text: str, *, errors: list[str] | None = None) -> list[SemgrepFinding]:
