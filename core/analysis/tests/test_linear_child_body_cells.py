@@ -53,9 +53,9 @@ def test_child_own_bindings_mask_outer_cell(header, body):
 
 
 @pytest.mark.parametrize("body", ["raw\n import module", "if raw:\n  import module",
-                                  "for item in raw:\n  return item", "global raw\n return raw",
+                                  "for obj.member in raw:\n  return raw", "global raw\n return raw",
                                   "def deeper():\n  return raw", "raw.member = 0\n return 0"],
-                         ids=["import", "branch-import", "loop", "global", "nested-definition", "indirect-target"])
+                         ids=["import", "branch-import", "indirect-loop", "global", "nested-definition", "indirect-target"])
 def test_unsupported_child_statement_invalidates_complete_body(body):
     source = "raw\ndef child():\n " + body
     assert _bounded_body_expression_loads(ast.parse(source).body) is None

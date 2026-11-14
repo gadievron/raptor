@@ -559,15 +559,19 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
         statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
-        elif isinstance(statement, ast.If):
+        elif isinstance(statement, (ast.If, ast.While)):
             expressions.append(statement.test)
+            pending.extend(reversed(statement.orelse))
+            pending.extend(reversed(statement.body))
+        elif isinstance(statement, (ast.For, ast.AsyncFor)) and isinstance(statement.target, ast.Name):
+            expressions.append(statement.iter)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Assign) and all(
             isinstance(target, ast.Name) for target in statement.targets
         ):
             expressions.append(statement.value)
-        elif not isinstance(statement, ast.Pass):
+        elif not isinstance(statement, (ast.Pass, ast.Break, ast.Continue)):
             return None
     if not all(_child_expression_is_supported(expression) for expression in expressions):
         return None
