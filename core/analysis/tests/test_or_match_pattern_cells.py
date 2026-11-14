@@ -48,7 +48,7 @@ def test_or_pattern_parameter_masks_outer_cell(child):
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["root", "child"])
-@pytest.mark.parametrize("pattern", ["0 | raw.member", "0 | -1", "[value] | (value,)", "0 | Value()", "[0 | raw.member]", "{0: 0 | raw.member}"],
+@pytest.mark.parametrize("pattern", ["0 | raw.member", "0 | -1", "[value] | (value,)", "Value(value) | Other(value)", "[0 | raw.member]", "{0: 0 | raw.member}"],
                          ids=["dotted", "unary", "consistent-captures", "class", "nested-dotted", "mapping-dotted"])
 def test_unsupported_or_child_invalidates_complete_scan(pattern, child):
     tree = ast.parse(source_for(pattern, child))
