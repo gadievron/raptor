@@ -848,7 +848,7 @@ def run_synthesis_loop(
         compilable result, sound or not).
 
     When ``diag`` is supplied, it records ``last_error`` (assembly /
-    compile), ``attempts`` (compile budget used in the last cycle),
+    compile), ``attempts`` (total proposal attempts across all cycles),
     and ``refine_attempts`` (soundness refinements used).
 
     Retry budgets must be non-negative integers. Zero compile attempts
