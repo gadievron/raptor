@@ -88,7 +88,7 @@ MAX_RESOLUTION_DEPTH: int = 3
 _HEADER_EXTS: tuple[str, ...] = (".h", ".hpp", ".hh", ".hxx")
 
 #: Source file extensions inspected for frequency-counting alias usage.
-_SOURCE_EXTS: tuple[str, ...] = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp")
+_SOURCE_EXTS: tuple[str, ...] = (".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".hxx")
 
 #: Bound on number of files walked. Kernels easily exceed 10k; the cap
 #: keeps the pre-pass cost sub-second on small/medium projects and
