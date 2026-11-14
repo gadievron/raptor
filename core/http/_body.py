@@ -136,7 +136,9 @@ def response_body(response: Any, deadline: float, *, clock: Callable[[], float])
     finally:
         try:
             release_response(response, reusable=reusable)
-        except Exception:
+        except BaseException as cleanup:
             if primary is None:
+                if not isinstance(cleanup, Exception):
+                    raise
                 raise HttpError("HTTP response cleanup failed") from None
             primary.add_note("HTTP response cleanup also failed")
