@@ -188,6 +188,15 @@ def _semgrep_version() -> str | None:
     # CLI probe of the PATH binary instead.
     exe = shutil.which("semgrep")
     if exe:
+        # Like the Joern install-metadata reader below, this is lazy: startup
+        # must not import or execute a tool merely to report its version.
+        from packages.semgrep.runtime import SnapRuntimeError, resolve_snap_runtime
+        try:
+            runtime = resolve_snap_runtime(exe)
+        except SnapRuntimeError:
+            return None
+        if runtime is not None:
+            return runtime.version
         prefix = str(Path(sys.prefix).resolve()) + os.sep
         if not str(Path(exe).resolve()).startswith(prefix):
             return _cached_cli_version("semgrep")

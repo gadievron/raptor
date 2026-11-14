@@ -665,25 +665,36 @@ def _make_runner(sandbox_run: Callable, scratch_root: Path) -> Callable:
     blocked; Landlock reads/writes scoped to the scratch tree.
     """
 
-    def _runner(cmd, **kwargs):
-        kwargs.pop("shell", None)
-        return sandbox_run(
-            cmd,
-            block_network=True,
-            target=str(scratch_root),
-            output=str(scratch_root),
-            # Throwaway HOME: semgrep writes ~/.semgrep/semgrep.log and
-            # its settings file unconditionally; with the real home
-            # outside the Landlock write scope that denial is fatal to
-            # the scan (and the negative control then flags every
-            # re-run as broken).
-            fake_home=True,
-            caller_label="patch-gate",
-            env_caller_filtered=True,
-            **kwargs,
-        )
+    def _bind_runtime(semgrep_runtime=None):
+        def _runner(cmd, **kwargs):
+            kwargs.pop("shell", None)
+            if semgrep_runtime is not None:
+                semgrep_runtime.validate()
+                if tuple(cmd[:2]) != semgrep_runtime.command_prefix:
+                    raise ValueError("Semgrep runtime does not match the selected command")
+                kwargs["env"] = semgrep_runtime.child_environment(kwargs.get("env") or {})
+                extras = list(kwargs.pop("tool_paths", []) or [])
+                kwargs["tool_paths"] = list(dict.fromkeys([*semgrep_runtime.tool_paths, *extras]))
+            return sandbox_run(
+                cmd,
+                block_network=True,
+                target=str(scratch_root),
+                output=str(scratch_root),
+                # Throwaway HOME: semgrep writes ~/.semgrep/semgrep.log and
+                # its settings file unconditionally; with the real home
+                # outside the Landlock write scope that denial is fatal to
+                # the scan (and the negative control then flags every
+                # re-run as broken).
+                fake_home=True,
+                caller_label="patch-gate",
+                env_caller_filtered=True,
+                **kwargs,
+            )
 
-    return _runner
+        setattr(_runner, "with_semgrep_runtime", _bind_runtime)
+        return _runner
+
+    return _bind_runtime()
 
 
 # ---------------------------------------------------------------------------

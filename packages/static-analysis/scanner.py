@@ -716,7 +716,7 @@ def _sanitize_pack_name(name: str) -> str:
 
 def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         target=None, output=None, proxy_hosts=None, caller_label=None,
-        fake_home: bool=False, readable_paths=None):
+        fake_home: bool=False, readable_paths=None, semgrep_runtime=None):
     """Execute a command in a network-isolated sandbox and return results.
 
     When `target` and `output` are supplied, Landlock is engaged — the
@@ -745,15 +745,22 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
     # rooted venv. Resolve argv[0] too: both executable spelling and its
     # dependencies must be visible in the bind tree. Unknown dependencies
     # can still cause a mountless retry, subject to the unchanged floor.
-    _resolved0 = shutil.which(cmd[0]) or cmd[0]
-    _real0 = os.path.realpath(_resolved0)
-    if _real0 != cmd[0] and os.path.isfile(_real0):
-        cmd = [_real0, *cmd[1:]]
-    tool_paths = _compute_python_tool_paths(cmd)
-    from core.sandbox.python_paths import python_runtime_tool_paths
-    for p in python_runtime_tool_paths():
-        if p not in tool_paths:
-            tool_paths.append(p)
+    if semgrep_runtime is not None:
+        semgrep_runtime.validate()
+        if tuple(cmd[:2]) != semgrep_runtime.command_prefix:
+            raise ValueError("Semgrep runtime does not match the selected command")
+        tool_paths = list(semgrep_runtime.tool_paths)
+        env = semgrep_runtime.child_environment(env or RaptorConfig.get_safe_env())
+    else:
+        _resolved0 = shutil.which(cmd[0]) or cmd[0]
+        _real0 = os.path.realpath(_resolved0)
+        if _real0 != cmd[0] and os.path.isfile(_real0):
+            cmd = [_real0, *cmd[1:]]
+        tool_paths = _compute_python_tool_paths(cmd)
+        from core.sandbox.python_paths import python_runtime_tool_paths
+        for p in python_runtime_tool_paths():
+            if p not in tool_paths:
+                tool_paths.append(p)
     sandbox_kwargs = {}
     if fake_home:
         sandbox_kwargs["fake_home"] = True
@@ -783,7 +790,8 @@ def run(cmd, cwd=None, timeout=RaptorConfig.DEFAULT_TIMEOUT, env=None,
         output=output,
         cwd=cwd,
         env=env or RaptorConfig.get_safe_env(),
-        strict_env=True,
+        **({"env_caller_filtered": True} if semgrep_runtime is not None
+           else {"strict_env": True}),
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -897,13 +905,31 @@ def run_single_semgrep(
 
     # Build the semgrep argv via packages/semgrep/. Sandbox engagement,
     # HOME redirect, and registry-pack proxy hosts remain scanner concerns
-    # below — packages/semgrep/ is pure invocation logic.
+    # below. Verified installed Snap runtimes also carry their explicitly
+    # scoped interpreter environment and one-payload JSON output contract.
     # Resolve binary explicitly to avoid broken-venv installations.
     semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
-    scope_ok = semgrep_pkg.scope_isolation_available(semgrep_cmd)
+    try:
+        semgrep_runtime = semgrep_pkg.resolve_snap_runtime(semgrep_cmd)
+        scope_ok = semgrep_pkg.scope_isolation_available(semgrep_cmd)
+    except semgrep_pkg.SnapRuntimeError as exc:
+        json_out.unlink(missing_ok=True)
+        json_out.with_name(json_out.name + ".rejected").unlink(missing_ok=True)
+        logger.error("Semgrep runtime cannot be used safely: %s", exc)
+        sarif.write_text('{"runs": []}', encoding="utf-8")
+        stderr_log.write_text(str(exc), encoding="utf-8")
+        exit_file.write_text("-1", encoding="utf-8")
+        return str(sarif), False
+    if semgrep_runtime is not None:
+        # A failed new Snap invocation cannot leave prior coverage at this name.
+        json_out.unlink(missing_ok=True)
+        json_out.with_name(json_out.name + ".rejected").unlink(missing_ok=True)
     if not scope_ok:
         from packages.semgrep.runner import _warn_scope_isolation_once
-        _warn_scope_isolation_once(logger)
+        if semgrep_runtime is not None:
+            _warn_scope_isolation_once(logger, semgrep_cmd)
+        else:
+            _warn_scope_isolation_once(logger)
     cmd = semgrep_pkg.build_cmd(
         repo_path,
         config,
@@ -916,6 +942,7 @@ def run_single_semgrep(
             or None
         ),
         scope_isolation=scope_ok,
+        **({"runtime": semgrep_runtime} if semgrep_runtime is not None else {}),
     )
 
     # Create clean environment without venv contamination or dangerous vars.
@@ -1023,11 +1050,38 @@ def run_single_semgrep(
             # The child's write grant is its work subdir, NOT out_dir
             # (see child_dir above); the fake HOME lands inside it.
             target=str(repo_path), output=str(child_dir),
-            proxy_hosts=None if RaptorConfig.SEMGREP_OFFLINE else _ph.proxy_hosts_for_semgrep(),
+            proxy_hosts=(None if RaptorConfig.SEMGREP_OFFLINE or
+                         (semgrep_runtime is not None and not is_registry_pack)
+                         else _ph.proxy_hosts_for_semgrep()),
             caller_label="scanner-semgrep",
             fake_home=True,
             readable_paths=_pack_readable or None,
+            **({"semgrep_runtime": semgrep_runtime} if semgrep_runtime is not None else {}),
         )
+
+        if semgrep_runtime is not None:
+            # One native JSON payload supplies findings and coverage. This is
+            # parent-side conversion, never a second scan or fabricated sidecar.
+            from core.atomic_fs import write_text_atomically
+            raw_json = so or ""
+            if (len(raw_json) > _MAX_TOOL_JSON_BYTES or
+                    len(raw_json.encode("utf-8", errors="surrogatepass")) > _MAX_TOOL_JSON_BYTES):
+                raise ValueError("Semgrep JSON output exceeds the output budget")
+            try:
+                semgrep_runtime.validate_output_version(
+                    raw_json, max_output_bytes=_MAX_TOOL_JSON_BYTES)
+                so = semgrep_pkg.convert_semgrep_json_to_sarif(
+                    raw_json, max_output_bytes=_MAX_TOOL_JSON_BYTES)
+            except ValueError:
+                try:
+                    write_text_atomically(
+                        json_out.with_name(json_out.name + ".rejected"), raw_json)
+                except OSError:
+                    logger.warning("Could not retain rejected Semgrep JSON output")
+                raise
+            write_text_atomically(json_out, raw_json)
+            from packages.semgrep.models import parse_json_output
+            snap_metadata_errors = bool(parse_json_output(raw_json)["errors"])
 
         # Promote the child-written JSON metadata to its documented
         # out_dir path (parent-tier write). lstat-regular first: the
@@ -1039,9 +1093,9 @@ def run_single_semgrep(
         # the empty-output handling below already covers those.
         try:
             import stat as _stat_mod
-            if _stat_mod.S_ISREG(json_out_child.lstat().st_mode):
+            if semgrep_runtime is None and _stat_mod.S_ISREG(json_out_child.lstat().st_mode):
                 os.replace(json_out_child, json_out)
-            else:
+            elif semgrep_runtime is None:
                 logger.warning(
                     "semgrep '%s': child JSON output is not a regular "
                     "file — not promoted", name)
@@ -1091,7 +1145,8 @@ def run_single_semgrep(
                 name
             )
 
-        success = rc in (0, 1) and not output_missing and is_valid is not False
+        success = (rc in (0, 1) and not output_missing and is_valid is not False
+                   and not (semgrep_runtime is not None and snap_metadata_errors))
         logger.debug("Completed Semgrep scan: %s (exit=%s, valid=%s)", name, rc, is_valid)
 
         return str(sarif), success

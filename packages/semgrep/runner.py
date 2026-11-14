@@ -44,7 +44,10 @@ from .models import (
     SemgrepResult,
     parse_json_output,
     parse_sarif,
+    convert_semgrep_json_to_sarif,
 )
+
+from .runtime import SnapRuntime, SnapRuntimeError, resolve_snap_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +63,7 @@ _scope_upgrade_warned = False
 _SCOPE_WARNING_LOCK = threading.Lock()
 
 
-def _warn_scope_isolation_once(log):
+def _warn_scope_isolation_once(log, binary=None):
     """Share one compatibility notice across scanner lanes and pack threads."""
     global _scope_upgrade_warned
     with _SCOPE_WARNING_LOCK:
@@ -142,6 +145,13 @@ def is_available(semgrep_bin: str | None = None) -> bool:
 
 def _version_probe(semgrep_bin: str | None = None):
     from core.config import RaptorConfig
+    selected = shutil.which(semgrep_bin or _SEMGREP_BIN)
+    if selected is not None:
+        runtime = resolve_snap_runtime(selected)
+        if runtime is not None:
+            from core.run.toolprobe import ToolInfo
+            return ToolInfo(name=_SEMGREP_BIN, path=selected, returncode=0,
+                            stdout=runtime.version, stderr="")
     if not RaptorConfig.SEMGREP_OFFLINE:
         return probe(
             semgrep_bin or _SEMGREP_BIN,
@@ -149,7 +159,7 @@ def _version_probe(semgrep_bin: str | None = None):
             isolated_home=True,
         )
     from core.run.toolprobe import ToolInfo
-    binary = shutil.which(semgrep_bin or _SEMGREP_BIN)
+    binary = selected
     if binary is None:
         return None
     runner = _default_sandbox_runner(Path.cwd(), "")
@@ -165,15 +175,18 @@ def _version_probe(semgrep_bin: str | None = None):
                     stdout=result.stdout, stderr=result.stderr)
 
 
-def version() -> str | None:
+def version(binary=None) -> str | None:
     """Return the semgrep version string, or None if unavailable.
 
-    Delegates to core.run.toolprobe (safe env, resolved-path exec —
-    the bare-name re-exec this used to do re-resolved PATH at exec
-    time). Uncached: a diagnostic surface, and tests patch
-    ``subprocess.run`` per-test.
+    Verified Snap runtimes use their installed package metadata. Other
+    launchers delegate to core.run.toolprobe with a safe environment.
+    An explicit binary selects the same launcher as the scan rather than
+    querying an unrelated tool from PATH.
     """
-    info = _version_probe()
+    try:
+        info = _version_probe(binary) if binary is not None else _version_probe()
+    except SnapRuntimeError:
+        return None
     return (info.first_line if info is not None and info.returncode == 0
             and info.version_tuple() is not None else None)
 
@@ -208,6 +221,9 @@ def _scope_probe_key(semgrep_bin: str | None = None) -> tuple[object, ...] | Non
         path = Path(binary).absolute()
         resolved = path.resolve(strict=True)
         stat = resolved.stat()
+        runtime = resolve_snap_runtime(str(path))
+        if runtime is not None:
+            return (str(path), str(resolved), *runtime.identity)
         return (str(path), str(resolved), stat.st_dev, stat.st_ino,
                 stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
                 os.environ.get("PATH", ""), str(Path.cwd()),
@@ -309,7 +325,10 @@ def scope_isolation_available(semgrep_bin: str | None = None) -> bool:
     ``.semgrepignore`` files.  Callers should log a warning and pass
     ``scope_isolation=False`` to :func:`build_cmd`.
     """
-    vt = _scope_version() if semgrep_bin is None else _scope_version(semgrep_bin)
+    try:
+        vt = _scope_version() if semgrep_bin is None else _scope_version(semgrep_bin)
+    except SnapRuntimeError:
+        return False
     return vt is not None and vt >= _SCOPE_ISOLATION_MIN_VERSION
 
 
@@ -323,6 +342,7 @@ def build_cmd(
     extra_args: list[str] | None = None,
     extra_targets: "Sequence[Path]" = (),
     scope_isolation: bool = True,
+    runtime: SnapRuntime | None = None,
 ) -> list[str]:
     """Build the semgrep command argv.
 
@@ -347,14 +367,19 @@ def build_cmd(
             and would cause rc=2.
 
     Returns:
-        argv list ready for subprocess.run.
+        argv list ready for the caller's sandbox. Verified Snap runtimes
+        emit one JSON payload; callers retain it and use the reviewed JSON
+        conversion instead of requesting an unsupported dual-output sidecar.
     """
     from core.config import RaptorConfig
     if RaptorConfig.SEMGREP_OFFLINE:
         config = RaptorConfig.get_semgrep_config(config)
     bin_path = semgrep_bin or shutil.which(_SEMGREP_BIN) or _SEMGREP_BIN
+    if semgrep_bin is not None:
+        bin_path = shutil.which(semgrep_bin) or semgrep_bin
+    runtime = runtime or resolve_snap_runtime(bin_path)
     cmd: list[str] = [
-        bin_path,
+        *((runtime.command_prefix) if runtime is not None else (bin_path,)),
         "scan",
         "--config", config,
         # --verbose, not --quiet (the two are mutually exclusive):
@@ -374,7 +399,7 @@ def build_cmd(
         # sandbox blocks network).
         "--disable-version-check",
         "--error",
-        "--sarif",
+        "--json" if runtime is not None else "--sarif",
         "--disable-nosem",
         # Scan scope must be RAPTOR-owned, never target-owned. By
         # default semgrep honours the SCANNED repo's ignore files —
@@ -412,9 +437,14 @@ def build_cmd(
                    "--x-ignore-semgrepignore-files")
     for pattern in SCOPE_EXCLUDE_BASELINE:
         cmd.extend(["--exclude", pattern])
-    if json_output_path is not None:
+    if json_output_path is not None and runtime is None:
         cmd.extend(["--json-output", str(json_output_path)])
     if extra_args:
+        if runtime is not None and any(
+                arg in {"--json", "--sarif", "--json-output", "--output", "-o"}
+                or arg.startswith(("--json-output=", "--output=", "--sarif-output="))
+                for arg in extra_args):
+            raise SnapRuntimeError("Semgrep output format is managed by RAPTOR")
         if RaptorConfig.SEMGREP_OFFLINE and any(
             arg in {"--config", "-c", "--pro", "--pro-intrafile", "--pro-languages", "--no-strict"}
             or arg.startswith(("--config=", "-c=", "--metrics", "--enable-version-check"))
@@ -503,7 +533,7 @@ if hasattr(os, "register_at_fork"):
 atexit.register(_reset_sandbox_scratch)
 
 
-def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None, target_root=None):
+def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), output_dir=None, target_root=None, runtime=None):
     """subprocess.run-shaped wrapper over core.sandbox.run, or None.
 
     Returns None when core.sandbox is unavailable on this host — the
@@ -540,7 +570,11 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
         net_kwargs = {"block_network": True}
 
     def _runner(cmd, **kwargs):
-        if offline:
+        if runtime is not None:
+            runtime.validate()
+            if tuple(cmd[:2]) != runtime.command_prefix:
+                raise SnapRuntimeError("Semgrep runtime does not match the selected command")
+        elif offline:
             from core.sandbox.python_paths import python_runtime_tool_paths
             selected = Path(shutil.which(cmd[0]) or cmd[0]).absolute()
             binary = selected.resolve()
@@ -565,7 +599,8 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
         # window). An owned directory is reclaimed when this call exits;
         # run_rule supplies its own directory until sidecar parsing ends.
         from core.sandbox.python_paths import python_tool_paths
-        tool_paths = python_tool_paths(str(binary) if offline else cmd[0]) if cmd else []
+        tool_paths = (list(runtime.tool_paths) if runtime is not None else
+                      (python_tool_paths(str(binary) if offline else cmd[0]) if cmd else []))
         # Local rules are outside target/output in common run_rule calls.
         # Declare the exact rule path; do not expose its parent directory.
         if not needs_registry and Path(config).exists():
@@ -649,7 +684,10 @@ def run_rule(
             (capture_output, text, timeout, env) and return an object
             with returncode/stdout/stderr. Used by callers that engage
             their own sandbox (e.g. core.sandbox.run) without
-            reimplementing the semgrep invocation logic.
+            reimplementing the semgrep invocation logic. A verified installed
+            Snap runtime additionally requires the runner to expose
+            ``with_semgrep_runtime(runtime)`` returning a new compatible runner
+            with the same confinement policy and explicit runtime grants.
         unsandboxed: Explicit opt-out from the default sandbox — run via
             bare subprocess.run. For trusted input only. Ignored when
             subprocess_runner is given. Without it, run_rule REFUSES to
@@ -709,10 +747,20 @@ def run_rule(
     if semgrep_bin is not None:
         # Pin a relative PATH answer before any runner changes working directory.
         semgrep_bin = str(Path(shutil.which(semgrep_bin) or semgrep_bin).absolute())
-    scope_ok = (scope_isolation_available() if semgrep_bin is None else
-                scope_isolation_available(semgrep_bin))
+    selected = shutil.which(semgrep_bin or _SEMGREP_BIN) or semgrep_bin or _SEMGREP_BIN
+    try:
+        runtime = resolve_snap_runtime(selected)
+    except SnapRuntimeError as exc:
+        return SemgrepResult(name=name, config=config, target=str(target),
+                             errors=[str(exc)], returncode=-1)
+    probe_binary = selected if runtime is not None or semgrep_bin is not None else None
+    scope_ok = (scope_isolation_available(probe_binary) if probe_binary is not None
+                else scope_isolation_available())
     if not scope_ok:
-        _warn_scope_isolation_once(logger)
+        if probe_binary is not None:
+            _warn_scope_isolation_once(logger, probe_binary)
+        else:
+            _warn_scope_isolation_once(logger)
 
     # The scanner must write its sidecar inside the SAME output directory
     # the sandbox grants. Host /tmp is not writable in a scoped invocation.
@@ -739,10 +787,11 @@ def run_rule(
             target, config,
             json_output_path=json_path,
             rule_timeout=rule_timeout,
-            semgrep_bin=semgrep_bin,
+            semgrep_bin=selected,
             extra_args=extra_args,
             extra_targets=extra_targets,
             scope_isolation=scope_ok,
+            **({"runtime": runtime} if runtime is not None else {}),
         )
 
         if env is None:
@@ -755,6 +804,20 @@ def run_rule(
             env = RaptorConfig.get_safe_env(preserve_proxy=_needs_registry)
 
         runner = subprocess_runner
+        if runtime is not None and runner is not None:
+            adapt = getattr(runner, "with_semgrep_runtime", None)
+            if not callable(adapt):
+                return SemgrepResult(
+                    name=name, config=config, target=str(target), returncode=-1,
+                    errors=["This Semgrep Snap requires a runtime-aware subprocess_runner "
+                            "with with_semgrep_runtime(runtime) support"],
+                )
+            runner = adapt(runtime)
+            if not callable(runner):
+                return SemgrepResult(
+                    name=name, config=config, target=str(target), returncode=-1,
+                    errors=["Semgrep runtime adapter did not return a callable runner"],
+                )
         if runner is None:
             if unsandboxed:
                 runner = subprocess.run
@@ -765,6 +828,7 @@ def run_rule(
                 runner = _default_sandbox_runner(
                     target, config, extra_targets=extra_targets,
                     output_dir=sandbox_output, target_root=target_root,
+                    **({"runtime": runtime} if runtime is not None else {}),
                 )
                 if runner is None:
                     return SemgrepResult(
@@ -775,6 +839,11 @@ def run_rule(
 
         start = time.monotonic()
         try:
+            if runtime is not None:
+                runtime.validate()
+                env = runtime.child_environment(env)
+                if json_output_path is not None:
+                    Path(json_output_path).unlink(missing_ok=True)
             proc = runner(
                 cmd,
                 capture_output=True,
@@ -789,7 +858,7 @@ def run_rule(
                 returncode=-1,
                 elapsed_ms=int((time.monotonic() - start) * 1000),
             )
-        except OSError as e:
+        except (OSError, SnapRuntimeError) as e:
             return SemgrepResult(
                 name=name, config=config, target=str(target),
                 errors=[str(e)],
@@ -809,6 +878,22 @@ def run_rule(
         # persist an attacker-sized payload.
         budget_errors: list[str] = []
         sarif_text = proc.stdout or ""
+        snap_json_text = ""
+        snap_output_valid = False
+        if runtime is not None:
+            try:
+                runtime.validate_output_version(
+                    proc.stdout or "", max_output_bytes=_MAX_TOOL_OUTPUT_BYTES)
+                sarif_text = convert_semgrep_json_to_sarif(
+                    proc.stdout or "", max_output_bytes=_MAX_TOOL_OUTPUT_BYTES)
+                snap_json_text = proc.stdout or ""
+                snap_output_valid = True
+            except ValueError as exc:
+                budget_errors.append(f"Semgrep JSON output is incomplete or invalid: {exc}")
+                raw = proc.stdout or ""
+                if len(raw) <= _MAX_TOOL_OUTPUT_BYTES and len(raw.encode("utf-8", errors="surrogatepass")) <= _MAX_TOOL_OUTPUT_BYTES:
+                    snap_json_text = raw
+                sarif_text = ""
         # Measure BYTES, matching the budget's unit: len(str) counts
         # characters, and UTF-8 encodes up to 4 bytes per char — a
         # non-ASCII-heavy payload could weigh 4x the budget while
@@ -831,9 +916,9 @@ def run_rule(
             logger.warning("%s", msg)
             budget_errors.append(msg)
             sarif_text = ""
-        json_text = ""
+        json_text = snap_json_text
         metadata_errors_before = len(budget_errors)
-        if os.path.lexists(json_path):
+        if runtime is None and os.path.lexists(json_path):
             from core.security.capped_read import read_capped_text
             try:
                 # Open once with O_NOFOLLOW and enforce the cap during the
@@ -853,7 +938,8 @@ def run_rule(
             budget_errors.append(
                 "semgrep --json metadata missing or empty; scan coverage unavailable"
             )
-        if json_output_path is not None and json_text:
+        if (json_output_path is not None and json_text and
+                (runtime is None or snap_output_valid)):
             from core.atomic_fs import write_text_atomically
             try:
                 write_text_atomically(json_output_path, json_text)
@@ -870,6 +956,10 @@ def run_rule(
     sarif_errors: list[str] = []
     findings = parse_sarif(sarif_text, errors=sarif_errors)
     parsed_json = parse_json_output(json_text)
+    if runtime is not None and not snap_output_valid:
+        # Keep the rejected native payload for diagnostics, never its coverage.
+        parsed_json.update(files_examined=[], files_failed=[], skipped_summary={},
+                           skipped_rules=[], semgrep_version="")
 
     # Engine failure must never read as verified silence: surface the
     # budget refusals and the real errors array, and when semgrep
