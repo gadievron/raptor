@@ -96,6 +96,7 @@ class FunctionSummary:
             and not self.preconditions
             and not self.returns
             and not self.error_paths
+            and not self.state_transitions
         )
 
     def format_for_context(self, depth: str = "full") -> str:
