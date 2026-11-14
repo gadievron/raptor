@@ -242,7 +242,11 @@ def _load_cached_index(
         caller = r.get("caller")
         callee = r.get("callee")
         bp = r.get("binary_path") or binary_path
-        if isinstance(caller, str) and isinstance(callee, str):
+        if (
+            isinstance(caller, str)
+            and isinstance(callee, str)
+            and isinstance(bp, str)
+        ):
             idx.edges.append(BinaryCallEdge(
                 caller=caller, callee=callee, binary_path=bp))
             idx.callees.add(callee)
