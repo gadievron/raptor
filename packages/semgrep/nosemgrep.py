@@ -154,7 +154,10 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
 
     Returns the number of results annotated.
     """
-    root = Path(repo_root)
+    try:
+        root = Path(repo_root).absolute()
+    except OSError:
+        return 0
     cache = _FileCache()
     annotated = 0
 
