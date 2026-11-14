@@ -42,6 +42,7 @@ from typing import (
 )
 
 from core.source import read_text_capped
+from core.source.streams import preserving_stream_error
 
 
 # Ground-truth label values.
@@ -265,7 +266,7 @@ def read_parity_records(path: str | Path) -> list[ParityRecord]:
         return []
     out: list[ParityRecord] = []
     try:
-        with p.open("r", encoding="utf-8", errors="replace") as f:
+        with preserving_stream_error(p.open("r", encoding="utf-8", errors="replace")) as f:
             while True:
                 line = f.readline(_MAX_RECORD_LINE_CHARS + 1)
                 if not line:
