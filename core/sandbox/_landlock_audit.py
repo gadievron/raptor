@@ -458,8 +458,9 @@ def _drain_pipes_until_eof(
         for fd in ready:
             try:
                 chunk = os.read(fd, 65536)
-            except OSError:
-                fds_open.discard(fd)
+            except (BlockingIOError, InterruptedError):
+                # Readiness can be transient; only an empty read is EOF.
+                # Other read errors reach the caller's retirement owner.
                 continue
             if chunk:
                 room = _DRAIN_MAX_BYTES_PER_FD - kept[fd]
