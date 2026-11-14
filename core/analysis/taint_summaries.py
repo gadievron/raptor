@@ -530,6 +530,29 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
+def _linear_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
+    """Known reads in a bounded linear body, or None for unsupported statements.
+
+    Validate the complete statement grammar before inspecting expressions.
+    Own-name binding and captured-cell identity are checked by the caller;
+    this does not model assignment values or return-value flow.
+    """
+    expressions: list[ast.expr | None] = []
+    for statement in body:
+        if isinstance(statement, (ast.Expr, ast.Return)):
+            expressions.append(statement.value)
+        elif isinstance(statement, ast.Assign) and all(
+            isinstance(target, ast.Name) for target in statement.targets
+        ):
+            expressions.append(statement.value)
+        elif not isinstance(statement, ast.Pass):
+            return None
+    names: set[str] = set()
+    for expression in expressions:
+        names.update(_scoped_expression_loads(expression))
+    return frozenset(names)
+
+
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -550,8 +573,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      whose sole return reads an enclosing cell through a bounded expression grammar
-      or a bounded lambda/comprehension read,
+      whose single return or bounded linear body reads an enclosing cell
+      through supported expressions, lambdas or comprehensions,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -675,12 +698,17 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                     cell_read = cell_read.value
                 if isinstance(cell_read, ast.Name):
                     names = names | {cell_read.id}
-                if frame_bindings is None:
-                    frame_bindings = local_binding_names(fn_ast)
-                if names & (frame_bindings - local_binding_names(definition)):
-                    if direct_call:
-                        return "returned local call depends on an unmodelled enclosing cell"
-                    return "returned function retains an unmodelled enclosing cell"
+            else:
+                linear_names = _linear_body_expression_loads(body)
+                if linear_names is None or not linear_names:
+                    continue
+                names = linear_names
+            if frame_bindings is None:
+                frame_bindings = local_binding_names(fn_ast)
+            if names & (frame_bindings - local_binding_names(definition)):
+                if direct_call:
+                    return "returned local call depends on an unmodelled enclosing cell"
+                return "returned function retains an unmodelled enclosing cell"
     return None
 
 
