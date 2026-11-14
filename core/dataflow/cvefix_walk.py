@@ -40,7 +40,7 @@ from core.git.clone import (
     safe_git_command,
     safe_git_readonly_command,
 )
-from core.sarif.parser import SARIF_MAX_BYTES
+from core.sarif.parser import SARIF_MAX_BYTES, get_run_execution_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -397,9 +397,20 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
         return None
     from core.json import load_json
     data = load_json(out, max_bytes=_MAX_SARIF_BYTES)
-    if data is None:
+    if not isinstance(data, dict):
         return None
-    return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
+    runs = data.get("runs", [])
+    if not isinstance(runs, list):
+        return None
+    count = 0
+    for run in runs:
+        if not isinstance(run, dict) or any(get_run_execution_diagnostics(run).values()):
+            return None
+        results = run.get("results", [])
+        if not isinstance(results, list) or any(not isinstance(result, dict) for result in results):
+            return None
+        count += len(results)
+    return count
 
 
 def _clean_go_caches(work_dir: Path) -> None:
