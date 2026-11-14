@@ -771,8 +771,12 @@ def _materialize_rules_dir(axis_dir: Path) -> Iterator[Path]:
     slotted: dict[Path, str] = {}
     for rule_path in rule_paths:
         try:
-            text = rule_path.read_text(encoding="utf-8")  # raw-open: shipped semgrep rule file (RAPTOR-owned)
-        except OSError:
+            text = rule_path.read_text(encoding="utf-8")  # raw-open: shipped Coccinelle rule file (RAPTOR-owned)
+        except (OSError, UnicodeError):
+            logger.warning(
+                "api-pack rule text unavailable for %s; running unrendered",
+                rule_path, exc_info=True,
+            )
             continue
         if not has_api_pack_marker(text):
             continue
