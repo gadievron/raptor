@@ -536,8 +536,8 @@ class TestCompletedUnitIds(unittest.TestCase):
 class TestSeedScanDir(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
-        self.base = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
+        self.base = Path(self._td.name)
         self.prior = self.base / "prior_scan"
         _write(self.prior / "dataset.json", {"units": []})
         _write(self.prior / "analyzer_output.json", {})
