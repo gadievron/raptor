@@ -7,6 +7,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+import packages.codeql as codeql
+
 
 # static-analysis has a hyphen — load via importlib
 
@@ -46,18 +48,33 @@ def _fake_popen(returncode=0, stdout="", stderr="", communicate_side_effect=None
 
 class TestRunCodeqlDelegation:
 
-    def test_returns_empty_when_codeql_not_installed(self, tmp_path):
-        """No codeql CLI on PATH → bail before invoking agent."""
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value=None):
+    def test_returns_empty_when_codeql_not_installed(self, tmp_path, monkeypatch):
+        """No configured or PATH CLI → bail before invoking agent."""
+        monkeypatch.delenv("CODEQL_CLI", raising=False)
+        with mock_module_attribute(codeql, "shutil", "which", return_value=None):
             result = run_codeql(tmp_path, tmp_path / "out", ["python"])
         assert result == []
+
+    @pytest.mark.parametrize("valid_override", [True, False])
+    def test_configured_launcher_without_path_cli(self, tmp_path, monkeypatch, valid_override):
+        """An executable override admits dispatch; an invalid file does not."""
+        launcher = tmp_path / "configured-codeql"
+        launcher.write_text("inert sentinel; never executed\n")
+        launcher.chmod(0o700 if valid_override else 0o600)
+        monkeypatch.setenv("CODEQL_CLI", str(launcher))
+        with mock_module_attribute(codeql, "shutil", "which", return_value=None), \
+             mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
+            mock_proc.return_value = _fake_popen()
+            result = run_codeql(tmp_path, tmp_path / "out", ["python"])
+        assert result == []
+        assert mock_proc.call_count == int(valid_override)
 
     def test_creates_output_dir(self, tmp_path):
         """out_dir is created up-front (matches pre-unification
         contract — downstream consumers may glob for SARIFs even
         if the agent never wrote one)."""
         out_dir = tmp_path / "codeql_out"
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen(returncode=1, stderr="agent failed")
             run_codeql(tmp_path, out_dir, ["python"])
@@ -67,7 +84,7 @@ class TestRunCodeqlDelegation:
         """The unification contract: subprocess invocation of
         packages/codeql/agent.py with --repo and --out."""
         out_dir = tmp_path / "out"
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, out_dir, languages=None)
@@ -88,7 +105,7 @@ class TestRunCodeqlDelegation:
         + memory until they finish. The unification PR's bare
         subprocess.run had this bug; the Popen migration fixes it.
         """
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, tmp_path / "out", languages=None)
@@ -101,7 +118,7 @@ class TestRunCodeqlDelegation:
 
     def test_languages_forwarded_as_csv(self, tmp_path):
         """An explicit language list flows through as --languages a,b."""
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, tmp_path / "out", languages=["cpp", "java"])
@@ -116,7 +133,7 @@ class TestRunCodeqlDelegation:
         auto-detects. This is the recommended default — the agent
         skips empty languages, vs the pre-unification 'always make
         cpp/java/python/go DBs' behaviour."""
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen()
             run_codeql(tmp_path, tmp_path / "out", languages=None)
@@ -127,7 +144,7 @@ class TestRunCodeqlDelegation:
     def test_build_command_forwarded(self, tmp_path):
         """build_command flows through as --build-command for the
         agent's CodeQL DB creation."""
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen()
             run_codeql(
@@ -153,7 +170,7 @@ class TestRunCodeqlDelegation:
         # And a non-matching file we must NOT pick up.
         (out_dir / "scan_metrics.json").write_text("{}")
 
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen(communicate_side_effect=complete)
             result = run_codeql(tmp_path, out_dir, languages=None)
@@ -173,7 +190,7 @@ class TestRunCodeqlDelegation:
             (out_dir / "codeql_python.sarif").write_text("{}")
             return "", "cpp build failed"
 
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             mock_proc.return_value = _fake_popen(
                 returncode=1, communicate_side_effect=complete,
@@ -195,7 +212,7 @@ class TestRunCodeqlDelegation:
                 cmd="codeql", timeout=3600,
             ),
         )
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
              mock_module_attribute(_scanner_mod, 'os', "killpg") as mock_killpg, \
              mock_module_attribute(_scanner_mod, 'os', "getpgid", return_value=12345):
@@ -222,7 +239,7 @@ class TestRunCodeqlDelegation:
                 cmd="codeql", timeout=3600,
             ),
         )
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
              mock_module_attribute(_scanner_mod, 'os', "killpg",
                           side_effect=ProcessLookupError()), \
@@ -234,7 +251,7 @@ class TestRunCodeqlDelegation:
 
     def test_subprocess_oserror_returns_empty(self, tmp_path):
         """Popen itself failing to spawn (ENOEXEC etc.) is caught."""
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen",
                           side_effect=OSError("ENOEXEC")):
             result = run_codeql(tmp_path, tmp_path / "out", languages=None)
@@ -497,7 +514,7 @@ class TestCodeQLStageHandle:
     def test_run_codeql_skips_spawn_after_abort(self, tmp_path):
         handle = _scanner_mod._CodeQLStageHandle()
         handle.abort()
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_proc:
             result = run_codeql(
                 tmp_path, tmp_path / "out", ["python"],
@@ -523,7 +540,7 @@ class TestCodeQLStageHandle:
 
         fake.communicate.side_effect = _communicate
         fake.poll.return_value = -9
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen",
                           return_value=fake):
             result = run_codeql(
@@ -600,7 +617,7 @@ class TestJoinCodeQLStage:
         fake = _fake_popen(
             communicate_side_effect=KeyboardInterrupt(),
         )
-        with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/usr/bin/codeql"), \
+        with mock_module_attribute(codeql, "shutil", "which", return_value="/usr/bin/codeql"), \
              mock_module_attribute(_scanner_mod, "subprocess", "Popen") as mock_popen, \
              mock_module_attribute(_scanner_mod, 'os', "killpg") as mock_killpg, \
              mock_module_attribute(_scanner_mod, 'os', "getpgid", return_value=12345):
@@ -824,7 +841,7 @@ def test_codeql_excludes_unchanged_prior_reports(tmp_path, returncode):
     report = out / "codeql_python.sarif"
     report.write_text('{"version":"2.1.0","runs":[]}')
     before = report.read_bytes()
-    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+    with mock_module_attribute(codeql, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen",
                                return_value=_fake_popen(returncode=returncode)) as spawn:
         paths = run_codeql(tmp_path, out)
@@ -846,7 +863,7 @@ def test_codeql_accepts_replaced_report_with_same_bytes(tmp_path, returncode):
     def complete(**kwargs):
         replacement.replace(report)
         return "", ""
-    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+    with mock_module_attribute(codeql, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=returncode, communicate_side_effect=complete)) as spawn:
         paths = run_codeql(tmp_path, out)
@@ -867,7 +884,7 @@ def test_codeql_accepts_report_rewritten_in_place(tmp_path, returncode):
     def complete(**kwargs):
         report.write_text(content)
         return "", ""
-    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+    with mock_module_attribute(codeql, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=returncode, communicate_side_effect=complete)) as spawn:
         paths = run_codeql(tmp_path, out)
@@ -897,7 +914,7 @@ def test_codeql_agent_failure_retains_execution_diagnostic(tmp_path, with_findin
                                  "region": {"startLine": 1}}}]}],
             }]}))
         return "", "owned other-language failure"
-    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+    with mock_module_attribute(codeql, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=1, communicate_side_effect=complete)) as spawn:
         paths = run_codeql(tmp_path, out)
@@ -929,7 +946,7 @@ def test_codeql_diagnostic_write_failure_retains_recovered_report(tmp_path, monk
     def fail_write(*args, **kwargs):
         raise OSError("owned diagnostic write failure")
     monkeypatch.setattr(_scanner_mod, "_write_stage_report", fail_write)
-    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/codeql"), \
+    with mock_module_attribute(codeql, "shutil", "which", return_value="/owned/codeql"), \
          mock_module_attribute(_scanner_mod, "subprocess", "Popen", return_value=_fake_popen(
              returncode=1, communicate_side_effect=complete)):
         assert run_codeql(tmp_path, out) == [str(report)]
