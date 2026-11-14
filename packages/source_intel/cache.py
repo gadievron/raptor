@@ -199,7 +199,7 @@ def compute_target_signature(target: Path) -> str:
 
     # Build markers — mirrors `_hash_target_tree`. A Makefile / .config
     # edit changes the build context even if no .c file changed.
-    for marker in ("Makefile", "GNUmakefile", "Kbuild",
+    for marker in ("Makefile", "GNUmakefile", "makefile", "Kbuild",
                    "compile_commands.json", ".config"):
         mp = target / marker
         if not mp.is_file():
@@ -306,7 +306,7 @@ def _hash_target_tree(target: Path) -> str:
     # content-only hash and return the wrong cached BuildFlagsContext.
     # Surfaced by axis-6 corpus fixtures `fortify_kconfig/` and
     # `fortify_makefile/` (identical `u.c` but different build markers).
-    for marker in ("Makefile", "GNUmakefile", "Kbuild",
+    for marker in ("Makefile", "GNUmakefile", "makefile", "Kbuild",
                    "compile_commands.json", ".config"):
         mp = target / marker
         if mp.is_file():
