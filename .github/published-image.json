@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "image": "danielcuthbert/raptor",
-  "digest": "sha256:80020d8b87d7a75a9befc74a0249ff66597eca62290c023f108c3372471b0321",
-  "source_commit": "facf409eb3409f5eb73b931da90686227c8b6109",
-  "image_inputs": "87076ec7c166cee281240b1d2b2bdbd6b3e69fb8bf3638cb0f6a490edb7592fb",
-  "run_id": 43446431046,
+  "digest": "sha256:43e43f725969ebabd0eaa55700a0344e2e9ef386f0ff7c07827b75f0206816ec",
+  "source_commit": "617e4280a4f93bb24bc6f38f7a73b7ee75a5c16e",
+  "image_inputs": "1638c3a9a76fe2d25b524b1c2bf595726945d94dab34165cdefb47dcaefdc614",
+  "run_id": 43548922447,
   "run_attempt": 1,
-  "published_at": 1794581806,
-  "run_url": "https://github.com/gadievron/raptor/actions/runs/43446431046"
+  "published_at": 1794625381,
+  "run_url": "https://github.com/gadievron/raptor/actions/runs/43548922447"
 }
