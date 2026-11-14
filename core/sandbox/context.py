@@ -5677,11 +5677,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # and the caller records a wrong verdict instead of an
             # error. Fail loud here instead.
             _spool_size = os.fstat(_stdin_spool_ro.fileno()).st_size
-            if _spool_size != len(_in_payload):
+            _spool_expected_bytes = memoryview(_in_payload).nbytes
+            if _spool_size != _spool_expected_bytes:
                 from .errors import SandboxSetupError
                 msg_0 = (
                     f"sandbox stdin spool integrity check failed: "
-                    f"wrote {len(_in_payload)} input= bytes but the "
+                    f"wrote {_spool_expected_bytes} input= bytes but the "
                     f"re-opened spool holds {_spool_size} — refusing "
                     f"to run the target with truncated stdin."
                 )
