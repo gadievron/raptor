@@ -2259,6 +2259,8 @@ def run_orchestrator(
     Returns:
         OrchestratorResult summarizing the run.
     """
+    from .review_resources import RunReviewResources
+    review_resources = RunReviewResources()
     start_time = time.monotonic()
 
     # Accumulated-knowledge gate banner + config normalization (one
@@ -2548,6 +2550,40 @@ def run_orchestrator(
     except Exception:
         logger.debug("llm telemetry sink install failed", exc_info=True)
 
+    def _retire_existing_run_resources():
+        # Treat each existing owner independently: an earlier reset failure
+        # must not prevent server release or replace a real cancellation.
+        errors = []
+        try:
+            if _telemetry_sink is not None:
+                try:
+                    from core.llm.telemetry import set_sink
+                    set_sink(None)
+                    if _telemetry_sink.total_records:
+                        logger.info(_telemetry_sink.summary_line())
+                except Exception:
+                    logger.debug("llm telemetry summary failed", exc_info=True)
+        except BaseException as error:
+            errors.append(error)
+        try:
+            reset_joern_server(_reach_token)
+        except BaseException as error:
+            errors.append(error)
+        try:
+            if is_sigterm_requested():
+                _bounded_joern_exit_release(_release_joern_for_exit)
+            else:
+                _release_joern_for_exit()
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            try:
+                _sigterm_flush_hooks.clear()
+            except BaseException as error:
+                errors.append(error)
+        RunReviewResources.raise_cleanup_errors(errors)
+
+    review_error = None
     try:
         return _run_audit_body(
             config,
@@ -2560,37 +2596,13 @@ def run_orchestrator(
             joern_presweep_future=joern_presweep_future,
             joern_presweep_activity=joern_presweep_activity,
             joern_presweep_abort=joern_presweep_abort,
+            review_resources=review_resources,
         )
+    except BaseException as error:
+        review_error = error
+        raise
     finally:
-        try:
-            if _telemetry_sink is not None:
-                try:
-                    from core.llm.telemetry import set_sink
-                    set_sink(None)
-                    if _telemetry_sink.total_records:
-                        logger.info(_telemetry_sink.summary_line())
-                except Exception:
-                    logger.debug(
-                        "llm telemetry summary failed", exc_info=True,
-                    )
-            reset_joern_server(_reach_token)
-            if is_sigterm_requested():
-                # Salvage conclusion: joern_release can block on its
-                # cross-process file lock, and the ~30s grace budget
-                # belongs to the ledger/journal flush and the salvage
-                # export — bound the release and abandon it if it
-                # stalls, exactly like the forced-exit hook.
-                _bounded_joern_exit_release(_release_joern_for_exit)
-            else:
-                _release_joern_for_exit()
-        finally:
-            # Cleared AFTER the release (this run's hooks must not
-            # outlive it — a later run registers its own): clearing
-            # first re-opened the leak this closes, a watchdog firing
-            # during teardown found an empty registry and force-exited
-            # past the still-running release. The release guard makes
-            # the hook + finally double-fire benign.
-            _sigterm_flush_hooks.clear()
+        review_resources.retire(primary_error=review_error, after=_retire_existing_run_resources)
 
 
 # (target_path, library) → detected version or None. Manifest parsing
@@ -9003,6 +9015,7 @@ def _run_audit_body(
     joern_presweep_future=None,
     joern_presweep_activity=None,
     joern_presweep_abort=None,
+    review_resources=None,
 ):
     """Inner orchestrator body, always wrapped in try/finally for server cleanup."""
     global _active_target_path
@@ -9803,6 +9816,8 @@ def _run_audit_body(
         resolved_workers,
         cooldown_s=read_throttle_cooldown_s(),
     )
+    if review_resources is not None:
+        review_resources.register(throttle.close)
 
     # --- Start incremental study consumer (Thread B) ---
     # The study loop resolves assumptions in C/C++ (via the study-prep
@@ -9826,6 +9841,19 @@ def _run_audit_body(
                   else start_time + config.max_seconds if config.max_seconds else float("inf")),
         caller_inventory=(config.inventory if isinstance(config.inventory, dict) else checklist),
     )
+    if review_resources is not None:
+        def persist_owned_knowledge():
+            if config.out_dir is not None:
+                try:
+                    knowledge_runtime.write_artifacts(config.out_dir)
+                except Exception:
+                    limitation = "knowledge-processing history (persistence failed)"
+                    with result._lock:
+                        if limitation not in result.processing_limitations:
+                            result.processing_limitations.append(limitation)
+                    logger.warning("Could not retain final knowledge processing history", exc_info=True)
+        review_resources.register(persist_owned_knowledge)
+        review_resources.register(lambda: knowledge_runtime.close("run_review_complete"))
     knowledge_gaps: dict[int, tuple[dict, Any, Any]] = {}
     knowledge_ready_frames: dict = {}
     knowledge_source_closed = False
@@ -10213,7 +10241,8 @@ def _run_audit_body(
                 exc_info=True,
             )
 
-        throttle.close()
+        if review_resources is None:
+            throttle.close()
 
         # --- Sync mutable state back from SharedState ---
         constraints = shared.constraints
@@ -10965,7 +10994,10 @@ def _run_audit_body(
                 logger.debug("layer disagreement persistence failed", exc_info=True)
 
     finally:
-        knowledge_runtime.close("review_context_deepen_and_disagreement_complete")
+        if review_resources is None:
+            knowledge_runtime.close("review_context_deepen_and_disagreement_complete")
+        else:
+            knowledge_runtime.close_sources("source_context_phase_complete")
         try:
             knowledge_runtime.write_artifacts(config.out_dir)
         except Exception:
@@ -11840,6 +11872,8 @@ def _run_audit_body(
                 audit_log=audit_log,
                 workqueue=workqueue,
                 reviewed_set=reviewed_set,
+                reviewed_outcomes=reviewed_outcomes,
+                review_one_fn=knowledge_review_one,
                 start_time=start_time,
                 layer_disagreements=layer_disagreements,
                 on_progress=on_progress,
@@ -11973,6 +12007,11 @@ def _run_audit_body(
     _pass_ledger.end_phase()  # post_loop_checks (differential tail)
 
     result.total_duration_s = time.monotonic() - start_time
+
+    if review_resources is not None:
+        # Final review boundary precedes every final report consumer. The
+        # outer run finally remains the failure/cancellation fallback.
+        review_resources.retire()
 
     # --- Collector flush: write all buffered state to disk ---
     if collector is not None:

@@ -48,7 +48,9 @@ logger = logging.getLogger(__name__)
 UNACKNOWLEDGED_ASSESSMENTS_LIMITATION = (
     "new review assessments (journal acknowledgement unavailable)"
 )
+KNOWLEDGE_RETENTION_LIMITATION = "knowledge-processing history (persistence failed)"
 _RETENTION_LIMITATIONS = (
+    KNOWLEDGE_RETENTION_LIMITATION,
     "new dark verification pass results (persistence failed)",
     "new differential verification pass results (persistence failed)",
 )
@@ -538,6 +540,14 @@ def generate_report(
     from .knowledge_reporting import load_knowledge_processing
 
     knowledge_processing = load_knowledge_processing(out_dir)
+    if KNOWLEDGE_RETENTION_LIMITATION in completeness.get("missing", []):
+        # The saved artifact may predate the failed final write. Retain its
+        # bytes for recovery, but do not project stale counts as the run's
+        # completed processing. The fixed limitation survives write_report.
+        knowledge_processing = {
+            "state": "unavailable", "artifact": "knowledge-results.json",
+            "reason": "persistence_failed",
+        }
     if knowledge_processing is not None:
         report["knowledge_processing"] = knowledge_processing
     from .claim_presentation import load_claim_presentation
