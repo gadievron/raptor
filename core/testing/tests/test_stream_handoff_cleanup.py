@@ -137,9 +137,15 @@ def _warmup_resources(kind, fault, error, tmp_path, monkeypatch):
 
         def pipe():
             pair = real_pipe()
-            for fd in pair:
-                record(fd)
-            return pair
+            with ExitStack() as setup:
+                for fd in pair:
+                    setup.callback(os.close, fd)
+                registered = len(entries)
+                setup.callback(entries.__delitem__, slice(registered, None))
+                for fd in pair:
+                    record(fd)
+                setup.pop_all()
+                return pair
 
         class Stream:
             def __init__(self, stream, mode):
