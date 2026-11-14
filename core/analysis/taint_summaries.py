@@ -552,6 +552,17 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
+        elif isinstance(statement, (ast.With, ast.AsyncWith)):
+            for item in statement.items:
+                expressions.append(item.context_expr)
+                if item.optional_vars is not None:
+                    scope = _comprehension_target_scope(
+                        item.optional_vars, require_scope_free_reads=True
+                    )
+                    if scope is None:
+                        return None
+                    target_reads.update(scope[1])
+            pending.extend(reversed(statement.body))
         elif isinstance(statement, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor)):
             if isinstance(statement, ast.AnnAssign) and not isinstance(
                 statement.annotation, (ast.Name, ast.Constant)
