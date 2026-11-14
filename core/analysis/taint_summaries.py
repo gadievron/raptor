@@ -1169,9 +1169,13 @@ def _function_reflective_readers(
         node = pending.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
-        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.For, ast.AsyncFor)):
-            value = node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.value
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.For, ast.AsyncFor, ast.withitem)):
+            if isinstance(node, ast.withitem):
+                value = node.context_expr
+                targets = [node.optional_vars] if node.optional_vars is not None else []
+            else:
+                value = node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.value
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names: set[str] = set()
             binding_targets = list(targets)
             while binding_targets:
