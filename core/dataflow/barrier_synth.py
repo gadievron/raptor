@@ -592,10 +592,17 @@ def _summarise_surviving_finding(
     """
     try:
         data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
-    except (OSError, ValueError):
-        # Refinement context is diagnostic; a failed reread must not
+        return _summarise_surviving_data(data, target_uri, target_line)
+    except (OSError, ValueError, TypeError, AttributeError, KeyError, IndexError):
+        # Refinement context is diagnostic; unusable metadata must not
         # discard the already completed count-based adjudication.
         return ""
+
+
+def _summarise_surviving_data(
+    data: object, target_uri: str | None, target_line: int | None,
+) -> str:
+    """Format optional metadata; the caller handles malformed shapes."""
     if not isinstance(data, dict):
         return ""
 
