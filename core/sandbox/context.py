@@ -3044,40 +3044,43 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             so one typed floor/achievable field pair would overclaim
             — the record carries honest labels computed from the
             same probes the gate consulted instead."""
-            if sys.platform == "darwin":
-                _floor_t = _tiers.ContainmentTier.SEATBELT
-                _ach_t = _tiers.ContainmentTier.BARE
-            else:
-                # strict demands the mount tier when it has a
-                # target/output to bind, the namespace tier
-                # otherwise; achievable follows the failed probes,
-                # worst axis first (a missing filter voids every
-                # tier's contract, exactly as in the seccomp axis
-                # arms).
-                _floor_t = (_tiers.ContainmentTier.MOUNT_NS
-                            if (target or output)
-                            else _tiers.ContainmentTier.NS_NOMOUNT)
-                if (seccomp_profile
-                        and not _seccomp.check_seccomp_available()):
+            # Diagnostic capability labels cannot replace the constructed refusal.
+            with suppress(BaseException):
+                if sys.platform == "darwin":
+                    _floor_t = _tiers.ContainmentTier.SEATBELT
                     _ach_t = _tiers.ContainmentTier.BARE
-                elif not use_sandbox:
-                    _ach_t = (_tiers.ContainmentTier.LANDLOCK_ONLY
-                              if check_landlock_available()
-                              else _tiers.ContainmentTier.BARE)
                 else:
-                    from ._spawn import (
-                        mount_ns_available as _sg_mount_avail,
-                    )
-                    if _sg_mount_avail():
-                        _ach_t = _tiers.ContainmentTier.MOUNTLESS_NS
-                    elif check_landlock_available():
-                        _ach_t = _tiers.ContainmentTier.LANDLOCK_ONLY
-                    else:
+                    # strict demands the mount tier when it has a
+                    # target/output to bind, the namespace tier
+                    # otherwise; achievable follows the failed probes,
+                    # worst axis first (a missing filter voids every
+                    # tier's contract, exactly as in the seccomp axis
+                    # arms).
+                    _floor_t = (_tiers.ContainmentTier.MOUNT_NS
+                                if (target or output)
+                                else _tiers.ContainmentTier.NS_NOMOUNT)
+                    if (seccomp_profile
+                            and not _seccomp.check_seccomp_available()):
                         _ach_t = _tiers.ContainmentTier.BARE
-            return _record_floor_refusal(
-                audit_run_dir or output, exc,
-                floor_label=_tiers.tier_label(_floor_t),
-                achievable_label=_tiers.tier_label(_ach_t))
+                    elif not use_sandbox:
+                        _ach_t = (_tiers.ContainmentTier.LANDLOCK_ONLY
+                                  if check_landlock_available()
+                                  else _tiers.ContainmentTier.BARE)
+                    else:
+                        from ._spawn import (
+                            mount_ns_available as _sg_mount_avail,
+                        )
+                        if _sg_mount_avail():
+                            _ach_t = _tiers.ContainmentTier.MOUNTLESS_NS
+                        elif check_landlock_available():
+                            _ach_t = _tiers.ContainmentTier.LANDLOCK_ONLY
+                        else:
+                            _ach_t = _tiers.ContainmentTier.BARE
+                return _record_floor_refusal(
+                    audit_run_dir or output, exc,
+                    floor_label=_tiers.tier_label(_floor_t),
+                    achievable_label=_tiers.tier_label(_ach_t))
+            return exc
 
         from .preflight import strict_backend_error
         error = strict_backend_error(
