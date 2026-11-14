@@ -848,9 +848,9 @@ def test_parallel_scanner_and_runner_share_one_scope_warning(tmp_path, monkeypat
     with ThreadPoolExecutor(max_workers=8) as pool:
         list(pool.map(invoke, range(32)))
     log.warning.assert_called_once()
-    message, version, _floor = log.warning.call_args.args
+    message, _floor = log.warning.call_args.args
     assert "--x-ignore-semgrepignore-files unavailable" in message
-    assert version == "1.79.0"
+    assert "unverified" in message
 
 
 @pytest.fixture(autouse=True)

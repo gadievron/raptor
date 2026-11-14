@@ -67,13 +67,13 @@ def _warn_scope_isolation_once(log):
         if _scope_upgrade_warned:
             return
         _scope_upgrade_warned = True
-    v = version() or "unknown"
     floor = ".".join(str(p) for p in _SCOPE_ISOLATION_MIN_VERSION)
     log.warning(
-        "semgrep %s < %s: --x-ignore-semgrepignore-files unavailable "
+        "semgrep scope isolation unavailable or unverified (requires %s or newer): "
+        "--x-ignore-semgrepignore-files unavailable "
         "— .semgrepignore files in the scanned repo can hide findings "
         "(upgrade: uv tool install --upgrade semgrep)",
-        v, floor,
+        floor,
     )
 
 # RAPTOR-owned scan-scope baseline, passed as repeated ``--exclude``
