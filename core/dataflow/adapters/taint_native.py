@@ -82,12 +82,13 @@ def _step_from_location(
     line = region.get("startLine") or 0
     if not uri or isinstance(line, bool) or not isinstance(line, int) or line < 1:
         return None
+    column = region.get("startColumn")
     return Step(
         # The native emitter quotes local filenames for SARIF. Decode
         # exactly once; literal percent escapes remain literal filenames.
         file_path=unquote(uri, errors="strict"),
         line=line,
-        column=region.get("startColumn") or 0,
+        column=0 if column is None else column,
         snippet=(region.get("snippet") or {}).get("text") or "",
         label=label,
     )
