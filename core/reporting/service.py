@@ -78,7 +78,7 @@ def complete_reporting(context: ReportContext, output_dir: Path, *, stem: str = 
             result.diagnostics.extend(result.publication.diagnostics)
             result.errors.extend(result.publication.failed_formats)
         else:
-            publish_summary(summary, output_dir, context=context, expected_generation=expected_generation,
+            publish_summary(summary, output_dir, context=context, document=document, expected_generation=expected_generation,
                             summary_writer=write_summary)
     except (OSError, ValueError, TypeError) as exc:
         result.diagnostics.append(f"Report persistence failed ({type(exc).__name__}); analysis results are retained")
@@ -87,7 +87,7 @@ def complete_reporting(context: ReportContext, output_dir: Path, *, stem: str = 
         result.summary.diagnostics.extend(result.diagnostics)
         try:
             guard = result.publication.generation if result.publication and result.publication.committed else expected_generation
-            publish_summary(result.summary, output_dir, context=context, expected_generation=guard,
+            publish_summary(result.summary, output_dir, context=context, document=document, expected_generation=guard,
                             summary_writer=write_summary)
         except (OSError, ValueError, TypeError):
             pass  # the original persistence failure remains visible below
