@@ -734,6 +734,8 @@ def _compute_verdict(
     total = len(verifications)
     missing = [v for v in verifications if not v.exists]
 
+    expected_links = verifications[:-1]
+    unresolved_links = [v for v in expected_links if v.call_link_to_next is None]
     links = [v for v in verifications if v.call_link_to_next is not None]
     confirmed_links = [v for v in links if v.call_link_to_next is True]
     # Tier-gated broken links (producer-declared sub-static hop at an
@@ -781,7 +783,7 @@ def _compute_verdict(
         )
 
     if confirmed_links and not broken_links and not missing \
-            and not tier_gated_links:
+            and not tier_gated_links and not unresolved_links:
         return StructuralResult(
             verdict="confirmed",
             reasoning=(
@@ -798,7 +800,8 @@ def _compute_verdict(
         return StructuralResult(
             verdict="confirmed",
             reasoning=(
-                f"{len(confirmed_links)}/{len(links)} call link(s) verified"
+                f"{len(confirmed_links)}/{len(expected_links)} call link(s) verified"
+                + (f"; {len(unresolved_links)} unresolved" if unresolved_links else "")
                 + (f"; {len(indirect_links)} indirect" if indirect_links else "")
                 + (
                     f"; {len(tier_gated_links)} unverifiable "
