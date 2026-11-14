@@ -163,7 +163,8 @@ def main():
                        PATH=interpreter_tool_path(sys.executable, os.environ.get('PATH', os.defpath)),
                        RAPTOR_OUT_DIR=str(root/'out'), RAPTOR_REGISTRY_HOME=str(root/'registry'),
                        PYTHONDONTWRITEBYTECODE='1', RAPTOR_MAX_TEST_SECONDS='', **overrides)
-            for key in ('RAPTOR_ALLOW_DEGRADED_UNTRUSTED', 'RAPTOR_TEST_EMULATE_PLATFORM', 'PYTHONPATH'):
+            for key in ('RAPTOR_ALLOW_DEGRADED_UNTRUSTED', 'RAPTOR_TEST_EMULATE_PLATFORM',
+                        'PYTHONPATH', 'PYTEST_ADDOPTS', 'PYTEST_PLUGINS'):
                 env.pop(key, None)
             xml = report/(name+'.xml')
             command = [sys.executable, '-I', '-B', '-m', 'pytest', *selectors,
