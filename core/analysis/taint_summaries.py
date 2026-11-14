@@ -59,6 +59,7 @@ from core.analysis.cfg_builder import (
 from core.analysis.dataflow import reaching_defs
 from core.analysis.python_module_callgraph import (
     PyModuleCallGraph,
+    local_binding_names,
 )
 
 # ---------------------------------------------------------------------------
@@ -295,9 +296,20 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
     """Visit this frame, including defaults of nested definitions."""
     if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return None  # Synthetic lambda entries use the existing shape refusal.
+    frame_bindings: frozenset[str] | None = None
     pending: list[ast.AST] = list(fn_ast.body)
     while pending:
         node = pending.pop()
+        if (isinstance(node, ast.Return) and isinstance(node.value, ast.Lambda)
+                and isinstance(node.value.body, ast.Name)):
+            name = node.value.body.id
+            # This exact bare-name body has no comprehension or nested scope.
+            # Defaults are snapshots, but an outer local here is a live cell.
+            if frame_bindings is None:
+                frame_bindings = local_binding_names(fn_ast)
+            if (name in frame_bindings
+                    and name not in local_binding_names(node.value)):
+                return "returned lambda retains an unmodelled enclosing cell"
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             pending.extend(node.args.defaults)
             pending.extend(d for d in node.args.kw_defaults if d is not None)
@@ -352,6 +364,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       the incoming local value.
     * A local class definition: its executed namespace can retain input,
       but enclosing-frame propagation models only the definition header.
+    * A directly returned lambda with a bare enclosing-local body: it
+      retains a live cell, which default-value propagation does not model.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
     * A type alias: later access can evaluate its deferred value, which
