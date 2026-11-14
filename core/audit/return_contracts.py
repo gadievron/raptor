@@ -218,10 +218,17 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
             len(sampled), n,
         )
         paths = sampled
+    seen_inputs: set[tuple[Path, str]] = set()
     for p in paths:
         resolved = confine(target_path, p)
         if resolved is None:
             continue
+        # Preserve distinct suffix-based view inputs while avoiding repeated
+        # reads of equivalent selected aliases. Selection is not backfilled.
+        key = (resolved, p.suffix.lower())
+        if key in seen_inputs:
+            continue
+        seen_inputs.add(key)
         got = read_text_capped(resolved, _MAX_WUR_FILE_CHARS)
         if got is None or got[1]:
             continue
