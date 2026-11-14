@@ -734,6 +734,11 @@ class _CodeQLAdjudicationOracle:
         )
 
 
+def _validate_retry_budget(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
 def run_synthesis_loop(
     proposal: BarrierProposal,
     after_db: Path,
@@ -771,7 +776,13 @@ def run_synthesis_loop(
     When ``diag`` is supplied, it records ``last_error`` (assembly /
     compile), ``attempts`` (compile budget used in the last cycle),
     and ``refine_attempts`` (soundness refinements used).
+
+    Retry budgets must be non-negative integers. Zero compile attempts
+    returns ``None`` without calling the proposer.
     """
+    _validate_retry_budget("max_attempts", max_attempts)
+    _validate_retry_budget("max_refine_attempts", max_refine_attempts)
+
     from core.orchestration.driver import DriverConfig
     from core.orchestration.driver import run as driver_run
 
@@ -841,6 +852,7 @@ def synthesize_over_corpus(
     max_attempts: int = 1,
 ) -> CorpusSynthReport:
     """Run the synthesis loop over a corpus of flagged FPs and aggregate."""
+    _validate_retry_budget("max_attempts", max_attempts)
     sound = not_sound = no_barrier = 0
     per: list = []
     for item in items:
