@@ -309,9 +309,12 @@ def load_persisted(
     payload = load_json(path, max_bytes=1024 * 1024)
     if not isinstance(payload, dict):
         return None
+    mode = payload.get("mode", "off")
+    if not isinstance(mode, str):
+        return None
     try:
         return configure(
-            payload.get("mode", "off"),
+            mode,
             parity_log=payload.get("parity_log_path"),
             run_dir=run_dir,
             export_env=export_env,
