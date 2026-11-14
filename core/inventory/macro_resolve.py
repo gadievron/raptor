@@ -24,12 +24,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
-# on blank-line runs in scanned source.
+# on blank-line runs in scanned source. Separators and parameters stay
+# within logical lines; build_macro_table joins continuations first.
 _MACRO_DEF_RE = re.compile(
-    r"^[^\S\n]*#\s*define\s+(\w+)(\([^)]*\))?\s+(.+?)(?:\s*\\)?$",
+    r"^[^\S\n]*#[^\S\n]*define[^\S\n]+(\w+)"
+    r"(?:(\([^)\n]*\))[^\S\n]*|[^\S\n]+)(.+?)(?:[^\S\n]*\\)?$",
     re.MULTILINE,
 )
-_MACRO_DEFINE_PREFIX_RE = re.compile(r"#\s*define\s")
+_MACRO_DEFINE_PREFIX_RE = re.compile(r"#[^\S\n]*define[^\S\n]")
 _MACRO_IDENT_RE = re.compile(r"\b([A-Za-z_]\w*)\b")
 _C_EXTENSIONS = frozenset({
     ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx",
