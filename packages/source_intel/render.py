@@ -1456,18 +1456,11 @@ def _render_sanitizers_line(
     build_flags: BuildFlagsContext | None,
     style: str,
 ) -> str | None:
-    """Render a single line summarising active sanitizers when any
-    are present in ``build_flags``. Returns None when:
-      * build_flags is None,
-      * extraction_confidence == "absent",
-      * sanitizers_enabled is empty,
-      * no enabled sanitizer is in ``_RELEVANT_SANITIZERS``.
+    """Summarise observed sanitizer and coverage settings.
 
-    The line is target-wide, not per-call-site — sanitizers are a
-    build-wide property. Consumer prompt may dedup if multiple
-    evidence blocks for the same target are rendered together; in
-    practice each finding gets its own evidence block, so one line
-    per finding is correct.
+    Return None when flag evidence is absent or no recorded name is
+    in the existing relevance set. Settings can aggregate translation
+    units and do not establish instrumentation at a particular finding.
     """
     if build_flags is None:
         return None
@@ -1482,24 +1475,18 @@ def _render_sanitizers_line(
 
     listed = ", ".join(enabled)
     if style == "stage_d":
-        prefix = "Build-flag context — active sanitizers"
+        prefix = "Build-flag context — observed sanitizer/coverage settings"
     elif style == "exploit_plan":
-        prefix = "Constraint — sanitizers active in build"
+        prefix = "Constraint to verify — sanitizer/coverage settings"
     else:
         prefix = "Variant hint — sanitizer build"
 
-    # Memory-corruption-CWE prose. Surfaces both interpretations the
-    # LLM should weigh: production-equivalent KASAN catches the bug
-    # at panic-cost (DoS-only outcome), but if the binary under
-    # analysis is the sanitizer build itself, the finding may not
-    # reproduce in stripped production binaries.
     return (
-        f"{prefix}: {listed}. If this is a production-equivalent build "
-        f"with these sanitizers active, memory-corruption primitives "
-        f"reaching runtime trigger a panic / abort — the bug is "
-        f"DoS-only, not RCE. If this is a CI / fuzzer build only, "
-        f"the production binary lacks these checks and the primitive "
-        f"survives uninstrumented."
+        f"{prefix}: {listed}. This observation does not establish "
+        f"instrumentation at the finding, runtime detection or termination, "
+        f"a DoS-only outcome, or equivalence to the production binary. "
+        f"Inspect the effective instrumentation and runtime options; "
+        f"verify production-binary coverage separately."
     )
 
 

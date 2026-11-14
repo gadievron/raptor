@@ -1,7 +1,7 @@
 """Tests for axis-6 sanitizer rendering in derive_evidence_strings.
 
 Phase B PR4: the renderer surfaces ``build_flags.sanitizers_enabled``
-as one prose line per finding when relevant sanitizers are active.
+as one prose line per finding when relevant settings are observed.
 """
 
 from __future__ import annotations
@@ -49,7 +49,8 @@ class TestRenderSanitizersLine:
         line = _render_sanitizers_line(flags, "stage_d")
         assert line is not None
         assert "kasan" in line
-        assert "panic" in line or "abort" in line  # DoS framing
+        assert "does not establish" in line
+        assert "runtime detection or termination" in line
 
     def test_renders_when_address_active(self):
         flags = BuildFlagsContext(
@@ -168,3 +169,17 @@ def test_relevant_sanitizers_includes_kernel_and_userspace():
     assert "kasan" in _RELEVANT_SANITIZERS      # kernel ASan
     assert "memory" in _RELEVANT_SANITIZERS     # userspace MSan
     assert "ubsan" in _RELEVANT_SANITIZERS      # kernel UBSan
+
+
+def test_sanitizer_settings_do_not_classify_runtime_or_production_outcomes():
+    for name in ("kcov", "address", "thread", "ubsan"):
+        flags = BuildFlagsContext(
+            extraction_confidence="high", sanitizers_enabled=(name,),
+        )
+        for style in ("stage_d", "exploit_plan", "agentic_variant"):
+            text = _render_sanitizers_line(flags, style)
+            assert name in text
+            assert "does not establish" in text
+            assert "the bug is DoS-only, not RCE" not in text
+            assert "production binary lacks these checks" not in text
+            assert "primitive survives uninstrumented" not in text
