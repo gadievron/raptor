@@ -260,11 +260,13 @@ def _hash_target_tree(target: Path) -> str:
     targets, returns a constant sentinel hash so cache misses are
     deterministic.
 
-    Bounded for cost, complete for change detection: every file's
-    path and (mtime_ns, size) participate; only the first
-    ``_CONTENT_HASH_CAP`` files in sorted-path order are additionally
-    content-hashed (kernel-scale safety). Any edit — including to
-    files past the cap — flips the hash via the stat line.
+    Includes every sorted C/C++ path. The first ``_CONTENT_HASH_CAP``
+    files are content-hashed; remaining files contribute (mtime_ns,
+    size). Content edits past the prefix can remain undetected when
+    those metadata fields are preserved.
+
+    The cap limits the number of content-hashed files, not total bytes,
+    directory enumeration/sorting, or elapsed time.
     """
     if not target.exists():
         return "missing"
@@ -284,8 +286,8 @@ def _hash_target_tree(target: Path) -> str:
         if idx < _CONTENT_HASH_CAP:
             h.update(_file_hash(path).encode("utf-8"))
         else:
-            # Past the content budget: the (mtime_ns, size) stat line
-            # still participates so an edit here flips the hash.
+            # Past the content prefix, changes are represented only
+            # by the recorded mtime and size.
             try:
                 st = path.stat()
             except OSError:
