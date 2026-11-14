@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sys
 import threading
 import time
@@ -247,9 +246,10 @@ class FuzzingTelemetry:
             # there — a planted symlink at the predictable trail name
             # would be followed by a bare "a" open, and a planted
             # reader-less FIFO would block campaign start forever.
-            self._events_fp = os.fdopen(
-                open_hardened_append(self.events_path),
-                "a", buffering=1, encoding="utf-8",
+            self._events_fp = open(
+                str(self.events_path), "a", buffering=1, encoding="utf-8",
+                closefd=True,
+                opener=lambda path, _flags: open_hardened_append(path),
             )
             try:
                 self._emit(FuzzEvent(
