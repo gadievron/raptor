@@ -387,6 +387,9 @@ def _drain_pipes_until_eof(
                 os.P_PID, target_pid,
                 os.WEXITED | os.WNOHANG | os.WNOWAIT,
             )
+        except InterruptedError:
+            # An interrupted observation does not confirm target exit.
+            return False
         except (ChildProcessError, OSError):
             return True
         return res is not None
