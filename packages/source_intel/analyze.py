@@ -2743,7 +2743,14 @@ def _scan_alias_in_file(path: Path) -> list[AttributeEvidence]:
     got = read_text_capped(resolved)
     if got is None:
         return []
-    text = got[0]
+    # Match curated spellings against the same unambiguous code-view
+    # contract as project aliases, using this reader's already-capped
+    # text rather than introducing another file read or cache policy.
+    from core.audit.source_view import sanitized_view_with_status
+    view = sanitized_view_with_status(got[0], str(resolved))
+    if view.ambiguous:
+        return []
+    text = view.text
 
     observations: list[AttributeEvidence] = []
     file_lines = text.split("\n")  # line-model: universal-newline read_text_capped above
