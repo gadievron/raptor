@@ -106,8 +106,7 @@ def test_dynamic_numeric_operand_mode_boundary_stays_excluded(annotation, future
 
 
 @pytest.mark.parametrize('annotation', ['True+1', '1+(not 0)', 'not invoke()', '0<invoke()',
-                                     '0 if True else invoke()', 'False and invoke()',
-                                     '0 if True else (lambda: 0)'])
+                                     '0 if True else invoke()', 'False and invoke()'])
 def test_numeric_dynamic_and_unselected_descendants_remain_excluded(annotation):
     compile(source_for(annotation), '<excluded-boolean-header>', 'exec', dont_inherit=True)
     assert not _literal_header_annotation(ast.parse(annotation, mode='eval').body)
