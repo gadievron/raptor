@@ -420,8 +420,12 @@ class PackageCallGraph:
         self._ensure_indices()
         if src_id not in self._by_id or dst_id not in self._by_id:
             return PathsFound()
+        if max_paths <= 0:
+            return PathsFound(budget_exhausted=True)
         if src_id == dst_id:
             return PathsFound(paths=((src_id,),))
+        if max_depth <= 0:
+            return PathsFound(budget_exhausted=True)
         paths: list[tuple[str, ...]] = []
         budget_exhausted = False
         expansions = 0
