@@ -516,7 +516,7 @@ def assemble_context(
     ctx["type_definitions"] = _resolve_types(
         target_path, file_path, ctx["metadata"], ctx.get("source", ""),
     )
-    if file_path.endswith((".c", ".h", ".cpp", ".cc", ".cxx", ".hpp")):
+    if file_path.endswith((".c", ".h", ".cpp", ".cc", ".cxx", ".hh", ".hpp", ".hxx")):
         ctx["macro_definitions"] = _resolve_macros(
             target_path, ctx.get("source", ""),
         )
