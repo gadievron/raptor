@@ -177,7 +177,8 @@ def discover_aliases(target: Path) -> DiscoveryResult:
                    # tend to false-positive on system /usr/include.
 
     # Phase 1: scan headers across all roots, build macro_name →
-    # expansion map. First definition wins per C semantics.
+    # expansion map. Keep the first encountered definition as a text-scan
+    # policy; preprocessing order and conditional redefinitions are not evaluated.
     macros: dict[str, str] = {}
     headers_seen = 0
     for root in scan_roots:
