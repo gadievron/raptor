@@ -1018,21 +1018,10 @@ def _render_nonnull_line(
     build_flags: BuildFlagsContext | None,
     style: str,
 ) -> str:
-    """Render nonnull evidence.
+    """Render the caller contract and observed build-setting context.
 
-    Nonnull is a TWO-EDGED signal for memory corruption:
-      * Author intent — caller MUST pass non-null pointers.
-      * Compiler behaviour — when -O2+ AND -fdelete-null-pointer-checks
-        is ON (GCC userspace default), the compiler may eliminate
-        redundant null-checks inside the annotated function. A real
-        NULL reaching the function then dereferences without the
-        defensive branch the author may have written.
-      * In the kernel, -fno-delete-null-pointer-checks is in CFLAGS
-        since 4.9, so the elimination doesn't happen — defensive null
-        checks are preserved.
-
-    The Stage D consumer reads this evidence WITH the build-flag
-    context to determine effective semantics.
+    Annotation and flag observations do not establish compiled checks,
+    a runtime NULL, or its relationship to a dereference.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1065,15 +1054,16 @@ def _nonnull_null_check_phrase(build_flags: BuildFlagsContext | None) -> str:
         )
     if build_flags.delete_null_pointer_checks is False:
         return (
-            "Build flags include -fno-delete-null-pointer-checks — "
-            "defensive null checks inside the function are preserved; "
-            "any NULL dereference behaves as the source code shows."
+            "Build flags observed include -fno-delete-null-pointer-checks. "
+            "This observation does not establish preserved defensive null "
+            "checks or the behaviour of a NULL in the compiled function."
         )
     if build_flags.delete_null_pointer_checks is True:
         return (
-            "Build flags explicitly enable -fdelete-null-pointer-checks "
-            "— compiler may dead-code-eliminate redundant null checks "
-            "inside the function; a real NULL would reach the deref."
+            "Build flags observed include -fdelete-null-pointer-checks; "
+            "the compiler may eliminate null checks. This observation "
+            "does not establish which checks were removed or whether "
+            "a NULL reaches a dereference."
         )
     return (
         "Compiler-elimination status not pinned by observed flags — "
@@ -1164,14 +1154,10 @@ def _render_returns_nonnull_line(
     build_flags: BuildFlagsContext | None,
     style: str,
 ) -> str:
-    """Render returns_nonnull evidence.
+    """Render the return-value promise and observed build settings.
 
-    Author promises the function never returns NULL. Callers may
-    legitimately skip null checks. If the annotation is wrong AND
-    -fdelete-null-pointer-checks is enabled (gcc userspace default),
-    the compiler may also dead-code-eliminate any defensive null
-    checks the caller DID write — making a wrong annotation actively
-    dangerous.
+    A wrong annotation warrants caller-path review; the observation
+    does not establish compiled checks or a runtime dereference.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1205,15 +1191,17 @@ def _returns_nonnull_caveat_phrase(
         )
     if build_flags.delete_null_pointer_checks is False:
         return (
-            "Build flags include -fno-delete-null-pointer-checks — "
-            "defensive null checks in the caller are preserved even if "
-            "the annotation is incorrect."
+            "Build flags observed include -fno-delete-null-pointer-checks. "
+            "This observation does not establish preserved caller checks "
+            "or the compiled behaviour if the annotation is wrong."
         )
     if build_flags.delete_null_pointer_checks is True:
         return (
-            "Build flags enable -fdelete-null-pointer-checks — if the "
-            "annotation is wrong, compiler may eliminate caller-side "
-            "null checks, making a returned NULL a real deref."
+            "Build flags observed include -fdelete-null-pointer-checks; "
+            "if the annotation is wrong, the compiler may eliminate "
+            "caller-side null checks. This observation does not establish "
+            "which checks were removed or whether a returned NULL "
+            "reaches a dereference."
         )
     return (
         "Compiler-elimination status not pinned by observed flags — "
