@@ -1384,7 +1384,7 @@ def run_rules_batched(
             nonce=nonce, rule_name="batch", target=target,
         )
 
-        by_rule = _demux_batch_matches(all_matches, rule_stems, alias_of)
+        by_rule = _demux_batch_matches(all_matches, rule_stems, alias_of, diagnostics=errors)
 
         # Match run_rule's result contract: files_examined is
         # populated (one shared tree walk for the whole batch —
@@ -1438,6 +1438,7 @@ def _demux_batch_matches(
     all_matches: list[SpatchMatch],
     rule_stems: list[str],
     alias_of: dict[str, str],
+    *, diagnostics: list[str] | None = None,
 ) -> dict[str, list[SpatchMatch]]:
     """Attribute batch matches to their emitting rule file.
 
@@ -1449,9 +1450,11 @@ def _demux_batch_matches(
     scan missed an emission shape and needs fixing.
     """
     by_rule: dict[str, list[SpatchMatch]] = {s: [] for s in rule_stems}
+    unassigned = 0
     for m in all_matches:
         stem = alias_of.get(m.rule)
         if stem is None or stem not in by_rule:
+            unassigned += 1
             logger.warning(
                 "batched COCCIRESULT rule id %r not attributable to "
                 "any batched rule file (stems: %s) — match at %s:%s "
@@ -1460,6 +1463,8 @@ def _demux_batch_matches(
             )
             continue
         by_rule[stem].append(m)
+    if unassigned and diagnostics is not None:
+        diagnostics.append(f"Coccinelle batch has {unassigned} match(es) with unassigned rule identities")
     return by_rule
 
 
