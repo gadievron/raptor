@@ -560,6 +560,12 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
         statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, ast.Delete):
+            for target in statement.targets:
+                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                if scope is None:
+                    return None
+                target_reads.update(scope[1])
         elif isinstance(statement, (ast.If, ast.While)):
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
