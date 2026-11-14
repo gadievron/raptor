@@ -92,10 +92,18 @@ def parse_pinned_sources(text: str) -> list[PinnedSource]:
             continue
         m = _SHA_LINE.match(line)
         if m:
+            if name is None:
+                raise CorpusPinError("SOURCES.md pin outside a source section")
+            if sha is not None:
+                raise CorpusPinError(f"SOURCES.md section {name!r} has duplicate pins")
             sha = m.group(1).lower()
             continue
         m = _PATH_LINE.match(line)
-        if m and name is not None and path is None:
+        if m:
+            if name is None:
+                raise CorpusPinError("SOURCES.md local path outside a source section")
+            if path is not None:
+                raise CorpusPinError(f"SOURCES.md section {name!r} has duplicate local paths")
             path = m.group(1)
     _flush()
     return out
