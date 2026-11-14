@@ -211,3 +211,38 @@ def test_native_iris_security_selection_retains_direct_probe(tmp_path, monkeypat
         [runner.codeql_cli, "resolve", "queries", *direct, "--format=json"])
     assert resolved_probe.returncode == 0, resolved_probe.stderr
     assert json.loads(resolved_probe.stdout) == [str(probe)]
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_query_enumeration_refusal_disables_compatibility_admission(tmp_path, monkeypatch, nested):
+    import os
+    from core import sandbox
+
+    pack = tmp_path / 'owned-pack'
+    pack.mkdir()
+    (pack / 'visible.ql').write_text('// owned inert query; never compiled\n')
+    blocked = pack
+    if nested:
+        blocked = pack / 'nested'
+        blocked.mkdir()
+        (blocked / 'hidden.ql').write_text('// owned inert query; never compiled\n')
+    original = os.scandir
+    calls = []
+
+    def refused(path):
+        if os.path.normpath(os.fspath(path)) == str(blocked):
+            calls.append(str(path))
+            raise PermissionError('owned query enumeration refusal')
+        return original(path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('incomplete enumeration reached version/native selection')
+
+    runner = object.__new__(query_runner.QueryRunner)
+    monkeypatch.setattr(runner, '_codeql_version', forbidden)
+    monkeypatch.setattr(sandbox, 'run', forbidden)
+    monkeypatch.setattr(os, 'scandir', refused)
+    args, skipped = runner._compatible_query_args(pack)
+    assert calls
+    assert args == []
+    assert skipped and 'enumeration' in skipped[0]
