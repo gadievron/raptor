@@ -47,7 +47,7 @@ def test_literal_pattern_parameter_masks_outer_cell(child):
     assert not summaries(source_for("0", child, "raw"))["handle"].summary_unknown
 
 
-@pytest.mark.parametrize("pattern", ["-1", "-1j", "1+2j", "raw.member", "value", "0 | 1", "[value]"],
+@pytest.mark.parametrize("pattern", ["-1", "-1j", "1+2j", "raw.member", "value", "0 | raw.member", "[value]"],
                          ids=["negative", "negative-imaginary", "complex-expression", "dotted", "capture", "or", "sequence"])
 def test_other_pattern_shapes_stay_excluded(pattern):
     source = source_for(pattern)

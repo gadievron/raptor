@@ -48,7 +48,7 @@ def test_sequence_pattern_parameter_masks_outer_cell(child):
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["root", "child"])
-@pytest.mark.parametrize("pattern", ["[value]", "[*values]", "[[value]]", "[0, raw.member]", "[0, {0: value}]", "[0, Value()]", "[0, 1 | 2]"],
+@pytest.mark.parametrize("pattern", ["[value]", "[*values]", "[[value]]", "[0, raw.member]", "[0, {0: value}]", "[0, Value()]", "[0, 1 | raw.member]"],
                          ids=["capture", "named-star", "nested-capture", "dotted-child", "mapping-child", "class-child", "or-child"])
 def test_unsupported_sequence_child_invalidates_complete_scan(pattern, child):
     tree = ast.parse(source_for(pattern, child))
