@@ -691,6 +691,34 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         node = pending.pop()
         if _match_literal_expression(node):
             continue
+        if isinstance(node, ast.Attribute):
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            pending.append(node.value)
+            continue
+        if isinstance(node, ast.Subscript):
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            pending.append(node.value)
+            index_pending: list[ast.expr] = [node.slice]
+            while index_pending:
+                index = index_pending.pop()
+                if isinstance(index, ast.Slice):
+                    pending.extend(bound for bound in (index.lower, index.upper, index.step)
+                                   if bound is not None)
+                elif isinstance(index, ast.Tuple):
+                    if not isinstance(index.ctx, ast.Load):
+                        return False
+                    for element in index.elts:
+                        if isinstance(element, ast.Starred):
+                            if not isinstance(element.ctx, ast.Load):
+                                return False
+                            pending.append(element.value)
+                        else:
+                            index_pending.append(element)
+                else:
+                    pending.append(index)
+            continue
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             pending.append(node.operand)
             continue
