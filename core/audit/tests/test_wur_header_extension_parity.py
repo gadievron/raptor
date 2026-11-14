@@ -114,3 +114,56 @@ def test_all_read_refusals_skip_declaration_harvesting(tmp_path, target_harvest)
     namespace["read_text_capped"] = lambda *args: None
     namespace["harvest_wur_declarations"] = lambda texts: pytest.fail("no admitted text")
     assert helper(tmp_path) == frozenset()
+
+
+@pytest.mark.parametrize("refused", [False, True], ids=["readable", "read-refused"])
+def test_equivalent_selected_header_aliases_are_read_once(tmp_path, target_harvest, refused):
+    helper, namespace = target_harvest
+    base = tmp_path / "base.h"
+    base.touch()
+    (tmp_path / "alias.H").symlink_to(base)
+    (tmp_path / "alias.h").symlink_to(base)
+    reads = []
+
+    def read(path, cap):
+        reads.append(path)
+        return None if refused else ("owned", False)
+
+    namespace["read_text_capped"] = read
+    namespace["harvest_wur_declarations"] = lambda texts: frozenset({"owned"})
+    assert helper(tmp_path) == (frozenset() if refused else frozenset({"owned"}))
+    assert reads == [base]
+
+
+def test_different_header_suffix_retains_its_own_view_input(tmp_path, target_harvest):
+    helper, namespace = target_harvest
+    base = tmp_path / "base.h"
+    base.touch()
+    (tmp_path / "alias.hpp").symlink_to(base)
+    reads = []
+    inputs = []
+    namespace["read_text_capped"] = lambda path, cap: (reads.append(path) or "owned", False)
+
+    def harvest(texts):
+        inputs.extend(texts)
+        return frozenset({"owned"})
+
+    namespace["harvest_wur_declarations"] = harvest
+    assert helper(tmp_path) == frozenset({"owned"})
+    assert reads == [base, base]
+    assert {Path(path).suffix for path in inputs} == {".h", ".hpp"}
+
+
+def test_skipped_selected_aliases_do_not_backfill_sample(tmp_path, target_harvest):
+    helper, namespace = target_harvest
+    base = tmp_path / "z.h"
+    base.touch()
+    (tmp_path / "a.H").symlink_to(base)
+    (tmp_path / "b.h").touch()
+    namespace["_MAX_WUR_SCAN_FILES"] = 2
+    reads = []
+    namespace["read_text_capped"] = lambda path, cap: (reads.append(path) or "owned", False)
+    namespace["harvest_wur_declarations"] = lambda texts: frozenset({"owned"})
+    assert helper(tmp_path) == frozenset({"owned"})
+    # Existing even selection chooses indices0,2: a.H and z.h. b.h is not selected.
+    assert reads == [base]
