@@ -75,15 +75,21 @@ def _require_data_only_pack(pack_dir: Path) -> None:
     is safe only because a data-extension pack is declarative YAML.
     A ``.ql``/``.qll`` file inside it would be compiled and run by the
     analyze invocation — enforce the data-only shape here rather than
-    trusting the emission step.
+    trusting the emission step. Directory symlinks are refused because
+    the recursive scan does not inspect their targets.
     """
     if not pack_dir.is_dir():
         msg = f"extension pack is not a directory: {pack_dir}"
         raise ValueError(msg)
-    offenders = [
-        p for p in pack_dir.rglob("*")
-        if p.suffix in (".ql", ".qll")
-    ]
+    offenders = []
+    for path in pack_dir.rglob("*"):
+        if path.is_symlink() and path.is_dir():
+            raise ValueError(
+                "extension pack must not contain linked directories: "
+                f"{path}"
+            )
+        if path.suffix in (".ql", ".qll"):
+            offenders.append(path)
     if offenders:
         raise ValueError(
             "extension pack must contain data extensions only; "
