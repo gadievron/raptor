@@ -3066,4 +3066,4 @@ def _local_line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     if line_no < 1 or line_no > len(lines):
         return False
     text = lines[line_no - 1]
-    return any(const in text for const in _PRIVILEGED_CAP_CONSTANTS_FOR_EVIDENCE)
+    return any(_is_word_present(text, const) for const in _PRIVILEGED_CAP_CONSTANTS_FOR_EVIDENCE)

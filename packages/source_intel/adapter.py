@@ -1086,7 +1086,7 @@ def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     if lines is None or not (1 <= line_no <= len(lines)):
         return False
     line = lines[line_no - 1]
-    return any(c in line for c in _PRIVILEGED_CAP_CONSTANTS)
+    return any(_is_word_present(line, c) for c in _PRIVILEGED_CAP_CONSTANTS)
 
 
 # =====================================================================
