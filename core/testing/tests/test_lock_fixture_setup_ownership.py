@@ -1,4 +1,5 @@
 """Actual held-lock fixture constructors cannot strand native holder FDs."""
+from contextlib import ExitStack
 import errno
 import os
 from types import FunctionType, ModuleType
@@ -42,8 +43,11 @@ def test_actual_lock_fixture_construction_failure_retires_holder(tmp_path, monke
     native_thread, native_event = threading.Thread, threading.Event
     def opened_fd(*args, **kwargs):
         fd = os.open(*args, **kwargs)
-        current = os.fstat(fd)
-        opened.append((fd, (current.st_dev, current.st_ino)))
+        with ExitStack() as setup:
+            setup.callback(os.close, fd)
+            current = os.fstat(fd)
+            opened.append((fd, (current.st_dev, current.st_ino)))
+            setup.pop_all()
         return fd
     def thread(*args, **kwargs):
         if after:
