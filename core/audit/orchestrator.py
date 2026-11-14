@@ -11712,6 +11712,8 @@ def _run_audit_body(
                                 audit_log=audit_log,
                                 workqueue=workqueue,
                                 reviewed_set=reviewed_set,
+                                reviewed_outcomes=reviewed_outcomes,
+                                review_one_fn=knowledge_review_one,
                                 start_time=start_time,
                                 layer_disagreements=layer_disagreements,
                                 on_progress=on_progress,
