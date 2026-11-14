@@ -114,10 +114,20 @@ class SourceIntelCache:
         rules_hash = _hash_rules_dir(
             Path(rules_dir) if rules_dir else None
         )
+        # Results carry caller-visible target/evidence paths. Identical
+        # directory contents at another location cannot share a result.
+        # Preserve spelling too: a relative-path result must not be
+        # replayed as an absolute-path result. absolute() binds relative
+        # inputs to their current location without resolving symlinks or
+        # adding another content walk.
+        identity = hashlib.sha256()
+        for part in (str(Path(target).absolute()), str(Path(target)), target_hash):
+            identity.update(part.encode("utf-8", "surrogatepass"))
+            identity.update(b"\x00")
         # Schema version is part of the key so a SCHEMA_VERSION bump
         # invalidates the cache even when target + rules unchanged.
         return (
-            f"{target_hash}:v{SCHEMA_VERSION}",
+            f"{identity.hexdigest()}:v{SCHEMA_VERSION}",
             rules_hash,
         )
 
