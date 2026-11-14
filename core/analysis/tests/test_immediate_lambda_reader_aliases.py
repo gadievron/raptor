@@ -100,7 +100,6 @@ def test_adjacent_child_default_uses_defining_frame():
 
 
 @pytest.mark.parametrize('call', [
-    '(lambda *read: read)(getattr)',
     '(lambda **read: read)(value=getattr)',
     '(lambda read: read)(*(getattr,))',
     '(lambda read: read)()',
@@ -116,3 +115,8 @@ def test_opaque_or_incomplete_binding_is_outside_additional_check(call):
 ])
 def test_existing_reason_priority_is_preserved(body, expected):
     assert reason('def helper(obj, field, mapping):\n    ' + body + '\n') == expected
+
+
+def test_explicit_vararg_reader_retention_is_now_supported():
+    node = ast.parse('(lambda *read: read)(getattr)', mode='eval').body
+    assert _immediate_lambda_retains_reflective_reader(node, frozenset({'getattr', 'hasattr'}))
