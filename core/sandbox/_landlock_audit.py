@@ -959,6 +959,8 @@ def run_landlock_audit(
             while True:
                 try:
                     done, status = os.waitpid(target_pid, os.WNOHANG)
+                except InterruptedError:
+                    raise  # Keep the positive PID for outer retirement.
                 except (ChildProcessError, OSError):
                     target_pid = -1
                     target_rc = -1
@@ -992,9 +994,11 @@ def run_landlock_audit(
                     target_rc = os.WEXITSTATUS(status)
                 elif os.WIFSIGNALED(status):
                     target_rc = -os.WTERMSIG(status)
+            except InterruptedError:
+                raise  # No terminal wait result; the caller still owns this PID.
             except (ChildProcessError, OSError):
-                pass
-            finally:
+                target_pid = -1
+            else:
                 target_pid = -1
 
         # Reap the tracer — bounded. A healthy tracer exits promptly
@@ -1006,6 +1010,8 @@ def run_landlock_audit(
             while time.monotonic() < reap_deadline:
                 try:
                     done, _ = os.waitpid(tracer_pid, os.WNOHANG)
+                except InterruptedError:
+                    raise  # Keep the positive PID for outer retirement.
                 except (ChildProcessError, OSError):
                     break
                 if done != 0:
