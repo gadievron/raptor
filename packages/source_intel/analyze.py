@@ -2660,14 +2660,13 @@ def _scan_project_alias_observations(
     that the macro appears in a C source file.
     """
     observations: list[AttributeEvidence] = []
-    if not target.is_dir():
-        return observations
-
     # Build a flat list of (kind, alias_name) tuples for the scan.
     alias_pairs: list[tuple[str, str]] = []
     for family, names in discovered_alias_tuple:
         alias_pairs.extend((family, name) for name in names)
     if not alias_pairs:
+        return observations
+    if not target.is_dir():
         return observations
 
     seen_files = 0
