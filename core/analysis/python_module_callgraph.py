@@ -515,7 +515,14 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
                 elif not isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef,
                                                 ast.ClassDef, ast.Lambda)):
                     statements.extend(ast.iter_child_nodes(statement))
-            visible = (enclosing | local_binding_names(node)) - globals_
+            # Generic function parameters live in a separate annotation
+            # frame visible to the body, not in its ordinary local bindings.
+            # Defaults and decorators below retain the defining environment.
+            type_parameters = frozenset(
+                parameter.name for parameter in getattr(node, "type_params", ())
+                if isinstance(getattr(parameter, "name", None), str)
+            )
+            visible = (enclosing | type_parameters | local_binding_names(node)) - globals_
             scopes[node] = visible
             pending.extend((statement, visible) for statement in body)
             pending.extend((expr, enclosing) for expr in _definition_header_expressions(node))
