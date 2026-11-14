@@ -375,8 +375,9 @@ def _verified_import(zip_path: Path, expected: str) -> None:
             if not isinstance(manifest, dict) or manifest.get("schema") != 1:
                 raise SystemExit("Unsupported bundle manifest; re-fetch using this tool")
             packs = manifest.get("packs")
-            if (not isinstance(packs, list) or not packs or len(packs) != len(set(packs))
-                    or any(not isinstance(p, str) or not _PACK_ID_RE.fullmatch(p) for p in packs)):
+            if (not isinstance(packs, list) or not packs
+                    or any(not isinstance(p, str) or not _PACK_ID_RE.fullmatch(p) for p in packs)
+                    or len(packs) != len(set(packs))):
                 raise SystemExit("Invalid manifest pack list")
             expected_names = {cache_filename(p) for p in packs}
             files = manifest.get("files")
