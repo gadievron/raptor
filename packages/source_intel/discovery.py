@@ -332,16 +332,18 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
     """Count word-boundary occurrences of each macro in source files
     under the scan roots. Returns a dict mapping name → count.
 
-    ``#define NAME …`` lines are NOT counted as usage — only real
-    invocations of the macro count. This matters when scanning a
+    The defined name on its own ``#define NAME …`` line is excluded.
+    Other matches are lexical mentions, including comments, strings,
+    inactive branches and other macro expansions; counts do not prove
+    actual macro invocation or preprocessing activity. This matters when scanning a
     project's own header that defines macros we just discovered:
     without the filter, every define-line would be counted as
     self-usage, inflating frequency to >= 1 and defeating the
     "filter zero-usage" pass.
 
-    Returns zero for names not found. By construction our names are
-    valid C identifiers, so word-boundary checks are safe against
-    English-language false positives.
+    Returns zero for names not found. Candidate names are C identifiers;
+    word boundaries reject longer identifiers but do not distinguish
+    source tokens from prose or string contents.
     """
     counts: dict[str, int] = dict.fromkeys(names, 0)
     if not names:
