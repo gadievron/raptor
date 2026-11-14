@@ -277,13 +277,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.regex-dos.literal.java
     message: >-
-      Regex literal has a catastrophic-backtracking shape (nested
-      unbounded quantifiers, self-repeating alternation, or an unbounded
-      wildcard run inside a repeated group). Non-matching input triggers
-      exponential backtracking in java.util.regex — a short crafted
-      string pins the thread (ReDoS). Rewrite with possessive
-      quantifiers/atomic groups, bounded repetition, or an unambiguous
-      structure.
+      Regex literal matches a backtracking-risk heuristic. Review the flags,
+      matching operation, input control and input bounds before classifying its
+      runtime cost as ReDoS. Where backtracking risk is confirmed, use an
+      unambiguous structure, bounded repetition or a suitable regex engine.
     languages: [java]
     severity: MEDIUM
     patterns:
