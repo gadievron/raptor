@@ -395,7 +395,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
       whose sole return reads an enclosing cell through a bounded expression grammar
-      or a comprehension's first iterable,
+      or a bounded comprehension read,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -480,6 +480,21 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                     # The first iterable evaluates in this function's frame,
                     # before comprehension targets bind in their own scope.
                     names |= _scope_free_expression_loads(cell_read.generators[0].iter)
+                    if all(isinstance(gen.target, ast.Name) for gen in cell_read.generators):
+                        targets = {
+                            gen.target.id for gen in cell_read.generators
+                            if isinstance(gen.target, ast.Name)
+                        }
+                        parts = ([cell_read.key, cell_read.value]
+                                 if isinstance(cell_read, ast.DictComp) else [cell_read.elt])
+                        for index, gen in enumerate(cell_read.generators):
+                            parts.extend(gen.ifs)
+                            if index:
+                                parts.append(gen.iter)
+                        # All targets bind throughout the comprehension scope,
+                        # including reads preceding a later generator target.
+                        for part in parts:
+                            names |= _scope_free_expression_loads(part) - targets
                 if isinstance(cell_read, (ast.Attribute, ast.Subscript)):
                     cell_read = cell_read.value
                 if isinstance(cell_read, ast.Name):
