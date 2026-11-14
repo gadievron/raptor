@@ -4,8 +4,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.taint.python
     message: >-
-      Untrusted data flows into an outbound HTTP request. Enforce a strict
-      URL allowlist or use a proxy with egress controls.
+      Potentially untrusted data reaches a URL-related construction or request
+      API. Review the actual callee, controlled URL components, request issuance
+      and destination checks. Use a strict destination allowlist or egress
+      controls where untrusted data can choose the request target.
     languages: [python]
     severity: CRITICAL
     mode: taint
@@ -85,8 +87,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.taint.go
     message: >-
-      Untrusted data flows into an outbound HTTP request. Enforce a strict
-      URL allowlist or use a proxy with egress controls.
+      Potentially untrusted data reaches a URL-related construction or request
+      API. Review the actual callee, controlled URL components, request issuance
+      and destination checks. Use a strict destination allowlist or egress
+      controls where untrusted data can choose the request target.
     languages: [go]
     severity: CRITICAL
     mode: taint
@@ -145,8 +149,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.taint.java
     message: >-
-      Untrusted data flows into an outbound HTTP request. Enforce a strict
-      URL allowlist or use a proxy with egress controls.
+      Potentially untrusted data reaches a URL-related construction or request
+      API. Review the actual callee, controlled URL components, request issuance
+      and destination checks. Use a strict destination allowlist or egress
+      controls where untrusted data can choose the request target.
     languages: [java]
     severity: CRITICAL
     mode: taint
@@ -199,8 +205,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.taint.javascript
     message: >-
-      Untrusted data flows into an outbound HTTP request. Enforce a strict
-      URL allowlist or use a proxy with egress controls.
+      Potentially untrusted data reaches a URL-related construction or request
+      API. Review the actual callee, controlled URL components, request issuance
+      and destination checks. Use a strict destination allowlist or egress
+      controls where untrusted data can choose the request target.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
@@ -309,9 +317,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.redirect-following.python
     message: >-
-      httpx does not follow redirects by default; enabling
-      follow_redirects=True lets an SSRF via open redirect bypass URL
-      allowlists. Validate redirect targets or leave redirects off.
+      Redirect following is enabled on an httpx-shaped call. Review the actual
+      API and whether redirect targets are checked against the destination
+      policy. Disable redirects or validate every target where an untrusted
+      redirect could change the request destination.
     languages: [python]
     severity: MEDIUM
     # requests' allow_redirects=True is deliberately NOT flagged: it
