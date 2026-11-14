@@ -93,7 +93,7 @@ def weight_functions(
             rank = int(chain["rank"])
             raw_iterations = chain.get("iterations")
             iterations = 1 if raw_iterations is None else int(raw_iterations)
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
         if rank < 1 or iterations < 1:
             continue
