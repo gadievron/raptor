@@ -1,5 +1,5 @@
 """Allocation and inert-launch hooks remain consumer-local."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import os
 import subprocess
 
@@ -80,9 +80,15 @@ def test_allocation_scope_preserves_outer_consumer_tracker(kind, monkeypatch, ca
 
     def pipe():
         pair = real_pipe()
-        for fd in pair:
-            stat = os.fstat(fd)
-            tracked.append((fd, (stat.st_dev, stat.st_ino)))
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            records = []
+            for fd in pair:
+                stat = os.fstat(fd)
+                records.append((fd, (stat.st_dev, stat.st_ino)))
+            tracked.extend(records)
+            setup.pop_all()
         return pair
 
     try:
