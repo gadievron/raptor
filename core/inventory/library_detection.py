@@ -25,11 +25,14 @@ traversal-read of out-of-tree files) and nothing is interpolated into a shell.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
 from pathlib import Path
 from typing import Any
+
+from core.source import read_bytes_capped
 
 _ON_WORDS = frozenset({"on", "true", "yes", "1", "enable", "enabled"})
 _OFF_WORDS = frozenset({"off", "false", "no", "0", "disable", "disabled"})
@@ -100,7 +103,11 @@ def _read_text(path: Path) -> str | None:
     try:
         if path.stat().st_size > _MAX_MANIFEST_BYTES:
             return None
-        return path.read_text(encoding="utf-8", errors="replace")
+        got = read_bytes_capped(path, _MAX_MANIFEST_BYTES)
+        if got is None or got[1]:
+            return None
+        with io.TextIOWrapper(io.BytesIO(got[0]), encoding="utf-8", errors="replace") as stream:
+            return stream.read()
     except OSError:
         return None
 
