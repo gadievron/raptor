@@ -101,10 +101,10 @@ def test_interpolated_header_mode_boundary_stays_excluded(annotation, future):
 
 
 @pytest.mark.parametrize('annotation', ['f"{0}"', 't"{0}"'])
-def test_constant_interpolations_remain_outside_the_literal_only_grammar(annotation):
+def test_constant_interpolations_are_name_free(annotation):
     require_syntax(annotation)
-    compile(source_for(annotation), '<excluded-interpolation>', 'exec', dont_inherit=True)
-    assert not module._literal_header_annotation(ast.parse(annotation, mode='eval').body)
+    compile(source_for(annotation), '<constant-interpolation>', 'exec', dont_inherit=True)
+    assert module._literal_header_annotation(ast.parse(annotation, mode='eval').body)
 
 
 def test_absent_template_classes_use_the_existing_ast_facade_convention(monkeypatch):
