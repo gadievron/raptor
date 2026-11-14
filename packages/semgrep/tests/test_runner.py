@@ -1434,3 +1434,71 @@ def test_live_scope_gate_is_not_replaced_by_unit_fixture():
     from packages.semgrep import runner
 
     assert runner.scope_isolation_available is scope_isolation_available
+
+
+@pytest.mark.parametrize('writes_current', [False, True])
+def test_explicit_sidecar_requires_current_invocation_metadata(tmp_path, monkeypatch, writes_current):
+    import subprocess
+    from core.config import RaptorConfig
+    import packages.semgrep.runner as runner
+
+    target = tmp_path / 'owned.py'
+    target.write_text('owned_value = 1\n')
+    rules = tmp_path / 'owned.yaml'
+    rules.write_text('rules: []\n')
+    output = tmp_path / 'metadata.json'
+    old = _make_json_output(scanned=['prior_scan.py'])
+    output.write_text(old)
+    monkeypatch.setattr(runner, 'is_available', lambda *args: True)
+    monkeypatch.setattr(runner, 'scope_isolation_available', lambda *args: True)
+    monkeypatch.setattr(RaptorConfig, 'get_semgrep_config', lambda value: value)
+    paths = []
+
+    def execute(command, **kwargs):
+        sidecar = Path(command[command.index('--json-output') + 1])
+        paths.append(sidecar)
+        assert sidecar.parent == output.parent
+        if writes_current:
+            sidecar.write_text(_make_json_output(scanned=['current_scan.py']))
+        return subprocess.CompletedProcess(command, 0, _make_sarif(), '')
+
+    result = runner.run_rule(target, str(rules), json_output_path=output,
+                             subprocess_runner=execute, env={})
+    if writes_current:
+        assert result.files_examined == ['current_scan.py']
+        assert not result.errors
+        assert json.loads(output.read_text())['paths']['scanned'] == ['current_scan.py']
+    else:
+        assert result.files_examined == []
+        assert result.errors
+        assert output.read_text() == old
+    assert paths[0] != output
+    assert not paths[0].exists()
+
+
+def test_custom_runner_sidecar_publication_refusal_retains_current_result(tmp_path, monkeypatch):
+    import subprocess
+    from core.config import RaptorConfig
+    import packages.semgrep.runner as runner
+
+    source = tmp_path / 'owned.py'
+    source.write_text('owned_value = 1\n')
+    output = tmp_path / 'metadata.json'
+    output.mkdir()
+    monkeypatch.setattr(runner, 'is_available', lambda *args: True)
+    monkeypatch.setattr(runner, 'scope_isolation_available', lambda *args: True)
+    monkeypatch.setattr(RaptorConfig, 'get_semgrep_config', lambda value: value)
+    paths = []
+
+    def execute(command, **kwargs):
+        sidecar = Path(command[command.index('--json-output') + 1])
+        paths.append(sidecar)
+        sidecar.write_text(_make_json_output(scanned=['current_scan.py']))
+        return subprocess.CompletedProcess(command, 0, _make_sarif(), '')
+
+    result = runner.run_rule(source, 'owned.yaml', json_output_path=output,
+                             subprocess_runner=execute, env={})
+    assert result.files_examined == ['current_scan.py']
+    assert any('cannot save' in error for error in result.errors)
+    assert output.is_dir()
+    assert not paths[0].exists()
