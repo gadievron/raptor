@@ -1215,6 +1215,77 @@ def _function_reflective_readers(
     return frozenset(readers)
 
 
+
+def _comprehension_retains_reflective_reader(
+    node: ast.AST, inherited: frozenset[str],
+) -> bool:
+    """Recognise negative retention while preserving local expression scopes.
+
+    Unsupported shapes do not establish absence. Nested comprehension facts
+    use their enclosing candidates; they never become function-wide aliases.
+    """
+    pending = [(node, inherited)]
+    while pending:
+        current, candidates = pending.pop()
+        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            # Only headers execute here. Bodies have their own frame; lambda
+            # capture reads are handled by the enclosing scoped-read check.
+            pending.extend((default, candidates) for default in (
+                *current.args.defaults, *current.args.kw_defaults,
+            ) if default is not None)
+            if not isinstance(current, ast.Lambda):
+                pending.extend((decorator, candidates) for decorator in current.decorator_list)
+            continue
+        if isinstance(current, ast.ClassDef):
+            continue  # The existing local-class refusal remains independent.
+        if not isinstance(current, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            pending.extend((child, candidates) for child in ast.iter_child_nodes(current))
+            continue
+        targets = _validated_expression_targets(current)
+        if targets is None or not current.generators:
+            continue
+        scopes = [targets[generator.target] for generator in current.generators]
+        bound = frozenset(name for names, _ in scopes for name in names)
+        local_readers: set[str] = set()
+        for index, (generator, (names, reads)) in enumerate(
+            zip(current.generators, scopes, strict=True)
+        ):
+            iterable_candidates = candidates if index == 0 else (candidates - bound) | local_readers
+            if index and _scoped_expression_loads(generator.iter) & local_readers:
+                return True
+            pending.append((generator.iter, frozenset(iterable_candidates)))
+            if _scoped_expression_loads(generator.iter) & iterable_candidates:
+                local_readers.update(names)
+            body_candidates = (candidates - bound) | local_readers
+            for expression in (*reads, *generator.ifs):
+                if _scoped_expression_loads(expression) & local_readers:
+                    return True
+                pending.append((expression, frozenset(body_candidates)))
+        payload = ([current.key, current.value] if isinstance(current, ast.DictComp)
+                   else [current.elt])
+        for expression in payload:
+            if _scoped_expression_loads(expression) & local_readers:
+                return True
+            pending.append((expression, frozenset((candidates - bound) | local_readers)))
+    return False
+
+
+def _function_comprehension_retains_reflective_reader(
+    fn_ast: ast.AST, inherited: frozenset[str],
+) -> bool:
+    """Defaults use the defining frame; body aliases apply only to the body."""
+    if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return False
+    if any(_comprehension_retains_reflective_reader(default, inherited)
+           for default in (*fn_ast.args.defaults, *fn_ast.args.kw_defaults)
+           if default is not None):
+        return True
+    return _comprehension_retains_reflective_reader(
+        ast.Module(body=list(fn_ast.body), type_ignores=[]),
+        _function_reflective_readers(fn_ast, inherited),
+    )
+
+
 def _detect_summary_unknown(
     fn_ast: ast.AST, import_map: dict[str, str] | None = None,
     annotation_evaluator_aliases: frozenset[str] = frozenset(),
@@ -1300,6 +1371,9 @@ def _detect_summary_unknown(
         fn_ast, frozenset({"getattr", "hasattr"}) | reflective_reader_aliases,
     )
     reader_alias_call: str | None = None
+    comprehension_reader_use = _function_comprehension_retains_reflective_reader(
+        fn_ast, frozenset({"getattr", "hasattr"}) | reflective_reader_aliases,
+    )
     annotation_metadata_read = False
     for node in ast.walk(fn_ast):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
@@ -1371,11 +1445,12 @@ def _detect_summary_unknown(
                 continue
             if direct_call:
                 consumed_readers = _function_reflective_readers(definition, reflective_readers)
-                if any(
-                    isinstance(child, ast.Call)
-                    and _attribute_chain_str(child.func) in consumed_readers
-                    for child in ast.walk(definition)
-                ):
+                if (_function_comprehension_retains_reflective_reader(definition, reflective_readers)
+                        or any(
+                            isinstance(child, ast.Call)
+                            and _attribute_chain_str(child.func) in consumed_readers
+                            for child in ast.walk(definition)
+                        )):
                     # A returned local call may invoke a descriptor that
                     # observes this frame without a lexical read or argument.
                     # Scan before unsupported/empty lexical bodies continue.
@@ -1452,6 +1527,8 @@ def _detect_summary_unknown(
             return "returned local call may have unmodelled reflective effects"
     if reader_alias_call is not None:
         return f"calls {reader_alias_call}"
+    if comprehension_reader_use:
+        return "comprehension retains an unmodelled reflective reader"
     return None
 
 
