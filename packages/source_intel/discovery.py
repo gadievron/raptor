@@ -181,6 +181,7 @@ def discover_aliases(target: Path) -> DiscoveryResult:
     # policy; preprocessing order and conditional redefinitions are not evaluated.
     macros: dict[str, str] = {}
     headers_seen = 0
+    admitted_headers: set[Path] = set()
     for root in scan_roots:
         for entry in root.rglob("*"):
             if headers_seen >= _MAX_FILES_HEADER_SCAN:
@@ -189,10 +190,15 @@ def discover_aliases(target: Path) -> DiscoveryResult:
                 continue
             if entry.suffix.lower() not in _HEADER_EXTS:
                 continue
-            headers_seen += 1
             resolved_entry = confine(root, entry)
+            if resolved_entry is not None and resolved_entry in admitted_headers:
+                continue
+            headers_seen += 1
             if resolved_entry is None:
                 continue
+            # Overlapping roots share one admission/read per confined path,
+            # including entries whose read or lexical view is refused.
+            admitted_headers.add(resolved_entry)
             got = read_text_capped(resolved_entry)
             if got is None:
                 continue
