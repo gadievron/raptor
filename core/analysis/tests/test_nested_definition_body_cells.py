@@ -63,7 +63,7 @@ def test_bare_child_return_contributes_no_reads():
 
 
 @pytest.mark.parametrize("source", [
-    "def child(value=raw):\n return value", "def child(*, value=raw):\n return value",
+    "def child(value=lambda: raw):\n return value", "def child(*, value=lambda: raw):\n return value",
     "def child(value: raw):\n return value", "def child() -> raw:\n return 0",
     "@raw\ndef child():\n return 0", "def child[T]():\n return raw",
     "def child():\n return lambda: raw", "def child():\n value = raw\n return value",
