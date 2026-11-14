@@ -19,6 +19,9 @@ def _discover(tmp_path, monkeypatch, raw, blanked, ambiguous=False, joined=None)
         return (raw if path == header else "OWNED_CHECK int owned(void);\n"), False
 
     def view(text, file_path):
+        if file_path == str(source):
+            assert text == "OWNED_CHECK int owned(void);\n"
+            return SimpleNamespace(text=text, ambiguous=False)
         assert file_path == str(header)
         assert text == (raw if joined is None else joined)
         views.append(file_path)

@@ -345,21 +345,15 @@ def _iter_source_files(scan_roots: list[Path]):
 
 
 def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
-    """Count word-boundary occurrences of each macro in source files
-    under the scan roots. Returns a dict mapping name → count.
+    """Count word-boundary macro mentions in admitted code views.
 
-    The defined name on its own ``#define NAME …`` line is excluded.
-    Other matches are lexical mentions, including comments, strings,
-    inactive branches and other macro expansions; counts do not prove
-    actual macro invocation or preprocessing activity. This matters when scanning a
-    project's own header that defines macros we just discovered:
-    without the filter, every define-line would be counted as
-    self-usage, inflating frequency to >= 1 and defeating the
-    "filter zero-usage" pass.
+    The defined name on its own ``#define NAME …`` line is excluded;
+    references to other macros in its expansion still count. Comments
+    and literals are blanked by the shared view. Unreadable or ambiguous
+    input contributes no counted mentions, not proof of macro absence.
 
-    Returns zero for names not found. Candidate names are C identifiers;
-    word boundaries reject longer identifiers but do not distinguish
-    source tokens from prose or string contents.
+    Counts remain lexical heuristics, not actual macro invocation or
+    preprocessing activity. Returns zero for names not counted.
     """
     counts: dict[str, int] = dict.fromkeys(names, 0)
     if not names:
@@ -382,11 +376,19 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
         if got is None:
             continue
         text = got[0]
+        # Avoid lexical-view work when no candidate can occur at all.
+        if not pattern.search(text):
+            continue
+        from core.audit.source_view import sanitized_view_with_status
+        view = sanitized_view_with_status(text, str(entry))
+        if view.ambiguous:
+            continue
+        text = view.text
         for line in text.split("\n"):  # line-model: universal-newline read_text_capped above
             # Skip lines that DEFINE one of our candidates — those
             # aren't usage, they're definition. (A define line may
             # also mention OTHER macros in its expansion; we still
-            # count those via the inclusive substring match below
+            # count those via the inclusive word-boundary match below
             # since they ARE usage from the define's perspective.)
             define_match = define_re.match(line)
             defined_name = define_match.group(1) if define_match else None
