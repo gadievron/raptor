@@ -92,7 +92,15 @@ def _parse_sarif_matches(sarif_path: Path) -> list[dict[str, Any]] | None:
 _MESSAGE_TOKEN_RE = re.compile(r"\b(?:src|sink)=([0-9a-f]{12})\b")
 
 
-def _match_to_spec_keys(match: dict, specs: list[TaintSpec]) -> list[str]:
+def _spec_token_index(specs: list[TaintSpec]) -> dict[str, str]:
+    from .specs import spec_message_token
+
+    return {spec_message_token(spec): _spec_key(spec) for spec in specs}
+
+
+def _match_to_spec_keys(
+    match: dict, specs: list[TaintSpec], *, token_to_key: dict[str, str] | None = None,
+) -> list[str]:
     """Map a CodeQL match back to the spec(s) that produced it.
 
     The generated query binds a ``spec_message_token`` for each
@@ -113,12 +121,9 @@ def _match_to_spec_keys(match: dict, specs: list[TaintSpec]) -> list[str]:
     key silently never matches any spec: no promotion, no scorecard
     outcome, and a confirmation that cannot cancel a refutation.
     """
-    from .specs import spec_message_token
-
     msg = match.get("message", "")
-    token_to_key = {
-        spec_message_token(spec): _spec_key(spec) for spec in specs
-    }
+    if token_to_key is None:
+        token_to_key = _spec_token_index(specs)
     keys: list[str] = []
     for token in _MESSAGE_TOKEN_RE.findall(msg):
         key = token_to_key.get(token)
@@ -250,8 +255,9 @@ def make_codeql_tool_runner(
                     )
                 confirmed_keys = []
                 seen = set()
+                token_to_key = _spec_token_index(specs) if matches else {}
                 for match in matches:
-                    for key in _match_to_spec_keys(match, specs):
+                    for key in _match_to_spec_keys(match, specs, token_to_key=token_to_key):
                         if key not in seen:
                             confirmed_keys.append(key)
                             seen.add(key)
