@@ -2495,11 +2495,13 @@ class TestSandboxedCompileWriteGrants:
         from core.run.workdir import exec_workdir
         work_dir = Path(tempfile.mkdtemp(
             prefix="raptor_dark_test_", dir=exec_workdir()))
-        target = tmp_path / "target"
-        target.mkdir()
-        (target / "src.c").write_text("int x;\n", encoding="utf-8")
-        yield work_dir, target
-        shutil.rmtree(work_dir, ignore_errors=True)
+        try:
+            target = tmp_path / "target"
+            target.mkdir()
+            (target / "src.c").write_text("int x;\n", encoding="utf-8")
+            yield work_dir, target
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
     def test_work_dir_writable_in_sandbox(self, sandbox_run, dirs):
         work_dir, target = dirs
