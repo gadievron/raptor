@@ -65,6 +65,7 @@ from core.analysis.cfg_builder_cpp import (
     CPPCFGNode,
     build_cpp_intraproc_cfg,
 )
+from core.source.streams import preserving_stream_error
 
 if TYPE_CHECKING:                                       # pragma: no cover
     from tree_sitter import Node
@@ -457,7 +458,7 @@ def _read_finding_source(
                    f"({size} bytes > {_MAX})",
         )
     try:
-        with read_path.open("rb") as fh:
+        with preserving_stream_error(read_path.open("rb")) as fh:
             raw = fh.read(_MAX + 1)
     except OSError as e:
         return ResolutionFailure(reason=f"cannot read {file}: {e}")
