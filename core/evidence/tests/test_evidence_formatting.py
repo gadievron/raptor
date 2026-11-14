@@ -149,9 +149,39 @@ class TestTaintSummaryProse:
             function="handler",
             params=("buf",),
             summary_unknown=True,
+            summary_unknown_reason="generator iteration outputs are not modelled",
         )
         prose = format_evidence_prose(_record(taint_summary=summary))
         assert "don't trust absence" in prose
+        assert "dynamic dispatch" not in prose
+
+    def test_unconverged_summary_discloses_quality_and_keeps_available_flow(self):
+        summary = TaintSummary(
+            function="handler", params=("buf",),
+            call_arg_taint=frozenset({("memcpy", 0, 0)}),
+            summary_unconverged=True,
+        )
+        prose = format_evidence_prose(_record(taint_summary=summary))
+        assert "param `buf` flows to `memcpy` arg 0" in prose
+        assert "taint summary did not converge" in prose
+        assert "don't trust absence" in prose
+
+    def test_both_incomplete_flags_emit_one_absence_warning(self):
+        summary = TaintSummary(
+            function="handler", params=("buf",),
+            summary_unknown=True, summary_unconverged=True,
+        )
+        prose = format_evidence_prose(_record(taint_summary=summary))
+        assert prose.count("don't trust absence") == 1
+
+    def test_complete_summary_has_no_incomplete_warning(self):
+        summary = TaintSummary(
+            function="handler", params=("buf",),
+            call_arg_taint=frozenset({("memcpy", 0, 0)}),
+        )
+        prose = format_evidence_prose(_record(taint_summary=summary))
+        assert "param `buf` flows to `memcpy` arg 0" in prose
+        assert "don't trust absence" not in prose
 
     def test_hostile_param_name_neutralised(self):
         summary = TaintSummary(
