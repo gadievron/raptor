@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.audit import llm_review, orchestrator as orch
+from core.audit import collector as collector_mod, llm_review, orchestrator as orch
 from core.audit.continuation_context import context_version
 from core.audit.knowledge_calls import KnowledgeCallRefused
 from core.audit.knowledge_runtime import AuditKnowledgeRuntime
@@ -22,6 +22,8 @@ SOURCE = "def owned(value):\n    return value\n"
 
 
 class Client:
+    _attempt_admission_protocol = 1
+
     def __init__(self):
         self.prompts = []
         self.status = "clean"
@@ -29,6 +31,7 @@ class Client:
         self.fail = False
 
     def generate_structured(self, prompt, schema, **kwargs):
+        assert kwargs.pop("accounting_attempt_admission")() is True
         self.prompts.append(prompt)
         self.after()
         if self.fail:
@@ -179,7 +182,15 @@ def test_actual_late_orchestrator_preserves_prior_until_owned_publication(owned,
     # client admission, outcome accounting and publication are the real pipeline.
     monkeypatch.setattr(orch, "_build_context", lambda *a, **kw: dict(ctx))
     committed = []
-    monkeypatch.setattr(orch, "_commit_outcome", lambda cfg, outcome, gap: committed.append(outcome))
+    original_append = collector_mod.append_journal_for_outcome
+
+    def append_owned(**kwargs):
+        acknowledgement = original_append(**kwargs)
+        assert acknowledgement is not None
+        committed.append(kwargs["outcome"])
+        return acknowledgement
+
+    monkeypatch.setattr(collector_mod, "append_journal_for_outcome", append_owned)
     result = orch.OrchestratorResult(outcomes=[prior], clean=1)
     record = SimpleNamespace(all_joern_flows=lambda: ["owned saved flow"])
     kwargs = dict(checklist={"files": []}, context_map=None, fuzz_coverage=None,

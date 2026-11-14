@@ -37,6 +37,11 @@ class LateJoernContinuations:
             self.fail(index, "late_joern_review_failed")
             raise
 
+    def reservation(self, index):
+        with self._lock:
+            owned = self._passes.get(index)
+        return owned[0] if owned is not None else None
+
     def can_publish(self, index):
         with self._lock:
             owned = self._passes.get(index)

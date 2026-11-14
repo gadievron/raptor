@@ -14715,6 +14715,14 @@ def _commit_outcome(
     if acknowledgement is None:
         return None
 
+    _record_acknowledged_outcome(config, outcome, gap, batch=batch)
+    return acknowledgement
+
+
+def _record_acknowledged_outcome(
+    config: OrchestratorConfig, outcome: ReviewOutcome, gap: dict[str, Any], *, batch: bool = False,
+) -> None:
+    """Retain optional reporting after an acknowledged publication."""
     try:
         outcome.verification_tier = outcome.compute_tier(target_path=config.target_path)
     except Exception:
@@ -14838,7 +14846,6 @@ def _commit_outcome(
                 outcome.function,
                 exc_info=True,
             )
-    return acknowledgement
 
 
 
@@ -35542,24 +35549,47 @@ def _re_review_joern_enriched(
                     with result._lock:
                         result.total_cost_usd += outcome.cost_usd
                     continue
-                if prior_outcome in result.outcomes:
-                    _untally_outcome(result, prior_outcome)
-                    oi = result.outcomes.index(prior_outcome)
-                    result.outcomes[oi] = outcome
-                    _tally_outcome(result, outcome, append=False)
+                if continuation_owner is not None:
+                    # The attempted review costs money even if publication
+                    # refuses its now-stale inputs or writer acknowledgement.
+                    with result._lock:
+                        result.total_cost_usd += outcome.cost_usd
+                    try:
+                        disposition = _publish_study_outcome(
+                            config, result, continuation_owner.runtime, continuation_owner.reservation(idx),
+                            prior_outcome, outcome, gap)
+                        if disposition == "published":
+                            _record_acknowledged_outcome(config, outcome, gap)
+                    except BaseException:
+                        with result._lock:
+                            committed = any(current is outcome for current in result.outcomes)
+                        if committed:
+                            continuation_owner.complete(idx, outcome.status)
+                        else:
+                            continuation_owner.fail(idx, "late_joern_publication_cancelled")
+                        raise
+                    if disposition != "published":
+                        continuation_owner.fail(idx, disposition)
+                        continue
                 else:
-                    result.outcomes.append(outcome)
-                    _tally_outcome(result, outcome, append=False)
+                    if prior_outcome in result.outcomes:
+                        _untally_outcome(result, prior_outcome)
+                        oi = result.outcomes.index(prior_outcome)
+                        result.outcomes[oi] = outcome
+                        _tally_outcome(result, outcome, append=False)
+                    else:
+                        result.outcomes.append(outcome)
+                        _tally_outcome(result, outcome, append=False)
 
-                try:
-                    _commit_outcome(config, outcome, gap)
-                except Exception:
-                    logger.warning(
-                        "commit failed for %s:%s",
-                        gap["file"],
-                        gap["name"],
-                        exc_info=True,
-                    )
+                    try:
+                        _commit_outcome(config, outcome, gap)
+                    except Exception:
+                        logger.warning(
+                            "commit failed for %s:%s",
+                            gap["file"],
+                            gap["name"],
+                            exc_info=True,
+                        )
 
                 if (
                     config.enable_session_context
