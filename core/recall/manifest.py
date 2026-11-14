@@ -206,7 +206,8 @@ def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:
         return Provenance(kind="missing")
     kind = raw.get("kind")
     if kind == "benchmark":
-        if not raw.get("suite") or not raw.get("case"):
+        if (not isinstance(raw.get("suite"), str) or not raw.get("suite")
+                or not isinstance(raw.get("case"), str) or not raw.get("case")):
             errors.append(
                 f"{where}: benchmark provenance needs suite and case")
         return Provenance(kind="benchmark", suite=raw.get("suite"),
@@ -214,14 +215,15 @@ def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:
     if kind == "cve":
         cve = raw.get("cve_id") or ""
         fix = raw.get("fix_commit") or ""
-        if not re.fullmatch(r"^CVE-\d{4}-\d{4,}$", cve):
+        if not isinstance(cve, str) or not re.fullmatch(r"^CVE-\d{4}-\d{4,}$", cve):
             errors.append(f"{where}: cve provenance needs a CVE id")
-        if not _SHA_RE.fullmatch(fix):
+        if not isinstance(fix, str) or not _SHA_RE.fullmatch(fix):
             errors.append(f"{where}: cve provenance needs a fix commit sha")
         return Provenance(kind="cve", cve_id=cve or None,
                           fix_commit=fix or None)
     if kind == "synthetic":
-        if not raw.get("generator") or not raw.get("case"):
+        if (not isinstance(raw.get("generator"), str) or not raw.get("generator")
+                or not isinstance(raw.get("case"), str) or not raw.get("case")):
             errors.append(
                 f"{where}: synthetic provenance needs generator and "
                 "case (the in-tree generator + the case it produced)")
@@ -250,11 +252,13 @@ def _parse_expected(raw: Any, where: str,
     eid = raw.get("id") or ""
     file = raw.get("file") or ""
     cwe = raw.get("cwe") or ""
-    if not eid:
+    if not isinstance(eid, str) or not eid:
         errors.append(f"{where}: missing id")
-    if not file or Path(file).is_absolute() or ".." in Path(file).parts:
+        eid = ""
+    if (not isinstance(file, str) or not file
+            or Path(file).is_absolute() or ".." in Path(file).parts):
         errors.append(f"{where}: file must be a relative in-repo path")
-    if not _CWE_RE.fullmatch(cwe):
+    if not isinstance(cwe, str) or not _CWE_RE.fullmatch(cwe):
         errors.append(f"{where}: cwe must look like CWE-NNN (got {cwe!r})")
     line_start = raw.get("line_start")
     line_end = raw.get("line_end")
@@ -283,7 +287,7 @@ def parse_manifest(data: Any) -> RecallManifest:
             f"schema_version must be {SCHEMA_VERSION} "
             f"(got {data.get('schema_version')!r})")
     name = data.get("name") or ""
-    if not name:
+    if not isinstance(name, str) or not name:
         errors.append("missing name")
 
     target = data.get("target")
@@ -292,21 +296,23 @@ def parse_manifest(data: Any) -> RecallManifest:
         errors.append("missing target object")
     else:
         repo_url = target.get("repo_url") or ""
-        pinned_sha = (target.get("pinned_sha") or "").lower()
+        pinned_sha = target.get("pinned_sha") or ""
+        if isinstance(pinned_sha, str):
+            pinned_sha = pinned_sha.lower()
         local_path = target.get("local_path") or ""
-        if not repo_url:
+        if not isinstance(repo_url, str) or not repo_url:
             errors.append("target.repo_url required (public provenance)")
-        if not _SHA_RE.fullmatch(pinned_sha):
+        if not isinstance(pinned_sha, str) or not _SHA_RE.fullmatch(pinned_sha):
             errors.append("target.pinned_sha must be a git sha")
-        if not local_path:
+        if not isinstance(local_path, str) or not local_path:
             errors.append("target.local_path required")
 
     language = data.get("language") or ""
-    if not language:
+    if not isinstance(language, str) or not language:
         errors.append("missing language")
 
     profile = data.get("profile") or ""
-    if profile not in PROFILES:
+    if not isinstance(profile, str) or profile not in PROFILES:
         errors.append(
             f"profile must be one of {sorted(PROFILES)} (got {profile!r})")
 
@@ -356,6 +362,10 @@ def parse_manifest(data: Any) -> RecallManifest:
     if corpus_kind == "fp-only" and not clean:
         errors.append("an fp-only manifest needs clean_regions")
 
+    build_command = data.get("build_command")
+    if build_command is not None and not isinstance(build_command, str):
+        errors.append("build_command must be a string or null")
+
     if errors:
         raise ManifestError(
             "invalid recall manifest:\n  " + "\n  ".join(errors))
@@ -364,7 +374,7 @@ def parse_manifest(data: Any) -> RecallManifest:
         name=name, repo_url=repo_url, pinned_sha=pinned_sha,
         local_path=local_path, language=language, profile=profile,
         expected=expected, clean_regions=clean,
-        build_command=data.get("build_command"), tolerance=tolerance,
+        build_command=build_command, tolerance=tolerance,
         corpus_kind=corpus_kind,
     )
 
