@@ -554,7 +554,11 @@ def _noncapturing_match_pattern(pattern: ast.pattern) -> bool:
     pending = [(pattern, False)]
     while pending:
         current, in_sequence = pending.pop()
-        if isinstance(current, ast.MatchMapping):
+        if isinstance(current, ast.MatchOr):
+            if not current.patterns:
+                return False
+            pending.extend((child, False) for child in current.patterns)
+        elif isinstance(current, ast.MatchMapping):
             if (current.rest is not None or len(current.keys) != len(current.patterns)
                     or not all(isinstance(key, ast.Constant) for key in current.keys)):
                 return False
