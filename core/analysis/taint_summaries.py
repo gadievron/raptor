@@ -696,10 +696,20 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                 return False
             pending.extend(node.elts)
         elif isinstance(node, (ast.JoinedStr, getattr(ast, "TemplateStr", ast.Constant))):
-            # Literal text is inert; any interpolation keeps the header unknown.
-            if any(not isinstance(value, ast.Constant) or type(value.value) is not str
-                   for value in node.values):
-                return False
+            part_type = (ast.FormattedValue if isinstance(node, ast.JoinedStr)
+                         else getattr(ast, "Interpolation", None))
+            for value in node.values:
+                if isinstance(value, ast.Constant) and type(value.value) is str:
+                    continue
+                if (part_type is None or not isinstance(value, part_type)
+                        or not _match_literal_expression(value.value)
+                        or type(value.conversion) is not int
+                        or value.conversion not in (-1, 97, 114, 115)):
+                    return False
+                if value.format_spec is not None:
+                    if not isinstance(value.format_spec, ast.JoinedStr):
+                        return False
+                    pending.append(value.format_spec)
         elif isinstance(node, ast.Set):
             pending.extend(node.elts)
         elif isinstance(node, ast.Dict):
