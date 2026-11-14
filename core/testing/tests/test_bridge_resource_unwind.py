@@ -204,11 +204,12 @@ def _native_resources(spec, stage, failure_type, monkeypatch, position=1):
     resources = _Resources(native, monkeypatch, stage, failure_type, position)
     body = pytest.MonkeyPatch()
     backend_owner = None
-    if hasattr(native, '_owned_backends'):
-        backend_owner = native._owned_backends.__wrapped__(body)
-        next(backend_owner)
-    left, right = socket.socketpair()
+    left = right = None
     try:
+        if hasattr(native, '_owned_backends'):
+            backend_owner = native._owned_backends.__wrapped__(body)
+            next(backend_owner)
+        left, right = socket.socketpair()
         with left, right, TemporaryDirectory(prefix='rp-unwind-', dir='/tmp') as directory:
             def invoke():
                 if suffix == 'forwarder':
@@ -238,8 +239,10 @@ def _native_resources(spec, stage, failure_type, monkeypatch, position=1):
         if backend_owner is not None:
             backend_owner.close()
         body.undo()
-        left.close()
-        right.close()
+        if left is not None:
+            left.close()
+        if right is not None:
+            right.close()
 
 
 @pytest.mark.parametrize('spec,position,operation', SOCKET_CASES)
