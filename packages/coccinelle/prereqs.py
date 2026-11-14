@@ -198,7 +198,7 @@ def evaluate_finding(
       {
         "applicable": bool,    # False when prereqs were skipped,
                                # the finding carries no function
-                               # name, its file isn't C/C++, OR the
+                               # name or file, its file isn't C/C++, OR the
                                # fact base is structurally blind to
                                # the file (C++ TUs the C-only sweep
                                # never parses).
@@ -246,6 +246,9 @@ def evaluate_finding(
     # Findings on .py / .js / .go are skipped (cocci is C-only).
     if not func_name:
         out["skipped_reason"] = "finding_missing_function"
+        return out
+    if not file_path:
+        out["skipped_reason"] = "finding_missing_file"
         return out
     ext = ""
     if file_path:
