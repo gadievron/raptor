@@ -117,6 +117,18 @@ class GDBDebugger:
             # Windows path under WSL) don't support POSIX modes;
             # the chmod failure isn't fatal.
             pass
+        except BaseException:
+            # No stream has adopted this descriptor yet. Attempt both cleanups
+            # without replacing the operation error or retrying a consumed fd.
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            try:
+                script_file.unlink(missing_ok=True)
+            except BaseException:
+                pass
+            raise
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(gdb_script)

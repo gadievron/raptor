@@ -579,6 +579,18 @@ class CrashAnalyser:
             # Non-POSIX filesystem — mkstemp's own 0600 default is the
             # best available; not fatal.
             pass
+        except BaseException:
+            # No stream has adopted this descriptor yet. Attempt both cleanups
+            # without replacing the operation error or retrying a consumed fd.
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            try:
+                script_file.unlink(missing_ok=True)
+            except BaseException:
+                pass
+            raise
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(commands))
