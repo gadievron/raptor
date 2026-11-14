@@ -249,8 +249,8 @@ def _run_scan(target: Path, out: Path) -> tuple[float, float, str]:
         str(target), "--offline", "--out", str(out),
     ]
     result_fd, result_path = tempfile.mkstemp(suffix=".json")
-    os.close(result_fd)
     try:
+        os.close(result_fd)
         start = time.perf_counter()
         with tempfile.TemporaryFile() as out_fh, \
                 tempfile.TemporaryFile() as err_fh:
