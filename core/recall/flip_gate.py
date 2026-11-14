@@ -161,6 +161,8 @@ def _report_guard(name: str, side: str, report: dict[str, Any], *,
     found = report["found_total"]
     expected = report["expected_total"]
     missed = report.get("missed")
+    if isinstance(missed, list) and any(not isinstance(item, dict) for item in missed):
+        problems.append("missed must contain only objects")
     if not _is_count(expected) or not _is_count(found):
         problems.append("expected_total and found_total must be non-negative ints")
     elif found > expected:
