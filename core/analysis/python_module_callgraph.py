@@ -686,8 +686,9 @@ def _module_callable_aliases(
     tree: ast.Module, *, module_names: frozenset[str],
     attributes: tuple[str, ...], direct_names: tuple[str, ...] = (),
 ) -> frozenset[str]:
-    """Negative module-level callable candidates from simple assignment edges.
+    """Negative callable candidates from a supplied statement-body view.
 
+    Callers may wrap an existing function body without mutating its nodes.
     Order, overwrites and conditional execution are ignored conservatively.
     Candidates only withhold certification, never establish trusted identities.
     Nested scope bodies, containers, destructuring and returned aliases are

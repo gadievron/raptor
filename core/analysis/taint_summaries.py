@@ -60,6 +60,7 @@ from core.analysis.cfg_builder import (
 from core.analysis.dataflow import reaching_defs
 from core.analysis.python_module_callgraph import (
     PyModuleCallGraph,
+    _module_callable_aliases,
     local_binding_names,
 )
 
@@ -1127,6 +1128,19 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
     return frozenset(names)
 
 
+def _function_reflective_readers(
+    fn_ast: ast.AST, inherited: frozenset[str],
+) -> frozenset[str]:
+    """Negative reader candidates in one existing function-body AST view."""
+    if not isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return inherited
+    body_view = ast.Module(body=list(fn_ast.body), type_ignores=[])
+    return inherited | _module_callable_aliases(
+        body_view, module_names=frozenset({"builtins"}),
+        attributes=("getattr", "hasattr"), direct_names=tuple(inherited),
+    )
+
+
 def _detect_summary_unknown(
     fn_ast: ast.AST, import_map: dict[str, str] | None = None,
     annotation_evaluator_aliases: frozenset[str] = frozenset(),
@@ -1139,7 +1153,7 @@ def _detect_summary_unknown(
 
     * Direct call to a name in :data:`_UNKNOWN_CALLABLES` (e.g.
       ``getattr(o, name)(...)``).
-    * Module aliases of reflective attribute readers/checks also withhold
+    * Module/function-body aliases of reflective attribute readers/checks also withhold
       certification, without establishing trusted callable identity.
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
@@ -1208,7 +1222,9 @@ def _detect_summary_unknown(
         elif isinstance(node, ast.ImportFrom) and not node.level:
             for alias in node.names:
                 add_annotation_import(alias.asname or alias.name, f"{node.module}.{alias.name}")
-    reflective_readers = {"getattr", "hasattr"} | set(reflective_reader_aliases)
+    reflective_readers = _function_reflective_readers(
+        fn_ast, frozenset({"getattr", "hasattr"}) | reflective_reader_aliases,
+    )
     reader_alias_call: str | None = None
     annotation_metadata_read = False
     for node in ast.walk(fn_ast):
@@ -1258,7 +1274,7 @@ def _detect_summary_unknown(
             continue
         if callee_name in _UNKNOWN_CALLABLES:
             return f"calls {callee_name}"
-        if callee_name in reflective_reader_aliases and reader_alias_call is None:
+        if callee_name in reflective_readers and reader_alias_call is None:
             reader_alias_call = callee_name
         for kw in node.keywords:
             if kw.arg is None:
@@ -1279,15 +1295,17 @@ def _detect_summary_unknown(
                 value = value.func
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
-            if direct_call and any(
-                isinstance(child, ast.Call)
-                and _attribute_chain_str(child.func) in reflective_readers
-                for child in ast.walk(definition)
-            ):
-                # A returned local call may invoke a descriptor that observes
-                # this frame without an enclosing lexical read or argument.
-                # Scan before unsupported/empty lexical bodies can continue.
-                returned_reflective_call = True
+            if direct_call:
+                consumed_readers = _function_reflective_readers(definition, reflective_readers)
+                if any(
+                    isinstance(child, ast.Call)
+                    and _attribute_chain_str(child.func) in consumed_readers
+                    for child in ast.walk(definition)
+                ):
+                    # A returned local call may invoke a descriptor that
+                    # observes this frame without a lexical read or argument.
+                    # Scan before unsupported/empty lexical bodies continue.
+                    returned_reflective_call = True
             # Adjacency and no decorator avoid an intervening binding rewrite
             # or wrapper. Keep direct-base detection even when another part of
             # the expression lies outside the scope-free grammar.
