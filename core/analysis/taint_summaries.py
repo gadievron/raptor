@@ -1153,7 +1153,7 @@ def _detect_summary_unknown(
       whose single return or bounded body reads an enclosing cell
       through supported expressions, lambdas or comprehensions,
       or a directly returned call to it: the object or call depends on a cell.
-    * An adjacent returned local call containing a reflective getter: a
+    * An adjacent returned local call containing a reflective getter/check: a
       descriptor can observe the enclosing frame without a lexical read.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -1273,7 +1273,8 @@ def _detect_summary_unknown(
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
             if direct_call and any(
-                isinstance(child, ast.Call) and _attribute_chain_str(child.func) == "getattr"
+                isinstance(child, ast.Call)
+                and _attribute_chain_str(child.func) in ("getattr", "hasattr")
                 for child in ast.walk(definition)
             ):
                 # A returned local call may invoke a descriptor that observes
