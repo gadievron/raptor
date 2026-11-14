@@ -53,8 +53,8 @@ def test_dotted_attribute_name_is_not_an_enclosing_name_read():
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["root", "child"])
-@pytest.mark.parametrize("pattern", ["-1.5", "{1+2j: _}", "{raw.key: value}", "Value(member=value)", "[*values]"],
-                         ids=["unary", "compound-key", "mapping-capture", "class-capture", "star-capture"])
+@pytest.mark.parametrize("pattern", ["(-1.5) as value", "({1+2j: _}) as value", "{raw.key: value}", "Value(member=value)", "[*values]"],
+                         ids=["unary-capture", "compound-key-capture", "mapping-capture", "class-capture", "star-capture"])
 def test_unsupported_dotted_tree_invalidates_complete_scan(pattern, child):
     tree = ast.parse(source_for(pattern, child))
     assert _bounded_body_expression_loads(tree.body[0].body[0].body) is None

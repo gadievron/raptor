@@ -549,6 +549,24 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
+def _match_literal_expression(expression: ast.expr) -> bool:
+    """Recognise literal AST shapes without evaluating numeric expressions."""
+    if isinstance(expression, ast.Constant):
+        return True
+    if isinstance(expression, ast.UnaryOp):
+        return (isinstance(expression.op, ast.USub)
+                and isinstance(expression.operand, ast.Constant)
+                and type(expression.operand.value) in (int, float, complex))
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, (ast.Add, ast.Sub)):
+        left = expression.left
+        if isinstance(left, ast.UnaryOp) and isinstance(left.op, ast.USub):
+            left = left.operand
+        return (isinstance(left, ast.Constant) and type(left.value) in (int, float)
+                and isinstance(expression.right, ast.Constant)
+                and type(expression.right.value) is complex)
+    return False
+
+
 def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | None:
     """Known lexical pattern reads, or None for a shape outside the closed grammar."""
     expressions: list[ast.expr] = []
@@ -570,7 +588,7 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
             if current.rest is not None or len(current.keys) != len(current.patterns):
                 return None
             for key in current.keys:
-                if isinstance(key, ast.Constant):
+                if _match_literal_expression(key):
                     continue
                 if not isinstance(key, ast.Attribute) or _attribute_chain_str(key) is None:
                     return None
@@ -579,7 +597,7 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
         elif isinstance(current, ast.MatchSequence):
             pending.extend((child, True) for child in current.patterns)
         elif isinstance(current, ast.MatchValue):
-            if isinstance(current.value, ast.Constant):
+            if _match_literal_expression(current.value):
                 continue
             if not isinstance(current.value, ast.Attribute) or _attribute_chain_str(current.value) is None:
                 return None

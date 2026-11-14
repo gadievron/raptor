@@ -54,8 +54,8 @@ def test_class_attribute_strings_and_globals_are_not_outer_reads(pattern):
 
 
 @pytest.mark.parametrize("child", [False, True], ids=["root", "child"])
-@pytest.mark.parametrize("pattern", ["Value(value)", "Value(member=value)", "Value(-1.5)", "Value({1+2j: _})", "Value(-1)", "Value([*values])"],
-                         ids=["capture", "keyword-capture", "unary-float-value", "compound-key", "unary-value", "named-star"])
+@pytest.mark.parametrize("pattern", ["Value(value)", "Value(member=value)", "(Value(-1.5)) as value", "(Value({1+2j: _})) as value", "(Value(-1)) as value", "Value([*values])"],
+                         ids=["capture", "keyword-capture", "unary-float-value-capture", "compound-key-capture", "unary-value-capture", "named-star"])
 def test_unsupported_class_child_invalidates_complete_scan(pattern, child):
     tree = ast.parse(source_for(pattern, child))
     assert _bounded_body_expression_loads(tree.body[0].body[0].body) is None
