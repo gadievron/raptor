@@ -570,6 +570,17 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
                 return None
             # Import names bind in the child; they are not expression reads.
             # This lexical scan supplies no authority about import effects.
+        elif isinstance(statement, ast.Match):
+            if not statement.cases or any(
+                not isinstance(case.pattern, ast.MatchAs)
+                or case.pattern.pattern is not None or case.pattern.name is not None
+                for case in statement.cases
+            ):
+                return None
+            expressions.append(statement.subject)
+            for case in reversed(statement.cases):
+                expressions.append(case.guard)
+                pending.extend(reversed(case.body))
         elif isinstance(statement, ast.Try):
             if any(handler.name is not None for handler in statement.handlers):
                 return None

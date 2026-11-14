@@ -62,8 +62,8 @@ def test_unsupported_case_body_invalidates_complete_scan():
     assert _bounded_body_expression_loads(ast.parse(body).body) is None
 
 
-def test_child_match_stays_outside_root_subset():
-    body = "def child():\n match raw:\n  case _:\n   return raw"
+def test_capturing_child_match_stays_excluded():
+    body = "def child():\n match raw:\n  case value:\n   return raw"
     assert _bounded_body_expression_loads(ast.parse(body).body) is None
 
 
