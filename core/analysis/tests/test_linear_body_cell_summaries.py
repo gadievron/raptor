@@ -61,8 +61,8 @@ def test_parameter_default_shadow_keeps_existing_admission():
 
 @pytest.mark.parametrize(
     "body", ["global raw\nreturn raw", "value: object = raw\nreturn value",
-             "first, second = raw\nreturn first", "value = raw\nimport module"],
-    ids=["global", "annotation", "unpacking", "later-import"],
+             "first[(lambda: raw)()] = 0\nreturn 0", "value = raw\nimport module"],
+    ids=["global", "annotation", "scoped-target", "later-import"],
 )
 def test_unsupported_statement_invalidates_complete_new_scan(body):
     assert _bounded_body_expression_loads(ast.parse(body).body) is None

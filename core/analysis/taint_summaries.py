@@ -538,6 +538,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
     this does not model assignment values or return-value flow.
     """
     expressions: list[ast.expr | None] = []
+    target_reads: set[str] = set()
     pending = list(reversed(body))
     while pending:
         statement = pending.pop()
@@ -547,17 +548,24 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
-        elif isinstance(statement, (ast.For, ast.AsyncFor)) and isinstance(statement.target, ast.Name):
-            expressions.append(statement.iter)
-            pending.extend(reversed(statement.orelse))
-            pending.extend(reversed(statement.body))
-        elif isinstance(statement, ast.Assign) and all(
-            isinstance(target, ast.Name) for target in statement.targets
-        ):
-            expressions.append(statement.value)
+        elif isinstance(statement, (ast.Assign, ast.For, ast.AsyncFor)):
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            for target in targets:
+                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                if scope is None:
+                    return None
+                # These stores share the function scope; the caller masks all
+                # own bindings rather than creating a target-local scope here.
+                target_reads.update(scope[1])
+            if isinstance(statement, ast.Assign):
+                expressions.append(statement.value)
+            else:
+                expressions.append(statement.iter)
+                pending.extend(reversed(statement.orelse))
+                pending.extend(reversed(statement.body))
         elif not isinstance(statement, (ast.Pass, ast.Break, ast.Continue)):
             return None
-    names: set[str] = set()
+    names = target_reads
     for expression in expressions:
         names.update(_scoped_expression_loads(expression))
     return frozenset(names)
