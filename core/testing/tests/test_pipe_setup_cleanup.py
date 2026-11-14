@@ -1,7 +1,7 @@
 """Pipe ownership across failed child startup and readiness writes."""
 
 import ast
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import inspect
 import errno
 import os
@@ -45,10 +45,16 @@ def _pipes(monkeypatch, error, second_fails=False, *, fail_at=None, consumer):
         if (second_fails and pairs) or len(pairs) + 1 == fail_at:
             raise error("injected pipe setup failure")
         pair = real_pipe()
-        pairs.append(pair)
-        for fd in pair:
-            stat = os.fstat(fd)
-            descriptors.append((fd, (stat.st_dev, stat.st_ino)))
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            records = []
+            for fd in pair:
+                stat = os.fstat(fd)
+                records.append((fd, (stat.st_dev, stat.st_ino)))
+            descriptors.extend(records)
+            pairs.append(pair)
+            setup.pop_all()
         return pair
 
     try:
