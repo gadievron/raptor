@@ -835,12 +835,11 @@ def _semgrep_max_memory_mb(
 ) -> int:
     """Per-pack ``--max-memory`` backstop (MiB).
 
-    Local scans default to unlimited; with many packs running at once
-    that is OOM-killer roulette — the kernel picks a victim and the
-    pack dies with no attributable error. A generous share (75% of
-    RAM divided by the packs actually running, floor 4 GiB) converts
-    that into semgrep's own clean per-pack termination, surfaced
-    through the normal failed-pack path.
+    Request 75% of estimated RAM divided by the active packs, with a
+    4 GiB minimum per pack. The floor can make the combined limits
+    exceed that RAM share. These requested tool limits do not guarantee
+    avoidance of host OOM or graceful termination; observed tool failures
+    still follow the normal failed-pack path.
     """
     active = max(1, min(max_workers, n_configs))
     return max(4096, (total_ram_mb * 3 // 4) // active)
