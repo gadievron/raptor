@@ -399,7 +399,7 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
     data = load_json(out, max_bytes=_MAX_SARIF_BYTES)
     if not isinstance(data, dict):
         return None
-    runs = data.get("runs", [])
+    runs = data.get("runs")
     if not isinstance(runs, list):
         return None
     count = 0
