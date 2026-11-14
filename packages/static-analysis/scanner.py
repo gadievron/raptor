@@ -2478,7 +2478,15 @@ def run_graduated_rules_stage(
         )
         return []
 
-    rule_files = sorted(Path(rules_dir).glob("*.yaml"))
+    try:
+        rule_files = sorted(path for path in Path(rules_dir).iterdir() if path.match("*.yaml"))
+    except OSError as exc:
+        return _write_stage_report(
+            Path(out_dir) / "graduated.sarif", _graduated_findings_to_sarif([]),
+            [_stage_diagnostic(
+                f"Graduated rule enumeration failed: {type(exc).__name__}", failed=True,
+            )],
+        )
     if not rule_files:
         return []
 
