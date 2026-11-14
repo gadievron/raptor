@@ -1582,7 +1582,7 @@ def _load_vendored_triage(out_dir: Path) -> dict[str, int]:
         return {}
     skipped = glanced = 0
     try:
-        with Path(path).open(encoding="utf-8") as f:  # raw-open: RAPTOR-written report artifact in the run dir
+        with preserving_stream_error(Path(path).open(encoding="utf-8")) as f:  # raw-open: RAPTOR-written report artifact in the run dir
             for line in f:
                 line = line.strip()
                 if not line:
@@ -1646,7 +1646,7 @@ def _load_toolchain_screen(out_dir: Path) -> int:
         return 0
     screened = 0
     try:
-        with Path(path).open(encoding="utf-8") as f:  # raw-open: RAPTOR-written report artifact in the run dir
+        with preserving_stream_error(Path(path).open(encoding="utf-8")) as f:  # raw-open: RAPTOR-written report artifact in the run dir
             for line in f:
                 line = line.strip()
                 if not line:
