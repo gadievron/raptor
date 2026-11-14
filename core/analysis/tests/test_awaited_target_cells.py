@@ -1,6 +1,7 @@
 """Awaited target indices expose lexical cells without executing comprehensions."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 from textwrap import indent
 
 import pytest
@@ -64,7 +65,7 @@ def test_first_iterable_remains_outside_target_bindings():
     assert summaries(source_for(expression))["handle"].summary_unknown
 
 
-def test_ordinary_statement_target_keeps_awaited_writes_excluded():
-    body = "async def child():\n for box[await (lambda: (value := (yield raw)))()] in ():\n  pass"
+def test_synthetic_awaited_statement_target_remains_refused():
+    body = "async def child():\n for box[await _raptor_unsupported_target] in ():\n  pass"
     compile("def outer(raw):\n " + body.replace("\n", "\n "), "<ordinary-await-target>", "exec", dont_inherit=True)
-    assert _bounded_body_expression_loads(ast.parse(body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(body).body) is None

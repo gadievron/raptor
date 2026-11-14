@@ -1,6 +1,7 @@
 """Child deletion targets retain lexical cells without executing deletion."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -51,11 +52,11 @@ def test_whole_child_bindings_mask_deletion_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["del slots[(lambda: (yield raw))()]", "del slots[(index := 0)]",
+@pytest.mark.parametrize("body", ["del slots[_raptor_unsupported_target]", "del slots[(index := 0)]",
                                   "del raw.member\n global unsupported"],
                          ids=["lambda-index", "assignment-index", "later-declaration"])
 def test_unsupported_deletion_target_invalidates_complete_child(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

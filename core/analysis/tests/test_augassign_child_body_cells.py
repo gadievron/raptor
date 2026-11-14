@@ -1,6 +1,7 @@
 """Augmented child targets retain lexical cells without operator execution."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -49,11 +50,11 @@ def test_whole_child_bindings_mask_augmented_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("target", ["slots[(lambda: (yield raw))()]", "slots[(index := 0)]"],
+@pytest.mark.parametrize("target", ["slots[_raptor_unsupported_target]", "slots[(index := 0)]"],
                          ids=["lambda-index", "assignment-index"])
 def test_unsupported_augmented_target_invalidates_complete_child(target):
     source = f"raw\ndef child():\n {target} += 1"
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

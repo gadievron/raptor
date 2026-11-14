@@ -1,6 +1,7 @@
 """Bounded linear local-function bodies can retain enclosing cells."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -61,11 +62,11 @@ def test_parameter_default_shadow_keeps_existing_admission():
 
 @pytest.mark.parametrize(
     "body", ["global raw\nreturn raw", "value: (lambda: raw) = 0\nreturn value",
-             "first[(lambda: (yield raw))()] = 0\nreturn 0", "value = raw\nglobal unsupported"],
-    ids=["global", "annotation", "scoped-target", "later-declaration"],
+             "first[_raptor_unsupported_target] = 0\nreturn 0", "value = raw\nglobal unsupported"],
+    ids=["global", "annotation", "synthetic-target", "later-declaration"],
 )
 def test_unsupported_statement_invalidates_complete_new_scan(body):
-    assert _bounded_body_expression_loads(ast.parse(body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(body).body) is None
 
 
 def test_keyword_expansion_keeps_earlier_refusal_reason():

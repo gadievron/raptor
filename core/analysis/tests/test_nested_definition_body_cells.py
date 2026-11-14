@@ -2,6 +2,8 @@
 
 import ast
 
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
+
 import pytest
 
 from core.analysis.interproc import _param_cleanly_sanitized
@@ -63,14 +65,14 @@ def test_bare_child_return_contributes_no_reads():
 
 
 @pytest.mark.parametrize("source", [
-    "def child(value=[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]):\n return value", "def child(*, value=[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]):\n return value",
+    "def child(value=[raw for slots[[_raptor_unsupported_target for item in ()]] in ()]):\n return value", "def child(*, value=[raw for slots[[_raptor_unsupported_target for item in ()]] in ()]):\n return value",
     "def child(value: raw):\n return value", "def child() -> raw:\n return 0",
     "@raw\ndef child(value: raw):\n return 0", "def child[T]():\n return raw",
-    "def child():\n return [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]", "def child():\n value = raw\n global unsupported\n return value",
+    "def child():\n return [raw for slots[[_raptor_unsupported_target for item in ()]] in ()]", "def child():\n value = raw\n global unsupported\n return value",
 ], ids=["default", "kwdefault", "parameter-annotation", "return-annotation", "decorated-annotation",
         "type-parameter", "scoped-return", "later-declaration"])
 def test_unsupported_child_invalidates_complete_body(source):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{source}").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{source}").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

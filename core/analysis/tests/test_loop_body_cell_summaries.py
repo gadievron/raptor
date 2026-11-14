@@ -1,6 +1,7 @@
 """Loop-body captures are lexical facts rather than iteration or path proofs."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -66,13 +67,13 @@ def test_loop_own_bindings_shadow_outer_cell(body):
 
 
 @pytest.mark.parametrize(
-    "body", ["for obj[(lambda: (yield raw))()] in ():\n pass\nreturn 0",
+    "body", ["for obj[_raptor_unsupported_target] in ():\n pass\nreturn 0",
              "while False:\n global raw\nreturn raw",
              "for item in ():\n break\n global unsupported\nreturn raw"],
     ids=["indirect-target", "nested-global", "declaration-after-break"],
 )
 def test_exclusions_invalidate_complete_loop_statement_tree(body):
-    assert _bounded_body_expression_loads(ast.parse(body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(body).body) is None
 
 
 def test_keyword_expansion_keeps_earlier_refusal_reason():

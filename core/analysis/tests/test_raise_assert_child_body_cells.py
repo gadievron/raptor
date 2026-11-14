@@ -1,6 +1,7 @@
 """Child raise and assertion expressions expose lexical cells without execution."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -52,10 +53,10 @@ def test_whole_child_bindings_mask_statement_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["assert raw\n global unsupported", "raise (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])"],
+@pytest.mark.parametrize("body", ["assert raw\n global unsupported", "raise (yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()])"],
                          ids=["later-declaration", "yield-scoped-target"])
 def test_unsupported_child_tree_invalidates_complete_body(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_outer_assert_message_write_keeps_prior_reason():

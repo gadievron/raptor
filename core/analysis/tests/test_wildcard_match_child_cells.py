@@ -1,6 +1,8 @@
 """Child wildcard matches expose cells without executing subjects or patterns."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 from textwrap import indent
 
 import pytest
@@ -61,11 +63,11 @@ def test_unsupported_child_pattern_invalidates_complete_scan(pattern):
 
 
 @pytest.mark.parametrize("body", ["match raw:\n case _:\n  global other",
-                                  "match (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()]):\n case _:\n  return 0"],
+                                  "match (yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()]):\n case _:\n  return 0"],
                          ids=["unsupported-body", "unsupported-scoped-subject"])
 def test_unsupported_child_match_invalidates_complete_scan(body):
     source = child_source(body)
-    assert _bounded_body_expression_loads(ast.parse(source).body[0].body[0].body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body[0].body[0].body) is None
 
 
 def test_outer_capture_keeps_prior_reason():

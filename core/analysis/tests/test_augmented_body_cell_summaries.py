@@ -1,6 +1,7 @@
 """Augmented stores expose lexical cells without operator execution."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -50,10 +51,10 @@ def test_own_binding_masks_augmented_target_cell(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("target", ["slots[(lambda: (yield raw))()]", "slots[(raw := 0)]"],
-                         ids=["lambda", "walrus"])
+@pytest.mark.parametrize("target", ["slots[_raptor_unsupported_target]", "slots[(raw := 0)]"],
+                         ids=["synthetic-target", "walrus"])
 def test_unsupported_augmented_target_invalidates_complete_body(target):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{target} += 1").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{target} += 1").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

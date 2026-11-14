@@ -1,6 +1,8 @@
 """Bare yields in target lambdas leave sibling and default cell reads intact."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 import types
 
 import pytest
@@ -75,14 +77,14 @@ def test_bare_yield_target_keeps_caller_raw_flow():
 
 
 @pytest.mark.parametrize('target', [
-    'box[(lambda: (yield raw))()]',
+    'box[_raptor_unsupported_target]',
     'box[(lambda value=(yield): value)()]',
     'box[((lambda: (yield)), (lambda value=(yield): value))]',
 ])
-def test_valued_yield_and_unowned_bare_default_stay_excluded(target):
+def test_synthetic_target_and_unowned_bare_default_stay_excluded(target):
     source = f'def nested():\n {target} = 0'
     compile(source, '<excluded-target-yield>', 'exec', dont_inherit=True)
-    assert _bounded_body_expression_loads(ast.parse(source).body[0].body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body[0].body) is None
 
 
 def test_own_generator_return_authority_stays_unknown():

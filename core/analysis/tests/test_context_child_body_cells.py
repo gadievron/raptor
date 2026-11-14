@@ -1,6 +1,7 @@
 """Context child statements retain lexical cells without entering contexts."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -64,12 +65,12 @@ def test_whole_child_bindings_mask_context_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["with manager as slots[(lambda: (yield raw))()]:\n  pass",
+@pytest.mark.parametrize("body", ["with manager as slots[_raptor_unsupported_target]:\n  pass",
                                   "with raw:\n  global unsupported",
                                   "with raw:\n  def deeper(value: raw):\n   return raw"],
-                         ids=["scoped-target", "body-import", "deeper-annotation"])
+                         ids=["synthetic-target", "body-import", "deeper-annotation"])
 def test_unsupported_child_context_invalidates_complete_body(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
