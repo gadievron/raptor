@@ -232,7 +232,9 @@ def _load_cached_index(
             binary_path,
         )
         return None
-    edges_raw = payload.get("edges") or []
+    edges_raw = payload.get("edges", [])
+    if not isinstance(edges_raw, list):
+        return None
     idx = BinaryEdgeIndex(binary_path=binary_path)
     for r in edges_raw:
         if not isinstance(r, dict):
