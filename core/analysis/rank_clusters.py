@@ -39,6 +39,7 @@ discover a published fix commit but a vendor patch is in hand) and
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
@@ -97,9 +98,13 @@ def weight_functions(
         if rank < 1 or iterations < 1:
             continue
         functions = chain.get("functions") or []
-        if isinstance(functions, (str, bytes)):
-            continue  # a bare string would explode into characters
-        for name in functions:
+        if isinstance(functions, (str, bytes, Mapping)):
+            continue  # text or mapping keys are not function-name collections
+        try:
+            names = iter(functions)
+        except TypeError:
+            continue
+        for name in names:
             name = str(name)
             if not name:
                 continue
