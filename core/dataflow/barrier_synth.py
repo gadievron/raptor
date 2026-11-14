@@ -492,6 +492,16 @@ select sink, "synthesized-barrier {sink_class} [go]"
 """
 
 
+def _validate_target_scope(target_uri: str | None, target_line: int | None) -> None:
+    if target_uri is not None and (not isinstance(target_uri, str) or not target_uri):
+        raise ValueError("target_uri must be a non-empty string")
+    if target_line is not None:
+        if isinstance(target_line, bool) or not isinstance(target_line, int) or target_line < 1:
+            raise ValueError("target_line must be a positive integer")
+        if target_uri is None:
+            raise ValueError("target_line requires target_uri")
+
+
 def _count_results_for_target(sarif_path: Path, target_uri: str | None = None,
                               target_line: int | None = None) -> int:
     """Count SARIF results. With ``target_uri`` (+ optional ``target_line``),
@@ -502,6 +512,7 @@ def _count_results_for_target(sarif_path: Path, target_uri: str | None = None,
     sits at a different line after the patch's line shifts). Malformed run or
     result containers and incomplete-run diagnostics refuse adjudication;
     scoped counts also require usable location metadata."""
+    _validate_target_scope(target_uri, target_line)
     data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
     if not isinstance(data, dict):
         raise ValueError("SARIF document must be an object")
@@ -637,6 +648,7 @@ def adjudicate(
 ) -> int:
     """Compile + run ``query_ql`` against ``db_path`` via CodeQL; return the
     finding count. Writes the query + a minimal qlpack into ``work_dir``."""
+    _validate_target_scope(target_uri, target_line)
     pack = work_dir
     pack.mkdir(parents=True, exist_ok=True)
     dep = _LANG_PACK.get(language)
@@ -823,6 +835,7 @@ def run_synthesis_loop(
     """
     _validate_retry_budget("max_attempts", max_attempts)
     _validate_retry_budget("max_refine_attempts", max_refine_attempts)
+    _validate_target_scope(target_uri, target_line)
 
     from core.orchestration.driver import DriverConfig
     from core.orchestration.driver import run as driver_run
