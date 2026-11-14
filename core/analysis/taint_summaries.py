@@ -1219,16 +1219,16 @@ def _function_reflective_readers(
 def _immediate_lambda_retains_reflective_reader(
     node: ast.AST, inherited: frozenset[str],
 ) -> bool:
-    """Negative retention for fixed lambda calls, never trusted call identity."""
+    """Negative retention for explicit lambda bindings, never trusted call identity."""
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Lambda):
         return False
     args = node.func.args
-    if (args.vararg is not None or args.kwarg is not None
+    if (args.kwarg is not None
             or any(isinstance(argument, ast.Starred) for argument in node.args)
             or any(keyword.arg is None for keyword in node.keywords)):
         return False  # Opaque binding stays outside this additional check.
     positional = (*args.posonlyargs, *args.args)
-    if len(node.args) > len(positional):
+    if len(node.args) > len(positional) and args.vararg is None:
         return False
     values = {parameter.arg: default for parameter, default in zip(
         positional[len(positional) - len(args.defaults):], args.defaults, strict=True,
@@ -1249,7 +1249,17 @@ def _immediate_lambda_retains_reflective_reader(
     parameters = {parameter.arg for parameter in (*positional, *args.kwonlyargs)}
     if parameters - values.keys():
         return False  # An incomplete call cannot establish a supported binding.
+    if args.vararg is not None:
+        parameters.add(args.vararg.arg)
     readers = inherited - parameters
+    if args.vararg is not None and any(
+        _attribute_chain_str(argument) in inherited
+        or _scoped_expression_loads(argument) & inherited
+        for argument in node.args[len(positional):]
+    ):
+        # All explicit surplus values share the tuple binding. This preserves
+        # negative provenance without resolving any particular tuple element.
+        readers |= frozenset({args.vararg.arg})
     readers |= frozenset(name for name, value in values.items()
                          if _attribute_chain_str(value) in inherited
                          or _scoped_expression_loads(value) & inherited)
