@@ -226,7 +226,7 @@ def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:
                 f"{where}: synthetic provenance needs generator and "
                 "case (the in-tree generator + the case it produced)")
         seed = raw.get("seed")
-        if seed is not None and not isinstance(seed, int):
+        if seed is not None and (not isinstance(seed, int) or isinstance(seed, bool)):
             errors.append(
                 f"{where}: synthetic provenance seed must be an int")
             seed = None
@@ -259,7 +259,7 @@ def _parse_expected(raw: Any, where: str,
     line_start = raw.get("line_start")
     line_end = raw.get("line_end")
     for label, v in (("line_start", line_start), ("line_end", line_end)):
-        if v is not None and (not isinstance(v, int) or v < 1):
+        if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
             errors.append(f"{where}: {label} must be a positive int or null")
     if line_start is None and line_end is not None:
         errors.append(f"{where}: line_end without line_start")
@@ -313,7 +313,7 @@ def parse_manifest(data: Any) -> RecallManifest:
     tol_raw = data.get("tolerance") or {}
     drift = tol_raw.get("line_drift", DEFAULT_LINE_DRIFT)
     fam = tol_raw.get("cwe_family_match", True)
-    if not isinstance(drift, int) or drift < 0:
+    if not isinstance(drift, int) or isinstance(drift, bool) or drift < 0:
         errors.append("tolerance.line_drift must be a non-negative int")
         drift = DEFAULT_LINE_DRIFT
     tolerance = Tolerance(line_drift=drift, cwe_family_match=bool(fam))
