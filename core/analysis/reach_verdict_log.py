@@ -238,10 +238,12 @@ def summarize(path: Path | None = None) -> dict[str, dict[str, int]]:
     if not isinstance(data, dict):
         return {}
     languages = data.get("languages") or {}
+    if not isinstance(languages, dict):
+        return {}
     return {
         lang: dict(slot.get("verdicts") or {})
         for lang, slot in languages.items()
-        if isinstance(slot, dict)
+        if isinstance(slot, dict) and isinstance(slot.get("verdicts") or {}, dict)
     }
 
 
