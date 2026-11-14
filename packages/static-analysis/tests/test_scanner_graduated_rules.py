@@ -406,3 +406,43 @@ def test_graduated_enumeration_refusal_is_failed_invocation(tmp_path, monkeypatc
     assert metrics['total_findings'] == 0
     assert metrics['tool_execution_failures']
     assert scan_execution_status(metrics) == 'partial'
+
+
+def test_automatic_graduated_locator_preserves_enumeration_failure(tmp_path, monkeypatch):
+    import os
+    from types import SimpleNamespace
+    from core.audit import rules_dirs
+    from core.run import pin
+    from packages.semgrep import runner
+    from core.sarif.parser import generate_scan_metrics
+
+    project, repo = tmp_path / 'project', tmp_path / 'repo'
+    out = project / 'run'
+    out.mkdir(parents=True)
+    repo.mkdir()
+    rules = _mk_rules_dir(project, 'owned')
+    monkeypatch.setattr(pin, 'resolve_run_pin', lambda path: SimpleNamespace(run_dir=out, authoritative=True))
+    monkeypatch.setattr(pin, 'pin_project_dir', lambda path: project)
+    monkeypatch.setattr(pin, '_marker_trustworthy', lambda path: True)
+    monkeypatch.setattr(rules_dirs, 'standalone_read_candidates', lambda path: [])
+    original = os.scandir
+    calls = []
+
+    def refused(path):
+        if os.path.normpath(os.fspath(path)) == str(rules):
+            calls.append(str(path))
+            raise PermissionError('owned automatic discovery refusal')
+        return original(path)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('automatic discovery refusal reached Semgrep')
+
+    monkeypatch.setattr(os, 'scandir', refused)
+    monkeypatch.setattr(runner, 'is_available', forbidden)
+    monkeypatch.setattr(runner, 'run_rule', forbidden)
+    paths = _scanner.run_graduated_rules_stage(repo, out)
+    assert calls
+    assert paths
+    metrics = generate_scan_metrics(paths)
+    assert metrics['total_findings'] == 0
+    assert metrics['tool_execution_failures']

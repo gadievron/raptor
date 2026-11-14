@@ -2432,7 +2432,13 @@ def find_engine_rules_dir(out_dir: Path, repo_path: Path) -> Path | None:
                 continue
         except ImportError:
             continue
-        if any(rules_dir.glob("*.yaml")):
+        try:
+            has_rules = any(path.match("*.yaml") for path in rules_dir.iterdir())
+        except OSError:
+            # Preserve the selected trusted directory so the stage reports
+            # its enumeration failure instead of treating it as empty.
+            return rules_dir
+        if has_rules:
             return rules_dir
     return None
 
