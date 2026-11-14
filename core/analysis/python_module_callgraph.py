@@ -526,6 +526,19 @@ def function_scope_bindings(tree: ast.Module) -> dict[ast.AST, frozenset[str]]:
             scopes[node] = visible
             pending.extend((statement, visible) for statement in body)
             pending.extend((expr, enclosing) for expr in _definition_header_expressions(node))
+        elif isinstance(node, ast.ClassDef):
+            # Class assignments are not method closure bindings. Generic
+            # parameters occupy a separate frame shared by the class body,
+            # bases and keyword expressions; decorators precede that frame.
+            type_parameters = frozenset(
+                parameter.name for parameter in getattr(node, "type_params", ())
+                if isinstance(getattr(parameter, "name", None), str)
+            )
+            class_environment = enclosing | type_parameters
+            pending.extend((statement, class_environment) for statement in node.body)
+            pending.extend((expression, class_environment) for expression in node.bases)
+            pending.extend((keyword.value, class_environment) for keyword in node.keywords)
+            pending.extend((decorator, enclosing) for decorator in node.decorator_list)
         elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             targets = frozenset(
                 target.id for generator in node.generators
