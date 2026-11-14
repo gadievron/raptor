@@ -83,7 +83,7 @@ _DEFAULT_YEARS = tuple(
 # harvester still records them and the parent-resolution step will fail
 # them; that's a tracked decline, not silent loss.
 _COMMIT_RE = re.compile(
-    r"github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/commit/([0-9a-f]{7,40})"
+    r"github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/commit/([0-9a-f]{7,40})(?![0-9a-fA-F])"
 )
 
 
