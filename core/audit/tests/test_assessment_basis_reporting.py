@@ -204,9 +204,12 @@ def test_unknown_basis_label_cannot_render_mechanical_assurance():
 
 def test_recorded_unit_fields_are_escaped_by_the_actual_portable_renderer():
     record = {"file": "a|<img src=x>.c", "function": "f\n# injected heading", "line_start": 1,
-              "status": "clean", "basis": "model_judgment", "scope": "historical_review_only"}
+              "status": "clean|column\n# status heading <img src=x>\x1b[31m", "basis": "model_judgment", "scope": "historical_review_only"}
     blocks = assessment_basis_blocks({"assessment_bases": {"role": ROLE, "recorded": 1,
         "unavailable": 0, "records": [record], "records_omitted": 0}})
+    table = next(child for section in blocks for child in section.children if child.kind == "table")
+    assert table.rows[0][0] == f"{record['file']}:1 {record['function']}"
+    assert table.rows[0][1] == record["status"]
     document = ReportDocument("Consumer fixture", "audit", "consumer-fixture", blocks=blocks)
     markdown = get_renderer("markdown").render(document).content.decode()
     assert "Recorded reviewer basis" in markdown and "Model judgement" in markdown
@@ -214,6 +217,10 @@ def test_recorded_unit_fields_are_escaped_by_the_actual_portable_renderer():
     assert "\n# injected heading" not in markdown
     assert "<img src=x>" not in markdown
     assert "a&#124;" in markdown
+
+    assert "clean&#124;column" in markdown
+    assert "\n# status heading" not in markdown
+    assert "\x1b" not in markdown
 
 
 @pytest.mark.parametrize("clean_basis", ["verdict", "gate_resolved"])
