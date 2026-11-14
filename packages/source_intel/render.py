@@ -978,14 +978,10 @@ def _render_wur_line(
     build_flags: BuildFlagsContext | None,
     style: str,
 ) -> str:
-    """One line of WUR evidence, framed per consumer style.
+    """Render author intent with observed warning-as-error settings.
 
-    The enforcement-status caveat depends on build flags:
-      * `-Werror=unused-result` known True → "compile-enforced"
-      * `-Werror=unused-result` known False → "author intent only;
-        warning was suppressed"
-      * None / build_flags absent → "advisory; enforcement depends
-        on build flags not in evidence"
+    Per-target flags can aggregate different translation units. They
+    do not establish a particular caller's flags or compile outcome.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1423,14 +1419,17 @@ def _enforcement_phrase(build_flags: BuildFlagsContext | None) -> str:
         )
     if build_flags.werror_unused_result is True:
         return (
-            "Build flags include -Werror=unused-result — "
-            "compile-enforced; callers that ignore the return "
-            "would not compile."
+            "Build flags observed include -Werror=unused-result. "
+            "This observation does not establish the setting used for "
+            "a particular caller or whether an ignored return "
+            "caused compilation to fail."
         )
     if build_flags.werror_unused_result is False:
         return (
-            "Build flags include -Wno-error=unused-result — "
-            "warning suppressed; advisory only."
+            "Build flags observed include -Wno-error=unused-result. "
+            "This observation does not establish warning suppression "
+            "or a particular caller's compile outcome; the annotation "
+            "remains advisory context."
         )
     return (
         "Build flags observed but -Werror=unused-result not set; "
