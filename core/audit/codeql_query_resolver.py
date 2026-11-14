@@ -170,7 +170,11 @@ def _pack_roots(pack: str) -> list[Path]:
             # from the other existing best-effort lookup routes.
             continue
     for candidate in candidates:
-        if candidate.is_dir() and candidate not in roots:
+        try:
+            is_directory = candidate.is_dir()
+        except OSError:
+            continue
+        if is_directory and candidate not in roots:
             roots.append(candidate)
     return roots
 

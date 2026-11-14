@@ -69,3 +69,35 @@ def test_successful_routes_keep_order_filtering_and_deduplication(tmp_path, monk
     monkeypatch.setattr(resolver, "_package_cache_roots", lambda _: [first])
     monkeypatch.setattr(resolver, "_distribution_roots", lambda _: [second])
     assert resolver._pack_roots("codeql/cpp-queries") == [first, second]
+
+
+@pytest.mark.parametrize("error", [PermissionError, OSError])
+def test_refused_candidate_retains_available_siblings(tmp_path, monkeypatch, error):
+    from pathlib import Path
+
+    class RefusedPath(type(Path())):
+        def is_dir(self):
+            raise error("owned candidate refusal")
+
+    first, last = tmp_path / "first", tmp_path / "last"
+    first.mkdir()
+    last.mkdir()
+    refused = RefusedPath(tmp_path / "refused")
+    monkeypatch.setattr(resolver, "_cli_qlpack_roots", lambda _: [first, refused, last, first])
+    monkeypatch.setattr(resolver, "_package_cache_roots", lambda _: [])
+    monkeypatch.setattr(resolver, "_distribution_roots", lambda _: [])
+    assert resolver._pack_roots("codeql/cpp-queries") == [first, last]
+
+
+def test_unexpected_candidate_failure_propagates(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    class FailedPath(type(Path())):
+        def is_dir(self):
+            raise RuntimeError("owned unexpected failure")
+
+    monkeypatch.setattr(resolver, "_cli_qlpack_roots", lambda _: [FailedPath(tmp_path)])
+    monkeypatch.setattr(resolver, "_package_cache_roots", lambda _: [])
+    monkeypatch.setattr(resolver, "_distribution_roots", lambda _: [])
+    with pytest.raises(RuntimeError, match="owned unexpected failure"):
+        resolver._pack_roots("codeql/cpp-queries")
