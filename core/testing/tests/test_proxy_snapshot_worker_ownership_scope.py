@@ -12,41 +12,41 @@ def exercise(phase, tmp_path):
     error = KeyboardInterrupt if "interrupt" in phase else RuntimeError
     borrowed = native.summary._proxy_persist_state
     patch = pytest.MonkeyPatch()
-    native.isolated_mirror.__wrapped__(patch)
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.release, self.errors = cells["release"], cells["errors"]
-            self.entered = threading.Event()
-            self.completed, self.joins = False, []
-            def running(*args, **kwargs):
-                self.entered.set()
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if phase.startswith("after-"):
-                assert self.entered.wait(5), "actual updater was not entered"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            assert native.summary._proxy_persist_state is not borrowed
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.test_snapshot_survives_an_update_from_another_thread
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        native.isolated_mirror.__wrapped__(patch)
+        class Thread(real):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.release, self.errors = cells["release"], cells["errors"]
+                self.entered = threading.Event()
+                self.completed, self.joins = False, []
+                def running(*args, **kwargs):
+                    self.entered.set()
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if phase.startswith("after-"):
+                    assert self.entered.wait(5), "actual updater was not entered"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                assert native.summary._proxy_persist_state is not borrowed
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.test_snapshot_survives_an_update_from_another_thread
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(tmp_path), threads
     finally:
         try:

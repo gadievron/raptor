@@ -16,49 +16,49 @@ def exercise(phase, tmp_path):
     borrowed_ledger, borrowed_budget = heap_ledger._LEDGER_PATH, heap_ledger._host_budget_mb
     borrowed_subprocess = server_module.subprocess
     patch = pytest.MonkeyPatch()
-    owners._isolated_heap_ledger.__wrapped__(tmp_path, patch)
-    native._isolate_subprocess_launch_patches.__wrapped__(patch)
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.barrier, self.grants = cells["barrier"], cells["grants"]
-            self.ledger = cells["ledger"]
-            self.completed, self.joins, self.barrier_errors = False, [], []
-            self.index = len(threads)
-            def running(*args, **kwargs):
-                try:
-                    result = target(*args, **kwargs)
-                except threading.BrokenBarrierError as caught:
-                    self.barrier_errors.append(caught)
-                    result = None
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if self.index == 0 and phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if self.index == 0 and phase.startswith("after-"):
-                deadline = time.monotonic() + 5
-                while self.barrier.n_waiting != 1 and time.monotonic() < deadline:
-                    threading.Event().wait(0.001)
-                assert self.barrier.n_waiting == 1, "actual admission barrier not reached"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            assert heap_ledger._host_budget_mb() == 10000
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.TestConcurrentAdmission.test_racing_reservations_never_oversubscribe
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        owners._isolated_heap_ledger.__wrapped__(tmp_path, patch)
+        native._isolate_subprocess_launch_patches.__wrapped__(patch)
+        class Thread(real):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.barrier, self.grants = cells["barrier"], cells["grants"]
+                self.ledger = cells["ledger"]
+                self.completed, self.joins, self.barrier_errors = False, [], []
+                self.index = len(threads)
+                def running(*args, **kwargs):
+                    try:
+                        result = target(*args, **kwargs)
+                    except threading.BrokenBarrierError as caught:
+                        self.barrier_errors.append(caught)
+                        result = None
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if self.index == 0 and phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if self.index == 0 and phase.startswith("after-"):
+                    deadline = time.monotonic() + 5
+                    while self.barrier.n_waiting != 1 and time.monotonic() < deadline:
+                        threading.Event().wait(0.001)
+                    assert self.barrier.n_waiting == 1, "actual admission barrier not reached"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                assert heap_ledger._host_budget_mb() == 10000
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.TestConcurrentAdmission.test_racing_reservations_never_oversubscribe
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(native.TestConcurrentAdmission(), tmp_path, patch), threads
     finally:
         try:
