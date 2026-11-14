@@ -188,7 +188,7 @@ def get_status(finding: dict) -> str:
     """Return the finding's status — prefer the explicit ``status``
     field; fall back to ``derive_status`` for pre-#19 emit paths."""
     explicit = finding.get("status")
-    if explicit in ALL_STATUSES:
+    if isinstance(explicit, str) and explicit in ALL_STATUSES:
         return explicit
     return derive_status(finding)
 
@@ -231,7 +231,8 @@ def is_terminal(finding: dict) -> bool:
     ``get_status``: derive_status always lands in ALL_STATUSES, so
     routing through get_status made this predicate unconditionally
     True and the documented in-flight False case unreachable."""
-    return finding.get("status") in ALL_STATUSES
+    explicit = finding.get("status")
+    return isinstance(explicit, str) and explicit in ALL_STATUSES
 
 
 __all__ = [
