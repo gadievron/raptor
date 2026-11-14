@@ -611,8 +611,13 @@ def _summarise_surviving_data(
             phys = loc.get("physicalLocation", {})
             uri = phys.get("artifactLocation", {}).get("uri")
             line = phys.get("region", {}).get("startLine")
-            if uri:
-                return uri, line
+            if not uri:
+                continue
+            if target_uri is not None and uri != target_uri:
+                continue
+            if target_line is not None and line != target_line:
+                continue
+            return uri, line
         return None, None
 
     for run in data.get("runs", []):
