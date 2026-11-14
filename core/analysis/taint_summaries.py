@@ -1153,6 +1153,8 @@ def _detect_summary_unknown(
       whose single return or bounded body reads an enclosing cell
       through supported expressions, lambdas or comprehensions,
       or a directly returned call to it: the object or call depends on a cell.
+    * An adjacent returned local call containing a reflective getter: a
+      descriptor can observe the enclosing frame without a lexical read.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
     * A type alias: later access can evaluate its deferred value, which
@@ -1256,6 +1258,7 @@ def _detect_summary_unknown(
                 # ``**expr`` — opaque expansion
                 return "forwards **kwargs"
     if isinstance(fn_ast, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        returned_reflective_call = False
         frame_bindings: frozenset[str] | None = None
         for definition, returned in zip(fn_ast.body, fn_ast.body[1:]):
             if (not isinstance(definition, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -1269,6 +1272,14 @@ def _detect_summary_unknown(
                 value = value.func
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
+            if direct_call and any(
+                isinstance(child, ast.Call) and _attribute_chain_str(child.func) == "getattr"
+                for child in ast.walk(definition)
+            ):
+                # A returned local call may invoke a descriptor that observes
+                # this frame without an enclosing lexical read or argument.
+                # Scan before unsupported/empty lexical bodies can continue.
+                returned_reflective_call = True
             # Adjacency and no decorator avoid an intervening binding rewrite
             # or wrapper. Keep direct-base detection even when another part of
             # the expression lies outside the scope-free grammar.
@@ -1337,6 +1348,8 @@ def _detect_summary_unknown(
                 return "returned function retains an unmodelled enclosing cell"
         if annotation_metadata_read:
             return "annotation metadata access may evaluate deferred expressions"
+        if returned_reflective_call:
+            return "returned local call may have unmodelled reflective effects"
     return None
 
 
