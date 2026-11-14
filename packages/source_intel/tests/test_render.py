@@ -131,7 +131,7 @@ def test_enforcement_unknown_when_no_build_flags():
     assert "build flags not in evidence" in lines[0].lower()
 
 
-def test_enforcement_compile_enforced_when_werror_unused_result():
+def test_enforcement_observed_werror_does_not_prove_caller_outcome():
     bf = BuildFlagsContext(
         source="compile_commands.json",
         extraction_confidence="high",
@@ -139,7 +139,8 @@ def test_enforcement_compile_enforced_when_werror_unused_result():
     )
     r = _result_with_wur(_wur())
     lines = derive_evidence_strings(r, build_flags=bf)
-    assert "compile-enforced" in lines[0].lower()
+    assert "-Werror=unused-result" in lines[0]
+    assert "does not establish" in lines[0]
 
 
 def test_enforcement_advisory_when_werror_explicitly_off():
@@ -150,7 +151,8 @@ def test_enforcement_advisory_when_werror_explicitly_off():
     )
     r = _result_with_wur(_wur())
     lines = derive_evidence_strings(r, build_flags=bf)
-    assert "suppressed" in lines[0].lower()
+    assert "-Wno-error=unused-result" in lines[0]
+    assert "does not establish warning suppression" in lines[0]
 
 
 def test_enforcement_partial_when_other_flags_observed():
