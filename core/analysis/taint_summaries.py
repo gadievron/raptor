@@ -425,6 +425,28 @@ def _comprehension_target_scope(
     return frozenset(names), frozenset(reads)
 
 
+def _lambda_body_bindings(body: ast.expr) -> frozenset[str] | None:
+    """Assignment-expression bindings owned by this lambda's body.
+
+    Nested lambda bodies own their bindings; their defaults evaluate here.
+    Comprehension assignment expressions bind the containing lambda scope.
+    """
+    names: set[str] = set()
+    pending: list[ast.AST] = [body]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Lambda):
+            pending.extend(node.args.defaults)
+            pending.extend(d for d in node.args.kw_defaults if d is not None)
+            continue
+        if isinstance(node, ast.NamedExpr):
+            if not isinstance(node.target, ast.Name):
+                return None
+            names.add(node.target.id)
+        pending.extend(ast.iter_child_nodes(node))
+    return frozenset(names)
+
+
 def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     """Known reads through bounded lambda/comprehension scopes.
 
@@ -448,7 +470,10 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             parameters = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
             parameters.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
             pending.extend((d, bound) for d in (*args.defaults, *args.kw_defaults) if d is not None)
-            pending.append((node.body, bound | parameters))
+            local = _lambda_body_bindings(node.body)
+            if local is None:
+                return frozenset()
+            pending.append((node.body, bound | parameters | local))
         elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
                 return frozenset()
@@ -470,6 +495,10 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
                 pending.extend((condition, inner) for condition in gen.ifs)
             payload = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
             pending.extend((part, inner) for part in payload)
+        elif isinstance(node, ast.NamedExpr):
+            if not isinstance(node.target, ast.Name):
+                return frozenset()
+            pending.append((node.value, bound))
         elif isinstance(node, allowed):
             pending.extend((child, bound) for child in ast.iter_child_nodes(node))
         else:
