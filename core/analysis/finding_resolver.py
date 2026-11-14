@@ -416,7 +416,8 @@ def _read_finding_source(
 
     When *target_root* is provided, :func:`core.paths.confine` decides
     containment (symlink-aware; absolute paths must resolve UNDER the
-    root, relative paths join it) — the full path-containment fix.
+    root, relative paths join it). The subsequent open walks beneath
+    the resolved root so a directory swap cannot redirect the read.
     Without a root the resolver cannot know the scanned tree, so the
     legacy contract holds: absolute paths pass through (RAPTOR-native
     findings legitimately carry absolute paths into the scanned repo)
@@ -431,6 +432,8 @@ def _read_finding_source(
             reason=f"refusing file path with '..' segment: {file!r}",
         )
     read_path = Path(file)
+    anchored_root = None
+    anchored_relative = None
     if target_root is not None:
         from core.paths import confine
 
@@ -442,6 +445,11 @@ def _read_finding_source(
                     f"{str(target_root)!r}: {file!r}"
                 ),
             )
+        try:
+            anchored_root = Path(target_root).resolve()
+            anchored_relative = confined.relative_to(anchored_root)
+        except (OSError, RuntimeError, ValueError) as e:
+            return ResolutionFailure(reason=f"cannot read {file}: {e}")
         read_path = confined
     # Size gate: the file lives inside the scanned repo and its size
     # is attacker-controlled.  An unbounded read OOMs the process.
@@ -458,7 +466,17 @@ def _read_finding_source(
                    f"({size} bytes > {_MAX})",
         )
     try:
-        with preserving_stream_error(read_path.open("rb")) as fh:
+        if anchored_root is None:
+            stream = read_path.open("rb")
+        else:
+            from core.source.beneath import open_regular_beneath
+
+            stream = open_regular_beneath(anchored_root, anchored_relative, "rb")
+            if stream is None:
+                return ResolutionFailure(
+                    reason=f"cannot read {file}: anchored source open refused",
+                )
+        with preserving_stream_error(stream) as fh:
             raw = fh.read(_MAX + 1)
     except OSError as e:
         return ResolutionFailure(reason=f"cannot read {file}: {e}")
