@@ -191,10 +191,16 @@ def load_pairs_from_cve_diff_runs(
     OSV gate the checker-synthesis bridge enforces.
 
     ``limit`` is a non-negative integer or None; zero skips metadata access.
+    Filters must be collections of non-empty strings, as in ``load_pairs``.
     """
     _validate_pair_limit(limit)
     if limit == 0:
         return []
+    for name, values in (("cwes", cwes), ("languages", languages)):
+        if isinstance(values, (str, bytes, Mapping)) or any(
+            not isinstance(value, str) or not value for value in values
+        ):
+            raise ValueError(f"{name} must be a collection of non-empty strings")
     from packages.checker_synthesis.cve_bridge import (
         ProvenanceError,
         load_cve_run,
