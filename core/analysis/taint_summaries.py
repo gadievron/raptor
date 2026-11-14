@@ -351,15 +351,9 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
     return None
 
 
-def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
-    """Loaded names in a bounded expression grammar with no nested scope or binder.
-
-    Unsupported shapes contribute nothing here; the existing direct-base cell
-    check remains independent. This is not a general free-variable analysis.
-    """
-    if expr is None:
-        return frozenset()
-    allowed = (
+def _scope_free_expression_nodes() -> tuple[type[ast.AST], ...]:
+    """Shared expression grammar, with optional AST classes discovered locally."""
+    return (
         ast.Name, ast.Constant, ast.Attribute, ast.Subscript, ast.Slice,
         ast.UnaryOp, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
         ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Call, ast.keyword,
@@ -369,6 +363,17 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
         getattr(ast, "Interpolation", ast.Constant),
         ast.Starred, ast.Load, ast.operator, ast.unaryop, ast.boolop, ast.cmpop,
     )
+
+
+def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
+    """Loaded names in a bounded expression grammar with no nested scope or binder.
+
+    Unsupported shapes contribute nothing here; the existing direct-base cell
+    check remains independent. This is not a general free-variable analysis.
+    """
+    if expr is None:
+        return frozenset()
+    allowed = _scope_free_expression_nodes()
     names: set[str] = set()
     for node in ast.walk(expr):
         if not isinstance(node, allowed):
@@ -406,6 +411,53 @@ def _comprehension_target_scope(
         else:
             return None
     return frozenset(names), frozenset(reads)
+
+
+def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
+    """Known reads through bounded lambda/comprehension scopes.
+
+    An unsupported node aborts this additional scan. Empty results never
+    certify absence; existing expression and direct-base refusals stay active.
+    Only bare-name comprehension targets are admitted here; existing target
+    store and unpacking checks remain independent.
+    """
+    if expr is None:
+        return frozenset()
+    allowed = _scope_free_expression_nodes()
+    names: set[str] = set()
+    pending: list[tuple[ast.AST, frozenset[str]]] = [(expr, frozenset())]
+    while pending:
+        node, bound = pending.pop()
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load) and node.id not in bound:
+                names.add(node.id)
+        elif isinstance(node, ast.Lambda):
+            args = node.args
+            parameters = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+            parameters.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
+            pending.extend((d, bound) for d in (*args.defaults, *args.kw_defaults) if d is not None)
+            pending.append((node.body, bound | parameters))
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            if not node.generators:
+                return frozenset()
+            if not all(isinstance(gen.target, ast.Name) for gen in node.generators):
+                return frozenset()
+            targets = {
+                gen.target.id for gen in node.generators if isinstance(gen.target, ast.Name)
+            }
+            inner = bound | targets
+            pending.append((node.generators[0].iter, bound))
+            for index, gen in enumerate(node.generators):
+                if index:
+                    pending.append((gen.iter, inner))
+                pending.extend((condition, inner) for condition in gen.ifs)
+            payload = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+            pending.extend((part, inner) for part in payload)
+        elif isinstance(node, allowed):
+            pending.extend((child, bound) for child in ast.iter_child_nodes(node))
+        else:
+            return frozenset()
+    return frozenset(names)
 
 
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
@@ -508,6 +560,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                 body = body[1:]
             if len(body) == 1 and isinstance(body[0], ast.Return):
                 names = _scope_free_expression_loads(body[0].value)
+                names |= _scoped_expression_loads(body[0].value)
                 cell_read = body[0].value
                 if isinstance(cell_read, ast.Lambda):
                     args = cell_read.args
