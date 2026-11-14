@@ -747,8 +747,16 @@ class TestRunRules:
         assert [r.name for r in results] == ["a", "b", "c"]
         assert mock_run.call_count == 3
 
-    def test_empty_configs(self, tmp_path):
-        results = run_rules(tmp_path, [])
+    @pytest.mark.parametrize('launcher', [None, 'owned-inert-launcher'])
+    def test_empty_configs(self, tmp_path, monkeypatch, launcher):
+        import packages.semgrep.runner as runner
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("empty configuration list reached tool admission")
+
+        monkeypatch.setattr(runner, 'is_available', forbidden)
+        monkeypatch.setattr(runner, 'run_rule', forbidden)
+        results = run_rules(tmp_path, [], semgrep_bin=launcher)
         assert results == []
 
     def test_not_installed_returns_error_per_config(self, tmp_path):

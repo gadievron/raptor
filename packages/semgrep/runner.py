@@ -969,6 +969,8 @@ def run_rules(
     is sequential to keep the package free of policy decisions about
     concurrency, worker counts, and progress reporting.
     """
+    if not configs:
+        return []
     if semgrep_bin is None and not is_available():
         return [
             SemgrepResult(
