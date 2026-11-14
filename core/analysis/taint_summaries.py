@@ -54,6 +54,7 @@ from pathlib import Path
 from core.analysis.cfg_builder import (
     PyCFGNode,
     _PythonCFGBuilder,
+    _pattern_capture_names,
 )
 from core.analysis.dataflow import reaching_defs
 from core.analysis.python_module_callgraph import (
@@ -303,6 +304,8 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
             if not isinstance(node, ast.Lambda):
                 pending.extend(node.decorator_list)
             continue
+        if isinstance(node, ast.match_case) and _pattern_capture_names(node.pattern):
+            return "pattern capture value transfer is not modelled"
         if hasattr(ast, "TypeAlias") and isinstance(node, ast.TypeAlias):
             return "type alias deferred values are not modelled"
         if isinstance(node, ast.ExceptHandler) and node.name is not None:
@@ -345,6 +348,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       short-circuit operand, chained comparison, assertion message or eager
       comprehension: it may not overwrite
       the incoming local value.
+    * A capturing match pattern: subject-to-capture value transfer is
+      not modelled by the def-only pattern nodes.
     * A type alias: later access can evaluate its deferred value, which
       ordinary local assignment propagation does not model.
     * A named exception handler: the caught object can carry input through
