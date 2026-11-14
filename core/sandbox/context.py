@@ -9852,6 +9852,20 @@ def _reopen_write_only(fd: int, flags: int) -> "int | None":
     return None
 
 
+def _retire_untrusted_stdio(fds: list[int], *, primary_error: BaseException | None) -> None:
+    """Attempt every owned reopen once while preserving dispatch failure."""
+    from ._retirement import retire_parent_resources
+
+    def close_one(fd: int) -> None:
+        with suppress(OSError):
+            os.close(fd)
+
+    retire_parent_resources(
+        *(lambda fd=fd: close_one(fd) for fd in fds),
+        primary_error=primary_error,
+    )
+
+
 def _untrusted_stdio_write_only(kwargs: dict, caller: str) -> "list[int]":
     """fd 1/2 pass-through guard shared by EVERY ``run_untrusted*``
     entry point — mutates *kwargs* in place, returns the reopened fds
@@ -10516,6 +10530,7 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     # Waived-contract degradations warn per call at the dispatch site
     # that actually delivers the reduced lane (the consented-degrade
     # branch of run()'s containment-floor check).
+    _stdio_primary: BaseException | None = None
     try:
         return run(cmd, block_network=True, target=target, output=output,
                    limits=limits, job_budget=job_budget,
@@ -10534,12 +10549,11 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
                    # (same truthiness idiom as the entry gate).
                    require_fresh_procfs=untrusted_fresh_procfs_required(),
                    **kwargs)
+    except BaseException as error:
+        _stdio_primary = error
+        raise
     finally:
-        for _wfd in _wo_fds:
-            try:
-                os.close(_wfd)
-            except OSError:
-                pass
+        _retire_untrusted_stdio(_wo_fds, primary_error=_stdio_primary)
 
 
 def run_untrusted_networked(
@@ -10702,6 +10716,7 @@ def run_untrusted_networked(
     # Waived-contract degradations warn per call at the dispatch site
     # that actually delivers the reduced lane (the consented-degrade
     # branch of run()'s containment-floor check).
+    _stdio_primary: BaseException | None = None
     try:
         return run(
             cmd,
@@ -10737,9 +10752,8 @@ def run_untrusted_networked(
             loopback_unix_bridges=loopback_unix_bridges,
             **kwargs,
         )
+    except BaseException as error:
+        _stdio_primary = error
+        raise
     finally:
-        for _wfd in _wo_fds:
-            try:
-                os.close(_wfd)
-            except OSError:
-                pass
+        _retire_untrusted_stdio(_wo_fds, primary_error=_stdio_primary)
