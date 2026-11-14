@@ -151,12 +151,14 @@ def prepare_overflow_claim_context(
     if not _prepared_binding_matches(admission, context, scope):
         return PreparationUnavailable("prepared-exact-source-anchor-unavailable")
     try:
-        source = anchor.expected_span.decode("utf-8")
+        source = anchor.prepared_content.decode("utf-8")
     except UnicodeError:
         return PreparationUnavailable("prepared-source-encoding-unavailable")
     selected_scope, selected_source = source_for_function(source, scope.file, scope.function)
     if selected_source is None or selected_scope.status != "selected":
         return PreparationUnavailable("prepared-function-occurrence-unavailable")
+    if (selected_scope.start, selected_scope.end) != (anchor.byte_start, anchor.byte_end):
+        return PreparationUnavailable("prepared-function-anchor-range-mismatch")
     source = selected_source
     expected_source_binding = source_binding(source, scope.function, verb="check-overflow",
                                              integer_abi=integer_abi, hypothesis=scope.hypothesis)
