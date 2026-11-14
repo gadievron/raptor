@@ -61,18 +61,21 @@ ALL_WUR_ALIASES: tuple[str, ...] = tuple(
 # Regex compiled once at module load — the alias spellings include
 # punctuation that must be escaped before union into a pattern.
 _WUR_PATTERN = re.compile(
-    "|".join(re.escape(s) for s in ALL_WUR_ALIASES)
+    "|".join(
+        r"(?<![A-Za-z0-9_])" + re.escape(s) + r"(?![A-Za-z0-9_])"
+        if s.isidentifier() else re.escape(s)
+        for s in ALL_WUR_ALIASES
+    )
 )
 
 
 def wur_alias_in(text: str) -> bool:
     """Return True iff any known WUR alias spelling appears in ``text``.
 
-    This is a fast substring/regex check — it does NOT verify that
-    the alias was applied to a specific identifier or position. For
-    that, source_intel's cocci rules give precise file/line positions;
-    this helper is for header-discovery (does THIS header define a
-    project alias) and rule-emission filtering.
+    Identifier aliases require ASCII identifier boundaries; literal
+    attribute syntax is matched as a substring. This raw-text helper
+    does not check comments, strings, declaration binding or positions.
+    A match alone does not establish an annotated declaration.
     """
     return bool(_WUR_PATTERN.search(text))
 
