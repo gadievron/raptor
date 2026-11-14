@@ -10,6 +10,7 @@ Cached per absolute lexical target location; content is not revalidated.
 
 from __future__ import annotations
 
+import io
 import re
 import threading
 from collections import OrderedDict
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from core.inventory._walk import iter_regular_files
 from core.inventory.extractors import CExtractor
+from core.source import read_bytes_capped
 from core.source.lines import split_lines
 
 _HEADER_EXTENSIONS = frozenset({".h", ".hh", ".hpp", ".hxx"})
@@ -51,6 +53,7 @@ _FUNC_DEF_RE = re.compile(
 # C proper) and stays a local extra for `#if defined(...)` lines.
 _SKIP_NAMES = CExtractor.RESERVED_WORDS | frozenset({"defined"})
 
+_MAX_HEADER_SOURCE_BYTES = 1_048_576
 _MAX_BODY_LINES = 30
 _MAX_CACHE_ENTRIES = 16
 
@@ -96,6 +99,15 @@ def _extract_function_body(lines: list[str], open_brace_line: int) -> str | None
     return None
 
 
+
+def _read_header_text(path: Path) -> str | None:
+    """Decode only admitted bytes with default locale and newline handling."""
+    got = read_bytes_capped(path, _MAX_HEADER_SOURCE_BYTES)
+    if got is None or got[1]:
+        return None
+    with io.TextIOWrapper(io.BytesIO(got[0]), errors="replace") as stream:
+        return stream.read()
+
 def build_header_function_index(
     target_path: Path,
 ) -> dict[str, tuple[str, str]]:
@@ -121,9 +133,11 @@ def build_header_function_index(
         # target must not walk the host fs into audit context.
         for p in iter_regular_files(target_path, _HEADER_EXTENSIONS):
             try:
-                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                if p.stat().st_size > _MAX_HEADER_SOURCE_BYTES:  # cheap oversize rejection
                     continue
-                text = p.read_text(errors="replace")
+                text = _read_header_text(p)
+                if text is None:
+                    continue
             except OSError:
                 continue
 

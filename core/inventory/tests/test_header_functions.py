@@ -317,7 +317,7 @@ def test_line_progress_survives_skips_failed_bodies_and_file_reset(tmp_path, mon
 
 
 def test_text_adapter_keeps_full_prefix_count_operations(tmp_path, monkeypatch):
-    from pathlib import Path
+    import re
     from core.inventory import header_functions as mod
 
     calls = []
@@ -327,14 +327,13 @@ def test_text_adapter_keeps_full_prefix_count_operations(tmp_path, monkeypatch):
             calls.append((separator, start, end))
             return super().count(separator, start, end)
 
-    class Header(type(Path())):
-        def read_text(self, **kwargs):
-            return Text(super().read_text(**kwargs))
-
     path = tmp_path / 'adapter.h'
     source = '/* preface */\nstatic int one(void) {}\nstatic int two(void) {}\n'
     path.write_text(source, encoding='utf-8')
-    monkeypatch.setattr(mod, 'iter_regular_files', lambda *args: iter([Header(path)]))
+    monkeypatch.setattr(mod, 'iter_regular_files', lambda *args: iter([path]))
+    monkeypatch.setattr(mod, '_read_header_text', lambda header: Text(source))
+    monkeypatch.setattr(mod, '_FUNC_DEF_RE', re.compile('static int (one|two)'))
+    monkeypatch.setattr(mod, '_extract_function_body', lambda lines, row: lines[row])
     assert list(build_header_function_index(tmp_path)) == ['one', 'two']
     assert calls == [('\n', 0, source.index('static int one')),
                      ('\n', 0, source.index('static int two'))]
