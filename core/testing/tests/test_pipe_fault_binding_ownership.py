@@ -1,6 +1,6 @@
 """Pipe fault views preserve shared factories, outer trackers and unrelated FDs."""
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from types import ModuleType
 
 import pytest
@@ -16,6 +16,18 @@ def _record(pair, identities):
     for fd in pair:
         info = os.fstat(fd)
         identities[fd] = (info.st_dev, info.st_ino)
+    return pair
+
+
+def _owned_pipe(factory, identities):
+    pair = factory()
+    with ExitStack() as setup:
+        for fd in pair:
+            setup.callback(os.close, fd)
+        records = {}
+        _record(pair, records)
+        identities.update(records)
+        setup.pop_all()
     return pair
 
 
@@ -54,7 +66,7 @@ def test_pipe_scope_owns_only_selected_consumer(monkeypatch, consumer, state, ou
                     assert other.os is borrowed_other
                     assert os.pipe is borrowed_pipe and os.write is borrowed_write
                     selected = _record(consumer.os.pipe(), identities)
-                    unrelated = _record(borrowed_pipe(), identities)
+                    unrelated = _owned_pipe(borrowed_pipe, identities)
                     assert pairs == [selected] and unrelated not in pairs
                     if failure is not None:
                         raise failure
