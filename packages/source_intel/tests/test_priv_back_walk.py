@@ -99,8 +99,8 @@ class TestPathIsGated:
         facts = _StubFacts({})
         result = _result_with_caps(_cap_for("gated_fn"))
         with patch(
-            "packages.source_intel.adapter._line_uses_privileged_cap",
-            return_value=True,
+            "packages.source_intel.adapter._function_has_privileged_cap",
+            side_effect=lambda fn, _result: fn == "gated_fn",
         ):
             assert _path_is_gated(
                 "gated_fn", facts, result,
@@ -213,8 +213,8 @@ class TestPathIsGated:
         })
         result = _result_with_caps(_cap_for("top_fn"))
         with (
-            patch("packages.source_intel.adapter._line_uses_privileged_cap",
-                  return_value=True),
+            patch("packages.source_intel.adapter._function_has_privileged_cap",
+                  side_effect=lambda fn, _result: fn == "top_fn"),
             patch("packages.source_intel.adapter._function_is_static",
                   return_value=True),
             patch("packages.source_intel.analyze._enclosing_function",
