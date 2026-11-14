@@ -25,6 +25,7 @@ JSON entries can later be re-parsed by the same adapter without loss.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping
 from typing import Any
 from urllib.parse import unquote
@@ -45,6 +46,9 @@ def make_finding_id(
     surface via the corpus-integrity test
     (``test_corpus_finding_ids_are_unique``).
 
+    Components containing ``|`` use a structured, versioned key to
+    avoid delimiter ambiguity. Other inputs retain their existing IDs.
+
     Known limitation: the id is location-anchored (file path + line
     of source and sink), so a file rename or move — or any edit that
     shifts those line numbers — yields a new id for the same defect,
@@ -56,9 +60,20 @@ def make_finding_id(
         f"{source.file_path}:{source.line}|"
         f"{sink.file_path}:{sink.line}"
     )
+    version = ""
+    if any("|" in value for value in (
+        producer, rule_id, source.file_path, sink.file_path,
+    )):
+        # Preserve existing IDs for ordinary locations. A literal field
+        # delimiter needs structured encoding to keep distinct tuples apart.
+        key = json.dumps([
+            producer, rule_id, source.file_path, source.line,
+            sink.file_path, sink.line,
+        ], ensure_ascii=True, separators=(",", ":"))
+        version = "v2_"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
     rule_slug = rule_id.replace("/", "-").replace(".", "-") or "unknown"
-    return f"{producer}_{rule_slug}_{digest}"
+    return f"{producer}_{rule_slug}_{version}{digest}"
 
 
 def from_sarif_result(
