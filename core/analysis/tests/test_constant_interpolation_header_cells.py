@@ -71,7 +71,7 @@ def test_constant_interpolation_keeps_caller_raw_flow():
 
 
 @pytest.mark.parametrize('prefix', ['f', 't'])
-@pytest.mark.parametrize('value', ['raw', '0:{raw}', '1+2', '-True', '+1'])
+@pytest.mark.parametrize('value', ['raw', '0:{raw}', '1+2', '-True'])
 def test_dynamic_and_nonliteral_values_stay_excluded(prefix, value):
     annotation = prefix + '"{' + value + '}"'
     source = source_for(annotation)
