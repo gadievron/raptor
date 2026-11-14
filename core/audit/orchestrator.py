@@ -22215,8 +22215,11 @@ def _codeql_query_file(query: str) -> str | None:
     """
     if not query:
         return None
-    if Path(query).exists():
-        return query
+    try:
+        if Path(query).is_file():
+            return query
+    except OSError:
+        pass
     try:
         from .codeql_query_resolver import resolve_query_id
         return resolve_query_id(query)
