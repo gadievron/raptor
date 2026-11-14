@@ -15,9 +15,10 @@ consume the SAME substrate — each previously grew its own raw-text
 read, and the raw readers drifted into comment-forgeable behaviour
 while their adapter twins were protected.
 
-Reads are byte-capped: every consumer's ``None`` path is its
-conservative direction, so an oversized (planted) file degrades
-safely instead of becoming a memory sink.
+Reads are byte-capped and return ``None`` on refusal. Consumers own
+how that unavailable view affects their evidence: some withhold a
+lexical fact, while others preserve an existing fallback. The read
+limit does not establish a verdict policy.
 """
 
 from __future__ import annotations
@@ -31,9 +32,8 @@ from core.security.capped_read import read_capped_text
 #: and scanned per (path, mtime, size); a planted multi-GB "source
 #: file" would otherwise turn every per-finding lexical check into a
 #: memory/CPU sink. Real C files — amalgamations included (sqlite3.c
-#: is ~9 MB) — fit comfortably. Oversized files return ``None``:
-#: default grade, no static-ness, no privileged-cap evidence — always
-#: the conservative direction.
+#: is ~9 MB) — fit comfortably. Oversized files return ``None``;
+#: each consumer applies its own unavailable-view policy.
 MAX_SOURCE_BYTES = 16 * 1024 * 1024
 
 
