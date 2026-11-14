@@ -54,8 +54,8 @@ def test_unsupported_later_statement_invalidates_capture():
     assert _bounded_body_expression_loads(ast.parse("assert raw\nimport module").body) is None
 
 
-def test_annotation_only_statement_stays_excluded():
-    assert _bounded_body_expression_loads(ast.parse("value: raw\nreturn 0").body) is None
+def test_scoped_annotation_statement_stays_excluded():
+    assert _bounded_body_expression_loads(ast.parse("value: (lambda: raw)\nreturn 0").body) is None
 
 
 def test_assert_message_write_keeps_prior_reason():
