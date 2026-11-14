@@ -530,6 +530,23 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
+def _child_expression_is_supported(expression: ast.expr | None) -> bool:
+    """Closed child-expression grammar with complete comprehension targets."""
+    if expression is None:
+        return True
+    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
+               ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+               ast.comprehension, ast.Store)
+    for node in ast.walk(expression):
+        if not isinstance(node, allowed):
+            return False
+        if isinstance(node, ast.comprehension) and _comprehension_target_scope(
+            node.target, require_scope_free_reads=True
+        ) is None:
+            return False
+    return True
+
+
 def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
     """Known reads in a bounded body grammar, or None for unsupported statements.
 
@@ -562,15 +579,13 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                     or len(child_body) != 1 or not isinstance(child_body[0], ast.Return)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
-            allowed = _scope_free_expression_nodes()
-            lambda_nodes = (*allowed, ast.Lambda, ast.arguments, ast.arg)
-            if not all(isinstance(node, lambda_nodes) for default in defaults for node in ast.walk(default)):
+            if not all(_child_expression_is_supported(default) for default in defaults):
                 return None
             # Defaults belong to the enclosing scope, before child parameters.
             expressions.extend(defaults)
             value = child_body[0].value
             if value is not None:
-                if not all(isinstance(node, lambda_nodes) for node in ast.walk(value)):
+                if not _child_expression_is_supported(value):
                     return None
                 target_reads.update(
                     _scoped_expression_loads(value) - local_binding_names(statement)
