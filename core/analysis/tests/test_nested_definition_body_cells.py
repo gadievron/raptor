@@ -63,10 +63,10 @@ def test_bare_child_return_contributes_no_reads():
 
 
 @pytest.mark.parametrize("source", [
-    "def child(value=[raw for slots[(lambda: raw)()] in ()]):\n return value", "def child(*, value=[raw for slots[(lambda: raw)()] in ()]):\n return value",
+    "def child(value=[raw for slots[[raw for item in ()]] in ()]):\n return value", "def child(*, value=[raw for slots[[raw for item in ()]] in ()]):\n return value",
     "def child(value: raw):\n return value", "def child() -> raw:\n return 0",
     "@raw\ndef child(value: raw):\n return 0", "def child[T]():\n return raw",
-    "def child():\n return [raw for slots[(lambda: raw)()] in ()]", "def child():\n value = raw\n global unsupported\n return value",
+    "def child():\n return [raw for slots[[raw for item in ()]] in ()]", "def child():\n value = raw\n global unsupported\n return value",
 ], ids=["default", "kwdefault", "parameter-annotation", "return-annotation", "decorated-annotation",
         "type-parameter", "scoped-return", "later-declaration"])
 def test_unsupported_child_invalidates_complete_body(source):
