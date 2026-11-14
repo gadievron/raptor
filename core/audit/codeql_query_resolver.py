@@ -12,7 +12,9 @@ Resolution is mechanical and offline: locate the installed pack
 roots (the CLI's ``resolve qlpacks`` answer, the package cache under
 ``~/.codeql/packages``, and the CLI distribution's bundled
 ``qlpacks/``), then index each relevant pack's ``.ql`` files by their
-``@id`` header in one bounded walk, cached per process.  The CLI has
+``@id`` header, cached per process. The index caps header reads
+from matching query files, each at a bounded text prefix; those limits
+do not bound visited directories, traversal time or CLI output. The CLI has
 no direct id→file resolver, so the header scan against the installed
 packs IS the mechanical route.  Unresolvable IDs return None and the
 chain builder drops the step loudly-once.
@@ -53,8 +55,8 @@ _QUERY_ID_RE = re.compile(r"^[a-z]{1,8}/[A-Za-z0-9_.-]{1,80}$")
 # on blank-line runs.
 _ID_HEADER_RE = re.compile(r"^[^\S\n]*\*\s*@id\s+(\S+)", re.MULTILINE)
 
-# One pack walk indexes every query, so even the biggest standard
-# pack costs a single bounded directory scan per process.
+# Limit matching query paths admitted for header reads per index build.
+# This count does not bound directory traversal or elapsed scan time.
 _MAX_PACK_FILES = 20_000
 _HEADER_READ_BYTES = 4096
 
@@ -81,7 +83,7 @@ def _version_key(name: str) -> tuple:
 # found" so a missing pack is probed once, not per lookup.
 _PACK_INDEX_CACHE: dict[str, dict[str, str] | None] = {}
 # _CACHE_LOCK guards dict operations only. Pack indexing (a `codeql
-# resolve qlpacks` subprocess + an up-to-_MAX_PACK_FILES rglob) runs
+# resolve qlpacks` subprocess and rglob with a query-file count cap) runs
 # under a PER-PACK lock so it computes once per pack without
 # serialising concurrent resolvers of other packs behind it.
 _CACHE_LOCK = threading.Lock()
