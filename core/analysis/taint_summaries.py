@@ -544,6 +544,27 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
         statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = statement.args
+            parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+            if args.vararg is not None:
+                parameters.append(args.vararg)
+            if args.kwarg is not None:
+                parameters.append(args.kwarg)
+            if (statement.decorator_list or statement.type_params
+                    or statement.returns is not None or args.defaults
+                    or any(default is not None for default in args.kw_defaults)
+                    or any(parameter.annotation is not None for parameter in parameters)
+                    or len(statement.body) != 1 or not isinstance(statement.body[0], ast.Return)):
+                return None
+            value = statement.body[0].value
+            if value is not None:
+                allowed = _scope_free_expression_nodes()
+                if not all(isinstance(node, allowed) for node in ast.walk(value)):
+                    return None
+                target_reads.update(
+                    _scope_free_expression_loads(value) - local_binding_names(statement)
+                )
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
