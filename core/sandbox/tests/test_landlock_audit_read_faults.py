@@ -145,3 +145,83 @@ def test_actual_caller_retires_all_owners_with_read_error_primary(cleanup_fails)
     assert caught.value is failure
     assert reads == [failure]
     assert events == ["fds", "target", "tracer", "config", "evidence"]
+
+
+@pytest.mark.parametrize("position", ["initial", "idle"])
+def test_interrupted_liveness_probe_cannot_discard_later_output(position):
+    namespace, events = drain_view([b"after", b""])
+    probes = iter(([InterruptedError("probe interrupted")] if position == "initial"
+                   else [None, InterruptedError("probe interrupted")]))
+    quiet = 1 if position == "initial" else 2
+    readiness = iter([[]] * quiet + [[71], [71]])
+
+    def probe(*args):
+        value = next(probes, None)
+        if isinstance(value, BaseException):
+            raise value
+        return value
+
+    namespace["os"].waitid = probe
+    namespace["_readable_fds"] = lambda fds, timeout: next(readiness)
+    assert namespace["_drain_pipes_until_eof"]([71], 73) == {71: b"after"}
+    assert events == [b"after", b""]
+
+
+@pytest.mark.parametrize("ready", [False, True])
+def test_repeated_probe_interruptions_retain_deadline(ready):
+    namespace, events = drain_view([b"x"] * 20, ready=ready)
+    probes = []
+
+    def probe(*args):
+        probes.append(None)
+        raise InterruptedError("probe interrupted")
+
+    now = [0.0]
+    polls = []
+
+    def poll(fds, timeout):
+        # A confirmed-exit final sweep polls with zero. Interruptions must
+        # instead retain the live-target wait bounded by the caller deadline.
+        assert 0 < timeout <= 0.05 - now[0] + 1e-12
+        polls.append(timeout)
+        now[0] = min(0.05, now[0] + 0.01)
+        return list(fds) if ready else []
+
+    namespace["os"].waitid = probe
+    namespace["time"].monotonic = lambda: now[0]
+    namespace["_readable_fds"] = poll
+    result = namespace["_drain_pipes_until_eof"]([71], 73, deadline=0.05)
+    assert now[0] == 0.05 and len(polls) == 5
+    assert 1 <= len(probes) < 20
+    assert result == {71: b"x" * len(events)}
+    assert len(events) == (5 if ready else 0)
+
+
+@pytest.mark.parametrize("status", [object(), ChildProcessError("already reaped"),
+                                   OSError(errno.EIO, "probe unavailable")])
+def test_non_interrupt_probe_fallbacks_keep_existing_idle_sweep(status):
+    namespace, events = drain_view([], ready=False)
+    probes = []
+
+    def probe(*args):
+        probes.append(None)
+        if isinstance(status, BaseException):
+            raise status
+        return status
+
+    namespace["os"].waitid = probe
+    assert namespace["_drain_pipes_until_eof"]([71], 73) == {71: b""}
+    assert probes == [None] and events == []
+
+
+def test_liveness_probe_cancellation_propagates():
+    cancellation = KeyboardInterrupt("probe cancelled")
+    namespace, events = drain_view([])
+
+    def probe(*args):
+        raise cancellation
+
+    namespace["os"].waitid = probe
+    with pytest.raises(KeyboardInterrupt) as caught:
+        namespace["_drain_pipes_until_eof"]([71], 73)
+    assert caught.value is cancellation and events == []
