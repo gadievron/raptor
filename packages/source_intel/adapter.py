@@ -2225,18 +2225,24 @@ def _double_free_supports_finding(
 
     sink_path_abs = sink_path
     if not Path(sink_path).is_absolute():
-        sink_path_abs = str(
-            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
-        )
+        sink_path_abs = str(((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve())
+    endpoints = [(sink_path_abs, sink_line)] if sink_line else []
+
+    source_path = finding.source.file_path or ""
+    if source_path and src_line:
+        try:
+            if not Path(source_path).is_absolute():
+                source_path = str(((repo_root or _DEFAULT_REPO_ROOT) / source_path).resolve())
+        except (OSError, ValueError, RuntimeError):
+            # An unavailable source endpoint must not hide valid sink evidence.
+            pass
+        else:
+            endpoints.append((source_path, src_line))
 
     for df in result.double_frees:
         df_path, df_line = df.location
-        if df_path != sink_path_abs:
-            continue
-        for target_line in (sink_line, src_line):
-            if not target_line:
-                continue
-            if abs(df_line - target_line) <= 3:
+        for target_path, target_line in endpoints:
+            if df_path == target_path and abs(df_line - target_line) <= 3:
                 return True
     return False
 
