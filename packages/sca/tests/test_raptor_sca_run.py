@@ -53,6 +53,7 @@ class RaptorScaRunWrapperTests(unittest.TestCase):
         # pollution into the suite, and host-absolute paths like
         # /etc/hostname that depend on the runner's filesystem.
         self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         self.scratch = Path(self._tmp.name)
 
     def tearDown(self):
