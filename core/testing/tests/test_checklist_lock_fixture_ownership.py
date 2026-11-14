@@ -1,5 +1,6 @@
 """Checklist-lock fixtures close their holder before retiring any waiter."""
 
+from contextlib import ExitStack
 import os
 import threading
 from types import ModuleType
@@ -24,8 +25,11 @@ def _exercise(stage, error, after, tmp_path, monkeypatch):
     def opened(path, flags, mode=0o777):
         assert path == str(tmp_path / "checklist.lock")
         fd = os.open(path, flags, mode)
-        stamp = os.fstat(fd)
-        holders.append((fd, stamp.st_dev, stamp.st_ino))
+        with ExitStack() as setup:
+            setup.callback(os.close, fd)
+            stamp = os.fstat(fd)
+            holders.append((fd, stamp.st_dev, stamp.st_ino))
+            setup.pop_all()
         return fd
 
     def close(fd):
