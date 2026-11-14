@@ -20,8 +20,10 @@ is hardwired: CodeQL IRIS > structural tree-sitter > LLM-only.
 
 from __future__ import annotations
 
+import ast
 import logging
 import re
+import warnings
 from dataclasses import dataclass, field
 from functools import lru_cache, partial
 from pathlib import Path
@@ -201,8 +203,8 @@ def _read_file_content(path: Path, repo_path: Path | None = None) -> str | None:
 def _extract_graph(content: str, language: str) -> FileCallGraph | None:
     """Extract call graph for the given language.
 
-    Returns ``None`` (no evidence) when the language is unsupported OR
-    its tree-sitter grammar isn't installed.  The extractors degrade to
+    Returns ``None`` (no evidence) when the language is unsupported,
+    its tree-sitter grammar isn't installed, or Python parsing fails.  The extractors degrade to
     an EMPTY — but truthy — graph on a missing grammar, which the link
     check would otherwise misread as proof that the call chain is
     broken and refute the finding with high confidence; an environment
@@ -225,7 +227,14 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
         if not _TS_AVAILABLE or _ts_language(language) is None:
             return None
     try:
-        return extractor(content)  # type: ignore[operator]
+        graph = extractor(content)  # type: ignore[operator]
+        if language == "python" and not graph.calls:
+            # The inventory extractor also returns no calls on a failed parse.
+            # Distinguish that failure from valid source containing no calls.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                ast.parse(content)
+        return graph
     except Exception:  # noqa: BLE001 — hostile source: any parse failure degrades to no-graph
         return None
 
