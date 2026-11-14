@@ -552,6 +552,15 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
+        elif isinstance(statement, ast.Try):
+            if any(handler.name is not None for handler in statement.handlers):
+                return None
+            pending.extend(reversed(statement.finalbody))
+            pending.extend(reversed(statement.orelse))
+            for handler in reversed(statement.handlers):
+                expressions.append(handler.type)
+                pending.extend(reversed(handler.body))
+            pending.extend(reversed(statement.body))
         elif isinstance(statement, (ast.With, ast.AsyncWith)):
             for item in statement.items:
                 expressions.append(item.context_expr)
