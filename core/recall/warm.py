@@ -35,7 +35,7 @@ def load_suppression_records(path: Path) -> list[dict[str, Any]]:
     """Parse a suppressions.jsonl file; malformed lines are counted, not fatal."""
     records: list[dict[str, Any]] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="surrogateescape")
     except OSError:
         return records
     for line in text.split("\n"):
@@ -43,8 +43,10 @@ def load_suppression_records(path: Path) -> list[dict[str, Any]]:
         if not line:
             continue
         try:
+            # Keep undecodable bytes local to their physical record.
+            line.encode("utf-8")
             rec = json.loads(line)
-        except json.JSONDecodeError:
+        except (UnicodeError, json.JSONDecodeError):
             records.append({"_malformed": True})
             continue
         if isinstance(rec, dict):
