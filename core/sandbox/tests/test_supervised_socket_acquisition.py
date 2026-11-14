@@ -16,7 +16,9 @@ def test_failed_acquisition_closes_pair_with_traceback_retained(stage, error_typ
     primary = error_type('owned acquisition failure')
 
     def socketpair(*args):
-        pair = socket.socketpair(*args)
+        # Check the production protocol request; these no-traffic controls own only FD lifetime.
+        assert args == (socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        pair = socket.socketpair()
         endpoints.extend(pair)
         return pair
 
@@ -50,7 +52,9 @@ def test_successful_parent_handoff_closes_pair_without_starting_process():
     sentinel = object()
 
     def socketpair(*args):
-        pair = socket.socketpair(*args)
+        # Check the production protocol request; these no-traffic controls own only FD lifetime.
+        assert args == (socket.AF_UNIX, socket.SOCK_SEQPACKET)
+        pair = socket.socketpair()
         endpoints.extend(pair)
         return pair
 
