@@ -7,6 +7,8 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import Future
 
+from core.source.lines import iter_splitlines
+
 _process_id = os.getpid
 
 
@@ -102,7 +104,7 @@ def rule_version_refusal(text: str, installed: Callable[[], str | None]) -> str 
     content. Invalid or duplicate declarations refuse only the affected rule.
     """
     requirements = []
-    for line in text.removeprefix("﻿").splitlines():
+    for line in iter_splitlines(text.removeprefix("﻿")):
         stripped = line.strip()
         if not stripped:
             continue

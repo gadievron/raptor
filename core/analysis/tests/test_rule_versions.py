@@ -43,3 +43,31 @@ def test_version_parser_is_bounded():
 
 def test_bom_does_not_hide_a_requirement():
     assert rule_version_refusal("\ufeff// raptor-min-version: 2.0.0\nselect 1", lambda: "1.0.0")
+
+
+def test_requirement_parser_stops_consuming_lines_at_rule_body(monkeypatch):
+    from core.analysis import rule_versions
+    from core.source.lines import iter_splitlines
+
+    consumed = []
+
+    def tracked(text):
+        for line in iter_splitlines(text):
+            consumed.append(line)
+            yield line
+
+    monkeypatch.setattr(rule_versions, 'iter_splitlines', tracked, raising=False)
+    probe = Mock(side_effect=AssertionError('undeclared rule probed tool'))
+    text = '// owned header\n@rule@\n' + 'owned body\n' * 2000
+    assert rule_versions.rule_version_refusal(text, probe) is None
+    assert consumed == ['// owned header', '@rule@']
+    probe.assert_not_called()
+
+
+@pytest.mark.parametrize('separator', ['\n', '\r\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
+def test_requirement_parser_preserves_display_line_separators(separator):
+    probe = Mock(return_value='1.0.0')
+    text = separator.join(['\ufeff// owned header', '// raptor-min-version: 2.0.0', '@rule@'])
+    reason = rule_version_refusal(text, probe)
+    assert reason and 'requires tool >= 2.0.0' in reason
+    assert probe.call_count == 1
