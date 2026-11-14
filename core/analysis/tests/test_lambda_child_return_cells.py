@@ -59,8 +59,8 @@ def test_child_parameter_masks_lambda_capture():
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("expression", ["lambda: [raw for item in ()]", "lambda: (raw := 0)",
-                                       "lambda: (lambda value=[raw for item in ()]: value)"],
+@pytest.mark.parametrize("expression", ["lambda: [raw for slots[(lambda: raw)()] in ()]", "lambda: (raw := 0)",
+                                       "lambda: (lambda value=[raw for slots[(lambda: raw)()] in ()]: value)"],
                          ids=["comprehension", "assignment-expression", "nested-default"])
 def test_unsupported_lambda_return_invalidates_complete_body(expression):
     source = f"raw\ndef child():\n return {expression}"
