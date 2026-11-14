@@ -76,9 +76,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.xss.taint.go
     message: >-
-      Untrusted data flows into an HTML response without escaping. Use
-      html/template (auto-escaping) instead of text/template, or call
-      template.HTMLEscapeString() before writing.
+      Request or environment data reaches a template trusted-content conversion.
+      Review the eventual HTML, JavaScript, CSS or attribute context before
+      treating the converted value as safe. Retain template auto-escaping and
+      use encoding appropriate to the output context.
     languages: [go]
     severity: CRITICAL
     mode: taint
@@ -128,9 +129,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.xss.taint.java
     message: >-
-      Untrusted data flows into an HTML response without escaping. Use a
-      context-aware encoder such as OWASP Java Encoder or a templating engine
-      with auto-escaping.
+      Request-derived data reaches a response or writer API. Review the writer's
+      destination, response content type and output context before treating it
+      as executable markup. Use context-appropriate encoding or retain template
+      auto-escaping for HTML output.
     languages: [java]
     severity: CRITICAL
     mode: taint
