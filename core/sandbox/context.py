@@ -9892,86 +9892,93 @@ def _untrusted_stdio_write_only(kwargs: dict, caller: str) -> "list[int]":
         return wo_fds
     import fcntl as _fcntl
     import stat as _stat
-    for _name, _fd in (("stdout", 1), ("stderr", 2)):
-        if _name in kwargs:
-            continue
-        try:
-            _is_tty = os.isatty(_fd)
-            if not _is_tty:
-                _mode = os.fstat(_fd).st_mode
-                try:
-                    _acc = _fcntl.fcntl(
-                        _fd, _fcntl.F_GETFL) & os.O_ACCMODE
-                except OSError:
-                    _acc = os.O_RDWR  # unknown → treat as readable
-                if _acc == os.O_WRONLY:
-                    continue  # not readable — safe to inherit
-                if _stat.S_ISSOCK(_mode):
-                    logger.warning(
-                        "%s: %s is a readable socket "
-                        "descriptor — plugging with /dev/null "
-                        "(no write-only reopen exists for "
-                        "sockets). Pass capture_output=True or "
-                        "an explicit %s= pipe to keep the "
-                        "output.", caller, _name, _name,
-                    )
-                    kwargs[_name] = subprocess.DEVNULL
-                    continue
-                _flags = os.O_WRONLY | os.O_NOCTTY
-                try:
-                    if _fcntl.fcntl(_fd, _fcntl.F_GETFL) \
-                            & os.O_APPEND:
-                        _flags |= os.O_APPEND
-                except OSError:
-                    pass
-                _wfd_opt = _reopen_write_only(_fd, _flags)
-                if _wfd_opt is None:
-                    logger.warning(
-                        "%s: %s has no verified "
-                        "write-only reopen on this platform — "
-                        "plugging with /dev/null. Pass "
-                        "capture_output=True or an explicit "
-                        "%s= pipe to keep the output.",
-                        caller, _name, _name,
-                    )
-                    kwargs[_name] = subprocess.DEVNULL
-                    continue
-                _wfd = _wfd_opt
-                if _stat.S_ISREG(_mode) and not (
-                        _flags & os.O_APPEND):
-                    # A fresh open starts at offset 0; carry the
-                    # inherited stream position so the child
-                    # appends after prior parent output instead
-                    # of clobbering it.
+    try:
+        for _name, _fd in (("stdout", 1), ("stderr", 2)):
+            if _name in kwargs:
+                continue
+            try:
+                _is_tty = os.isatty(_fd)
+                if not _is_tty:
+                    _mode = os.fstat(_fd).st_mode
                     try:
-                        os.lseek(_wfd,
-                                 os.lseek(_fd, 0, os.SEEK_CUR),
-                                 os.SEEK_SET)
+                        _acc = _fcntl.fcntl(
+                            _fd, _fcntl.F_GETFL) & os.O_ACCMODE
+                    except OSError:
+                        _acc = os.O_RDWR  # unknown → treat as readable
+                    if _acc == os.O_WRONLY:
+                        continue  # not readable — safe to inherit
+                    if _stat.S_ISSOCK(_mode):
+                        logger.warning(
+                            "%s: %s is a readable socket "
+                            "descriptor — plugging with /dev/null "
+                            "(no write-only reopen exists for "
+                            "sockets). Pass capture_output=True or "
+                            "an explicit %s= pipe to keep the "
+                            "output.", caller, _name, _name,
+                        )
+                        kwargs[_name] = subprocess.DEVNULL
+                        continue
+                    _flags = os.O_WRONLY | os.O_NOCTTY
+                    try:
+                        if _fcntl.fcntl(_fd, _fcntl.F_GETFL) \
+                                & os.O_APPEND:
+                            _flags |= os.O_APPEND
                     except OSError:
                         pass
-            else:
-                _wfd = os.open(os.ttyname(_fd),
-                               os.O_WRONLY | os.O_NOCTTY)
-        except OSError as _tty_exc:
-            # Fail CLOSED like the socket / no-reopen branches
-            # above: inheriting the descriptor here would hand the
-            # untrusted child the readable handle (an O_RDWR pty
-            # slave taps the operator's keystrokes) that this whole
-            # guard exists to revoke. Discarding output is strictly
-            # safer than granting the read channel.
-            logger.warning(
-                "%s: could not reopen the %s "
-                "descriptor write-only for the child (%s) — "
-                "plugging with /dev/null (the inherited "
-                "descriptor may be readable). Pass "
-                "capture_output=True or an explicit %s= pipe to "
-                "keep the output.",
-                caller, _name, _tty_exc, _name,
-            )
-            kwargs[_name] = subprocess.DEVNULL
-            continue
-        kwargs[_name] = _wfd
-        wo_fds.append(_wfd)
+                    _wfd_opt = _reopen_write_only(_fd, _flags)
+                    if _wfd_opt is None:
+                        logger.warning(
+                            "%s: %s has no verified "
+                            "write-only reopen on this platform — "
+                            "plugging with /dev/null. Pass "
+                            "capture_output=True or an explicit "
+                            "%s= pipe to keep the output.",
+                            caller, _name, _name,
+                        )
+                        kwargs[_name] = subprocess.DEVNULL
+                        continue
+                    _wfd = _wfd_opt
+                    wo_fds.append(_wfd)
+                    if _stat.S_ISREG(_mode) and not (
+                            _flags & os.O_APPEND):
+                        # A fresh open starts at offset 0; carry the
+                        # inherited stream position so the child
+                        # appends after prior parent output instead
+                        # of clobbering it.
+                        try:
+                            os.lseek(_wfd,
+                                     os.lseek(_fd, 0, os.SEEK_CUR),
+                                     os.SEEK_SET)
+                        except OSError:
+                            pass
+                else:
+                    _wfd = os.open(os.ttyname(_fd),
+                                   os.O_WRONLY | os.O_NOCTTY)
+                    wo_fds.append(_wfd)
+            except OSError as _tty_exc:
+                # Fail CLOSED like the socket / no-reopen branches
+                # above: inheriting the descriptor here would hand the
+                # untrusted child the readable handle (an O_RDWR pty
+                # slave taps the operator's keystrokes) that this whole
+                # guard exists to revoke. Discarding output is strictly
+                # safer than granting the read channel.
+                logger.warning(
+                    "%s: could not reopen the %s "
+                    "descriptor write-only for the child (%s) — "
+                    "plugging with /dev/null (the inherited "
+                    "descriptor may be readable). Pass "
+                    "capture_output=True or an explicit %s= pipe to "
+                    "keep the output.",
+                    caller, _name, _tty_exc, _name,
+                )
+                kwargs[_name] = subprocess.DEVNULL
+                continue
+            kwargs[_name] = _wfd
+    except BaseException:
+        for owned_fd in wo_fds:
+            with suppress(BaseException):
+                os.close(owned_fd)
+        raise
     return wo_fds
 
 
