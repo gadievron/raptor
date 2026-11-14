@@ -25,6 +25,7 @@ from packages.source_intel.analyze import (
     GRADE_SAME_FUNCTION,
     CapabilityEvidence,
     SourceIntelResult,
+    compute_privilege_back_walk_evidence,
 )
 
 # ---- fixtures ---------------------------------------------------------
@@ -284,37 +285,15 @@ class TestPrivilegeBackWalkSuppresses:
         # No real walk; just verify the clamp constant.
         assert _PRIV_BACK_WALK_DEFAULT_DEPTH <= _PRIV_BACK_WALK_MAX_DEPTH
 
-    def test_two_hop_gate_suppresses(self):
-        """leaf_fn callers all funnel through gated_top within 2 hops."""
-        facts = _StubFacts({
-            "leaf_fn": [("/repo/a.c", 50, "mid_fn")],
-            "mid_fn": [("/repo/a.c", 30, "gated_top")],
-        })
+    def test_two_hop_call_observations_do_not_suppress(self):
+        """Complete caller facts and capability observations do not establish denial enforcement."""
+        facts = _StubFacts({'leaf_fn': [('/repo/a.c', 50, 'mid_fn')], 'mid_fn': [('/repo/a.c', 30, 'gated_top')]})
 
-        # enclosing_function: sink line 100 → leaf_fn (the finding fn);
-        # call sites resolve via the stub.
         def _enc(file_path, line):
             if line == 100:
-                return "leaf_fn"
+                return 'leaf_fn'
             return facts.enclosing(file_path, line)
-
-        with (
-            patch("packages.coccinelle.prereqs.gather_prereqs",
-                  return_value=facts),
-            patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=_enc),
-            patch("packages.source_intel.adapter._line_uses_privileged_cap",
-                  return_value=True),
-            patch("packages.source_intel.adapter._function_is_static",
-                  return_value=True),
-            patch.object(Path, "is_dir", return_value=True),
-        ):
-            assert _privilege_back_walk_suppresses(
-                _finding(),
-                _result_with_caps(_cap_for("gated_top")),
-                Path("/repo"),
-                max_depth=3,
-            ) is True
+        assert _privilege_back_walk_suppresses(_finding(), _result_with_caps(_cap_for('gated_top')), Path('/repo'), max_depth=3) is False
 
     def test_incomplete_sweep_does_not_suppress(self):
         """Fully-gated shape, but the fact base is marked partial (an
@@ -419,80 +398,21 @@ class TestPrivilegeBackWalkSuppresses:
         assert _PRIV_BACK_WALK_DEFAULT_DEPTH == 3
 
     def test_non_static_finding_fn_never_suppressed(self, tmp_path):
-        """Two-direction linkage gate on real files: the prereq scan
-        only sees the sink file's parent directory, so a NON-static
-        finding function may have ungated callers in other
-        translation units the walk can't see — even a fully-gated
-        in-scope caller set must not suppress. The identical shape
-        with `static` linkage (all callers provably in-file) still
-        suppresses."""
+        """Both linkage shapes withhold suppression without a reviewed denial-exit relation."""
         gated_line = 5
-        non_static = tmp_path / "a.c"
-        non_static.write_text(
-            "int leaf_fn(int a)\n"
-            "{\n"
-            "    return a * 2;\n"
-            "}\n"
-            "static int caller(int a)\n"
-            "{\n"
-            "    if (!capable(CAP_SYS_ADMIN)) return -1;\n"
-            "    return leaf_fn(a);\n"
-            "}\n"
-        )
-
-        facts = _StubFacts({
-            "leaf_fn": [(str(non_static), 8, "caller")],
-        })
-        finding = Finding(
-            finding_id="t", producer="codeql",
-            rule_id="cpp/use-after-free", message="m",
-            source=Step(file_path=str(non_static), line=3, column=1,
-                        snippet="s", label="source"),
-            sink=Step(file_path=str(non_static), line=3, column=1,
-                      snippet="x", label="sink"),
-            intermediate_steps=(), raw={},
-        )
-        caps = _result_with_caps(CapabilityEvidence(
-            cap_function="capable",
-            location=(str(non_static), gated_line + 2),
-            grade=GRADE_SAME_FUNCTION,
-            enclosing_function="caller",
-        ))
+        non_static = tmp_path / 'a.c'
+        non_static.write_text('int leaf_fn(int a)\n{\n    return a * 2;\n}\nstatic int caller(int a)\n{\n    if (!capable(CAP_SYS_ADMIN)) return -1;\n    return leaf_fn(a);\n}\n')
+        facts = _StubFacts({'leaf_fn': [(str(non_static), 8, 'caller')]})
+        finding = Finding(finding_id='t', producer='codeql', rule_id='cpp/use-after-free', message='m', source=Step(file_path=str(non_static), line=3, column=1, snippet='s', label='source'), sink=Step(file_path=str(non_static), line=3, column=1, snippet='x', label='sink'), intermediate_steps=(), raw={})
+        caps = _result_with_caps(CapabilityEvidence(cap_function='capable', location=(str(non_static), gated_line + 2), grade=GRADE_SAME_FUNCTION, enclosing_function='caller'))
 
         def _enc(file_path, line):
             if line == 3:
-                return "leaf_fn"
+                return 'leaf_fn'
             return facts.enclosing(file_path, line)
-
-        with (
-            patch("packages.coccinelle.prereqs.gather_prereqs",
-                  return_value=facts),
-            patch("packages.source_intel.analyze._enclosing_function",
-                  side_effect=_enc),
-            patch("packages.source_intel.adapter._line_uses_privileged_cap",
-                  return_value=True),
-        ):
-            # Direction 1: non-static finding fn — must NOT suppress.
-            assert _privilege_back_walk_suppresses(
-                finding, caps, tmp_path,
-            ) is False
-
-            # Direction 2: identical shape, static linkage — still
-            # suppresses (the legitimately-gated case keeps working).
-            non_static.write_text(
-                "static int leaf_fn(int a)\n"
-                "{\n"
-                "    return a * 2;\n"
-                "}\n"
-                "static int caller(int a)\n"
-                "{\n"
-                "    if (!capable(CAP_SYS_ADMIN)) return -1;\n"
-                "    return leaf_fn(a);\n"
-                "}\n"
-            )
-            assert _privilege_back_walk_suppresses(
-                finding, caps, tmp_path,
-            ) is True
+        assert _privilege_back_walk_suppresses(finding, caps, tmp_path) is False
+        non_static.write_text('static int leaf_fn(int a)\n{\n    return a * 2;\n}\nstatic int caller(int a)\n{\n    if (!capable(CAP_SYS_ADMIN)) return -1;\n    return leaf_fn(a);\n}\n')
+        assert _privilege_back_walk_suppresses(finding, caps, tmp_path) is False
 
 
 # ---- compute_privilege_back_walk_evidence (prose evidence walker) -----
@@ -514,15 +434,8 @@ class TestBackWalkEvidenceCompleteness:
                 "leaf_fn", tmp_path, _result_with_caps(),
             ) is None
 
-    def test_complete_sweep_still_yields_evidence(self, tmp_path):
-        from packages.source_intel.analyze import (
-            compute_privilege_back_walk_evidence,
-        )
+    def test_complete_sweep_without_denial_relation_yields_no_summary(self, tmp_path):
         facts = _StubFacts({})
-        with patch("packages.coccinelle.prereqs.gather_prereqs",
-                   return_value=facts):
-            ev = compute_privilege_back_walk_evidence(
-                "leaf_fn", tmp_path, _result_with_caps(),
-            )
-        assert ev is not None
-        assert ev.no_callers is True
+        assert facts.complete is True
+        ev = compute_privilege_back_walk_evidence('leaf_fn', tmp_path, _result_with_caps())
+        assert ev is None

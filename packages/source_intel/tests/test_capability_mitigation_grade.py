@@ -31,12 +31,18 @@ def test_weak_capability_grade_does_not_read_constant(monkeypatch):
 
 
 @pytest.mark.parametrize("function,constant,expected", [
-    ("capable", "CAP_SYS_ADMIN", True),
+    ("capable", "CAP_SYS_ADMIN", False),
     ("capable", None, False),
     ("ns_capable", "CAP_SYS_ADMIN", False),
 ])
-def test_dominates_capability_keeps_existing_admission(function, constant, expected, monkeypatch):
-    monkeypatch.setattr(render, "_privileged_cap_constant_on_line", lambda *_: constant)
+def test_dominates_capability_withholds_gate_without_relation(function, constant, expected, monkeypatch):
+    calls = []
+
+    def owned_lookup(*args):
+        calls.append(args)
+        return constant
+
+    monkeypatch.setattr(render, "_privileged_cap_constant_on_line", owned_lookup)
     record = CapabilityEvidence(
         cap_function=function, location=("owned.c", 7),
         grade="dominates", enclosing_function="owned",
@@ -45,6 +51,8 @@ def test_dominates_capability_keeps_existing_admission(function, constant, expec
         SourceIntelResult(capabilities=(record,)), finding_function="owned",
     )
     assert bool(entries) is expected
-    if expected:
-        assert entries[0].name == "privilege_gate"
-        assert entries[0].confidence == "medium"
+    assert entries == []
+    assert calls == []
+    assert record.cap_function == function
+    assert record.grade == "dominates"
+    assert record.location == ("owned.c", 7)

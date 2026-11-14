@@ -279,7 +279,7 @@ def test_capability_in_different_function_does_not_dominate(tmp_path):
 
 
 def test_capability_dominance_pure_helper(tmp_path):
-    """Direct test of _privileged_capability_dominates."""
+    """Call observations alone withhold direct suppression, including matching grade."""
     src = tmp_path / "x.c"
     src.write_text(
         "int privileged(int *p) {\n"
@@ -294,7 +294,8 @@ def test_capability_dominance_pure_helper(tmp_path):
         grade=GRADE_SAME_FUNCTION,
         enclosing_function="privileged",
     ),))
-    assert _privileged_capability_dominates(finding, matching) is True
+    assert _privileged_capability_dominates(finding, matching) is False
+    assert matching.capabilities[0].enclosing_function == "privileged"
 
     sibling = SourceIntelResult(capabilities=(CapabilityEvidence(
         cap_function="capable",
