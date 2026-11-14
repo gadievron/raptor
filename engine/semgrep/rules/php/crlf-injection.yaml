@@ -22,11 +22,10 @@ rules:
     languages: [php]
     severity: HIGH
     message: >
-      Request data flows into a socket write without CR/LF
-      neutralization. Embedded "\r\n" terminates the current protocol
-      command (SMTP/IMAP/NNTP/FTP) and injects attacker-chosen
-      commands into the stream. Strip or reject CR/LF
-      (e.g. str_replace(["\r", "\n"], '', $value)) before writing.
+      Request-derived data reaches a socket-write payload without a recognised
+      CR/LF sanitizer. Review the bytes actually written, protocol framing and
+      validation before concluding that command boundaries are attacker-controlled.
+      For line-oriented command fields, reject or neutralise CR/LF before writing.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
