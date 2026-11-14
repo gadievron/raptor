@@ -75,7 +75,7 @@ def _version_key(name: str) -> tuple:
     """
     parts: list[tuple[int, int, str]] = []
     for comp in name.split("."):
-        if comp.isdigit():
+        if comp.isdecimal():
             parts.append((1, int(comp), ""))
         else:
             parts.append((0, 0, comp))
