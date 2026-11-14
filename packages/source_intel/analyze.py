@@ -792,13 +792,21 @@ def _materialize_rules_dir(axis_dir: Path) -> Iterator[Path]:
 
     import shutil
     with scratch_dir("source_intel_rules_") as tmp_dir:
-        for rule_path in rule_paths:
-            if rule_path in slotted:
-                (tmp_dir / rule_path.name).write_text(
-                    slotted[rule_path], encoding="utf-8",
-                )
-            else:
-                shutil.copyfile(rule_path, tmp_dir / rule_path.name)
+        try:
+            for rule_path in rule_paths:
+                if rule_path in slotted:
+                    (tmp_dir / rule_path.name).write_text(
+                        slotted[rule_path], encoding="utf-8",
+                    )
+                else:
+                    shutil.copyfile(rule_path, tmp_dir / rule_path.name)
+        except OSError:
+            logger.warning(
+                "api-pack staging failed for %s; running unrendered",
+                axis_dir, exc_info=True,
+            )
+            yield axis_dir
+            return
         yield tmp_dir
 
 
