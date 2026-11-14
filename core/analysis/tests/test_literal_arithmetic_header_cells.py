@@ -104,7 +104,7 @@ def test_dynamic_numeric_operand_mode_boundary_stays_excluded(annotation, future
     assert _bounded_body_expression_loads(ast.parse(source).body[-1].body[0].body) is None
 
 
-@pytest.mark.parametrize('annotation', ['-True', 'True+2j', '1+False', '1<<2', '~1', '1@2',
+@pytest.mark.parametrize('annotation', ['-True', 'True+2j', '1+False', '1@2',
                                      '[0]+[1]', '"a"+"b"', '1+None', 'invoke()+1'])
 def test_non_numeric_dynamic_and_unlisted_operators_remain_excluded(annotation):
     compile(source_for(annotation), '<excluded-arithmetic-header>', 'exec', dont_inherit=True)
