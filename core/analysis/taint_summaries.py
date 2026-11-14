@@ -633,8 +633,8 @@ def _expr_taint(
       clean-sanitizer binding the enforced sanitizer-cut consumed
       to suppress real findings (the JoinedStr hazard restated on
       the element/container shapes).
-    * Literals, lambdas — return empty (a literal carries no param
-      taint; a lambda OBJECT doesn't evaluate its body here).
+    * Literals — return empty. Lambda objects retain default-value
+      taint without evaluating their bodies or modelling live closure cells.
     """
     if expr is None:
         return _empty_state()
@@ -909,9 +909,19 @@ def _expr_taint(
                 out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
             )
         return out
-    if isinstance(expr, (ast.Constant, ast.Lambda)):
-        # A literal carries no param taint; a lambda OBJECT does not
-        # evaluate its body here (calling it does — see the IIFE arm).
+    if isinstance(expr, ast.Lambda):
+        # The object retains evaluated defaults; its body remains deferred.
+        # Free closure cells are not creation-time values and need a
+        # separate transfer model for later writes.
+        state = _empty_state()
+        for default in (*expr.args.defaults, *expr.args.kw_defaults):
+            if default is not None:
+                state = _merge_states(state, _expr_taint(
+                    default, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
+                ))
+        # A callable object is not a sanitised default value itself.
+        return _add_effect(state, "<lambda>", _OPAQUE_ARG)
+    if isinstance(expr, ast.Constant):
         return _empty_state()
     # Conservative fallback for every OTHER expression kind (Compare,
     # Slice bounds, and any future node): union the in-states of all
