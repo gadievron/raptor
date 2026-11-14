@@ -495,10 +495,10 @@ def _parse_setup_status(raw: bytes):
     )
 
 
-def _drain_status_observation(status_r: int, parent_fds: set):
+def _drain_status_pipe(status_r: int, parent_fds: set, *, _observation=None):
     """Read and close the parent status pipe, retaining descriptive termination.
 
-    Return (legacy verdict, termination kind, byte count, G: prefix seen).
+    Return the legacy verdict. Optional parent observation cannot replace it.
     Neither a prefix nor would-block independently proves target execution.
 
     MUST be called on EVERY parent exit path (including timeout/exception) so
@@ -556,15 +556,20 @@ def _drain_status_observation(status_r: int, parent_fds: set):
         # G: may hide a following X report; an empty read proves neither.
         parsed = ("!", "exec-status pipe read failed; "
                   "target execution status is unknown")
-    return parsed, termination, len(raw), raw.startswith(b"G:")
-
-
-def _drain_status_pipe(status_r: int, parent_fds: set):
-    """Preserve the existing verdict API; observation is not execution proof."""
-    parsed, _termination, _read_bytes, _confirmation_prefix = (
-        _drain_status_observation(status_r, parent_fds)
-    )
+    if _observation is not None:
+        try:
+            _observation.append((parsed, termination, len(raw), raw.startswith(b"G:")))
+        except Exception:
+            pass  # Optional metadata does not change the legacy verdict.
     return parsed
+
+
+
+def _drain_status_observation(status_r: int, parent_fds: set):
+    """Descriptive helper; production callers retain the legacy verdict API."""
+    observation = []
+    _drain_status_pipe(status_r, parent_fds, _observation=observation)
+    return observation[0] if observation else None
 
 
 def _should_warn_proc_mount_failure(proc_rc: int, libc_loaded: bool,
@@ -1858,11 +1863,16 @@ def run_sandboxed(
         if _cwd_path and not os.path.isabs(_cwd_path):
             cwd = os.path.join(os.getcwd(), _cwd_path)
 
-    _execution_handoff = _prepare_execution_handoff(
-        _execution_input_owner, cmd, env, cwd, strict_env=strict_env,
-    )
-    _exec_payload = (None if _execution_handoff is None else
-                     _execution_handoff.inputs.exec_inputs())
+    try:
+        _execution_handoff = _prepare_execution_handoff(
+            _execution_input_owner, cmd, env, cwd, strict_env=strict_env,
+        )
+        _exec_payload = (None if _execution_handoff is None else
+                         _execution_handoff.inputs.exec_inputs())
+    except Exception:
+        # Optional snapshot/import/allocation failure changes observation
+        # availability only. Original arguments still use the same lane.
+        _execution_handoff = _exec_payload = None
     _exec_cmd = cmd if _exec_payload is None else _exec_payload[0]
     _exec_cwd = cwd if _exec_payload is None else _exec_payload[2]
 
@@ -4816,8 +4826,14 @@ def run_sandboxed(
     finally:
         def retire_status():
             nonlocal setup_status, status_observation
-            status_observation = _drain_status_observation(status_r, _parent_fds)
-            setup_status = status_observation[0]
+            try:
+                observations = []
+            except Exception:
+                observations = None
+            setup_status = _drain_status_pipe(
+                status_r, _parent_fds, _observation=observations,
+            )
+            status_observation = observations[0] if observations else None
 
         callbacks = [retire_status, lambda: _close_parent_fd(death_w),
                      retire_scope_endpoints]
@@ -4888,13 +4904,18 @@ def run_sandboxed(
     # Authoritative setup-failure signal for context.py's decision table
     # (degrade on M/X, fail loud on L/S/U). None ⇒ target execed.
     cp._setup_status = setup_status  # type: ignore[attr-defined]
-    if _execution_handoff is not None:
-        cp._execution_input_handoff = _execution_handoff  # type: ignore[attr-defined]
-    # Descriptive parent observations only; no attempt or target-context seal.
-    cp._setup_status_observation = status_observation  # type: ignore[attr-defined]
-    cp._wait_origin = wait_origin  # type: ignore[attr-defined]
-    cp._exec_pid_delivered = _exec_pid_delivered  # type: ignore[attr-defined]
-    cp._caller_kill_exemption_applied = caller_kill_exemption_applied  # type: ignore[attr-defined]
+    try:
+        if _execution_handoff is not None:
+            cp._execution_input_handoff = _execution_handoff  # type: ignore[attr-defined]
+        # Descriptive parent observations only; no attempt or target-context seal.
+        cp._setup_status_observation = status_observation  # type: ignore[attr-defined]
+        cp._wait_origin = wait_origin  # type: ignore[attr-defined]
+        cp._exec_pid_delivered = _exec_pid_delivered  # type: ignore[attr-defined]
+        cp._caller_kill_exemption_applied = caller_kill_exemption_applied  # type: ignore[attr-defined]
+    except Exception:
+        # No private result receipt can be issued without its owned handoff.
+        with contextlib.suppress(Exception):
+            del cp._execution_input_handoff
     if not text and _capture_any:
         # The parent can decode the retained prefix using its selected codec
         # before formatting loss, without interpreting target-printed markers.

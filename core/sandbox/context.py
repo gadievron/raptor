@@ -160,12 +160,16 @@ class _ExecutionObservationIssuer:
         self._reference = None
         self._result = None
         self._view = None
+        self._available = True
+
+    def unavailable(self):
+        self._available = False
 
     def record_native_result(self, result):
         from core.audit.prepared_execution_attempt import ExecutionInputHandoff
         handoff = getattr(result, "_execution_input_handoff", None)
         try:
-            if (type(result) is subprocess.CompletedProcess
+            if (self._available and type(result) is subprocess.CompletedProcess
                     and type(handoff) is ExecutionInputHandoff
                     and len(self._results) < 8):
                 self._results[id(result)] = (weakref.ref(result), handoff.attempt)
@@ -177,6 +181,8 @@ class _ExecutionObservationIssuer:
 
     def bind_selected_result(self, result):
         from core.audit.prepared_execution_inputs import InputsUnavailable
+        if not self._available:
+            return
         registered = self._results.get(id(result))
         if registered is None or registered[0]() is not result:
             return
@@ -216,14 +222,16 @@ class _ExecutionObservationIssuer:
         result._execution_observation = reference
 
     def read(self, reference, result):
-        if (reference is not self._reference or self._result is None
+        if (not self._available or reference is not self._reference or self._result is None
                 or self._result() is not result):
             return None
         return self._view
 
     def close(self):
-        self.inputs.close()
-        self._results.clear()
+        try:
+            self.inputs.close()
+        finally:
+            self._results.clear()
 
 
 def _read_execution_observation(result):
@@ -244,17 +252,40 @@ def _own_execution_observations(execute):
     def owned(cmd, **kwargs):
         if "_execution_invocation" in kwargs:
             raise TypeError("_execution_invocation is an internal sandbox argument")
-        issuer = _ExecutionObservationIssuer()
+        # Observation is optional. Only its own ordinary failures are
+        # unavailable; execution, required budgets and cancellation stay loud.
+        try:
+            issuer = _ExecutionObservationIssuer()
+        except Exception:
+            issuer = None
         failure = None
+        result = None
+
+        def retire_observation():
+            if issuer is not None:
+                try:
+                    issuer.close()
+                except Exception:
+                    issuer.unavailable()
+                    if result is not None:
+                        with suppress(Exception):
+                            del result._execution_observation
+
         try:
             result = execute(cmd, _execution_invocation=issuer, **kwargs)
-            issuer.bind_selected_result(result)
+            if issuer is not None:
+                try:
+                    issuer.bind_selected_result(result)
+                except Exception:
+                    issuer.unavailable()
+                    with suppress(Exception):
+                        del result._execution_observation
             return result
         except BaseException as error:
             failure = error
             raise
         finally:
-            retire_parent_resources(issuer.close, primary_error=failure)
+            retire_parent_resources(retire_observation, primary_error=failure)
 
     return owned
 
@@ -6575,7 +6606,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 execution_committed_callback=_mark_spawn_execution_committed,
                             )
                             if _execution_invocation is not None:
-                                _execution_invocation.record_native_result(_native_result)
+                                try:
+                                    _execution_invocation.record_native_result(_native_result)
+                                except Exception:
+                                    _execution_invocation.unavailable()
+                                    with suppress(Exception):
+                                        del _native_result._execution_input_handoff
                             if getattr(_native_result, "_setup_status", None) is not None:
                                 # A returned failure status keeps the existing
                                 # typed setup decision table authoritative.
