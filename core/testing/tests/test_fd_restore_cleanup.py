@@ -1,6 +1,6 @@
 """Descriptor snapshots must close and restore independently after failure."""
 
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 import errno
 import importlib
 import os
@@ -36,15 +36,29 @@ def _intercept_descriptors(module, monkeypatch, error, fault):
 
     def pipe():
         pair = real_pipe()
-        for fd in pair:
-            record(fd)
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            mark = len(descriptors)
+            setup.callback(descriptors.__delitem__, slice(mark, None))
+            for fd in pair:
+                record(fd)
+            setup.pop_all()
         return pair
 
     def dup(fd):
         if fault == "dup" or (fault == "second-dup" and duplicates):
             return fail()
-        result = record(real_dup(fd))
-        duplicates.append(result)
+        duplicate = real_dup(fd)
+        with ExitStack() as setup:
+            setup.callback(os.close, duplicate)
+            mark = len(descriptors)
+            setup.callback(descriptors.__delitem__, slice(mark, None))
+            duplicate_mark = len(duplicates)
+            setup.callback(duplicates.__delitem__, slice(duplicate_mark, None))
+            result = record(duplicate)
+            duplicates.append(result)
+            setup.pop_all()
         return result
 
     def dup2(source, target):
