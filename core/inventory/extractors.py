@@ -2458,7 +2458,8 @@ class TreeSitterExtractor:
     ) -> list[FunctionInfo]:
         """Extract spans, optionally propagating parse and function metadata errors.
 
-        Recovery from syntax errors or unnamed nodes remains unchanged.
+        Refused named spans also raise when requested. Recovery from syntax
+        errors or unnamed nodes remains unchanged.
         """
         if _tree is None:
             try:
@@ -2800,6 +2801,8 @@ class TreeSitterExtractor:
                     fi = self._extract_function(child, class_name, attrs, class_attributes)
                     if fi:
                         functions.append(fi)
+                    elif raise_on_error and self._get_name(child):
+                        raise RuntimeError("Named function span was refused")
                 except Exception as e:  # noqa: BLE001 — skip one node, keep walking
                     logger.debug("tree-sitter: failed to extract function at line %d: %s", child.start_point[0]+1, e)
                     if raise_on_error:
