@@ -247,23 +247,21 @@ def _sink_discovery_fingerprint(target_path, scope_dirs) -> str | None:
             iter_discovery_source_files, _PER_FILE_CAP, _AGGREGATE_CAP,
         )
 
-        from .prep_cache import content_fingerprint
+        from core.hash import sha256_fileobj
 
-        # The fingerprint needs whole-file bytes (a capped read
-        # would make files differing past the cap fingerprint equal
-        # and serve a stale extraction), so the open is the hardened
-        # one instead: fd-checked regular + O_NOFOLLOW + O_NONBLOCK
-        # refuses FIFO/symlink plants; regular-file reads cannot
-        # block.
-        def _whole_bytes(p: Path) -> bytes:
+        from .prep_cache import content_fingerprint_from_hashes
+
+        # Hash whole contents in bounded chunks on the verified descriptor.
+        # Keep the existing empty-content digest on open refusal.
+        def _whole_digest(p: Path) -> str:
             fh = open_regular(p, "rb")
             if fh is None:
-                return b""
+                return hashlib.sha256(b"").hexdigest()
             with preserving_stream_error(fh):
-                return fh.read()
+                return sha256_fileobj(fh, chunk_size=65_536)
 
-        base_fingerprint = content_fingerprint(
-            (rel, _whole_bytes(path))
+        base_fingerprint = content_fingerprint_from_hashes(
+            (rel, _whole_digest(path))
             for path, rel, _lang in iter_discovery_source_files(
                 Path(target_path), scope_dirs=scope_dirs,
             )

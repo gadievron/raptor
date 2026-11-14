@@ -60,6 +60,24 @@ def content_fingerprint(items: Iterable[tuple[str, bytes]]) -> str:
     return h.hexdigest()
 
 
+def content_fingerprint_from_hashes(items: Iterable[tuple[str, str]]) -> str:
+    """Hash ordered names and locally computed whole-content SHA-256s.
+
+    Preserve content_fingerprint's name/NUL/binary-digest framing, including
+    caller order and duplicate names. Digests must come from the exact input
+    bytes, not unverified cache records.
+    """
+    h = hashlib.sha256()
+    for name, content_sha in items:
+        digest = bytes.fromhex(content_sha)
+        if len(digest) != 32:
+            raise ValueError("source fingerprint requires SHA-256 digests")
+        h.update(name.encode("utf-8", "replace"))
+        h.update(b"\0")
+        h.update(digest)
+    return h.hexdigest()
+
+
 def source_fingerprint(source_texts: dict[str, str]) -> str:
     """Deterministic fingerprint of an in-memory source-text map.
 
@@ -81,15 +99,9 @@ def source_fingerprint_from_hashes(content_shas: dict[str, str]) -> str:
     Preserve the original sorted path + NUL + binary digest framing;
     neither fingerprint bytes nor the cache's authentication change.
     """
-    h = hashlib.sha256()
-    for path in sorted(content_shas):
-        digest = bytes.fromhex(content_shas[path])
-        if len(digest) != 32:
-            raise ValueError("source fingerprint requires SHA-256 digests")
-        h.update(path.encode("utf-8", "replace"))
-        h.update(b"\0")
-        h.update(digest)
-    return h.hexdigest()
+    return content_fingerprint_from_hashes(
+        (path, content_shas[path]) for path in sorted(content_shas)
+    )
 
 
 def prep_cache_path(out_dir: Path | str, filename: str) -> Path:
