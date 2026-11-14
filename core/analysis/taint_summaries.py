@@ -371,8 +371,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      with a bare enclosing-local return, or a directly returned call
-      to that function: the object or call depends on an enclosing cell.
+      whose sole return reads an enclosing-local name or its direct attribute,
+      or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
     * A type alias: later access can evaluate its deferred value, which
@@ -441,15 +441,19 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
             # Adjacency and no decorator avoid an intervening binding rewrite
-            # or wrapper. Only a bare return body needs this lexical check.
+            # or wrapper. Only a bare name or direct attribute return needs this check.
             body = definition.body
             if (body and isinstance(body[0], ast.Expr)
                     and isinstance(body[0].value, ast.Constant)
                     and isinstance(body[0].value.value, str)):
                 body = body[1:]
-            if (len(body) == 1 and isinstance(body[0], ast.Return)
-                    and isinstance(body[0].value, ast.Name)):
-                name = body[0].value.id
+            if len(body) == 1 and isinstance(body[0], ast.Return):
+                cell_read = body[0].value
+                if isinstance(cell_read, ast.Attribute):
+                    cell_read = cell_read.value
+                if not isinstance(cell_read, ast.Name):
+                    continue
+                name = cell_read.id
                 if frame_bindings is None:
                     frame_bindings = local_binding_names(fn_ast)
                 if (name in frame_bindings
