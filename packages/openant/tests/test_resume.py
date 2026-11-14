@@ -701,8 +701,8 @@ def _sidecar_key(base_url: str) -> dict:
 class TestRebaseGatewayFingerprints(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
-        self.scan = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
+        self.scan = Path(self._td.name)
 
     def _put_sidecar(self, key: dict, digest: str | None = None) -> Path:
         sidecar = dict(key)
