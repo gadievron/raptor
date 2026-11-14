@@ -435,6 +435,8 @@ def _comprehension_target_scope(
 
 def _validated_expression_targets(
     expression: ast.expr | None,
+    *,
+    target_read: bool = False,
 ) -> dict[ast.AST, tuple[frozenset[str], tuple[ast.expr, ...]]] | None:
     """Validate once, retaining target parts for the scoped read traversal.
 
@@ -447,7 +449,7 @@ def _validated_expression_targets(
         return targets
     allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
                ast.Store, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)
-    pending: list[tuple[ast.AST, bool]] = [(expression, False)]
+    pending: list[tuple[ast.AST, bool]] = [(expression, target_read)]
     while pending:
         node, target_read = pending.pop()
         if target_read and isinstance(node, (ast.NamedExpr, ast.Yield, ast.YieldFrom)):
@@ -593,6 +595,21 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return _validated_expression_targets(expression) is not None
 
 
+def _scoped_statement_target_scope(
+    target: ast.AST,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Read target addresses in the current frame, keeping own binders separate."""
+    scope = _comprehension_target_parts(target)
+    if scope is None:
+        return None
+    if any(_validated_expression_targets(part, target_read=True) is None for part in scope[1]):
+        return None
+    names: set[str] = set()
+    for part in scope[1]:
+        names.update(_scoped_expression_loads(part))
+    return scope[0], frozenset(names)
+
+
 def _match_literal_expression(expression: ast.expr) -> bool:
     """Recognise literal AST shapes without evaluating numeric expressions."""
     if isinstance(expression, ast.Constant):
@@ -729,16 +746,14 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             for item in statement.items:
                 operations.append(item.context_expr)
                 if item.optional_vars is not None:
-                    scope = _comprehension_target_scope(
-                        item.optional_vars, require_scope_free_reads=True
-                    )
+                    scope = _scoped_statement_target_scope(item.optional_vars)
                     if scope is None:
                         return None
                     operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
-                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                scope = _scoped_statement_target_scope(target)
                 if scope is None:
                     return None
                 operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
@@ -753,7 +768,7 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
                 return None
             targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
             for target in targets:
-                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                scope = _scoped_statement_target_scope(target)
                 if scope is None:
                     return None
                 operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
@@ -836,7 +851,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
-                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                scope = _scoped_statement_target_scope(target)
                 if scope is None:
                     return None
                 target_reads.update(scope[1])
@@ -872,9 +887,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             for item in statement.items:
                 expressions.append(item.context_expr)
                 if item.optional_vars is not None:
-                    scope = _comprehension_target_scope(
-                        item.optional_vars, require_scope_free_reads=True
-                    )
+                    scope = _scoped_statement_target_scope(item.optional_vars)
                     if scope is None:
                         return None
                     target_reads.update(scope[1])
@@ -886,7 +899,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 return None
             targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
             for target in targets:
-                scope = _comprehension_target_scope(target, require_scope_free_reads=True)
+                scope = _scoped_statement_target_scope(target)
                 if scope is None:
                     return None
                 # These stores share the function scope; the caller masks all

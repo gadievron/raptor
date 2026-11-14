@@ -64,7 +64,7 @@ def test_whole_child_bindings_mask_context_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["with manager as slots[(lambda: raw)()]:\n  pass",
+@pytest.mark.parametrize("body", ["with manager as slots[(lambda: (yield raw))()]:\n  pass",
                                   "with raw:\n  global unsupported",
                                   "with raw:\n  def deeper(value: raw):\n   return raw"],
                          ids=["scoped-target", "body-import", "deeper-annotation"])

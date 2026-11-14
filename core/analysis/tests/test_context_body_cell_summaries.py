@@ -65,7 +65,7 @@ def test_whole_function_bindings_mask_context_cells(header, body):
 
 
 @pytest.mark.parametrize("body", [
-    "with manager as slots[(lambda: raw)()]:\n pass",
+    "with manager as slots[(lambda: (yield raw))()]:\n pass",
     "with manager as slots[(raw := 0)]:\n pass",
     "with raw:\n global unsupported",
 ], ids=["lambda-target", "walrus-target", "body-import"])

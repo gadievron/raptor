@@ -75,7 +75,7 @@ def test_legacy_strict_statement_target_contract_is_unchanged():
     assert _comprehension_target_scope(target, require_scope_free_reads=True) is None
     assert _comprehension_target_scope(target) == (frozenset(), frozenset({'box'}))
     assert _bounded_body_expression_loads(ast.parse(
-        'for box[[raw for item in ()]] in ():\n pass'
+        'for box[[(lambda: (yield raw))() for item in ()]] in ():\n pass'
     ).body) is None
 
 

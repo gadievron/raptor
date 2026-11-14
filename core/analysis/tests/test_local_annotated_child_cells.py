@@ -60,7 +60,7 @@ def test_child_parameter_masks_local_annotated_target():
 
 
 @pytest.mark.parametrize("body", ["value: (lambda: raw)", "value: [raw for item in ()]",
-                                  "slots[(lambda: raw)()]: object = 0"],
+                                  "slots[(lambda: (yield raw))()]: object = 0"],
                          ids=["lambda-annotation", "comprehension-annotation", "scoped-target"])
 def test_unsupported_local_annotation_or_target_invalidates_complete_child(body):
     assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None

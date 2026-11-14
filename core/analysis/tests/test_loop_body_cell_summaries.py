@@ -66,7 +66,7 @@ def test_loop_own_bindings_shadow_outer_cell(body):
 
 
 @pytest.mark.parametrize(
-    "body", ["for obj[(lambda: raw)()] in ():\n pass\nreturn 0",
+    "body", ["for obj[(lambda: (yield raw))()] in ():\n pass\nreturn 0",
              "while False:\n global raw\nreturn raw",
              "for item in ():\n break\n global unsupported\nreturn raw"],
     ids=["indirect-target", "nested-global", "declaration-after-break"],

@@ -49,7 +49,7 @@ def test_whole_child_bindings_mask_augmented_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("target", ["slots[(lambda: raw)()]", "slots[(index := 0)]"],
+@pytest.mark.parametrize("target", ["slots[(lambda: (yield raw))()]", "slots[(index := 0)]"],
                          ids=["lambda-index", "assignment-index"])
 def test_unsupported_augmented_target_invalidates_complete_child(target):
     source = f"raw\ndef child():\n {target} += 1"

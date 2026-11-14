@@ -64,7 +64,7 @@ def test_first_iterable_remains_outside_target_bindings():
     assert summaries(source_for(expression))["handle"].summary_unknown
 
 
-def test_ordinary_statement_await_target_remains_strictly_excluded():
-    body = "async def child():\n for box[await raw] in ():\n  pass"
+def test_ordinary_statement_target_keeps_awaited_writes_excluded():
+    body = "async def child():\n for box[await (lambda: (value := raw))()] in ():\n  pass"
     compile("def outer(raw):\n " + body.replace("\n", "\n "), "<ordinary-await-target>", "exec", dont_inherit=True)
     assert _bounded_body_expression_loads(ast.parse(body).body) is None

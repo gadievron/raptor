@@ -62,7 +62,7 @@ def test_parameter_masks_annotated_target():
 
 
 @pytest.mark.parametrize("statement", ["value: (lambda: raw)", "value: [raw for item in ()]",
-                                       "slots[(lambda: raw)()]: object = 0"],
+                                       "slots[(lambda: (yield raw))()]: object = 0"],
                          ids=["lambda-annotation", "comprehension-annotation", "scoped-target"])
 def test_unsupported_annotation_or_target_invalidates_earlier_capture(statement):
     assert _bounded_body_expression_loads(ast.parse(f"raw\n{statement}").body) is None
