@@ -1494,13 +1494,25 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
                 elif (isinstance(target, (ast.Tuple, ast.List))
                       and isinstance(target.ctx, ast.Store)
                       and isinstance(value, (ast.Tuple, ast.List))
-                      and len(target.elts) == len(value.elts)
-                      and not any(isinstance(element, ast.Starred)
-                                  for element in (*target.elts, *value.elts))):
-                    # Explicit literal projection retains original source
-                    # prototypes only as negative candidates. Opaque iterable
-                    # and starred binding shapes remain outside this check.
-                    bindings.extend(zip(target.elts, value.elts, strict=True))
+                      and not any(isinstance(element, ast.Starred) for element in value.elts)):
+                    stars = [index for index, element in enumerate(target.elts)
+                             if isinstance(element, ast.Starred)]
+                    if not stars and len(target.elts) == len(value.elts):
+                        bindings.extend(zip(target.elts, value.elts, strict=True))
+                    elif len(stars) == 1 and len(value.elts) >= len(target.elts) - 1:
+                        index = stars[0]
+                        capture = target.elts[index]
+                        if (not isinstance(capture.ctx, ast.Store)
+                                or not isinstance(capture.value, ast.Name)
+                                or not isinstance(capture.value.ctx, ast.Store)):
+                            continue
+                        # The starred capture receives a list, not a callable.
+                        # Project only fixed positions onto original source
+                        # values, retaining negative prototype candidates.
+                        bindings.extend(zip(target.elts[:index], value.elts[:index], strict=True))
+                        suffix = len(target.elts) - index - 1
+                        if suffix:
+                            bindings.extend(zip(target.elts[-suffix:], value.elts[-suffix:], strict=True))
         pending.extend(ast.iter_child_nodes(node))
     work = deque((name, prototype) for name, values in candidates.items() for prototype in values)
     while work:
