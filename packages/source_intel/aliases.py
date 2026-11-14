@@ -90,8 +90,8 @@ def wur_alias_origin(spelling: str) -> str:
       * ``"bsd"`` — BSD lineage
       * ``"unknown"`` — not in the curated table
 
-    Used by ``analyze.py`` to record provenance: literal observations
-    have higher confidence than alias-matched observations.
+    This lookup classifies the spelling only; it does not assign an
+    observation's provenance or confidence.
     """
     for origin, spellings in WUR_ALIASES_BY_ORIGIN.items():
         if spelling in spellings:
