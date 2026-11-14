@@ -134,3 +134,21 @@ def test_direct_restamp_helper_keeps_existing_in_place_contract():
     rows = [{"priority_score": 1}, {"priority_score": 3}, {}, {"priority_score": None}]
     assert mod._restamp_scores(rows) is None
     assert rows == [{"priority_score": 3.0}, {"priority_score": 1.0}, {}, {"priority_score": None}]
+
+
+def test_early_score_failure_stops_before_ranking_later_tiers(monkeypatch):
+    gaps = owned_gaps()
+    gaps[0]["priority_score"] = "owned invalid early score"
+    before = deepcopy(gaps)
+    calls = []
+
+    def result(items, *args, **kwargs):
+        calls.append(items)
+        return ranked(items)
+
+    monkeypatch.setattr(ranking, "rank_items", result)
+    out, note = mod.rank_gap_queue(gaps, client=object(), stamp_scores=True)
+    assert len(calls) == 1
+    assert out is gaps
+    assert gaps == before
+    assert "failed" in note and "mechanical order kept" in note

@@ -135,7 +135,7 @@ def rank_gap_queue(
                       else build_llm_client())
 
         out: list[dict[str, Any]] = []
-        score_segments: list[list[dict[str, Any]]] = []
+        score_updates: list[tuple[dict[str, Any], float]] = []
         budget = head
         ranked_n = 0
         tiers_ranked = 0
@@ -168,7 +168,7 @@ def rank_gap_queue(
             budget -= len(head_slice)
             ranked_items = [r.item for r in result.ranked]
             if stamp_scores:
-                score_segments.append(ranked_items)
+                score_updates.extend(_score_assignments(ranked_items))
             out.extend(ranked_items)
             out.extend(rest)
             ranked_n += len(head_slice)
@@ -184,9 +184,7 @@ def rank_gap_queue(
             f"priority tier(s) ({calls} LLM calls, ${cost:.2f})"
         )
         if stamp_scores:
-            assignments = [assignment for segment in score_segments
-                           for assignment in _score_assignments(segment)]
-            for gap, score in assignments:
+            for gap, score in score_updates:
                 gap["priority_score"] = score
         return out, note
     except Exception as e:  # noqa: BLE001 — ordering refinement must
