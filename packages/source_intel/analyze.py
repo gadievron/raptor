@@ -14,8 +14,9 @@ Hard invariants (carried from design):
   * Strict sidecar — produces evidence, never overrides verdict.
   * ``--no-includes`` to spatch by default (untrusted-target posture
     matching PR-3 cocci scan + PR-4 prereqs).
-  * Out-of-tree symbols never fabricated — `function_attrs_status`
-    explicit when a symbol isn't found.
+  * Function attribution can be unknown. No per-function absence
+    status is recorded; missing observations do not establish symbol
+    or annotation absence.
 """
 
 from __future__ import annotations
