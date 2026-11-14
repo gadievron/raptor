@@ -6,6 +6,7 @@ summaries from the target.  Separated from orchestrator.py.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import stat as stat_mod
@@ -238,12 +239,12 @@ _SINK_CACHE_FILENAME = "sink-discovery-cache.json"
 def _sink_discovery_fingerprint(target_path, scope_dirs) -> str | None:
     """Deterministic fingerprint of the discovery inputs: the file
     set + contents the discovery walk would read, enumerated by the
-    walk's own gate chain (:func:`iter_discovery_source_files`) so
-    the fingerprint and the build can never drift. Hashing the bytes
+    walk's metadata gate chain (:func:`iter_discovery_source_files`).
+    Read-policy version and caps invalidate prior-policy cached results. Hashing the bytes
     is a small fraction of re-extracting every call graph."""
     try:
         from core.inventory.sink_discovery import (
-            iter_discovery_source_files,
+            iter_discovery_source_files, _PER_FILE_CAP, _AGGREGATE_CAP,
         )
 
         from .prep_cache import content_fingerprint
@@ -261,12 +262,14 @@ def _sink_discovery_fingerprint(target_path, scope_dirs) -> str | None:
             with preserving_stream_error(fh):
                 return fh.read()
 
-        return content_fingerprint(
+        base_fingerprint = content_fingerprint(
             (rel, _whole_bytes(path))
             for path, rel, _lang in iter_discovery_source_files(
                 Path(target_path), scope_dirs=scope_dirs,
             )
         )
+        policy = f"sink-read-admission-v1:{_PER_FILE_CAP}:{_AGGREGATE_CAP}\0".encode("ascii")
+        return hashlib.sha256(policy + bytes.fromhex(base_fingerprint)).hexdigest()
     except Exception:
         logger.debug("sink-discovery fingerprint failed", exc_info=True)
         return None
