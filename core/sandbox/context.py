@@ -518,13 +518,20 @@ def _finish_teardown_first(proc, death_w_holder: list, failure: BaseException,
             confirmed = True
             break
     pending_pipes = _close_teardown_streams(proc, failure=failure)
-    setattr(failure, "sandbox_cleanup_pending",
-            death_close_pending or not confirmed or bool(pending_pipes))
-    if not confirmed:
-        setattr(failure, "sandbox_process", proc)
+    def attach_metadata(name, value):
+        try:
+            setattr(failure, name, value)
+        except BaseException as metadata_error:
+            with suppress(BaseException):
+                issues.append(type(metadata_error).__name__ + " while attaching " + name)
+            return False
+        return True
+
+    attach_metadata("sandbox_cleanup_pending",
+                    death_close_pending or not confirmed or bool(pending_pipes))
+    if not confirmed and attach_metadata("sandbox_process", proc):
         issues.append("sweeper exit unconfirmed; retry sandbox_process.wait()")
-    if pending_pipes:
-        setattr(failure, "sandbox_pipes", pending_pipes)
+    if pending_pipes and attach_metadata("sandbox_pipes", pending_pipes):
         issues.append("owned pipes remain open; retry sandbox_pipes close")
     for issue in issues:
         with suppress(BaseException):
