@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import logging
 from collections import defaultdict
 import sys
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 from core.inventory import _ts_cache
+from core.source import read_bytes_capped
 
 logger = logging.getLogger(__name__)
 
@@ -8259,7 +8261,16 @@ def load_call_graphs(
                 if oversize_example is None:
                     oversize_example = rel
                 continue
-            content = path.read_text(encoding="utf-8", errors="replace")
+            got = read_bytes_capped(path, max_bytes)
+            if got is None:
+                continue
+            if got[1]:
+                oversize_skipped += 1
+                if oversize_example is None:
+                    oversize_example = rel
+                continue
+            with io.TextIOWrapper(io.BytesIO(got[0]), encoding="utf-8", errors="replace") as stream:
+                content = stream.read()
         except OSError:
             continue
         if extractor is None:
