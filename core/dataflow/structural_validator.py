@@ -263,18 +263,33 @@ MAX_STRUCTURAL_STEPS = 64
 
 
 @lru_cache(maxsize=8)
-def _extract_functions_cached(language: str, content: str) -> tuple[Any, ...]:
+def _extract_functions_cached(language: str, content: str) -> tuple[Any, ...] | None:
     """Memoized function-span extraction for the enclosing-function
     lookup. The span path runs once per STEP (module-level lines have
     no caller-attributed calls), and pre-memo each run re-parsed the
     whole file — O(steps × parse) on attacker-sized inputs. Keyed on
     the content itself; maxsize bounds retained content to a handful
     of already-size-capped files. Returns a tuple: lru_cache shares
-    the result across callers, so it must be immutable.
+    the result across callers, so it must be immutable. None records
+    unavailable spans without retrying the same failed parse per step.
     """
     from core.inventory import extractors
-    return tuple(extractors.extract_functions(
-        "<structural-validator>", language, content))
+    try:
+        if language == "python":
+            return tuple(extractors.extract_functions(
+                "<structural-validator>", language, content))
+        # Native regex fallback can omit a scope while the graph still has its
+        # calls. Parse explicitly so span failures remain unresolved attribution.
+        from core.run.gaps import parse_origin
+        extractor = extractors.TreeSitterExtractor(language)
+        with parse_origin("<structural-validator>"):
+            tree = extractor.parser.parse(content.encode())
+        if tree is None:
+            raise RuntimeError("Function-span parser returned no tree")
+        return tuple(extractor.extract("<structural-validator>", content, _tree=tree))
+    except Exception:
+        logger.debug("function-span extraction failed", exc_info=True)
+        return None
 
 
 def _enclosing_function_state(
@@ -316,6 +331,8 @@ def _enclosing_function_state(
     ancestor_names: set[str] = set()
     try:
         funcs = _extract_functions_cached(language, content)
+        if funcs is None:
+            return None, False
         for f in funcs:
             if f.line_start <= line and (f.line_end is None or line <= f.line_end):
                 # Extractors may list enclosing definitions before nested ones.

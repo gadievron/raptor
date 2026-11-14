@@ -731,7 +731,7 @@ class TestAttributionDivergence:
         def boom(*a, **k):
             raise RuntimeError("grammar exploded")
 
-        monkeypatch.setattr(ex, "extract_functions", boom)
+        monkeypatch.setattr(ex, "TreeSitterExtractor", boom)
         graph = FileCallGraph(calls=[], imports={}, indirection=False)
         name, resolved = _enclosing_function_state(
             1, graph, "function f() {}\n", "javascript",
