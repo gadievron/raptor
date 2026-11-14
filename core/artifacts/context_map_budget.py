@@ -85,12 +85,15 @@ _REGENERABLE_PAYLOADS: tuple[tuple[tuple[str, ...], str], ...] = (
 
 
 def _is_synthesized(entry: Any) -> bool:
-    return isinstance(entry, dict) and entry.get("origin") in _SYNTHESIZED_ORIGINS
+    return (isinstance(entry, dict)
+            and isinstance(entry.get("origin"), str)
+            and entry["origin"] in _SYNTHESIZED_ORIGINS)
 
 
 def _is_machine_sink(entry: Any) -> bool:
     return (isinstance(entry, dict)
-            and entry.get("source") in _MACHINE_SINK_SOURCES)
+            and isinstance(entry.get("source"), str)
+            and entry["source"] in _MACHINE_SINK_SOURCES)
 
 
 def _compact_chunks(data: Any, *, sort_keys: bool = False) -> Iterator[bytes]:
