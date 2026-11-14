@@ -912,9 +912,17 @@ class LanguageDetector:
         # would otherwise be swallowed by the ".lock" ignore suffix —
         # detection evidence must win over noise filtering.
         build_files = self._get_all_build_files()
+
+        def warn_walk_error(error: OSError) -> None:
+            logger.warning(
+                "Unable to enumerate repository directory %s: %s; "
+                "language census is partial",
+                error.filename, error,
+            )
+
         try:
             for dirpath, dirnames, filenames in os.walk(
-                self.repo_path, followlinks=False,
+                self.repo_path, followlinks=False, onerror=warn_walk_error,
             ):
                 # In-place prune ignored dirs from descent.
                 kept = []
