@@ -537,7 +537,7 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
 
     * A non-def binding statement at module scope naming the same
       name as a ``def``/lambda-def elsewhere at module scope
-      (``esc = str``, an import alias, a ``for`` target, …). The
+      (``esc = str``, a bare deletion target, an import alias, a ``for`` target, …). The
       single-``Name``-target lambda assignment is exempt — it IS the
       def :func:`_collect_functions` harvests.
     * A ``global`` declaration of the name anywhere in the module: a
@@ -595,6 +595,9 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
                 return
             for t in node.targets:
                 _add_target(t)
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
         elif isinstance(node, ast.NamedExpr):
@@ -667,8 +670,7 @@ def module_import_map(tree: ast.Module) -> dict[str, str]:
 
 
 def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
-    """Module-scope names whose binding is REPO-CONTROLLED rather than
-    the same-named external module / builtin.
+    """Module-scope names whose trusted external identity is not established.
 
     The catalog matcher and the decorator allowlist trust WRITTEN
     names (``html.escape``, ``@staticmethod``); a hostile module can
@@ -677,7 +679,8 @@ def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
     * every module-scope def / class / lambda-def name (a def named
       ``html`` or ``staticmethod`` is the repo's object);
     * every non-import module-scope binding (assignments including
-      destructuring, walrus, ``for``/``with``/``except`` targets);
+      destructuring, walrus, ``for``/``with``/``except`` targets),
+      and every bare deletion target (which may leave the name unbound);
     * names declared ``global`` anywhere in the module (any sibling
       can rewrite the slot);
     Import bindings are NOT in this set — they resolve exactly
@@ -715,6 +718,9 @@ def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
         if isinstance(node, ast.Assign):
             for t in node.targets:
                 _add_target(t)
+        elif isinstance(node, ast.Delete):
+            for target in node.targets:
+                _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
         elif isinstance(node, ast.NamedExpr):
