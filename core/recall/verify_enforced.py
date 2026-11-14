@@ -136,7 +136,10 @@ def verify_enforced(
     order = {"on_expected": 0, "null_line": 1, "same_file": 2}
     reviews.sort(key=lambda r: (order[r["proximity"]],
                                 str(r["file_path"]),
-                                r["record_line"] or 0))
+                                (r["record_line"]
+                                 if isinstance(r["record_line"], int)
+                                 and not isinstance(r["record_line"], bool)
+                                 else 0)))
     return {
         "records_reviewed": len(live),
         "records_malformed": malformed,
