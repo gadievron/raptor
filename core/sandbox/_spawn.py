@@ -495,9 +495,11 @@ def _parse_setup_status(raw: bytes):
     )
 
 
-def _drain_status_pipe(status_r: int, parent_fds: set):
-    """Non-blocking read of the exec-status pipe, then close it. Returns the
-    parsed (category, reason) or None.
+def _drain_status_observation(status_r: int, parent_fds: set):
+    """Read and close the parent status pipe, retaining descriptive termination.
+
+    Return (legacy verdict, termination kind, byte count, G: prefix seen).
+    Neither a prefix nor would-block independently proves target execution.
 
     MUST be called on EVERY parent exit path (including timeout/exception) so
     status_r never leaks — an fd leak here exhausts the table over a long
@@ -510,18 +512,22 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
     sibling cannot inject data (it never writes our status_w).
     """
     raw = b""
+    termination = "bound-reached"
     read_failed = False
     try:
         while len(raw) < 1024:
             try:
                 chunk = os.read(status_r, 256)
             except BlockingIOError:
+                termination = "would-block"
                 break  # no (more) data — EOF-equivalent for our purposes
             if not chunk:
+                termination = "read-eof"
                 break
             raw += chunk
     except OSError as e:
         read_failed = True
+        termination = "read-error"
         # An unreadable status pipe is NOT the same thing as EOF: EOF
         # means the write end closed cleanly (normally: the target
         # exec'd and CLOEXEC reaped status_w), while a read error means
@@ -548,8 +554,16 @@ def _drain_status_pipe(status_r: int, parent_fds: set):
     if read_failed and (parsed is None or parsed[0] == "!"):
         # A damaged channel cannot prove execution or pre-exec death. Even
         # G: may hide a following X report; an empty read proves neither.
-        return ("!", "exec-status pipe read failed; "
-                "target execution status is unknown")
+        parsed = ("!", "exec-status pipe read failed; "
+                  "target execution status is unknown")
+    return parsed, termination, len(raw), raw.startswith(b"G:")
+
+
+def _drain_status_pipe(status_r: int, parent_fds: set):
+    """Preserve the existing verdict API; observation is not execution proof."""
+    parsed, _termination, _read_bytes, _confirmation_prefix = (
+        _drain_status_observation(status_r, parent_fds)
+    )
     return parsed
 
 
@@ -1664,6 +1678,29 @@ def _append_capture_chunk(chunks: list[bytes], kept: int, chunk: bytes,
     return kept + len(piece), len(piece) < len(chunk)
 
 
+def _prepare_execution_handoff(owner, cmd, env, cwd, *, strict_env):
+    """Parent-only capture for the supported explicit-input scope.
+
+    Direct strict filtering and env=None still execute their legacy child
+    branches. Unsupported shapes leave observation unavailable, without
+    changing the execution lane or manufacturing an effective-context claim.
+    """
+    if owner is None or strict_env or env is None:
+        return None
+    from core.audit.prepared_execution_attempt import ExecutionInputOwner
+    from core.audit.prepared_execution_inputs import InputsUnavailable
+    if type(owner) is not ExecutionInputOwner:
+        return None
+    try:
+        reference = owner.reserve(
+            cmd, env, cwd, max_args=4096, max_env=4096,
+            max_item_bytes=1024 * 1024, max_total_bytes=4 * 1024 * 1024,
+        )
+        return owner.handoff_for_dispatch(reference)
+    except InputsUnavailable:
+        return None
+
+
 def run_sandboxed(
     cmd: Sequence[str],
     *,
@@ -1714,6 +1751,7 @@ def run_sandboxed(
     rootfs: str | None = None,
     max_capture_bytes: int | None = None,
     job_controller=None,
+    _execution_input_owner=None,
 ) -> subprocess.CompletedProcess:
     """Run `cmd` inside a fully-isolated sandbox.
 
@@ -1819,6 +1857,14 @@ def run_sandboxed(
         _cwd_path = os.fsdecode(cwd)
         if _cwd_path and not os.path.isabs(_cwd_path):
             cwd = os.path.join(os.getcwd(), _cwd_path)
+
+    _execution_handoff = _prepare_execution_handoff(
+        _execution_input_owner, cmd, env, cwd, strict_env=strict_env,
+    )
+    _exec_payload = (None if _execution_handoff is None else
+                     _execution_handoff.inputs.exec_inputs())
+    _exec_cmd = cmd if _exec_payload is None else _exec_payload[0]
+    _exec_cwd = cwd if _exec_payload is None else _exec_payload[2]
 
     _job_control_sealer = None
     if job_controller is not None and job_controller.scope is not None:
@@ -3348,7 +3394,7 @@ def run_sandboxed(
             # stderr write stays as the human-readable diagnostic.
             if cwd is not None:
                 try:
-                    os.chdir(cwd)
+                    os.chdir(_exec_cwd)
                 except OSError as e:
                     _write_setup_status(
                         status_w, b"C",
@@ -3650,7 +3696,9 @@ def run_sandboxed(
                             os.close(_tgt_wstat_r)
                     _pid1_split_for_waiter(
                         _tgt_wstat_w if _tgt_wstat_w >= 0 else None)
-                if env is not None:
+                if _exec_payload is not None:
+                    exec_env = _exec_payload[1]
+                elif env is not None:
                     exec_env = env
                     # Defense-in-depth: context.py:run() already strips
                     # DANGEROUS_ENV_VARS from the caller env when
@@ -3701,7 +3749,7 @@ def run_sandboxed(
                 _write_setup_status(status_w, b"G")
                 try:
                     # nosemgrep: python.lang.security.audit.dangerous-os-exec-tainted-env-args.dangerous-os-exec-tainted-env-args
-                    os.execvpe(cmd[0], list(cmd), exec_env)
+                    os.execvpe(_exec_cmd[0], list(_exec_cmd), exec_env)
                 except FileNotFoundError:
                     # Target (or a dep) not reachable in the sandboxed view
                     # — typically a mount-ns bind set too narrow. Signal
@@ -4577,6 +4625,7 @@ def run_sandboxed(
     # Raw wait-status once the capture loop's exit poll reaps the
     # child (None = not yet reaped there).
     child_status = None
+    wait_origin = "not-observed"
     # time.monotonic() for deadline math — see _reap_tracer() above for the
     # NTP/wall-clock-jump rationale; same hazard applies here.
     # `is not None`, NOT truthiness: timeout=0 means "zero budget
@@ -4587,6 +4636,7 @@ def run_sandboxed(
     # Exec-status verdict — populated in the finally so the pipe is read and
     # status_r reclaimed on EVERY exit path (success, timeout, exception).
     setup_status = None
+    status_observation = None
     collection_error: BaseException | None = None
     try:
         if _capture_any:
@@ -4631,6 +4681,7 @@ def run_sandboxed(
                         try:
                             pid_, st = os.waitpid(child_pid, os.WNOHANG)
                         except ChildProcessError:
+                            wait_origin = "capture-poll-echild"
                             # Already reaped elsewhere — status lost;
                             # same SIGKILL synthesis as the wait below.
                             logger.warning(
@@ -4641,6 +4692,7 @@ def run_sandboxed(
                             child_status = 9
                         else:
                             if pid_ != 0:
+                                wait_origin = "capture-poll-waitpid"
                                 child_status = st
                         if child_status is not None:
                             drain_deadline = (
@@ -4735,6 +4787,7 @@ def run_sandboxed(
                 while True:
                     pid_, status = os.waitpid(child_pid, os.WNOHANG)
                     if pid_ != 0:
+                        wait_origin = "final-poll-waitpid"
                         break
                     if time.monotonic() > deadline:
                         # Death-pipe EOF first — same setsid-escape
@@ -4748,7 +4801,9 @@ def run_sandboxed(
                     time.sleep(0.01)
             else:
                 _, status = os.waitpid(child_pid, 0)
+                wait_origin = "final-blocking-waitpid"
         except ChildProcessError:
+            wait_origin = "final-wait-echild"
             # Child already reaped (ECHILD) — real exit status lost.
             # Synthesise SIGKILL (raw wait-status 9) so downstream
             # returncode is -9, not 0 (false success).
@@ -4760,8 +4815,9 @@ def run_sandboxed(
         raise
     finally:
         def retire_status():
-            nonlocal setup_status
-            setup_status = _drain_status_pipe(status_r, _parent_fds)
+            nonlocal setup_status, status_observation
+            status_observation = _drain_status_observation(status_r, _parent_fds)
+            setup_status = status_observation[0]
 
         callbacks = [retire_status, lambda: _close_parent_fd(death_w),
                      retire_scope_endpoints]
@@ -4808,8 +4864,10 @@ def run_sandboxed(
     # pre-exec death by NORMAL exit (rc >= 0) stays '!' even with the
     # flag: nothing exits cleanly between fork and exec without writing
     # a byte, so that shape is never the callback's kill.
+    caller_kill_exemption_applied = False
     if (setup_status is not None and setup_status[0] == "!"
             and _exec_pid_delivered and returncode < 0):
+        caller_kill_exemption_applied = True
         setup_status = None
     stdout_out = stderr_out = None
     if _capture_stdout:
@@ -4830,6 +4888,13 @@ def run_sandboxed(
     # Authoritative setup-failure signal for context.py's decision table
     # (degrade on M/X, fail loud on L/S/U). None ⇒ target execed.
     cp._setup_status = setup_status  # type: ignore[attr-defined]
+    if _execution_handoff is not None:
+        cp._execution_input_handoff = _execution_handoff  # type: ignore[attr-defined]
+    # Descriptive parent observations only; no attempt or target-context seal.
+    cp._setup_status_observation = status_observation  # type: ignore[attr-defined]
+    cp._wait_origin = wait_origin  # type: ignore[attr-defined]
+    cp._exec_pid_delivered = _exec_pid_delivered  # type: ignore[attr-defined]
+    cp._caller_kill_exemption_applied = caller_kill_exemption_applied  # type: ignore[attr-defined]
     if not text and _capture_any:
         # The parent can decode the retained prefix using its selected codec
         # before formatting loss, without interpreting target-printed markers.
