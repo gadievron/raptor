@@ -13,13 +13,13 @@ from __future__ import annotations
 import logging
 import re
 from collections import OrderedDict
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.inventory._walk import iter_regular_files
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -216,8 +216,13 @@ def _extract_braced_body(text: str, open_pos: int) -> str | None:
 def build_rust_macro_table(target_path: Path) -> dict[str, str]:
     """Build name→body table of all macro_rules! in the target.
 
-    Results are cached per target path.
+    Results are cached per absolute lexical target location.
     """
+    try:
+        target_path = Path(target_path).absolute()
+    except OSError:
+        # An unavailable relative location cannot identify a cached target.
+        return {}
     key = str(target_path)
     if key in _rust_table_cache:
         _rust_table_cache.move_to_end(key)
@@ -302,8 +307,14 @@ def resolve_rust_macros(
 def build_macro_table(target_path: Path) -> dict[str, tuple[str, str]]:
     """Build name→(params, body) table of all #defines in the target.
 
-    Results are cached per target path, evicting LRU when full.
+    Results are cached per absolute lexical target location, evicting LRU
+    when full. Cached content is not revalidated after edits.
     """
+    try:
+        target_path = Path(target_path).absolute()
+    except OSError:
+        # An unavailable relative location cannot identify a cached target.
+        return {}
     key = str(target_path)
     if key in _table_cache:
         _table_cache.move_to_end(key)
