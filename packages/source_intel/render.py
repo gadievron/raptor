@@ -51,6 +51,7 @@ from packages.source_intel.analyze import (
     PairedFreeEvidence,
     PrivilegeBackWalkEvidence,
     SourceIntelResult,
+    WarnEvidence,
 )
 from typing import TYPE_CHECKING
 
@@ -200,6 +201,12 @@ def derive_evidence_strings(
         if prefix is not None:
             lines = [prefix] + lines
         return _truncate(lines, max_lines)
+
+    if result.rules_failed:
+        lines.append(
+            f"Source_intel incomplete: {len(result.rules_failed)} rule failure(s). "
+            f"Missing observations do not establish clean coverage."
+        )
 
     # Filter attributes to the finding's function when supplied.
     # Unknown-attribution observations (function_name stays "" for
@@ -370,6 +377,15 @@ def derive_evidence_strings(
         )
     for boundary in boundaries:
         lines.append(_render_boundary_line(boundary, style))
+
+    # Warning calls are context only, after existing evidence. Avoid
+    # formatting entries that the final positive line budget would discard.
+    for warning in result.warns:
+        if max_lines is not None and 0 <= max_lines <= len(lines):
+            break
+        if finding_function and warning.enclosing_function not in (finding_function, None):
+            continue
+        lines.append(_render_warning_line(warning, style))
 
     # When source_intel ran but found nothing relevant — emit an
     # explicit "no signal" line so the consumer prompt template
@@ -764,6 +780,22 @@ def _render_privilege_back_walk_line(
         f"within depth {bw.depth_used}.{gated_note} The bug "
         f"remains reachable from unprivileged context — do not "
         f"discount the finding on privilege grounds."
+    )
+
+
+def _render_warning_line(warning: WarnEvidence, style: str) -> str:
+    """Render a warning-call observation without inferring runtime effects."""
+    if style == "stage_d":
+        prefix = "Warning call observed"
+    elif style == "exploit_plan":
+        prefix = "Review site — warning call"
+    else:
+        prefix = "Variant hint — warning call"
+    return (
+        f"{prefix}: `{warning.warn_fn}` at "
+        f"{warning.location[0]}:{warning.location[1]}. This call-site "
+        f"observation does not establish runtime emission, termination "
+        f"behaviour or mitigation of this finding."
     )
 
 
