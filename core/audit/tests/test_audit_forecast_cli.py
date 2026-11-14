@@ -46,8 +46,11 @@ def _load_cli():
     spec = importlib.util.spec_from_loader(
         "raptor_audit_forecast_cli_test", loader)
     mod = importlib.util.module_from_spec(spec)
-    with patch.object(sys, "path", sys.path.copy()):
-        loader.exec_module(mod)
+    with pytest.MonkeyPatch.context() as loading:
+        # Own the documented test-only dispatch marker for this import only.
+        loading.setenv("_RAPTOR_TRUSTED", "1")
+        with patch.object(sys, "path", sys.path.copy()):
+            loader.exec_module(mod)
     return mod
 
 
