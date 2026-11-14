@@ -298,8 +298,10 @@ def check_tool_updates() -> set[str]:
 def _cached_cli_version(binary: str) -> str | None:
     """Disk-cached ``<binary> --version`` probe for startup-hot paths.
 
-    Cache key is the resolved binary's realpath + mtime_ns + size, so
-    upgrades and reinstalls invalidate naturally. Cache file:
+    Cache key includes the selected absolute launcher and its resolved
+    target's mtime_ns + size. Launcher-specific application data changes
+    that leave that metadata unchanged may still require a fresh cache.
+    Cache file:
     ``$XDG_CACHE_HOME/raptor/tool-versions.json`` (default
     ``~/.cache/raptor/``, alongside the sandbox calibration cache).
     Never raises; probe failures return None and are not cached.
@@ -310,12 +312,15 @@ def _cached_cli_version(binary: str) -> str | None:
     path = shutil.which(binary)
     if not path:
         return None
+    # Multicall launchers such as Snap dispatch using the invoked name.
+    # Keep that spelling for execution; resolve only for cache identity.
+    path = str(Path(path).absolute())
     real = os.path.realpath(path)
     try:
         st = os.stat(real)
     except OSError:
         return None
-    key = f"{real}:{st.st_mtime_ns}:{st.st_size}"
+    key = f"launcher-v2:{path}:{real}:{st.st_mtime_ns}:{st.st_size}"
 
     cache_dir = Path(
         os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")
@@ -336,7 +341,7 @@ def _cached_cli_version(binary: str) -> str | None:
     env = safe_subprocess_env(strip_target_markers=True)
     try:
         proc = subprocess.run(
-            [real, "--version"], capture_output=True, text=True,
+            [path, "--version"], capture_output=True, text=True,
             check=False, timeout=15, env=env, cwd=os.sep,
         )
     except (OSError, subprocess.SubprocessError):

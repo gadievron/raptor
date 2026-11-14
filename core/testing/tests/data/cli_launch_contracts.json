@@ -1134,7 +1134,8 @@
     "packages/web/tests/test_poc.py": "ea6315d58681dd2916b17b68683d53df66cf907ae3c8eaee3c34dfb1a3398170",
     "packages/zkpox/tests/test_libexec_raptor_zkpox.py": "7ce9a88871918c1a56e6604e935116133fa9c230349c8625f110e0e32ea32b8a",
     "packages/zkpox/tests/test_reproduce.py": "62a97b5b9ff29131cf090c8ce6a0055e5612f21ed7d7f6f37731cc5166ec56b9",
-    "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b"
+    "test/data/python_sql_injection.py": "88fa88d9c368b06451426760c49a2e8640be25fabd5b3fb4b52f1389cb01cb9b",
+    "packages/semgrep/tests/test_snap_launcher_identity.py": "647a954ebbc4b308d915df42162f1a5cda5d5339ea1064a563156f43afc5c91d"
   },
   "sites": [
     {
@@ -46984,6 +46985,14 @@
       "count": 1,
       "contract": "owned-in-process",
       "purpose": "Owned self-bump report control: run the trusted workflow report heredoc as a temporary local Python script, directly or through the generate helper, using owned phase-report inputs; no shell, SCA, Git, provider, installer or native-engine invocation."
+    },
+    {
+      "path": "packages/semgrep/tests/test_snap_launcher_identity.py",
+      "scope": "test_offline_scan_uses_resolved_identity_for_actual_runtime_grants",
+      "signature": "44218c56686d421084a6c1c6845500e20a184486bc272b924b94583da9c68b9e",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Load only repository-owned stdlib-only core/sandbox/python_paths.py into an unregistered private module; owned metadata, no real sandbox initializer/process/native tool/parser/provider; actual helper verifies unchanged resolved runtime grants."
     }
   ],
   "shell_routers": {
