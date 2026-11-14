@@ -570,14 +570,18 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
-        elif isinstance(statement, (ast.Assign, ast.AugAssign, ast.For, ast.AsyncFor)):
+        elif isinstance(statement, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor)):
+            if isinstance(statement, ast.AnnAssign) and not isinstance(
+                statement.annotation, (ast.Name, ast.Constant)
+            ):
+                return None
             targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
             for target in targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
                 if scope is None:
                     return None
                 target_reads.update(scope[1])
-            if isinstance(statement, (ast.Assign, ast.AugAssign)):
+            if isinstance(statement, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
                 expressions.append(statement.value)
             else:
                 expressions.append(statement.iter)
