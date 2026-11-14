@@ -652,7 +652,7 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             for case in reversed(statement.cases):
                 expressions.append(case.guard)
                 pending.extend(reversed(case.body))
-        elif isinstance(statement, ast.Try):
+        elif isinstance(statement, (ast.Try, ast.TryStar)):
             if any(handler.name is not None for handler in statement.handlers):
                 return None
             pending.extend(reversed(statement.finalbody))
@@ -779,7 +779,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             for case in reversed(statement.cases):
                 expressions.append(case.guard)
                 pending.extend(reversed(case.body))
-        elif isinstance(statement, ast.Try):
+        elif isinstance(statement, (ast.Try, ast.TryStar)):
             if any(handler.name is not None for handler in statement.handlers):
                 return None
             pending.extend(reversed(statement.finalbody))
