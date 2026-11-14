@@ -1,6 +1,6 @@
 """Command preparation and failed launches retain pipe ownership."""
 
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import errno
 import os
 from types import SimpleNamespace
@@ -43,11 +43,20 @@ def _record_pipes(monkeypatch, error, fault):
         if fault == "second-pipe" and pairs:
             raise error("injected second-pipe failure")
         pair = real_pipe()
-        pairs.append(pair)
-        for fd in pair:
-            stat = os.fstat(fd)
-            descriptors.append((fd, (stat.st_dev, stat.st_ino)))
-        return pair
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            descriptor_mark, pair_mark = len(descriptors), len(pairs)
+            setup.callback(descriptors.__delitem__, slice(descriptor_mark, None))
+            setup.callback(pairs.__delitem__, slice(pair_mark, None))
+            records = []
+            for fd in pair:
+                stat = os.fstat(fd)
+                records.append((fd, (stat.st_dev, stat.st_ino)))
+            descriptors.extend(records)
+            pairs.append(pair)
+            setup.pop_all()
+            return pair
 
     try:
         with monkeypatch.context() as patcher:
