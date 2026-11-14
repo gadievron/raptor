@@ -54,12 +54,11 @@ rules:
     languages: [php]
     severity: HIGH
     message: >
-      Request data is emitted into a single-quoted or unquoted HTML
-      attribute with no output encoding. An embedded quote (or, in
-      the unquoted context, whitespace) closes the attribute and
-      injects event-handler attributes. Quote the attribute AND
-      encode with htmlspecialchars($v, ENT_QUOTES) at the emission
-      site.
+      Request-derived data reaches a single-quoted or unquoted HTML attribute
+      construction without a recognised output encoder (CWE-79 review candidate).
+      Review whether the string is emitted, the value's allowed characters and
+      context-specific encoding. Quote attributes and encode at emission, for
+      example with htmlspecialchars($v, ENT_QUOTES) where appropriate.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]

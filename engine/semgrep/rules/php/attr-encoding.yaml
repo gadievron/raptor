@@ -112,9 +112,10 @@ rules:
     languages: [php]
     severity: MEDIUM
     message: >
-      HTML-encoded request data reaches an unquoted attribute. HTML entity
-      encoding leaves whitespace that can separate attacker-chosen
-      attributes. Quote the attribute value and encode it for that context.
+      HTML-encoded request data reaches an unquoted attribute construction.
+      Review whether it is emitted and whether the value can contain whitespace
+      that separates attributes. Quote the attribute value and encode it for
+      the output context.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
