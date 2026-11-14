@@ -60,7 +60,7 @@ def test_nested_default_reads_surrounding_scope_before_shadow():
     assert result.summary_unknown
 
 
-def test_unsupported_binder_does_not_become_a_certified_read_scan():
+def test_lambda_binding_shadows_an_earlier_name_read():
     expression = ast.parse("lambda: (raw, (raw := 0))", mode="eval").body
     assert not _scoped_expression_loads(expression)
 
