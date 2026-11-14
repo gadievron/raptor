@@ -1511,14 +1511,24 @@ def run_sandboxed(cmd: list[str], *,
                     # No implicit Popen.__exit__ may repeat a failed close
                     # or perform an unbounded wait while unwinding this abort.
                     setattr(process, attr, None)
-            setattr(failure, "sandbox_cleanup_pending",
-                    not all((death_closed, confirmed, snapshot_ok, group_ok,
-                             kill_ok, status_ok, parse_ok, sweep_ok)) or bool(pending))
-            if not confirmed:
-                setattr(failure, "sandbox_process", process)
+            def attach_metadata(name, value):
+                try:
+                    setattr(failure, name, value)
+                except BaseException as metadata_error:
+                    try:
+                        issues.append(type(metadata_error).__name__ + " while attaching " + name)
+                    except BaseException:
+                        pass
+                    return False
+                return True
+
+            attach_metadata("sandbox_cleanup_pending",
+                            not all((death_closed, confirmed, snapshot_ok, group_ok,
+                                     kill_ok, status_ok, parse_ok, sweep_ok)) or bool(pending))
+            if not confirmed and attach_metadata("sandbox_process", process):
                 issues.append("shim reap unconfirmed; retry sandbox_process.wait()")
             if pending:
-                setattr(failure, "sandbox_pipes", pending)
+                attach_metadata("sandbox_pipes", pending)
             for issue in issues:
                 try:
                     failure.add_note("macOS sandbox cleanup: " + issue)
