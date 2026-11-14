@@ -325,6 +325,8 @@ def main(argv: list | None = None) -> int:
                     help="abort if more than N consecutive parent-resolutions "
                          "fail (network outage signal)")
     args = ap.parse_args(argv)
+    if args.sample_size is not None and args.sample_size < 0:
+        ap.error("--sample-size must be a non-negative integer")
 
     cwes_set = set(args.cwes)
     eco_set = set(args.ecosystems) & set(_ECOSYSTEM_LANG.keys())
