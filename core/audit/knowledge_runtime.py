@@ -1474,7 +1474,7 @@ class AuditKnowledgeRuntime:
         ctx["caller_context_answers"] = (*reservation.packet.caller_contexts, *missing_answers)
         return True
 
-    def _binary_callee_context_current(self, reservation: KnowledgeReservation,
+    def _binary_selected_payloads_current(self, reservation: KnowledgeReservation,
                                       fresh_scopes: list[BinaryReviewPublicationScope]) -> bool:
         """Recheck original advisory contributors, including after journal append.
 
@@ -1482,6 +1482,7 @@ class AuditKnowledgeRuntime:
         same-version offer. Callbacks run outside the Runtime lock.
         """
         from .binary_callee_assessments import BinaryCalleeAssessmentContext
+        from .binary_subjects import BinarySubjectContext
         from .continuation_context import context_spec
 
         key = self._key(reservation.origin)
@@ -1489,7 +1490,7 @@ class AuditKnowledgeRuntime:
             selected = []
             for context_id in reservation.packet.external_context_ids:
                 spec = self._context_deltas.get((key, context_id))
-                if spec is not None and spec["kind"] == "binary_callee_assessments":
+                if spec is not None and spec["kind"] in ("binary_callee_assessments", "binary_target_semantics"):
                     selected.append((dict(spec), self._binary_external_payloads.get((key, context_id))))
             cycle_input = self._binary_cycle_scopes.get(key)
         if not selected:
@@ -1504,7 +1505,9 @@ class AuditKnowledgeRuntime:
                 if not isinstance(original_ctx, dict):
                     return False
                 payload = original_ctx.get(spec["context_key"]) if fresh_scopes else retained[1]
-                if not isinstance(payload, BinaryCalleeAssessmentContext):
+                payload_type = (BinaryCalleeAssessmentContext if spec["kind"] == "binary_callee_assessments"
+                                else BinarySubjectContext)
+                if not isinstance(payload, payload_type):
                     return False
                 ctx = dict(original_ctx)
                 ctx[spec["context_key"]] = payload
@@ -1523,7 +1526,7 @@ class AuditKnowledgeRuntime:
                 fresh_scopes = [scope for (pass_id, _attempt), (scope, original) in self._binary_review_scopes.items()
                                 if pass_id == reservation.packet.pass_id and self._same_snapshot(original, origin)]
             return (not invalid and self._current_binary_cycle_input(origin) is not None
-                    and self._binary_callee_context_current(reservation, fresh_scopes)
+                    and self._binary_selected_payloads_current(reservation, fresh_scopes)
                     and all(scope.current(self.target_root) for scope in fresh_scopes)
                     and not reservation.packet.references and not reservation.packet.explanations
                     and not reservation.packet.caller_contexts and bool(reservation.packet.external_context_ids))
