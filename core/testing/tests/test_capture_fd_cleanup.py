@@ -245,12 +245,22 @@ def test_config_descriptor_is_reclaimed_when_setup_or_cli_fails(
     with _descriptors() as (record, entries):
 
         def anonymous(*args, **kwargs):
-            return record(real_anonymous(*args, **kwargs))
+            descriptor = real_anonymous(*args, **kwargs)
+            with ExitStack() as setup:
+                setup.callback(os.close, descriptor)
+                registered = record(descriptor)
+                setup.pop_all()
+                return registered
 
         def dup(fd):
             if fault == "keeper":
                 raise error("injected config descriptor failure")
-            return record(os.dup(fd))
+            duplicate = os.dup(fd)
+            with ExitStack() as setup:
+                setup.callback(os.close, duplicate)
+                registered = record(duplicate)
+                setup.pop_all()
+                return registered
 
         def fail(*args):
             raise error("injected config descriptor failure")
