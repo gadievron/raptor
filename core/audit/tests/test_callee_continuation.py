@@ -162,7 +162,10 @@ def test_knowledge_and_callee_share_two_continuation_rounds(owned):
     calls = []
 
     class KnowledgeClient:
+        _attempt_admission_protocol = 1
+
         def generate_structured(self, prompt, schema, **kwargs):
+            assert kwargs.pop("accounting_attempt_admission")() is True
             calls.append(prompt)
             response = {"status": "clean", "body": "Still provisional",
                         "relies_on": [{"callee": "callee", "assumption": "checks value"}]}
