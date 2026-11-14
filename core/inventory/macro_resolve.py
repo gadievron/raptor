@@ -10,6 +10,7 @@ transitive references used in a given source fragment.
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from collections import OrderedDict
@@ -17,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from core.inventory._walk import iter_regular_files
+from core.source import read_bytes_capped
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -213,6 +215,20 @@ def _extract_braced_body(text: str, open_pos: int) -> str | None:
     return None
 
 
+_MAX_MACRO_SOURCE_BYTES = 1_048_576
+
+
+def _read_macro_text(path: Path) -> str | None:
+    """Admit a regular-file byte budget before replacement text decoding."""
+    got = read_bytes_capped(path, _MAX_MACRO_SOURCE_BYTES)
+    if got is None or got[1]:
+        return None
+    # Preserve Path.read_text(errors="replace") default encoding and
+    # universal-newline behaviour over the already bounded byte buffer.
+    with io.TextIOWrapper(io.BytesIO(got[0]), errors="replace") as stream:
+        return stream.read()
+
+
 def build_rust_macro_table(target_path: Path) -> dict[str, str]:
     """Build name→body table of all macro_rules! in the target.
 
@@ -234,9 +250,11 @@ def build_rust_macro_table(target_path: Path) -> dict[str, str]:
         # target must not walk the host fs into audit context.
         for p in iter_regular_files(target_path, _RUST_EXTENSIONS):
             try:
-                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                if p.stat().st_size > _MAX_MACRO_SOURCE_BYTES:  # cheap oversize rejection
                     continue
-                text = p.read_text(errors="replace")
+                text = _read_macro_text(p)
+                if text is None:
+                    continue
             except OSError:
                 continue
             for m in _RUST_MACRO_RULES_RE.finditer(text):
@@ -325,9 +343,11 @@ def build_macro_table(target_path: Path) -> dict[str, tuple[str, str]]:
         # Symlink-safe enumeration — same class as the rust walk above.
         for p in iter_regular_files(target_path, _C_EXTENSIONS):
             try:
-                if p.stat().st_size > 1_048_576:  # 1 MB cap
+                if p.stat().st_size > _MAX_MACRO_SOURCE_BYTES:  # cheap oversize rejection
                     continue
-                text = p.read_text(errors="replace")
+                text = _read_macro_text(p)
+                if text is None:
+                    continue
             except OSError:
                 continue
             text = text.replace("\\\n", " ")
