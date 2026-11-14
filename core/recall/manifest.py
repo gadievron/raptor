@@ -265,6 +265,10 @@ def _parse_expected(raw: Any, where: str,
     for label, v in (("line_start", line_start), ("line_end", line_end)):
         if v is not None and (not isinstance(v, int) or isinstance(v, bool) or v < 1):
             errors.append(f"{where}: {label} must be a positive int or null")
+    if (isinstance(line_start, int) and not isinstance(line_start, bool)
+            and isinstance(line_end, int) and not isinstance(line_end, bool)
+            and 0 < line_end < line_start):
+        errors.append(f"{where}: line_end must be greater than or equal to line_start")
     if line_start is None and line_end is not None:
         errors.append(f"{where}: line_end without line_start")
     prov = _parse_provenance(raw.get("provenance"), where, errors)
