@@ -141,13 +141,21 @@ def _annotate_step(
 
     for chain in chains:
         callee_tokens.update(chain)
-        matched = False
-        for c in candidates:
-            if _chain_matches_candidate(chain, c):
-                on_path.add(c.qualified_name)
-                matched = True
-                break
-        if not matched:
+        qualified = [
+            c for c in candidates
+            if _ends_with(chain, c.qualified_name.split("."))
+        ]
+        if qualified:
+            # Prefer the most specific syntactic identity before trying
+            # short names; an earlier unrelated bare match must not hide it.
+            match = max(qualified, key=lambda c: len(c.qualified_name.split(".")))
+        else:
+            match = next(
+                (c for c in candidates if _chain_matches_candidate(chain, c)), None,
+            )
+        if match is not None:
+            on_path.add(match.qualified_name)
+        else:
             helpers.add(_join_chain(chain))
 
     identifiers = _extract_identifiers(step.snippet)
