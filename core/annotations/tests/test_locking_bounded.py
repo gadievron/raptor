@@ -10,7 +10,9 @@ of stalling the writer silently and forever.
 
 from __future__ import annotations
 
+import errno
 import os
+from contextlib import ExitStack
 import threading
 from pathlib import Path
 
@@ -113,13 +115,29 @@ def test_fifo_at_lock_path_is_refused_loudly(tmp_path: Path):
     thread = threading.Thread(target=writer, daemon=True)
     from core.testing.threads import retiring_threads
 
-    with retiring_threads([thread], release=lambda: None, timeout=10):
-        thread.start()
-        try:
-            assert done.wait(timeout=10), (
-                "writer wedged opening the planted FIFO lock path"
-            )
-            assert errors, "the FIFO lock path was neither refused nor hung"
-            assert "not a regular file" in str(errors[0])
-        finally:
-            thread.join(timeout=10)
+    with ExitStack() as peers:
+        peer = None
+
+        def release_reader() -> None:
+            nonlocal peer
+            if peer is not None or thread.ident is None or not thread.is_alive():
+                return
+            try:
+                peer = os.open(tmp_path / "notes.md.lock", os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+            else:
+                peers.callback(os.close, peer)
+
+        with retiring_threads([thread], release=release_reader, timeout=10):
+            thread.start()
+            try:
+                assert done.wait(timeout=10), (
+                    "writer wedged opening the planted FIFO lock path"
+                )
+                assert errors, "the FIFO lock path was neither refused nor hung"
+                assert "not a regular file" in str(errors[0])
+            finally:
+                release_reader()
+                thread.join(timeout=10)
