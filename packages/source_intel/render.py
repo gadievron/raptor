@@ -395,9 +395,9 @@ def _render_allocation_line(ae: AllocationEvidence, style: str) -> str:
     )
 
     if style == "stage_d":
-        prefix = "Allocator-result not checked"
+        prefix = "Unchecked allocation shape"
     elif style == "exploit_plan":
-        prefix = "Primitive — unchecked allocator result"
+        prefix = "Primitive candidate — unchecked allocation shape"
     else:
         prefix = "Variant hint — unchecked alloc shape"
 
@@ -410,9 +410,10 @@ def _render_allocation_line(ae: AllocationEvidence, style: str) -> str:
 
     return (
         f"{prefix}: `{ae.allocator}` at {ae.location[0]}:{ae.location[1]} "
-        f"{fn_text} stores into {field_text} with NO subsequent NULL "
-        f"check on that location. Allocation failure → NULL stored → "
-        f"downstream deref crashes (CWE-476).{caveat}"
+        f"{fn_text} stores into {field_text}, reported without a matched "
+        f"NULL-check pattern. This observation does not establish allocator "
+        f"failure behaviour, downstream dereference, or a crashing path "
+        f"(CWE-476).{caveat}"
     )
 
 
