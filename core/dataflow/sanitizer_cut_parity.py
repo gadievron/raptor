@@ -283,7 +283,10 @@ def read_parity_records(path: str | Path) -> list[ParityRecord]:
                 if not line:
                     continue
                 try:
-                    out.append(ParityRecord.from_json(loads(line)))
+                    record = loads(line)
+                    if not isinstance(record, dict):
+                        continue
+                    out.append(ParityRecord.from_json(record))
                 except (ValueError, KeyError, TypeError):
                     continue
     except OSError:
