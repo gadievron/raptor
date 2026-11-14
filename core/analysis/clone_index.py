@@ -447,6 +447,9 @@ def build_clone_index(
 def _index_from_dict(raw: Any) -> CloneIndex | None:
     if not isinstance(raw, dict):
         return None
+    version = raw.get("version", 0)
+    if isinstance(version, bool) or (isinstance(version, float) and not version.is_integer()):
+        return None
     families = raw.get("families")
     if not isinstance(families, list):
         return None
@@ -470,7 +473,7 @@ def _index_from_dict(raw: Any) -> CloneIndex | None:
             "key": str(fam.get("key", "")), "members": recs,
         })
     return CloneIndex(
-        version=int(raw.get("version", 0)),
+        version=int(version),
         source_fingerprint=str(raw.get("source_fingerprint", "")),
         families=cleaned,
         caps_hit=bool(raw.get("caps_hit", False)),
