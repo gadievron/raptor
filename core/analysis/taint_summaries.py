@@ -1169,7 +1169,8 @@ def _function_reflective_readers(
         node = pending.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
             continue
-        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.For, ast.AsyncFor)):
+            value = node.iter if isinstance(node, (ast.For, ast.AsyncFor)) else node.value
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             names: set[str] = set()
             binding_targets = list(targets)
@@ -1183,7 +1184,7 @@ def _function_reflective_readers(
                     binding_targets.append(target.value)
                 # Attribute/subscript addresses bind no bare target here.
                 # Their nested expression scopes are not unpacked locals.
-            for source in _scoped_expression_loads(node.value):
+            for source in _scoped_expression_loads(value):
                 assignments.setdefault(source, set()).update(names)
         pending.extend(ast.iter_child_nodes(node))
     work = deque(readers)
