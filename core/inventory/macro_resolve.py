@@ -40,7 +40,7 @@ _MACRO_DEF_RE = re.compile(
 _MACRO_DEFINE_PREFIX_RE = re.compile(r"#[^\S\n]*define[^\S\n]")
 _MACRO_IDENT_RE = re.compile(r"\b([A-Za-z_]\w*)\b")
 _C_EXTENSIONS = frozenset({
-    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx",
+    ".c", ".h", ".hh", ".cpp", ".cc", ".cxx", ".hpp", ".hxx",
 })
 _RUST_EXTENSIONS = frozenset({".rs"})
 
