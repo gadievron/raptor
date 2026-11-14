@@ -2165,18 +2165,19 @@ def _count_statements(body_lines: list) -> int:
 # hostile line (measured exp 1.98; bounded, exp 1.0).  Both
 # directions: raising the bound re-opens per-head rescan cost;
 # lowering it drops long-but-real one-line return expressions from
-# the value census (402 chars covers any sane spelling).
+# the value census; the current expression span admits at most 402 chars.
 _RETURN_VALUE_RE = re.compile(
     r"\breturn\s+([^;\s](?:[^;]{0,400}[^;\s])?)\s*;",
 )
 
 
 def _extract_return_values(body_lines: list) -> list:
-    """Extract the right-hand side of every `return ...;` in the body.
+    """Collect at most one bounded return-expression match per line.
 
-    Returns a list of normalized (whitespace-collapsed) strings.
-    Lines with bare `return;` (no value) are skipped — void-style
-    returns don't speak to return-value semantics.
+    Return normalized (whitespace-collapsed) strings. Bare `return;`
+    statements are skipped. Additional returns on the same line and
+    expressions beyond the regex bound can be omitted; this lexical
+    census is not complete return-path analysis.
     """
     values = []
     for line in body_lines:
