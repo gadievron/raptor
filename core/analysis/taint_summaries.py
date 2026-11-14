@@ -686,6 +686,17 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             expressions.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
+        elif isinstance(statement, ast.Match):
+            if not statement.cases or any(
+                not isinstance(case.pattern, ast.MatchAs)
+                or case.pattern.pattern is not None or case.pattern.name is not None
+                for case in statement.cases
+            ):
+                return None
+            expressions.append(statement.subject)
+            for case in reversed(statement.cases):
+                expressions.append(case.guard)
+                pending.extend(reversed(case.body))
         elif isinstance(statement, ast.Try):
             if any(handler.name is not None for handler in statement.handlers):
                 return None
