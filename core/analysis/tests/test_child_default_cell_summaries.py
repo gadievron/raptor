@@ -1,6 +1,7 @@
 """Child defaults retain enclosing cells before child parameter binding."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -65,11 +66,12 @@ def test_enclosing_unreachable_binding_masks_default_cell():
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("header", ["first=raw, second=[raw for slots[[raw for item in ()]] in ()]", "first=raw, *, second=[raw for slots[[raw for item in ()]] in ()]"],
+@pytest.mark.parametrize("header", ["first=raw, second=[raw for slots[_raptor_unsupported_target] in ()]", "first=raw, *, second=[raw for slots[_raptor_unsupported_target] in ()]"],
                          ids=["positional", "keyword"])
 def test_unsupported_later_default_invalidates_complete_body(header):
+    # Synthetic malformed-AST admission control, not compiler-accepted source.
     source = f"raw\ndef child({header}):\n return first"
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
