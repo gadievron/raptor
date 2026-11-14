@@ -131,12 +131,12 @@ def _package_cache_roots(pack: str) -> list[Path]:
     pack_dir = base / scope / name
     if not pack_dir.is_dir():
         return []
-    versions = sorted(
+    newest = max(
         (d for d in pack_dir.iterdir() if d.is_dir()),
         key=lambda d: _version_key(d.name),
-        reverse=True,
+        default=None,
     )
-    return versions[:1]  # newest version only
+    return [newest] if newest is not None else []
 
 
 def _distribution_roots(pack: str) -> list[Path]:
@@ -151,12 +151,12 @@ def _distribution_roots(pack: str) -> list[Path]:
     pack_dir = dist / scope / name
     if not pack_dir.is_dir():
         return []
-    versions = sorted(
+    newest = max(
         (d for d in pack_dir.iterdir() if d.is_dir()),
         key=lambda d: _version_key(d.name),
-        reverse=True,
+        default=None,
     )
-    return versions[:1] or [pack_dir]
+    return [newest] if newest is not None else [pack_dir]
 
 
 def _pack_roots(pack: str) -> list[Path]:
