@@ -371,7 +371,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      whose sole return reads an enclosing-local name or its direct attribute,
+      whose sole return reads an enclosing-local name, direct attribute or indexed value,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -441,7 +441,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if not isinstance(value, ast.Name) or value.id != definition.name:
                 continue
             # Adjacency and no decorator avoid an intervening binding rewrite
-            # or wrapper. Only a bare name or direct attribute return needs this check.
+            # or wrapper. Only a bare name or direct member/index return needs this check.
             body = definition.body
             if (body and isinstance(body[0], ast.Expr)
                     and isinstance(body[0].value, ast.Constant)
@@ -449,7 +449,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                 body = body[1:]
             if len(body) == 1 and isinstance(body[0], ast.Return):
                 cell_read = body[0].value
-                if isinstance(cell_read, ast.Attribute):
+                if isinstance(cell_read, (ast.Attribute, ast.Subscript)):
                     cell_read = cell_read.value
                 if not isinstance(cell_read, ast.Name):
                     continue
