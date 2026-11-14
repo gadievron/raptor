@@ -60,7 +60,7 @@ def load_overlay(overlay_dir: Path | str | None) -> dict[str, dict[str, Any]]:
             logger.debug("env_overlay: unreadable sidecar %s", path)
             continue
         cve_id = data.get("cve_id") if isinstance(data, dict) else None
-        if not cve_id:
+        if not isinstance(cve_id, str) or not cve_id:
             logger.debug("env_overlay: sidecar %s lacks cve_id", path)
             continue
         out[cve_id] = data
