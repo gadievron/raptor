@@ -584,8 +584,13 @@ def validate_structurally(
         s_line = s.get("line", 0) or 0
         if not s_file or s_line < 1:
             continue
-        lo, hi = window.get(s_file, (s_line, s_line))
-        window[s_file] = (min(lo, s_line), max(hi, s_line))
+        resolved_source = _resolve_file(s, repo_path)
+        if resolved_source is None:
+            continue
+        # Match file_cache keys so aliases of one file share its window.
+        source_key = str(resolved_source)
+        lo, hi = window.get(source_key, (s_line, s_line))
+        window[source_key] = (min(lo, s_line), max(hi, s_line))
 
     for i, step in enumerate(steps):
         file_path_str = step.get("file", "")
@@ -638,7 +643,7 @@ def validate_structurally(
 
         sanitizer_calls = []
         if graph:
-            win_lo, win_hi = window.get(file_path_str, (line, line))
+            win_lo, win_hi = window.get(cache_key, (line, line))
             calls_in_range = [
                 c for c in graph.calls
                 if c.caller == func_name and win_lo <= c.line <= win_hi
