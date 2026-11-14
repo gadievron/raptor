@@ -62,6 +62,7 @@ from collections import Counter
 from collections.abc import Iterator
 import fnmatch
 import os
+import stat
 from dataclasses import dataclass, field
 from glob import escape as escape_glob
 from pathlib import Path
@@ -168,7 +169,7 @@ class _FileIndex:
         """(matches, capped). Hidden/build directories are skipped so a
         vendored or generated copy cannot shadow the source of truth
         silently — if both survive the skip list, ambiguity refuses.
-        Enumeration failure discards partial candidates: a surviving file
+        Enumeration or metadata failure discards partial candidates: a surviving file
         alone cannot establish uniqueness across an unreadable subtree.
         The candidate cap bounds retention, not total directory traversal.
         """
@@ -188,7 +189,11 @@ class _FileIndex:
                     rel_parts = p.parts
                 if any(part in _SKIP_DIR_PARTS for part in rel_parts):
                     continue
-                if not p.is_file():
+                try:
+                    regular = stat.S_ISREG(p.stat().st_mode)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+                if not regular:
                     continue
                 matches.append(p)
                 if len(matches) > _CANDIDATE_CAP:
