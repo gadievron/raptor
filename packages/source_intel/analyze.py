@@ -2952,45 +2952,6 @@ def compute_privilege_back_walk_evidence(
     return None
 
 
-def _path_is_gated_with_examples(
-    fn_name: str,
-    facts: Any,
-    result: SourceIntelResult,
-    *,
-    remaining_depth: int,
-    visited: set,
-) -> tuple[bool, list[tuple[str, str, str, int]]]:
-    """Legacy caller traversal with optional admitted examples. Current records
-    provide no denial-exit relation, so the site helper supplies no gating
-    example. False and an empty list express unknown gating, not an ungated
-    caller or a complete call-graph proof."""
-    if fn_name in visited:
-        return False, []
-    example = _function_privileged_cap_site(fn_name, result)
-    if example is not None:
-        return True, [example]
-    if remaining_depth <= 0:
-        return False, []
-    callers = facts.callers_of(fn_name)
-    if not callers:
-        return False, []
-    next_visited = visited | {fn_name}
-    collected: list[tuple[str, str, str, int]] = []
-    for call_file, call_line in callers:
-        caller_fn = _enclosing_function(call_file, call_line)
-        if not caller_fn:
-            return False, []
-        sub_gated, sub_examples = _path_is_gated_with_examples(
-            caller_fn, facts, result,
-            remaining_depth=remaining_depth - 1,
-            visited=next_visited,
-        )
-        if not sub_gated:
-            return False, []
-        collected.extend(sub_examples)
-    return True, collected
-
-
 def _function_privileged_cap_site(
     fn_name: str,
     result: SourceIntelResult,
