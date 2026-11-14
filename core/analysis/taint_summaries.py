@@ -745,11 +745,13 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                 numeric = numeric_pending.pop()
                 if isinstance(numeric, ast.Constant) and type(numeric.value) in (int, float, complex):
                     continue
-                if isinstance(numeric, ast.UnaryOp) and isinstance(numeric.op, (ast.UAdd, ast.USub)):
+                if (isinstance(numeric, ast.UnaryOp)
+                        and isinstance(numeric.op, (ast.UAdd, ast.USub, ast.Invert))):
                     numeric_pending.append(numeric.operand)
                 elif (isinstance(numeric, ast.BinOp)
                       and isinstance(numeric.op, (ast.Add, ast.Sub, ast.Mult, ast.Div,
-                                                  ast.FloorDiv, ast.Mod, ast.Pow))):
+                                                  ast.FloorDiv, ast.Mod, ast.Pow, ast.LShift,
+                                                  ast.RShift, ast.BitAnd, ast.BitOr, ast.BitXor))):
                     numeric_pending.extend((numeric.left, numeric.right))
                 else:
                     return False
