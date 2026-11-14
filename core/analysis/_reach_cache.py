@@ -432,6 +432,11 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
             raise ValueError(f"expected boolean dispatch flag, got {v!r}")
         return v
 
+    def list_only(v: Any) -> list:
+        if not isinstance(v, list):
+            raise ValueError(f"expected list collection, got {v!r}")
+        return v
+
     def rows(key: str) -> list:
         value = data.get(key, [])
         if not isinstance(value, list):
@@ -440,32 +445,32 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
 
     return _AdjacencyIndex(
         forward={
-            dec_internal(src): {dec_node(d) for d in dsts}
+            dec_internal(src): {dec_node(d) for d in list_only(dsts)}
             for src, dsts in rows("forward")
         },
         reverse={
-            dec_node(dst): {dec_internal(s) for s in srcs}
+            dec_node(dst): {dec_internal(s) for s in list_only(srcs)}
             for dst, srcs in rows("reverse")
         },
         uncertain_tail_paths={
-            str_only(tail): {str_only(pp) for pp in paths}
+            str_only(tail): {str_only(pp) for pp in list_only(paths)}
             for tail, paths in rows("uncertain_tail_paths")
         },
         masked_file_callers={
             str_only(path): (
                 str_only(flag),
-                tuple(dec_internal(fn) for fn in fns),
+                tuple(dec_internal(fn) for fn in list_only(fns)),
             )
             for path, flag, fns in rows("masked_file_callers")
         },
         method_match={
             str_only(tail): {
-                (dec_internal(fn), opt_str(cls)) for fn, cls in pairs
+                (dec_internal(fn), opt_str(cls)) for fn, cls in list_only(pairs)
             }
             for tail, pairs in rows("method_match")
         },
         uncertain_callees={
-            dec_internal(src): {str_only(n) for n in names}
+            dec_internal(src): {str_only(n) for n in list_only(names)}
             for src, names in rows("uncertain_callees")
         },
         has_method_dispatch={
@@ -474,7 +479,7 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
         },
         definitions={
             (str_only(file_path), str_only(name)):
-                {dec_internal(fn) for fn in fns}
+                {dec_internal(fn) for fn in list_only(fns)}
             for file_path, name, fns in rows("definitions")
         },
         class_of_method={
@@ -483,7 +488,7 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
         },
         class_bases={
             (str_only(file_path), str_only(cls)):
-                tuple(str_only(b) for b in bases)
+                tuple(str_only(b) for b in list_only(bases))
             for file_path, cls, bases in rows("class_bases")
         },
         override_methods={
@@ -502,7 +507,7 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
         },
         call_lines={
             (dec_internal(src), dec_node(dst)): tuple(
-                int_only(ln) for ln in lines
+                int_only(ln) for ln in list_only(lines)
             )
             for src, dst, lines in rows("call_lines")
         },
