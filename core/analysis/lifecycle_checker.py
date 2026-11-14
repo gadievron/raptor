@@ -105,13 +105,19 @@ def check_coverage_with_cfg(
     (the CFG is file-specific, so applying it to lines from other
     files produces wrong results).
     """
+    def textual_fallback() -> list[LifecycleFinding]:
+        return [
+            finding for finding in check_coverage(field)
+            if not cfg_file or finding.read_site.file == cfg_file
+        ]
+
     try:
         from core.analysis.guard_bypass import check_guard_coverage
     except ImportError:
-        return check_coverage(field)
+        return textual_fallback()
 
     if not hasattr(cfg, "entry") or not hasattr(cfg, "nodes"):
-        return check_coverage(field)
+        return textual_fallback()
 
     findings: list[LifecycleFinding] = []
 
