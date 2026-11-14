@@ -1,13 +1,13 @@
 """Unavailable preprocessing must reach every C/C++ CFG proof consumer."""
 import pytest
 
+pytest.importorskip("tree_sitter_c")
+pytest.importorskip("tree_sitter_cpp")
+
 from core.analysis.finding_resolver import ResolutionFailure, resolve_finding
 from core.analysis.tests.test_cpp_macro_fidelity import _source, gap_transport as gap_transport
 from core.audit import release_order, resource_bounds
 from core.audit.block_review import try_build_cfg
-
-pytest.importorskip("tree_sitter_c")
-pytest.importorskip("tree_sitter_cpp")
 
 
 @pytest.mark.parametrize("language", ["c", "cpp"])
