@@ -59,9 +59,9 @@ def test_default_parameter_shadow_keeps_existing_admission():
 
 
 @pytest.mark.parametrize(
-    "body", ["if True:\n global raw\nreturn raw", "if True:\n import value\nreturn raw",
+    "body", ["if True:\n global raw\nreturn raw", "if True:\n nonlocal other\nreturn raw",
              "raw\nif False:\n class Value:\n  pass\nreturn 0"],
-    ids=["nested-global", "nested-import", "later-class"],
+    ids=["nested-global", "nested-nonlocal", "later-class"],
 )
 def test_declaration_anywhere_invalidates_new_statement_scan(body):
     assert _bounded_body_expression_loads(ast.parse(body).body) is None

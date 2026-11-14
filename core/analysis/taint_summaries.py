@@ -666,6 +666,12 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             if child_reads is None:
                 return None
             target_reads.update(child_reads - local_binding_names(statement))
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            if (any(alias.name == "*" for alias in statement.names)
+                    or isinstance(statement, ast.ImportFrom) and statement.module == "__future__"):
+                return None
+            # Import names bind in the child; they are not expression reads.
+            # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)

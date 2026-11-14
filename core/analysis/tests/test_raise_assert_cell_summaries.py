@@ -51,7 +51,7 @@ def test_statement_controls_do_not_capture_outer_cell(header, body):
 
 
 def test_unsupported_later_statement_invalidates_capture():
-    assert _bounded_body_expression_loads(ast.parse("assert raw\nimport module").body) is None
+    assert _bounded_body_expression_loads(ast.parse("assert raw\nglobal unsupported").body) is None
 
 
 def test_scoped_annotation_statement_stays_excluded():
