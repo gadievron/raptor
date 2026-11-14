@@ -238,17 +238,20 @@ class TestSystemPromptFileFor:
                 errors.append(exc)
 
         threads = [threading.Thread(target=_use) for _ in range(8)]
-        try:
-            for t in threads:
-                t.start()
-        finally:
-            for t in threads:
-                if t.ident is not None:
-                    t.join(timeout=3)
-            assert not any(t.is_alive() for t in threads), "prompt-cache workers did not exit"
-        assert not errors
-        assert len(set(paths)) == 1
-        assert paths[0].exists()
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=lambda: None, timeout=3):
+            try:
+                for t in threads:
+                    t.start()
+            finally:
+                for t in threads:
+                    if t.ident is not None:
+                        t.join(timeout=3)
+                assert not any(t.is_alive() for t in threads), "prompt-cache workers did not exit"
+            assert not errors
+            assert len(set(paths)) == 1
+            assert paths[0].exists()
 
     def test_cleanup_removes_cached_files(self):
         from core.llm import cc_adapter
