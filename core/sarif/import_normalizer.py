@@ -25,6 +25,7 @@ from core.sarif import emit
 from core.sarif.parser import _coerce_line, _sanitize_step_properties, _scope_fingerprint
 from core.security.log_sanitisation import escape_nonprintable
 from core.source.lines import split_lines
+from core.source.streams import preserving_stream_error
 
 logger = get_logger()
 
@@ -445,7 +446,7 @@ def _read_snippet_lines(source_root: Path, rel_path: str) -> list[str] | None:
         fh = open_regular_beneath(root, relative, "rb")
         if fh is None:
             return None
-        with fh:
+        with preserving_stream_error(fh):
             st = os.fstat(fh.fileno())
             if not _stat_mod.S_ISREG(st.st_mode):
                 return None
