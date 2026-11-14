@@ -1831,8 +1831,10 @@ def derive_batch_workers(cpu_count: int | None = None) -> int:
         large TUs) kept climbing.
       * Lower and the parallel win evaporates: single-lane spatch on a
         63k-file tree is a >13 h/rule floor; even 2 lanes halves it.
-    cpu//4 leaves headroom for the orchestrator's own threads and the
-    sandboxed children's supervisor overhead on shared hosts.
+    Above the two-worker floor, cpu//4 leaves headroom for the
+    orchestrator and sandbox supervisors. The floor can exceed the CPU
+    count on a one-CPU host: this width is a scheduling heuristic, not
+    a hard CPU limit.
     """
     if cpu_count is None:
         cpu_count = os.cpu_count() or 1
