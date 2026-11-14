@@ -177,12 +177,10 @@ def derive_evidence_strings(
         and reframed as informational-only: the LLM should weigh
         the binary verdict over any source_intel EXPLOITABLE signal.
         ``None`` (default): no binary side; emit unchanged.
-      privilege_back_walk: optional axis-4 multi-hop privilege
-        back-walk evidence. When supplied, rendered as one prose line
-        (the privileged gate example(s) along the call paths, or the
-        ungated counter-example) after the C-level source lines;
-        ``no_callers`` results render nothing. ``None`` (default): no
-        back-walk line.
+      privilege_back_walk: optional legacy caller observations rendered
+        as informational context after the C-level source lines. Recorded
+        flags establish neither enforced gating nor an ungated caller;
+        ``no_callers`` results render nothing. ``None`` omits the line.
 
     Skipped results emit a skip notice; results with no relevant
     observations emit an absence acknowledgement. The output may also
@@ -325,9 +323,8 @@ def derive_evidence_strings(
     for d in double_frees:
         lines.append(_render_double_free_line(d, style))
 
-    # Axis-4 capability evidence — privilege gating at sink. When
-    # a capable(CAP_PRIV) check dominates the sink, the attacker
-    # already holds that privilege; weighs the verdict accordingly.
+    # Capability call observations retain source context. Existing grades
+    # do not establish result consumption, denial polarity or sink gating.
     capabilities = list(result.capabilities)
     if finding_function:
         capabilities = [
@@ -337,8 +334,7 @@ def derive_evidence_strings(
     for c in capabilities:
         lines.append(_render_capability_line(c, style))
 
-    # Axis-4 LSM hook evidence — Linux Security Module hooks gate
-    # the sink path. Same severity caveat as capabilities.
+    # LSM hook observations retain their existing independent rendering.
     lsm_hooks = list(result.lsm_hooks)
     if finding_function:
         lsm_hooks = [
@@ -359,11 +355,8 @@ def derive_evidence_strings(
     for src in c_sources:
         lines.append(_render_c_level_source_line(src, style))
 
-    # Axis-4 multi-hop privilege back-walk evidence (Phase D follow-
-    # up). Surfaces the back-walk's prose findings — the verdict-side
-    # walk in adapter.py produces a boolean suppression decision; this
-    # path produces concrete examples the LLM weighs (the privileged
-    # gate(s) along the path, OR the ungated counter-example caller).
+    # Retain legacy back-walk observations as informational context.
+    # Neither its flags nor call examples prove gating or an ungated path.
     if privilege_back_walk is not None:
         line = _render_privilege_back_walk_line(
             privilege_back_walk, style,
@@ -586,13 +579,9 @@ _PRIVILEGED_CAP_CONSTANTS_FOR_RENDER = frozenset({
 # `ptracer_capable`, and similar variants gate against task or
 # tracer creds — not always equivalent to global root.
 #
-# The render prose escalates "ROOT-EQUIVALENT, not a meaningful
-# escalation" ONLY when both:
-#   1. cap_function is in this set (gates against global creds), AND
-#   2. cap constant is in ``_PRIVILEGED_CAP_CONSTANTS_FOR_RENDER``.
-# For namespace-scoped checks gating root-equivalent caps we emit
-# the userns-caveat prose instead — bug is still reachable via
-# `unshare -U` from an unprivileged process.
+# These legacy constant/function tables describe credential scope only.
+# The renderer treats calls as observations and does not infer enforced
+# denial, exploitability, or an attacker-held credential from these sets.
 _GLOBAL_CRED_CAP_FUNCTIONS = frozenset({
     "capable",
 })
@@ -618,18 +607,11 @@ _CAP_CONST_RE = re.compile(r"\bCAP_[A-Z_]+\b")
 def _privileged_cap_constant_on_line(
     file_path: str, line_no: int,
 ) -> str | None:
-    """Return the first privileged CAP_ constant on the given line,
-    or ``None`` when the line can't be read OR carries no privileged
-    constant. Used by ``_render_capability_line`` to strengthen the
-    prose when the check is root-equivalent.
+    """Return a privileged constant token from an admitted source line.
 
-    Mirrors the verdict-side ``adapter.py:_line_uses_privileged_cap``
-    but returns the constant name rather than a boolean (so the
-    render can include it in the prose). The mirror includes the
-    substrate: both read the shared sanitized view, so a constant
-    planted in a comment or string cannot mint Tier-1
-    \"privilege-gated\" prose or a ``privilege_gate`` Mitigation
-    (Stage D consumes both as discounts)."""
+    This informational lookup does not establish capability enforcement or
+    justify a privilege-gate mitigation from a call-site observation.
+    """
     from packages.source_intel._source_view import sanitized_lines
     lines = sanitized_lines(file_path)
     if lines is None:
@@ -643,163 +625,40 @@ def _privileged_cap_constant_on_line(
 
 
 def _render_capability_line(c: CapabilityEvidence, style: str) -> str:
-    """Render one capability-call observation with its recorded grade.
-
-    Non-dominating grades describe co-location only and do not establish
-    a required privilege. The existing dominates-grade credential tiers
-    remain separate from those informational observations.
-    """
+    """Render call-site information without inferring privilege enforcement."""
     fn_text = (
         f"function `{c.enclosing_function}`"
         if c.enclosing_function
         else f"in {c.location[0]} near line {c.location[1]}"
     )
-    grade_phrase = {
-        GRADE_DOMINATES: "DOMINATES the function body (depth-1, no early exit precedes)",
-        GRADE_SAME_PATH: "on a nested control-flow path (depth>1, inside if/loop/switch)",
-        GRADE_SAME_FUNCTION: "shares the function with the sink",
-    }.get(c.grade, c.grade)
-
-    if c.grade != GRADE_DOMINATES:
-        if style == "stage_d":
-            prefix = "Capability observation — call near sink"
-        elif style == "exploit_plan":
-            prefix = "Constraint to verify — capability-call relationship"
-        else:
-            prefix = "Variant hint — capability-call observation"
-        return (
-            f"{prefix}: `{c.cap_function}(...)` at "
-            f"{c.location[0]}:{c.location[1]} {fn_text} — {grade_phrase}. "
-            f"This observation does not establish a required capability, "
-            f"sink reachability or privilege gating; inspect the check's "
-            f"result and its control-flow relationship to the finding."
-        )
-
-    # Preserve the existing dominates-grade credential tiers.
-    priv_cap: str | None = None
-    if c.grade in (GRADE_DOMINATES, GRADE_SAME_FUNCTION):
-        priv_cap = _privileged_cap_constant_on_line(
-            c.location[0], c.location[1],
-        )
-
     if style == "stage_d":
-        prefix = "Privilege gating — capability check near sink"
+        prefix = "Capability observation — call near sink"
     elif style == "exploit_plan":
-        prefix = "Constraint — capability required to reach sink"
+        prefix = "Constraint to verify — capability-call relationship"
     else:
-        prefix = "Variant hint — capability check"
-
-    # Tier 1: global-creds check + root-equivalent constant.
-    if priv_cap is not None and c.cap_function in _GLOBAL_CRED_CAP_FUNCTIONS:
-        return (
-            f"{prefix}: `{c.cap_function}({priv_cap})` at "
-            f"{c.location[0]}:{c.location[1]} {fn_text} — "
-            f"{grade_phrase}. `{priv_cap}` is ROOT-EQUIVALENT "
-            f"(grants kernel-level powers: arbitrary memory access, "
-            f"module load, file DAC bypass — depending on the cap). "
-            f"`{c.cap_function}()` gates against GLOBAL credentials. "
-            f"Attacker must already hold this capability against the "
-            f"host root user to reach the sink; the bug is NOT a "
-            f"meaningful privilege escalation. Finding is effectively "
-            f"privilege-gated."
-        )
-
-    # Tier 2: namespace-scoped check + root-equivalent constant.
-    # The cap CAN be held by a userns admin without global root,
-    # so the bug is reachable via `unshare -U`.
-    if priv_cap is not None and c.cap_function in _NS_SCOPED_CAP_FUNCTIONS:
-        return (
-            f"{prefix}: `{c.cap_function}(..., {priv_cap})` at "
-            f"{c.location[0]}:{c.location[1]} {fn_text} — "
-            f"{grade_phrase}. `{priv_cap}` is root-equivalent ONLY "
-            f"against the init user namespace; `{c.cap_function}()` "
-            f"is NAMESPACE-SCOPED — a userns admin (created via "
-            f"`unshare -U` from an otherwise-unprivileged process) "
-            f"holds the cap inside their own ns. The bug IS "
-            f"reachable from unprivileged context; do NOT treat as "
-            f"privilege-gated. Mitigates only against pure-no-cap "
-            f"local attackers without userns availability."
-        )
-
-    # Tier 3: generic prose — unknown function family OR non-
-    # root-equivalent constant.
+        prefix = "Variant hint — capability-call observation"
     return (
         f"{prefix}: `{c.cap_function}(...)` at "
-        f"{c.location[0]}:{c.location[1]} {fn_text} — {grade_phrase}. "
-        f"Attacker must already hold the checked capability before "
-        f"the sink is reachable; for root-equivalent caps the bug "
-        f"may not be a meaningful escalation."
+        f"{c.location[0]}:{c.location[1]} {fn_text} — "
+        f"recorded heuristic grade `{c.grade}`. This observation does not "
+        f"establish privilege gating or sink reachability. Result consumption, "
+        f"denial polarity, a terminating denial branch and ordering before "
+        f"the relevant sink or call edge require reviewed evidence."
     )
 
 
 def _render_privilege_back_walk_line(
     bw: PrivilegeBackWalkEvidence, style: str,
 ) -> str | None:
-    """Render the axis-4 multi-hop privilege back-walk result as one
-    prose line. Three cases:
-
-      * no_callers — finding function is a top-level entry; the
-        back-walk is inapplicable. Return None (nothing to say).
-      * all_paths_gated — concrete privileged-gate examples from
-        the walk. Strongest signal: bug is only reachable from
-        already-privileged callers.
-      * partial — some paths gated, but an ungated counter-example
-        exists. Surfaces the counter-example so the LLM can weigh
-        it (don't claim full gating when one ungated path remains).
-    """
+    """Keep retained caller-walk records informational when relation is absent."""
     if bw.no_callers:
         return None
-    if style == "stage_d":
-        prefix = "Privilege gating — multi-hop back-walk"
-    elif style == "exploit_plan":
-        prefix = "Constraint — bug only reachable via privileged callers"
-    else:
-        prefix = "Variant hint — privilege back-walk"
-
-    if bw.all_paths_gated and bw.gating_examples:
-        # Render the FIRST gating example; mention if there are more.
-        first = bw.gating_examples[0]
-        gating_fn, cap_fn, fp, ln = first
-        extra = ""
-        if len(bw.gating_examples) > 1:
-            extra = (
-                f" (and {len(bw.gating_examples) - 1} more gating "
-                f"site(s) along other call paths within depth "
-                f"{bw.depth_used})"
-            )
-        return (
-            f"{prefix}: function `{bw.finding_function}` is reachable "
-            f"ONLY via callers that pass through a privileged "
-            f"`{cap_fn}(CAP_...)` check (e.g. `{gating_fn}` at "
-            f"{fp}:{ln}){extra}. Attacker without the required "
-            f"capability cannot trigger the bug; finding is "
-            f"privilege-gated and is not a meaningful escalation "
-            f"for already-privileged code."
-        )
-    if bw.all_paths_gated:
-        # Gated but no examples surfaced (shouldn't normally happen
-        # but handle defensively).
-        return (
-            f"{prefix}: all paths to function `{bw.finding_function}` "
-            f"(within depth {bw.depth_used}) pass through a "
-            f"privileged capability check. Finding is privilege-gated."
-        )
-    # Partial gating: ungated path exists.
-    ungated = bw.ungated_caller or "<unknown caller>"
-    if bw.gating_examples:
-        gating_fn = bw.gating_examples[0][0]
-        gated_note = (
-            f" Some paths ARE gated (e.g. via `{gating_fn}`) — "
-            f"but at least one unprivileged path remains."
-        )
-    else:
-        gated_note = ""
     return (
-        f"{prefix} (partial): function `{bw.finding_function}` is "
-        f"reachable via at least one ungated caller `{ungated}` "
-        f"within depth {bw.depth_used}.{gated_note} The bug "
-        f"remains reachable from unprivileged context — do not "
-        f"discount the finding on privilege grounds."
+        f"Capability back-walk observation: function `{bw.finding_function}` "
+        f"has a recorded summary within depth {bw.depth_used}. Current records "
+        f"do not establish reviewed denial-exit enforcement before each "
+        f"relevant call edge. Neither all-path privilege gating nor an "
+        f"ungated path is established by this summary."
     )
 
 
@@ -1538,9 +1397,8 @@ def derive_mitigations_found(
       * axis_2 abort  — abort-class call in finding's function
         (`abort_dominates` grade=dominates, `abort_on_path`
         grade=same_path, `abort_proximate` grade=same_function)
-      * axis_4 priv   — global-credential ``capable()`` check on a
-        root-equivalent constant in the finding's function
-        (`privilege_gate`)
+      * axis_4 capability calls remain informational: current records
+        do not establish the denial-exit relation required for a gate
       * axis_6 fortify — FORTIFY_SOURCE observed in build flags
         (`fortify_source`)
       * axis_3 paired — alloc paired with free in function
@@ -1576,28 +1434,8 @@ def derive_mitigations_found(
             location=ab.location,
         ))
 
-    # A privilege gate requires the existing dominates grade, a global
-    # credential check and a root-equivalent constant. Co-location or
-    # a nested-path observation does not establish a required privilege.
-    for cap in result.capabilities:
-        if (finding_function and cap.enclosing_function
-                and cap.enclosing_function != finding_function):
-            continue
-        if cap.cap_function not in _GLOBAL_CRED_CAP_FUNCTIONS:
-            continue
-        if cap.grade != GRADE_DOMINATES:
-            continue
-        priv_const = _privileged_cap_constant_on_line(
-            cap.location[0], cap.location[1],
-        )
-        if priv_const is None:
-            continue
-        mitigations.append(Mitigation(
-            name="privilege_gate",
-            axis="axis_4", confidence="medium",
-            detail=f"{cap.cap_function}({priv_const}) (grade={cap.grade})",
-            location=cap.location,
-        ))
+    # Capability observations carry no reviewed denial-exit relation, so
+    # they remain informational and do not create privilege_gate entries.
 
     # axis_6 FORTIFY — surface only when level present. Kernel
     # CONFIG_FORTIFY_SOURCE doesn't tier (kconfig level=1 intercepts

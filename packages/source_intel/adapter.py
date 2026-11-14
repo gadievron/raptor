@@ -994,93 +994,20 @@ def _privileged_capability_dominates(
     *,
     repo_root: Path | None = None,
 ) -> bool:
-    """Return True iff axis-4 evidence supports NOT_EXPLOITABLE:
+    """Withhold suppression without a reviewed capability enforcement relation.
 
-    * finding's rule_id is memory-corruption-class, AND
-    * a ``capable(CAP_X)`` call sits in the same function as the
-      finding's sink (Phase 8 same_function grade is enough), AND
-    * the capability constant on that line is in the privileged set
-      (CAP_SYS_ADMIN / equivalent).
-
-    Same proximity gate as axis-2 abort-dominance: ±50 lines from
-    the finding's sink to filter mega-function false positives.
+    Existing call-site records do not establish result consumption, denial
+    polarity, a terminating denial branch or ordering before this sink.
+    False means suppression is unproven, not that the finding is exploitable.
     """
-    rid = finding.rule_id or ""
-    if not any(rid.startswith(p) for p in _MEMORY_CORRUPTION_RULE_PREFIXES):
-        return False
-    if not result.capabilities:
-        return False
-
-    sink_path = finding.sink.file_path or ""
-    sink_line = finding.sink.line or 0
-    if not sink_path:
-        return False
-
-    sink_path_abs = sink_path
-    if not Path(sink_path).is_absolute():
-        sink_path_abs = str(
-            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
-        )
-
-    from packages.source_intel.analyze import _enclosing_function
-    finding_fn = (
-        _enclosing_function(sink_path_abs, sink_line)
-        if sink_line else None
-    )
-
-    # Per-grade proximity gate — same shape as axis-2 abort:
-    #   * SAME_FUNCTION (default): ±50 line proximity.
-    #   * SAME_PATH (inside conditional branch): ±300 lines.
-    #   * DOMINATES (depth=1, no preceding return): no gate;
-    #     additionally requires cap_line < sink_line (a cap below
-    #     the bug can't dominate it).
-    proximity_by_grade: dict[str, int | None] = {
-        GRADE_SAME_FUNCTION: 50,
-        GRADE_SAME_PATH: 300,
-        GRADE_DOMINATES: None,
-    }
-
-    for cap in result.capabilities:
-        if cap.cap_function not in _PRIVILEGED_CAP_FUNCTIONS:
-            continue
-        cap_path, cap_line = cap.location
-        if cap_path != sink_path_abs:
-            continue
-        proximity_gate = proximity_by_grade.get(cap.grade, 50)
-        if proximity_gate is not None:
-            if not sink_line:
-                continue
-            if abs(cap_line - sink_line) > proximity_gate:
-                continue
-        # Function-name match required when both known.
-        if finding_fn and cap.enclosing_function:
-            if cap.enclosing_function != finding_fn:
-                continue
-        # DOMINATES additionally requires cap_line < sink_line.
-        if cap.grade == GRADE_DOMINATES and sink_line and cap_line >= sink_line:
-            continue
-        # Final filter: the capability constant on this line must be
-        # privileged. We read the source line and look for one of the
-        # privileged constants.
-        if not _line_uses_privileged_cap(cap_path, cap_line):
-            continue
-        return True
-
     return False
 
 
 def _line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
-    """Read ``file_path`` line ``line_no`` and check whether any
-    privileged capability constant appears in it.
+    """Read a privileged constant token from an admitted code-view line.
 
-    Best-effort: capability checks under #ifdef may not reflect the
-    actual build, and a mock capability constant in test code could
-    spuriously match. Scope is bounded by upstream filters
-    (function-name + memory-corruption rule_id + line proximity).
-    Reads the comment/string-blanked view: ``capable(mask)
-    /* CAP_SYS_ADMIN */`` must not upgrade a bounded capability to
-    root-equivalent (this check also gates every hop of the
-    privilege back-walk).
+    This informational lookup does not establish result consumption, denial
+    polarity, termination or ordering before a sink or call edge.
     """
     lines = _sanitized_lines(file_path)
     if lines is None or not (1 <= line_no <= len(lines)):
@@ -1684,117 +1611,13 @@ def _privilege_back_walk_suppresses(
     *,
     max_depth: int = _PRIV_BACK_WALK_DEFAULT_DEPTH,
 ) -> bool:
-    """Return True iff every call path reaching the finding's
-    enclosing function (within ``max_depth`` hops) passes through a
-    privileged ``capable()`` check.
+    """Withhold all-path capability suppression with current evidence.
 
-    Multi-hop scope (PR3 of Phase B): walks the inverted call graph
-    via PR-4 prereqs (``packages.coccinelle.prereqs:function_inventory``);
-    at each hop the caller's body is checked for a
-    ``capable(CAP_<PRIVILEGED>)`` call. A path is "gated" when the
-    walk encounters a privileged capability in some caller along the
-    path before either depth-limit or a leaf is reached.
-
-    Suppression requires **every** call path to be gated within
-    ``max_depth``. If any path:
-      * reaches a leaf (caller with no callers — likely an entry
-        point) without seeing a gate, OR
-      * exhausts ``max_depth`` without seeing a gate, OR
-      * contains a caller whose enclosing function cannot be
-        determined,
-    the back-walk returns False (do NOT suppress; at least one
-    unprivileged path exists, or we can't prove otherwise).
-
-    ``max_depth`` is clamped at :data:`_PRIV_BACK_WALK_MAX_DEPTH`
-    to bound walk cost on dense call-graphs.
-
-    Cycle-safe: visited set prevents infinite recursion on mutually-
-    recursive callers.
-
-    Limitations:
-      * No CFG-aware "call site is downstream of capable()" check —
-        caller HAS capable() somewhere in its body is enough. Could
-        over-suppress when the caller has multiple branches and only
-        one is gated. Same limitation as the 1-hop version.
-      * No support for indirect calls (function pointers / ops
-        vtables / macro-registered handlers) — PR-4's
-        ``function_inventory`` cocci doesn't see them.
-      * Cap-set is the conservative root-equivalent set in
-        :data:`_PRIVILEGED_CAP_CONSTANTS`; userspace namespace caps
-        (CAP_NET_ADMIN, CAP_SYS_NICE, …) intentionally don't count.
-      * ``static`` linkage is required at every hop whose caller set
-        the walk relies on: prereqs are gathered from the sink file's
-        parent directory only, so a non-static function may have
-        callers in other translation units / directories the walk
-        never sees — "every path is gated" can't be proven from an
-        incomplete caller set. Same rationale as the dead-code axis.
+    Each relevant edge requires a reviewed enforcement relation. A caller
+    map or call-site presence cannot supply it, so no prerequisite scan is
+    needed for this unavailable suppression proof.
     """
-    rid = finding.rule_id or ""
-    if not any(rid.startswith(p) for p in _MEMORY_CORRUPTION_RULE_PREFIXES):
-        return False
-
-    sink_path = finding.sink.file_path or ""
-    sink_line = finding.sink.line or 0
-    if not sink_path or not sink_line:
-        return False
-
-    sink_path_abs = sink_path
-    if not Path(sink_path).is_absolute():
-        sink_path_abs = str(
-            ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
-        )
-
-    from packages.source_intel.analyze import _enclosing_function
-    finding_fn = _enclosing_function(sink_path_abs, sink_line)
-    if not finding_fn:
-        return False
-
-    # Caller-set completeness gate: prereqs are gathered from the
-    # sink file's parent directory only, so callers in other
-    # translation units / directories are invisible to the walk. A
-    # non-static function reachable from an unseen ungated caller
-    # would be wrongly suppressed. `static` bounds all callers to
-    # this file, which the directory scan does cover.
-    if not _function_is_static(sink_path_abs, finding_fn):
-        return False
-
-    target = Path(sink_path_abs).parent
-    if not target.is_dir():
-        return False
-
-    facts = _gather_prereqs_cached(target)
-    if facts is None or facts.is_skipped or not facts.complete:
-        # "Every path is gated" quantifies over the caller map; an
-        # incomplete sweep may be missing an ungated caller, so the
-        # suppression claim needs the complete map.
-        return False
-
-    callers = facts.callers_of(finding_fn)
-    if not callers:
-        # No callers seen — finding function may be a top-level
-        # entry. In-function axis-4 handles entry-level checks.
-        return False
-
-    effective_depth = max(1, min(max_depth, _PRIV_BACK_WALK_MAX_DEPTH))
-
-    # For each direct call site, find its enclosing function. The
-    # path through that caller is "gated" iff the caller itself has
-    # a privileged cap, OR (recursively) every path to that caller
-    # within remaining depth is gated. If any direct caller's path
-    # isn't gated, return False — at least one ungated path exists.
-    visited = {finding_fn}
-    for call_file, call_line in callers:
-        caller_fn = _enclosing_function(call_file, call_line)
-        if not caller_fn:
-            return False
-        if not _path_is_gated(
-            caller_fn, facts, result,
-            remaining_depth=effective_depth - 1,
-            visited=visited,
-            fn_file=call_file,
-        ):
-            return False
-    return True
+    return False
 
 
 def _path_is_gated(
@@ -1806,30 +1629,10 @@ def _path_is_gated(
     visited: frozenset[str] | set[str],
     fn_file: str | None = None,
 ) -> bool:
-    """Multi-hop helper: True iff every call path reaching ``fn_name``
-    (within ``remaining_depth`` further hops) passes through a
-    privileged capability check.
-
-    ``fn_file`` is the file containing ``fn_name``'s body (the call
-    site's file — the caller's body encloses the call). It is needed
-    for the caller-set completeness gate in case 5.
-
-    Termination cases (visited in order):
-      1. Cycle / already-visited (``fn_name in visited``) → False.
-         Cycles can't be "gated" without an entry — bail.
-      2. ``fn_name`` itself contains a privileged ``capable()`` →
-         True. Gate found, stop expanding this branch.
-      3. Depth exhausted (``remaining_depth == 0``) → False.
-         Could not prove gating within budget; conservative.
-      4. ``fn_name`` isn't ``static`` (or ``fn_file`` unknown) →
-         False. The prereq scan is directory-scoped, so a non-static
-         function may have unseen callers in other translation
-         units — its in-scope caller set can't prove all-paths-gated.
-      5. No callers (leaf) → False. ``fn_name`` is an entry point;
-         path is ungated.
-      6. Otherwise: recurse on every direct caller; True iff all
-         caller paths are themselves gated.
-    """
+    """Legacy bounded caller traversal. Current capability records cannot establish
+    a denial-exit relation, so the local admission helper withholds gating.
+    False means gating is unknown, including at depth and caller boundaries;
+    it does not establish an ungated entry path."""
     if fn_name in visited:
         return False
     if _function_has_privileged_cap(fn_name, result):
@@ -1861,21 +1664,11 @@ def _function_has_privileged_cap(
     fn_name: str,
     result: SourceIntelResult,
 ) -> bool:
-    """Check if ``fn_name`` has a privileged ``capable(CAP_X)`` call
-    site somewhere in its body.
+    """Withhold caller gating from capability-call presence alone.
 
-    Uses ``result.capabilities`` (already-cocci-detected capability
-    sites) + ``_line_uses_privileged_cap`` to verify the constant
-    on the matched line is in ``_PRIVILEGED_CAP_CONSTANTS``.
+    No existing record establishes denial-exit enforcement before the
+    relevant call edge. False is unknown gating, not proof of an ungated path.
     """
-    for cap in result.capabilities:
-        if cap.enclosing_function != fn_name:
-            continue
-        if cap.cap_function not in _PRIVILEGED_CAP_FUNCTIONS:
-            continue
-        cap_path, cap_line = cap.location
-        if _line_uses_privileged_cap(cap_path, cap_line):
-            return True
     return False
 
 
