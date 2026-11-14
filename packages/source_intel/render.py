@@ -1072,13 +1072,10 @@ def _render_alloc_size_line(
     build_flags: BuildFlagsContext | None,
     style: str,
 ) -> str:
-    """Render alloc_size evidence.
+    """Render the declared allocation-size contract and observed settings.
 
-    The annotation tells the compiler the return buffer's byte size.
-    When FORTIFY_SOURCE is on, this unlocks __builtin_object_size and
-    fortified intrinsics (memcpy_chk etc.) — operations on the return
-    value get bounds-checked at runtime. Without FORTIFY_SOURCE, the
-    annotation is mostly hint-for-analyzers.
+    The annotation does not establish the actual returned allocation size
+    or runtime interception of operations involving that buffer.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1096,52 +1093,33 @@ def _render_alloc_size_line(
         prefix = "Variant hint — alloc_size annotation"
 
     return (
-        f"{prefix}: {fn_text} returns a buffer whose byte size equals "
-        f"the value of the annotated parameter(s). {fortify_phrase}"
+        f"{prefix}: {fn_text} declares a returned buffer byte size based on "
+        f"the annotated parameter(s). {fortify_phrase}"
     )
 
 
 def _alloc_size_fortify_phrase(build_flags: BuildFlagsContext | None) -> str:
+    """Describe observed FORTIFY settings without asserting runtime checks."""
     if build_flags is None or build_flags.extraction_confidence == "absent":
         return (
             "FORTIFY_SOURCE status unknown (build flags not in evidence); "
-            "any runtime bounds-checking on the returned buffer depends "
-            "on _FORTIFY_SOURCE level at compile time."
+            "runtime bounds-checking on the returned buffer is not established."
         )
     level = build_flags.fortify_source_level
     if level is None:
-        return (
-            "FORTIFY_SOURCE not set in observed flags; the alloc_size "
-            "annotation gives the static-analyzer hint but no runtime "
-            "bounds-check on the buffer."
-        )
-    if level >= 2:
-        return (
-            f"_FORTIFY_SOURCE={level} — fortified intrinsics will "
-            f"bounds-check operations against the returned buffer at "
-            f"runtime; some overflows in the caller would be caught."
-        )
-    if level == 1:
-        # Kernel CONFIG_FORTIFY_SOURCE doesn't tier: kconfig
-        # extraction maps "enabled" to level=1 by convention, but it
-        # intercepts the same write-class calls as glibc level 2.
-        # Mirrors the verdict-side threshold in the adapter — the
-        # prose must not call the same build fact "limited" while
-        # the verdict policy treats it as full interception.
-        if build_flags.source == "kconfig":
-            return (
-                "CONFIG_FORTIFY_SOURCE enabled — the kernel fortify "
-                "layer doesn't tier; write-class intrinsics are "
-                "bounds-checked at runtime like glibc level 2."
-            )
-        return (
-            "FORTIFY_SOURCE=1 — limited runtime bounds-checking active; "
-            "caller-side memcpy_chk catches overflows when the source "
-            "length is also known statically."
-        )
+        setting = "No _FORTIFY_SOURCE setting captured in observed flags."
+    elif level == 1 and build_flags.source == "kconfig":
+        setting = "CONFIG_FORTIFY_SOURCE enabled observed (represented as level 1)."
+    elif level == 1:
+        setting = "_FORTIFY_SOURCE=1 observed (limited fortification setting)."
+    elif level == 0:
+        setting = "_FORTIFY_SOURCE=0 observed (explicitly disabled setting)."
+    else:
+        setting = f"_FORTIFY_SOURCE={level} observed."
     return (
-        "_FORTIFY_SOURCE=0 (explicitly disabled); annotation is "
-        "static-analyzer-only, no runtime protection."
+        f"{setting} This observation does not establish runtime bounds "
+        f"checks on operations involving the returned buffer or that an "
+        f"overflow is caught; inspect the calls and compiled checks."
     )
 
 
@@ -1346,8 +1324,8 @@ def _render_access_line(
 
     Declares which pointer parameters are read-only / write-only /
     read-write, and optionally ties access width to another parameter.
-    Combined with FORTIFY_SOURCE, this unlocks runtime bounds-checking
-    on the annotated parameters.
+    The annotation and observed FORTIFY settings do not establish
+    runtime bounds-checking on those parameters.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1372,41 +1350,27 @@ def _render_access_line(
 
 
 def _access_fortify_phrase(build_flags: BuildFlagsContext | None) -> str:
-    """Same FORTIFY_SOURCE caveat shape as alloc_size — annotations
-    unlock runtime checks when fortified intrinsics are active."""
+    """Describe observed FORTIFY settings for the declared access pattern."""
     if build_flags is None or build_flags.extraction_confidence == "absent":
         return (
-            "FORTIFY_SOURCE status unknown; whether the declared access "
-            "pattern triggers runtime bounds-checking depends on the "
-            "compile-time _FORTIFY_SOURCE level."
+            "FORTIFY_SOURCE status unknown; runtime bounds-checking "
+            "on the annotated parameters is not established."
         )
     level = build_flags.fortify_source_level
     if level is None:
-        return (
-            "FORTIFY_SOURCE not set in observed flags; access annotation "
-            "is static-analyzer-only, no runtime bounds-check enforcement."
-        )
-    if level >= 2:
-        return (
-            f"FORTIFY_SOURCE={level} — runtime bounds-checking active "
-            f"on the annotated parameters; caller overflows would be "
-            f"caught."
-        )
-    if level == 1:
-        # Same kconfig caveat as the alloc_size phrase: kernel
-        # fortify doesn't tier, level=1 means full write-class
-        # interception there.
-        if build_flags.source == "kconfig":
-            return (
-                "CONFIG_FORTIFY_SOURCE enabled — kernel fortify "
-                "doesn't tier; runtime bounds-checking active on the "
-                "annotated parameters like glibc level 2."
-            )
-        return (
-            "FORTIFY_SOURCE=1 — limited runtime bounds-checking active."
-        )
+        setting = "No _FORTIFY_SOURCE setting captured in observed flags."
+    elif level == 1 and build_flags.source == "kconfig":
+        setting = "CONFIG_FORTIFY_SOURCE enabled observed (represented as level 1)."
+    elif level == 1:
+        setting = "_FORTIFY_SOURCE=1 observed (limited fortification setting)."
+    elif level == 0:
+        setting = "_FORTIFY_SOURCE=0 observed (explicitly disabled setting)."
+    else:
+        setting = f"_FORTIFY_SOURCE={level} observed."
     return (
-        "_FORTIFY_SOURCE=0 — annotation is static-analyzer-only."
+        f"{setting} This observation does not establish runtime bounds "
+        f"checks on the annotated parameters or that caller overflows "
+        f"are caught; inspect the calls and compiled checks."
     )
 
 

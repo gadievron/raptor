@@ -319,7 +319,7 @@ def test_alloc_size_renders_with_fortify_disabled():
     r = SourceIntelResult(attributes=(_alloc_size(),))
     lines = derive_evidence_strings(r, build_flags=bf)
     text = "\n".join(lines)
-    # Should note no runtime protection.
+    # Preserve the observed disabling setting without proving binary behaviour.
     assert "disabled" in text.lower() or "no runtime" in text.lower()
 
 
@@ -455,9 +455,7 @@ def test_no_stack_protector_correlates_with_build_wide_strong():
 
 
 def test_access_renders_with_fortify_correlation():
-    """access annotation declares parameter intent; with
-    FORTIFY_SOURCE=2 active, the runtime-bounds-check signal must
-    surface so the LLM correctly weighs CWE-120 findings."""
+    """Access annotation rendering preserves observed FORTIFY context."""
     bf = BuildFlagsContext(
         source="compile_commands.json",
         extraction_confidence="high",
@@ -534,11 +532,8 @@ def test_alloc_size_fortify_phrase_literal_token_is_well_formed():
     assert "=_2_" not in phrase
 
 
-def test_fortify_phrases_treat_kconfig_level_1_as_full_interception():
-    """Kernel CONFIG_FORTIFY_SOURCE doesn't tier: level=1 from
-    kconfig intercepts like glibc level 2. The prose must not call
-    the same build fact 'limited' while the verdict policy treats it
-    as full interception."""
+def test_fortify_phrases_preserve_kconfig_and_glibc_level_1_context():
+    """Keep source/level distinctions without asserting runtime interception."""
     from packages.source_intel.render import (
         _access_fortify_phrase,
         _alloc_size_fortify_phrase,
@@ -552,6 +547,7 @@ def test_fortify_phrases_treat_kconfig_level_1_as_full_interception():
         phrase = phrase_fn(kconfig)
         assert "CONFIG_FORTIFY_SOURCE" in phrase
         assert "limited" not in phrase.lower()
+        assert "does not establish" in phrase
 
     # glibc level 1 keeps the limited-coverage caveat.
     glibc = BuildFlagsContext(
