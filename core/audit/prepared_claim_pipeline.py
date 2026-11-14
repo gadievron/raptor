@@ -71,6 +71,30 @@ class PreparedClaimPipeline:
         with self._lock:
             self._staged[self._key(record)] = _Staged(target, anchor, current_prepared)
 
+    def stage_from_capture(self, record, capture_owner, reference):
+        """Consume only privately admitted capture inputs, never CP metadata.
+
+        The production capture source/admission remain unavailable by default.
+        A refused replacement clears prior staging for this claim rather than
+        silently reusing evidence from an earlier preparation attempt.
+        """
+        from .prepared_build_capture import BuildCaptureUnavailable, PreparedBuildCaptureOwner
+
+        try:
+            key = self._key(record)
+        except Exception:
+            return PreparationUnavailable("prepared-capture-claim-unavailable")
+        with self._lock:
+            self._staged.pop(key, None)
+        if type(capture_owner) is not PreparedBuildCaptureOwner:
+            return PreparationUnavailable("prepared-capture-owner-unavailable")
+        admitted = capture_owner.for_pipeline(record, reference)
+        if isinstance(admitted, BuildCaptureUnavailable):
+            return PreparationUnavailable(admitted.reason)
+        self.stage(record, target=admitted.target, anchor=admitted.anchor,
+                   current_prepared=admitted.current)
+        return None
+
     def prepare(self, record, *, integer_abi):
         if self.out_dir is None:
             return PreparationUnavailable("durable-output-unavailable")
