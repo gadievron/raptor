@@ -63,10 +63,10 @@ def test_legacy_strict_wrapper_and_statement_targets_are_unchanged():
     assert _bounded_body_expression_loads(ast.parse("for box[(lambda: (yield raw))()] in ():\n pass").body) is None
 
 
-@pytest.mark.parametrize("expression", ["[0 for box[(lambda: (value := raw))()] in ()]",
+@pytest.mark.parametrize("expression", ["[0 for box[(lambda: (value := (yield raw)))()] in ()]",
                                        "[0 for box[[(lambda: (yield raw))() for item in ()]] in ()]",
-                                       "[0 for box[await (lambda: (value := raw))()] in ()]"],
-                         ids=["named-write", "nested-comprehension", "awaited-write"])
+                                       "[0 for box[await (lambda: (value := (yield raw)))()] in ()]"],
+                         ids=["yielded-write", "nested-comprehension", "awaited-write"])
 def test_excluded_target_descendants_invalidate_scoped_scan(expression):
     # AST admission controls; no compiled-source claim for these expressions.
     node = ast.parse(expression, mode="eval").body

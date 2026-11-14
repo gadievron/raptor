@@ -85,7 +85,7 @@ def test_legacy_strict_wrapper_keeps_its_contract():
 
 @pytest.mark.parametrize('target', [
     'box[(lambda: (yield raw))()]',
-    'box[(lambda: (value := raw))()]',
+    'box[(lambda: (value := (yield raw)))()]',
     'box[[(lambda: (yield raw))() for item in ()]]',
 ])
 def test_excluded_target_descendant_invalidates_complete_body(target):

@@ -65,6 +65,6 @@ def test_first_iterable_remains_outside_target_bindings():
 
 
 def test_ordinary_statement_target_keeps_awaited_writes_excluded():
-    body = "async def child():\n for box[await (lambda: (value := raw))()] in ():\n  pass"
+    body = "async def child():\n for box[await (lambda: (value := (yield raw)))()] in ():\n  pass"
     compile("def outer(raw):\n " + body.replace("\n", "\n "), "<ordinary-await-target>", "exec", dont_inherit=True)
     assert _bounded_body_expression_loads(ast.parse(body).body) is None

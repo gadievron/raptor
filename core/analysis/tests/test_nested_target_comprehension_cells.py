@@ -83,8 +83,8 @@ def test_legacy_strict_statement_target_contract_is_unchanged():
     '[0 for box[[(lambda: (yield raw))() for item in ()]] in ()]',
     '[0 for box[[item for item in () if (lambda: (yield raw))()]] in ()]',
     '[0 for box[[item for item in (lambda: (yield raw))()]] in ()]',
-    '[0 for box[[(lambda: (value := raw))() for item in ()]] in ()]',
-    '[0 for box[[0 for other[(lambda: (value := raw))()] in ()]] in ()]',
+    '[0 for box[[(lambda: (value := (yield raw)))() for item in ()]] in ()]',
+    '[0 for box[[0 for other[(lambda: (value := (yield raw)))()] in ()]] in ()]',
 ])
 def test_excluded_descendants_cannot_hide_in_nested_targets(expression):
     compile(expression, '<excluded-target-contract>', 'eval', dont_inherit=True)

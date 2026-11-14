@@ -441,18 +441,19 @@ def _validated_expression_targets(
     """Validate once, retaining target parts for the scoped read traversal.
 
     Target address expressions have their own closed grammar. The flag
-    follows all descendants, including nested comprehension scopes, so
-    assignment expressions and yields cannot hide beneath a nested payload.
+    follows all descendants, including nested comprehension scopes. Writes
+    must belong to a lambda body; yields remain excluded from target reads.
     """
     targets: dict[ast.AST, tuple[frozenset[str], tuple[ast.expr, ...]]] = {}
     if expression is None:
         return targets
     allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
                ast.Store, ast.NamedExpr, ast.Await, ast.Yield, ast.YieldFrom)
-    pending: list[tuple[ast.AST, bool]] = [(expression, target_read)]
+    pending: list[tuple[ast.AST, bool, bool]] = [(expression, target_read, False)]
     while pending:
-        node, target_read = pending.pop()
-        if target_read and isinstance(node, (ast.NamedExpr, ast.Yield, ast.YieldFrom)):
+        node, target_read, lambda_body = pending.pop()
+        if target_read and (isinstance(node, (ast.Yield, ast.YieldFrom))
+                            or isinstance(node, ast.NamedExpr) and not lambda_body):
             return None
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
@@ -462,17 +463,21 @@ def _validated_expression_targets(
                 if scope is None:
                     return None
                 targets[gen.target] = scope
-                pending.extend((part, True) for part in scope[1])
-                pending.append((gen.iter, target_read))
-                pending.extend((condition, target_read) for condition in gen.ifs)
+                pending.extend((part, True, lambda_body) for part in scope[1])
+                pending.append((gen.iter, target_read, lambda_body))
+                pending.extend((condition, target_read, lambda_body) for condition in gen.ifs)
             payload = (node.key, node.value) if isinstance(node, ast.DictComp) else (node.elt,)
-            pending.extend((part, target_read) for part in payload)
+            pending.extend((part, target_read, lambda_body) for part in payload)
         else:
             if not isinstance(node, allowed):
                 return None
             if isinstance(node, ast.NamedExpr) and not isinstance(node.target, ast.Name):
                 return None
-            pending.extend((child, target_read) for child in ast.iter_child_nodes(node))
+            for child in ast.iter_child_nodes(node):
+                # Lambda defaults stay in the enclosing frame; only its body
+                # owns assignment-expression bindings.
+                child_lambda_body = lambda_body or isinstance(node, ast.Lambda) and child is node.body
+                pending.append((child, target_read, child_lambda_body))
     return targets
 
 
