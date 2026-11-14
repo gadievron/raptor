@@ -8915,12 +8915,20 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         with suppress(BaseException):
                             failure.add_note('job budget receipt available in the run activity report')
                 # Retain parent-owned observations before run finalisation.
-                from . import activity as _activity
-                _activity.record_execution(
-                    _attributed_run_dir,
-                    result=result, error=failure, job_budget=budget_record,
-                    observation_dir=audit_run_dir or output,
-                )
+                try:
+                    from . import activity as _activity
+                    _activity.record_execution(
+                        _attributed_run_dir,
+                        result=result, error=failure, job_budget=budget_record,
+                        observation_dir=audit_run_dir or output,
+                    )
+                except BaseException as activity_error:
+                    if failure is None:
+                        raise
+                    with suppress(BaseException):
+                        failure.add_note(
+                            'sandbox activity receipt: '
+                            + type(activity_error).__name__)
 
     run = _budgeted_run
 
