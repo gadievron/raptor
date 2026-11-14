@@ -293,6 +293,7 @@ def _enclosing_function_state(
     caller at all (the arrow-function / extractor-gap shape: the span
     extractor sees ``const run = (x) => {…}`` as function ``run``
     while the call-graph extractor tags its calls ``caller=None``) —
+    or attributes its calls to an enclosing function's name,
     or when multiple graph callers share the same source line,
     or when span extraction itself failed, leaving "module level"
     indistinguishable from "could not tell".  An unresolved
@@ -312,6 +313,7 @@ def _enclosing_function_state(
     span_name: str | None = None
     span_lo = span_hi = 0
     extraction_ok = True
+    ancestor_names: set[str] = set()
     try:
         funcs = _extract_functions_cached(language, content)
         for f in funcs:
@@ -329,6 +331,15 @@ def _enclosing_function_state(
                              if language == "python" else f.name)
                 span_lo = f.line_start
                 span_hi = end
+        if span_name is not None:
+            for f in funcs:
+                if (f.line_end is not None
+                        and f.line_start <= span_lo and span_hi <= f.line_end
+                        and (f.line_start < span_lo or span_hi < f.line_end)):
+                    name = (unicodedata.normalize("NFKC", f.name)
+                            if language == "python" else f.name)
+                    if name != span_name:
+                        ancestor_names.add(name)
     except Exception:
         logger.debug("function-at-line lookup failed", exc_info=True)
         extraction_ok = False
@@ -337,15 +348,14 @@ def _enclosing_function_state(
         # ran; a failed extractor conflates "module level" with
         # "unknown".
         return None, extraction_ok
-    # Calls inside the span attributed to a NAMED caller (this
-    # function, or a nested named function) are legitimate graph
-    # vocabulary; caller-less calls inside a span the extractor says
-    # belongs to ``span_name`` are the divergence signal.
-    unattributed_in_span = any(
-        c.caller is None and span_lo <= c.line <= span_hi
+    # Named nested-child callers are legitimate. Calls assigned to a known
+    # ancestor instead of this span reveal the same scope gap as caller=None.
+    divergent_in_span = any(
+        (c.caller is None or c.caller in ancestor_names)
+        and span_lo <= c.line <= span_hi
         for c in graph.calls
     )
-    return span_name, not unattributed_in_span
+    return span_name, extraction_ok and not divergent_in_span
 
 
 def _find_enclosing_function(
