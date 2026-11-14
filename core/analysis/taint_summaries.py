@@ -549,31 +549,42 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
-def _noncapturing_match_pattern(pattern: ast.pattern) -> bool:
-    """Recognise a closed no-read pattern grammar without match-value authority."""
+def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | None:
+    """Known lexical pattern reads, or None for a shape outside the closed grammar."""
+    expressions: list[ast.expr] = []
     pending = [(pattern, False)]
     while pending:
         current, in_sequence = pending.pop()
-        if isinstance(current, ast.MatchOr):
+        if isinstance(current, ast.MatchClass):
+            if (_attribute_chain_str(current.cls) is None
+                    or len(current.kwd_attrs) != len(current.kwd_patterns)):
+                return None
+            expressions.append(current.cls)
+            pending.extend((child, False) for child in current.patterns)
+            pending.extend((child, False) for child in current.kwd_patterns)
+        elif isinstance(current, ast.MatchOr):
             if not current.patterns:
-                return False
+                return None
             pending.extend((child, False) for child in current.patterns)
         elif isinstance(current, ast.MatchMapping):
             if (current.rest is not None or len(current.keys) != len(current.patterns)
                     or not all(isinstance(key, ast.Constant) for key in current.keys)):
-                return False
+                return None
             pending.extend((child, False) for child in current.patterns)
         elif isinstance(current, ast.MatchSequence):
             pending.extend((child, True) for child in current.patterns)
         elif isinstance(current, ast.MatchStar):
             if not in_sequence or current.name is not None:
-                return False
+                return None
         elif not (isinstance(current, ast.MatchAs)
                   and current.pattern is None and current.name is None
                   or isinstance(current, ast.MatchSingleton)
                   or isinstance(current, ast.MatchValue) and isinstance(current.value, ast.Constant)):
-            return False
-    return True
+            return None
+    names: set[str] = set()
+    for expression in expressions:
+        names.update(_scope_free_expression_loads(expression))
+    return frozenset(names)
 
 
 def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
@@ -598,10 +609,12 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             # Import names bind in the child; they are not expression reads.
             # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Match):
-            if not statement.cases or any(
-                not _noncapturing_match_pattern(case.pattern) for case in statement.cases
-            ):
+            pattern_reads = [_noncapturing_match_pattern_loads(case.pattern) for case in statement.cases]
+            if not statement.cases or any(reads is None for reads in pattern_reads):
                 return None
+            for reads in pattern_reads:
+                if reads is not None:
+                    target_reads.update(reads)
             expressions.append(statement.subject)
             for case in reversed(statement.cases):
                 expressions.append(case.guard)
@@ -723,10 +736,12 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Match):
-            if not statement.cases or any(
-                not _noncapturing_match_pattern(case.pattern) for case in statement.cases
-            ):
+            pattern_reads = [_noncapturing_match_pattern_loads(case.pattern) for case in statement.cases]
+            if not statement.cases or any(reads is None for reads in pattern_reads):
                 return None
+            for reads in pattern_reads:
+                if reads is not None:
+                    target_reads.update(reads)
             expressions.append(statement.subject)
             for case in reversed(statement.cases):
                 expressions.append(case.guard)
