@@ -17,10 +17,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.java.trust-boundary-session-write
     message: >-
-      Untrusted request data is stored in the session or servlet context
-      without validation — code reading these attributes typically treats
-      them as trusted (CWE-501 trust boundary violation). Validate against
-      an allowlist before crossing the boundary.
+      Request-derived data reaches a session or servlet-context attribute
+      write (CWE-501 review candidate). Review validation guards, the attribute
+      key and value, and downstream readers before treating the stored data as
+      trusted. Apply an appropriate allowlist where a trust boundary requires it.
     languages: [java]
     severity: MEDIUM
     mode: taint
