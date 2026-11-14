@@ -20,6 +20,8 @@ import stat
 import math
 import subprocess
 import sys
+import weakref
+from dataclasses import dataclass, field
 from collections.abc import Callable, Mapping
 import threading
 import time
@@ -113,6 +115,148 @@ def spawn_backend_available() -> bool:
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _ExecutionObservation:
+    invocation: object = field(repr=False)
+    attempt: object = field(repr=False)
+    parent_input_digest: str
+    payload_bytes: int
+    filesystem_encoding: str
+    filesystem_errors: str
+    status_observation: tuple
+    wait_origin: str
+    exec_pid_delivered: bool
+    caller_kill_exemption_applied: bool
+
+    @property
+    def authenticated_build(self) -> bool:
+        return False
+
+    @property
+    def observed_child_context(self) -> bool:
+        return False
+
+
+class _ExecutionObservationReference:
+    def __init__(self, issuer):
+        self._issuer = issuer
+
+
+class _ExecutionObservationIssuer:
+    """One public call's private parent observations, never a build issuer.
+
+    No raw environment is retained in a result reference or public diagnostic.
+    Object identity binds the selected result; arbitrary trusted-parent Python
+    is outside this in-process ownership boundary.
+    """
+
+    def __init__(self):
+        from core.audit.prepared_execution_attempt import ExecutionInputOwner
+        self.inputs = ExecutionInputOwner(max_attempts=8, max_retained_bytes=32 * 1024 * 1024)
+        self._invocation = object()
+        self._results = {}
+        self._reference = None
+        self._result = None
+        self._view = None
+
+    def record_native_result(self, result):
+        from core.audit.prepared_execution_attempt import ExecutionInputHandoff
+        handoff = getattr(result, "_execution_input_handoff", None)
+        try:
+            if (type(result) is subprocess.CompletedProcess
+                    and type(handoff) is ExecutionInputHandoff
+                    and len(self._results) < 8):
+                self._results[id(result)] = (weakref.ref(result), handoff.attempt)
+        finally:
+            # Do this before decode/refusal handling, including earlier retry
+            # results: ledger retirement cannot revoke an external snapshot.
+            if handoff is not None:
+                del result._execution_input_handoff
+
+    def bind_selected_result(self, result):
+        from core.audit.prepared_execution_inputs import InputsUnavailable
+        registered = self._results.get(id(result))
+        if registered is None or registered[0]() is not result:
+            return
+        observation = getattr(result, "_setup_status_observation", None)
+        wait_origin = getattr(result, "_wait_origin", None)
+        delivered = getattr(result, "_exec_pid_delivered", None)
+        exempted = getattr(result, "_caller_kill_exemption_applied", None)
+        if (type(observation) is not tuple or len(observation) != 4
+                or observation[1] not in ("read-eof", "would-block", "read-error", "bound-reached")
+                or type(observation[2]) is not int or not 0 <= observation[2] <= 1279
+                or type(observation[3]) is not bool
+                or wait_origin not in ("capture-poll-waitpid", "capture-poll-echild",
+                                       "final-poll-waitpid", "final-blocking-waitpid",
+                                       "final-wait-echild", "not-observed")
+                or type(delivered) is not bool or type(exempted) is not bool):
+            return
+        parsed = observation[0]
+        if parsed is not None and (
+            type(parsed) is not tuple or len(parsed) != 2
+            or any(type(item) is not str for item in parsed)
+            or len(parsed[0]) != 1 or len(parsed[1]) > 1279
+        ):
+            return
+        try:
+            self.inputs.select_terminal(registered[1])
+            selected = self.inputs.read_selected(registered[1])
+        except InputsUnavailable:
+            return
+        snapshot = selected.inputs
+        view = _ExecutionObservation(
+            self._invocation, selected.attempt, snapshot.sha256,
+            snapshot.payload_bytes, snapshot.filesystem_encoding,
+            snapshot.filesystem_errors, observation, wait_origin, delivered, exempted,
+        )
+        reference = _ExecutionObservationReference(self)
+        self._view, self._result, self._reference = view, weakref.ref(result), reference
+        result._execution_observation = reference
+
+    def read(self, reference, result):
+        if (reference is not self._reference or self._result is None
+                or self._result() is not result):
+            return None
+        return self._view
+
+    def close(self):
+        self.inputs.close()
+        self._results.clear()
+
+
+def _read_execution_observation(result):
+    """Read only the exact selected result's privately issued parent view."""
+    reference = getattr(result, "_execution_observation", None)
+    if type(reference) is not _ExecutionObservationReference:
+        return None
+    if type(reference._issuer) is not _ExecutionObservationIssuer:
+        return None
+    return reference._issuer.read(reference, result)
+
+
+def _own_execution_observations(execute):
+    from functools import wraps
+    from ._retirement import retire_parent_resources
+
+    @wraps(execute)
+    def owned(cmd, **kwargs):
+        if "_execution_invocation" in kwargs:
+            raise TypeError("_execution_invocation is an internal sandbox argument")
+        issuer = _ExecutionObservationIssuer()
+        failure = None
+        try:
+            result = execute(cmd, _execution_invocation=issuer, **kwargs)
+            issuer.bind_selected_result(result)
+            return result
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            retire_parent_resources(issuer.close, primary_error=failure)
+
+    return owned
 
 
 def _first_external_caller() -> str:
@@ -3850,6 +3994,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         """
         from core.config import RaptorConfig
         _job_controller = kwargs.pop('_job_controller', None)
+        _execution_invocation = kwargs.pop('_execution_invocation', None)
         _input_spool_files = kwargs.pop('_input_spool_files')
 
         _validate_output_redirections(kwargs)
@@ -6366,6 +6511,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 pass_fds=kwargs.get("pass_fds", ()),
                                 max_capture_bytes=_max_capture_bytes,
                                 job_controller=_job_controller,
+                                _execution_input_owner=(None if _execution_invocation is None
+                                                        else _execution_invocation.inputs),
                                 audit_mode=nonlocal_audit_mode,
                                 audit_run_dir=_audit_run_dir,
                                 audit_required=audit_required,
@@ -6427,6 +6574,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 child_pid_callback=_register_lane_peer,
                                 execution_committed_callback=_mark_spawn_execution_committed,
                             )
+                            if _execution_invocation is not None:
+                                _execution_invocation.record_native_result(_native_result)
                             if getattr(_native_result, "_setup_status", None) is not None:
                                 # A returned failure status keeps the existing
                                 # typed setup decision table authoritative.
@@ -8885,10 +9034,12 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     from .job_budget import Job as _Job
     _execute_call = run
 
+    @_own_execution_observations
     @_wraps(_execute_call)
     def _budgeted_run(cmd, **kwargs):
         if '_job_controller' in kwargs:
             raise TypeError('_job_controller is an internal sandbox argument')
+        _execution_invocation = kwargs.pop('_execution_invocation')
         from .summary import get_active_run_dir as _active_run_dir
         _attributed_run_dir = _active_run_dir() or audit_run_dir or output
         job = None
@@ -8898,7 +9049,8 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             job = _Job(_budget_spec, namespace_backend=bool(
                 sys.platform == 'linux' and use_mount and not effectively_disabled),
                 run_dir=_attributed_run_dir)
-            result = _execute_call(cmd, _job_controller=job, **kwargs)
+            result = _execute_call(cmd, _job_controller=job,
+                                   _execution_invocation=_execution_invocation, **kwargs)
             return result
         except BaseException as exc:
             failure = exc
