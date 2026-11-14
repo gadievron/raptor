@@ -9498,8 +9498,9 @@ def _record_floor_refusal(
             reason=str(exc),
             remedies=exc.instructions or "",
         )
-    except Exception:  # noqa: BLE001 — evidence recording is best-effort
-        logger.debug("floor-refusal record failed", exc_info=True)
+    except BaseException:  # evidence recording cannot replace the refusal
+        with suppress(BaseException):
+            logger.debug("floor-refusal record failed", exc_info=True)
     return exc
 
 
