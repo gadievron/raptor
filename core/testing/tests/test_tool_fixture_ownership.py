@@ -182,6 +182,15 @@ def _start(case, namespace, patch, tmp_path):
     return generator, value
 
 
+def _finish(generator, cleanup):
+    try:
+        if generator is not None:
+            generator.close()
+    finally:
+        cleanup()
+
+
+
 @pytest.mark.parametrize("case", CASES, ids=[c[2] for c in CASES])
 @pytest.mark.parametrize("mode", ["normal", "close", "throw"])
 @pytest.mark.parametrize("body_patch", [False, True], ids=["direct-writes", "body-patches"])
@@ -231,9 +240,7 @@ def test_tool_fixture_restores_borrowed_state(case, mode, body_patch, tmp_path):
         if owned is not None:
             assert not owned.exists()
     finally:
-        if generator is not None:
-            generator.close()
-        cleanup()
+        _finish(generator, cleanup)
 
 
 FAULTS = [(case, step) for case in CASES for step in (1, case[3])]
@@ -249,9 +256,7 @@ def test_tool_fixture_restores_partial_setup(case, fail_at, tmp_path):
                 generator, _ = _start(case, namespace, patch, tmp_path)
         restored()
     finally:
-        if generator is not None:
-            generator.close()
-        cleanup()
+        _finish(generator, cleanup)
 
 
 def test_scratch_fixture_reclaims_tree_after_product_cleanup_failure(tmp_path):
@@ -271,9 +276,7 @@ def test_scratch_fixture_reclaims_tree_after_product_cleanup_failure(tmp_path):
         restored()
     finally:
         owner.rmtree_hardened = original_remove
-        if generator is not None:
-            generator.close()
-        cleanup()
+        _finish(generator, cleanup)
 
 
 def test_runner_battery_uses_module_scratch_scope():
@@ -303,6 +306,4 @@ def test_scratch_fixture_attempts_all_fallback_removals(tmp_path):
         restored()
     finally:
         owner.rmtree_hardened = original_remove
-        if generator is not None:
-            generator.close()
-        cleanup()
+        _finish(generator, cleanup)
