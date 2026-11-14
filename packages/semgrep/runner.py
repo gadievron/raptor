@@ -156,7 +156,7 @@ def _version_probe(semgrep_bin: str | None = None):
     if runner is None:
         return None
     result = runner(
-        [str(Path(binary).resolve()), "--version", "--metrics", "off", "--disable-version-check"],
+        [str(Path(binary).absolute()), "--version", "--metrics", "off", "--disable-version-check"],
         env=RaptorConfig.get_safe_env(), capture_output=True, text=True, timeout=15,
     )
     if result.returncode:
@@ -542,8 +542,11 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
     def _runner(cmd, **kwargs):
         if offline:
             from core.sandbox.python_paths import python_runtime_tool_paths
-            binary = Path(shutil.which(cmd[0]) or cmd[0]).resolve()
-            cmd = [str(binary), *cmd[1:]]
+            selected = Path(shutil.which(cmd[0]) or cmd[0]).absolute()
+            binary = selected.resolve()
+            cmd = [str(selected), *cmd[1:]]
+            # Execution retains the launcher name (e.g. a Snap app alias),
+            # while grants retain the existing resolved runtime identity.
             paths = [str(binary.parent), *python_runtime_tool_paths()]
             if config and Path(config).exists():
                 paths.append(str(Path(config).resolve()))
@@ -562,7 +565,7 @@ def _default_sandbox_runner(target: Path, config: str, *, extra_targets=(), outp
         # window). An owned directory is reclaimed when this call exits;
         # run_rule supplies its own directory until sidecar parsing ends.
         from core.sandbox.python_paths import python_tool_paths
-        tool_paths = python_tool_paths(cmd[0]) if cmd else []
+        tool_paths = python_tool_paths(str(binary) if offline else cmd[0]) if cmd else []
         # Local rules are outside target/output in common run_rule calls.
         # Declare the exact rule path; do not expose its parent directory.
         if not needs_registry and Path(config).exists():
