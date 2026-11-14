@@ -280,6 +280,9 @@
     "artifacts:write_only_artifact::cocci.sarif": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:write_only_artifact::codeql_stage_diagnostics.sarif": {
+      "note": "Operator-facing CodeQL stage failure SARIF from scanner.run_codeql. Its returned diagnostic_reports paths join codeql_sarifs/sarif_inputs and are read by the generic merge_sarif and generate_scan_metrics pipeline; literal-name artifact indexing cannot follow that path flow. Invocation failure diagnostics are retained even when no language finding report survives."
+    },
     "artifacts:write_only_artifact::compiler-review-candidates.json": {
       "note": "Operator-facing compiler leads retained for independent corroboration. Deliberately excluded from automatic findings and paid analysis; documented in docs/static-analysis.md."
     },
@@ -715,6 +718,9 @@
     "dead:dead_method:core/llm/dispatcher/client.py:_TokenRenewalAuth.sync_auth_flow": {
       "note": "httpx framework hook: httpx.Client/AsyncClient invoke the Auth subclass's sync_auth_flow/async_auth_flow generators dynamically during send() \u2014 no in-repo caller names them (same pattern as any httpx.Auth override)"
     },
+    "dead:dead_method:core/testing/tests/_project_case_setup_ownership.py:Result.addError": {
+      "note": "unittest TestResult callback invoked dynamically by TestCase.run on setup errors. This override records the original exception object; the private setup-ownership helper and its outer test consume observed_primary/primary_identity to verify error preservation. No direct callback call is required."
+    },
     "dead:dead_method:packages/autonomous/corpus_generator.py:CorpusGenerator.generate_mutated_seed": {
       "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
@@ -808,6 +814,9 @@
     "plumbing:orphan_config_field:core/audit/fail_open_roles.py:SecurityFlag.safe_when": {
       "note": "pending wiring: safe_when is the fail-open channel's planned per-flag suppression predicate"
     },
+    "plumbing:orphan_config_field:core/audit/prepared_declaration_custody.py:DeclarationCapture.database_sha256": {
+      "note": "Retained public immutable capture-record metadata returned by capture_declaration/DeclarationOwner.capture and exposed through AcquiredDeclaration.selected.capture. The digest describes the retained whole database bytes for callers. Internal custody intentionally uses issued-object identity and exact bytes/intervals, not the digest as build authentication or authority; no internal serialized consumer is claimed."
+    },
     "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
       "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
     },
@@ -816,6 +825,12 @@
     },
     "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
       "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.all_paths_gated": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume this flag as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
+    },
+    "plumbing:orphan_config_field:packages/source_intel/analyze.py:PrivilegeBackWalkEvidence.gating_examples": {
+      "note": "Retained legacy record-constructor field accepted by render_source_context(privilege_back_walk=...). Current capability-call records lack reviewed denial-exit enforcement, so rendering intentionally does not consume these examples as gating evidence. test_retained_backwalk_flags_do_not_prove_gated_or_ungated_paths preserves record/API compatibility without restoring gating authority."
     }
   },
   "version": 1
