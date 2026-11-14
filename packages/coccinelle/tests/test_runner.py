@@ -3812,3 +3812,42 @@ def test_batched_missing_requested_rules_are_refusals(tmp_path, monkeypatch, cou
         assert result.errors
         assert result.files_examined == []
         assert result.matches == []
+
+
+def test_all_excluded_rules_skip_tool_and_target_work(tmp_path, monkeypatch):
+    rules = tmp_path / 'owned-rules'
+    rules.mkdir()
+    (rules / 'owned.cocci').write_text('// inert; never executed\n')
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('excluded sweep must not probe, walk, notify or execute')
+
+    for name in ('is_available', '_walk_c_h', '_rule_version_probe', 'run_rule'):
+        monkeypatch.setattr(runner_mod, name, forbidden)
+    assert run_rules(tmp_path, rules, exclude_rules=frozenset({'owned'}), on_rule=forbidden) == []
+
+
+def test_mixed_exclusion_preserves_progress_indices(tmp_path, monkeypatch):
+    from packages.coccinelle.models import SpatchResult
+
+    rules = tmp_path / 'owned-rules'
+    rules.mkdir()
+    for name in ('a_skip', 'b_kept'):
+        (rules / f'{name}.cocci').write_text('// inert; never executed\n')
+    target = tmp_path / 'owned.c'
+    target.write_text('/* inert */\n')
+    progress = []
+    seen = []
+
+    def fake_rule(_target, rule, **kwargs):
+        seen.append(rule.stem)
+        return SpatchResult(rule=rule.stem)
+
+    monkeypatch.setattr(runner_mod, 'is_available', lambda: True)
+    monkeypatch.setattr(runner_mod, '_rule_version_probe', lambda: lambda: None)
+    monkeypatch.setattr(runner_mod, 'run_rule', fake_rule)
+    results = run_rules(target, rules, exclude_rules=frozenset({'a_skip'}),
+                        on_rule=lambda *args: progress.append(args))
+    assert seen == ['b_kept']
+    assert [r.rule for r in results] == ['b_kept']
+    assert progress == [(1, 2, 'b_kept')]

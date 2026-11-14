@@ -1019,7 +1019,7 @@ def run_rules(
             rule="coccinelle", rule_path=str(rules_dir), returncode=-1,
             errors=[f"Coccinelle rules directory could not be enumerated: {type(exc).__name__}"],
         )]
-    if not rule_paths:
+    if not any(path.stem not in exclude_rules for path in rule_paths):
         return []
 
     if not is_available():
