@@ -78,7 +78,7 @@ from core.dataflow.source_identity import (
     known_python_identity_conflict, known_python_origin_conflict,
 )
 from core.paths import confine
-from core.source import read_text_capped
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes
 from core.llm.coerce import extract_fenced_code
 
 # A bare-minimum LLM completer signature, compatible with the existing
@@ -750,7 +750,16 @@ def try_tier1b(
     # Source-wide binding checks need the complete file, including
     # declarations after the sink. A visible sink does not prove completeness.
     try:
-        got = read_text_capped(src_path, errors="strict", newline="")
+        raw_source = read_contained_bytes(
+            repo_root, src_path, 4 * DEFAULT_MAX_SOURCE_CHARS,
+        )
+        if raw_source is None:
+            got = None
+        elif raw_source[1]:
+            got = ("", True)
+        else:
+            text = raw_source[0].decode("utf-8")
+            got = (text, len(text) > DEFAULT_MAX_SOURCE_CHARS)
     except UnicodeDecodeError:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,

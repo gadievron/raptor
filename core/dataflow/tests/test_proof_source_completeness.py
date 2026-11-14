@@ -42,8 +42,9 @@ def test_tier1_rejects_truncated_source_with_visible_sink(tmp_path, monkeypatch)
     from core.dataflow import tier1_llm as tier1
 
     (tmp_path / "app.py").write_text(PREFIX + "# padding\n" * 40 + "re = supplied_validator\n")
-    real = tier1.read_text_capped
-    monkeypatch.setattr(tier1, "read_text_capped", lambda path, **kw: real(path, len(PREFIX), **kw))
+    real = tier1.read_contained_bytes
+    monkeypatch.setattr(tier1, "read_contained_bytes",
+                        lambda root, path, cap: real(root, path, len(PREFIX)))
     reply = json.dumps({"kind": "charset", "validator_source_line": GUARD.strip(),
                         "variable_name": "value", "charset": "a-z", "forbidden": "", "library_call": ""})
     result = tier1.try_tier1b(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
