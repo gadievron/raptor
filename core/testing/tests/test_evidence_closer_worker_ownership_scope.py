@@ -15,55 +15,55 @@ def exercise(phase, tmp_path, verdict):
     threads, handles = [], []
     error = KeyboardInterrupt if "interrupt" in phase else RuntimeError
     patch = pytest.MonkeyPatch()
-    class Handle(real_evidence):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.close_states = []
-            handles.append(self)
-        def close(self, *args, **kwargs):
-            self.close_states.append(tuple(thread.is_alive() for thread in threads))
-            return super().close(*args, **kwargs)
-    patch.setattr(native.evidence, "EvidenceFile", Handle)
-    class Thread(real_thread):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.result, self.errors = cells["results"], cells["errors"]
-            verify = cells["handle"].verify
-            state = dict(zip(verify.__code__.co_freevars, (c.cell_contents for c in verify.__closure__)))
-            self.entered, self.release = state["entered"], state["release"]
-            self.verifications = state["verifications"]
-            close_fd = native.evidence.os.close
-            close_state = dict(zip(close_fd.__code__.co_freevars, (c.cell_contents for c in close_fd.__closure__)))
-            self.closes = close_state["closes"]
-            self.index = len(threads)
-            self.completed, self.joins, self.join_writes = False, [], []
-            def running(*args, **kwargs):
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if self.index == 0 and phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if self.index == 0 and phase.startswith("after-"):
-                assert self.entered.wait(5), "actual verifier was not entered"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            self.join_writes.append(native.evidence.os.write)
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.test_concurrent_closers_share_one_verification_and_release
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        class Handle(real_evidence):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.close_states = []
+                handles.append(self)
+            def close(self, *args, **kwargs):
+                self.close_states.append(tuple(thread.is_alive() for thread in threads))
+                return super().close(*args, **kwargs)
+        patch.setattr(native.evidence, "EvidenceFile", Handle)
+        class Thread(real_thread):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.result, self.errors = cells["results"], cells["errors"]
+                verify = cells["handle"].verify
+                state = dict(zip(verify.__code__.co_freevars, (c.cell_contents for c in verify.__closure__)))
+                self.entered, self.release = state["entered"], state["release"]
+                self.verifications = state["verifications"]
+                close_fd = native.evidence.os.close
+                close_state = dict(zip(close_fd.__code__.co_freevars, (c.cell_contents for c in close_fd.__closure__)))
+                self.closes = close_state["closes"]
+                self.index = len(threads)
+                self.completed, self.joins, self.join_writes = False, [], []
+                def running(*args, **kwargs):
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if self.index == 0 and phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if self.index == 0 and phase.startswith("after-"):
+                    assert self.entered.wait(5), "actual verifier was not entered"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                self.join_writes.append(native.evidence.os.write)
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.test_concurrent_closers_share_one_verification_and_release
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(tmp_path, patch, verdict), threads, handles
     finally:
         try:

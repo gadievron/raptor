@@ -15,64 +15,64 @@ def exercise(phase, tmp_path):
     threads, handles, victims = [], [], []
     error = KeyboardInterrupt if "interrupt" in phase else RuntimeError
     patch = pytest.MonkeyPatch()
-    class Handle(real_evidence):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            self.close_states = []
-            self.victims = victims
-            handles.append(self)
-        def close(self, *args, **kwargs):
-            self.close_states.append(tuple(thread.is_alive() for thread in threads))
-            return super().close(*args, **kwargs)
-    patch.setattr(native.evidence, "EvidenceFile", Handle)
-    class Thread(real_thread):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.result, self.errors = cells["results"], cells["errors"]
-            encode = cells["PausedLine"].encode
-            state = dict(zip(encode.__code__.co_freevars, (c.cell_contents for c in encode.__closure__)))
-            self.entered, self.release = state["entered"], state["release"]
-            self.completed, self.joins, self.join_writes = False, [], []
-            def running(*args, **kwargs):
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if phase.startswith("after-"):
-                assert self.entered.wait(5), "actual encoder was not entered"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            self.join_writes.append(native.evidence.os.write)
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    os_view = ModuleType("os")
-    vars(os_view).update(vars(os))
-    def open_victim(*args, **kwargs):
-        fd = os.open(*args, **kwargs)
-        victims.append({"fd": fd, "closed": False, "close_states": []})
-        return fd
-    def close_victim(fd):
-        owned = next(record for record in victims if record["fd"] == fd and not record["closed"])
-        owned["close_states"].append(tuple(thread.is_alive() for thread in threads))
-        result = os.close(fd)
-        owned["closed"] = True
-        return result
-    os_view.open, os_view.close = open_victim, close_victim
-    function = native.test_close_during_encoding_cannot_write_to_reused_descriptor
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace, "os": os_view})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        class Handle(real_evidence):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.close_states = []
+                self.victims = victims
+                handles.append(self)
+            def close(self, *args, **kwargs):
+                self.close_states.append(tuple(thread.is_alive() for thread in threads))
+                return super().close(*args, **kwargs)
+        patch.setattr(native.evidence, "EvidenceFile", Handle)
+        class Thread(real_thread):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.result, self.errors = cells["results"], cells["errors"]
+                encode = cells["PausedLine"].encode
+                state = dict(zip(encode.__code__.co_freevars, (c.cell_contents for c in encode.__closure__)))
+                self.entered, self.release = state["entered"], state["release"]
+                self.completed, self.joins, self.join_writes = False, [], []
+                def running(*args, **kwargs):
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if phase.startswith("after-"):
+                    assert self.entered.wait(5), "actual encoder was not entered"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                self.join_writes.append(native.evidence.os.write)
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        os_view = ModuleType("os")
+        vars(os_view).update(vars(os))
+        def open_victim(*args, **kwargs):
+            fd = os.open(*args, **kwargs)
+            victims.append({"fd": fd, "closed": False, "close_states": []})
+            return fd
+        def close_victim(fd):
+            owned = next(record for record in victims if record["fd"] == fd and not record["closed"])
+            owned["close_states"].append(tuple(thread.is_alive() for thread in threads))
+            result = os.close(fd)
+            owned["closed"] = True
+            return result
+        os_view.open, os_view.close = open_victim, close_victim
+        function = native.test_close_during_encoding_cannot_write_to_reused_descriptor
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace, "os": os_view})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(tmp_path, patch), threads, handles
     finally:
         try:
