@@ -1554,8 +1554,10 @@ def run_codeql(
         and other non-``Exception`` aborts after killing the agent group.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
-    if shutil.which("codeql") is None:
-        logger.warning("codeql CLI not on PATH; skipping CodeQL stage")
+    from packages.codeql import is_available
+
+    if not is_available():
+        logger.warning("codeql CLI unavailable via CODEQL_CLI or PATH; skipping CodeQL stage")
         return []
 
     # repo root → packages/codeql/agent.py. scanner.py lives at
