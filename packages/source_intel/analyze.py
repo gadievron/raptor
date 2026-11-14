@@ -1149,11 +1149,9 @@ def analyze(
     # WUR aliases only; Phase 3c also scans for project-discovered
     # aliases (any kind) with provenance = "project_alias".
     observations.extend(_scan_alias_observations(target))
-    observations.extend(
-        _scan_project_alias_observations(
-            target,
-            discovered_alias_tuple,
-        )
+    _extend_project_alias_observations(
+        observations,
+        _scan_project_alias_observations(target, discovered_alias_tuple),
     )
     c_level_source_observations.extend(_scan_c_level_source_inputs(target))
 
@@ -2622,6 +2620,29 @@ def _line_mentions_env_source(line: str) -> bool:
         or re.search(r"\benviron\s*\[", line)
         or re.search(r"\bchar\s*\*\s*envp\s*\[", line)
         or re.search(r"\bchar\s*\*\s*\*\s*envp\b", line)
+    )
+
+
+def _extend_project_alias_observations(
+    observations: list[AttributeEvidence],
+    project_observations: list[AttributeEvidence],
+) -> None:
+    """Retain curated provenance when the same project-alias fact exists.
+
+    Match every fact field except provenance. An absent curated observation
+    must not discard a project observation merely because its spelling is
+    in the curated table; the two scans may have different read outcomes.
+    """
+    if not project_observations:
+        return
+    known_keys = {
+        (ev.kind, ev.function_name, ev.location, ev.raw_match, ev.conditional_on)
+        for ev in observations if ev.match_source == "known_alias"
+    }
+    observations.extend(
+        ev for ev in project_observations
+        if (ev.kind, ev.function_name, ev.location, ev.raw_match, ev.conditional_on)
+        not in known_keys
     )
 
 
