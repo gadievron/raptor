@@ -86,8 +86,8 @@ class _GatewayHarness(unittest.TestCase):
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
-        self.base = Path(self._td.name)
         self.addCleanup(self._td.cleanup)
+        self.base = Path(self._td.name)
         self.core = _make_fake_core(self.base)
         self.out = self.base / "out"
         self.out.mkdir()
