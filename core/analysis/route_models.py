@@ -606,9 +606,8 @@ _BRACE_PARAM_RE = re.compile(r"\{([^{}:]+)(?::[^{}]*)?\}")
 # The name repeat is BOUNDED at the param-name cap: an unbounded
 # ``[^>]+`` before the required ``>`` is the unanchored scan-restart
 # ReDoS shape (every finditer position re-scans a hostile no-``>``
-# run), and a name longer than _MAX_PARAM_NAME would be truncated
-# anyway — an over-long group name now yields no param at all, the
-# same degradation as the extractor's over-cap literals. Group names
+# run). An over-long group name yields no param, matching the
+# name-cap refusal without an unbounded identifier scan. Group names
 # are Python identifiers in real patterns (< 40 chars).
 _NAMED_GROUP_RE = re.compile(r"\(\?P<([^>]{1,128})>")
 
@@ -634,7 +633,10 @@ def _params_from_pattern(
             stats["params_dropped_cap"] = (
                 stats.get("params_dropped_cap", 0) + 1)
             continue
-        name = m.group(1)[:_MAX_PARAM_NAME]
+        name = m.group(1)
+        if len(name) > _MAX_PARAM_NAME:
+            stats["params_dropped_cap"] = stats.get("params_dropped_cap", 0) + 1
+            continue
         out.append(RouteParam(name=name))
     return tuple(out)
 
