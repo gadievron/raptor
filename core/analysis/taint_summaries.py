@@ -371,7 +371,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      with a bare enclosing-local return, or a returned zero-argument call
+      with a bare enclosing-local return, or a directly returned call
       to that function: the object or call depends on an enclosing cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -435,8 +435,7 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                 continue
             value = returned.value
             direct_call = False
-            if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
-                    and not value.args and not value.keywords):
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
                 direct_call = True
                 value = value.func
             if not isinstance(value, ast.Name) or value.id != definition.name:
