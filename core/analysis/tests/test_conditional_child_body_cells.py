@@ -1,6 +1,7 @@
 """Conditional child reads identify lexical cells without proving branch paths."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -56,11 +57,12 @@ def test_whole_child_bindings_mask_conditional_reads(header, body):
 @pytest.mark.parametrize("body", ["if raw:\n  global unsupported",
                                   "if raw:\n  return raw\n else:\n  global other",
                                   "if raw:\n  def deeper(value: raw):\n   return raw",
-                                  "if raw:\n  for obj[(lambda: raw)()] in ():\n   pass"],
+                                  "if raw:\n  for obj[_raptor_unsupported_target] in ():\n   pass"],
                          ids=["then-declaration", "else-global", "deeper-annotation", "indirect-loop"])
 def test_unsupported_child_branch_invalidates_complete_body(body):
+    # Synthetic malformed-AST admission control, not compiler-accepted source.
     source = "raw\ndef child():\n " + body
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

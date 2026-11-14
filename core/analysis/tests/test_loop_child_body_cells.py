@@ -1,6 +1,7 @@
 """Child loop cells are lexical facts rather than iteration or path proofs."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -64,12 +65,13 @@ def test_whole_child_bindings_mask_loop_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["for obj[(lambda: raw)()] in ():\n  pass",
+@pytest.mark.parametrize("body", ["for obj[_raptor_unsupported_target] in ():\n  pass",
                                   "while raw:\n  break\n  global unsupported",
                                   "for item in ():\n  pass\n else:\n  global other"],
                          ids=["indirect-target", "declaration-after-break", "else-global"])
 def test_unsupported_child_loop_invalidates_complete_body(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    # Synthetic malformed-AST admission control, not compiler-accepted source.
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

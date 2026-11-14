@@ -2,6 +2,8 @@
 
 import ast
 
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
+
 import pytest
 
 from core.analysis.interproc import _param_cleanly_sanitized
@@ -62,7 +64,8 @@ def test_binding_only_mode_still_rejects_supported_store_expression():
 
 
 def test_unsupported_index_still_aborts_new_scoped_scan():
-    expression = ast.parse("lambda: [raw for target[[0 for item in ()]] in ()]", mode="eval").body
+    # Synthetic malformed-AST admission control, not compiler-accepted source.
+    expression = parse_target_refusal_fixture("lambda: [raw for target[_raptor_unsupported_target] in ()]", mode="eval").body
     assert not _scoped_expression_loads(expression)
 
 

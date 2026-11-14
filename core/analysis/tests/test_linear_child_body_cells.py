@@ -1,6 +1,7 @@
 """Linear child bodies retain cells without proving assignment or return values."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -53,12 +54,13 @@ def test_child_own_bindings_mask_outer_cell(header, body):
 
 
 @pytest.mark.parametrize("body", ["raw\n global unsupported", "if raw:\n  global unsupported",
-                                  "for obj[(lambda: raw)()] in raw:\n  return raw", "global raw\n return raw",
-                                  "def deeper(value: raw):\n  return raw", "obj[(lambda: raw)()] = 0\n return 0"],
+                                  "for obj[_raptor_unsupported_target] in raw:\n  return raw", "global raw\n return raw",
+                                  "def deeper(value: raw):\n  return raw", "obj[_raptor_unsupported_target] = 0\n return 0"],
                          ids=["declaration", "branch-declaration", "indirect-loop", "global", "deeper-annotation", "indirect-target"])
 def test_unsupported_child_statement_invalidates_complete_body(body):
+    # Synthetic malformed-AST admission control, not compiler-accepted source.
     source = "raw\ndef child():\n " + body
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
