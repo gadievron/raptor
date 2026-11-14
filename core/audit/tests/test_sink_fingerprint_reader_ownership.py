@@ -41,12 +41,14 @@ def test_sink_fingerprint_reader_precedence(tmp_path, monkeypatch, body_kind, cl
             if cleanup is not None:
                 raise cleanup
 
-        def read(self):
+        def read(self, size=-1):
             self.reads += 1
-            assert self.stream.read() == content
+            assert size == 65_536
+            data = self.stream.read(size)
+            assert data == (content if self.reads == 1 else b"")
             if primary is not None:
                 raise primary
-            return content
+            return data
 
     def observe(*args, **kwargs):
         stream = real_open(*args, **kwargs)
@@ -76,7 +78,8 @@ def test_sink_fingerprint_reader_precedence(tmp_path, monkeypatch, body_kind, cl
             observed = error
         assert source._sink_discovery_fingerprint is original
         assert calls == [(tmp_path, None)]
-        assert len(streams) == 1 and streams[0].reads == 1
+        assert len(streams) == 1
+        assert streams[0].reads == (1 if primary is not None else 2)
         assert streams[0].closes == 1 and streams[0].stream.closed
         try:
             os.fstat(streams[0].fd)
