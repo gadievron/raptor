@@ -706,10 +706,16 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                 else:
                     return False
             continue
-        if isinstance(node, (ast.Tuple, ast.List)):
-            if not isinstance(node.ctx, ast.Load):
+        if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+            if not isinstance(node, ast.Set) and not isinstance(node.ctx, ast.Load):
                 return False
-            pending.extend(node.elts)
+            for element in node.elts:
+                if isinstance(element, ast.Starred):
+                    if not isinstance(element.ctx, ast.Load):
+                        return False
+                    pending.append(element.value)
+                else:
+                    pending.append(element)
         elif isinstance(node, (ast.JoinedStr, getattr(ast, "TemplateStr", ast.Constant))):
             part_type = (ast.FormattedValue if isinstance(node, ast.JoinedStr)
                          else getattr(ast, "Interpolation", None))
@@ -725,10 +731,8 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                     if not isinstance(value.format_spec, ast.JoinedStr):
                         return False
                     pending.append(value.format_spec)
-        elif isinstance(node, ast.Set):
-            pending.extend(node.elts)
         elif isinstance(node, ast.Dict):
-            if len(node.keys) != len(node.values) or any(key is None for key in node.keys):
+            if len(node.keys) != len(node.values):
                 return False
             pending.extend(key for key in node.keys if key is not None)
             pending.extend(node.values)

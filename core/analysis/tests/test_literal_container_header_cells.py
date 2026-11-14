@@ -100,7 +100,7 @@ def test_dynamic_container_mode_boundary_stays_excluded(annotation, future):
     assert _bounded_body_expression_loads(ast.parse(source).body[-1].body[0].body) is None
 
 
-@pytest.mark.parametrize('annotation', ['(0, [raw])', '{**{}}', '(*(),)', 'list[0]',
+@pytest.mark.parametrize('annotation', ['(0, [raw])', 'list[0]',
                                      '(lambda: 0)', '[item for item in ()]'])
 def test_unknown_annotation_descendant_refuses_the_complete_header(annotation):
     source = source_for(annotation)
