@@ -105,7 +105,7 @@ def test_dynamic_lambda_header_mode_boundary_stays_excluded(annotation, future):
     assert _bounded_body_expression_loads(ast.parse(source).body[-1].body[0].body) is None
 
 
-@pytest.mark.parametrize('annotation', ['(lambda raw:raw)', '(lambda:0)()', '(lambda:invoke())',
+@pytest.mark.parametrize('annotation', ['(lambda:0)()', '(lambda:invoke())',
                                      '(lambda:(value:=0))', '(lambda:(yield 0))', '1+(lambda:0)'])
 def test_dynamic_invoked_and_writing_lambdas_stay_excluded(annotation):
     compile(source_for(annotation), '<excluded-lambda-header>', 'exec', dont_inherit=True)

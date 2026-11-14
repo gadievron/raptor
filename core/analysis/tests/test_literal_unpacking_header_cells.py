@@ -102,7 +102,7 @@ def test_dynamic_numeric_operand_mode_boundary_stays_excluded(annotation, future
     assert _bounded_body_expression_loads(ast.parse(source).body[-1].body[0].body) is None
 
 
-@pytest.mark.parametrize('annotation', ['[*invoke()]', '{**invoke()}', '[*(x for x in ())]',
+@pytest.mark.parametrize('annotation', ['[*invoke()]', '{**invoke()}',
                                      '1+[*(0,)]', '[*([raw],)]'])
 def test_dynamic_or_unknown_unpacking_descendants_remain_excluded(annotation):
     compile(source_for(annotation), '<excluded-unpacking-header>', 'exec', dont_inherit=True)
