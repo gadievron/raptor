@@ -36,14 +36,6 @@ inputs:
       word-split unquoted; empty adds nothing.
     required: false
     default: ''
-  requirements-file:
-    description: >
-      Optional checkout-relative, self-contained requirements file of exact
-      name==version pins. Its path and bytes enter the cache identity. Install
-      these requirements after the locked project dependencies and before
-      saving the complete environment. Includes and index options are refused.
-    required: false
-    default: ''
   save-on-rebuild:
     description: >
       Save the venv back to the cache after a rebuild ("true"/"false").
@@ -74,7 +66,6 @@ runs:
         VENV_CACHE_PREFIX: ${{ inputs.cache-key-prefix }}
         VENV_CACHE_EXPORT_ARGS: ${{ inputs.uv-export-extra-args }}
         VENV_CACHE_INSTALL_METHOD: ${{ inputs.install-method }}
-        VENV_CACHE_REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
       run: python3 .github/scripts/ci_cache_key.py
 
     - name: Stagger cache restore (avoid 429 thundering herd)
@@ -117,7 +108,6 @@ runs:
           uv.lock
           pyproject.toml
           uv.toml
-          ${{ inputs.requirements-file }}
 
     - name: Rebuild venv (rebuild fallback when no cache was restored)
       id: rebuild
@@ -128,7 +118,6 @@ runs:
       env:
         UV_EXPORT_EXTRA_ARGS: ${{ inputs.uv-export-extra-args }}
         VENV_CACHE_INSTALL_METHOD: ${{ inputs.install-method }}
-        VENV_CACHE_REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
       run: |
         uv venv --clear --python "$(command -v python3)" "$VENV_PATH"
         source "$VENV_PATH/bin/activate"
@@ -137,9 +126,6 @@ runs:
           sync) uv sync --locked --active $UV_EXPORT_EXTRA_ARGS ;;
           *) echo "Invalid venv install method" >&2; exit 2 ;;
         esac
-        if [[ -n "${VENV_CACHE_REQUIREMENTS_FILE:-}" ]]; then
-          uv pip install --python "$VENV_PATH/bin/python" -r "$VENV_CACHE_REQUIREMENTS_FILE"
-        fi
 
     - name: Save rebuilt venv to cache
       # continue-on-error: the cache is an optimisation — a failed save

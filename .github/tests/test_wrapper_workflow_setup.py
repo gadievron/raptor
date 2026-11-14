@@ -190,31 +190,31 @@ def _cache_expression(text, platform, families):
 @pytest.mark.parametrize('families', [[], ['radare2'], ['gadget-parsers'], ['elf-worker'],
                                     ['gadget-parsers', 'elf-worker', 'playwright-browser']],
                          ids=['contracts', 'unrelated-native', 'gadgets', 'elf', 'full-parser-selection'])
-def test_parser_build_cache_uses_installed_requirements_only_when_needed(platform, families):
+def test_parser_group_is_selected_only_for_its_families(platform, families):
+    import tomllib
+
     workflow = (ROOT / '.github/workflows/sandbox-wrappers.yml').read_text()
     uv_step = workflow.split('      - uses: astral-sh/setup-uv@', 1)[1].split('      - uses:', 1)[0]
     globs = re.search(r'(?m)^          cache-dependency-glob: \|\n((?:            [^\n]*\n)+)', uv_step)
     assert globs
-    patterns = []
-    for line in globs[1].splitlines():
-        value = _cache_expression(line, platform, families) if '${{' in line else line.strip()
-        if value:
-            patterns.append(value)
-    assert 'uv.lock' in patterns
+    assert {line.strip() for line in globs[1].splitlines()} == {'uv.lock', 'pyproject.toml', 'uv.toml'}
     needed = bool({'gadget-parsers', 'elf-worker'} & set(families))
-    manifest = re.search(r'(?m)^          requirements-file: (.+)$', workflow)[1]
-    selected = _cache_expression(manifest, platform, families)
-    installed = '.github/scripts/requirements-sandbox-wrappers.txt'
-    assert selected == (installed if needed else '')
-    assert (installed in patterns) is needed
-    assert {'uv.lock', 'pyproject.toml', 'uv.toml'} <= set(patterns)
-    assert len(patterns) == (4 if needed else 3)
+    suffix = re.search(r'(?m)^          cache-suffix: (.+)$', uv_step)[1]
+    assert _cache_expression(suffix, platform, families) == ('sandbox-wrappers' if needed else 'base')
+    args = re.search(r'(?m)^          uv-export-extra-args: >-\n((?:            [^\n]*\n)+)', workflow)
+    assert args
+    selected = ' '.join(_cache_expression(line, platform, families) if '${{' in line else line.strip()
+                        for line in args[1].splitlines()).split()
+    base = '--extra binary --extra r2pipe --extra frida --extra llm --extra grammars --extra web'.split()
+    assert selected == base + (['--group', 'sandbox-wrappers'] if needed else [])
+    assert 'requirements-file:' not in workflow
     pruning = re.search(r'(?m)^          prune-cache: (.+)$', uv_step)[1]
     assert _cache_expression(pruning, platform, families) is (platform == 'macOS' and needed)
-    pins = [line for line in (ROOT / installed).read_text().splitlines() if line and not line.startswith('#')]
-    assert len(pins) == 3
-    assert all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*==[0-9.]+', pin) for pin in pins)
-    assert {pin.split('==')[0].lower() for pin in pins} == {'pwntools', 'ropgadget', 'capstone'}
+    project = tomllib.loads((ROOT / 'pyproject.toml').read_text())
+    group = project['dependency-groups']['sandbox-wrappers']
+    assert {re.split(r'[<>=!~]', requirement, maxsplit=1)[0].lower() for requirement in group} == {
+        'pwntools', 'ropgadget', 'capstone',
+    }
 
 
 @pytest.mark.parametrize('installed,failure', [(True, ''), (False, ''), (False, 'sudo')],

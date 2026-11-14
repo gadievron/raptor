@@ -90,7 +90,7 @@ def test_parent_initializer_and_conftest_dependencies(tree):
         assert len(contracts) == 1 and families == {'one'}
 
 
-@pytest.mark.parametrize('changed', [None, ['core/sandbox/context.py'], ['uv.lock'], ['.github/scripts/requirements-sandbox-wrappers.txt'], ['conftest.py'], ['libexec/new-wrapper']])
+@pytest.mark.parametrize('changed', [None, ['core/sandbox/context.py'], ['uv.lock'], ['pyproject.toml'], ['conftest.py'], ['libexec/new-wrapper']])
 def test_full_coverage_inputs_keep_both_platforms_and_every_case(tree, changed):
     contracts, families = selected(tree, changed)
     assert len(contracts) == 2 and families == {'one', 'two'}

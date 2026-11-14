@@ -136,21 +136,6 @@ def test_failed_rebuild_is_not_saved_or_used():
     assert "Restore venv permissions and fix symlinks" not in selected
 
 
-def test_requirements_are_installed_inside_the_cache_success_boundary():
-    rebuild = next(step for step in _steps() if _field(step, 'id') == 'rebuild')
-    source = '\n'.join(rebuild)
-    assert 'VENV_CACHE_REQUIREMENTS_FILE: ${{ inputs.requirements-file }}' in source
-    assert source.index('esac') < source.index('uv pip install --python "$VENV_PATH/bin/python"')
-    assert not any('uv pip install --python "$VENV_PATH/bin/python"' in '\n'.join(step)
-                   for step in _steps() if _field(step, 'id') != 'rebuild')
-    for first, second in [(('success', 'exact'), None),
-                          (('failure', ''), ('success', 'exact'))]:
-        selected, failed = _simulate(True, first, second)
-        assert not failed
-        assert not any(name.startswith('Rebuild venv (') for name in selected)
-        assert 'Save rebuilt venv to cache' not in selected
-
-
 def test_no_executable_environment_can_restore_an_old_lock_prefix():
     for step in _steps():
         assert _field(step, "restore-keys", indent=8) == ""
@@ -167,7 +152,8 @@ def test_rebuild_does_not_add_a_second_owner_for_an_existing_uv_cache(existing, 
 
 @pytest.mark.parametrize('extras,expected_extras', [('--extra grammars', ['--extra', 'grammars']), ('--no-dev', ['--no-dev']),
                                                    ('--no-dev --extra cvss', ['--no-dev', '--extra', 'cvss']),
-                                                   ('--extra cvss', ['--extra', 'cvss'])])
+                                                   ('--extra cvss', ['--extra', 'cvss']),
+                                                   ('--extra binary --group sandbox-wrappers', ['--extra', 'binary', '--group', 'sandbox-wrappers'])])
 @pytest.mark.parametrize('method', ['export', 'sync'])
 @pytest.mark.parametrize('status', [0, 23])
 def test_native_rebuild_keeps_method_extras_active_env_and_failure_status(tmp_path, method, status, extras, expected_extras):
@@ -227,65 +213,6 @@ else:
             ['export', '--locked', '--no-hashes', *expected_extras],
             ['pip', 'install', '-r', '-'],
         ])
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize('status', [0, 29], ids=['complete-environment', 'parser-install-fails'])
-def test_native_rebuild_installs_parser_requirements_before_it_can_be_saved(tmp_path, status):
-    import json
-    import os
-    import subprocess
-    import sys
-    import textwrap
-
-    rebuild = next(lines for lines in _steps() if _field(lines, 'id') == 'rebuild')
-    start = rebuild.index('      run: |')
-    script = textwrap.dedent('\n'.join(rebuild[start + 1:]))
-    tools = tmp_path / 'tools with spaces'
-    tools.mkdir()
-    (tools / 'python3').symlink_to(sys.executable)
-    uv = tools / 'uv'
-    uv.write_text(f'''#!{sys.executable}
-import json, os, pathlib, shlex, sys
-args = sys.argv[1:]
-with pathlib.Path(os.environ['UV_RECORD']).open('a') as record:
-    record.write(json.dumps({{'args': args, 'active': os.environ.get('VIRTUAL_ENV')}}) + '\\n')
-if args[0] == 'venv':
-    target = pathlib.Path(args[-1])
-    (target / 'bin').mkdir(parents=True)
-    (target / 'bin/activate').write_text('export VIRTUAL_ENV=' + shlex.quote(str(target)) + '\\n')
-elif args == ['export', '--locked', '--no-hashes', '--extra', 'binary']:
-    print('pytest==9.1.1')
-elif args == ['pip', 'install', '-r', '-']:
-    assert sys.stdin.read().strip() == 'pytest==9.1.1'
-else:
-    assert args == ['pip', 'install', '--python', os.environ['VENV_PATH'] + '/bin/python',
-                    '-r', os.environ['VENV_CACHE_REQUIREMENTS_FILE']]
-    assert pathlib.Path(args[-1]).read_text() == 'capstone==5.0.6\\n'
-    raise SystemExit(int(os.environ['PARSER_INSTALL_EXIT']))
-''')
-    uv.chmod(0o755)
-    manifest = tmp_path / 'parser requirements.txt'
-    manifest.write_text('capstone==5.0.6\n')
-    venv = tmp_path / 'complete environment'
-    record = tmp_path / 'uv-record.jsonl'
-    env = dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin', VENV_PATH=str(venv),
-               VENV_CACHE_INSTALL_METHOD='export', UV_EXPORT_EXTRA_ARGS='--extra binary',
-               VENV_CACHE_REQUIREMENTS_FILE=manifest.name,
-               UV_RECORD=str(record), PARSER_INSTALL_EXIT=str(status))
-    env.pop('VIRTUAL_ENV', None)
-    result = subprocess.run(
-        ['/bin/bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
-        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10,
-    )
-    assert result.returncode == status, result.stdout + result.stderr
-    calls = [json.loads(line) for line in record.read_text().splitlines()]
-    assert calls[-1] == {'args': ['pip', 'install', '--python', str(venv / 'bin/python'),
-                                 '-r', manifest.name], 'active': str(venv)}
-    assert len(calls) == 4
-    selected, failed = _simulate(True, ('success', ''), rebuild='failure' if result.returncode else 'success')
-    assert failed is bool(status)
-    assert ('Save rebuilt venv to cache' in selected) is (status == 0)
 
 
 def test_native_permission_repair_handles_a_venv_path_with_spaces(tmp_path):

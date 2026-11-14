@@ -87,6 +87,12 @@ Repository = "https://github.com/gadievron/raptor"
 Issues = "https://github.com/gadievron/raptor/issues"
 
 [dependency-groups]
+# Tools needed only by the native sandbox-wrapper parser checks.
+sandbox-wrappers = [
+    "pwntools==4.15.0",
+    "ROPgadget==7.7",
+    "capstone>=5.0.8",
+]
 test = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
