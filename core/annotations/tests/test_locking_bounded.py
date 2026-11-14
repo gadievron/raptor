@@ -81,10 +81,12 @@ def test_wedged_holder_raises_after_bounded_wait(
         assert any("held by another process" in r.message
                    for r in caplog.records)
     finally:
-        os.close(holder_fd)
-        if thread is not None and thread.ident is not None:
-            thread.join(timeout=10)
-            assert not thread.is_alive(), "lock waiter survived holder cleanup"
+        try:
+            os.close(holder_fd)
+        finally:
+            if thread is not None and thread.ident is not None:
+                thread.join(timeout=10)
+                assert not thread.is_alive(), "lock waiter survived holder cleanup"
 
     assert clock.seconds >= 0.5
     assert len(clock.sleeps) > 1, "caller bypassed the polling wait"
