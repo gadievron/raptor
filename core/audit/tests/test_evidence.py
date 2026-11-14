@@ -367,7 +367,9 @@ class TestSanitizerCallsEvidence:
             {"callable": "html_escape", "param": "user_input", "arg_idx": "0"},
         ]
         prose = format_evidence_prose(rec)
-        assert "SANITIZER" in prose
+        assert "RETURN CALLABLE" in prose
+        assert "sanitisation unverified" in prose
+        assert "SANITIZER:" not in prose
         assert "html_escape" in prose
         assert "user_input" in prose
 
@@ -379,7 +381,7 @@ class TestSanitizerCallsEvidence:
         summary = TaintSummary(
             function="handle",
             params=("user_input",),
-            return_effects=frozenset([(0, "html_escape", 0)]),
+            return_effects=frozenset([(0, "html_escape", 0), (0, "", -1)]),
         )
         index = build_evidence_index(
             checklist=checklist,
@@ -387,6 +389,11 @@ class TestSanitizerCallsEvidence:
         )
         assert len(index["a.py:handle"].sanitizer_calls) == 1
         assert index["a.py:handle"].sanitizer_calls[0]["callable"] == "html_escape"
+        prose = format_evidence_prose(index["a.py:handle"])
+        assert "direct flow also recorded" in prose
+        assert "RETURN CALLABLE" in prose
+        assert "sanitisation unverified" in prose
+        assert "SANITIZER:" not in prose
 
 
 class TestEvidenceTierAnnotations:

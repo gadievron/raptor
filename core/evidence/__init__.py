@@ -415,14 +415,18 @@ def format_evidence_prose(
                             _safe_name(s[0] if isinstance(s, tuple) else s)
                             for s in sorted(sanitizers)
                         )
+                        direct_note = (
+                            "; direct flow also recorded"
+                            if (pidx, "", -1) in getattr(ts, "return_effects", ()) else ""
+                        )
                         lines.append(
                             f"- param `{pname}` taints return value "
-                            f"(sanitized by: {slist})"
+                            f"(callable effects: {slist}{direct_note}; sanitisation unverified)"
                         )
                     else:
                         lines.append(
                             f"- param `{pname}` taints return value "
-                            f"(no sanitizer)"
+                            f"(no callable effect recorded)"
                         )
         if hasattr(ts, "summary_unknown") and ts.summary_unknown:
             lines.append(
@@ -435,9 +439,9 @@ def format_evidence_prose(
                 f"`{_safe_name(target)}` (dangerous API)" for target in record.app_sink_targets[:10])
 
     if record.sanitizer_calls:
-        lines.extend(f"- SANITIZER: `{_safe_name(sc.get('callable', '?'))}` "
-                f"transforms param `{_safe_name(sc.get('param', '?'))}` "
-                f"before return (taint summary)" for sc in record.sanitizer_calls[:8])
+        lines.extend(f"- RETURN CALLABLE: `{_safe_name(sc.get('callable', '?'))}` "
+                f"for param `{_safe_name(sc.get('param', '?'))}` "
+                f"(taint-summary effect; sanitisation unverified)" for sc in record.sanitizer_calls[:8])
 
     if record.transitive_taint is not None:
         tt = record.transitive_taint
