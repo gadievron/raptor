@@ -4863,13 +4863,14 @@ _HEADER_SUFFIXES = (".h", ".hpp", ".hh", ".hxx")
 
 
 def _binary_absence_suppression_allowed() -> bool:
-    """Classifier coverage is not source/build correspondence authority."""
-    from core.analysis.reach_witness import (
-        STRUCTURALLY_SUPPRESSIBLE_KINDS, verdict_from_classification,
-    )
-    return verdict_from_classification("binary_oracle_absent").may_suppress(
-        STRUCTURALLY_SUPPRESSIBLE_KINDS,
-    )
+    """Withhold audit suppression without source/build correspondence.
+
+    The shared witness table describes classifier policy, not an admitted
+    correspondence between this review's source occurrence and the build.
+    This adapter has no such admission contract, so even a suppressible
+    classifier observation cannot authorise skipping or demoting a finding.
+    """
+    return False
 
 
 def _binary_absent_gap_keys(
@@ -4883,8 +4884,8 @@ def _binary_absent_gap_keys(
     A flat name map is retained classification data, not a source occurrence
     or build-correspondence record. It cannot authorise skipping a namesake.
     Header and entry-point exemptions remain conservative additional guards.
-    Even an occurrence-joined classifier observation must pass the shared
-    witness authority gate; full debug coverage alone does not establish
+    Even an occurrence-joined classifier observation needs an admitted
+    source/build correspondence; full debug coverage alone does not establish
     complete source/build correspondence.
     """
     keys: set[str] = set()
@@ -20173,7 +20174,7 @@ def _apply_reachability_gate(
 ) -> ReviewOutcome:
     """Apply the existing post-review reachability policies.
 
-    Binary dormancy requires admission through the shared witness gate.
+    Binary dormancy requires admitted source/build correspondence.
     Classifier absence alone has no source/build correspondence contract and
     cannot enter that branch. The separate source-only heuristic can retain
     a suspicious concern; it does not establish source unreachability.
@@ -33182,7 +33183,7 @@ def _demote_absent_promotions(
 ) -> int:
     """Retain static promotions unless binary suppression is admitted.
 
-    The shared witness gate currently withholds classifier-only absence:
+    The audit adapter currently withholds classifier-only absence:
     full debug coverage does not establish complete source/build correspondence.
     Existing observations and source findings remain intact. If a future
     independently admitted witness permits this adapter, runtime evidence still
