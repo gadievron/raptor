@@ -203,7 +203,7 @@ def resolve_query_id(query_id: str) -> str | None:
     or no query in the pack carries that ``@id`` — callers degrade
     loudly-once and drop the chain step (never a phantom dispatch).
     """
-    if not query_id or not _QUERY_ID_RE.match(query_id):
+    if not query_id or not _QUERY_ID_RE.fullmatch(query_id):
         return None
     prefix = query_id.split("/", 1)[0]
     pack = _LANG_PREFIX_TO_PACK.get(prefix)
