@@ -10,7 +10,7 @@ from core.testing.stream_faults import FaultingStream
 
 PRIMARY = [OSError, ValueError, RuntimeError, KeyboardInterrupt, SystemExit]
 CLEANUP = [OSError, RuntimeError, KeyboardInterrupt, SystemExit]
-READERS = ['strict-bytes', 'strict-text', 'capped-bytes', 'capped-text', 'contained-bytes', 'contained-text']
+READERS = ['strict-bytes', 'strict-text', 'capped-bytes', 'capped-text', 'contained-bytes', 'contained-text', 'contained-text-capped']
 
 
 @pytest.mark.parametrize('primary_type', PRIMARY)
@@ -113,6 +113,8 @@ def install_reader(monkeypatch, root, kind, primary, cleanup):
             return contained.read_text_capped(path, cap)
         if kind == 'contained-bytes':
             return contained.read_contained_bytes(root, 'data', max_bytes=cap)
+        if kind == 'contained-text-capped':
+            return contained.read_contained_text_capped(root, 'data', max_chars=cap)
         return contained.read_contained(root, 'data', max_chars=cap)
     return read, observed
 
