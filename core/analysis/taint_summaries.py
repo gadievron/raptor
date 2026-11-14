@@ -701,6 +701,10 @@ def _expr_taint(
         # sanitizer, so the consumer refuses rather than suppresses.
         recv_state = _empty_state()
         recv_stamp = stamp_name
+        if isinstance(expr.func, ast.Name) and shadowed:
+            # A local callable can carry input through its own value,
+            # independently of explicit call arguments or method receivers.
+            recv_state = in_state_fn(cfg_node, expr.func.id)
         if isinstance(expr.func, ast.Lambda):
             # IIFE: the lambda body evaluates NOW over enclosing-scope
             # names (``(lambda: a)()``), and parameter DEFAULTS
