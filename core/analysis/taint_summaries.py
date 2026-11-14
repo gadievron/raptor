@@ -705,7 +705,7 @@ def _literal_header_binding_target(target: ast.expr) -> bool:
 
 
 def _literal_header_annotation(annotation: ast.expr | None) -> bool:
-    """Closed annotations without reads outside their own scopes; never evaluate."""
+    """Closed annotation syntax with no free lexical names; never evaluate."""
     if annotation is None:
         return True
     if not isinstance(annotation, ast.expr):
@@ -1159,20 +1159,30 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A generator function: iteration output is not a normal return value.
     * A generator expression with a deferred assignment expression: its
       enclosing-frame writes depend on consumption, which is not modelled.
+    * An annotation metadata protocol read: ``__annotations__`` and
+      ``__annotate__`` can evaluate code whose effects are not modelled.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
       the local frame is not a local: any call between the tracked
       assignment and the return can rewrite it (module slot /
       enclosing closure), so the straight-line-locals premise the
       propagation runs on is void for the whole function.
 
-    Only the FUNCTION's own body is checked — nested function
-    definitions are summarised separately so their dynamic dispatch
-    doesn't poison the outer summary.
+    Direct call checks inspect the function's own body. Nested nonlocal
+    rebinding and annotation protocol reads are inspected at every depth:
+    they can affect an enclosing frame without passing its values as arguments.
+    Metadata reads are conservatively unknown even when benign; this does not
+    model every way that annotation effects can be triggered.
     """
     deferred_reason = _deferred_frame_summary_reason(fn_ast)
     if deferred_reason is not None:
         return deferred_reason
+    annotation_metadata_read = False
     for node in ast.walk(fn_ast):
+        if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+                and node.attr in ("__annotations__", "__annotate__")):
+            # Deferred annotation code may observe this frame through a nested
+            # consumer, without any enclosing lexical name in its expression.
+            annotation_metadata_read = True
         if isinstance(node, ast.Nonlocal):
             # A nested def's ``nonlocal`` rebinds an ENCLOSING frame —
             # possibly this function's locals — behind the
@@ -1283,6 +1293,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                 if direct_call:
                     return "returned local call depends on an unmodelled enclosing cell"
                 return "returned function retains an unmodelled enclosing cell"
+        if annotation_metadata_read:
+            return "annotation metadata access may evaluate deferred expressions"
     return None
 
 
