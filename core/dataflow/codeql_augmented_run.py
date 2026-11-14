@@ -141,7 +141,8 @@ def analyze(
             ``pack:Subdir/path/Foo.ql`` references). Forwarded as
             positional args after the DB path.
         output_path: Where to write the SARIF output. Parent dir is
-            created if missing.
+            created if missing. Previous output is removed immediately
+            before invocation so readers cannot reuse an older report.
         extension_pack: Optional path to a directory containing a
             ``codeql-pack.yml`` declaring data extensions
             (PR2a's :func:`write_extension_pack` output). When
@@ -194,6 +195,9 @@ def analyze(
         ])
     cmd.extend(extra_args)
 
+    # A successful invocation without replacement output must not leave
+    # downstream readers consuming a report from an earlier analysis.
+    output_path.unlink(missing_ok=True)
     run = runner or subprocess.run
 
     import time
