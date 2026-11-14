@@ -22,6 +22,7 @@ import ast
 import logging
 import sqlite3
 from collections import Counter
+from collections.abc import Mapping
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +96,11 @@ def load_pairs(
     _validate_pair_limit(limit)
     if limit == 0:
         return []
+    for name, values in (("cwes", cwes), ("languages", languages)):
+        if isinstance(values, (str, bytes, Mapping)) or any(
+            not isinstance(value, str) or not value for value in values
+        ):
+            raise ValueError(f"{name} must be a collection of non-empty strings")
     cwe_ph = ",".join("?" * len(cwes))
     lang_ph = ",".join("?" * len(languages))
     sql = f"""
