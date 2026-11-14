@@ -596,7 +596,17 @@ def validate_structurally(
 
     Returns:
         StructuralResult with verdict, evidence, and path_conditions.
+        Findings with alternative paths decline this single-path check.
     """
+    if dataflow_path.get("alternative_paths"):
+        return StructuralResult(
+            verdict="inconclusive",
+            reasoning=(
+                "Dataflow finding has alternative paths; single-path structural "
+                "validation cannot adjudicate the whole finding"
+            ),
+            confidence="low",
+        )
     steps = _build_all_steps(dataflow_path)
     if len(steps) < 2:
         return StructuralResult(
