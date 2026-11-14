@@ -814,7 +814,7 @@ def _axis_dirs(rules_root: Path) -> list[Path]:
     """
     return sorted(
         d for d in rules_root.iterdir()
-        if d.is_dir() and any(d.glob("*.cocci"))
+        if d.is_dir() and any(entry.match("*.cocci") for entry in d.iterdir())
     )
 
 
@@ -1006,7 +1006,13 @@ def analyze(
     # The shipped layout has per-axis subdirs (``attrs/`` etc.). When a
     # caller hands us a flat rules_dir (e.g. tests), accept that too —
     # if no subdirs are present, run rules from the dir directly.
-    axis_dirs = _axis_dirs(effective_rules_root)
+    try:
+        axis_dirs = _axis_dirs(effective_rules_root)
+    except OSError:
+        return SourceIntelResult(
+            target=str(target),
+            skipped_reason="rules_discovery_failed",
+        )
     rule_dirs = axis_dirs or [effective_rules_root]
 
     # Build + register the inventory for the target so the parser
