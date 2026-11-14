@@ -334,9 +334,8 @@ def derive_evidence_strings(
         if line is not None:
             lines.append(line)
 
-    # Axis-2 null-guard evidence — null check on pointer before
-    # use. Lowers severity of cpp/null-dereference findings when
-    # a guard dominates the sink line.
+    # Axis-2 observations carry a check shape and location, without
+    # establishing expression identity, sink order or dominance.
     null_guards = list(result.null_guards)
     if finding_function:
         null_guards = [
@@ -782,9 +781,9 @@ def _render_null_guard_line(ng: NullGuardEvidence, style: str) -> str:
         else f"in {ng.location[0]} near line {ng.location[1]}"
     )
     if style == "stage_d":
-        prefix = "Defensive check — null guard observed"
+        prefix = "Check observation — null-guard shape"
     elif style == "exploit_plan":
-        prefix = "Constraint — null check precedes sink"
+        prefix = "Review site — null-guard shape"
     else:
         prefix = "Variant hint — null guard"
     kind_phrase = {
@@ -794,10 +793,10 @@ def _render_null_guard_line(ng: NullGuardEvidence, style: str) -> str:
     }.get(ng.kind, ng.kind)
     return (
         f"{prefix}: {kind_phrase}-shape null check at "
-        f"{ng.location[0]}:{ng.location[1]} {fn_text}. Reduces "
-        f"likelihood of cpp/null-dereference reaching runtime — "
-        f"but doesn't prove ALL null paths are guarded (cocci "
-        f"only sees the matched site)."
+        f"{ng.location[0]}:{ng.location[1]} {fn_text}. This observation "
+        f"does not establish that the checked expression matches this "
+        f"finding, that the check precedes its sink, or that all null "
+        f"paths are guarded."
     )
 
 
