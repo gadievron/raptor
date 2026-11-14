@@ -492,10 +492,11 @@ def _render_double_free_line(d: DoubleFreeEvidence, style: str) -> str:
         prefix = "Primitive — double-free at sink"
     else:
         prefix = "Variant hint — double-free shape"
+    site_label = {"first": "First", "second": "Second"}.get(d.role, "Matched")
     return (
         f"{prefix}: `{d.free_fn}` called twice on the same expression "
         f"with no intervening reassignment to NULL or a new "
-        f"allocation. First free at "
+        f"allocation. {site_label} free at "
         f"{d.location[0]}:{d.location[1]} {fn_text}. Direct "
         f"supporting evidence for cpp/double-free (CWE-415)."
     )
