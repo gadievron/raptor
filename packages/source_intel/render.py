@@ -1550,23 +1550,16 @@ def derive_mitigations_found(
             location=ab.location,
         ))
 
-    # axis_4 privilege — capable() in same function. Same criteria
-    # as the tier-1 render prose and the adapter verdict policy: only
-    # a GLOBAL-credential check (`capable`) on a root-equivalent
-    # constant is a privilege gate. Namespace-scoped checks
-    # (ns_capable & friends) are reachable from an unprivileged
-    # process via `unshare -U`, and bounded caps (CAP_NET_ADMIN, …)
-    # are not root-equivalent — emitting either as `privilege_gate`
-    # would steer consumers toward discounting reachable bugs. The
-    # grade gate matters too: on same_path the check may guard a
-    # branch the sink isn't on.
+    # A privilege gate requires the existing dominates grade, a global
+    # credential check and a root-equivalent constant. Co-location or
+    # a nested-path observation does not establish a required privilege.
     for cap in result.capabilities:
         if (finding_function and cap.enclosing_function
                 and cap.enclosing_function != finding_function):
             continue
         if cap.cap_function not in _GLOBAL_CRED_CAP_FUNCTIONS:
             continue
-        if cap.grade not in (GRADE_DOMINATES, GRADE_SAME_FUNCTION):
+        if cap.grade != GRADE_DOMINATES:
             continue
         priv_const = _privileged_cap_constant_on_line(
             cap.location[0], cap.location[1],

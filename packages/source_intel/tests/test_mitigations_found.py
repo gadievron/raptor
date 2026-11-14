@@ -86,7 +86,7 @@ def test_capability_emits_axis_4_medium(tmp_path):
     )
     r = SourceIntelResult(capabilities=(CapabilityEvidence(
         cap_function="capable", location=(path, 5),
-        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+        grade=GRADE_DOMINATES, enclosing_function="op",
     ),))
     m = derive_mitigations_found(r, finding_function="op")
     assert m[0].axis == "axis_4"
@@ -104,7 +104,7 @@ def test_ns_scoped_capability_is_not_a_privilege_gate(tmp_path):
     )
     r = SourceIntelResult(capabilities=(CapabilityEvidence(
         cap_function="ns_capable", location=(path, 5),
-        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+        grade=GRADE_DOMINATES, enclosing_function="op",
     ),))
     assert derive_mitigations_found(r, finding_function="op") == []
 
@@ -117,7 +117,7 @@ def test_bounded_cap_constant_is_not_a_privilege_gate(tmp_path):
     )
     r = SourceIntelResult(capabilities=(CapabilityEvidence(
         cap_function="capable", location=(path, 5),
-        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+        grade=GRADE_DOMINATES, enclosing_function="op",
     ),))
     assert derive_mitigations_found(r, finding_function="op") == []
 
@@ -194,7 +194,7 @@ def test_comment_planted_cap_constant_mints_no_privilege_gate(tmp_path):
     )
     r = SourceIntelResult(capabilities=(CapabilityEvidence(
         cap_function="capable", location=(path, 5),
-        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+        grade=GRADE_DOMINATES, enclosing_function="op",
     ),))
     assert derive_mitigations_found(r, finding_function="op") == []
 
@@ -215,7 +215,7 @@ def test_comment_planted_cap_constant_no_tier1_prose(tmp_path):
     line = _render_capability_line(
         CapabilityEvidence(
             cap_function="capable", location=(path, 5),
-            grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+            grade=GRADE_DOMINATES, enclosing_function="op",
         ),
         "stage_d",
     )
