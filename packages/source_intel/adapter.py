@@ -1894,14 +1894,15 @@ def _wur_annotation_trustworthy(file_path: str, function_name: str) -> bool:
          the body has ≤2 statements, the function is a no-op and the
          WUR annotation is suspect. Catches naive `return 0;` plants.
 
-      2. **Return-value constancy** — scan all `return ...;` statements
-         in the function body. If they're all the same literal
-         constant (`return 0;`, `return -1;`, `return NULL;`), the
-         return value carries no caller-actionable information.
-         Catches medium-difficulty plants with dead branches.
+      2. **Captured return-value constancy** — inspect the bounded
+         per-line matches from `_extract_return_values`. If the
+         captured values are all the same literal constant, withhold
+         trust. Additional or oversized return expressions can be
+         omitted; this does not establish constancy on every path.
 
-    Returns False (annotation untrustworthy) when EITHER check fails;
-    True (trust the annotation) when both pass.
+    Returns False when either heuristic withholds trust; otherwise
+    preserves True. Passing these checks is not semantic validation
+    of the annotation or of caller-actionable return values.
 
     Conservative on failure: file unreadable or function definition
     not found → returns True (preserve existing verdict behavior).
@@ -1954,11 +1955,11 @@ def _wur_annotation_trustworthy(file_path: str, function_name: str) -> bool:
     if statement_count <= 2:
         return False  # trivial body — don't trust WUR
 
-    # Return-value constancy check: scan all `return X;` patterns.
-    # Only suspect when EVERY return is a LITERAL (digit / NULL /
-    # nullptr / hex) AND they're all the same. A return like
-    # `return r;` (variable) is NOT a literal — caller might still
-    # need to inspect it, so the WUR annotation could be legitimate.
+    # Constancy heuristic over captured return-pattern matches only.
+    # Withhold trust when all captured values are the same literal;
+    # the bounded per-line census may omit other return expressions.
+    # A captured variable return is not a literal and keeps this
+    # heuristic from withholding trust.
     return_values = _extract_return_values(body_lines)
     if return_values:
         all_literal_same = (
@@ -2174,7 +2175,7 @@ _RETURN_VALUE_RE = re.compile(
 def _extract_return_values(body_lines: list) -> list:
     """Collect at most one bounded return-expression match per line.
 
-    Return normalized (whitespace-collapsed) strings. Bare `return;`
+    Return normalised (whitespace-collapsed) strings. Bare `return;`
     statements are skipped. Additional returns on the same line and
     expressions beyond the regex bound can be omitted; this lexical
     census is not complete return-path analysis.
