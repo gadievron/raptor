@@ -2,25 +2,19 @@
 // call site in the target. The Python aggregator scopes these to the
 // finding's function and grades them by proximity.
 //
-// Why this matters for memory corruption: an abort-class call on the
-// path between a bug's source and its sink primitive aborts the
-// process before exploitation. The finding may still be a real bug
-// (defensive cleanup needed), but the exploitability collapses to
-// DoS-only. Stage D LLM uses this evidence to soften CWE-120 / CWE-787
-// / CWE-476 verdicts when the abort dominates the bug line.
+// These are call-shape observations, not proof that an abort is taken.
+// Conditional macros such as BUG_ON/assert depend on their arguments and
+// build configuration. Their presence alone does not establish termination
+// before the finding's sink or a DoS-only outcome.
 //
-// Grading (computed in Python from match locations, NOT in cocci):
-//   * same_function — abort site shares the finding's enclosing
-//     function. Weak grade — abort might be on an unrelated path.
-//   * same_path — cocci's `<+...+>` path operator confirms the abort
-//     appears between function entry and the finding line. Medium
-//     grade — best-effort, not proven domination at runtime.
-//   * dominates — cocci's `when !=` constraints exclude paths that
-//     bypass the abort. Strong grade — closest cocci gets to runtime
-//     domination.
-//
-// Phase 5a ships ONLY same_function grading. Same_path + dominates
-// arrive when path-operator-aware variant rules ship in 5b.
+// Grading is computed in Python from the sanitised source view:
+//   * same_function — fallback when structural attribution is unavailable.
+//   * same_path — call location has brace depth greater than one.
+//   * dominates — call location has depth one with no preceding depth-one
+//     return/goto observed by the lexical walk.
+// These are structural heuristics, not runtime control-flow proofs. This
+// rule has no path-operator or bypass-exclusion constraints and reports
+// neither argument truth nor an abort-taken relation.
 //
 // Macro set (curated; can be expanded via project-alias discovery
 // in axis-1's aliases.py mechanism — Phase 5b will plumb through):
