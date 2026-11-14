@@ -1,6 +1,8 @@
 """Delegation operands in target lambdas retain lexical cells only."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 import types
 
 import pytest
@@ -76,14 +78,14 @@ def test_yieldfrom_target_keeps_caller_raw_flow():
 
 
 @pytest.mark.parametrize('target', [
-    'box[(lambda: (yield raw))()]',
+    'box[_raptor_unsupported_target]',
     'box[(lambda value=(yield from raw): value)()]',
     'box[((lambda: (yield from ())), (lambda value=(yield from raw): value))]',
 ])
-def test_ordinary_yield_and_unowned_default_stay_excluded(target):
+def test_synthetic_target_and_unowned_default_stay_excluded(target):
     source = f'def nested():\n {target} = 0'
     compile(source, '<excluded-yield-target>', 'exec', dont_inherit=True)
-    assert _bounded_body_expression_loads(ast.parse(source).body[0].body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body[0].body) is None
 
 
 def test_yieldfrom_does_not_grant_generator_return_value_authority():

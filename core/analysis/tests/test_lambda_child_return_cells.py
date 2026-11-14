@@ -1,6 +1,7 @@
 """Child return lambdas retain cells according to nested lexical scopes."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -59,12 +60,12 @@ def test_child_parameter_masks_lambda_capture():
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("expression", ["lambda: [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]", "lambda: (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])",
-                                       "lambda: (lambda value=[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]: value)"],
+@pytest.mark.parametrize("expression", ["lambda: [raw for slots[[_raptor_unsupported_target for item in ()]] in ()]", "lambda: (yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()])",
+                                       "lambda: (lambda value=[raw for slots[[_raptor_unsupported_target for item in ()]] in ()]: value)"],
                          ids=["comprehension", "generator-output", "nested-default"])
 def test_unsupported_lambda_return_invalidates_complete_body(expression):
     source = f"raw\ndef child():\n return {expression}"
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

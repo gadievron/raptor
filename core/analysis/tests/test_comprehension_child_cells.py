@@ -1,6 +1,7 @@
 """Child comprehensions expose lexical cells without iteration or target execution."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -63,12 +64,12 @@ def test_child_and_comprehension_bindings_mask_outer_cell(parameters, expression
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("expression", ["[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]",
-                                       "lambda: [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]",
-                                       "lambda: (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])"],
-                         ids=["scoped-target", "nested-scoped-target", "generator-output"])
+@pytest.mark.parametrize("expression", ["[raw for slots[[_raptor_unsupported_target for item in ()]] in ()]",
+                                       "lambda: [raw for slots[[_raptor_unsupported_target for item in ()]] in ()]",
+                                       "lambda: (yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()])"],
+                         ids=["synthetic-target", "nested-scoped-target", "generator-output"])
 def test_incomplete_target_or_unsupported_node_invalidates_complete_body(expression):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\ndef child():\n return {expression}").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\ndef child():\n return {expression}").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

@@ -1,6 +1,7 @@
 """Comprehension target lambdas retain cells in the comprehension's lexical scope."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -54,21 +55,21 @@ def test_first_iterable_stays_outside_comprehension_bindings():
 
 
 def test_legacy_strict_wrapper_and_statement_targets_are_unchanged():
-    node = ast.parse("[0 for box[(lambda: raw)()] in ()]", mode="eval").body
+    node = parse_target_refusal_fixture("[0 for box[(lambda: raw)()] in ()]", mode="eval").body
     target = node.generators[0].target
     assert _comprehension_target_scope(target, require_scope_free_reads=True) is None
     assert _comprehension_target_scope(target) == (frozenset(), frozenset({"box"}))
     assert _child_expression_is_supported(node)
     assert "raw" in _scoped_expression_loads(node)
-    assert _bounded_body_expression_loads(ast.parse("for box[(lambda: (yield raw))()] in ():\n pass").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("for box[_raptor_unsupported_target] in ():\n pass").body) is None
 
 
-@pytest.mark.parametrize("expression", ["[0 for box[(lambda: (value := (yield raw)))()] in ()]",
-                                       "[0 for box[[(lambda: (yield raw))() for item in ()]] in ()]",
-                                       "[0 for box[await (lambda: (value := (yield raw)))()] in ()]"],
-                         ids=["yielded-write", "nested-comprehension", "awaited-write"])
+@pytest.mark.parametrize("expression", ["[0 for box[_raptor_unsupported_target] in ()]",
+                                       "[0 for box[[_raptor_unsupported_target for item in ()]] in ()]",
+                                       "[0 for box[await _raptor_unsupported_target] in ()]"],
+                         ids=["synthetic-index", "nested-comprehension", "awaited-synthetic-index"])
 def test_excluded_target_descendants_invalidate_scoped_scan(expression):
     # AST admission controls; no compiled-source claim for these expressions.
-    node = ast.parse(expression, mode="eval").body
+    node = parse_target_refusal_fixture(expression, mode="eval").body
     assert not _child_expression_is_supported(node)
     assert _scoped_expression_loads(node) == frozenset()

@@ -1,6 +1,7 @@
 """Deletion syntax retains cells without executing any target operations."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -52,15 +53,15 @@ def test_own_bindings_mask_deletion_cells(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["del slots[(lambda: (yield raw))()]", "del slots[(raw := 0)]",
+@pytest.mark.parametrize("body", ["del slots[_raptor_unsupported_target]", "del slots[(raw := 0)]",
                                   "del raw.member\nglobal unsupported"],
-                         ids=["lambda-target", "walrus-target", "later-declaration"])
+                         ids=["synthetic-target", "walrus-target", "later-declaration"])
 def test_unsupported_deletion_tree_invalidates_earlier_capture(body):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{body}").body) is None
 
 
 def test_nested_scope_unsupported_delete_stays_excluded():
-    assert _bounded_body_expression_loads(ast.parse("def child():\n del slots[(lambda: (yield raw))()]").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("def child():\n del slots[_raptor_unsupported_target]").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

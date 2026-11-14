@@ -1,6 +1,7 @@
 """Indirect stores retain lexical cells without proving stored value flow."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -63,10 +64,10 @@ def test_whole_function_binding_masks_target_read(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("target", ["slots[(lambda: (yield raw))()]", "slots[(raw := 0)]"],
-                         ids=["lambda", "walrus"])
+@pytest.mark.parametrize("target", ["slots[_raptor_unsupported_target]", "slots[(raw := 0)]"],
+                         ids=["synthetic-target", "walrus"])
 def test_unsupported_target_invalidates_earlier_capture(target):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{target} = 0").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{target} = 0").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

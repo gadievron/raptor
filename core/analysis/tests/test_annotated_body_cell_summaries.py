@@ -1,6 +1,7 @@
 """Narrow local annotations distinguish retained cells from annotation text."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -62,10 +63,10 @@ def test_parameter_masks_annotated_target():
 
 
 @pytest.mark.parametrize("statement", ["value: (lambda: raw)", "value: [raw for item in ()]",
-                                       "slots[(lambda: (yield raw))()]: object = 0"],
-                         ids=["lambda-annotation", "comprehension-annotation", "scoped-target"])
+                                       "slots[_raptor_unsupported_target]: object = 0"],
+                         ids=["lambda-annotation", "comprehension-annotation", "synthetic-target"])
 def test_unsupported_annotation_or_target_invalidates_earlier_capture(statement):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{statement}").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{statement}").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

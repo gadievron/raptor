@@ -1,6 +1,8 @@
 """Statement target address scopes retain enclosing cells without rebinding them."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 import types
 
 import pytest
@@ -84,14 +86,13 @@ def test_legacy_strict_wrapper_keeps_its_contract():
 
 
 @pytest.mark.parametrize('target', [
-    'box[(lambda: (yield raw))()]',
-    'box[(lambda: (value := (yield raw)))()]',
-    'box[[(lambda: (yield raw))() for item in ()]]',
+    'box[_raptor_unsupported_target]',
+    'box[[_raptor_unsupported_target for item in ()]]',
 ])
 def test_excluded_target_descendant_invalidates_complete_body(target):
     source = f'raw\n{target} = 0'
     compile(source, '<excluded-statement-target>', 'exec', dont_inherit=True)
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_awaited_statement_target_preserves_async_cell():

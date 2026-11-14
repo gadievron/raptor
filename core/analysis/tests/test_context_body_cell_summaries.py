@@ -1,6 +1,7 @@
 """Context statements expose lexical cells without entering any context."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -65,12 +66,12 @@ def test_whole_function_bindings_mask_context_cells(header, body):
 
 
 @pytest.mark.parametrize("body", [
-    "with manager as slots[(lambda: (yield raw))()]:\n pass",
+    "with manager as slots[_raptor_unsupported_target]:\n pass",
     "with manager as slots[(raw := 0)]:\n pass",
     "with raw:\n global unsupported",
-], ids=["lambda-target", "walrus-target", "body-import"])
+], ids=["synthetic-target", "walrus-target", "body-import"])
 def test_unsupported_context_tree_invalidates_earlier_capture(body):
-    assert _bounded_body_expression_loads(ast.parse(f"raw\n{body}").body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(f"raw\n{body}").body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

@@ -2,6 +2,8 @@
 
 import ast
 
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
+
 import pytest
 
 from core.analysis.interproc import _param_cleanly_sanitized
@@ -60,10 +62,10 @@ def test_child_parameter_masks_local_annotated_target():
 
 
 @pytest.mark.parametrize("body", ["value: (lambda: raw)", "value: [raw for item in ()]",
-                                  "slots[(lambda: (yield raw))()]: object = 0"],
-                         ids=["lambda-annotation", "comprehension-annotation", "scoped-target"])
+                                  "slots[_raptor_unsupported_target]: object = 0"],
+                         ids=["lambda-annotation", "comprehension-annotation", "synthetic-target"])
 def test_unsupported_local_annotation_or_target_invalidates_complete_child(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_function_header_annotation_remains_excluded():

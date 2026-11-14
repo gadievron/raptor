@@ -1,6 +1,7 @@
 """Lambda defaults retain cells according to each lexical parameter scope."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -51,17 +52,17 @@ def test_lambda_parameters_mask_outer_cell(default):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("default", ["lambda: [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]", "lambda: (yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])",
-                                    "lambda: (lambda value=[raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]: value)"],
+@pytest.mark.parametrize("default", ["lambda: [raw for slots[[_raptor_unsupported_target for item in ()]] in ()]", "lambda: (yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()])",
+                                    "lambda: (lambda value=[raw for slots[[_raptor_unsupported_target for item in ()]] in ()]: value)"],
                          ids=["comprehension", "generator-output", "nested-default"])
 def test_unsupported_lambda_descendant_invalidates_complete_body(default):
     source = f"raw\ndef child(value={default}):\n return value"
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_child_return_comprehension_stays_outside_body_grammar():
-    source = "def child(value=lambda: raw):\n return [raw for slots[[(lambda: (yield raw))() for item in ()]] in ()]"
-    assert _bounded_body_expression_loads(ast.parse(source).body) is None
+    source = "def child(value=lambda: raw):\n return [raw for slots[[_raptor_unsupported_target for item in ()]] in ()]"
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(source).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():

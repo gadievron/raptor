@@ -1,6 +1,8 @@
 """Decorator expressions retain parent cells without granting wrapper identity."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 from textwrap import indent
 
 import pytest
@@ -63,8 +65,8 @@ def test_decorated_body_still_supplies_parent_cell_reads():
 
 
 def test_unsupported_decorator_descendant_invalidates_complete_scan():
-    source = source_for("(lambda: [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])")
-    tree = ast.parse(source)
+    source = source_for("(lambda: [raw for box[[_raptor_unsupported_target for item in ()]] in ()])")
+    tree = parse_target_refusal_fixture(source)
     assert _bounded_body_expression_loads(tree.body[0].body[0].body) is None
 
 

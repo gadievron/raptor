@@ -1,6 +1,8 @@
 """Nested comprehension target addresses retain their own lexical scopes."""
 
 import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 import types
 
 import pytest
@@ -70,24 +72,24 @@ def test_nested_target_caller_keeps_raw_flow():
 
 
 def test_legacy_strict_statement_target_contract_is_unchanged():
-    expression = ast.parse(CAPTURES[0], mode='eval').body
+    expression = parse_target_refusal_fixture(CAPTURES[0], mode='eval').body
     target = expression.generators[0].target
     assert _comprehension_target_scope(target, require_scope_free_reads=True) is None
     assert _comprehension_target_scope(target) == (frozenset(), frozenset({'box'}))
-    assert _bounded_body_expression_loads(ast.parse(
-        'for box[[(lambda: (yield raw))() for item in ()]] in ():\n pass'
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture(
+        'for box[[_raptor_unsupported_target for item in ()]] in ():\n pass'
     ).body) is None
 
 
 @pytest.mark.parametrize('expression', [
-    '[0 for box[[(lambda: (yield raw))() for item in ()]] in ()]',
-    '[0 for box[[item for item in () if (lambda: (yield raw))()]] in ()]',
-    '[0 for box[[item for item in (lambda: (yield raw))()]] in ()]',
-    '[0 for box[[(lambda: (value := (yield raw)))() for item in ()]] in ()]',
-    '[0 for box[[0 for other[(lambda: (value := (yield raw)))()] in ()]] in ()]',
+    '[0 for box[[_raptor_unsupported_target for item in ()]] in ()]',
+    '[0 for box[[item for item in () if _raptor_unsupported_target]] in ()]',
+    '[0 for box[[item for item in _raptor_unsupported_target]] in ()]',
+    '[0 for box[[_raptor_unsupported_target for item in ()]] in ()]',
+    '[0 for box[[0 for other[_raptor_unsupported_target] in ()]] in ()]',
 ])
 def test_excluded_descendants_cannot_hide_in_nested_targets(expression):
     compile(expression, '<excluded-target-contract>', 'eval', dont_inherit=True)
-    node = ast.parse(expression, mode='eval').body
+    node = parse_target_refusal_fixture(expression, mode='eval').body
     assert not _child_expression_is_supported(node)
     assert _scoped_expression_loads(node) == frozenset()

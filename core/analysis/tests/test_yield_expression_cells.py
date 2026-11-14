@@ -1,6 +1,7 @@
 """Yield operands retain lexical cells without generator iteration or result proof."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 from textwrap import indent
 
 import pytest
@@ -65,9 +66,9 @@ def test_yield_parameter_masks_outer_cell(child):
 
 
 def test_unsupported_yielded_descendant_invalidates_complete_scan():
-    expression = "(yield [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])"
+    expression = "(yield [raw for box[[_raptor_unsupported_target for item in ()]] in ()])"
     compile(source_for(expression), "<yield-target-control>", "exec", dont_inherit=True)
-    node = ast.parse(expression, mode="eval").body
+    node = parse_target_refusal_fixture(expression, mode="eval").body
     assert not _child_expression_is_supported(node)
     assert _scoped_expression_loads(node) == frozenset()
 

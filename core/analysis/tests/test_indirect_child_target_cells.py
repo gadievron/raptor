@@ -1,6 +1,7 @@
 """Indirect child stores retain cells without evaluating targets or stored values."""
 
-import ast
+
+from core.analysis.tests.target_ast_helpers import parse_target_refusal_fixture
 
 import pytest
 
@@ -62,12 +63,12 @@ def test_whole_child_bindings_mask_indirect_target_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["slots[(lambda: (yield raw))()] = 0",
-                                  "for slots[(lambda: (yield raw))()] in ():\n  pass",
-                                  "first, slots[(lambda: (yield raw))()] = ()"],
+@pytest.mark.parametrize("body", ["slots[_raptor_unsupported_target] = 0",
+                                  "for slots[_raptor_unsupported_target] in ():\n  pass",
+                                  "first, slots[_raptor_unsupported_target] = ()"],
                          ids=["assignment", "loop", "unpacking"])
 def test_unsupported_target_read_invalidates_complete_body(body):
-    assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
+    assert _bounded_body_expression_loads(parse_target_refusal_fixture("raw\ndef child():\n " + body).body) is None
 
 
 def test_keyword_expansion_keeps_prior_reason():
