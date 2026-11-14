@@ -377,6 +377,8 @@ def merge_results(pack: dict, results: list[HarvestResult]) -> dict:
     for entry in pack.get("entries", []):
         name = entry.get("name")
         if isinstance(name, str) and _IDENT_RE.match(name):
+            if name in by_name:
+                raise ValueError(f"duplicate existing parser pack name: {name!r}")
             by_name[name] = {
                 "name": name,
                 "library": str(entry.get("library", "")),
