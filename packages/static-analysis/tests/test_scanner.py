@@ -1094,3 +1094,88 @@ def test_config_stage_empty_repo_report_status(tmp_path, monkeypatch, refuse_rep
         assert path is None
     else:
         assert path is not None and path.is_file()
+
+
+@pytest.mark.parametrize('nested', [False, True])
+def test_config_stage_listing_refusal_reports_failure(tmp_path, monkeypatch, nested):
+    import os
+    from core.analysis import config_resolved_findings as stage
+
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir()
+    out.mkdir()
+    denied_root = repo / 'blocked' if nested else repo
+    denied_root.mkdir(exist_ok=True)
+    (denied_root / 'Owned.java').write_text('// inert\n')
+    original = os.scandir
+    denied = []
+
+    def scoped_scandir(path):
+        if os.path.normpath(os.fspath(path)) == str(denied_root):
+            denied.append(str(path))
+            raise PermissionError('owned Java enumeration refusal')
+        return original(path)
+
+    def forbidden_parser(*args, **kwargs):
+        pytest.fail('enumeration control must not parse Java')
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    monkeypatch.setattr(stage, '_parser', forbidden_parser)
+    monkeypatch.setattr(stage, 'scan_java_source', forbidden_parser)
+    path, stats = stage.run_config_resolved_stage(repo, out)
+    assert denied
+    assert path is None
+    assert stats['stage_error'] == 1
+
+
+@pytest.mark.parametrize('relative', [False, True])
+def test_config_source_selection_preserves_glob_and_prunes_exclusions(tmp_path, monkeypatch, relative):
+    import os
+    from core.analysis import config_resolved_findings as stage
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    for name in ('Owned.java', 'UPPER.JAVA', 'literal[1].java', 'skip.txt'):
+        (repo / name).write_text('// inert\n')
+    for name in ('directory.java', '.hidden', 'build', 'out'):
+        directory = repo / name
+        directory.mkdir()
+        (directory / 'Child.java').write_text('// inert\n')
+    if relative:
+        monkeypatch.chdir(tmp_path)
+        repo = Path('repo')
+    expected = {p for p in repo.rglob('*.java')
+                if not any(part in stage._SKIP_DIR_PARTS for part in p.relative_to(repo).parts)}
+    excluded = {(repo / name).absolute() for name in ('build', 'out')}
+    original = os.scandir
+
+    def scoped_scandir(path):
+        assert Path(path).absolute() not in excluded, 'excluded subtree was enumerated'
+        return original(path)
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    assert set(stage._java_source_paths(repo)) == expected
+
+
+@pytest.mark.parametrize('count', [0, 1, 2])
+def test_config_source_cap_counts_only_eligible_entries(tmp_path, monkeypatch, count):
+    from core.analysis import config_resolved_findings as stage
+
+    repo, out = tmp_path / 'repo', tmp_path / 'out'
+    repo.mkdir()
+    out.mkdir()
+    for index in range(count):
+        (repo / f'Owned{index}.java').write_text('// inert\n')
+    (repo / 'build').mkdir()
+    (repo / 'build' / 'Ignored.java').write_text('// inert\n')
+
+    def forbidden_parser(*args, **kwargs):
+        pytest.fail('selection controls must not parse Java')
+
+    monkeypatch.setattr(stage, '_FILE_CAP', 1)
+    monkeypatch.setattr(stage, '_parser', forbidden_parser)
+    monkeypatch.setattr(stage, 'scan_java_source', forbidden_parser)
+    path, stats = stage.run_config_resolved_stage(repo, out)
+    assert path is not None
+    assert bool(stats.get('file_cap_hit')) is (count > 1)
+    assert stats.get('stage_error', 0) == 0

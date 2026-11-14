@@ -25,7 +25,10 @@ metadata carries ``external/cwe/cwe-N`` tags for the shared parser.
 from __future__ import annotations
 
 import logging
+import fnmatch
+import os
 from collections import Counter
+from collections.abc import Iterator
 from pathlib import Path
 
 from core.json import save_json
@@ -236,6 +239,23 @@ def to_sarif(findings: list[dict], repo_root: str) -> dict:
     )
 
 
+def _java_source_paths(repo_path: Path) -> Iterator[Path]:
+    """List eligible entries without hiding enumeration errors or walking exclusions."""
+    def refuse_walk_error(error):
+        raise error
+
+    for directory, dirnames, filenames in os.walk(
+        repo_path, followlinks=False, onerror=refuse_walk_error,
+    ):
+        dirnames[:] = [name for name in dirnames if name not in _SKIP_DIR_PARTS]
+        # Preserve glob's matching directory entries as well as regular files;
+        # the contained reader remains responsible for refusing non-files.
+        for entries in (filenames, dirnames):
+            for name in entries:
+                if fnmatch.fnmatch(name, "*.java"):
+                    yield Path(directory) / name
+
+
 def run_config_resolved_stage(
         repo_path: Path, out_dir: Path) -> tuple[Path | None, dict]:
     """Scan the repo, write ``config-resolved.sarif`` into ``out_dir``.
@@ -248,7 +268,7 @@ def run_config_resolved_stage(
     findings: list[dict] = []
     try:
         java_files: list[Path] = []
-        for p in repo_path.rglob("*.java"):
+        for p in _java_source_paths(repo_path):
             # Relative to the repo root: the checkout's own parent
             # dirs (a corpus under out/, build/, ...) must not veto
             # the scan.
