@@ -442,7 +442,8 @@ def _validated_expression_targets(
 
     Target address expressions have their own closed grammar. The flag
     follows all descendants, including nested comprehension scopes. Writes
-    must belong to a lambda body; yields remain excluded from target reads.
+    and yield-from operands must belong to a lambda body; ordinary yields
+    remain excluded from target reads.
     """
     targets: dict[ast.AST, tuple[frozenset[str], tuple[ast.expr, ...]]] = {}
     if expression is None:
@@ -452,8 +453,8 @@ def _validated_expression_targets(
     pending: list[tuple[ast.AST, bool, bool]] = [(expression, target_read, False)]
     while pending:
         node, target_read, lambda_body = pending.pop()
-        if target_read and (isinstance(node, (ast.Yield, ast.YieldFrom))
-                            or isinstance(node, ast.NamedExpr) and not lambda_body):
+        if target_read and (isinstance(node, ast.Yield)
+                            or isinstance(node, (ast.NamedExpr, ast.YieldFrom)) and not lambda_body):
             return None
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
