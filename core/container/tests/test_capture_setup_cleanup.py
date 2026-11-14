@@ -1,5 +1,6 @@
 """Partial capture setup retires owned pipes and reports failures to callers."""
 
+from contextlib import ExitStack
 import errno
 import os
 import subprocess
@@ -38,10 +39,18 @@ def capture_fault(monkeypatch):
             if stage == f"pipe{pipe_calls}":
                 raise error
             pair = real_pipe()
-            for index, fd in enumerate(pair):
-                info = os.fstat(fd)
-                pipes.append((fd, (info.st_dev, info.st_ino), index == 1))
-            return pair
+            with ExitStack() as setup:
+                for fd in pair:
+                    setup.callback(os.close, fd)
+                registered = len(pipes)
+                setup.callback(pipes.__delitem__, slice(registered, None))
+                records = []
+                for index, fd in enumerate(pair):
+                    info = os.fstat(fd)
+                    records.append((fd, (info.st_dev, info.st_ino), index == 1))
+                pipes.extend(records)
+                setup.pop_all()
+                return pair
 
         def close(fd):
             os.close(fd)
