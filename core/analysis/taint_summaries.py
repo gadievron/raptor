@@ -1156,7 +1156,13 @@ def _function_reflective_readers(
                 # Scoped reads mask lambda-owned names; this is only negative
                 # provenance, never proof of the resulting callable's identity.
                 readers.add(parameter.arg)
-    body_view = ast.Module(body=list(fn_ast.body), type_ignores=[])
+    return _body_reflective_readers(fn_ast.body, frozenset(readers))
+
+
+def _body_reflective_readers(body: list[ast.stmt], inherited: frozenset[str]) -> frozenset[str]:
+    """Existing flow-insensitive body alias facts without default binding."""
+    readers = set(inherited)
+    body_view = ast.Module(body=list(body), type_ignores=[])
     readers.update(_module_callable_aliases(
         body_view, module_names=frozenset({"builtins"}),
         attributes=("getattr", "hasattr"), direct_names=tuple(readers),
@@ -1164,7 +1170,7 @@ def _function_reflective_readers(
     # Computed local values can retain a reader just like defaults. These
     # edges carry only negative callable provenance, never module identities.
     assignments: dict[str, set[str]] = {}
-    pending: list[ast.AST] = list(fn_ast.body)
+    pending: list[ast.AST] = list(body)
     while pending:
         node = pending.pop()
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
@@ -1231,8 +1237,8 @@ def _literal_star_lambda_arguments(arguments: list[ast.expr]) -> tuple[ast.expr,
     return tuple(expanded)
 
 
-def _local_function_return_expression(node: ast.AST) -> ast.expr | None:
-    """Closed source-body boundary for additional negative function candidates."""
+def _local_function_body_reads(node: ast.AST) -> frozenset[str] | None:
+    """Existing bounded lexical reads, never function effects or return flow."""
     if (not isinstance(node, ast.FunctionDef) or node.decorator_list
             or getattr(node, "type_params", ()) or getattr(node, "returns", None) is not None
             or getattr(node, "type_comment", None)):
@@ -1243,18 +1249,10 @@ def _local_function_return_expression(node: ast.AST) -> ast.expr | None:
     if any(getattr(arg, "annotation", None) is not None
            or getattr(arg, "type_comment", None) for arg in parameters):
         return None
-    statements = node.body
-    if (statements and isinstance(statements[0], ast.Expr)
-            and isinstance(statements[0].value, ast.Constant)
-            and isinstance(statements[0].value.value, str)):
-        statements = statements[1:]
-    if (len(statements) != 1 or not isinstance(statements[0], ast.Return)
-            or statements[0].value is None):
+    body = ast.Module(body=list(node.body), type_ignores=[])
+    if any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(body)):
         return None
-    expression = statements[0].value
-    if any(isinstance(child, (ast.Yield, ast.YieldFrom)) for child in ast.walk(expression)):
-        return None
-    return expression
+    return _bounded_body_expression_loads(node.body)
 
 
 def _source_callable_retains_reflective_reader(
@@ -1266,9 +1264,9 @@ def _source_callable_retains_reflective_reader(
     Actual arguments use call-site candidates. Saved defaults and free body
     names use their defining frame; neither context grants trusted identity.
     """
-    expression = (prototype.body if isinstance(prototype, ast.Lambda)
-                  else _local_function_return_expression(prototype))
-    if expression is None:
+    body_reads = (_scoped_expression_loads(prototype.body) if isinstance(prototype, ast.Lambda)
+                  else _local_function_body_reads(prototype))
+    if body_reads is None:
         return False
     args = prototype.args
     definition_candidates = inherited if defining is None else defining
@@ -1316,7 +1314,10 @@ def _source_callable_retains_reflective_reader(
         parameters.add(args.vararg.arg)
     if args.kwarg is not None:
         parameters.add(args.kwarg.arg)
-    readers = definition_candidates - parameters
+    own_bindings = (local_binding_names(prototype) if isinstance(prototype, ast.FunctionDef)
+                    else frozenset(parameters))
+    readers = (definition_candidates - own_bindings if isinstance(prototype, ast.Lambda)
+               else frozenset())
     if args.kwarg is not None and any(
         _attribute_chain_str(value) in inherited or _scoped_expression_loads(value) & inherited
         for value in collected_keywords
@@ -1333,7 +1334,18 @@ def _source_callable_retains_reflective_reader(
     readers |= frozenset(name for name, value in values.items()
                          if _attribute_chain_str(value) in origins[name]
                          or _scoped_expression_loads(value) & origins[name])
-    return bool(_scoped_expression_loads(expression) & readers)
+    if body_reads & readers:
+        return True
+    if isinstance(prototype, ast.FunctionDef):
+        # Lexical acquisition alone is not consumption. Preserve body alias
+        # facts, but require a return, call or potentially dispatching use for
+        # free defining-frame readers. Parameter retention remains separate.
+        free_readers = _body_reflective_readers(prototype.body, definition_candidates - own_bindings)
+        return _comprehension_retains_reflective_reader(
+            ast.Module(body=list(prototype.body), type_ignores=[]),
+            free_readers, free_body_readers=True,
+        )
+    return False
 
 
 def _immediate_lambda_retains_reflective_reader(
@@ -1349,7 +1361,7 @@ def _immediate_lambda_retains_reflective_reader(
 def _comprehension_retains_reflective_reader(
     node: ast.AST, inherited: frozenset[str], *, immediate_lambdas: bool = False,
     local_lambdas: dict[str, frozenset[ast.Lambda | ast.FunctionDef]] | None = None,
-    defining: frozenset[str] | None = None,
+    defining: frozenset[str] | None = None, free_body_readers: bool = False,
 ) -> bool:
     """Recognise negative retention while preserving local expression scopes.
 
@@ -1360,6 +1372,42 @@ def _comprehension_retains_reflective_reader(
     pending = [(node, inherited, frozenset())]
     while pending:
         current, candidates, callback_masks = pending.pop()
+        if free_body_readers:
+            # Free origins require a consumption or escape root. Loading a
+            # reader into an otherwise unused local is not itself a call.
+            expressions: list[ast.expr | None] = []
+            if isinstance(current, ast.Call):
+                expressions.append(current)
+            elif isinstance(current, ast.Return):
+                expressions.append(current.value)
+            elif isinstance(current, (ast.Attribute, ast.Subscript, ast.UnaryOp, ast.BinOp,
+                                      ast.BoolOp, ast.Compare, ast.IfExp, ast.JoinedStr,
+                                      ast.FormattedValue, ast.Starred)):
+                expressions.append(current)
+            elif isinstance(current, (ast.If, ast.While, ast.Assert)):
+                expressions.append(current.test)
+                if isinstance(current, ast.Assert):
+                    expressions.append(current.msg)
+            elif isinstance(current, (ast.For, ast.AsyncFor)):
+                expressions.append(current.iter)
+            elif isinstance(current, ast.Match):
+                expressions.append(current.subject)
+            elif isinstance(current, ast.MatchClass):
+                expressions.append(current.cls)
+            elif isinstance(current, ast.withitem):
+                expressions.append(current.context_expr)
+            elif isinstance(current, ast.Raise):
+                expressions.extend((current.exc, current.cause))
+            elif isinstance(current, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                targets = current.targets if isinstance(current, ast.Assign) else [current.target]
+                if not all(isinstance(target, ast.Name) for target in targets):
+                    expressions.append(current.value)
+                for target in targets:
+                    scope = _scoped_statement_target_scope(target)
+                    if scope is not None and scope[1] & candidates:
+                        return True
+            if any(_scoped_expression_loads(expression) & candidates for expression in expressions):
+                return True
         if (local_lambdas is not None and isinstance(current, ast.Call)
                 and isinstance(current.func, ast.Name) and current.func.id not in callback_masks):
             for prototype in local_lambdas.get(current.func.id, ()):
@@ -1395,7 +1443,7 @@ def _comprehension_retains_reflective_reader(
             zip(current.generators, scopes, strict=True)
         ):
             iterable_candidates = candidates if index == 0 else (candidates - bound) | local_readers
-            if (not immediate_lambdas and local_lambdas is None and index
+            if (not immediate_lambdas and local_lambdas is None and not free_body_readers and index
                     and _scoped_expression_loads(generator.iter) & local_readers):
                 return True
             iterable_masks = callback_masks if index == 0 else callback_masks | bound
@@ -1404,14 +1452,14 @@ def _comprehension_retains_reflective_reader(
                 local_readers.update(names)
             body_candidates = (candidates - bound) | local_readers
             for expression in (*reads, *generator.ifs):
-                if (not immediate_lambdas and local_lambdas is None
+                if (not immediate_lambdas and local_lambdas is None and not free_body_readers
                     and _scoped_expression_loads(expression) & local_readers):
                     return True
                 pending.append((expression, frozenset(body_candidates), callback_masks | bound))
         payload = ([current.key, current.value] if isinstance(current, ast.DictComp)
                    else [current.elt])
         for expression in payload:
-            if (not immediate_lambdas and local_lambdas is None
+            if (not immediate_lambdas and local_lambdas is None and not free_body_readers
                     and _scoped_expression_loads(expression) & local_readers):
                 return True
             pending.append((expression, frozenset((candidates - bound) | local_readers), callback_masks | bound))
@@ -1428,7 +1476,7 @@ def _function_local_callable_candidates(fn_ast: ast.AST) -> dict[str, frozenset[
     while pending:
         node = pending.pop()
         if isinstance(node, ast.FunctionDef):
-            if _local_function_return_expression(node) is not None:
+            if _local_function_body_reads(node) is not None:
                 candidates.setdefault(node.name, set()).add(node)
             continue
         if isinstance(node, (ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):

@@ -156,7 +156,7 @@ def test_named_alias_cycles_keep_finite_source_candidates():
     'def consume(read: object):\n    return read(obj, field)\n',
     'def consume(read) -> object:\n    return read(obj, field)\n',
     'async def consume(read):\n    return read(obj, field)\n',
-    'def consume(read):\n    pass\n    return read(obj, field)\n',
+    'def consume(read):\n    try:\n        return read(obj, field)\n    except Exception as caught:\n        return caught\n',
     'def consume(read):\n    return (yield read(obj, field))\n',
     'def consume[T](read):\n    return read(obj, field)\n',
 ])
