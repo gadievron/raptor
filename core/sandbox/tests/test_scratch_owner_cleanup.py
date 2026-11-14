@@ -200,19 +200,20 @@ def test_concurrent_host_cleanup_removes_tree_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(host, "rmtree_hardened", remove)
     workers = [threading.Thread(target=instance._cleanup_owned_output) for _ in range(2)]
-    try:
-        workers[0].start()
-        assert entered.wait(3)
-        workers[1].start()
-    finally:
-        release.set()
-        for worker in workers:
-            if worker.ident is not None:
-                worker.join(timeout=3)
-    assert not any(worker.is_alive() for worker in workers)
-    assert calls == [str(path)]
-    assert instance._owned_output is None
-    assert not path.exists()
+    with retiring_threads(workers, release=release.set, timeout=3):
+        try:
+            workers[0].start()
+            assert entered.wait(3)
+            workers[1].start()
+        finally:
+            release.set()
+            for worker in workers:
+                if worker.ident is not None:
+                    worker.join(timeout=3)
+        assert not any(worker.is_alive() for worker in workers)
+        assert calls == [str(path)]
+        assert instance._owned_output is None
+        assert not path.exists()
 
 
 @pytest.mark.parametrize("keep", [False, True])
