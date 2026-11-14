@@ -621,20 +621,44 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
 
 
 def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
-    """Known lexical reads in a complete, non-recursive child statement grammar."""
+    """Known lexical reads through a closed child grammar and nested function scopes."""
     if not body:
         return None
-    expressions: list[ast.expr | None] = []
-    target_reads: set[str] = set()
-    pending = list(reversed(body))
+    operations: list[ast.expr | _ExpressionScopeEvent | None] = []
+    pending: list[ast.stmt | _ExpressionScopeEvent] = list(reversed(body))
     while pending:
         statement = pending.pop()
-        if isinstance(statement, (ast.Expr, ast.Return)):
-            expressions.append(statement.value)
+        if isinstance(statement, _ExpressionScopeEvent):
+            operations.append(statement)
+            continue
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            child_body = statement.body
+            if (child_body and isinstance(child_body[0], ast.Expr)
+                    and isinstance(child_body[0].value, ast.Constant)
+                    and isinstance(child_body[0].value.value, str)):
+                child_body = child_body[1:]
+            if not child_body:
+                return None
+            args = statement.args
+            parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+            parameters.extend(arg for arg in (args.vararg, args.kwarg) if arg is not None)
+            if (statement.decorator_list or statement.type_params
+                    or statement.returns is not None
+                    or any(parameter.annotation is not None for parameter in parameters)):
+                return None
+            # Defaults run in the defining frame, before child bindings.
+            operations.extend(args.defaults)
+            operations.extend(default for default in args.kw_defaults if default is not None)
+            bindings = local_binding_names(statement)
+            pending.append(_ExpressionScopeEvent(bindings, False))
+            pending.extend(reversed(child_body))
+            pending.append(_ExpressionScopeEvent(bindings, True))
+        elif isinstance(statement, (ast.Expr, ast.Return)):
+            operations.append(statement.value)
         elif isinstance(statement, ast.Raise):
-            expressions.extend((statement.exc, statement.cause))
+            operations.extend((statement.exc, statement.cause))
         elif isinstance(statement, ast.Assert):
-            expressions.extend((statement.test, statement.msg))
+            operations.extend((statement.test, statement.msg))
         elif isinstance(statement, (ast.Import, ast.ImportFrom)):
             if (any(alias.name == "*" for alias in statement.names)
                     or isinstance(statement, ast.ImportFrom) and statement.module == "__future__"):
@@ -647,10 +671,10 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
                 return None
             for reads in pattern_reads:
                 if reads is not None:
-                    target_reads.update(reads)
-            expressions.append(statement.subject)
+                    operations.append(_ExpressionScopeEvent(frozenset(), True, reads))
+            operations.append(statement.subject)
             for case in reversed(statement.cases):
-                expressions.append(case.guard)
+                operations.append(case.guard)
                 pending.extend(reversed(case.body))
         elif isinstance(statement, (ast.Try, ast.TryStar)):
             if any(handler.name is not None for handler in statement.handlers):
@@ -658,28 +682,28 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             pending.extend(reversed(statement.finalbody))
             pending.extend(reversed(statement.orelse))
             for handler in reversed(statement.handlers):
-                expressions.append(handler.type)
+                operations.append(handler.type)
                 pending.extend(reversed(handler.body))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, (ast.With, ast.AsyncWith)):
             for item in statement.items:
-                expressions.append(item.context_expr)
+                operations.append(item.context_expr)
                 if item.optional_vars is not None:
                     scope = _comprehension_target_scope(
                         item.optional_vars, require_scope_free_reads=True
                     )
                     if scope is None:
                         return None
-                    target_reads.update(scope[1])
+                    operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Delete):
             for target in statement.targets:
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
                 if scope is None:
                     return None
-                target_reads.update(scope[1])
+                operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
         elif isinstance(statement, (ast.If, ast.While)):
-            expressions.append(statement.test)
+            operations.append(statement.test)
             pending.extend(reversed(statement.orelse))
             pending.extend(reversed(statement.body))
         elif isinstance(statement, (ast.Assign, ast.AugAssign, ast.AnnAssign, ast.For, ast.AsyncFor)):
@@ -692,20 +716,35 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
                 scope = _comprehension_target_scope(target, require_scope_free_reads=True)
                 if scope is None:
                     return None
-                target_reads.update(scope[1])
+                operations.append(_ExpressionScopeEvent(frozenset(), True, scope[1]))
             if isinstance(statement, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                expressions.append(statement.value)
+                operations.append(statement.value)
             else:
-                expressions.append(statement.iter)
+                operations.append(statement.iter)
                 pending.extend(reversed(statement.orelse))
                 pending.extend(reversed(statement.body))
         elif not isinstance(statement, (ast.Pass, ast.Break, ast.Continue)):
             return None
-    if not all(_child_expression_is_supported(expression) for expression in expressions):
+    if not all(isinstance(operation, _ExpressionScopeEvent)
+               or _child_expression_is_supported(operation) for operation in operations):
         return None
-    names = target_reads
-    for expression in expressions:
-        names.update(_scoped_expression_loads(expression))
+    names: set[str] = set()
+    bound: dict[str, int] = {}
+    for operation in operations:
+        if isinstance(operation, _ExpressionScopeEvent):
+            if operation.enter:
+                for name in operation.bindings:
+                    bound[name] = bound.get(name, 0) + 1
+                names.update(name for name in operation.reads if name not in bound)
+            else:
+                for name in operation.bindings:
+                    count = bound[name] - 1
+                    if count:
+                        bound[name] = count
+                    else:
+                        del bound[name]
+        else:
+            names.update(name for name in _scoped_expression_loads(operation) if name not in bound)
     return frozenset(names)
 
 
