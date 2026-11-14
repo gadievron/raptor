@@ -642,11 +642,12 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             args = statement.args
             parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
             parameters.extend(arg for arg in (args.vararg, args.kwarg) if arg is not None)
-            if (statement.decorator_list or statement.type_params
+            if (statement.type_params
                     or statement.returns is not None
                     or any(parameter.annotation is not None for parameter in parameters)):
                 return None
-            # Defaults run in the defining frame, before child bindings.
+            # Decorators and defaults run before child bindings are entered.
+            operations.extend(statement.decorator_list)
             operations.extend(args.defaults)
             operations.extend(default for default in args.kw_defaults if default is not None)
             bindings = local_binding_names(statement)
@@ -774,15 +775,16 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 parameters.append(args.vararg)
             if args.kwarg is not None:
                 parameters.append(args.kwarg)
-            if (statement.decorator_list or statement.type_params
+            if (statement.type_params
                     or statement.returns is not None
                     or any(parameter.annotation is not None for parameter in parameters)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
-            if not all(_child_expression_is_supported(default) for default in defaults):
+            header_reads = [*statement.decorator_list, *defaults]
+            if not all(_child_expression_is_supported(expression) for expression in header_reads):
                 return None
-            # Defaults belong to the enclosing scope, before child parameters.
-            expressions.extend(defaults)
+            # Header expressions belong to the defining frame, before child parameters.
+            expressions.extend(header_reads)
             child_reads = _bounded_child_body_expression_loads(child_body)
             if child_reads is None:
                 return None
