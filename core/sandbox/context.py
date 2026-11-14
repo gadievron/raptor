@@ -9822,6 +9822,10 @@ def _reopen_write_only(fd: int, flags: int) -> "int | None":
                 return wfd
         except OSError:
             pass
+        except BaseException:
+            with suppress(BaseException):
+                os.close(wfd)
+            raise
         os.close(wfd)
     getpath = getattr(_fcntl, "F_GETPATH", None)
     if getpath is None:
@@ -9840,6 +9844,10 @@ def _reopen_write_only(fd: int, flags: int) -> "int | None":
             return cand
     except OSError:
         pass
+    except BaseException:
+        with suppress(BaseException):
+            os.close(cand)
+        raise
     os.close(cand)
     return None
 
