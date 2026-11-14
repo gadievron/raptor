@@ -430,7 +430,12 @@ def format_evidence_prose(
                         )
         if hasattr(ts, "summary_unknown") and ts.summary_unknown:
             lines.append(
-                "- taint summary incomplete (dynamic dispatch) — "
+                "- taint summary incomplete — "
+                "don't trust absence"
+            )
+        elif hasattr(ts, "summary_unconverged") and ts.summary_unconverged:
+            lines.append(
+                "- taint summary did not converge — "
                 "don't trust absence"
             )
 
