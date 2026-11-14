@@ -731,10 +731,13 @@ class TestEnableIsThreadSafe:
                 errors.append(exc)
 
         threads = [threading.Thread(target=call) for _ in range(2)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join(timeout=30)
+        from core.testing.threads import retiring_threads
+
+        with retiring_threads(threads, release=barrier.abort, timeout=30):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
         assert errors == []
         # The enable transition ran one caller at a time.
         assert max_concurrent == 1
