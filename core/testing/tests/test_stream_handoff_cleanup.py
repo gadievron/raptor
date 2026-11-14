@@ -1,6 +1,6 @@
 """File-wrapper setup owns descriptors until successful handoff."""
 
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager, suppress, ExitStack
 import errno
 import importlib
 import os
@@ -51,7 +51,12 @@ def test_descriptor_argument_failure_closes_duplicate(
         real_dup = os.dup
 
         def dup(fd):
-            return record(real_dup(fd))
+            duplicate = real_dup(fd)
+            with ExitStack() as setup:
+                setup.callback(os.close, duplicate)
+                registered = record(duplicate)
+                setup.pop_all()
+                return registered
 
         def fail(*args, **kwargs):
             raise error("injected descriptor handoff failure")
