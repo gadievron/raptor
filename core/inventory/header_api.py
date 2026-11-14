@@ -22,12 +22,13 @@ ZEXTERN), __attribute__ annotations, and multi-line declarations.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 import re
 from pathlib import Path
 
-from core.source.streams import preserving_stream_error
+from core.source import read_bytes_capped
 
 logger = logging.getLogger(__name__)
 
@@ -175,8 +176,11 @@ def scan_public_api(
             try:
                 if fpath.stat().st_size > 1_048_576:  # 1 MB cap
                     continue
-                with preserving_stream_error(Path(fpath).open(encoding="utf-8", errors="replace")) as f:
-                    content = f.read()
+                got = read_bytes_capped(fpath, 1_048_576)
+                if got is None or got[1]:
+                    continue
+                with io.TextIOWrapper(io.BytesIO(got[0]), encoding="utf-8", errors="replace") as stream:
+                    content = stream.read()
             except OSError:
                 continue
 
