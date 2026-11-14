@@ -184,7 +184,7 @@ def _stamp_errors(stamp: Any, path: str = "provenance") -> list[str]:
 def _check_dict(data: dict, path: str = "") -> tuple[str, list[str]]:
     prefix = f"{path}." if path else ""
     stamp = data.get(PROVENANCE_KEY)
-    if stamp is None:
+    if PROVENANCE_KEY not in data:
         if SCHEMA_VERSION_KEY in data:
             return STATUS_INVALID, [
                 (
