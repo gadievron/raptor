@@ -1418,6 +1418,8 @@ class LLMDispatcher:
         token_ttl_s: int | None = None,
         token_budget: int | None = None,
         creds: CredentialStore | None = None,
+        rules: dict[str, ProviderRule] | None = None,
+        generation_routes: dict[str, str] | None = None,
     ) -> None:
         self.run_id = run_id
         # TTL/budget resolution order: explicit caller arg →
@@ -1442,8 +1444,31 @@ class LLMDispatcher:
             )
         )
 
-        self._creds = creds or CredentialStore()
-        self._rules: dict[str, ProviderRule] = build_rules(self._creds)
+        self._generation_routes = None
+        if generation_routes is not None:
+            if (rules is None or set(generation_routes) != set(rules) or not generation_routes
+                    or any(name not in ("anthropic", "gemini")
+                           or not isinstance(model, str) or not model or len(model) > 256
+                           or not model[0].isascii() or not model[0].isalnum()
+                           or any(not char.isascii() or not (char.isalnum() or char in "._-")
+                                  for char in model)
+                           for name, model in generation_routes.items())):
+                raise ValueError("Generation routes require explicit native-provider rules and model identifiers")
+            self._generation_routes = dict(generation_routes)
+        if rules is not None:
+            if creds is not None or not rules or any(
+                not isinstance(rule, ProviderRule) or name != rule.name
+                for name, rule in rules.items()
+            ):
+                raise ValueError("Explicit dispatcher rules must be nonempty and cannot accompany credentials")
+            # Trusted bootstrap supplies only the selected provider. Do not
+            # discover or consume ambient credentials for unrelated providers.
+            from dataclasses import replace
+            self._creds = None
+            self._rules = {name: replace(rule) for name, rule in rules.items()}
+        else:
+            self._creds = creds or CredentialStore()
+            self._rules: dict[str, ProviderRule] = build_rules(self._creds)
 
         # Pooled clients for the forwarding leg, shared by every
         # request (httpx.Client is thread-safe). Building a client
@@ -2781,6 +2806,17 @@ def _make_request_handler(
             return self.rfile.read(content_length) if content_length else b""
 
         def _dispatch(self) -> None:
+            if dispatcher._generation_routes is not None:
+                # Dedicated ask plane: no renewal, child minting, account API,
+                # model discovery or alternate operation is reachable at all.
+                allowed = set()
+                for provider, model in dispatcher._generation_routes.items():
+                    base = ("/anthropic/v1/messages" if provider == "anthropic" else
+                            f"/gemini/v1beta/models/{model}:generateContent")
+                    allowed.update((base, base + "?alt=json", base + "?$alt=json"))
+                if self.command != "POST" or self.path not in allowed:
+                    self._send_simple(403, "operation is outside the configured generation route")
+                    return
             # ---- L3+L4 — token check (pre-body: nothing is read
             # from the wire beyond headers until the token clears) ----
             token = self._presented_token()
@@ -2954,6 +2990,26 @@ def _make_request_handler(
             body = self._read_body(_provider_max_body_bytes())
             if body is None:
                 return
+
+            if dispatcher._generation_routes is not None:
+                def unique_fields(pairs):
+                    result = {}
+                    for key, value in pairs:
+                        if key in result:
+                            raise ValueError("duplicate field")
+                        result[key] = value
+                    return result
+
+                expected_model = dispatcher._generation_routes.get(provider_name)
+                try:
+                    payload = json.loads(body, object_pairs_hook=unique_fields)
+                    if (type(payload) is not dict or expected_model is None
+                            or provider_name == "anthropic" and payload.get("model") != expected_model
+                            or "model" in payload and payload["model"] != expected_model):
+                        raise ValueError("model mismatch")
+                except (ValueError, TypeError, UnicodeError, RecursionError):
+                    self._send_simple(403, "body is outside the configured generation route")
+                    return
 
             method = self.command
 
