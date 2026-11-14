@@ -64,7 +64,7 @@ def test_whole_child_bindings_mask_loop_reads(header, body):
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("body", ["for raw.member in ():\n  pass",
+@pytest.mark.parametrize("body", ["for obj[(lambda: raw)()] in ():\n  pass",
                                   "while raw:\n  break\n  import module",
                                   "for item in ():\n  pass\n else:\n  global other"],
                          ids=["indirect-target", "declaration-after-break", "else-global"])
