@@ -705,8 +705,10 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
             parameters.extend(arg for arg in (args.vararg, args.kwarg) if arg is not None)
             if (statement.type_params
-                    or statement.returns is not None
-                    or any(parameter.annotation is not None for parameter in parameters)):
+                    or statement.returns is not None and not isinstance(statement.returns, ast.Constant)
+                    or any(parameter.annotation is not None
+                           and not isinstance(parameter.annotation, ast.Constant)
+                           for parameter in parameters)):
                 return None
             # Decorators and defaults run before child bindings are entered.
             operations.extend(statement.decorator_list)
@@ -836,8 +838,10 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             if args.kwarg is not None:
                 parameters.append(args.kwarg)
             if (statement.type_params
-                    or statement.returns is not None
-                    or any(parameter.annotation is not None for parameter in parameters)):
+                    or statement.returns is not None and not isinstance(statement.returns, ast.Constant)
+                    or any(parameter.annotation is not None
+                           and not isinstance(parameter.annotation, ast.Constant)
+                           for parameter in parameters)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
             header_reads = [*statement.decorator_list, *defaults]
