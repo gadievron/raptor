@@ -32,6 +32,7 @@ import os
 import re
 import subprocess
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -179,6 +180,14 @@ def _pack_roots(pack: str) -> list[Path]:
     return roots
 
 
+def _iter_pack_query_paths(root: Path) -> Iterator[Path]:
+    """Retain paths yielded before a root becomes unavailable."""
+    try:
+        yield from root.rglob("*.ql")
+    except OSError:
+        return
+
+
 def _index_pack(pack: str) -> dict[str, str] | None:
     """Build the ``@id`` → path index for *pack* (None: not found)."""
     roots = _pack_roots(pack)
@@ -187,7 +196,7 @@ def _index_pack(pack: str) -> dict[str, str] | None:
     index: dict[str, str] = {}
     seen_files = 0
     for root in roots:
-        for ql in root.rglob("*.ql"):
+        for ql in _iter_pack_query_paths(root):
             seen_files += 1
             if seen_files > _MAX_PACK_FILES:
                 logger.warning(
