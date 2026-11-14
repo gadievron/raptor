@@ -61,7 +61,7 @@ def test_unsupported_child_pattern_invalidates_complete_scan(pattern):
 
 
 @pytest.mark.parametrize("body", ["match raw:\n case _:\n  global other",
-                                  "match (yield [raw for box[(lambda: raw)()] in ()]):\n case _:\n  return 0"],
+                                  "match (yield [raw for box[[raw for item in ()]] in ()]):\n case _:\n  return 0"],
                          ids=["unsupported-body", "unsupported-scoped-subject"])
 def test_unsupported_child_match_invalidates_complete_scan(body):
     source = child_source(body)

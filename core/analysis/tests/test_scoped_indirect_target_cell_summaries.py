@@ -62,7 +62,7 @@ def test_binding_only_mode_still_rejects_supported_store_expression():
 
 
 def test_unsupported_index_still_aborts_new_scoped_scan():
-    expression = ast.parse("lambda: [raw for target[(lambda: 0)()] in ()]", mode="eval").body
+    expression = ast.parse("lambda: [raw for target[[0 for item in ()]] in ()]", mode="eval").body
     assert not _scoped_expression_loads(expression)
 
 

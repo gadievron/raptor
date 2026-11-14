@@ -65,7 +65,7 @@ def test_enclosing_unreachable_binding_masks_default_cell():
     assert not result.summary_unknown
 
 
-@pytest.mark.parametrize("header", ["first=raw, second=[raw for slots[(lambda: raw)()] in ()]", "first=raw, *, second=[raw for slots[(lambda: raw)()] in ()]"],
+@pytest.mark.parametrize("header", ["first=raw, second=[raw for slots[[raw for item in ()]] in ()]", "first=raw, *, second=[raw for slots[[raw for item in ()]] in ()]"],
                          ids=["positional", "keyword"])
 def test_unsupported_later_default_invalidates_complete_body(header):
     source = f"raw\ndef child({header}):\n return first"

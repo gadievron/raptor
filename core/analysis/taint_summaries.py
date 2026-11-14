@@ -383,24 +383,12 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
-def _comprehension_target_scope(
-    target: ast.AST,
-    *,
-    allow_indirect_stores: bool = True,
-    require_scope_free_reads: bool = False,
-) -> tuple[frozenset[str], frozenset[str]] | None:
-    """Bare bindings and known scope-free reads for supported target stores.
-
-    Attribute/subscript bases and indices are reads, not bindings. Unsupported
-    read expressions contribute nothing; this does not certify their absence.
-    Unsupported target structures return None. Binding-only consumers can
-    reject indirect stores rather than rely on partial expression reads.
-    Strict consumers can instead require all target read expressions to fit
-    the scope-free grammar before using the returned reads.
-    """
+def _comprehension_target_parts(
+    target: ast.AST, *, allow_indirect_stores: bool = True,
+) -> tuple[frozenset[str], tuple[ast.expr, ...]] | None:
+    """Bare target bindings and read expressions, without entering their scopes."""
     names: set[str] = set()
-    reads: set[str] = set()
-    allowed = _scope_free_expression_nodes() if require_scope_free_reads else ()
+    parts: list[ast.expr] = []
     pending = [target]
     while pending:
         node = pending.pop()
@@ -413,16 +401,49 @@ def _comprehension_target_scope(
         elif isinstance(node, (ast.Attribute, ast.Subscript)):
             if not allow_indirect_stores:
                 return None
-            parts = [node.value] + ([node.slice] if isinstance(node, ast.Subscript) else [])
-            for part in parts:
-                if require_scope_free_reads and not all(
-                    isinstance(child, allowed) for child in ast.walk(part)
-                ):
-                    return None
-                reads.update(_scope_free_expression_loads(part))
+            parts.append(node.value)
+            if isinstance(node, ast.Subscript):
+                parts.append(node.slice)
         else:
             return None
-    return frozenset(names), frozenset(reads)
+    return frozenset(names), tuple(parts)
+
+
+def _comprehension_target_scope(
+    target: ast.AST,
+    *,
+    allow_indirect_stores: bool = True,
+    require_scope_free_reads: bool = False,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Bare bindings and known scope-free reads for supported target stores.
+
+    Attribute/subscript bases and indices are reads, not bindings. Unsupported
+    read expressions contribute nothing here; this does not certify absence.
+    Strict consumers require every part to fit the scope-free grammar.
+    """
+    scope = _comprehension_target_parts(target, allow_indirect_stores=allow_indirect_stores)
+    if scope is None:
+        return None
+    allowed = _scope_free_expression_nodes() if require_scope_free_reads else ()
+    reads: set[str] = set()
+    for part in scope[1]:
+        if require_scope_free_reads and not all(isinstance(node, allowed) for node in ast.walk(part)):
+            return None
+        reads.update(_scope_free_expression_loads(part))
+    return scope[0], frozenset(reads)
+
+
+def _scoped_comprehension_target_parts(
+    target: ast.AST,
+) -> tuple[frozenset[str], tuple[ast.expr, ...]] | None:
+    """Target read expressions in a closed lambda-aware grammar."""
+    scope = _comprehension_target_parts(target)
+    if scope is None:
+        return None
+    allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg)
+    if not all(isinstance(node, allowed) for part in scope[1] for node in ast.walk(part)):
+        return None
+    return scope
 
 
 def _lambda_body_bindings(body: ast.expr) -> frozenset[str] | None:
@@ -503,13 +524,13 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             if not node.generators:
                 return frozenset()
             scopes = [
-                _comprehension_target_scope(gen.target, require_scope_free_reads=True)
+                _scoped_comprehension_target_parts(gen.target)
                 for gen in node.generators
             ]
             if any(scope is None for scope in scopes):
                 return frozenset()
             bindings = frozenset(name for scope in scopes if scope is not None for name in scope[0])
-            reads = frozenset(name for scope in scopes if scope is not None for name in scope[1])
+            read_parts = [part for scope in scopes if scope is not None for part in scope[1]]
             pending.append(node.generators[0].iter)
             pending.append(_ExpressionScopeEvent(bindings, False))
             for index, gen in enumerate(node.generators):
@@ -518,7 +539,8 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
                 pending.extend(gen.ifs)
             payload = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
             pending.extend(payload)
-            pending.append(_ExpressionScopeEvent(bindings, True, reads))
+            pending.extend(read_parts)
+            pending.append(_ExpressionScopeEvent(bindings, True))
         elif isinstance(node, ast.Await):
             pending.append(node.value)
         elif isinstance(node, (ast.Yield, ast.YieldFrom)):
@@ -547,9 +569,8 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
             return False
         if isinstance(node, ast.NamedExpr) and not isinstance(node.target, ast.Name):
             return False
-        if isinstance(node, ast.comprehension) and _comprehension_target_scope(
-            node.target, require_scope_free_reads=True
-        ) is None:
+        if (isinstance(node, ast.comprehension)
+                and _scoped_comprehension_target_parts(node.target) is None):
             return False
     return True
 

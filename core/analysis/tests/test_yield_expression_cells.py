@@ -65,7 +65,7 @@ def test_yield_parameter_masks_outer_cell(child):
 
 
 def test_unsupported_yielded_descendant_invalidates_complete_scan():
-    expression = "(yield [raw for box[(lambda: raw)()] in ()])"
+    expression = "(yield [raw for box[[raw for item in ()]] in ()])"
     compile(source_for(expression), "<yield-target-control>", "exec", dont_inherit=True)
     node = ast.parse(expression, mode="eval").body
     assert not _child_expression_is_supported(node)
