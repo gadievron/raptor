@@ -549,6 +549,13 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
+def _literal_match_pattern(pattern: ast.pattern) -> bool:
+    """Recognise patterns with no lexical reads, without match-value authority."""
+    return (isinstance(pattern, ast.MatchAs) and pattern.pattern is None and pattern.name is None
+            or isinstance(pattern, ast.MatchSingleton)
+            or isinstance(pattern, ast.MatchValue) and isinstance(pattern.value, ast.Constant))
+
+
 def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
     """Known lexical reads in a complete, non-recursive child statement grammar."""
     if not body:
@@ -572,9 +579,7 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Match):
             if not statement.cases or any(
-                not isinstance(case.pattern, ast.MatchAs)
-                or case.pattern.pattern is not None or case.pattern.name is not None
-                for case in statement.cases
+                not _literal_match_pattern(case.pattern) for case in statement.cases
             ):
                 return None
             expressions.append(statement.subject)
@@ -699,9 +704,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Match):
             if not statement.cases or any(
-                not isinstance(case.pattern, ast.MatchAs)
-                or case.pattern.pattern is not None or case.pattern.name is not None
-                for case in statement.cases
+                not _literal_match_pattern(case.pattern) for case in statement.cases
             ):
                 return None
             expressions.append(statement.subject)

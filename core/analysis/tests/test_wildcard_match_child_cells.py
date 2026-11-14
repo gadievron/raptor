@@ -53,9 +53,9 @@ def test_whole_child_bindings_mask_match_reads(header, body):
     assert not summaries(child_source(body, header))["handle"].summary_unknown
 
 
-@pytest.mark.parametrize("pattern", ["value", "0", "[_, _]", "{}", "Value()", "0 | 1"],
+@pytest.mark.parametrize("pattern", ["value", "raw.member", "[_, _]", "{}", "Value()", "0 | 1"],
                          ids=["capture", "value", "sequence", "mapping", "class", "or"])
-def test_non_wildcard_child_pattern_invalidates_complete_scan(pattern):
+def test_unsupported_child_pattern_invalidates_complete_scan(pattern):
     source = child_source(f"match 0:\n case _ if False:\n  raw\n case {pattern}:\n  return raw")
     assert _bounded_body_expression_loads(ast.parse(source).body[0].body[0].body) is None
 
