@@ -89,7 +89,7 @@ from core.smt_solver import z3
 from core.smt_solver._validation import require_bool
 from core.smt_solver import z3_available as _z3_available
 from core.smt_solver.session import check_solver, new_solver, solver_reason_unknown
-from core.source import read_text_capped
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_contained_bytes, read_text_capped
 
 # --------------------------------------------------------------------------
 # Sink danger model.  Each sink_class maps to the set of characters whose
@@ -3526,7 +3526,16 @@ def try_tier0(
     # Source-wide binding checks cannot establish identity from a prefix.
     # Refuse an incomplete read even when validator and sink are visible.
     try:
-        got = read_text_capped(src_path, errors="strict", newline="")
+        raw_source = read_contained_bytes(
+            repo_root, src_path, 4 * DEFAULT_MAX_SOURCE_CHARS,
+        )
+        if raw_source is None:
+            got = None
+        elif raw_source[1]:
+            got = ("", True)
+        else:
+            text = raw_source[0].decode("utf-8")
+            got = (text, len(text) > DEFAULT_MAX_SOURCE_CHARS)
     except UnicodeDecodeError:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
