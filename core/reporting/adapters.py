@@ -99,7 +99,7 @@ def stages_from_phases(phases: dict, *, producer: str, run_id: str = "") -> list
 
 
 def native_findings(findings: list[dict], *, run_id: str, producer: str, triage: bool = False,
-                    pass_id: str = "", attempt_id: str = "") -> list[dict]:
+                    pass_id: str = "", attempt_id: str = "", legacy_occurrence_refs: bool = False) -> list[dict]:
     """Keep original evidence, map display fields, and never infer verdicts."""
     if len(findings) > MAX_FINDINGS:
         raise ValueError("Too many native findings to capture a complete report")
@@ -113,7 +113,12 @@ def native_findings(findings: list[dict], *, run_id: str, producer: str, triage:
         primary_id = f.get("finding_id")
         # Zero is a valid producer identifier, not an absent value.
         local_id = primary_id if type(primary_id) is int else primary_id or f.get("id")
-        ref = f"native:{producer}:{run_id}:{pass_id}:{attempt_id}:{source_digest}:{i}"
+        if legacy_occurrence_refs:
+            # Lifecycle identities include this historical source reference.
+            ref = f"native:{producer}:{run_id}:{pass_id}:{attempt_id}:{source_digest}:{i}"
+        else:
+            ref = "native:v2:" + digest({"producer": producer, "run": run_id, "pass": pass_id,
+                                          "attempt": attempt_id, "source_digest": source_digest, "index": i})
         notes = []
         if local_id is not None and (isinstance(local_id, bool) or not isinstance(local_id, (str, int))):
             local_id = None

@@ -5673,7 +5673,7 @@ def main() -> int:
     from core.reporting.service import complete_reporting
     report_context = ReportContext(
         "agentic", out_dir.name, target=str(repo_path), state="unknown",
-        findings=native_findings(analysed_results, run_id=out_dir.name, producer="agentic"),
+        findings=native_findings(analysed_results, run_id=out_dir.name, producer="agentic", legacy_occurrence_refs=True),
         diagnostics=list(warnings), extensions={"raptor.metadata": metadata, "raptor.metrics": extra_summary,
                                                "raptor.agentic": final_report,
                                                "raptor.phase_enrichment": [s.source_data for s in extra_sections]},
