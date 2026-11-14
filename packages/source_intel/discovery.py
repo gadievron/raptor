@@ -242,7 +242,9 @@ def discover_aliases(target: Path) -> DiscoveryResult:
     return DiscoveryResult(
         aliases_by_family=out,
         headers_scanned=headers_seen,
-        sources_scanned=sum(1 for _ in _iter_source_files(scan_roots)),
+        sources_scanned=(
+            sum(1 for _ in _iter_source_files(scan_roots)) if candidate_names else 0
+        ),
     )
 
 
