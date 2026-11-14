@@ -1,5 +1,4 @@
 """Telemetry startup owns its native writer until initialization returns."""
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -60,13 +59,13 @@ def startup_io(tmp_path, monkeypatch):
             if state["cleanup"] is not None:
                 raise state["cleanup"]
 
-    def fdopen(*args, **kwargs):
-        native = os.fdopen(*args, **kwargs)
+    def open_stream(*args, **kwargs):
+        native = open(*args, **kwargs)
         assert state["native"] is None
         state["native"] = native
         return Stream()
 
-    monkeypatch.setattr(consumer, "os", SimpleNamespace(**{**vars(os), "fdopen": fdopen}))
+    monkeypatch.setattr(consumer, "open", open_stream, raising=False)
     monkeypatch.setattr(consumer, "logger", SimpleNamespace(info=info, debug=native_debug))
     state["telemetry"] = FuzzingTelemetry(tmp_path, fuzzer="inert", on_event=callback)
     try:
