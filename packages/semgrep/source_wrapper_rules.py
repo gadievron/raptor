@@ -225,9 +225,9 @@ def generate_rules_yaml(summaries: Iterable) -> str | None:
     doc = {"rules": [
         _taint_rule(
             "raptor.generated.source-wrapper.xss",
-            "Untrusted data from a project source-wrapper flows into an "
-            "HTML response without escaping (wrapper source derived "
-            "mechanically; see core/analysis/java_source_summaries).",
+            "Data from a mechanically derived project source-wrapper reaches "
+            "a response or writer API. Review the writer destination, output "
+            "context and encoding before treating it as executable markup.",
             "CWE-79", sources, XSS_SINKS, XSS_SANITIZERS,
         ),
         _taint_rule(
