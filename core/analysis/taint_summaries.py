@@ -564,6 +564,12 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             expressions.extend((statement.exc, statement.cause))
         elif isinstance(statement, ast.Assert):
             expressions.extend((statement.test, statement.msg))
+        elif isinstance(statement, (ast.Import, ast.ImportFrom)):
+            if (any(alias.name == "*" for alias in statement.names)
+                    or isinstance(statement, ast.ImportFrom) and statement.module == "__future__"):
+                return None
+            # Import names bind in the child; they are not expression reads.
+            # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Try):
             if any(handler.name is not None for handler in statement.handlers):
                 return None
