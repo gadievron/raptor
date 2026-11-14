@@ -126,11 +126,11 @@ def uds_dir():
     # roots) overflows the bind. Fall back to /tmp when the budget
     # doesn't fit rather than failing on hosts with long TMPDIRs.
     d = tempfile.mkdtemp(prefix="raptor-joern-uds-test-")
-    if len(os.fsencode(os.path.join(d, "joern.sock"))) > 107:
-        shutil.rmtree(d, ignore_errors=True)
-        d = tempfile.mkdtemp(prefix="raptor-joern-uds-test-", dir="/tmp")
-    os.chmod(d, 0o700)
     try:
+        if len(os.fsencode(os.path.join(d, "joern.sock"))) > 107:
+            shutil.rmtree(d, ignore_errors=True)
+            d = tempfile.mkdtemp(prefix="raptor-joern-uds-test-", dir="/tmp")
+        os.chmod(d, 0o700)
         yield d
     finally:
         shutil.rmtree(d, ignore_errors=True)
