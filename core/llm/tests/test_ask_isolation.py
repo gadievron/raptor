@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import sys
 import threading
 import importlib.machinery
@@ -26,6 +27,9 @@ def native_setup(monkeypatch):
     from core.llm import detection
 
     monkeypatch.setattr(detection, "_sdk_available", lambda name: True)
+    for name in list(os.environ):
+        if name.startswith("GOOGLE_"):
+            monkeypatch.delenv(name, raising=False)
     for name in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS", "CLAUDE_CODE_OAUTH_TOKEN",
                  "ANTHROPIC_BASE_URL", "GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_GEMINI_BASE_URL"):
         monkeypatch.delenv(name, raising=False)
@@ -62,6 +66,13 @@ def test_missing_native_sdk_is_not_an_openai_compatibility_fallback(monkeypatch)
     config = ModelConfig(provider="gemini", model_name="fixture-model", api_key="selected-account")
     with pytest.raises(IsolatedAskError, match="native SDK"):
         ask_isolation.run_isolated_ask(config, "test", None)
+
+
+def test_additional_google_setup_does_not_silently_change_backend(native_setup, monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "fixture-project")
+    model = ModelConfig(provider="gemini", model_name="fixture-model", api_key="selected-account")
+    with pytest.raises(IsolatedAskError, match="Additional Google SDK"):
+        ask_isolation.run_isolated_ask(model, "test", None)
 
 
 def test_worker_response_identity_and_size_are_checked():
@@ -107,7 +118,7 @@ def test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation(monkeypa
 # A provider-seam test adapter, not a fake native SDK. It makes a real proxy
 # request in a fresh worker, keeping credentials in the trusted parent. The
 # audit hook proves worker bootstrap/client generation never open models.json.
-_WORKER = r'''
+_AUDITED_BOOTSTRAP = r'''
 import os, sys
 def audit(event, args):
     if event == "open" and isinstance(args[0], (str, bytes)):
@@ -118,6 +129,9 @@ sys.addaudithook(audit)
 from core.config import RaptorConfig
 assert not (set(RaptorConfig.LLM_API_KEY_VARS) & set(os.environ))
 assert "RAPTOR_CONFIG" not in os.environ
+'''
+
+_WORKER = _AUDITED_BOOTSTRAP + r'''
 from core.llm import client, detection
 detection._sdk_available = lambda name: True
 def no_discovery(*args, **kwargs):
@@ -143,12 +157,24 @@ from core.llm.ask_worker import main
 raise SystemExit(main())
 '''
 
+_NATIVE_WORKER = _AUDITED_BOOTSTRAP + r'''
+from core.llm import detection
+def no_discovery(*args, **kwargs):
+    raise AssertionError("native worker attempted model/setup discovery")
+detection.detect_llm_availability = no_discovery
+from core.llm.ask_worker import main
+raise SystemExit(main())
+'''
+
 
 @pytest.mark.integration
 @pytest.mark.parametrize("provider,header", [("anthropic", "x-api-key"), ("gemini", "x-goog-api-key")])
+@pytest.mark.parametrize("native_sdk", [False, True], ids=["provider-seam", "native-sdk"])
 def test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth(
-    native_setup, monkeypatch, tmp_path, provider, header,
+    native_setup, monkeypatch, tmp_path, provider, header, native_sdk,
 ):
+    if native_sdk:
+        pytest.importorskip("anthropic" if provider == "anthropic" else "google.genai")
     observed = []
 
     class Upstream(http.server.BaseHTTPRequestHandler):
@@ -158,8 +184,26 @@ def test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth(
         def do_POST(self):
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             observed.append(dict(self.headers))
-            body = b'{"ok":true}'
+            if native_sdk and provider == "anthropic":
+                payload = {
+                    "id": "msg_fixture", "type": "message", "role": "assistant",
+                    "model": "fixture-model", "content": [{"type": "text", "text": "worker-ok"}],
+                    "stop_reason": "end_turn", "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            elif native_sdk:
+                payload = {
+                    "candidates": [{"content": {"parts": [{"text": "worker-ok"}], "role": "model"},
+                                    "finishReason": "STOP"}],
+                    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1,
+                                      "totalTokenCount": 2},
+                    "modelVersion": "fixture-model",
+                }
+            else:
+                payload = {"ok": True}
+            body = json.dumps(payload).encode()
             self.send_response(200)
+            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -174,7 +218,8 @@ def test_fresh_worker_has_no_keys_or_config_reads_and_parent_injects_auth(
         return replace(original_rule(model), upstream_base_url=f"http://127.0.0.1:{server.server_port}")
 
     def test_worker(dispatcher, command, **kwargs):
-        return original_spawn(dispatcher, [sys.executable, "-c", _WORKER, command[-1]], **kwargs)
+        program = _NATIVE_WORKER if native_sdk else _WORKER
+        return original_spawn(dispatcher, [sys.executable, "-c", program, command[-1]], **kwargs)
 
     monkeypatch.setattr(ask_isolation, "_rule_for", captive_rule)
     monkeypatch.setattr(ask_isolation, "spawn_worker", test_worker)
