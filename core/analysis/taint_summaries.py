@@ -364,6 +364,9 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
         ast.UnaryOp, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
         ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Call, ast.keyword,
         ast.JoinedStr, ast.FormattedValue,
+        # Optional on Python 3.12/3.13; Constant is already admitted.
+        getattr(ast, "TemplateStr", ast.Constant),
+        getattr(ast, "Interpolation", ast.Constant),
         ast.Starred, ast.Load, ast.operator, ast.unaryop, ast.boolop, ast.cmpop,
     )
     names: set[str] = set()
