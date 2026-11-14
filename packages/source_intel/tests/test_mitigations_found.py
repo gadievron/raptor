@@ -80,7 +80,7 @@ def _cap_source_file(tmp_path, line_text: str):
     return str(f)
 
 
-def test_capability_emits_axis_4_medium(tmp_path):
+def test_capability_call_alone_emits_no_privilege_gate(tmp_path):
     path = _cap_source_file(
         tmp_path, "if (!capable(CAP_SYS_ADMIN)) return -EPERM;",
     )
@@ -89,9 +89,11 @@ def test_capability_emits_axis_4_medium(tmp_path):
         grade=GRADE_DOMINATES, enclosing_function="op",
     ),))
     m = derive_mitigations_found(r, finding_function="op")
-    assert m[0].axis == "axis_4"
-    assert m[0].name == "privilege_gate"
-    assert "CAP_SYS_ADMIN" in m[0].detail
+    assert m == []
+    assert len(r.capabilities) == 1
+    assert r.capabilities[0].cap_function == "capable"
+    assert r.capabilities[0].grade == GRADE_DOMINATES
+    assert r.capabilities[0].location == (path, 5)
 
 
 def test_ns_scoped_capability_is_not_a_privilege_gate(tmp_path):
