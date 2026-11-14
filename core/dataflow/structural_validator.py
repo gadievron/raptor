@@ -204,7 +204,7 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
     """Extract call graph for the given language.
 
     Returns ``None`` (no evidence) when the language is unsupported,
-    its tree-sitter grammar isn't installed, or Python parsing fails.  The extractors degrade to
+    its tree-sitter grammar isn't installed, or graph parsing fails.  The extractors degrade to
     an EMPTY — but truthy — graph on a missing grammar, which the link
     check would otherwise misread as proof that the call chain is
     broken and refute the finding with high confidence; an environment
@@ -221,12 +221,22 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
         # Python's extractor uses the stdlib ast module; every other
         # extractor needs the matching tree-sitter grammar.
         try:
-            from core.inventory.extractors import _TS_AVAILABLE, _ts_language
+            from core.inventory.extractors import _TS_AVAILABLE, _ts_language, _ts_parser_for
         except ImportError:
             return None
         if not _TS_AVAILABLE or _ts_language(language) is None:
             return None
     try:
+        if language != "python":
+            # Acquire the tree here so a parser failure cannot become an
+            # empty inventory graph and masquerade as call-edge absence.
+            parser = _ts_parser_for(language)
+            if parser is None:
+                return None
+            tree = parser.parse(content.encode("utf-8", errors="replace"))
+            if tree is None:
+                return None
+            return extractor(content, _tree=tree)  # type: ignore[operator]
         graph = extractor(content)  # type: ignore[operator]
         if language == "python" and not graph.calls:
             # The inventory extractor also returns no calls on a failed parse.
