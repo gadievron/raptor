@@ -140,10 +140,10 @@ def _git(repo: Path, *args: str) -> None:
 class TestValidatePriorRun(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
         self.base = Path(self._td.name)
         self.repo = self.base / "repo"
         self.repo.mkdir()
-        self.addCleanup(self._td.cleanup)
 
     def test_missing_dir_refuses(self):
         with self.assertRaisesRegex(OpenAntResumeError, "not a directory"):
@@ -307,10 +307,10 @@ class TestInFlightPriorRunRefuses(unittest.TestCase):
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
         self.base = Path(self._td.name)
         self.repo = self.base / "repo"
         self.repo.mkdir()
-        self.addCleanup(self._td.cleanup)
 
     @staticmethod
     def _own_starttime() -> str:
@@ -363,10 +363,10 @@ class TestScanFailedReportResumesLikeSuccess(unittest.TestCase):
 
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
+        self.addCleanup(self._td.cleanup)
         self.base = Path(self._td.name)
         self.repo = self.base / "repo"
         self.repo.mkdir()
-        self.addCleanup(self._td.cleanup)
 
     def _mk_scan_failed_prior(self, tfp: dict) -> Path:
         import raptor_openant
