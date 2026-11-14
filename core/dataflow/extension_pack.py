@@ -517,6 +517,11 @@ def _validate(row: ModelRow, language: str) -> str | None:
                 "(core.taint.mad_matrix pins the same rule)"
             )
         return f"role {row.role!r} unsupported for language {language!r}"
+    for index, cell in enumerate(_cells(row, language)):
+        if language in ("cpp", "java") and index == 2:
+            continue  # subtype boolean is checked separately
+        if not isinstance(cell, str):
+            return f"model cell {index} must be text"
     if language == "cpp":
         return _validate_cpp(row)
     if language == "java":
