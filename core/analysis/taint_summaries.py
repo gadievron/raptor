@@ -303,6 +303,8 @@ def _deferred_frame_summary_reason(fn_ast: ast.AST) -> str | None:
             if not isinstance(node, ast.Lambda):
                 pending.extend(node.decorator_list)
             continue
+        if isinstance(node, ast.ExceptHandler) and node.name is not None:
+            return "caught exception payload is not modelled"
         if isinstance(node, (ast.Yield, ast.YieldFrom)):
             return "generator iteration outputs are not modelled"
         if isinstance(node, ast.GeneratorExp) and _comprehension_writes_enclosing_frame(node):
@@ -341,6 +343,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
       short-circuit operand, chained comparison, assertion message or eager
       comprehension: it may not overwrite
       the incoming local value.
+    * A named exception handler: the caught object can carry input through
+      an exceptional edge whose value transfer is not modelled.
     * A generator function: iteration output is not a normal return value.
     * A generator expression with a deferred assignment expression: its
       enclosing-frame writes depend on consumption, which is not modelled.
