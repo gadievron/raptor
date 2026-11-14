@@ -53,7 +53,7 @@ def test_whole_child_bindings_mask_match_reads(header, body):
     assert not summaries(child_source(body, header))["handle"].summary_unknown
 
 
-@pytest.mark.parametrize("pattern", ["value", "raw.member", "[value, _]", "{0: value}", "Value(value)", "0 | raw.member"],
+@pytest.mark.parametrize("pattern", ["value", "-1.5", "[value, _]", "{0: value}", "Value(value)", "0 | -1.5"],
                          ids=["capture", "value", "sequence", "mapping", "class", "or"])
 def test_unsupported_child_pattern_invalidates_complete_scan(pattern):
     source = child_source(f"match 0:\n case _ if False:\n  raw\n case {pattern}:\n  return raw")
