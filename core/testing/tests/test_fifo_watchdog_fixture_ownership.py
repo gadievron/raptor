@@ -96,9 +96,9 @@ def _exercise(tmp_path, mode, operation, after, error):
 
     def call():
         fd = os.open(fifo, os.O_WRONLY if mode == "writer" else os.O_RDONLY)
-        state = os.fstat(fd)
-        acquired.append((fd, (state.st_dev, state.st_ino)))
         try:
+            state = os.fstat(fd)
+            acquired.append((fd, (state.st_dev, state.st_ino)))
             if mode == "writer":
                 assert os.write(fd, b"owned") == 5
                 results.append("written")
