@@ -695,6 +695,12 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                 and isinstance(node.operand, ast.Constant)
                 and type(node.operand.value) in (int, float, complex)):
             continue
+        if (isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub))
+                and isinstance(node.left, ast.UnaryOp) and isinstance(node.left.op, ast.UAdd)
+                and isinstance(node.left.operand, ast.Constant)
+                and type(node.left.operand.value) in (int, float)
+                and isinstance(node.right, ast.Constant) and type(node.right.value) is complex):
+            continue
         if isinstance(node, (ast.Tuple, ast.List)):
             if not isinstance(node.ctx, ast.Load):
                 return False
