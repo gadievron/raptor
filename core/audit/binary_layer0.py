@@ -879,44 +879,56 @@ def _presweep_fingerprint(
     """Deterministic fingerprint of the pre-sweep inputs: every gated
     record's identity + span (from the pinned checklist, via the
     evidence index) and the contents of the files those records read.
-    One read per distinct file — a small fraction of the per-record
-    whole-file reads + pattern batteries the sweep itself pays."""
+    One bounded whole-content hash per distinct file; record ordering,
+    span keys and over-cap markers are preserved."""
+    import hashlib
     from pathlib import Path
 
-    from .prep_cache import content_fingerprint
+    from core.source import open_regular
+    from core.source.streams import preserving_stream_error
+
+    from .prep_cache import content_fingerprint_from_hashes
 
     root = Path(target_path)
+    unreadable = hashlib.sha256(b"<unreadable>").hexdigest()
+    over_cap = hashlib.sha256(b"<over-cap>").hexdigest()
 
-    def _items():
+    def _file_digest(path: Path) -> str:
+        try:
+            if _MAX_FINGERPRINT_FILE_BYTES < 0:
+                raise ValueError("negative fingerprint byte cap")
+            stream = open_regular(path, "rb")
+            if stream is None:
+                return unreadable
+            with preserving_stream_error(stream):
+                digest = hashlib.sha256()
+                remaining = _MAX_FINGERPRINT_FILE_BYTES + 1
+                while remaining > 0:
+                    chunk = stream.read(min(65_536, remaining))
+                    if not chunk:
+                        return digest.hexdigest()
+                    remaining -= len(chunk)
+                    if remaining <= 0:
+                        return over_cap
+                    digest.update(chunk)
+        except (OSError, ValueError):
+            return unreadable
+        return over_cap
+
+    def _hashes():
         seen: set[str] = set()
         for key, rec in sorted(gated, key=lambda kr: kr[0]):
             meta = "|".join((
                 rec.kind, rec.file, rec.function,
                 str(rec.line_start or 0), str(rec.line_end or 0),
             ))
-            yield f"record:{key}", meta.encode("utf-8", "replace")
+            yield f"record:{key}", hashlib.sha256(meta.encode("utf-8", "replace")).hexdigest()
             if rec.file in seen:
                 continue
             seen.add(rec.file)
-            # House-capped read (64 MiB budget): a planted blob must
-            # not be buffered just to fingerprint it — an over-cap
-            # file contributes a deterministic marker instead.
-            from core.source import read_bytes_capped
+            yield f"file:{rec.file}", _file_digest(root / rec.file)
 
-            try:
-                got = read_bytes_capped(
-                    root / rec.file, _MAX_FINGERPRINT_FILE_BYTES,
-                )
-            except ValueError:
-                got = None
-            if got is None:
-                data = b"<unreadable>"
-            else:
-                raw, truncated = got
-                data = b"<over-cap>" if truncated else raw
-            yield f"file:{rec.file}", data
-
-    return content_fingerprint(_items())
+    return content_fingerprint_from_hashes(_hashes())
 
 
 def run_source_presweep(
