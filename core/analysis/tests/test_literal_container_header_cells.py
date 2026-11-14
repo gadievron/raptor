@@ -101,7 +101,7 @@ def test_dynamic_container_mode_boundary_stays_excluded(annotation, future):
 
 
 @pytest.mark.parametrize('annotation', ['(0, [raw])', 'list[0]',
-                                     '(lambda: 0)', '[item for item in ()]'])
+                                     '[item for item in ()]'])
 def test_unknown_annotation_descendant_refuses_the_complete_header(annotation):
     source = source_for(annotation)
     compile(source, '<excluded-container-header>', 'exec', dont_inherit=True)

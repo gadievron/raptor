@@ -691,6 +691,19 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         node = pending.pop()
         if _match_literal_expression(node):
             continue
+        if isinstance(node, ast.Lambda):
+            arguments = node.args
+            parameters = [*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs]
+            parameters.extend(parameter for parameter in (arguments.vararg, arguments.kwarg)
+                              if parameter is not None)
+            if (len(arguments.defaults) > len(arguments.posonlyargs) + len(arguments.args)
+                    or len(arguments.kw_defaults) != len(arguments.kwonlyargs)
+                    or any(parameter.annotation is not None for parameter in parameters)):
+                return False
+            pending.append(node.body)
+            pending.extend(arguments.defaults)
+            pending.extend(default for default in arguments.kw_defaults if default is not None)
+            continue
         if isinstance(node, ast.Attribute):
             if not isinstance(node.ctx, ast.Load):
                 return False
