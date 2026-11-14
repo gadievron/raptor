@@ -549,11 +549,22 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
-def _literal_match_pattern(pattern: ast.pattern) -> bool:
-    """Recognise patterns with no lexical reads, without match-value authority."""
-    return (isinstance(pattern, ast.MatchAs) and pattern.pattern is None and pattern.name is None
-            or isinstance(pattern, ast.MatchSingleton)
-            or isinstance(pattern, ast.MatchValue) and isinstance(pattern.value, ast.Constant))
+def _noncapturing_match_pattern(pattern: ast.pattern) -> bool:
+    """Recognise a closed no-read pattern grammar without match-value authority."""
+    pending = [(pattern, False)]
+    while pending:
+        current, in_sequence = pending.pop()
+        if isinstance(current, ast.MatchSequence):
+            pending.extend((child, True) for child in current.patterns)
+        elif isinstance(current, ast.MatchStar):
+            if not in_sequence or current.name is not None:
+                return False
+        elif not (isinstance(current, ast.MatchAs)
+                  and current.pattern is None and current.name is None
+                  or isinstance(current, ast.MatchSingleton)
+                  or isinstance(current, ast.MatchValue) and isinstance(current.value, ast.Constant)):
+            return False
+    return True
 
 
 def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
@@ -579,7 +590,7 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             # This lexical scan supplies no authority about import effects.
         elif isinstance(statement, ast.Match):
             if not statement.cases or any(
-                not _literal_match_pattern(case.pattern) for case in statement.cases
+                not _noncapturing_match_pattern(case.pattern) for case in statement.cases
             ):
                 return None
             expressions.append(statement.subject)
@@ -704,7 +715,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Match):
             if not statement.cases or any(
-                not _literal_match_pattern(case.pattern) for case in statement.cases
+                not _noncapturing_match_pattern(case.pattern) for case in statement.cases
             ):
                 return None
             expressions.append(statement.subject)
