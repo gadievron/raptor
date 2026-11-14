@@ -556,6 +556,14 @@ def _try_known_safe_call(
         )
         if conflict:
             return Tier0Result(Tier0Status.NOT_APPLICABLE, conflict)
+    if language == "javascript":
+        from core.analysis.validator_call_binding import javascript_local_object_receiver_conflict
+
+        if javascript_local_object_receiver_conflict(source_text, validator_line, entry.library_call):
+            return Tier0Result(
+                Tier0Status.NOT_APPLICABLE,
+                "curated call receiver is an explicit local const object, not verified library identity",
+            )
     if tree is not None and _validator_call_error_may_reach_sink(
         tree, validator_line, sink_line, source_text=source_text,
     ):

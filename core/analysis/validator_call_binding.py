@@ -85,6 +85,63 @@ def native_transform_binding_targets(source: str, line: int, library_call: str,
 
 
 
+
+def javascript_local_object_receiver_conflict(source: str, line: int, library_call: str) -> bool:
+    """Veto an explicit local object receiver, never establish library origin.
+
+    Only preceding const object declarations in the same function and a
+    containing statement block are recognised. Other binding/effect shapes
+    require separate identity evidence and are outside this negative query.
+    """
+    if line <= 0 or not _DOTTED_NAME.fullmatch(library_call) or "." not in library_call:
+        return False
+    try:
+        tree = _syntax._native_source_tree(source, "javascript")
+        if tree is None:
+            return False
+        expected = library_call.split(".")
+        calls = []
+        declarations = []
+        pending = [tree.root_node]
+        visited = 0
+        while pending:
+            node = pending.pop()
+            visited += 1
+            if visited > _syntax._MAX_NODES:
+                return False
+            pending.extend(node.named_children)
+            if (node.type == "call_expression" and node.start_point[0] + 1 == line
+                    and _callee_parts(node) == expected):
+                calls.append(node)
+            elif node.type == "variable_declarator":
+                statement = node.parent
+                name = node.child_by_field_name("name")
+                value = _parenthesised_value(node.child_by_field_name("value"))
+                if (statement is not None and statement.type == "lexical_declaration"
+                        and any(child.type == "const" for child in statement.children)
+                        and name is not None and name.type == "identifier"
+                        and name.text == expected[0].encode("utf-8")
+                        and value is not None and value.type == "object"):
+                    declarations.append(node)
+        for call in calls:
+            owner = _syntax._owner(call, _syntax._JS_OWNERS)
+            if owner is None or owner.type == "program":
+                continue
+            for declaration in declarations:
+                visited += 1
+                if visited > _syntax._MAX_NODES:
+                    return False
+                block = declaration.parent.parent
+                if (block is not None and block.type == "statement_block"
+                        and declaration.end_byte <= call.start_byte
+                        and _syntax._owner(declaration, _syntax._JS_OWNERS) == owner
+                        and _syntax._contains(block, call)):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 -- no match grants no positive identity evidence
+        return False
+
+
 def _sink_statement_value(statement):
     if statement.type in {"expression_statement", "return_statement"}:
         children = [node for node in statement.named_children if node.type not in _COMMENTS]
