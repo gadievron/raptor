@@ -8,59 +8,60 @@ from core.testing.module_views import module_function_view
 
 @contextmanager
 def exercise(phase):
-    patch = pytest.MonkeyPatch()
     borrowed = prompt_telemetry.defense_telemetry
-    native._isolated_defense_telemetry.__wrapped__(patch)
-    real = threading.Thread
-    release = threading.Event()
-    threads = []
-    error = KeyboardInterrupt if 'interrupt' in phase else RuntimeError
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs['target']
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.task = cells['task']
-            self.nonces = cells['nonces']
-            self.errors = cells['errors']
-            assert type(self.task) is native.AnalysisTask
-            self.completed = False
-            def running(*args, **kwargs):
-                assert release.wait(10), 'owned worker gate not released'
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs['target'] = running
-            self.index, self.joins = len(threads), []
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if self.index == 1 and phase.startswith('before-'):
-                raise error('owned start failure')
-            if phase == 'normal':
-                release.set()
-            super().start()
-            if self.index == 1 and phase.startswith('after-'):
-                raise error('owned start failure')
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            release.set()
-            return super().join(*args, **kwargs)
-    namespace = ModuleType('threading')
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.TestNonceTracking.test_nonce_thread_safety
-    view = module_function_view(native, bindings={'_owned_case': function, 'threading': namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
-        yield lambda: view._owned_case(native.TestNonceTracking()), threads
+        with pytest.MonkeyPatch.context() as patch:
+            native._isolated_defense_telemetry.__wrapped__(patch)
+            real = threading.Thread
+            release = threading.Event()
+            threads = []
+            error = KeyboardInterrupt if 'interrupt' in phase else RuntimeError
+            class Thread(real):
+                def __init__(self, *args, **kwargs):
+                    target = kwargs['target']
+                    self.native_target = target
+                    cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                    self.task = cells['task']
+                    self.nonces = cells['nonces']
+                    self.errors = cells['errors']
+                    assert type(self.task) is native.AnalysisTask
+                    self.completed = False
+                    def running(*args, **kwargs):
+                        assert release.wait(10), 'owned worker gate not released'
+                        result = target(*args, **kwargs)
+                        self.completed = True
+                        return result
+                    kwargs['target'] = running
+                    self.index, self.joins = len(threads), []
+                    super().__init__(*args, **kwargs)
+                    threads.append(self)
+                def start(self):
+                    if self.index == 1 and phase.startswith('before-'):
+                        raise error('owned start failure')
+                    if phase == 'normal':
+                        release.set()
+                    super().start()
+                    if self.index == 1 and phase.startswith('after-'):
+                        raise error('owned start failure')
+                def join(self, *args, **kwargs):
+                    self.joins.append((args, kwargs))
+                    release.set()
+                    return super().join(*args, **kwargs)
+            namespace = ModuleType('threading')
+            vars(namespace).update(vars(threading))
+            namespace.Thread = Thread
+            function = native.TestNonceTracking.test_nonce_thread_safety
+            view = module_function_view(native, bindings={'_owned_case': function, 'threading': namespace})
+            assert view._owned_case.__code__ is function.__code__
+            try:
+                yield lambda: view._owned_case(native.TestNonceTracking()), threads
+            finally:
+                release.set()
+                for thread in threads:
+                    if thread.ident is not None:
+                        real.join(thread, timeout=30)
+                        assert not thread.is_alive()
     finally:
-        release.set()
-        for thread in threads:
-            if thread.ident is not None:
-                real.join(thread, timeout=30)
-                assert not thread.is_alive()
-        patch.undo()
         assert prompt_telemetry.defense_telemetry is borrowed
 
 
