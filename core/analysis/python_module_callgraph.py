@@ -680,7 +680,7 @@ def module_import_map(tree: ast.Module) -> dict[str, str]:
 
 
 def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
-    """Simple module bindings that may retain an annotation evaluator.
+    """Module names and dotted projections that may retain an evaluator.
 
     Collect import candidates and simple assignments in source order, keeping
     candidates after overwrites and across conditional branches. This is a
@@ -689,6 +689,7 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
     """
     candidates = {"annotationlib.get_annotations", "inspect.get_annotations"}
     bound_evaluators: set[str] = set()
+    module_candidates = {"annotationlib", "inspect"}
     pending: list[ast.AST] = list(reversed(tree.body))
     while pending:
         node = pending.pop()
@@ -697,7 +698,11 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name in ("annotationlib", "inspect"):
-                    candidates.add((alias.asname or alias.name) + ".get_annotations")
+                    bound = alias.asname or alias.name
+                    module_candidates.add(bound)
+                    candidates.add(bound + ".get_annotations")
+                    if alias.asname:
+                        bound_evaluators.add(bound + ".get_annotations")
         elif (isinstance(node, ast.ImportFrom) and not node.level
               and node.module in ("annotationlib", "inspect")):
             for alias in node.names:
@@ -708,12 +713,19 @@ def _module_annotation_evaluator_aliases(tree: ast.Module) -> frozenset[str]:
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
             value = node.value
             chain = _attribute_chain(value) if value is not None else None
-            if chain is not None and ".".join(chain) in candidates:
+            source = ".".join(chain) if chain is not None else None
+            if source in candidates or source in module_candidates:
                 targets = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets:
                     if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store):
-                        candidates.add(target.id)
-                        bound_evaluators.add(target.id)
+                        if source in module_candidates:
+                            module_candidates.add(target.id)
+                            projection = target.id + ".get_annotations"
+                            candidates.add(projection)
+                            bound_evaluators.add(projection)
+                        else:
+                            candidates.add(target.id)
+                            bound_evaluators.add(target.id)
         pending.extend(reversed(list(ast.iter_child_nodes(node))))
     return frozenset(bound_evaluators)
 
