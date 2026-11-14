@@ -394,7 +394,8 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     * A directly returned lambda with a bare enclosing-local body: it
       retains a live cell, which default-value propagation does not model.
     * An immediately returned, undecorated, non-generic local function
-      whose sole return reads an enclosing cell through a bounded expression grammar,
+      whose sole return reads an enclosing cell through a bounded expression grammar
+      or a comprehension's first iterable,
       or a directly returned call to it: the object or call depends on a cell.
     * A capturing match pattern: subject-to-capture value transfer is
       not modelled by the def-only pattern nodes.
@@ -474,6 +475,11 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
             if len(body) == 1 and isinstance(body[0], ast.Return):
                 names = _scope_free_expression_loads(body[0].value)
                 cell_read = body[0].value
+                if (isinstance(cell_read, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp))
+                        and cell_read.generators):
+                    # The first iterable evaluates in this function's frame,
+                    # before comprehension targets bind in their own scope.
+                    names |= _scope_free_expression_loads(cell_read.generators[0].iter)
                 if isinstance(cell_read, (ast.Attribute, ast.Subscript)):
                     cell_read = cell_read.value
                 if isinstance(cell_read, ast.Name):
