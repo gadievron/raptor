@@ -66,7 +66,7 @@ def test_bare_child_return_contributes_no_reads():
     "def child(value=[raw for item in ()]):\n return value", "def child(*, value=[raw for item in ()]):\n return value",
     "def child(value: raw):\n return value", "def child() -> raw:\n return 0",
     "@raw\ndef child():\n return 0", "def child[T]():\n return raw",
-    "def child():\n return lambda: raw", "def child():\n value = raw\n return value",
+    "def child():\n return [raw for item in ()]", "def child():\n value = raw\n return value",
 ], ids=["default", "kwdefault", "parameter-annotation", "return-annotation", "decorator",
         "type-parameter", "scoped-return", "multiple-statements"])
 def test_unsupported_child_invalidates_complete_body(source):
