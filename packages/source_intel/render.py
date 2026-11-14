@@ -39,6 +39,7 @@ from packages.source_intel.analyze import (
     KIND_RETURNS_NONNULL,
     KIND_WUR,
     AbortEvidence,
+    BoundaryEvidence,
     AllocationEvidence,
     AttributeEvidence,
     CapabilityEvidence,
@@ -358,6 +359,17 @@ def derive_evidence_strings(
     sanitizer_line = _render_sanitizers_line(build_flags, style)
     if sanitizer_line is not None:
         lines.append(sanitizer_line)
+
+    # Retain existing boundary-call records as informational sites. Keep
+    # earlier evidence priority and the shared unknown-function policy.
+    boundaries = result.boundary_crossings
+    if finding_function:
+        boundaries = tuple(
+            ev for ev in boundaries
+            if ev.enclosing_function in (finding_function, None)
+        )
+    for boundary in boundaries:
+        lines.append(_render_boundary_line(boundary, style))
 
     # When source_intel ran but found nothing relevant — emit an
     # explicit "no signal" line so the consumer prompt template
@@ -755,6 +767,22 @@ def _render_privilege_back_walk_line(
     )
 
 
+def _render_boundary_line(boundary: BoundaryEvidence, style: str) -> str:
+    """Render a boundary-call site without inferring data-flow or success."""
+    if style == "stage_d":
+        prefix = "User-boundary call observed"
+    elif style == "exploit_plan":
+        prefix = "Review site — user-boundary call"
+    else:
+        prefix = "Variant hint — user-boundary call"
+    return (
+        f"{prefix}: `{boundary.boundary_fn}` at "
+        f"{boundary.location[0]}:{boundary.location[1]}. This name-based "
+        f"observation does not establish argument identity, transfer success "
+        f"or relation to this finding's sink."
+    )
+
+
 def _render_lsm_line(hook: LsmEvidence, style: str) -> str:
     """Render one axis-4 LSM hook observation."""
     fn_text = (
@@ -763,17 +791,17 @@ def _render_lsm_line(hook: LsmEvidence, style: str) -> str:
         else f"in {hook.location[0]} near line {hook.location[1]}"
     )
     if style == "stage_d":
-        prefix = "Privilege gating — LSM hook near sink"
+        prefix = "LSM-name call observed"
     elif style == "exploit_plan":
-        prefix = "Constraint — LSM hook on path to sink"
+        prefix = "Review site — possible LSM hook"
     else:
-        prefix = "Variant hint — LSM hook"
+        prefix = "Variant hint — possible LSM hook"
     return (
         f"{prefix}: `{hook.hook_name}` at "
-        f"{hook.location[0]}:{hook.location[1]} {fn_text}. Linux Security "
-        f"Module checks the operation; deployments with active LSM "
-        f"(SELinux/AppArmor/Smack) may block exploitation even when "
-        f"the C-level bug exists."
+        f"{hook.location[0]}:{hook.location[1]} {fn_text}. A name-prefix "
+        f"match does not establish hook identity, return-value handling, "
+        f"reachability of this finding's sink or active policy. Verify "
+        f"those before treating this site as a privilege constraint."
     )
 
 
