@@ -58,8 +58,8 @@ def test_whole_child_bindings_mask_try_reads(header, body):
 
 @pytest.mark.parametrize("body", ["try:\n  pass\n except Exception as error:\n  pass",
                                   "try:\n  pass\n except* Exception:\n  raw",
-                                  "try:\n  pass\n finally:\n  import module"],
-                         ids=["named-handler", "group", "later-import"])
+                                  "try:\n  pass\n finally:\n  global unsupported"],
+                         ids=["named-handler", "group", "later-declaration"])
 def test_unsupported_child_exception_tree_invalidates_complete_body(body):
     assert _bounded_body_expression_loads(ast.parse("raw\ndef child():\n " + body).body) is None
 

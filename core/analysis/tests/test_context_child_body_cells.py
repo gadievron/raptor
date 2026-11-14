@@ -65,7 +65,7 @@ def test_whole_child_bindings_mask_context_reads(header, body):
 
 
 @pytest.mark.parametrize("body", ["with manager as slots[(lambda: raw)()]:\n  pass",
-                                  "with raw:\n  import module",
+                                  "with raw:\n  global unsupported",
                                   "with raw:\n  def deeper():\n   return raw"],
                          ids=["scoped-target", "body-import", "nested-definition"])
 def test_unsupported_child_context_invalidates_complete_body(body):

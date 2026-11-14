@@ -65,7 +65,7 @@ def test_whole_child_bindings_mask_loop_reads(header, body):
 
 
 @pytest.mark.parametrize("body", ["for obj[(lambda: raw)()] in ():\n  pass",
-                                  "while raw:\n  break\n  import module",
+                                  "while raw:\n  break\n  global unsupported",
                                   "for item in ():\n  pass\n else:\n  global other"],
                          ids=["indirect-target", "declaration-after-break", "else-global"])
 def test_unsupported_child_loop_invalidates_complete_body(body):
