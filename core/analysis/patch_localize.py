@@ -51,9 +51,9 @@ _MAX_NAME_CHARS = 200
 # Chain-count ceiling. Chains cost O(chains) LLM calls per trial; a
 # big vendor patch joined with a dense call graph can otherwise
 # explode into tens of thousands of chains and burn the entire model
-# budget on ordering noise. Singles are kept first (every candidate
-# stays represented); pair chains fill the remainder in edge order,
-# and the truncation is loud (log + report field).
+# budget on ordering noise. Singles come first; if they exceed the cap,
+# some candidates are omitted. Pair chains fill remaining slots in edge
+# order, and truncation is loud (log + report field).
 DEFAULT_MAX_CHAINS = 2000
 DEFAULT_QUERY_PREFIX = (
     "Below is a security advisory. Rank these changed-function call "
@@ -168,12 +168,12 @@ def localize(
     # max_chains=0 instead of keeping one chain.
     chain_cap = max(1, max_chains)
     if len(chains) > chain_cap:
-        # Singles come first from build_chains, so every candidate
-        # stays represented; excess pair chains are dropped loudly.
+        # Singles come first from build_chains. The cap can drop singles
+        # too, so report all omitted chains rather than pair-only loss.
         chains_truncated = len(chains) - chain_cap
         logger.warning(
             "localize: %d chains exceed the %d-chain cap; dropping %d "
-            "pair chains (pass max_chains to raise)",
+            "chains (pass max_chains to raise)",
             len(chains), chain_cap, chains_truncated,
         )
         chains = chains[:chain_cap]
