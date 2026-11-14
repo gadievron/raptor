@@ -9,6 +9,7 @@ from core.analysis.interproc import _param_cleanly_sanitized
 from core.analysis.python_module_callgraph import build_python_module_callgraph
 from core.analysis.taint_summaries import (
     _child_expression_is_supported,
+    _comprehension_target_scope,
     _scoped_expression_loads,
     build_taint_summaries,
 )
@@ -64,12 +65,13 @@ def test_await_parameter_masks_outer_cell(child):
     assert not summaries(source_for("await raw", child, "raw"))["handle"].summary_unknown
 
 
-def test_awaited_comprehension_target_stays_outside_strict_target_grammar():
+def test_awaited_comprehension_target_preserves_legacy_strict_wrapper():
     expression = "[0 for box[await raw] in ()]"
     compile(source_for(expression), "<await-target-control>", "exec", dont_inherit=True)
     node = ast.parse(expression, mode="eval").body
-    assert not _child_expression_is_supported(node)
-    assert _scoped_expression_loads(node) == frozenset()
+    assert _child_expression_is_supported(node)
+    assert "raw" in _scoped_expression_loads(node)
+    assert _comprehension_target_scope(node.generators[0].target, require_scope_free_reads=True) is None
 
 
 def test_generator_refusal_keeps_prior_reason():
