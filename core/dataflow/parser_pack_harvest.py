@@ -398,6 +398,8 @@ def merge_results(pack: dict, results: list[HarvestResult]) -> dict:
                     "provenance": [],
                     "cves": [],
                 }
+            elif entry["library"] != result.library:
+                raise ValueError(f"conflicting library for parser pack name: {name!r}")
             entry["provenance"] = sorted(
                 set(entry["provenance"]) | {PROVENANCE_CVE_FIX}
             )
