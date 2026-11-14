@@ -185,7 +185,7 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
     """Bounded header sweep: the census's source set is the gap files,
     but warn_unused_result attributes live in headers no gap covers —
     harvest those too (declarations only, no call sites)."""
-    texts: dict[str, str] = {}
+    names: set[str] = set()
     try:
         paths = sorted(
             p for p in Path(target_path).rglob("*")
@@ -220,8 +220,10 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
         got = read_text_capped(resolved, _MAX_WUR_FILE_BYTES)
         if got is None or got[1]:
             continue
-        texts[str(p)] = got[0]
-    return harvest_wur_declarations(texts)
+        # Harvest each admitted text before reading the next header; the
+        # declaration helper treats files independently and unions names.
+        names.update(harvest_wur_declarations({str(p): got[0]}))
+    return frozenset(names)
 
 
 def _wur_contract(callee: str, ctx: RoleContext) -> ContractEvidence | None:

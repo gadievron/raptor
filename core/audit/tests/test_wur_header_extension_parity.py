@@ -84,3 +84,33 @@ def test_uppercase_and_lowercase_headers_share_existing_budget(tmp_path, target_
     namespace["harvest_wur_declarations"] = lambda texts: frozenset(texts)
     assert len(helper(tmp_path)) == 1
     assert len(reads) == 1
+
+
+def test_headers_are_harvested_between_reads_and_names_are_unioned(tmp_path, target_harvest):
+    helper, namespace = target_harvest
+    for name in ["a.h", "b.H"]:
+        (tmp_path / name).touch()
+    events = []
+
+    def read(path, cap):
+        events.append("read:" + path.name)
+        return "owned text", False
+
+    def harvest(texts):
+        assert len(texts) == 1
+        name = Path(next(iter(texts))).name
+        events.append("harvest:" + name)
+        return frozenset({"shared", Path(name).stem})
+
+    namespace["read_text_capped"] = read
+    namespace["harvest_wur_declarations"] = harvest
+    assert helper(tmp_path) == frozenset({"shared", "a", "b"})
+    assert events == ["read:a.h", "harvest:a.h", "read:b.H", "harvest:b.H"]
+
+
+def test_all_read_refusals_skip_declaration_harvesting(tmp_path, target_harvest):
+    helper, namespace = target_harvest
+    (tmp_path / "owned.h").touch()
+    namespace["read_text_capped"] = lambda *args: None
+    namespace["harvest_wur_declarations"] = lambda texts: pytest.fail("no admitted text")
+    assert helper(tmp_path) == frozenset()
