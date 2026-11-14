@@ -34,7 +34,7 @@ from core.atomic_fs import rmtree_hardened
 from core.run.scratch import scratch_dir
 from core.source.streams import preserving_stream_error
 from core.config import RaptorConfig
-from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, load_pairs
+from core.dataflow.cvefix_loader import INJECTION_CWES, CveFixPair, _validate_pair_limit, load_pairs
 from core.git.clone import (
     get_safe_git_env,
     safe_git_command,
@@ -543,7 +543,11 @@ def walk(
     Timeouts default to the conservative walker-tier values; operators
     pushing into projects with very long secondary-extractor phases
     (large Go web repos) can raise ``build_timeout``.  ``tunables``
-    controls ``--threads`` / ``--ram`` / ``--max-disk-cache``."""
+    controls ``--threads`` / ``--ram`` / ``--max-disk-cache``.
+    ``limit`` must be a non-negative integer or None; invalid values
+    raise ValueError before metadata or results access.
+    """
+    _validate_pair_limit(limit)
     pairs = load_pairs(db_path, cwes=cwes, languages=languages)
     con = sqlite3.connect(str(results_db))
     with preserving_stream_error(closing(con)):
@@ -611,7 +615,10 @@ def promote_misses(
     autobuild failures or still-0 keep the buildless row, so the result is never
     worse than buildless-only. Targeted at exactly the cases a build can help, so
     the expensive autobuilds are bounded to the buildless false-negative set.
+    ``limit`` must be a non-negative integer or None; invalid values
+    raise ValueError before results access.
     """
+    _validate_pair_limit(limit)
     con = sqlite3.connect(str(results_db))
     with preserving_stream_error(closing(con)):
         con.execute(_SCHEMA)
