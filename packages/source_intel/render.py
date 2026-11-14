@@ -1292,10 +1292,8 @@ def _render_no_stack_protector_line(
 ) -> str:
     """Render no_stack_protector evidence.
 
-    This is an explicit HARDENING HOLE — the function opts out of the
-    stack-canary insertion that -fstack-protector* would normally add.
-    A stack buffer overflow in such a function bypasses the canary
-    check entirely.
+    The annotation requests omission of stack-protector instrumentation.
+    It does not establish the compiled layout or an overflow path.
     """
     fn_text = (
         f"function `{ev.function_name}`"
@@ -1306,17 +1304,17 @@ def _render_no_stack_protector_line(
     sp_phrase = _stack_protector_phrase(build_flags)
 
     if style == "stage_d":
-        prefix = "Hardening hole — no_stack_protector"
+        prefix = "Hardening annotation — no_stack_protector"
     elif style == "exploit_plan":
-        prefix = "Constraint relaxed — no canary on this function"
+        prefix = "Constraint to verify — no_stack_protector annotation"
     else:
         prefix = "Variant hint — no_stack_protector annotation"
 
     return (
-        f"{prefix}: {fn_text} explicitly OPTS OUT of -fstack-protector. "
-        f"A stack buffer overflow in this function bypasses the canary "
-        f"check; saved return address reaches via overflow without "
-        f"defence. {sp_phrase}"
+        f"{prefix}: {fn_text} is annotated to opt out of stack-protector "
+        f"instrumentation. This observation does not establish an overflow, "
+        f"saved-return-address reachability, absence of other defences, "
+        f"or the instrumentation in the compiled binary. {sp_phrase}"
     )
 
 
@@ -1333,9 +1331,9 @@ def _stack_protector_phrase(build_flags: BuildFlagsContext | None) -> str:
     level = build_flags.stack_protector_level
     if level in ("strong", "all"):
         return (
-            f"Build flags include -fstack-protector-{level} — most of "
-            f"the binary has canary protection that this function "
-            f"explicitly disables."
+            f"Build flags observed include -fstack-protector-{level}; "
+            f"this does not establish which functions in the compiled "
+            f"binary contain canary instrumentation."
         )
     if level == "weak":
         return (
@@ -1345,9 +1343,9 @@ def _stack_protector_phrase(build_flags: BuildFlagsContext | None) -> str:
         )
     if level == "none":
         return (
-            "Build-wide stack-protector is disabled (-fno-stack-protector); "
-            "this function's opt-out is redundant — canary wasn't "
-            "present anyway."
+            "Build flags observed include -fno-stack-protector; this "
+            "does not establish the instrumentation in the compiled binary "
+            "or the flags used for this function."
         )
     return (
         "Build-wide stack-protector status not pinned by observed flags."
