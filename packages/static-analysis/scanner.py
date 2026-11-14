@@ -968,6 +968,7 @@ def run_single_semgrep(
     is_registry_pack = config.startswith(("p/", "category/"))
     effective_timeout = min(timeout, RaptorConfig.SEMGREP_PACK_TIMEOUT) if is_registry_pack else timeout
 
+    sarif_written = False
     try:
         # Engage Landlock via target + output. Writes pinned to out_dir
         # and /tmp. Reads Landlock-default-wide (semgrep is a
@@ -1069,6 +1070,7 @@ def run_single_semgrep(
         # byte sequence in the semgrep stdout (shouldn't happen but
         # we don't want a single bad byte to crash the write).
         sarif.write_text(so, encoding="utf-8", errors="replace")
+        sarif_written = True
         stderr_log.write_text(se or "", encoding="utf-8", errors="replace")
         exit_file.write_text(str(rc), encoding="utf-8")
 
@@ -1105,13 +1107,16 @@ def run_single_semgrep(
         raise
     except Exception as e:  # noqa: BLE001
         logger.error("Semgrep scan '%s' failed: %s", name, e)
-        # Write empty SARIF on error. Same encoding posture as the
-        # success path above — explicit UTF-8 so the downstream
-        # parser sees a consistent byte shape regardless of host
-        # locale.
-        sarif.write_text('{"runs": []}', encoding="utf-8")
-        stderr_log.write_text(str(e), encoding="utf-8", errors="replace")
-        exit_file.write_text("-1", encoding="utf-8")
+        # Preserve output saved by this invocation if a later artifact write
+        # fails. An older report is not evidence from this invocation.
+        recovery_writes = [(stderr_log, str(e)), (exit_file, "-1")]
+        if not sarif_written:
+            recovery_writes.insert(0, (sarif, '{"runs": []}'))
+        for artifact, text in recovery_writes:
+            try:
+                artifact.write_text(text, encoding="utf-8", errors="replace")
+            except OSError:
+                logger.warning("Could not persist Semgrep failure artifact: %s", artifact.name)
         return str(sarif), False
 
 

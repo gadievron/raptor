@@ -954,3 +954,35 @@ def test_codeql_diagnostic_write_failure_retains_recovered_report(tmp_path, monk
              returncode=1, communicate_side_effect=complete)):
         assert run_codeql(tmp_path, out) == [str(report)]
     assert "Could not persist CodeQL execution diagnostic" in caplog.text
+
+
+@pytest.mark.parametrize("refused_suffix", ["stderr.log", "exit", "sarif", "scan-error"])
+def test_semgrep_secondary_artifact_refusal_retains_current_sarif(tmp_path, monkeypatch, refused_suffix):
+    import json
+
+    payload = json.dumps({"version": "2.1.0", "runs": [{"results": [{"ruleId": "owned"}]}]})
+    if refused_suffix == "scan-error":
+        (tmp_path / "semgrep_owned.sarif").write_text(payload)
+    else:
+        (tmp_path / f"semgrep_owned.{refused_suffix}").mkdir()
+    monkeypatch.setattr(_scanner_mod.RaptorConfig, "SEMGREP_OFFLINE", True)
+    monkeypatch.setattr(_scanner_mod.RaptorConfig, "get_semgrep_config", lambda value: value)
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "scope_isolation_available", lambda *a: True)
+    monkeypatch.setattr(_scanner_mod.semgrep_pkg, "build_cmd", lambda *a, **kw: ["/owned/unexecuted"])
+    def fake_run(*args, **kwargs):
+        if refused_suffix == "scan-error":
+            raise OSError("owned execution refusal")
+        return 0, payload, "owned stderr"
+
+    monkeypatch.setattr(_scanner_mod, "run", fake_run)
+    with mock_module_attribute(_scanner_mod, "shutil", "which", return_value="/owned/unexecuted"):
+        path, success = _scanner_mod.run_single_semgrep("owned", "owned.yaml", tmp_path, tmp_path, 1)
+    assert success is False
+    if refused_suffix == "sarif":
+        assert Path(path).is_dir()
+    elif refused_suffix == "scan-error":
+        assert json.loads(Path(path).read_text()) == {"runs": []}
+    else:
+        assert Path(path).read_text() == payload
+    if refused_suffix != "exit":
+        assert (tmp_path / "semgrep_owned.exit").read_text() == "-1"
