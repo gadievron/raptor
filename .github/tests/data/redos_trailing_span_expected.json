@@ -1,5 +1,5 @@
 {
- "_comment": "Pinned trailing-span/anchor-restart census members: static proposals (Rule C / Rule R) the pump oracle measured linear, keyed file\u001fname with pattern digests. Regenerate with: python3 .github/tests/test_redos_idiom_census.py --regen-trailing-span  (the tool refuses superlinear members; hand-editing a verdict is caught by the nightly oracle re-check).",
+ "_comment": "Pinned trailing-span/anchor-restart census members (Rule C / Rule R), keyed file\\x1fname with exact pattern/flags/mode digests. Records contain pump-oracle dispositions or explicit source-specific static adjudications documented in note. A null exp carries no measured exponent. Regenerate with: python3 .github/tests/test_redos_idiom_census.py --regen-trailing-span (refuses superlinear members; preserves matching review notes). Nightly oracle re-check remains independent validation.",
  "members": {
   "core/analysis/binary_oracle.py\u001fattr_re": {
    "digests": [
@@ -1222,9 +1222,10 @@
   },
   "core/inventory/macro_resolve.py\u001f_MACRO_DEF_RE": {
    "digests": [
-    "2bd308c671e8"
+    "2f6131ec4fe0"
    ],
-   "exp": 1.04,
+   "exp": null,
+   "note": "Static source adjudication for this exact pattern digest, flags rendering re.MULTILINE and search mode: Each MULTILINE attempt is LF-bounded. Identifier cannot overlap whitespace/parameter-open. Missing closing parameter costs one line scan. Preferred greedy body endpoint must be non-whitespace; lookahead scans its following horizontal whitespace run once, and other endpoint probes cannot begin inside that run. If no terminal continuation qualifies, nonempty whole-line body fallback accepts the remainder. Greedy separator needs at most one-character give-back for whitespace-only replacement. Optional terminal trailer therefore cannot fail repeatedly at every interior whitespace position as the former lazy-body shape did. Sum of disjoint-line scans is linear in joined input length; sparse prefilter is not the complexity proof. No current pump-oracle exponent measured; exp is null. Historical prior-pattern exponent is not transferred.",
    "rules": [
     "C",
     "R"
@@ -2048,9 +2049,10 @@
   },
   "packages/source_intel/discovery.py\u001f_DEFINE_RE": {
    "digests": [
-    "6c3adba2ca7e"
+    "b617412c5713"
    ],
-   "exp": 1.04,
+   "exp": null,
+   "note": "Static source adjudication for this exact pattern digest, flags rendering re.MULTILINE and search mode: Each MULTILINE attempt is LF-bounded. Identifier excludes whitespace and parenthesis delimiter. Parameter body excludes LF; missing closing parenthesis costs a single line scan. Once a separator branch succeeds, replacement [^\\n]*$ accepts the remainder without a failable suffix. Empty end-of-line alternative accepts empty object definitions. No cross-line whitespace restart or repeated suffix allocation; sum over disjoint logical lines is linear in joined input length. No current pump-oracle exponent measured; exp is null. Historical prior-pattern exponent is not transferred.",
    "rules": [
     "C",
     "R"
