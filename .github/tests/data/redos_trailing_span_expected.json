@@ -1220,18 +1220,6 @@
    ],
    "verdict": "linear"
   },
-  "core/inventory/macro_resolve.py\u001f_MACRO_DEF_RE": {
-   "digests": [
-    "2f6131ec4fe0"
-   ],
-   "exp": null,
-   "note": "Static source adjudication for this exact pattern digest, flags rendering re.MULTILINE and search mode: Each MULTILINE attempt is LF-bounded. Identifier cannot overlap whitespace/parameter-open. Missing closing parameter costs one line scan. Preferred greedy body endpoint must be non-whitespace; lookahead scans its following horizontal whitespace run once, and other endpoint probes cannot begin inside that run. If no terminal continuation qualifies, nonempty whole-line body fallback accepts the remainder. Greedy separator needs at most one-character give-back for whitespace-only replacement. Optional terminal trailer therefore cannot fail repeatedly at every interior whitespace position as the former lazy-body shape did. Sum of disjoint-line scans is linear in joined input length; sparse prefilter is not the complexity proof. No current pump-oracle exponent measured; exp is null. Historical prior-pattern exponent is not transferred.",
-   "rules": [
-    "C",
-    "R"
-   ],
-   "verdict": "linear"
-  },
   "core/inventory/module_load_abort.py\u001f_RUST_COMPILE_ERROR": {
    "digests": [
     "888061a5afa4"
