@@ -273,7 +273,7 @@ def read_parity_records(path: str | Path) -> list[ParityRecord]:
                 if len(line) > _MAX_RECORD_LINE_CHARS:
                     # Drain the rest of the oversized line in bounded
                     # chunks, then resume at the next record.
-                    while True:
+                    while not line.endswith("\n"):
                         chunk = f.readline(_MAX_RECORD_LINE_CHARS)
                         if not chunk or chunk.endswith("\n"):
                             break
