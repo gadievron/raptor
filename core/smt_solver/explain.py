@@ -115,7 +115,7 @@ def core_names(solver: Any, rev: Mapping[str, str]) -> list[str]:
     names: list[str] = []
     try:
         core = solver.unsat_core()
-    except (*Z3_ERRORS, AttributeError):
+    except Z3_ERRORS + (AttributeError,):
         return names
     for label in core:
         name = rev.get(str(label))

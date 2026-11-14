@@ -1222,7 +1222,11 @@ def module_dynamic_namespace(
         while (isinstance(value, ast.NamedExpr)
                or (isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
                    and value.func.attr == "copy" and not value.args and not value.keywords)):
-            value = value.value if isinstance(value, ast.NamedExpr) else value.func.value
+            if isinstance(value, ast.NamedExpr):
+                value = value.value
+            else:
+                assert isinstance(value, ast.Call) and isinstance(value.func, ast.Attribute)
+                value = value.func.value
         if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
                 and value.func.id in list_constructor_names
                 and len(value.args) == 1 and not value.keywords):

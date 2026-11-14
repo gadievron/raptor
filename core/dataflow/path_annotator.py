@@ -149,7 +149,7 @@ def _annotate_step(
         if qualified:
             # Prefer the most specific syntactic identity before trying
             # short names; an earlier unrelated bare match must not hide it.
-            match = max(qualified, key=lambda c: len(c.qualified_name.split(".")))
+            match: CandidateValidator | None = max(qualified, key=lambda c: len(c.qualified_name.split(".")))
         else:
             short_matches = [
                 c for c in candidates if _chain_matches_candidate(chain, c)

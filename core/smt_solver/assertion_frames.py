@@ -47,7 +47,7 @@ class TrackedFrames:
             return len(current) == len(self._assertions) and all(
                 actual.eq(original) for actual, original in zip(current, self._assertions, strict=True)
             )
-        except (*Z3_ERRORS, AttributeError):
+        except Z3_ERRORS + (AttributeError,):
             return False
 
     def check(self) -> Any:

@@ -13,6 +13,7 @@ import re
 import stat as stat_mod
 from pathlib import Path
 from typing import Any, Callable, Iterator
+from collections.abc import Mapping
 from urllib.parse import unquote, urljoin, urlsplit, urlunsplit, quote
 
 from core.detectors.compiler_families import compiler_diagnostic_is_candidate
@@ -1859,7 +1860,7 @@ def _normalise_tool_name(driver_name: str) -> str:
     return _TOOL_NAME_MAP.get(driver_name.lower(), driver_name.lower())
 
 
-def get_run_execution_diagnostics(run: dict[str, Any]) -> dict[str, int]:
+def get_run_execution_diagnostics(run: Mapping[str, Any]) -> dict[str, int]:
     """Count execution/configuration failures without retaining report payloads.
 
     One invocation is one failure even when multiple notification channels

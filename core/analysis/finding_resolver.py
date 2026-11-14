@@ -49,6 +49,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
+    IO,
     TYPE_CHECKING,
     Any,
     Union,
@@ -465,12 +466,14 @@ def _read_finding_source(
             reason=f"refusing oversize source file {file!r} "
                    f"({size} bytes > {_MAX})",
         )
+    stream: IO[bytes] | None
     try:
         if anchored_root is None:
             stream = read_path.open("rb")
         else:
             from core.source.beneath import open_regular_beneath
 
+            assert anchored_relative is not None
             stream = open_regular_beneath(anchored_root, anchored_relative, "rb")
             if stream is None:
                 return ResolutionFailure(
