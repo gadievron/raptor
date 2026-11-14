@@ -363,6 +363,7 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
         ast.Name, ast.Constant, ast.Attribute, ast.Subscript, ast.Slice,
         ast.UnaryOp, ast.BinOp, ast.BoolOp, ast.Compare, ast.IfExp,
         ast.Tuple, ast.List, ast.Set, ast.Dict, ast.Call, ast.keyword,
+        ast.JoinedStr, ast.FormattedValue,
         ast.Starred, ast.Load, ast.operator, ast.unaryop, ast.boolop, ast.cmpop,
     )
     names: set[str] = set()
