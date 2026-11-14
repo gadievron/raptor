@@ -75,21 +75,20 @@ def _render_gap(gap: Any) -> str:
     ])
 
 
+def _score_assignments(
+    ranked_items: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], float]]:
+    """Prepare a segment's score assignments without mutating its gaps."""
+    scored = [g for g in ranked_items
+              if isinstance(g, dict) and g.get("priority_score") is not None]
+    ordered = sorted((float(g["priority_score"]) for g in scored), reverse=True)
+    return list(zip(scored, ordered, strict=True))
+
+
 def _restamp_scores(ranked_items: list[dict[str, Any]]) -> None:
-    """Reassign the segment's own priority_score multiset (sorted
-    descending) along the LLM order, in place. No-op when the segment
-    carries no scores (plain compute_gaps output)."""
-    scores = [
-        g.get("priority_score") for g in ranked_items
-        if isinstance(g, dict) and g.get("priority_score") is not None
-    ]
-    if not scores:
-        return
-    ordered = sorted((float(s) for s in scores if s is not None), reverse=True)
-    it = iter(ordered)
-    for gap in ranked_items:
-        if isinstance(gap, dict) and gap.get("priority_score") is not None:
-            gap["priority_score"] = next(it)
+    """Reassign a segment's score multiset in place; skip absent scores."""
+    for gap, score in _score_assignments(ranked_items):
+        gap["priority_score"] = score
 
 
 def rank_gap_queue(
@@ -136,6 +135,7 @@ def rank_gap_queue(
                       else build_llm_client())
 
         out: list[dict[str, Any]] = []
+        score_segments: list[list[dict[str, Any]]] = []
         budget = head
         ranked_n = 0
         tiers_ranked = 0
@@ -168,7 +168,7 @@ def rank_gap_queue(
             budget -= len(head_slice)
             ranked_items = [r.item for r in result.ranked]
             if stamp_scores:
-                _restamp_scores(ranked_items)
+                score_segments.append(ranked_items)
             out.extend(ranked_items)
             out.extend(rest)
             ranked_n += len(head_slice)
@@ -183,6 +183,11 @@ def rank_gap_queue(
             f"ranked {ranked_n}/{len(gaps)} gaps within {tiers_ranked} "
             f"priority tier(s) ({calls} LLM calls, ${cost:.2f})"
         )
+        if stamp_scores:
+            assignments = [assignment for segment in score_segments
+                           for assignment in _score_assignments(segment)]
+            for gap, score in assignments:
+                gap["priority_score"] = score
         return out, note
     except Exception as e:  # noqa: BLE001 — ordering refinement must
         # never break the gaps pipeline; mechanical order is always a
