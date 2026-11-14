@@ -389,6 +389,8 @@ class ExtensionPackResult:
 def _gate_provenance(row: ModelRow) -> str | None:
     if not row.provenance:
         return "provenance missing"
+    if not isinstance(row.provenance, str):
+        return "provenance must be text"
     if row.provenance in REJECTED_PROVENANCE:
         return f"provenance {row.provenance!r} is not evidence-backed"
     if row.provenance not in ACCEPTED_PROVENANCE:
@@ -400,9 +402,9 @@ def _gate_provenance(row: ModelRow) -> str | None:
 
 
 def _validate_common(row: ModelRow) -> str | None:
-    if row.role not in VALID_ROLES:
+    if not isinstance(row.role, str) or row.role not in VALID_ROLES:
         return f"role {row.role!r} not in {sorted(VALID_ROLES)}"
-    if not _KIND_RE.match(row.model_kind or ""):
+    if not isinstance(row.model_kind, str) or not _KIND_RE.match(row.model_kind):
         return f"model_kind {row.model_kind!r} fails kind grammar"
     if isinstance(row.confidence, bool) or not isinstance(row.confidence, Number):
         return f"confidence {row.confidence!r} must be numeric"
