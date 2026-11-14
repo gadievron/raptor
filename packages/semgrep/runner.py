@@ -135,21 +135,21 @@ SCOPE_EXCLUDE_BASELINE: tuple[str, ...] = (
 )
 
 
-def is_available() -> bool:
-    """Check whether semgrep is on PATH."""
-    return shutil.which(_SEMGREP_BIN) is not None
+def is_available(semgrep_bin: str | None = None) -> bool:
+    """Check whether the selected Semgrep launcher can be resolved."""
+    return shutil.which(semgrep_bin or _SEMGREP_BIN) is not None
 
 
-def _version_probe():
+def _version_probe(semgrep_bin: str | None = None):
     from core.config import RaptorConfig
     if not RaptorConfig.SEMGREP_OFFLINE:
         return probe(
-            _SEMGREP_BIN,
+            semgrep_bin or _SEMGREP_BIN,
             args=("--version", "--metrics", "off", "--disable-version-check"),
             isolated_home=True,
         )
     from core.run.toolprobe import ToolInfo
-    binary = shutil.which(_SEMGREP_BIN)
+    binary = shutil.which(semgrep_bin or _SEMGREP_BIN)
     if binary is None:
         return None
     runner = _default_sandbox_runner(Path.cwd(), "")
@@ -197,11 +197,11 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reset_scope_probe_cache)
 
 
-def _scope_probe_key() -> tuple[object, ...] | None:
+def _scope_probe_key(semgrep_bin: str | None = None) -> tuple[object, ...] | None:
     """Fingerprint the selected launcher and its dispatch/sandbox context."""
     from core.config import RaptorConfig
 
-    binary = shutil.which(_SEMGREP_BIN)
+    binary = shutil.which(semgrep_bin or _SEMGREP_BIN)
     if binary is None:
         return None
     try:
@@ -217,8 +217,10 @@ def _scope_probe_key() -> tuple[object, ...] | None:
         return None
 
 
-def _probe_scope_version(key: tuple[object, ...] | None) -> tuple[int, ...] | None:
-    info = _version_probe()
+def _probe_scope_version(
+    key: tuple[object, ...] | None, semgrep_bin: str | None = None,
+) -> tuple[int, ...] | None:
+    info = _version_probe() if semgrep_bin is None else _version_probe(semgrep_bin)
     if info is None or info.returncode != 0:
         return None
     # Semgrep emits a bare release on either stream. Dependency warnings and
@@ -243,11 +245,18 @@ def _probe_scope_version(key: tuple[object, ...] | None) -> tuple[int, ...] | No
     return parsed if same_tool else None
 
 
-def _scope_version() -> tuple[int, ...] | None:
+def _scope_version(semgrep_bin: str | None = None) -> tuple[int, ...] | None:
     global _SCOPE_PROBE_CACHE, _SCOPE_PROBE_PENDING
 
+    def current_key():
+        return _scope_probe_key() if semgrep_bin is None else _scope_probe_key(semgrep_bin)
+
+    def probe_version(key):
+        return (_probe_scope_version(key) if semgrep_bin is None else
+                _probe_scope_version(key, semgrep_bin))
+
     with _SCOPE_PROBE_LOCK:
-        key = _scope_probe_key()
+        key = current_key()
         future: Future[tuple[int, ...] | None] | None = None
         owner = False
         if key is not None:
@@ -265,17 +274,17 @@ def _scope_version() -> tuple[int, ...] | None:
                 # cleanup cannot clear this newer coordination entry.
                 _SCOPE_PROBE_PENDING = (key, future)
     if key is None:
-        return _probe_scope_version(None)
+        return probe_version(None)
     assert future is not None
     if not owner:
         parsed = future.result()
-        return parsed if key == _scope_probe_key() else None
+        return parsed if key == current_key() else None
 
     try:
-        parsed = _probe_scope_version(key)
+        parsed = probe_version(key)
         with _SCOPE_PROBE_LOCK:
             # Revalidate at publication, including changes during probing.
-            if key != _scope_probe_key():
+            if key != current_key():
                 parsed = None
             if parsed is not None:
                 _SCOPE_PROBE_CACHE = (key, parsed)
@@ -293,14 +302,14 @@ def _scope_version() -> tuple[int, ...] | None:
         raise
 
 
-def scope_isolation_available() -> bool:
+def scope_isolation_available(semgrep_bin: str | None = None) -> bool:
     """True when semgrep supports ``--x-ignore-semgrepignore-files``.
 
     Below-floor versions let hostile targets steer scan scope via
     ``.semgrepignore`` files.  Callers should log a warning and pass
     ``scope_isolation=False`` to :func:`build_cmd`.
     """
-    vt = _scope_version()
+    vt = _scope_version() if semgrep_bin is None else _scope_version(semgrep_bin)
     return vt is not None and vt >= _SCOPE_ISOLATION_MIN_VERSION
 
 
@@ -651,6 +660,8 @@ def run_rule(
         SemgrepResult with parsed findings, files_examined, files_failed,
         and raw SARIF/JSON for caller persistence.
     """
+    # Empty overrides retain build_cmd's default-launcher behaviour.
+    semgrep_bin = semgrep_bin or None
     # The private bind tree need not carry the caller's working directory.
     # Preserve file identity while making scan/rule arguments cwd-independent.
     target = Path(target).absolute()
@@ -680,14 +691,20 @@ def run_rule(
             return SemgrepResult(name=name, config=config, target=str(target),
                                  errors=[str(exc)], returncode=-1)
 
-    if not is_available():
+    available = is_available() if semgrep_bin is None else is_available(semgrep_bin)
+    if not available:
         return SemgrepResult(
             name=name, config=config, target=str(target),
-            errors=["semgrep is not installed (semgrep binary not found on PATH)"],
+            errors=[("semgrep is not installed (semgrep binary not found on PATH)"
+                     if semgrep_bin is None else f"Selected Semgrep executable unavailable: {semgrep_bin}")],
             returncode=-1,
         )
 
-    scope_ok = scope_isolation_available()
+    if semgrep_bin is not None:
+        # Pin a relative PATH answer before any runner changes working directory.
+        semgrep_bin = str(Path(shutil.which(semgrep_bin) or semgrep_bin).absolute())
+    scope_ok = (scope_isolation_available() if semgrep_bin is None else
+                scope_isolation_available(semgrep_bin))
     if not scope_ok:
         _warn_scope_isolation_once(logger)
 
@@ -945,7 +962,7 @@ def run_rules(
     is sequential to keep the package free of policy decisions about
     concurrency, worker counts, and progress reporting.
     """
-    if not is_available():
+    if semgrep_bin is None and not is_available():
         return [
             SemgrepResult(
                 name=name, config=config, target=str(target),

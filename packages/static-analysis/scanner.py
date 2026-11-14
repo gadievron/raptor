@@ -901,7 +901,7 @@ def run_single_semgrep(
     # below — packages/semgrep/ is pure invocation logic.
     # Resolve binary explicitly to avoid broken-venv installations.
     semgrep_cmd = shutil.which("semgrep") or "/opt/homebrew/bin/semgrep"
-    scope_ok = semgrep_pkg.scope_isolation_available()
+    scope_ok = semgrep_pkg.scope_isolation_available(semgrep_cmd)
     if not scope_ok:
         from packages.semgrep.runner import _warn_scope_isolation_once
         _warn_scope_isolation_once(logger)
