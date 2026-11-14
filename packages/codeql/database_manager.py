@@ -267,7 +267,7 @@ def buildless_degradation_summary(db_path: Path) -> tuple:
     try:
         diag_root = db_path / "diagnostic"
         if diag_root.is_dir():
-            for f in sorted(diag_root.rglob("*")):
+            for f in diag_root.rglob("*"):
                 if not f.is_file() or f.suffix.lower() not in (".json", ".jsonl"):
                     continue
                 try:
