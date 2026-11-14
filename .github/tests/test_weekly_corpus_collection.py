@@ -3,10 +3,10 @@
 import ast
 import builtins
 from pathlib import Path
+import re
 from types import ModuleType, SimpleNamespace
 
 import pytest
-import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -90,8 +90,10 @@ def test_available_grammars_retain_helper_and_product_imports():
     ("contributor/raptor", "push", False),
 ])
 def test_corpus_job_event_policy(repository, event, expected):
-    workflow = yaml.safe_load((ROOT / ".github/workflows/weekly_corpus.yml").read_text())
-    condition = workflow["jobs"]["corpus-drivers"].get("if", "true")
+    workflow = (ROOT / ".github/workflows/weekly_corpus.yml").read_text()
+    match = re.search(r"(?m)^  corpus-drivers:\n(?:    #[^\n]*\n)*    if: ([^\n]+)$", workflow)
+    assert match, "corpus-drivers must declare its job-level event policy"
+    condition = match.group(1)
     assert condition == ("github.event_name == 'workflow_dispatch' || "
                          "(github.event_name == 'schedule' && "
                          "github.repository == 'gadievron/raptor')")
