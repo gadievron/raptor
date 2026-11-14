@@ -65,8 +65,8 @@ def test_child_and_comprehension_bindings_mask_outer_cell(parameters, expression
 
 @pytest.mark.parametrize("expression", ["[raw for slots[(lambda: raw)()] in ()]",
                                        "lambda: [raw for slots[(lambda: raw)()] in ()]",
-                                       "[(raw := item) for item in ()]"],
-                         ids=["scoped-target", "nested-scoped-target", "assignment-expression"])
+                                       "lambda: (yield raw)"],
+                         ids=["scoped-target", "nested-scoped-target", "generator-output"])
 def test_incomplete_target_or_unsupported_node_invalidates_complete_body(expression):
     assert _bounded_body_expression_loads(ast.parse(f"raw\ndef child():\n return {expression}").body) is None
 
