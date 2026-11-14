@@ -691,6 +691,26 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
         node = pending.pop()
         if _match_literal_expression(node):
             continue
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            pending.append(node.operand)
+            continue
+        if isinstance(node, ast.BoolOp):
+            if not isinstance(node.op, (ast.And, ast.Or)) or len(node.values) < 2:
+                return False
+            pending.extend(node.values)
+            continue
+        if isinstance(node, ast.IfExp):
+            pending.extend((node.test, node.body, node.orelse))
+            continue
+        if isinstance(node, ast.Compare):
+            if (not node.ops or len(node.ops) != len(node.comparators)
+                    or any(not isinstance(operator, (ast.Eq, ast.NotEq, ast.Lt, ast.LtE,
+                                                       ast.Gt, ast.GtE, ast.Is, ast.IsNot,
+                                                       ast.In, ast.NotIn)) for operator in node.ops)):
+                return False
+            pending.append(node.left)
+            pending.extend(node.comparators)
+            continue
         if isinstance(node, (ast.UnaryOp, ast.BinOp)):
             numeric_pending: list[ast.expr] = [node]
             while numeric_pending:
