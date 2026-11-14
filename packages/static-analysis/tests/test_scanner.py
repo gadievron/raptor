@@ -644,6 +644,7 @@ class TestJoinCodeQLStage:
     (merge_fails, removed_lines, 0, False, {}, False, False, None)
     for merge_fails in (False, True) for removed_lines in ([], [1], [1, 2])
 ] + [
+    (True, [], 0, False, {}, False, 'merge-log-refused', None),
     (False, [], 1, False, {}, False, False, None),
     (False, [], 2, False, {}, False, False, None),
     (False, [], 1, False, {}, True, False, None),
@@ -736,6 +737,8 @@ def test_scan_metrics_follow_committed_report_or_raw_fallback(
     (out / 'scan' / 'coverage-sca.json').write_text(json.dumps({
         'tool': 'sca', 'files_examined': ['old-dependency.json'],
     }))
+    if stage_mode == 'merge-log-refused':
+        (out / 'sarif_merge.stderr.log').mkdir()
     # An earlier run's report must not become authoritative on merge failure.
     (out / 'combined.sarif').write_text(json.dumps({'version': '2.1.0', 'runs': []}))
     monkeypatch.setattr(core.sandbox, 'apply_cli_args', lambda *a, **kw: None)
