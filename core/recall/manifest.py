@@ -214,9 +214,9 @@ def _parse_provenance(raw: Any, where: str, errors: list[str]) -> Provenance:
     if kind == "cve":
         cve = raw.get("cve_id") or ""
         fix = raw.get("fix_commit") or ""
-        if not re.match(r"^CVE-\d{4}-\d{4,}$", cve):
+        if not re.fullmatch(r"^CVE-\d{4}-\d{4,}$", cve):
             errors.append(f"{where}: cve provenance needs a CVE id")
-        if not _SHA_RE.match(fix):
+        if not _SHA_RE.fullmatch(fix):
             errors.append(f"{where}: cve provenance needs a fix commit sha")
         return Provenance(kind="cve", cve_id=cve or None,
                           fix_commit=fix or None)
@@ -254,7 +254,7 @@ def _parse_expected(raw: Any, where: str,
         errors.append(f"{where}: missing id")
     if not file or Path(file).is_absolute() or ".." in Path(file).parts:
         errors.append(f"{where}: file must be a relative in-repo path")
-    if not _CWE_RE.match(cwe):
+    if not _CWE_RE.fullmatch(cwe):
         errors.append(f"{where}: cwe must look like CWE-NNN (got {cwe!r})")
     line_start = raw.get("line_start")
     line_end = raw.get("line_end")
@@ -296,7 +296,7 @@ def parse_manifest(data: Any) -> RecallManifest:
         local_path = target.get("local_path") or ""
         if not repo_url:
             errors.append("target.repo_url required (public provenance)")
-        if not _SHA_RE.match(pinned_sha):
+        if not _SHA_RE.fullmatch(pinned_sha):
             errors.append("target.pinned_sha must be a git sha")
         if not local_path:
             errors.append("target.local_path required")
