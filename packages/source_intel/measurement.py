@@ -450,7 +450,7 @@ def main() -> int:
           f"({stats['err_rate_si']:.1%})")
     print(f"  improved by SI:      {stats['improved']}")
     print(f"  regressed by SI:     {stats['regressed']}")
-    print(f"  same verdict:        {stats['same']}")
+    print(f"  unchanged correctness: {stats['same']}")
     if stats["err_reduction"] == float("-inf"):
         print(f"  error reduction:     regressed — baseline had zero "
               f"errors, SI introduced {stats['si_errors']}  "
