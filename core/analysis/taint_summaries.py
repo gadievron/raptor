@@ -536,9 +536,11 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
         return True
     allowed = (*_scope_free_expression_nodes(), ast.Lambda, ast.arguments, ast.arg,
                ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
-               ast.comprehension, ast.Store)
+               ast.comprehension, ast.Store, ast.NamedExpr)
     for node in ast.walk(expression):
         if not isinstance(node, allowed):
+            return False
+        if isinstance(node, ast.NamedExpr) and not isinstance(node.target, ast.Name):
             return False
         if isinstance(node, ast.comprehension) and _comprehension_target_scope(
             node.target, require_scope_free_reads=True
