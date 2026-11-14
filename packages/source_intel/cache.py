@@ -154,15 +154,15 @@ def compute_target_signature(target: Path) -> str:
     """Fast change-detection signature for a target dir or file.
 
     Used as a cache-staleness marker — *not* a security-relevant
-    fingerprint. Walks every C/C++ file under ``target`` and combines
-    each file's (mtime_ns, size) into a single sha256 — stat only, no
-    content reads, no file cap. Two invocations on an unchanged tree
-    return the same signature; any source edit, file add/remove, or
-    build-marker change flips it.
+    fingerprint. Walks C/C++ files under ``target`` and combines
+    paths and (mtime_ns, size) into a single sha256 — stat only, no
+    content reads or file cap. File-set and recorded metadata changes
+    participate in the marker; content edits preserving size and mtime
+    can remain undetected.
 
-    Cheaper than ``_hash_target_tree`` (no content reads) so it's
-    affordable to recompute on every cache lookup. Sub-second on
-    kernel-scale repos.
+    Avoids the content reads of ``_hash_target_tree``, but still
+    enumerates and sorts paths. Work depends on the tree and filesystem;
+    this helper does not provide a fixed elapsed-time bound.
 
     Falls back to deterministic sentinels for missing targets +
     unresolvable paths so cache misses are predictable rather than
@@ -184,9 +184,8 @@ def compute_target_signature(target: Path) -> str:
         return h.hexdigest()
 
     h.update(b"DIR\x00")
-    # No file cap: the stat-only walk is cheap, and any cap would
-    # exclude some files from the signature — edits to them would
-    # never invalidate downstream caches.
+    # No file cap: excluding files here would omit their path/metadata
+    # changes from downstream cache-staleness checks.
     for path in _sorted_source_files(target):
         try:
             st = path.stat()
