@@ -227,7 +227,7 @@ def source_fingerprint(source_texts: dict[str, str]) -> str:
     """Content fingerprint of the indexed tree (cache key half)."""
     h = hashlib.sha256()
     for path in sorted(source_texts):
-        h.update(path.encode("utf-8", "replace"))
+        h.update(path.encode("utf-8", "surrogatepass"))
         h.update(b"\x00")
         h.update(hashlib.sha256(
             (source_texts[path] or "").encode("utf-8", "replace"),
