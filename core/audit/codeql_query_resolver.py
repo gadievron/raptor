@@ -100,8 +100,9 @@ def _cli_qlpack_roots(pack: str) -> list[Path]:
     cache — the direct probes below cover that)."""
     try:
         from core.config import RaptorConfig
+        cli = os.environ.get("CODEQL_CLI") or "codeql"
         proc = subprocess.run(
-            ["codeql", "resolve", "qlpacks", "--format=json"],
+            [cli, "resolve", "qlpacks", "--format=json"],
             capture_output=True, text=True,
             timeout=_RESOLVE_QLPACKS_TIMEOUT_S,
             env=RaptorConfig.get_safe_env(),
