@@ -110,6 +110,7 @@ class AuditPipelineOpts:
     study_root: Path | None = None
     study_libraries: tuple[tuple[str, str], ...] = ()
     no_study_libraries: bool = False
+    study_job_call_limit: int | None = field(default=None, kw_only=True)
     study_concept_seeding: bool = True
     mode: ReviewMode = ReviewMode.SECURITY
     max_workers: int = 0
@@ -271,6 +272,11 @@ class AuditPipelineOpts:
     # (--prior-claims; 0 disables) and the per-claim body excerpt.
     prior_claims_per_function: int = 3
     prior_claim_excerpt_chars: int = 600
+
+    def __post_init__(self) -> None:
+        if (self.study_job_call_limit is not None
+                and (type(self.study_job_call_limit) is not int or self.study_job_call_limit < 1)):
+            raise ValueError("study_job_call_limit must be a positive integer or None")
 
 
 
@@ -446,6 +452,10 @@ def _build_orchestrator_config(
     """
     from core.audit.orchestrator import OrchestratorConfig
 
+    if (opts.study_job_call_limit is not None
+            and (type(opts.study_job_call_limit) is not int or opts.study_job_call_limit < 1)):
+        raise ValueError("study_job_call_limit must be a positive integer or None")
+
     from .integer_abi import resolve_integer_abi, select_integer_abi
     opts.integer_abi = select_integer_abi(opts.integer_abi, target_path=opts.target_path)
     abi = resolve_integer_abi(opts.integer_abi)
@@ -506,6 +516,7 @@ def _build_orchestrator_config(
         study_root=opts.study_root,
         study_libraries=opts.study_libraries,
         no_study_libraries=opts.no_study_libraries,
+        study_job_call_limit=opts.study_job_call_limit,
         study_concept_seeding=opts.study_concept_seeding,
         mode=mode,
         max_workers=opts.max_workers,

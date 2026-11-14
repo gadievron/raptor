@@ -120,6 +120,16 @@ lookup reads a local reference library. Target-source explanations use the
 existing study budget and retain the source fragments supplied to that study.
 These contexts do not confirm or refute a security concern.
 
+Use `raptor-audit run TARGET --study-job-call-limit N` to opt into an explicit
+shared model-call allowance for each source-study job in the current study session. `N` must be a positive
+integer; no shared-job allowance is inferred when the option is omitted. The
+chosen allowance must fit the participating functions' call limits and leave
+capacity for review; it does not increase per-function or whole-run budgets.
+The configured value is restored on resume; shared-job accounting starts with
+the new study session, while the existing whole-run spending cap still applies.
+A request waiting on another live study keeps its original inputs and can retry
+only after that study retires and remaining allowances permit it.
+
 Requests for the same reviewed function can share a bounded knowledge
 follow-up. Repeating a request or asking another question does not reset its review
 allowance. A panel needs capacity for its configured reviewers; exhausted
