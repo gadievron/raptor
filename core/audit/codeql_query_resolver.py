@@ -22,8 +22,10 @@ chain builder drops the step loudly-once.
 
 from __future__ import annotations
 
+from core.source import open_regular_gated
 from core.source.streams import preserving_stream_error
 
+import io
 import json
 import logging
 import os
@@ -186,9 +188,14 @@ def _index_pack(pack: str) -> dict[str, str] | None:
                 )
                 return index
             try:
-                with preserving_stream_error(open(ql, encoding="utf-8", errors="replace")) as fh:  # raw-open: shipped CodeQL query pack file (RAPTOR-owned)
-                    header = fh.read(_HEADER_READ_BYTES)
-            except OSError:
+                with preserving_stream_error(
+                    open_regular_gated(ql, follow_symlinks=True),
+                ) as raw:
+                    with preserving_stream_error(io.TextIOWrapper(
+                        raw, encoding="utf-8", errors="replace",
+                    )) as fh:
+                        header = fh.read(_HEADER_READ_BYTES)
+            except (OSError, ValueError):
                 continue
             m = _ID_HEADER_RE.search(header)
             if m and m.group(1) not in index:
