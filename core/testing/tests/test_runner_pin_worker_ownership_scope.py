@@ -13,40 +13,40 @@ def exercise(phase):
     error = KeyboardInterrupt if "interrupt" in phase else RuntimeError
     borrowed = dict(vars(runner._thread_bound_runner))
     patch = pytest.MonkeyPatch()
-    patch.setitem(vars(runner._thread_bound_runner), "runner", borrowed.get("runner"))
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.pinned, self.done, self.seen = cells["pinned"], cells["done"], cells["seen"]
-            self.entered = threading.Event()
-            self.completed, self.joins = False, []
-            def running(*args, **kwargs):
-                self.entered.set()
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if phase.startswith("after-"):
-                assert self.entered.wait(5), "actual lookup callback not entered"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.TestBoundSandboxRunner.test_pin_is_thread_local
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        patch.setitem(vars(runner._thread_bound_runner), "runner", borrowed.get("runner"))
+        class Thread(real):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                cells = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.pinned, self.done, self.seen = cells["pinned"], cells["done"], cells["seen"]
+                self.entered = threading.Event()
+                self.completed, self.joins = False, []
+                def running(*args, **kwargs):
+                    self.entered.set()
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if phase.startswith("after-"):
+                    assert self.entered.wait(5), "actual lookup callback not entered"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.TestBoundSandboxRunner.test_pin_is_thread_local
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(native.TestBoundSandboxRunner()), threads
     finally:
         try:
