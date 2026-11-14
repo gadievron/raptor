@@ -193,6 +193,14 @@ def discover_aliases(target: Path) -> DiscoveryResult:
             if got is None:
                 continue
             text = _join_continuations(got[0])
+            # Classify only code-shaped expansion markers. A comment or
+            # string mentioning an attribute does not declare that family.
+            # Reuse the capped text and existing pure-view ambiguity policy.
+            from core.audit.source_view import sanitized_view_with_status
+            view = sanitized_view_with_status(text, str(resolved_entry))
+            if view.ambiguous:
+                continue
+            text = view.text
             for m in _DEFINE_RE.finditer(text):
                 name = m.group(1)
                 expansion = m.group(2).strip()

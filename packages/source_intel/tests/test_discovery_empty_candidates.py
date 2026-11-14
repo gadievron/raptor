@@ -1,8 +1,19 @@
 """Empty alias candidates must not trigger a diagnostic source walk."""
 
+from types import SimpleNamespace
+
 import pytest
 
+from core.audit import source_view
 from packages.source_intel import discovery
+
+
+@pytest.fixture(autouse=True)
+def _owned_header_view(monkeypatch):
+    monkeypatch.setattr(
+        source_view, "sanitized_view_with_status",
+        lambda text, _: SimpleNamespace(text=text, ambiguous=False),
+    )
 
 
 @pytest.mark.parametrize("header", [False, True], ids=["no-header", "unrelated-header"])
