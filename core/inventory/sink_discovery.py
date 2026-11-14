@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import functools
 import heapq
+import io
 import logging
 import stat
 from collections import defaultdict
@@ -38,6 +39,7 @@ if TYPE_CHECKING:
     from core.inventory.call_graph import FileCallGraph
 
 from core.inventory.call_graph import build_reverse_edges
+from core.source import read_bytes_capped
 
 logger = logging.getLogger(__name__)
 
@@ -351,10 +353,9 @@ class SinkDiscoveryResult:
     framework_apis: list[FrameworkAPI]
     dangerous_target_counts: dict[str, int]
     unreachable_eligible: dict[tuple[str, str], UnreachableVerdict] | None = None
-    #: Honest-incomplete marker: ``None`` when the discovery walk read
-    #: every eligible file; a structured record (reason, budget and
-    #: admitted/skipped file+byte counts) when the aggregate byte
-    #: budget truncated the walk. Serialised through every artifact
+    #: Aggregate metadata-admission budget marker (reason, budget and
+    #: admitted/skipped file+byte counts). Later read failures are not
+    #: represented here; their eligibility verdicts are withheld separately. Serialised through every artifact
     #: shape (context-map ``sink_discovery``, the audit prep cache) so
     #: downstream consumers see the degradation as a field, not a log
     #: line.
@@ -933,13 +934,29 @@ def discover_sinks_for_target(
     from core.inventory.languages import refine_language
 
     walk_stats: dict[str, Any] = {}
+    read_budget_remaining = _AGGREGATE_CAP
+    read_skipped = 0
     for source_file, rel, lang in iter_discovery_source_files(
         target, languages=languages, scope_dirs=scope_dirs,
         budget_warning=True, stats=walk_stats,
     ):
         extractor = extractors[lang]
+        if read_budget_remaining <= 0:
+            read_skipped += 1
+            continue
         try:
-            content = source_file.read_text(encoding="utf-8", errors="replace")
+            got = read_bytes_capped(source_file, min(_PER_FILE_CAP, read_budget_remaining))
+            if got is None:
+                read_skipped += 1
+                continue
+            # Charge returned prefixes, including refused truncated inputs.
+            # The shared reader can probe one extra byte per read.
+            read_budget_remaining -= len(got[0])
+            if got[1]:
+                read_skipped += 1
+                continue
+            with io.TextIOWrapper(io.BytesIO(got[0]), encoding="utf-8", errors="replace") as stream:
+                content = stream.read()
             graph = extractor(content)
             if graph.calls:
                 call_graphs[rel] = graph
@@ -966,6 +983,24 @@ def discover_sinks_for_target(
         framework_min_files=framework_min_files,
         file_languages=file_languages,
     )
+
+    if read_skipped:
+        # Keep an explicit map: None enables a legacy absence-based fallback.
+        if result.unreachable_eligible is None:
+            result.unreachable_eligible = {}
+        for key, verdict in result.unreachable_eligible.items():
+            if verdict.eligible:
+                result.unreachable_eligible[key] = UnreachableVerdict(
+                    file=verdict.file,
+                    function=verdict.function,
+                    eligible=False,
+                    reason="discovery incomplete: source read refused",
+                )
+        logger.warning(
+            "sink_discovery: %d admitted source(s) not read in full — "
+            "sink_unreachable scope-narrowing disabled for this run",
+            read_skipped,
+        )
 
     if walk_stats.get("truncated"):
         # Structured honest-incomplete marker: rides as_dict() into
@@ -1021,10 +1056,9 @@ def iter_discovery_source_files(
     language/extractor support, the lstat byte gates, and the
     aggregate byte budget).
 
-    This is the single definition of the discovery input set: the
-    walk in :func:`discover_sinks_for_target` and any fingerprint of
-    its inputs (the audit prep cache) both consume it, so the two can
-    never drift.
+    This defines the metadata-admitted candidate set for discovery and
+    its prep-cache fingerprint. Bounded reading may reject candidates
+    later; enumerating the same paths does not establish a content snapshot.
 
     ``stats``, when provided, is filled in place with the walk's
     admission accounting (``admitted_files``/``admitted_bytes``/

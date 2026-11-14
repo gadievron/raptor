@@ -1,11 +1,13 @@
 """Direct file-fingerprint lifetime with an inert local iterator seam."""
 import errno
+import hashlib
 import os
 
 import pytest
 from types import ModuleType
 from core.audit import codeql_backend as source
 from core.audit.prep_cache import content_fingerprint
+from core.inventory.sink_discovery import _PER_FILE_CAP, _AGGREGATE_CAP
 from core.testing.module_views import scoped_function_imports
 
 
@@ -59,6 +61,8 @@ def test_sink_fingerprint_reader_precedence(tmp_path, monkeypatch, body_kind, cl
 
     provided = ModuleType("core.inventory.sink_discovery")
     provided.iter_discovery_source_files = files
+    provided._PER_FILE_CAP = _PER_FILE_CAP
+    provided._AGGREGATE_CAP = _AGGREGATE_CAP
     monkeypatch.setattr(source, "open_regular", observe)
     original = source._sink_discovery_fingerprint
     observed = None
@@ -88,7 +92,9 @@ def test_sink_fingerprint_reader_precedence(tmp_path, monkeypatch, body_kind, cl
             assert observed is expected and result is None
         else:
             assert observed is None
-            assert result == content_fingerprint([(path.name, content)])
+            base = content_fingerprint([(path.name, content)])
+            policy = f"sink-read-admission-v1:{_PER_FILE_CAP}:{_AGGREGATE_CAP}\0".encode("ascii")
+            assert result == hashlib.sha256(policy + bytes.fromhex(base)).hexdigest()
     finally:
         for wrapped in streams:
             if not wrapped.stream.closed:
