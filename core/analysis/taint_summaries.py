@@ -683,13 +683,13 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
 
 
 def _literal_header_annotation(annotation: ast.expr | None) -> bool:
-    """Closed, name-free constant/container annotations; never evaluate values."""
+    """Closed, name-free literal/container annotations; never evaluate values."""
     if annotation is None:
         return True
     pending: list[ast.expr] = [annotation]
     while pending:
         node = pending.pop()
-        if isinstance(node, ast.Constant):
+        if _match_literal_expression(node):
             continue
         if isinstance(node, (ast.Tuple, ast.List)):
             if not isinstance(node.ctx, ast.Load):
