@@ -103,6 +103,8 @@ def extract_nosemgrep(
     if found, ``None`` otherwise. When ``rule_id`` is supplied, only
     comments selecting that rule (or all rules) are returned.
     """
+    if isinstance(line, int) and line <= 0:
+        return None
     if _lines is None:
         _lines = _read_source_lines(file_path)
         if _lines is None:
@@ -228,7 +230,7 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
             line = _dget(phys, "region").get("startLine", 0)
             if not isinstance(uri, str) or not uri:
                 continue
-            if not isinstance(line, int) or isinstance(line, bool) or not line:
+            if not isinstance(line, int) or isinstance(line, bool) or line <= 0:
                 continue
 
             # Resolve the file path against the repo root,
