@@ -185,8 +185,8 @@ def probe(
             # large stream — every ToolInfo consumer wants a first
             # line, not the payload. The capture itself stays
             # subprocess.run (the module's patched-run test contract);
-            # its transient buffer is bounded in practice by the probe
-            # timeout.
+            # the timeout limits elapsed execution, not the number of
+            # captured bytes or the transient capture buffer size.
             info = ToolInfo(
                 name=name, path=path, args=args,
                 returncode=proc.returncode,

@@ -42,7 +42,7 @@ def parse_version_output(stdout: str, stderr: str) -> str | None:
 
 
 def read_codeql_version(executable: str) -> str | None:
-    """Fresh bounded-output probe using CodeQL's existing temporary setup."""
+    """Read a fresh version with bounded retained text and parsing input."""
     try:
         resolved = shutil.which(executable)
         if resolved is None:
