@@ -1,7 +1,7 @@
 """Bridge fixture setup retains untransferred native death pipes."""
 
 import builtins
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import errno
 import os
 from types import FunctionType, ModuleType, SimpleNamespace
@@ -42,7 +42,12 @@ def test_refused_worker_retires_death_pipe(case, stage, error, tmp_path):
 
     def allocate():
         pair = os.pipe()
-        allocations.append((pair, [os.fstat(fd) for fd in pair]))
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            identities = [os.fstat(fd) for fd in pair]
+            allocations.append((pair, identities))
+            setup.pop_all()
         return pair
 
     def close(fd):
