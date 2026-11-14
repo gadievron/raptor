@@ -40,10 +40,14 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from core.hash import sha256_fileobj
 from core.hash.text import try_sha256_utf8_replace
+from core.source import open_regular
+from core.source.streams import preserving_stream_error
 
 from .prep_cache import (
     content_fingerprint,
+    content_fingerprint_from_hashes,
     load_prep_cache,
     prep_cache_path,
     source_fingerprint,
@@ -504,8 +508,8 @@ def call_graph_inputs_fingerprint(
 
     Enumerated by the loader's own candidate chain
     (:func:`core.inventory.call_graph.iter_call_graph_candidates`) so
-    the fingerprint and the build can never drift. Hashing the bytes
-    is a small fraction of re-running the structural battery. None on
+    candidate order stays shared. Read failures or changes after enumeration
+    can still alter admission. Contents are hashed in bounded chunks. None on
     enumeration failure — callers must treat that as uncacheable.
     """
     try:
@@ -514,27 +518,31 @@ def call_graph_inputs_fingerprint(
             iter_call_graph_candidates,
         )
 
-        def _items() -> Iterable[tuple[str, bytes]]:
-            # Over-keys relative to the build's gates in the safe
-            # direction: candidates past the build's max_files cap are
-            # still fingerprinted (their edits over-invalidate, never
-            # under). Oversized files hash as a size marker — the
-            # build skips their content, so content edits below the
-            # threshold cannot change the graphs, while crossing the
-            # threshold flips marker vs bytes.
+        oversized = hashlib.sha256(b"<oversized>").hexdigest()
+        unreadable = hashlib.sha256(b"<unreadable>").hexdigest()
+
+        def _hashes() -> Iterable[tuple[str, str]]:
+            # Candidates past the build's max_files cap remain fingerprinted:
+            # their edits over-invalidate. Over-cap inputs keep the existing
+            # marker; admitted target inputs use a verified descriptor.
             for rel, path, decl_language in iter_call_graph_candidates(
                 target_path, checklist,
             ):
                 try:
                     if path.stat().st_size > CALL_GRAPH_MAX_FILE_BYTES:
-                        data = b"<oversized>"
+                        digest = oversized
                     else:
-                        data = path.read_bytes()  # raw-open: RAPTOR-owned detector cache dir, written by this module
+                        stream = open_regular(path, "rb")
+                        if stream is None:
+                            digest = unreadable
+                        else:
+                            with preserving_stream_error(stream):
+                                digest = sha256_fileobj(stream, chunk_size=65_536)
                 except OSError:
-                    data = b"<unreadable>"
-                yield (f"{rel}\0{decl_language or ''}", data)
+                    digest = unreadable
+                yield (f"{rel}\0{decl_language or ''}", digest)
 
-        return content_fingerprint(_items())
+        return content_fingerprint_from_hashes(_hashes())
     except Exception:
         logger.debug(
             "call-graph inputs fingerprint failed", exc_info=True,
