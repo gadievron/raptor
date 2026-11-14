@@ -150,6 +150,7 @@ def live_capture(init_variants, content_variants, tools=None) -> str:
 class ReviewerBase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
         self.dir = Path(self.tmp.name)
 
     def tearDown(self):
