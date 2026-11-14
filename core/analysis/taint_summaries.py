@@ -563,7 +563,8 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
             allowed = _scope_free_expression_nodes()
-            if not all(isinstance(node, allowed) for default in defaults for node in ast.walk(default)):
+            default_nodes = (*allowed, ast.Lambda, ast.arguments, ast.arg)
+            if not all(isinstance(node, default_nodes) for default in defaults for node in ast.walk(default)):
                 return None
             # Defaults belong to the enclosing scope, before child parameters.
             expressions.extend(defaults)
