@@ -26,13 +26,13 @@ def combine_source_panel_scope(
     history = read_history(result.get("review_claims")) if isinstance(result, dict) else None
     if history is None:
         return None
-    primary = history.get("review")
-    if not isinstance(primary, dict):
+    primary_review = history.get("review")
+    if not isinstance(primary_review, dict):
         return None
-    origin = primary.get("origin")
+    origin = primary_review.get("origin")
     if not isinstance(origin, dict):
         return None
-    primary_pass, primary_attempt = origin.get("pass_id"), primary.get("attempt_id")
+    primary_pass, primary_attempt = origin.get("pass_id"), primary_review.get("attempt_id")
     if (not isinstance(primary_pass, str) or not primary_pass
             or not isinstance(primary_attempt, str) or not primary_attempt):
         return None
