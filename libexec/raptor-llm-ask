@@ -106,10 +106,19 @@ def main() -> int:
              "exit without sending a prompt",
     )
     parser.add_argument(
+        "--keyless-worker", action="store_true",
+        help="Opt in to a separate keyless worker for a free-form native Anthropic/Gemini ask. "
+             "Requires a standard API-key setup; disables retries, model fallback and response caching. "
+             "Does not enforce OS isolation.",
+    )
+    parser.add_argument(
         "prompt", nargs="*",
         help="Prompt text (reads stdin if omitted and stdin is a pipe)",
     )
     args = parser.parse_args()
+
+    if args.keyless_worker and (args.show_primary or args.json_schema):
+        parser.error("--keyless-worker currently supports free-form asks only")
 
     if args.show_primary and args.model:
         # --model resolves through the explicit-override path; the
@@ -227,9 +236,10 @@ def main() -> int:
         from core.llm.dispatcher.lifecycle import (
             ensure_route_for_model_configs,
         )
-        ensure_route_for_model_configs(
-            [model_config], label="raptor-llm-ask",
-        )
+        if not args.keyless_worker:
+            ensure_route_for_model_configs(
+                [model_config], label="raptor-llm-ask",
+            )
     except Exception as exc:  # noqa: BLE001 — provider errors below
         print(f"warning: could not start LLM dispatcher: {_sft(str(exc), max_len=300)}",
               file=sys.stderr)
@@ -271,11 +281,18 @@ def main() -> int:
                       f"cost=${response.cost:.4f} ---",
                       file=sys.stderr)
         else:
-            response = client.generate(
-                prompt,
-                system_prompt=system_prompt,
-                **kwargs,
-            )
+            if args.keyless_worker:
+                from core.llm.ask_isolation import run_isolated_ask
+                response = run_isolated_ask(
+                    model_config, prompt, system_prompt,
+                    max_tokens=args.max_tokens, temperature=args.temperature,
+                )
+            else:
+                response = client.generate(
+                    prompt,
+                    system_prompt=system_prompt,
+                    **kwargs,
+                )
             # The model can be induced (e.g. by --file context it is
             # asked to echo) to emit terminal escape sequences; both
             # lanes scrub — the JSON lane via ensure_ascii above (bare

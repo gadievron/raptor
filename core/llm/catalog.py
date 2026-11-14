@@ -196,3 +196,34 @@ def prepare_catalog(configs: Iterable[ModelConfig]) -> PreparedCatalog:
     public = PublicCatalog(secrets.token_hex(16), tuple(routes))
     public.to_bytes()  # Enforce the byte bound before publication as well as receipt.
     return PreparedCatalog(public, private)
+
+
+def model_config_from_catalog(catalog: PublicCatalog, route_id: str) -> ModelConfig:
+    """Build a keyless model from advertised metadata, without discovery."""
+    from core.llm.config import ModelConfig
+
+    for route in catalog.routes:
+        if route.route_id == route_id:
+            return ModelConfig(
+                provider=route.provider, model_name=route.model_name,
+                max_tokens=route.max_tokens, max_context=route.max_context,
+                temperature=route.temperature, timeout=route.timeout,
+                cost_per_1k_tokens=route.cost_per_1k_tokens,
+                enabled=route.enabled, role=route.role,
+            )
+    raise CatalogError("Unknown public catalog route")
+
+
+def llm_config_from_catalog(catalog: PublicCatalog, route_id: str):
+    """Explicit single-route configuration; no auto-discovered fallback models."""
+    from core.llm.config import LLMConfig
+
+    model = model_config_from_catalog(catalog, route_id)
+    config = LLMConfig(
+        primary_model=model, fallback_models=[], enable_fallback=False,
+        enable_caching=False, scorecard_enabled=False, max_retries=1,
+    )
+    # Legacy configuration seeds pure fast-tier metadata. Those models are not
+    # advertised by this catalogue, so remove them before publishing the config.
+    config.specialized_models.clear()
+    return config

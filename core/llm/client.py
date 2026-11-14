@@ -31,6 +31,7 @@ from core.hash import sha256_string
 from core.logging import get_logger
 
 from .config import DEFAULT_CACHE_MAX_ENTRIES, LLMConfig, ModelConfig
+from .catalog import PublicCatalog, model_config_from_catalog
 from .providers import LLMProvider, LLMResponse, StructuredResponse, create_provider
 from .response_validation import SchemaUnknownFieldError, unknown_response_fields
 from .budget_errors import (
@@ -1511,7 +1512,8 @@ class LLMClient:
     _transcript_seam_construction: bool = False
 
     def __init__(self, config: LLMConfig | None = None,
-                 *, pinned_model: str | None = None) -> None:
+                 *, pinned_model: str | None = None,
+                 catalog: PublicCatalog | None = None) -> None:
         """Construct the LLM client.
 
         When ``pinned_model`` is set the caller commits to overriding the
@@ -1526,6 +1528,23 @@ class LLMClient:
         ``config`` takes precedence over ``pinned_model`` when both are
         passed (caller knows what they want).
         """
+        self._catalog = catalog
+        if catalog is not None:
+            import os
+            from .detection import _sdk_available
+
+            if (type(catalog) is not PublicCatalog or config is None or pinned_model is not None
+                    or config.primary_model is None or config.fallback_models
+                    or config.specialized_models or config.enable_fallback
+                    or not os.environ.get("RAPTOR_LLM_SOCKET")):
+                raise ValueError("Catalog client requires an explicit single-route proxy configuration")
+            self._catalog_socket = os.environ["RAPTOR_LLM_SOCKET"]
+            self._validate_catalog_model(config.primary_model)
+            sdk = {"anthropic": "ANTHROPIC_SDK_AVAILABLE", "gemini": "GENAI_SDK_AVAILABLE"}
+            provider = config.primary_model.provider
+            if provider not in sdk or not _sdk_available(sdk[provider]):
+                raise ValueError("Catalog client requires the native Anthropic or Gemini SDK")
+
         # Transcript honesty fence FIRST — before any construction
         # side effect (egress proxy bring-up, transport banners): a
         # bare construction under an active RAPTOR_LLM_TRANSCRIPT
@@ -1652,7 +1671,8 @@ class LLMClient:
         # proxy chain, subprocess-env separation).
         from .egress import enable_llm_egress
         try:
-            enable_llm_egress(self.config)
+            if catalog is None:
+                enable_llm_egress(self.config)
         except Exception as e:                          # noqa: BLE001
             # Fail open: a proxy bring-up failure must not block LLM
             # calls entirely. Log and continue with direct egress.
@@ -1669,11 +1689,11 @@ class LLMClient:
         # anyway and sent operators chasing API keys while dispatches
         # were succeeding through the CLI. Say what is actually true.
         from .detection import detect_llm_availability
-        availability = detect_llm_availability()
+        availability = detect_llm_availability() if catalog is None else None
         # Once per PROCESS, not per client: transports that spawn a
         # client per call (claude CLI) otherwise print this banner on
         # every worker call.
-        if not availability.external_llm and not _transport_banner_shown():
+        if availability is not None and not availability.external_llm and not _transport_banner_shown():
             primary = self.config.primary_model
             if primary is not None and primary.provider.startswith("claudecode"):
                 # Say WHY the CLI transport won. "No external LLM
@@ -1780,6 +1800,19 @@ class LLMClient:
                 "model's measured pass rate rather than assuming it from provider alone."
             )
 
+    def _validate_catalog_model(self, model_config: ModelConfig) -> None:
+        catalog = getattr(self, "_catalog", None)
+        if catalog is not None:
+            import os
+            if os.environ.get("RAPTOR_LLM_SOCKET") != self._catalog_socket:
+                raise ValueError("Catalog proxy route changed or disappeared")
+            if not any(
+                model_config.enabled
+                and model_config == model_config_from_catalog(catalog, route.route_id)
+                for route in catalog.routes
+            ):
+                raise ValueError("Model settings are outside the supplied public catalog")
+
     def _get_provider(self, model_config: ModelConfig) -> LLMProvider:
         """Get or create provider for model config.
 
@@ -1791,6 +1824,7 @@ class LLMClient:
         Provider construction is cheap (no network) so holding the
         lock across `create_provider` is fine.
         """
+        self._validate_catalog_model(model_config)
         key = f"{model_config.provider}:{model_config.model_name}"
 
         with self._stats_lock:
