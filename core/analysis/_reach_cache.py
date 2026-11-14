@@ -427,6 +427,11 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
             raise ValueError(f"expected int, got {v!r}")
         return v
 
+    def bool_only(v: Any) -> bool:
+        if not isinstance(v, bool):
+            raise ValueError(f"expected boolean dispatch flag, got {v!r}")
+        return v
+
     def rows(key: str) -> list:
         value = data.get(key, [])
         if not isinstance(value, list):
@@ -464,7 +469,7 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
             for src, names in rows("uncertain_callees")
         },
         has_method_dispatch={
-            dec_internal(src): bool(flag)
+            dec_internal(src): bool_only(flag)
             for src, flag in rows("has_method_dispatch")
         },
         definitions={
