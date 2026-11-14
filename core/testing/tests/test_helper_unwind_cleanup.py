@@ -1,5 +1,6 @@
 """Pipe and socket-worker helpers finish cleanup after cleanup itself raises."""
 
+from contextlib import ExitStack
 import errno
 import os
 import socket
@@ -34,8 +35,13 @@ def test_pipe_unwind_attempts_every_descriptor(mode, position, error, monkeypatc
         if mode == "allocation" and len(pairs) == 2:
             raise setup_error
         pair = os.pipe()
-        pairs.append(pair)
-        identities.update((fd, _identity(fd)) for fd in pair)
+        with ExitStack() as setup:
+            for fd in pair:
+                setup.callback(os.close, fd)
+            recorded = {fd: _identity(fd) for fd in pair}
+            identities.update(recorded)
+            pairs.append(pair)
+            setup.pop_all()
         return pair
 
     def close(fd):
