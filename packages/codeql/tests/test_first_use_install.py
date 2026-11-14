@@ -461,3 +461,33 @@ def test_offline_launcher_refuses_registry_commands(installer, monkeypatch, args
     monkeypatch.setattr(state['os'], 'execv', lambda *args: pytest.fail('registry command executed'))
     assert state['main'](args) == 1
     assert not calls
+
+
+@pytest.mark.parametrize("tail, accepted", [("", True), (" ", False), ("invalid", False)])
+def test_install_marker_requires_complete_bounded_document(tmp_path, tail, accepted):
+    with patch.object(sys, "path", sys.path.copy()):
+        namespace = runpy.run_path(str(INSTALLER))
+    state = namespace["_installed_path"].__globals__
+    target = tmp_path / "owned-distribution"
+    target.mkdir()
+    cli = target / "codeql"
+    cli.write_text("OWNED INERT MARKER: NEVER EXECUTE\n")
+    cli.chmod(0o700)
+    content = json.dumps({"version": state["VERSION"], "sha256": "owned-digest"})
+    content += " " * (4096 - len(content))
+    (target / ".raptor-install.json").write_text(content + tail)
+    assert state["_installed_path"](target, "owned-digest") == (cli if accepted else None)
+
+
+def test_install_marker_accepts_ordinary_complete_document(tmp_path):
+    with patch.object(sys, "path", sys.path.copy()):
+        namespace = runpy.run_path(str(INSTALLER))
+    state = namespace["_installed_path"].__globals__
+    target = tmp_path / "owned-distribution"
+    target.mkdir()
+    cli = target / "codeql"
+    cli.write_text("OWNED INERT MARKER: NEVER EXECUTE\n")
+    cli.chmod(0o700)
+    (target / ".raptor-install.json").write_text(json.dumps(
+        {"version": state["VERSION"], "sha256": "owned-digest"}))
+    assert state["_installed_path"](target, "owned-digest") == cli

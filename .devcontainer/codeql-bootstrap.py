@@ -76,7 +76,10 @@ def _installed_path(target: Path, digest: str) -> Path | None:
                 or cli.is_symlink()):
             return None
         with marker.open(encoding="utf-8") as stream:
-            metadata = json.loads(stream.read(4096))
+            content = stream.read(4097)
+        if len(content) > 4096:
+            return None
+        metadata = json.loads(content)
         if metadata == {"version": VERSION, "sha256": digest} and cli.is_file() and os.access(cli, os.X_OK):
             return cli
     except (OSError, ValueError):
