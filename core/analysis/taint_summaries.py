@@ -116,8 +116,8 @@ class TaintSummary:
     paths. ``summary_unknown_reason`` carries the short tag (e.g.
     ``"calls getattr"``) for audit.
 
-    ``summary_unconverged`` is True when the call-graph fixed-point
-    bailed out before reaching a fixed point. Treated like
+    ``summary_unconverged`` is True when the intra-function or call-graph
+    iteration budget ends before stability is observed. Treated like
     ``summary_unknown`` by Phase 14.
     """
     function: str
@@ -767,6 +767,7 @@ def _expr_taint(
 
         callee = None if shadowed else summaries.get(callable_name)
         if (callee is not None and not callee.summary_unknown
+                and not callee.summary_unconverged
                 and not has_starred):
             # In-module callee with a known summary. Positional args
             # map by index — but only below the callee's
@@ -1231,6 +1232,7 @@ def _compute_one_summary(
     _local_bindings = cg.binding_names(fn_ast)
     _distrusted_roots = cg.distrusted_roots
     max_inner = 4 * max(1, len(list(cfg.nodes())))
+    inner_converged = False
     for _ in range(max_inner):
         changed = False
         for n in cfg.nodes():
@@ -1281,6 +1283,7 @@ def _compute_one_summary(
                     out_state[key] = merged
                     changed = True
         if not changed:
+            inner_converged = True
             break
 
     # Pre-compute return-node line numbers and call-site AST nodes by
@@ -1356,6 +1359,7 @@ def _compute_one_summary(
         params=params,
         return_effects=frozenset(return_effects),
         call_arg_taint=frozenset(call_arg_taint),
+        summary_unconverged=not inner_converged,
         positional_limit=positional_limit,
         keyword_params=keyword_params,
     )
