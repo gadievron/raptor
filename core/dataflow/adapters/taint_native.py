@@ -24,6 +24,7 @@ nothing here adds a status, a verdict, or any absence claim.
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, TYPE_CHECKING
 from urllib.parse import unquote
 
@@ -44,15 +45,27 @@ def make_finding_id(
     identity, kept local so the adapters stay independent modules.
     Same inputs → same id across reruns; the location-anchored
     limitation (a file rename mints a new id) is shared and
-    deliberate."""
+    deliberate. Components containing ``|`` use the same structured,
+    versioned key as the CodeQL adapter; other IDs are unchanged."""
     key = (
         f"{producer}|{rule_id}|"
         f"{source.file_path}:{source.line}|"
         f"{sink.file_path}:{sink.line}"
     )
+    version = ""
+    if any("|" in value for value in (
+        producer, rule_id, source.file_path, sink.file_path,
+    )):
+        # Preserve existing IDs for ordinary locations. A literal field
+        # delimiter needs structured encoding to keep distinct tuples apart.
+        key = json.dumps([
+            producer, rule_id, source.file_path, source.line,
+            sink.file_path, sink.line,
+        ], ensure_ascii=True, separators=(",", ":"))
+        version = "v2_"
     digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
     rule_slug = rule_id.replace("/", "-").replace(".", "-") or "unknown"
-    return f"{producer}_{rule_slug}_{digest}"
+    return f"{producer}_{rule_slug}_{version}{digest}"
 
 
 def _step_from_location(
