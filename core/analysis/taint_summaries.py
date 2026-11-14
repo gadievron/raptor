@@ -374,6 +374,27 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
+def _comprehension_target_bindings(target: ast.AST) -> frozenset[str] | None:
+    """Lexical bindings for name/unpacking targets, or None for other stores.
+
+    Attribute/subscript stores evaluate reads rather than bind bare names;
+    those require a separate contract before scanning the comprehension scope.
+    """
+    names: set[str] = set()
+    pending = [target]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Starred):
+            pending.append(node.value)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            pending.extend(node.elts)
+        else:
+            return None
+    return frozenset(names)
+
+
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -480,10 +501,12 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                     # The first iterable evaluates in this function's frame,
                     # before comprehension targets bind in their own scope.
                     names |= _scope_free_expression_loads(cell_read.generators[0].iter)
-                    if all(isinstance(gen.target, ast.Name) for gen in cell_read.generators):
+                    target_bindings = [
+                        _comprehension_target_bindings(gen.target) for gen in cell_read.generators
+                    ]
+                    if all(bound is not None for bound in target_bindings):
                         targets = {
-                            gen.target.id for gen in cell_read.generators
-                            if isinstance(gen.target, ast.Name)
+                            name for bound in target_bindings if bound is not None for name in bound
                         }
                         parts = ([cell_read.key, cell_read.value]
                                  if isinstance(cell_read, ast.DictComp) else [cell_read.elt])
