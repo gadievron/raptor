@@ -80,3 +80,55 @@ def test_authoritative_flag_cannot_activate_consumer_switch(tmp_path):
     assert report["claim_adjudication"]["authoritative"] is False
     _, document = build_audit_document(report, tmp_path)
     assert "legacy assessments are unchanged" in get_renderer("markdown").render(document).content.decode()
+
+
+def test_full_shadow_state_counts_survive_display_cap_in_actual_report(tmp_path):
+    rows = [{"claim_id": f"claim-{i}", "revision_id": f"revision-{i}",
+             "state": "unresolved" if i < 100 else "conflicted"}
+            for i in range(103)]
+    (tmp_path / "claim-adjudication-shadow.json").write_text(json.dumps({
+        "schema_version": 1, "mode": "shadow", "authoritative": False,
+        "policy_version": "claim-adjudication-v1", "claims": rows,
+    }), encoding="utf-8")
+    report = generate_report(tmp_path)
+    shadow = report["claim_adjudication"]
+    assert shadow["state_counts"]["unresolved"] == 100
+    assert shadow["state_counts"]["conflicted"] == 3
+    assert sum(shadow["state_counts"].values()) == shadow["claim_count"] == 103
+    assert len(shadow["claims"]) == 100 and shadow["claims_omitted"] == 3
+    assert shadow["authoritative"] is False
+    _, document = build_audit_document(report, tmp_path)
+    markdown = get_renderer("markdown").render(document).content.decode()
+    assert "Recorded claim states" in markdown
+    assert "conflicted" in markdown and "3" in markdown
+    assert "Shadow comparison only" in markdown
+
+
+def test_malformed_omitted_shadow_row_cannot_produce_complete_counts(tmp_path):
+    rows = [{"claim_id": f"claim-{i}", "revision_id": f"revision-{i}", "state": "unresolved"}
+            for i in range(100)] + [{"claim_id": "hidden", "revision_id": "bad", "state": "safe"}]
+    (tmp_path / "claim-adjudication-shadow.json").write_text(json.dumps({
+        "schema_version": 1, "mode": "shadow", "authoritative": False,
+        "policy_version": "claim-adjudication-v1", "claims": rows,
+    }), encoding="utf-8")
+    report = generate_report(tmp_path)
+    assert report["claim_adjudication"]["mode"] == "unavailable"
+    assert "state_counts" not in report["claim_adjudication"]
+
+
+def test_saved_shadow_report_without_totals_still_renders(tmp_path):
+    (tmp_path / "claim-adjudication-shadow.json").write_text(json.dumps({
+        "schema_version": 1, "mode": "shadow", "authoritative": False,
+        "policy_version": "claim-adjudication-v1", "claims": [
+            {"claim_id": "old-claim", "revision_id": "old-revision", "state": "unresolved"}],
+    }), encoding="utf-8")
+    report = generate_report(tmp_path)
+    del report["claim_adjudication"]["state_counts"]  # Exact prior saved report shape.
+    report["claim_adjudication"]["claim_count"] = 103
+    report["claim_adjudication"]["claims_omitted"] = 102
+    _, document = build_audit_document(report, tmp_path)
+    markdown = get_renderer("markdown").render(document).content.decode()
+    assert "Recorded claim-state totals are unavailable" in markdown
+    assert "old-claim" in markdown and "unresolved" in markdown
+    assert "Recorded claim states" not in markdown
+    assert "Shadow comparison only" in markdown
