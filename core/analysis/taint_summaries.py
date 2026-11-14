@@ -1157,10 +1157,32 @@ def _function_reflective_readers(
                 # provenance, never proof of the resulting callable's identity.
                 readers.add(parameter.arg)
     body_view = ast.Module(body=list(fn_ast.body), type_ignores=[])
-    return frozenset(readers) | _module_callable_aliases(
+    readers.update(_module_callable_aliases(
         body_view, module_names=frozenset({"builtins"}),
         attributes=("getattr", "hasattr"), direct_names=tuple(readers),
-    )
+    ))
+    # Computed local values can retain a reader just like defaults. These
+    # edges carry only negative callable provenance, never module identities.
+    assignments: dict[str, set[str]] = {}
+    pending: list[ast.AST] = list(fn_ast.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names = {target.id for target in targets
+                     if isinstance(target, ast.Name) and isinstance(target.ctx, ast.Store)}
+            for source in _scoped_expression_loads(node.value):
+                assignments.setdefault(source, set()).update(names)
+        pending.extend(ast.iter_child_nodes(node))
+    work = deque(readers)
+    while work:
+        for target in assignments.get(work.popleft(), ()):
+            if target not in readers:
+                readers.add(target)
+                work.append(target)
+    return frozenset(readers)
 
 
 def _detect_summary_unknown(
