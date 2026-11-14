@@ -402,7 +402,7 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
     * Parameters, assignment/augmented/annotated targets (including
       tuple/list/star destructuring), bare deletion targets, walrus targets, ``for`` /
       ``async for`` targets, ``with … as`` targets, ``except … as``
-      names, import aliases, ``match`` capture names, and the NAMES
+      names, import aliases, type-alias names, ``match`` capture names, and the NAMES
       of nested function/class definitions all bind locally.
     * Nested function/class BODIES bind their own scopes and are not
       descended into — but their decorators and default expressions
@@ -447,6 +447,9 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
                 _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
+        elif isinstance(node, ast.TypeAlias):
+            _add_target(node.name)
+            return  # Alias parameters and RHS have their own deferred scope.
         elif isinstance(node, ast.NamedExpr):
             _add_target(node.target)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
@@ -600,6 +603,9 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
                 _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
+        elif isinstance(node, ast.TypeAlias):
+            _add_target(node.name)
+            return  # Only the alias name is bound in the enclosing scope.
         elif isinstance(node, ast.NamedExpr):
             _add_target(node.target)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
@@ -723,6 +729,9 @@ def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
                 _add_target(target)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
             _add_target(node.target)
+        elif isinstance(node, ast.TypeAlias):
+            _add_target(node.name)
+            return  # Do not merge the alias's deferred scope into the module.
         elif isinstance(node, ast.NamedExpr):
             _add_target(node.target)
         elif isinstance(node, (ast.For, ast.AsyncFor)):
