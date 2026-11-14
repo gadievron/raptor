@@ -17,42 +17,42 @@ def exercise(phase, tmp_path):
     borrowed_disabled = native.state._cli_sandbox_disabled
     patch = pytest.MonkeyPatch()
     fixture = native.isolated_state.__wrapped__(patch)
-    next(fixture)
-    class Thread(real):
-        def __init__(self, *args, **kwargs):
-            target = kwargs["target"]
-            self.native_target = target
-            state = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
-            self.errors = state["errors"]
-            self.serializer = native.summary.dumps_artifact
-            cells = dict(zip(self.serializer.__code__.co_freevars, (c.cell_contents for c in self.serializer.__closure__)))
-            self.release, self.entered = cells["release"], cells["entered"]
-            self.completed, self.joins = False, []
-            def running(*args, **kwargs):
-                result = target(*args, **kwargs)
-                self.completed = True
-                return result
-            kwargs["target"] = running
-            super().__init__(*args, **kwargs)
-            threads.append(self)
-        def start(self):
-            if phase.startswith("before-"):
-                raise error("owned start failure")
-            super().start()
-            if phase.startswith("after-"):
-                assert self.entered.wait(5), "actual serializer was not reached"
-                raise error("owned start failure")
-        def join(self, *args, **kwargs):
-            self.joins.append((args, kwargs))
-            assert native.summary.dumps_artifact is self.serializer
-            return super().join(*args, **kwargs)
-    namespace = ModuleType("threading")
-    vars(namespace).update(vars(threading))
-    namespace.Thread = Thread
-    function = native.test_threaded_transition_does_not_append_to_new_run_handle
-    view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
-    assert view._owned_case.__code__ is function.__code__
     try:
+        next(fixture)
+        class Thread(real):
+            def __init__(self, *args, **kwargs):
+                target = kwargs["target"]
+                self.native_target = target
+                state = dict(zip(target.__code__.co_freevars, (c.cell_contents for c in target.__closure__)))
+                self.errors = state["errors"]
+                self.serializer = native.summary.dumps_artifact
+                cells = dict(zip(self.serializer.__code__.co_freevars, (c.cell_contents for c in self.serializer.__closure__)))
+                self.release, self.entered = cells["release"], cells["entered"]
+                self.completed, self.joins = False, []
+                def running(*args, **kwargs):
+                    result = target(*args, **kwargs)
+                    self.completed = True
+                    return result
+                kwargs["target"] = running
+                super().__init__(*args, **kwargs)
+                threads.append(self)
+            def start(self):
+                if phase.startswith("before-"):
+                    raise error("owned start failure")
+                super().start()
+                if phase.startswith("after-"):
+                    assert self.entered.wait(5), "actual serializer was not reached"
+                    raise error("owned start failure")
+            def join(self, *args, **kwargs):
+                self.joins.append((args, kwargs))
+                assert native.summary.dumps_artifact is self.serializer
+                return super().join(*args, **kwargs)
+        namespace = ModuleType("threading")
+        vars(namespace).update(vars(threading))
+        namespace.Thread = Thread
+        function = native.test_threaded_transition_does_not_append_to_new_run_handle
+        view = module_function_view(native, bindings={"_owned_case": function, "threading": namespace})
+        assert view._owned_case.__code__ is function.__code__
         yield lambda: view._owned_case(tmp_path, patch), threads
     finally:
         try:
