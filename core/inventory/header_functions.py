@@ -5,7 +5,7 @@ __attribute__((always_inline)), and small non-static functions).
 Provides a name→(relative_path, source) lookup for callee enrichment
 when the function doesn't appear in the inventory's call graph.
 
-Cached per target path.
+Cached per absolute lexical target location; content is not revalidated.
 """
 
 from __future__ import annotations
@@ -13,14 +13,11 @@ from __future__ import annotations
 import re
 import threading
 from collections import OrderedDict
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from core.inventory._walk import iter_regular_files
 from core.inventory.extractors import CExtractor
 from core.source.lines import split_lines
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 _HEADER_EXTENSIONS = frozenset({".h", ".hh", ".hpp", ".hxx"})
 
@@ -106,8 +103,12 @@ def build_header_function_index(
 
     Only includes functions with bodies (definitions, not declarations).
     Skips functions longer than 30 lines to avoid bloating context.
-    Cached per target path.
+    Cached per absolute lexical target location; content is not revalidated.
     """
+    try:
+        target_path = Path(target_path).absolute()
+    except OSError:
+        return {}
     key = str(target_path)
     with _cache_lock:
         if key in _cache:
