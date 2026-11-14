@@ -704,27 +704,59 @@ def _literal_header_binding_target(target: ast.expr) -> bool:
 
 
 def _literal_header_annotation(annotation: ast.expr | None) -> bool:
-    """Closed, name-free literal/container annotations; never evaluate values."""
+    """Closed annotations without reads outside their own scopes; never evaluate."""
     if annotation is None:
         return True
-    pending: list[ast.expr] = [annotation]
+    if not isinstance(annotation, ast.expr):
+        return False
+    bound: dict[str, int] = {}
+    pending: list[ast.expr | _ExpressionScopeEvent] = [annotation]
     while pending:
-        node = pending.pop()
+        item = pending.pop()
+        if isinstance(item, _ExpressionScopeEvent):
+            if item.enter:
+                for name in item.bindings:
+                    bound[name] = bound.get(name, 0) + 1
+            else:
+                for name in item.bindings:
+                    count = bound[name] - 1
+                    if count:
+                        bound[name] = count
+                    else:
+                        del bound[name]
+            continue
+        node = item
+        if isinstance(node, ast.Name):
+            if not isinstance(node.ctx, ast.Load) or node.id not in bound:
+                return False
+            continue
         if _match_literal_expression(node):
             continue
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
                 return False
+            names: set[str] = set()
             for generator in node.generators:
                 if (type(generator.is_async) is not int or generator.is_async != 0
                         or not _literal_header_binding_target(generator.target)):
                     return False
-                pending.append(generator.iter)
+                parts = _comprehension_target_parts(generator.target, allow_indirect_stores=False)
+                if parts is None or parts[1]:
+                    return False
+                names.update(parts[0])
+            bindings = frozenset(names)
+            # Restore the parent scope before validating the first iterator.
+            pending.append(node.generators[0].iter)
+            pending.append(_ExpressionScopeEvent(bindings, False))
+            for position, generator in enumerate(node.generators):
+                if position:
+                    pending.append(generator.iter)
                 pending.extend(generator.ifs)
             if isinstance(node, ast.DictComp):
                 pending.extend((node.key, node.value))
             else:
                 pending.append(node.elt)
+            pending.append(_ExpressionScopeEvent(bindings, True))
             continue
         if isinstance(node, ast.Lambda):
             arguments = node.args
@@ -735,9 +767,12 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
                     or len(arguments.kw_defaults) != len(arguments.kwonlyargs)
                     or any(parameter.annotation is not None for parameter in parameters)):
                 return False
-            pending.append(node.body)
             pending.extend(arguments.defaults)
             pending.extend(default for default in arguments.kw_defaults if default is not None)
+            bindings = frozenset(parameter.arg for parameter in parameters)
+            # Restore the parent scope before validating defaults.
+            pending.extend((_ExpressionScopeEvent(bindings, False), node.body,
+                            _ExpressionScopeEvent(bindings, True)))
             continue
         if isinstance(node, ast.Attribute):
             if not isinstance(node.ctx, ast.Load):
@@ -752,8 +787,8 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
             while index_pending:
                 index = index_pending.pop()
                 if isinstance(index, ast.Slice):
-                    pending.extend(bound for bound in (index.lower, index.upper, index.step)
-                                   if bound is not None)
+                    pending.extend(limit for limit in (index.lower, index.upper, index.step)
+                                   if limit is not None)
                 elif isinstance(index, ast.Tuple):
                     if not isinstance(index.ctx, ast.Load):
                         return False

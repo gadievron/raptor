@@ -108,7 +108,7 @@ def test_dynamic_comprehension_header_mode_boundary_stays_excluded(annotation, f
     assert _bounded_body_expression_loads(ast.parse(source).body[-1].body[0].body) is None
 
 
-@pytest.mark.parametrize('annotation', ['[item for item in ()]', '[0 for obj.attr in ()]',
+@pytest.mark.parametrize('annotation', ['[0 for obj.attr in ()]',
                                      '[0 for obj[0] in ()]', '[0 for item in invoke()]',
                                      '1+[0 for item in ()]'])
 def test_name_reads_address_targets_and_calls_stay_excluded(annotation):
