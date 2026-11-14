@@ -1660,7 +1660,7 @@ def _solve_pending(
             summary_axioms=_axiom_labels,
         )
 
-    # z3.unknown — timeout or outside decidable fragment.
+    # z3.unknown — retain the timeout or generic solver-unknown diagnostic.
     solver_reason = _classify_solver_unknown(solver)
     pending_texts = [t for t, _ in pending]
     pending_reasons = [
@@ -1676,7 +1676,7 @@ def _solve_pending(
         if getattr(solver, "_raptor_budget_exhausted", False) is True
         else f"likely the {_DEFAULT_TIMEOUT_MS}ms timeout"
         if solver_reason is RejectionKind.SOLVER_TIMEOUT
-        else "conditions outside the decidable bitvector fragment"
+        else "solver could not decide the encoded conditions"
     )
     return PathSMTResult(
         wp_complete=reduce_constraints,
