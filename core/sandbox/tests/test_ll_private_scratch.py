@@ -68,8 +68,8 @@ class TestRestrictedLandlockOnlyScratch(unittest.TestCase):
         # Target deliberately under /tmp — the battery's policy-gap
         # shape (write baseline used to cover it wholesale).
         self._target = tempfile.TemporaryDirectory(prefix="raptor-tgt-")
-        self._out = tempfile.TemporaryDirectory(prefix="raptor-out-")
         self.addCleanup(self._target.cleanup)
+        self._out = tempfile.TemporaryDirectory(prefix="raptor-out-")
         self.addCleanup(self._out.cleanup)
         self.target = os.path.realpath(self._target.name)
         self.out = os.path.realpath(self._out.name)

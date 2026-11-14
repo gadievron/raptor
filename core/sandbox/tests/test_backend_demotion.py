@@ -58,8 +58,8 @@ class _Base(unittest.TestCase):
         if not mount_ns_available():
             self.skipTest("mount-ns not available on this host")
         self._tgt = tempfile.TemporaryDirectory(prefix="raptor-dem-t-")
-        self._out = tempfile.TemporaryDirectory(prefix="raptor-dem-o-")
         self.addCleanup(self._tgt.cleanup)
+        self._out = tempfile.TemporaryDirectory(prefix="raptor-dem-o-")
         self.addCleanup(self._out.cleanup)
         self.tgt = os.path.realpath(self._tgt.name)
         self.out = os.path.realpath(self._out.name)
