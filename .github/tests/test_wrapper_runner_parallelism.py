@@ -344,3 +344,162 @@ def test_browser_order_retains_global_deadline_and_timeout_clamping(browser_runn
     assert browser_invoke(runner, monkeypatch, tmp_path, execute) == 0
     assert allocations == [('owned::case_3', 600), ('owned::case_0', 300),
                            ('owned::case_1', 1), ('owned::case_2', 1)]
+
+
+@pytest.mark.parametrize('prior', ['missing', 'file', 'symlink'])
+def test_current_attempt_requires_its_own_report(runner, monkeypatch, tmp_path, prior):
+    report_root = tmp_path / 'reports'
+    report_root.mkdir()
+    xml = report_root / 'family-0.xml'
+    outside = tmp_path / 'outside.xml'
+    sentinel = '<testsuite><testcase name="borrowed"/></testsuite>'
+    outside.write_text(sentinel)
+    if prior == 'file':
+        xml.write_text('<testsuite><testcase name="previous-attempt"/></testsuite>')
+    elif prior == 'symlink':
+        xml.symlink_to(outside)
+    homes = []
+
+    def no_current_report(command, **kwargs):
+        homes.append(Path(kwargs['env']['HOME']))
+        # No report is written by this fake current child.
+        return SimpleNamespace(returncode=0)
+
+    assert invoke(runner, monkeypatch, tmp_path, no_current_report,
+                  '--family', 'family-0') == 1
+    summary = json.loads((report_root / 'summary.json').read_text())
+    assert summary['results'] == [dict(
+        family='family-0', returncode=0,
+        coverage_errors=['pytest did not produce JUnit coverage'],
+    )]
+    assert len(homes) == 1 and not homes[0].exists()
+    assert not xml.exists() and not xml.is_symlink()
+    assert outside.read_text() == sentinel
+
+
+@pytest.mark.parametrize('prior', ['file', 'symlink'])
+def test_fresh_report_replaces_only_owned_prior_report(runner, monkeypatch, tmp_path, prior):
+    report_root = tmp_path / 'reports'
+    report_root.mkdir()
+    xml = report_root / 'family-0.xml'
+    outside = tmp_path / 'outside.xml'
+    sentinel = '<testsuite><testcase name="borrowed"/></testsuite>'
+    outside.write_text(sentinel)
+    if prior == 'file':
+        xml.write_text('<testsuite><testcase name="previous-attempt"/></testsuite>')
+    else:
+        xml.symlink_to(outside)
+    homes = []
+
+    def current_report(command, **kwargs):
+        assert not xml.exists() and not xml.is_symlink()
+        homes.append(Path(kwargs['env']['HOME']))
+        report(command, '<testcase name="current-attempt"/>')
+        return SimpleNamespace(returncode=0)
+
+    assert invoke(runner, monkeypatch, tmp_path, current_report,
+                  '--family', 'family-0') == 0
+    assert xml.read_text() == '<testsuite><testcase name="current-attempt"/></testsuite>'
+    assert outside.read_text() == sentinel
+    assert len(homes) == 1 and not homes[0].exists()
+    summary = json.loads((report_root / 'summary.json').read_text())
+    assert summary['results'] == [dict(family='family-0', returncode=0, coverage_errors=[])]
+
+
+def test_report_retirement_refusal_stops_before_child_and_cleans_root(runner, monkeypatch, tmp_path):
+    report_root = tmp_path / 'reports'
+    report_root.mkdir()
+    xml = report_root / 'family-0.xml'
+    prior = '<testsuite><testcase name="previous-attempt"/></testsuite>'
+    xml.write_text(prior)
+    stopped = threading.Event()
+    monkeypatch.setattr(runner, 'threading', SimpleNamespace(Event=lambda: stopped))
+
+    class RefusingReportPath(type(tmp_path)):
+        def unlink(self, *args, **kwargs):
+            if self.name == 'family-0.xml':
+                raise OSError('owned report retirement refusal')
+            return super().unlink(*args, **kwargs)
+
+    monkeypatch.setattr(runner, 'Path', RefusingReportPath)
+    calls = []
+
+    def not_called(command, **kwargs):
+        calls.append(command)
+        raise AssertionError('child reached after report retirement refusal')
+
+    with pytest.raises(OSError, match='owned report retirement refusal'):
+        invoke(runner, monkeypatch, tmp_path, not_called, '--family', 'family-0')
+    assert calls == [] and stopped.is_set()
+    assert xml.read_text() == prior
+    assert not list(tmp_path.rglob('raptor-wrapper-ci-*'))
+
+
+@pytest.mark.parametrize('fault', ['nonzero', 'timeout', 'exception'])
+def test_current_report_does_not_hide_child_failure(runner, monkeypatch, tmp_path, fault):
+    report_root = tmp_path / 'reports'
+    report_root.mkdir()
+    xml = report_root / 'family-0.xml'
+    xml.write_text('<testsuite><testcase name="previous-attempt"/></testsuite>')
+    homes = []
+    stopped = threading.Event()
+    monkeypatch.setattr(runner, 'threading', SimpleNamespace(Event=lambda: stopped))
+
+    def failing_child(command, **kwargs):
+        assert not xml.exists()
+        homes.append(Path(kwargs['env']['HOME']))
+        report(command, '<testcase name="current-attempt"/>')
+        if fault == 'exception':
+            raise OSError('owned current child exception')
+        if fault == 'timeout':
+            raise subprocess.TimeoutExpired(command, kwargs['timeout'])
+        return SimpleNamespace(returncode=13)
+
+    if fault == 'exception':
+        with pytest.raises(OSError, match='owned current child exception'):
+            invoke(runner, monkeypatch, tmp_path, failing_child, '--family', 'family-0')
+    else:
+        assert invoke(runner, monkeypatch, tmp_path, failing_child,
+                      '--family', 'family-0') == (124 if fault == 'timeout' else 13)
+        summary = json.loads((report_root / 'summary.json').read_text())
+        assert summary['results'][0]['coverage_errors'] == []
+    assert stopped.is_set()
+    assert len(homes) == 1 and not homes[0].exists()
+
+
+def test_parallel_families_retire_only_their_own_reports(runner, monkeypatch, tmp_path):
+    registry = runner.load_registry()
+    registry['native'] = registry['native'][:2]
+    report_root = tmp_path / 'reports'
+    report_root.mkdir()
+    for family in ('family-0', 'family-1'):
+        (report_root / (family + '.xml')).write_text(
+            '<testsuite><testcase name="previous-attempt"/></testsuite>')
+    sentinels = {'unselected-family.xml': 'unselected report', 'unrelated.log': 'borrowed log'}
+    for name, text in sentinels.items():
+        (report_root / name).write_text(text)
+    barrier = threading.Barrier(2, timeout=4)
+    homes = []
+    calls = []
+
+    def current_child(command, **kwargs):
+        selector = command[5]
+        calls.append(selector)
+        xml = Path(next(arg.split('=', 1)[1] for arg in command if arg.startswith('--junitxml=')))
+        assert not xml.exists()
+        homes.append(Path(kwargs['env']['HOME']))
+        assert all((report_root / name).read_text() == text for name, text in sentinels.items())
+        barrier.wait()
+        report(command, f'<testcase name="{selector}"/>')
+        kwargs['stdout'].write('owned current ' + selector)
+        return SimpleNamespace(returncode=0)
+
+    assert invoke(runner, monkeypatch, tmp_path, current_child, '--jobs', '2') == 0
+    assert sorted(calls) == ['owned::case_0', 'owned::case_1']
+    assert len(set(homes)) == 2 and all(not home.exists() for home in homes)
+    assert all((report_root / name).read_text() == text for name, text in sentinels.items())
+    summary = json.loads((report_root / 'summary.json').read_text())
+    assert [row['family'] for row in summary['results']] == ['family-0', 'family-1']
+    assert all(row['returncode'] == 0 and not row['coverage_errors'] for row in summary['results'])
+    for family in ('family-0', 'family-1'):
+        assert 'current ' in (report_root / (family + '.log')).read_text()

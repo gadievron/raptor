@@ -170,6 +170,7 @@ def main():
                        '-o', 'addopts=', '-o', 'cache_dir='+str(root/'cache'),
                        '--basetemp='+str(root/'pytest'), '--junitxml='+str(xml),
                        '-q', '-ra', '--tb=short', '--durations=15']
+            xml.unlink(missing_ok=True)
             print('Running', name, flush=True)
             try:
                 with (report/(name+'.log')).open('w') as log:
