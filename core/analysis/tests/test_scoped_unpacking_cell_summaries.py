@@ -57,9 +57,9 @@ def test_binding_only_mode_rejects_indirect_store_descendants(target):
     assert _comprehension_target_scope(node) is not None
 
 
-def test_nested_mixed_store_target_stays_outside_new_scoped_scan():
+def test_nested_mixed_store_target_uses_strict_scope_contract():
     expression = ast.parse("lambda: [raw for (first,obj.member) in ()]", mode="eval").body
-    assert not _scoped_expression_loads(expression)
+    assert _scoped_expression_loads(expression) == frozenset({"raw", "obj"})
 
 
 def test_first_iterable_is_not_shadowed_by_unpacking_target():
