@@ -374,13 +374,17 @@ def _scope_free_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     return frozenset(names)
 
 
-def _comprehension_target_bindings(target: ast.AST) -> frozenset[str] | None:
-    """Lexical bindings for name/unpacking targets, or None for other stores.
+def _comprehension_target_scope(
+    target: ast.AST,
+) -> tuple[frozenset[str], frozenset[str]] | None:
+    """Bare bindings and known scope-free reads for supported target stores.
 
-    Attribute/subscript stores evaluate reads rather than bind bare names;
-    those require a separate contract before scanning the comprehension scope.
+    Attribute/subscript bases and indices are reads, not bindings. Unsupported
+    read expressions contribute nothing; this does not certify their absence.
+    Unsupported target structures return None.
     """
     names: set[str] = set()
+    reads: set[str] = set()
     pending = [target]
     while pending:
         node = pending.pop()
@@ -390,9 +394,14 @@ def _comprehension_target_bindings(target: ast.AST) -> frozenset[str] | None:
             pending.append(node.value)
         elif isinstance(node, (ast.Tuple, ast.List)):
             pending.extend(node.elts)
+        elif isinstance(node, ast.Attribute):
+            reads.update(_scope_free_expression_loads(node.value))
+        elif isinstance(node, ast.Subscript):
+            reads.update(_scope_free_expression_loads(node.value))
+            reads.update(_scope_free_expression_loads(node.slice))
         else:
             return None
-    return frozenset(names)
+    return frozenset(names), frozenset(reads)
 
 
 def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
@@ -501,13 +510,16 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
                     # The first iterable evaluates in this function's frame,
                     # before comprehension targets bind in their own scope.
                     names |= _scope_free_expression_loads(cell_read.generators[0].iter)
-                    target_bindings = [
-                        _comprehension_target_bindings(gen.target) for gen in cell_read.generators
+                    target_scopes = [
+                        _comprehension_target_scope(gen.target) for gen in cell_read.generators
                     ]
-                    if all(bound is not None for bound in target_bindings):
+                    if all(scope is not None for scope in target_scopes):
                         targets = {
-                            name for bound in target_bindings if bound is not None for name in bound
+                            name for scope in target_scopes if scope is not None for name in scope[0]
                         }
+                        for scope in target_scopes:
+                            if scope is not None:
+                                names |= scope[1] - targets
                         parts = ([cell_read.key, cell_read.value]
                                  if isinstance(cell_read, ast.DictComp) else [cell_read.elt])
                         for index, gen in enumerate(cell_read.generators):
