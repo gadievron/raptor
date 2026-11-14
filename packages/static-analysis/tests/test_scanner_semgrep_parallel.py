@@ -858,3 +858,43 @@ def _private_discovery_patch_target(monkeypatch):
     """Resolve unittest decorators late against this test's private scanner view."""
     monkeypatch.setitem(sys.modules, "_raptor_scanner_semgrep_parallel_mock_target", _scanner_mod)
     patch_module_attribute(monkeypatch, _scanner_mod, "shutil", "which", _scanner_mod.shutil.which)
+
+
+def test_sequential_worker_setup_refusal_retains_sibling_results(tmp_path, monkeypatch):
+    seen = []
+    refused = tmp_path / 'owned-metadata.json'
+    refused.mkdir()
+
+    def worker(name, *args, **kwargs):
+        seen.append(name)
+        if name == 'refused':
+            refused.unlink()
+        report = tmp_path / f'semgrep_{name}.sarif'
+        report.write_text('{"runs": []}')
+        return str(report), True
+
+    monkeypatch.setattr(_scanner_mod, 'run_single_semgrep', worker)
+    paths, failures = semgrep_scan_sequential(
+        tmp_path, [], tmp_path, 1,
+        baseline_packs=[('first', 'first.yaml'), ('refused', 'refused.yaml'), ('last', 'last.yaml')],
+    )
+    assert seen == ['first', 'refused', 'last']
+    assert failures == ['refused']
+    assert {Path(path).name for path in paths} == {'semgrep_first.sarif', 'semgrep_last.sarif'}
+
+
+@pytest.mark.parametrize('abort', [KeyboardInterrupt, _scanner_mod.SandboxSetupError])
+def test_sequential_worker_abort_propagates(tmp_path, monkeypatch, abort):
+    seen = []
+
+    def worker(name, *args, **kwargs):
+        seen.append(name)
+        raise abort('owned abort')
+
+    monkeypatch.setattr(_scanner_mod, 'run_single_semgrep', worker)
+    with pytest.raises(abort):
+        semgrep_scan_sequential(
+            tmp_path, [], tmp_path, 1,
+            baseline_packs=[('first', 'first.yaml'), ('last', 'last.yaml')],
+        )
+    assert seen == ['first']
