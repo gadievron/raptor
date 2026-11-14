@@ -74,3 +74,23 @@ def test_empty_definition_does_not_capture_next_declaration():
 ], ids=["adjacent-function", "spaced-function", "object-parentheses", "unicode-name", "trailing-continuation"])
 def test_single_logical_line_forms_keep_three_capture_groups(source, expected):
     assert [match.groups() for match in _iter_macro_definitions(source)] == [expected]
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("token" + " " * 256 + "tail", "token" + " " * 256 + "tail"),
+    ("token" + " " * 256, "token" + " " * 256),
+    ("token" + " " * 256 + "\\", "token"),
+    ("\\", "\\"),
+    ("\\\\", "\\"),
+    ("token \\" + " " * 256 + "\\", "token \\"),
+    ("\t ", " "),
+    ("token\\\r", "token\\\r"),
+], ids=["interior-run", "terminal-spaces", "continuation-trim", "single-backslash",
+        "double-backslash", "embedded-backslash", "whitespace-only", "raw-cr-tail"])
+def test_macro_body_tail_capture_contract(body, expected):
+    source = "#define OWNED " + body + "\n"
+    matches = list(_iter_macro_definitions(source))
+    assert len(matches) == 1
+    assert matches[0].groups() == ("OWNED", None, expected)
+    assert matches[0].span() == (0, len(source) - 1)
+    assert matches[0].string is source
