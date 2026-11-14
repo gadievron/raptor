@@ -173,9 +173,10 @@ def derive_evidence_strings(
         ``no_callers`` results render nothing. ``None`` (default): no
         back-walk line.
 
-    Returns an empty list when the result is skipped or carries no
-    relevant evidence — consumers can render "no source_intel signal"
-    or omit the block entirely.
+    Skipped results emit a skip notice; results with no relevant
+    observations emit an absence acknowledgement. The output may also
+    disclose incomplete rule execution or binary supersession. A zero
+    line budget returns an empty list.
     """
     if style not in _STYLES:
         msg = f"unknown style: {style!r} (expected one of {_STYLES})"
