@@ -67,6 +67,8 @@ def main(argv: list[str] | None = None) -> int:
             context = context_from_sarif(args.inputs, target=args.target, run_id=args.run_id or args.out.name,
                                          pass_id=args.pass_id, attempt_id=args.attempt_id, parents=args.parent)
             captured_sarif = bool(context.artifacts)
+            for artifact in context.artifacts:
+                artifact["path"] = str(Path(artifact["path"]).resolve())
             referenced = {Path(artifact["path"]).resolve() for artifact in context.artifacts}
             for source in args.inputs:
                 resolved = source.resolve()
@@ -89,7 +91,7 @@ def main(argv: list[str] | None = None) -> int:
                                     pass_id=args.pass_id, attempt_id=args.attempt_id, parents=args.parent,
                                     findings=native_findings(findings or [], run_id=args.run_id or args.out.name, producer="imported", triage=not args.recorded_verdicts,
                                                              pass_id=args.pass_id, attempt_id=args.attempt_id),
-                                    artifacts=[{"path": str(args.input)}],
+                                    artifacts=[{"path": str(args.input.resolve())}],
                                     extensions={"raptor.imported": payload, "raptor.findings_available": args.findings_key != "-"},
                                     diagnostics=["Imported workflow data; recorded verdicts, when requested, are source claims, not local validation."])
             from .builders import build_document
