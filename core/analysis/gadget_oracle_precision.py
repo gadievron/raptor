@@ -1983,7 +1983,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {name:12}  {drv.description}")
         return 0
 
-    names: list[str] = args.corpus or ["synthetic"]
+    names: list[str] = list(dict.fromkeys(args.corpus or ["synthetic"]))
     unknown = [n for n in names if n not in reg]
     if unknown:
         print(f"unknown corpora: {unknown}; --list to see options",
