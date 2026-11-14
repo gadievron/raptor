@@ -549,14 +549,20 @@ def _child_expression_is_supported(expression: ast.expr | None) -> bool:
     return True
 
 
-def _linear_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
-    """Known lexical reads in a complete, non-recursive linear child body."""
+def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
+    """Known lexical reads in a complete, non-recursive child statement grammar."""
     if not body:
         return None
     expressions: list[ast.expr | None] = []
-    for statement in body:
+    pending = list(reversed(body))
+    while pending:
+        statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, ast.If):
+            expressions.append(statement.test)
+            pending.extend(reversed(statement.orelse))
+            pending.extend(reversed(statement.body))
         elif isinstance(statement, ast.Assign) and all(
             isinstance(target, ast.Name) for target in statement.targets
         ):
@@ -606,7 +612,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
                 return None
             # Defaults belong to the enclosing scope, before child parameters.
             expressions.extend(defaults)
-            child_reads = _linear_child_body_expression_loads(child_body)
+            child_reads = _bounded_child_body_expression_loads(child_body)
             if child_reads is None:
                 return None
             target_reads.update(child_reads - local_binding_names(statement))
