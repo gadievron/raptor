@@ -2446,6 +2446,43 @@ def _scan_alias_observations(target: Path) -> list[AttributeEvidence]:
     return observations
 
 
+def _iter_sorted_paths(root: Path) -> Iterator[Path]:
+    """Yield descendants in Path order using closed per-directory listings.
+
+    Directory links are yielded but not traversed, matching rglob's
+    default. File links remain available for the caller's type/confinement
+    gates. Retention depends on directory widths and traversal depth;
+    one wide directory still needs its full sorted listing.
+    """
+    # Windows Path ordering folds case: equivalent parent names can
+    # interleave descendants under a global sort. Preserve the original
+    # traversal there rather than claiming DFS has identical order.
+    if os.name != "posix":
+        yield from sorted(root.rglob("*"))
+        return
+
+    def entries(path: Path) -> list[os.DirEntry[str]]:
+        try:
+            with os.scandir(path) as listing:
+                return sorted(listing, key=lambda entry: Path(entry.path))
+        except OSError:
+            return []
+
+    stack: list[Iterator[os.DirEntry[str]]] = [iter(entries(root))]
+    while stack:
+        try:
+            entry = next(stack[-1])
+        except StopIteration:
+            stack.pop()
+            continue
+        yield Path(entry.path)
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                stack.append(iter(entries(Path(entry.path))))
+        except OSError:
+            continue
+
+
 def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
     """Best-effort C/C++ L1 source table scanner.
 
@@ -2459,7 +2496,7 @@ def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
     if target.is_file() and target.suffix.lower() in C_CPP_EXTS:
         files = [target]
     elif target.is_dir():
-        for entry in sorted(target.rglob("*")):
+        for entry in _iter_sorted_paths(target):
             if len(files) >= 500:
                 break
             if entry.is_file() and entry.suffix.lower() in C_CPP_EXTS:
