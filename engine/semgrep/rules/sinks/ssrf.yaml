@@ -293,8 +293,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.web.ssrf.cloud-metadata
     message: >-
-      Hardcoded cloud metadata endpoint. If this URL is constructed from
-      user input, it is a confirmed SSRF to the instance metadata service.
+      Text contains a cloud-metadata address or hostname prefix. Review the
+      complete URL authority, actual request use and attacker control before
+      classifying it as SSRF. Restrict access to metadata services where the
+      application does not require it.
     languages: [python, go, java, javascript, typescript]
     severity: HIGH
     pattern-regex: "http://(169\\.254\\.169\\.254|metadata\\.google\\.internal|100\\.100\\.100\\.200)"
