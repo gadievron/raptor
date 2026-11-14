@@ -1130,6 +1130,7 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
 def _detect_summary_unknown(
     fn_ast: ast.AST, import_map: dict[str, str] | None = None,
     annotation_evaluator_aliases: frozenset[str] = frozenset(),
+    reflective_reader_aliases: frozenset[str] = frozenset(),
 ) -> str | None:
     """Return a short reason string if the function should be marked
     ``summary_unknown``, otherwise None.
@@ -1138,6 +1139,8 @@ def _detect_summary_unknown(
 
     * Direct call to a name in :data:`_UNKNOWN_CALLABLES` (e.g.
       ``getattr(o, name)(...)``).
+    * Module aliases of reflective attribute readers/checks also withhold
+      certification, without establishing trusted callable identity.
     * ``**kwargs`` forwarding — any call whose keyword args list
       contains a ``**`` expansion (``g(**kwargs)``). The expanded
       content can't be statically resolved.
@@ -1205,6 +1208,8 @@ def _detect_summary_unknown(
         elif isinstance(node, ast.ImportFrom) and not node.level:
             for alias in node.names:
                 add_annotation_import(alias.asname or alias.name, f"{node.module}.{alias.name}")
+    reflective_readers = {"getattr", "hasattr"} | set(reflective_reader_aliases)
+    reader_alias_call: str | None = None
     annotation_metadata_read = False
     for node in ast.walk(fn_ast):
         if (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
@@ -1253,6 +1258,8 @@ def _detect_summary_unknown(
             continue
         if callee_name in _UNKNOWN_CALLABLES:
             return f"calls {callee_name}"
+        if callee_name in reflective_reader_aliases and reader_alias_call is None:
+            reader_alias_call = callee_name
         for kw in node.keywords:
             if kw.arg is None:
                 # ``**expr`` — opaque expansion
@@ -1274,7 +1281,7 @@ def _detect_summary_unknown(
                 continue
             if direct_call and any(
                 isinstance(child, ast.Call)
-                and _attribute_chain_str(child.func) in ("getattr", "hasattr")
+                and _attribute_chain_str(child.func) in reflective_readers
                 for child in ast.walk(definition)
             ):
                 # A returned local call may invoke a descriptor that observes
@@ -1351,6 +1358,8 @@ def _detect_summary_unknown(
             return "annotation metadata access may evaluate deferred expressions"
         if returned_reflective_call:
             return "returned local call may have unmodelled reflective effects"
+    if reader_alias_call is not None:
+        return f"calls {reader_alias_call}"
     return None
 
 
@@ -2102,7 +2111,7 @@ def _compute_one_summary(
     # iteration is wasteful but cheap, and it keeps the call graph's
     # responsibility narrow.
     unknown_reason = _detect_summary_unknown(
-        fn_ast, cg.import_map, cg.annotation_evaluator_aliases,
+        fn_ast, cg.import_map, cg.annotation_evaluator_aliases, cg.reflective_reader_aliases,
     )
     if unknown_reason is not None:
         return TaintSummary(
