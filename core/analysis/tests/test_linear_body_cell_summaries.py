@@ -60,7 +60,7 @@ def test_parameter_default_shadow_keeps_existing_admission():
 
 
 @pytest.mark.parametrize(
-    "body", ["global raw\nreturn raw", "value: object = raw\nreturn value",
+    "body", ["global raw\nreturn raw", "value: (lambda: raw) = 0\nreturn value",
              "first[(lambda: raw)()] = 0\nreturn 0", "value = raw\nimport module"],
     ids=["global", "annotation", "scoped-target", "later-import"],
 )
