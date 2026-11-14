@@ -1594,7 +1594,15 @@ def run_codeql(
     if stage_handle is not None and stage_handle.aborted:
         logger.warning("codeql stage aborted before agent spawn; skipping")
         return []
+    def report_stamp(path):
+        try:
+            info = path.stat()
+        except OSError:
+            return None
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
     try:
+        previous_reports = {path: report_stamp(path) for path in out_dir.glob("codeql_*.sarif")}
         agent_env = RaptorConfig.get_safe_env()
         # Orphan opt-in for the agent itself (core.run.parent_liveness)
         # — paired with start_new_session below by contract.
@@ -1693,7 +1701,15 @@ def run_codeql(
     # Glob for the agent's SARIF outputs. Naming matches the old
     # in-tree runner so downstream code (SARIF merge, coverage
     # records, _classify_artifact) needs no changes.
-    return sorted(str(p) for p in out_dir.glob("codeql_*.sarif"))
+    # Existing run directories may retain earlier language reports. Keep
+    # those files, but admit only reports observed as new or changed during
+    # this invocation, including partial outputs from a failed agent.
+    current_reports = []
+    for path in out_dir.glob("codeql_*.sarif"):
+        stamp = report_stamp(path)
+        if stamp is not None and stamp != previous_reports.get(path):
+            current_reports.append(str(path))
+    return sorted(current_reports)
 
 
 def _join_codeql_stage(
