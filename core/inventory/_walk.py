@@ -26,10 +26,10 @@ logger = get_logger()
 # farm dominate wall time and memory. 100k files sits an order of
 # magnitude above the largest targets this pipeline scans.
 _MAX_WALK_FILES = 100_000
-# Cap on directory entries EXAMINED: the yield cap alone let a hostile
-# tree of non-matching names walk in full (the wall-time half of the
-# same farm). 20x the yield cap leaves room for legitimately
-# header-sparse trees while bounding total walk work.
+# Cap on filenames examined: the yield cap alone lets non-matching
+# filenames consume scan work. 20x the yield cap leaves room for
+# header-sparse trees. Directory visits and os.walk's directory listings
+# are outside this counter; it is not a total traversal or time bound.
 _MAX_WALK_SCAN = 20 * _MAX_WALK_FILES
 
 
@@ -45,7 +45,9 @@ def iter_regular_files(
     File symlinks and non-regular entries (fifos, sockets) are skipped
     — matching the per-file ``is_symlink()`` filter the call sites
     already applied. Unreadable subtrees are skipped (``os.walk``
-    default). Stops with a warning after ``max_files`` yields.
+    default). Stops with a warning after ``max_files`` yields. The
+    separate scan counter limits filenames examined, not directory
+    visits or the work of listing a directory.
     """
     yielded = 0
     scanned = 0
