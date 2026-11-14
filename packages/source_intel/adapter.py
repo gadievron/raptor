@@ -735,7 +735,7 @@ def _unchecked_alloc_supports_finding(
 # even at the anchored match call. 256 chars sits far above real
 # declarations.
 _LOCAL_ASSIGN_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]{0,256}\s)?([A-Za-z_][A-Za-z0-9_]*)\s*="
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]{0,256}[\s*])?([A-Za-z_][A-Za-z0-9_]*)\s*="
 )
 
 
