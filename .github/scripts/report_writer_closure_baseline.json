@@ -46,11 +46,20 @@
     "core/analysis/java_xfile_const.py::_text::sanitiser_shadow::_text": {
       "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
+    "core/analysis/taint_summaries.py::_detect_summary_unknown::unsanitised_llm_value::gen": {
+      "note": "AST analysis accumulator, not an output lane: parts.extend(gen.ifs) retains comprehension predicate ast.expr nodes for scope-free-name analysis. The elements are consumed by _scope_free_expression_loads, never rendered as operator text; this branch returns fixed unknown-summary diagnostics."
+    },
     "core/annotations/storage.py::_render_file::unsanitised_llm_value::body": {
       "note": "storage-format round-trip (annotation .md files) — the display surfaces (raptor-annotate, /project annotations view) are registered writers that sanitise on render"
     },
     "core/audit/asm_zero_len_loop.py::_describe::unsanitised_llm_value::confidence": {
       "note": "numeric confidence rendered under a :.2f format spec — a non-numeric value raises at format time; the built string is a finding-description artifact, not a direct terminal lane"
+    },
+    "core/audit/assessment_basis.py::_text::sanitiser_shadow::_text": {
+      "note": "Boolean shape validator for nonempty bounded UTF-8 pass/attempt/origin strings in historical basis records. It returns no display text; assessment_basis_reporting and the typed renderers own report escaping. The name collision is not a display-sanitizer implementation."
+    },
+    "core/audit/binary_callee_assessments.py::_text::sanitiser_shadow::_text": {
+      "note": "Advisory data prefix normalizer: clips body/hypothesis while full-material digest and truncation metadata are retained separately. _render subsequently applies canonical JSON, neutralize_tag_forgery and _fenced for a PromptSection. No report/TTY sink; clipping is not display sanitization."
     },
     "core/audit/binary_context.py::assemble_binary_context::unsanitised_llm_value::kind": {
       "note": "prompt/context construction — the ghidra_context block feeds an LLM prompt, not an operator render surface; the prompt envelope is the defence layer for that lane"
@@ -58,11 +67,17 @@
     "core/audit/binary_layer0.py::format_layer0_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
+    "core/audit/binary_subjects.py::_text::sanitiser_shadow::_text": {
+      "note": "Domain prompt identifier adapter: rejects absent/nonstring values and delegates to context._defend_identifier before canonical JSON advisory recovered-type material. This is a PromptSection producer, not a report/terminal writer or an independently implemented display sanitizer."
+    },
+    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::answer": {
+      "note": "PromptSection label only: _label SHA256-hashes repr of typed request/answer/missing tuple; only owned prefix/index and hex digest leave this argument. Prompt-source content is emitted separately through canonical wrap_untrusted; no report/TTY surface."
+    },
+    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::data": {
+      "note": "LLM input packet, not operator report: whole metadata/source dictionary passes dumps_display directly into canonical nonce-tagged wrap_untrusted(kind=caller_context) before atomic PromptSection fitting. All foreign metadata stays inside untrusted envelope; no raw operator output."
+    },
     "core/audit/concept_discovery.py::discover_invariants::unsanitised_llm_value::top_apis": {
       "note": "invariant-candidate description slot consumed by prompts/domain model, not a terminal lane; API names extracted from LLM hypotheses"
-    },
-    "core/audit/cwe_dispatch.py::route_hypothesis_to_checkers::unsanitised_llm_value::lib_lines": {
-      "note": "prompt-construction lane: lib_lines assembles library-candidate rationales (already escape_nonprintable'd) into the routing LLM prompt, not an operator render surface"
     },
     "core/audit/context.py::_format_caller_contract::unsanitised_llm_value::line": {
       "note": "prompt/context construction — integer line-number field rendered into an LLM prompt block, not an operator render surface"
@@ -160,6 +175,9 @@
     "core/audit/corpus/run_corpus.py::main::unsanitised_llm_value::output": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
+    "core/audit/cwe_dispatch.py::route_hypothesis_to_checkers::unsanitised_llm_value::lib_lines": {
+      "note": "prompt-construction lane: lib_lines assembles library-candidate rationales (already escape_nonprintable'd) into the routing LLM prompt, not an operator render surface"
+    },
     "core/audit/discovery.py::_render_types_block::unsanitised_llm_value::source": {
       "note": "prompt/context construction — type-definition source from the context map assembled into an LLM lens prompt, not an operator render surface"
     },
@@ -190,6 +208,9 @@
     "core/audit/intra_function.py::format_intra_function_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
     },
+    "core/audit/knowledge_context.py::reference_sections::unsanitised_llm_value::reason": {
+      "note": "Prompt-only reference resolution reason: both branches serialise answer.reason with dumps_display inside wrap_untrusted(kind=reference_resolution, origin=language-reference). The nonce envelope escapes controls and forged tags and strips autofetch markup. No terminal/HTML/report sink or applicability/proof credit; raw interpolation outside that envelope remains unaudited."
+    },
     "core/audit/measurement.py::format_evaluation::unsanitised_llm_value::file": {
       "note": "prompt-construction lane, not an operator terminal/report lane — input-side envelope territory"
     },
@@ -217,6 +238,9 @@
     "core/audit/proto_length_checker.py::format_findings::unsanitised_llm_value::evidence": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
     },
+    "core/audit/refutation_assessment_basis.py::_text::sanitiser_shadow::_text": {
+      "note": "Boolean UTF-8/presence validator for historical hypothesis/check/claim metadata, with explicit permitted empty reasons. Exact identities remain data and must not be escaped here; downstream typed basis reporting owns presentation. No display text is returned."
+    },
     "core/audit/return_domain.py::_line::sanitiser_shadow::_line": {
       "note": "tree-sitter node-text accessor / analysis helper — a NAME collision with the recognised-sanitiser vocabulary, not a display helper; the module is not a report writer"
     },
@@ -228,6 +252,12 @@
     },
     "core/audit/struct_field_checker.py::format_findings::unsanitised_llm_value::evidence": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual — sanitise + register on next functional touch"
+    },
+    "core/audit/study_job_ledger.py::_text::sanitiser_shadow::_text": {
+      "note": "Boolean exact-string/nonblank predicate for lineage, generation, owner/request/binding identities and accounting reasons. Consumers are in-process lease/accounting operations; snapshot returns copied structured data, not formatted output. This name is not a display sanitizer."
+    },
+    "core/audit/synthesis_review_context.py::_text::sanitiser_shadow::_text": {
+      "note": "Boolean TypeGuard for UTF-8-valid context fields. Advisory prompt emission is separate: _section uses bounded ensure_ascii JSON and wrap_untrusted. This predicate emits no text and is not a report/TTY sanitizer; preserve exact source/context identities."
     },
     "core/concepts/audit_bridge.py::domain_bug_patterns::unsanitised_llm_value::desc": {
       "note": "prompt/context construction — the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
@@ -705,15 +735,6 @@
     },
     "raptor_codeql.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual — sanitise + register on next functional touch"
-    },
-    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::answer": {
-      "note": "PromptSection label only: _label SHA256-hashes repr of typed request/answer/missing tuple; only owned prefix/index and hex digest leave this argument. Prompt-source content is emitted separately through canonical wrap_untrusted; no report/TTY surface."
-    },
-    "core/audit/caller_review_prompt.py::caller_context_sections::unsanitised_llm_value::data": {
-      "note": "LLM input packet, not operator report: whole metadata/source dictionary passes dumps_display directly into canonical nonce-tagged wrap_untrusted(kind=caller_context) before atomic PromptSection fitting. All foreign metadata stays inside untrusted envelope; no raw operator output."
-    },
-    "core/audit/knowledge_context.py::reference_sections::unsanitised_llm_value::reason": {
-      "note": "Prompt-only reference resolution reason: both branches serialise answer.reason with dumps_display inside wrap_untrusted(kind=reference_resolution, origin=language-reference). The nonce envelope escapes controls and forged tags and strips autofetch markup. No terminal/HTML/report sink or applicability/proof credit; raw interpolation outside that envelope remains unaudited."
     }
   },
   "bash_manual_audit": {

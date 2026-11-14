@@ -541,6 +541,8 @@ _REPORT_CONSTRUCTORS = frozenset({"ReportSection"})
 _REPORT_WRITER_FILES = (
     # Exact typed-document and terminal-summary boundaries reviewed for combined306.
     "core/analysis/gadget_reporting.py",
+    # Historical basis rows are typed Block data; portable renderers escape cells.
+    "core/audit/assessment_basis_reporting.py",
     "core/dataflow/corpus_report_completion.py",
     "core/dataflow/parity_report_completion.py",
     "packages/llm_analysis/reporting.py",
@@ -851,6 +853,24 @@ class AllowlistEntry:
 # the heuristic. New entries require the same discipline (enforced by
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
+    AllowlistEntry(
+        file="core/audit/assessment_basis_reporting.py",
+        func_name="assessment_basis_blocks", kind="unsanitised_llm_value",
+        detail='file',
+        audit_note='Historical file is a typed Block table cell, not a direct output write. assessment_basis_blocks preserves raw domain values; core.reporting.renderers applies bounded md_inline/literal escaping for Markdown, escape_nonprintable plus HTML escaping for HTML, and structured ensure_ascii JSON encoding. The actual portable-renderer control covers hostile file/function/status cells; pre-escaping here would alter data or double escape. Re-review this exact site if a direct output consumer is added.',
+    ),
+    AllowlistEntry(
+        file="core/audit/assessment_basis_reporting.py",
+        func_name="assessment_basis_blocks", kind="unsanitised_llm_value",
+        detail='function',
+        audit_note='Historical function is a typed Block table cell, not a direct output write. assessment_basis_blocks preserves raw domain values; core.reporting.renderers applies bounded md_inline/literal escaping for Markdown, escape_nonprintable plus HTML escaping for HTML, and structured ensure_ascii JSON encoding. The actual portable-renderer control covers hostile file/function/status cells; pre-escaping here would alter data or double escape. Re-review this exact site if a direct output consumer is added.',
+    ),
+    AllowlistEntry(
+        file="core/audit/assessment_basis_reporting.py",
+        func_name="assessment_basis_blocks", kind="unsanitised_llm_value",
+        detail='status',
+        audit_note='Historical status is a typed Block table cell, not a direct output write. assessment_basis_blocks preserves raw domain values; core.reporting.renderers applies bounded md_inline/literal escaping for Markdown, escape_nonprintable plus HTML escaping for HTML, and structured ensure_ascii JSON encoding. The actual portable-renderer control covers hostile file/function/status cells; pre-escaping here would alter data or double escape. Re-review this exact site if a direct output consumer is added.',
+    ),
     AllowlistEntry(
         file="core/analysis/gadget_reporting.py",
         func_name="build_document",
