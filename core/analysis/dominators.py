@@ -111,8 +111,8 @@ class DomTree(Generic[N]):
         dominates itself."""
         if a not in self.idoms or b not in self.idoms:
             return False
-        cur: N | None = b
-        while cur is not None:
+        cur: N = b
+        while True:
             if cur == a:
                 return True
             nxt = self.idoms[cur]
@@ -120,7 +120,6 @@ class DomTree(Generic[N]):
                 # Reached entry without seeing a
                 return False
             cur = nxt
-        return False
 
     def dominators_of(self, node: N) -> list[N]:
         """All dominators of ``node`` from ``entry`` (inclusive)
@@ -129,8 +128,8 @@ class DomTree(Generic[N]):
         if node not in self.idoms:
             return []
         path: list[N] = []
-        cur: N | None = node
-        while cur is not None:
+        cur: N = node
+        while True:
             path.append(cur)
             nxt = self.idoms[cur]
             if nxt == cur:
@@ -201,11 +200,11 @@ class _UnionFind(Generic[N]):
 
     def __init__(self, semi: dict[N, int]) -> None:
         self._semi = semi
-        self._ancestor: dict[N, N | None] = {}
+        self._ancestor: dict[N, N] = {}
         self._label: dict[N, N] = {}
 
     def make(self, node: N) -> None:
-        self._ancestor[node] = None
+        self._ancestor.pop(node, None)
         self._label[node] = node
 
     def link(self, v: N, w: N) -> None:
@@ -224,20 +223,18 @@ class _UnionFind(Generic[N]):
         # candidate can only be the root itself, whose semi is minimal
         # exactly when it is the correct answer.
         path: list[N] = []
-        cur: N | None = v
-        while cur is not None and self._ancestor.get(cur) is not None:
+        cur: N = v
+        while cur in self._ancestor:
             path.append(cur)
             cur = self._ancestor[cur]
         if not path:
             return
-        # ``path`` ends at a node whose ancestor is None or the root;
+        # ``path`` ends immediately below an unlinked root;
         # walk it tail→head so each ancestor points to ``path[-1]``'s
         # ancestor and labels propagate from leaves up.
         for i in range(len(path) - 1, 0, -1):
             u = path[i]
             parent_u = self._ancestor[u]
-            if parent_u is None:
-                continue
             if (parent_u in self._label
                     and self._semi[self._label[parent_u]]
                     < self._semi[self._label[u]]):
@@ -250,7 +247,7 @@ class _UnionFind(Generic[N]):
     def eval(self, v: N) -> N:
         """Return the node ``u`` on the path ``v → root`` whose
         ``semi[u]`` is minimum."""
-        if self._ancestor.get(v) is None:
+        if v not in self._ancestor:
             return v
         self._compress(v)
         return self._label[v]
