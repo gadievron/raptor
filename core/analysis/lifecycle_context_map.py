@@ -45,6 +45,8 @@ def load_state_fields(out_dir: Path) -> list[StateField]:
         return []
 
     raw_fields = data.get("state_fields", [])
+    if not isinstance(raw_fields, list):
+        return []
     fields: list[StateField] = []
     for raw in raw_fields:
         try:
