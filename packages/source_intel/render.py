@@ -133,6 +133,21 @@ def _supersession_prefix(binary_verdict: str | None) -> str | None:
     )
 
 
+# Fixed rule-stem mapping: these report families currently have no retained
+# representation. Rule attempts identify applicable coverage limits, not
+# emitted matches or findings. Keep this notice in the existing text channel.
+_UNCONSUMED_REPORT_FAMILIES = (
+    ("refcount_pairs", "refcount_get, refcount_put"),
+    ("lock_pairs", "lock_take, lock_release, lock_leak"),
+    ("cred_manipulation", "cred"),
+    ("setuid_setgid", "setid"),
+    ("attr_pure", "pure"),
+    ("attr_const", "const"),
+    ("attr_deprecated", "deprecated"),
+    ("attr_counted_by", "counted_by"),
+)
+
+
 def derive_evidence_strings(
     result: SourceIntelResult,
     finding_function: str | None = None,
@@ -175,7 +190,8 @@ def derive_evidence_strings(
 
     Skipped results emit a skip notice; results with no relevant
     observations emit an absence acknowledgement. The output may also
-    disclose incomplete rule execution or binary supersession. A zero
+    disclose incomplete rule execution, unretained report families or
+    binary supersession. A zero
     line budget returns an empty list.
     """
     if style not in _STYLES:
@@ -207,6 +223,20 @@ def derive_evidence_strings(
         lines.append(
             f"Source_intel incomplete: {len(result.rules_failed)} rule failure(s). "
             f"Missing observations do not establish clean coverage."
+        )
+
+    unconsumed_families = [
+        families for rule, families in _UNCONSUMED_REPORT_FAMILIES
+        if rule in result.rules_executed
+    ]
+    if unconsumed_families:
+        lines.append(
+            "Source_intel coverage limitation: reports in these families are "
+            "not retained in this result when emitted: "
+            + "; ".join(unconsumed_families)
+            + ". This notice is not a finding and does not establish whether "
+            "these reports were emitted. Their absence here does not establish "
+            "absence of those operations or findings."
         )
 
     # Filter attributes to the finding's function when supplied.
