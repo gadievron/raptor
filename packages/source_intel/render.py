@@ -617,32 +617,11 @@ def _privileged_cap_constant_on_line(
 
 
 def _render_capability_line(c: CapabilityEvidence, style: str) -> str:
-    """Render one axis-4 capability-check observation.
+    """Render one capability-call observation with its recorded grade.
 
-    Three prose tiers based on (cap_function, cap_constant, grade):
-
-      1. Strongest ("ROOT-EQUIVALENT, finding is privilege-gated"):
-         cap_function gates against GLOBAL credentials
-         (``_GLOBAL_CRED_CAP_FUNCTIONS``: ``capable``) AND constant
-         is root-equivalent (``_PRIVILEGED_CAP_CONSTANTS_FOR_RENDER``).
-         Bug not reachable from unprivileged context.
-
-      2. Userns-caveat ("namespace-scoped, root-equivalent CAP can
-         be held by userns admin"): cap_function is namespace-scoped
-         (``_NS_SCOPED_CAP_FUNCTIONS``: ``ns_capable`` and
-         relatives) BUT constant is root-equivalent. An unprivileged
-         user can ``unshare -U`` into a userns and hold the CAP
-         there — bug IS reachable, just one userns hop away. LLM
-         must NOT treat as privilege-gated.
-
-      3. Generic ("Attacker must hold checked capability"): cap
-         constant not in root-equivalent set OR cap_function
-         unknown. Soft-signal prose; LLM weighs.
-
-    The (cap_function, grade) gate matters: on ``same_path``
-    grade, the cap may be on a branch the sink isn't on, so even
-    a root-equivalent constant doesn't gate. Only ``dominates``
-    and ``same_function`` qualify for the strong/userns tiers.
+    Non-dominating grades describe co-location only and do not establish
+    a required privilege. The existing dominates-grade credential tiers
+    remain separate from those informational observations.
     """
     fn_text = (
         f"function `{c.enclosing_function}`"
@@ -655,8 +634,22 @@ def _render_capability_line(c: CapabilityEvidence, style: str) -> str:
         GRADE_SAME_FUNCTION: "shares the function with the sink",
     }.get(c.grade, c.grade)
 
-    # Detect a privileged-equivalent constant on the source line.
-    # Only meaningful when the grade actually guards the sink path.
+    if c.grade != GRADE_DOMINATES:
+        if style == "stage_d":
+            prefix = "Capability observation — call near sink"
+        elif style == "exploit_plan":
+            prefix = "Constraint to verify — capability-call relationship"
+        else:
+            prefix = "Variant hint — capability-call observation"
+        return (
+            f"{prefix}: `{c.cap_function}(...)` at "
+            f"{c.location[0]}:{c.location[1]} {fn_text} — {grade_phrase}. "
+            f"This observation does not establish a required capability, "
+            f"sink reachability or privilege gating; inspect the check's "
+            f"result and its control-flow relationship to the finding."
+        )
+
+    # Preserve the existing dominates-grade credential tiers.
     priv_cap: str | None = None
     if c.grade in (GRADE_DOMINATES, GRADE_SAME_FUNCTION):
         priv_cap = _privileged_cap_constant_on_line(
