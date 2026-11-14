@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Enumeration and the opened-file read share the same exclusive byte limit.
 _TEST_FILE_BYTE_LIMIT = 500_000
+_TEST_FILE_COUNT_LIMIT = 500
 
 # ``regress`` covers the OpenBSD/openssh convention (openssh ships a
 # 200+ file ``regress/`` tree; without the pattern the whole suite was
@@ -445,6 +446,12 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
                     skipped_unsupported += 1
                 continue
             if is_test_dir or _TEST_FILE_PATTERNS.search(fname):
+                bucket = in_tree_files if is_test_dir else loose_files
+                # Only this bucket's first capped candidates can survive
+                # the final priority merge. Keep walking to count every
+                # unsupported file and to find higher-priority tree files.
+                if len(bucket) >= _TEST_FILE_COUNT_LIMIT:
+                    continue
                 fpath = root_path / fname
                 try:
                     size = fpath.stat().st_size
@@ -455,16 +462,13 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
                     # (ALL test evidence for the target lost).
                     continue
                 if size < _TEST_FILE_BYTE_LIMIT:
-                    if is_test_dir:
-                        in_tree_files.append(fpath)
-                    else:
-                        loose_files.append(fpath)
+                    bucket.append(fpath)
 
     # The result cap must not be walk-ordered: enough planted loose
     # test files sorting ahead of tests/ in the walk would evict the
     # entire curated suite from the capped set. Recognized test trees
     # take the cap first; loose files fill the remainder.
-    return (in_tree_files + loose_files)[:500], skipped_unsupported
+    return (in_tree_files + loose_files)[:_TEST_FILE_COUNT_LIMIT], skipped_unsupported
 
 
 def _extract_test_functions(source: str, suffix: str = "") -> List[tuple]:
