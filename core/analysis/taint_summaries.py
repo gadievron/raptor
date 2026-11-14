@@ -682,6 +682,31 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
     return frozenset(names)
 
 
+def _literal_header_annotation(annotation: ast.expr | None) -> bool:
+    """Closed, name-free constant/container annotations; never evaluate values."""
+    if annotation is None:
+        return True
+    pending: list[ast.expr] = [annotation]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Constant):
+            continue
+        if isinstance(node, (ast.Tuple, ast.List)):
+            if not isinstance(node.ctx, ast.Load):
+                return False
+            pending.extend(node.elts)
+        elif isinstance(node, ast.Set):
+            pending.extend(node.elts)
+        elif isinstance(node, ast.Dict):
+            if len(node.keys) != len(node.values) or any(key is None for key in node.keys):
+                return False
+            pending.extend(key for key in node.keys if key is not None)
+            pending.extend(node.values)
+        else:
+            return False
+    return True
+
+
 def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | None:
     """Known lexical reads through a closed child grammar and nested function scopes."""
     if not body:
@@ -705,9 +730,8 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
             parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
             parameters.extend(arg for arg in (args.vararg, args.kwarg) if arg is not None)
             if (statement.type_params
-                    or statement.returns is not None and not isinstance(statement.returns, ast.Constant)
-                    or any(parameter.annotation is not None
-                           and not isinstance(parameter.annotation, ast.Constant)
+                    or not _literal_header_annotation(statement.returns)
+                    or any(not _literal_header_annotation(parameter.annotation)
                            for parameter in parameters)):
                 return None
             # Decorators and defaults run before child bindings are entered.
@@ -838,9 +862,8 @@ def _bounded_body_expression_loads(body: list[ast.stmt]) -> frozenset[str] | Non
             if args.kwarg is not None:
                 parameters.append(args.kwarg)
             if (statement.type_params
-                    or statement.returns is not None and not isinstance(statement.returns, ast.Constant)
-                    or any(parameter.annotation is not None
-                           and not isinstance(parameter.annotation, ast.Constant)
+                    or not _literal_header_annotation(statement.returns)
+                    or any(not _literal_header_annotation(parameter.annotation)
                            for parameter in parameters)):
                 return None
             defaults = [*args.defaults, *(default for default in args.kw_defaults if default is not None)]
