@@ -161,11 +161,15 @@ def _distribution_roots(pack: str) -> list[Path]:
 
 def _pack_roots(pack: str) -> list[Path]:
     roots: list[Path] = []
-    for candidate in (
-        *_cli_qlpack_roots(pack),
-        *_package_cache_roots(pack),
-        *_distribution_roots(pack),
-    ):
+    candidates: list[Path] = []
+    for locate in (_cli_qlpack_roots, _package_cache_roots, _distribution_roots):
+        try:
+            candidates.extend(locate(pack))
+        except OSError:
+            # One unavailable filesystem route must not discard roots
+            # from the other existing best-effort lookup routes.
+            continue
+    for candidate in candidates:
         if candidate.is_dir() and candidate not in roots:
             roots.append(candidate)
     return roots
