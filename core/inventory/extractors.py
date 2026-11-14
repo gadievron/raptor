@@ -2366,9 +2366,9 @@ class TreeSitterExtractor:
     _FUNC_TYPES: ClassVar[dict[str, tuple]] = {
         "python": ("function_definition",),
         "java": ("method_declaration", "constructor_declaration"),
-        "javascript": ("function_declaration", "method_definition", "arrow_function"),
-        "typescript": ("function_declaration", "method_definition", "arrow_function"),
-        "tsx": ("function_declaration", "method_definition", "arrow_function"),
+        "javascript": ("function_declaration", "generator_function_declaration", "method_definition", "arrow_function"),
+        "typescript": ("function_declaration", "generator_function_declaration", "method_definition", "arrow_function"),
+        "tsx": ("function_declaration", "generator_function_declaration", "method_definition", "arrow_function"),
         "c": ("function_definition",),
         "cpp": ("function_definition",),
         "go": ("function_declaration", "method_declaration"),
