@@ -161,7 +161,9 @@ def _report_guard(name: str, side: str, report: dict[str, Any], *,
     found = report["found_total"]
     expected = report["expected_total"]
     missed = report.get("missed")
-    if found < 0 or found > expected:
+    if not _is_count(expected) or not _is_count(found):
+        problems.append("expected_total and found_total must be non-negative ints")
+    elif found > expected:
         problems.append(
             "found_total out of range for expected_total "
             "(impossible from a real run)")
