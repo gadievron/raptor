@@ -266,8 +266,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.xss.taint.javascript
     message: >-
-      Untrusted data flows into an HTML response or DOM sink without
-      sanitisation. Use a context-aware encoder or DOMPurify.
+      Request or environment data reaches an HTML-related assignment or
+      output API. Review the receiver, eventual output context and sanitisation
+      before treating it as executable markup. Use context-appropriate encoding
+      or HTML sanitisation for the actual destination.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
