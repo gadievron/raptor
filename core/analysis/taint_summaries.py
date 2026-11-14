@@ -560,6 +560,15 @@ def _bounded_child_body_expression_loads(body: list[ast.stmt]) -> frozenset[str]
         statement = pending.pop()
         if isinstance(statement, (ast.Expr, ast.Return)):
             expressions.append(statement.value)
+        elif isinstance(statement, ast.Try):
+            if any(handler.name is not None for handler in statement.handlers):
+                return None
+            pending.extend(reversed(statement.finalbody))
+            pending.extend(reversed(statement.orelse))
+            for handler in reversed(statement.handlers):
+                expressions.append(handler.type)
+                pending.extend(reversed(handler.body))
+            pending.extend(reversed(statement.body))
         elif isinstance(statement, (ast.With, ast.AsyncWith)):
             for item in statement.items:
                 expressions.append(item.context_expr)
