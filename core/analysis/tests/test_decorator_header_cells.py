@@ -63,7 +63,7 @@ def test_decorated_body_still_supplies_parent_cell_reads():
 
 
 def test_unsupported_decorator_descendant_invalidates_complete_scan():
-    source = source_for("(lambda: [raw for box[[raw for item in ()]] in ()])")
+    source = source_for("(lambda: [raw for box[[(lambda: (yield raw))() for item in ()]] in ()])")
     tree = ast.parse(source)
     assert _bounded_body_expression_loads(tree.body[0].body[0].body) is None
 
