@@ -232,3 +232,46 @@ def test_indexed_or_malformed_selectors_do_not_construct_memo_keys(lookup, monke
     owner = run([row(deepcopy(ref), **fields) for _ in range(4)], descriptors())
     assert nosemgrep.annotate_sarif({"runs": [owner]}, root) == expected
     assert len(calls) == 4
+
+
+def test_negative_locations_do_not_authorise_source_or_rule_lookup(lookup, monkeypatch):
+    root, calls = lookup
+    (root / "negative.c").write_text("// nosemgrep: selected\n")
+    bad = row(reference())
+    bad["locations"][0]["physicalLocation"] = {
+        "artifactLocation": {"uri": "negative.c"}, "region": {"startLine": -1}}
+    good = row(reference())
+    original = nosemgrep.confine
+    confined = []
+
+    def confine(owner, uri):
+        assert uri != "negative.c", "negative positions must not authorise source lookup"
+        confined.append(uri)
+        return original(owner, uri)
+
+    monkeypatch.setattr(nosemgrep, "confine", confine)
+    owner = run([bad, good], descriptors())
+    assert nosemgrep.annotate_sarif({"runs": [owner]}, root) == 1
+    assert confined == ["owned.c"]
+    assert len(calls) == 1 and calls[0] is good
+    assert "nosemgrep" not in bad.get("properties", {})
+    assert good["properties"]["nosemgrep"]["suppressed"] is True
+
+
+def test_direct_nonpositive_integer_lines_do_not_read_source(lookup, monkeypatch):
+    root, _ = lookup
+    original = nosemgrep._read_source_lines
+    reads = []
+
+    def read(path):
+        reads.append(path)
+        return original(path)
+
+    monkeypatch.setattr(nosemgrep, "_read_source_lines", read)
+    source = root / "owned.c"
+    assert nosemgrep.extract_nosemgrep(source, -1, rule_id="selected") is None
+    assert nosemgrep.extract_nosemgrep(source, 0, rule_id="selected") is None
+    assert reads == []
+    info = nosemgrep.extract_nosemgrep(source, 1, rule_id="selected")
+    assert info["suppressed"] is True and info["comment_line"] == 1
+    assert reads == [source]
