@@ -1682,6 +1682,7 @@ def run_codeql(
             "RAPTOR will not silently downgrade.",
         )
 
+    diagnostic_reports = []
     if returncode != 0:
         # Surface the agent's stderr tail so the operator can see
         # WHY the run failed — language detection miscount, build
@@ -1694,6 +1695,17 @@ def run_codeql(
         logger.warning(
             "codeql agent exited rc=%s. Last stderr: %s", returncode, stderr_tail or '<empty>'
         )
+        document = _stage_findings_to_sarif([], tool_name="codeql", rule_prefix="codeql-stage")
+        diagnostic = _stage_diagnostic(
+            f"CodeQL agent exited with code {returncode}; recovered reports retained", failed=True,
+        )
+        diagnostic["exitCode"] = returncode
+        try:
+            diagnostic_reports = _write_stage_report(
+                out_dir / "codeql_stage_diagnostics.sarif", document, [diagnostic],
+            )
+        except (OSError, ValueError):
+            logger.warning("Could not persist CodeQL execution diagnostic; recovered reports retained")
         # Don't return early — the agent may have produced partial
         # SARIFs (one language succeeded, another failed). Glob and
         # return whatever's there.
@@ -1709,7 +1721,7 @@ def run_codeql(
         stamp = report_stamp(path)
         if stamp is not None and stamp != previous_reports.get(path):
             current_reports.append(str(path))
-    return sorted(current_reports)
+    return sorted(set(current_reports + diagnostic_reports))
 
 
 def _join_codeql_stage(
@@ -2873,6 +2885,19 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
         exit_file = out_dir / f"{stem}.exit"
         parsed_exit = _pack_exit_code(exit_file)
         exit_code = parsed_exit if parsed_exit is not None else -1
+    elif stem == "codeql_stage_diagnostics":
+        exit_code = -1
+        for run in data["runs"] if data is not None else []:
+            if not isinstance(run, dict):
+                continue
+            invocations = run.get("invocations")
+            if not isinstance(invocations, list):
+                continue
+            for invocation in invocations:
+                value = invocation.get("exitCode") if isinstance(invocation, dict) else None
+                if type(value) is int and value != 0:
+                    exit_code = value
+                    break
     else:
         exit_code = 0
 
@@ -3788,7 +3813,9 @@ def main() -> None:
         metrics["config_resolved"] = config_resolved_stats
         metrics["show_suppressed"] = getattr(args, "show_suppressed", False)
         metrics["sarif_merge_failed"] = bool(sarif_inputs and not merge_completed)
-        metrics["codeql_no_output"] = bool(run_codeql_stage and not codeql_sarifs)
+        metrics["codeql_no_output"] = bool(run_codeql_stage and not any(
+            Path(path).name != "codeql_stage_diagnostics.sarif" for path in codeql_sarifs
+        ))
         metrics["semgrep_dropped_files"] = 0
         metrics["analysis_gaps"] = {}
         metrics["semgrep_metadata_errors"] = 0
@@ -4027,8 +4054,12 @@ def main() -> None:
             reason=f"{len(semgrep_failed)} failed pack(s)" if semgrep_failed else ("" if semgrep_sarifs else "No Semgrep artifact; execution is not attested"),
         )]
         if args.codeql and not args.no_codeql:
-            scan_stages.append(StageEnvelope("codeql", "completed" if codeql_sarifs else "unknown",
-                                             reason="No SARIF produced" if not codeql_sarifs else ""))
+            codeql_failed = bool((metrics.get("tool_execution_failures") or {}).get("codeql"))
+            scan_stages.append(StageEnvelope(
+                "codeql", "partial" if codeql_failed else ("completed" if codeql_sarifs else "unknown"),
+                reason=("Agent execution failed; recovered reports retained" if codeql_failed else
+                        ("No SARIF produced" if not codeql_sarifs else "")),
+            ))
         report_context = context_from_sarif(
             [merged] if merged.exists() else [Path(p) for p in sarif_inputs],
             kind="scan", target=str(repo_path), run_id=out_dir.name, stages=scan_stages,
