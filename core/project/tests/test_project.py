@@ -37,6 +37,7 @@ class TestProject(unittest.TestCase):
         # Hermetic scratch dir; gives every test a per-instance Path
         # to feed Project(target=...) without hardcoding a host path.
         self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
         self.scratch = Path(self._tmp.name)
         # Convention: ``code`` for the project's nominal target,
         # ``other`` if a test needs a second distinct target. Both
