@@ -986,3 +986,68 @@ def test_semgrep_secondary_artifact_refusal_retains_current_sarif(tmp_path, monk
         assert Path(path).read_text() == payload
     if refused_suffix != "exit":
         assert (tmp_path / "semgrep_owned.exit").read_text() == "-1"
+
+
+@pytest.mark.parametrize('stage', ['cocci', 'compiler-scan', 'expanded-semgrep'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_c_family_probe_enumeration_refusal_is_visible(tmp_path, monkeypatch, capsys, stage, nested):
+    import os
+
+    denied_root = tmp_path / 'blocked' if nested else tmp_path
+    denied_root.mkdir(exist_ok=True)
+    (denied_root / 'owned.c').write_text('/* inert; never compiled */\n')
+    original = os.scandir
+    refused = []
+
+    def scoped_scandir(path):
+        if os.path.normpath(os.fspath(path)) == str(denied_root):
+            refused.append(str(path))
+            raise PermissionError('owned presence-probe refusal')
+        return original(path)
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    assert _scanner_mod._skip_stage_without_c_cpp_source(stage, tmp_path) is True
+    assert refused
+    error = capsys.readouterr().err
+    assert stage in error
+    assert 'enumeration failed' in error
+    assert 'coverage gap' in error
+
+
+@pytest.mark.parametrize('case', ['found', 'negative', 'budget'])
+def test_c_family_probe_preserves_admission_controls(tmp_path, capsys, case):
+    if case == 'found':
+        (tmp_path / 'owned.c').write_text('/* inert */\n')
+    elif case == 'negative':
+        (tmp_path / 'only.py').write_text('# inert\n')
+    else:
+        for index in range(201):
+            (tmp_path / f'a{index:03}.txt').write_text('inert\n')
+        (tmp_path / 'z.c').write_text('/* inert */\n')
+    assert _scanner_mod._skip_stage_without_c_cpp_source('owned-stage', tmp_path) is (case != 'found')
+    error = capsys.readouterr().err
+    assert ('probe budget exhausted' in error) is (case == 'budget')
+    assert 'enumeration failed' not in error
+
+
+def test_c_family_probe_readable_sibling_still_admits_stage(tmp_path, monkeypatch, capsys):
+    import os
+
+    blocked = tmp_path / 'a_blocked'
+    readable = tmp_path / 'z_readable'
+    for directory in (blocked, readable):
+        directory.mkdir()
+        (directory / 'owned.c').write_text('/* inert; never compiled */\n')
+    original = os.scandir
+    refused = []
+
+    def scoped_scandir(path):
+        if os.path.normpath(os.fspath(path)) == str(blocked):
+            refused.append(str(path))
+            raise PermissionError('owned subtree refusal')
+        return original(path)
+
+    monkeypatch.setattr(os, 'scandir', scoped_scandir)
+    assert _scanner_mod._skip_stage_without_c_cpp_source('cocci', tmp_path) is False
+    assert refused
+    assert 'enumeration failed' not in capsys.readouterr().err

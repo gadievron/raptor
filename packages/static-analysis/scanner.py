@@ -1799,11 +1799,23 @@ def _c_cpp_source_probe(repo_path: Path,
     ``(False, True)`` — the budget ran out first: UNDECIDED, and a
     stage that skips on it must say so loudly (fail-toward-visibility)
     because a real C repo may sit past the horizon.
+    Directory enumeration errors raise OSError if no source was found,
+    instead of establishing a completed negative. A readable C-family
+    sibling still establishes presence; the skip helper reports unknowns.
     """
     if not repo_path.is_dir():
         return False, False
+    enumeration_error = None
+
+    def record_walk_error(error):
+        nonlocal enumeration_error
+        if enumeration_error is None:
+            enumeration_error = error
+
     seen = 0
-    for _dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+    for _dirpath, dirnames, filenames in os.walk(
+        repo_path, followlinks=False, onerror=record_walk_error,
+    ):
         dirnames[:] = sorted(
             d for d in dirnames
             if d not in _C_PROBE_SKIP_DIRS and not d.startswith(".")
@@ -1814,6 +1826,8 @@ def _c_cpp_source_probe(repo_path: Path,
             seen += 1
             if seen >= max_files_to_check:
                 return False, True
+    if enumeration_error is not None:
+        raise enumeration_error
     return False, False
 
 
@@ -1832,7 +1846,15 @@ def _skip_stage_without_c_cpp_source(stage: str, repo_path: Path) -> bool:
     pre-fix all three stages degraded to ``logger.debug``, invisible at
     default verbosity, and the run read as a clean semgrep-only scan.
     """
-    found, exhausted = _c_cpp_source_probe(repo_path)
+    try:
+        found, exhausted = _c_cpp_source_probe(repo_path)
+    except OSError as exc:
+        print(
+            f"⚠️  {stage}: C/C++ source enumeration failed — "
+            "stage skipped; coverage gap.", file=sys.stderr,
+        )
+        logger.warning("%s: C/C++ source enumeration failed: %s", stage, type(exc).__name__)
+        return True
     if found:
         return False
     if exhausted:
