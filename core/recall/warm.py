@@ -97,7 +97,7 @@ def _record_matches(rec: dict[str, Any], entry: dict[str, Any],
     if start is None:
         return True
     rec_line = rec.get("line")
-    if not isinstance(rec_line, int):
+    if not isinstance(rec_line, int) or isinstance(rec_line, bool):
         # A record without a line cannot be placed inside a
         # line-scoped entry. The two consumers need OPPOSITE
         # conservatism: FP attribution must not over-claim coverage
@@ -210,7 +210,8 @@ def apply_would_suppress(
                 # Review provenance (b45): True when the match came
                 # from the refusal-direction missing-line rule rather
                 # than a placed record.
-                "null_line": not isinstance(hit.get("line"), int),
+                "null_line": (not isinstance(hit.get("line"), int)
+                              or isinstance(hit.get("line"), bool)),
             })
 
     raw_fp = len(report.get("clean_region_fps", []))
