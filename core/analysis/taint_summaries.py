@@ -1167,6 +1167,7 @@ def _detect_summary_unknown(
       The same applies to recognised ``annotationlib.get_annotations`` and
       ``inspect.get_annotations`` references, including import aliases:
       retained evaluators may later be called through another local name.
+      Literal metadata ``getattr`` calls have the same conservative guard.
     * A ``global`` / ``nonlocal`` declaration — a name bound outside
       the local frame is not a local: any call between the tracked
       assignment and the return can rewrite it (module slot /
@@ -1235,11 +1236,19 @@ def _detect_summary_unknown(
             annotation_metadata_read = True
         if not isinstance(node, ast.Call):
             continue
+        callee_name = _attribute_chain_str(node.func)
+        if (callee_name == "getattr" and len(node.args) >= 2
+                and not isinstance(node.args[0], ast.Starred)
+                and isinstance(node.args[1], ast.Constant)
+                and type(node.args[1].value) is str
+                and node.args[1].value in ("__annotations__", "__annotate__")):
+            # A literal metadata getter can consume or retain the evaluator
+            # through a nested frame just like a direct protocol read.
+            annotation_metadata_read = True
         # Skip calls inside nested function definitions — those will
         # have their own summary entries.
         if _inside_nested_function(node, fn_ast):
             continue
-        callee_name = _attribute_chain_str(node.func)
         if callee_name in _UNKNOWN_CALLABLES:
             return f"calls {callee_name}"
         for kw in node.keywords:
