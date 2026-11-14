@@ -275,10 +275,11 @@ for _cf, _cfn, _cl, _cskb, _cvar in _sfu_counts:
               "message": "scatterlist sized from bare fragment count "
                          "'skb_shinfo(%s)->nr_frags' at line %s but "
                          "'%s' is mapped via skb_to_sgvec at line %s: "
-                         "frag_list segments of a fragmented skb are "
-                         "not counted, so the table is undersized for "
-                         "non-linear buffers (out-of-bounds "
-                         "scatterlist write / hard failure; size from "
-                         "skb_cow_data() instead)"
+                         "possible missing frag_list accounting; check "
+                         "reachable skb geometry, spare table capacity "
+                         "and the map result before concluding that "
+                         "the table is undersized. Size for every "
+                         "mapped segment, for example using "
+                         "skb_cow_data() where appropriate"
                          % (_cskb, _cl, _mskb, _ml)}
         sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
