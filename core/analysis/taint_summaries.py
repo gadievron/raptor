@@ -682,6 +682,27 @@ def _noncapturing_match_pattern_loads(pattern: ast.pattern) -> frozenset[str] | 
     return frozenset(names)
 
 
+def _literal_header_binding_target(target: ast.expr) -> bool:
+    """Binding-only target syntax for name-free annotation comprehensions."""
+    pending: list[tuple[ast.expr, bool]] = [(target, False)]
+    while pending:
+        node, allow_star = pending.pop()
+        if (not isinstance(node, (ast.Name, ast.Tuple, ast.List, ast.Starred))
+                or not isinstance(node.ctx, ast.Store)):
+            return False
+        if isinstance(node, ast.Name):
+            continue
+        if isinstance(node, (ast.Tuple, ast.List)):
+            if sum(isinstance(element, ast.Starred) for element in node.elts) > 1:
+                return False
+            pending.extend((element, True) for element in node.elts)
+        elif allow_star:
+            pending.append((node.value, False))
+        else:
+            return False
+    return True
+
+
 def _literal_header_annotation(annotation: ast.expr | None) -> bool:
     """Closed, name-free literal/container annotations; never evaluate values."""
     if annotation is None:
@@ -690,6 +711,20 @@ def _literal_header_annotation(annotation: ast.expr | None) -> bool:
     while pending:
         node = pending.pop()
         if _match_literal_expression(node):
+            continue
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            if not node.generators:
+                return False
+            for generator in node.generators:
+                if (type(generator.is_async) is not int or generator.is_async != 0
+                        or not _literal_header_binding_target(generator.target)):
+                    return False
+                pending.append(generator.iter)
+                pending.extend(generator.ifs)
+            if isinstance(node, ast.DictComp):
+                pending.extend((node.key, node.value))
+            else:
+                pending.append(node.elt)
             continue
         if isinstance(node, ast.Lambda):
             arguments = node.args
