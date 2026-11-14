@@ -590,7 +590,12 @@ def _summarise_surviving_finding(
     Shape:
       ``"surviving flow: <source-file>:<line> <msg> -> ... -> <sink-file>:<line> <sink-snippet>"``
     """
-    data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
+    try:
+        data = load_json(sarif_path, max_bytes=_MAX_SARIF_BYTES)
+    except (OSError, ValueError):
+        # Refinement context is diagnostic; a failed reread must not
+        # discard the already completed count-based adjudication.
+        return ""
     if not isinstance(data, dict):
         return ""
 
