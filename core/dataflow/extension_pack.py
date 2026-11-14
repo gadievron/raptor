@@ -498,6 +498,8 @@ def _validate(row: ModelRow, language: str) -> str | None:
     reason = _gate_provenance(row) or _validate_common(row)
     if reason:
         return reason
+    if language in ("cpp", "java") and type(row.subtypes) is not bool:
+        return "subtypes must be a boolean"
     layout = _LANGUAGE_LAYOUTS[language]
     if row.role not in layout:
         if language == "python" and row.role == ROLE_BARRIER:
