@@ -141,10 +141,6 @@ _UNCONSUMED_REPORT_FAMILIES = (
     ("lock_pairs", "lock_take, lock_release, lock_leak"),
     ("cred_manipulation", "cred"),
     ("setuid_setgid", "setid"),
-    ("attr_pure", "pure"),
-    ("attr_const", "const"),
-    ("attr_deprecated", "deprecated"),
-    ("attr_counted_by", "counted_by"),
 )
 
 
