@@ -59,8 +59,8 @@ def test_unsupported_lambda_descendant_invalidates_complete_body(default):
     assert _bounded_body_expression_loads(ast.parse(source).body) is None
 
 
-def test_child_return_lambda_stays_outside_body_grammar():
-    source = "def child(value=lambda: raw):\n return lambda: raw"
+def test_child_return_comprehension_stays_outside_body_grammar():
+    source = "def child(value=lambda: raw):\n return [raw for item in ()]"
     assert _bounded_body_expression_loads(ast.parse(source).body) is None
 
 
