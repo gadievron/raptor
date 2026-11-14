@@ -647,7 +647,7 @@ def _expr_taint(
             # expression's taint still flows into the attribute read —
             # returning empty dropped it (false clean-wrapper hazard).
             return _expr_taint(expr.value, cfg_node, in_state_fn,
-                               summaries)
+                               summaries, local_bindings, distrusted_roots)
         base = chain.split(".", 1)[0]
         return in_state_fn(cfg_node, base)
     if isinstance(expr, ast.Call):
