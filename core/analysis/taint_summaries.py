@@ -447,21 +447,42 @@ def _lambda_body_bindings(body: ast.expr) -> frozenset[str] | None:
     return frozenset(names)
 
 
+@dataclass(frozen=True, slots=True)
+class _ExpressionScopeEvent:
+    bindings: frozenset[str]
+    enter: bool
+    reads: frozenset[str] = frozenset()
+
+
 def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
     """Known reads through bounded lambda/comprehension scopes.
 
-    An unsupported node aborts this additional scan. Empty results never
-    certify absence; existing expression and direct-base refusals stay active.
-    Target base/index expressions must fit the scope-free grammar; existing
-    partial target-store checks remain independent.
+    Binding counts represent active lexical scopes without copying ancestor
+    sets. All state is local to this invocation, including aborted scans.
+    Unsupported nodes never certify absence; existing refusals stay active.
     """
     if expr is None:
         return frozenset()
     allowed = _scope_free_expression_nodes()
     names: set[str] = set()
-    pending: list[tuple[ast.AST, frozenset[str]]] = [(expr, frozenset())]
+    bound: dict[str, int] = {}
+    pending: list[ast.AST | _ExpressionScopeEvent] = [expr]
     while pending:
-        node, bound = pending.pop()
+        item = pending.pop()
+        if isinstance(item, _ExpressionScopeEvent):
+            if item.enter:
+                for name in item.bindings:
+                    bound[name] = bound.get(name, 0) + 1
+                names.update(name for name in item.reads if name not in bound)
+            else:
+                for name in item.bindings:
+                    count = bound[name] - 1
+                    if count:
+                        bound[name] = count
+                    else:
+                        del bound[name]
+            continue
+        node = item
         if isinstance(node, ast.Name):
             if isinstance(node.ctx, ast.Load) and node.id not in bound:
                 names.add(node.id)
@@ -469,11 +490,15 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             args = node.args
             parameters = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
             parameters.update(a.arg for a in (args.vararg, args.kwarg) if a is not None)
-            pending.extend((d, bound) for d in (*args.defaults, *args.kw_defaults) if d is not None)
+            pending.extend(d for d in (*args.defaults, *args.kw_defaults) if d is not None)
             local = _lambda_body_bindings(node.body)
             if local is None:
                 return frozenset()
-            pending.append((node.body, bound | parameters | local))
+            bindings = frozenset(parameters | local)
+            # Preserve body-before-default traversal while restoring the
+            # surrounding scope before defaults are visited.
+            pending.extend((_ExpressionScopeEvent(bindings, False), node.body,
+                            _ExpressionScopeEvent(bindings, True)))
         elif isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             if not node.generators:
                 return frozenset()
@@ -483,24 +508,23 @@ def _scoped_expression_loads(expr: ast.expr | None) -> frozenset[str]:
             ]
             if any(scope is None for scope in scopes):
                 return frozenset()
-            targets = {name for scope in scopes if scope is not None for name in scope[0]}
-            inner = bound | targets
-            for scope in scopes:
-                if scope is not None:
-                    names.update(scope[1] - inner)
-            pending.append((node.generators[0].iter, bound))
+            bindings = frozenset(name for scope in scopes if scope is not None for name in scope[0])
+            reads = frozenset(name for scope in scopes if scope is not None for name in scope[1])
+            pending.append(node.generators[0].iter)
+            pending.append(_ExpressionScopeEvent(bindings, False))
             for index, gen in enumerate(node.generators):
                 if index:
-                    pending.append((gen.iter, inner))
-                pending.extend((condition, inner) for condition in gen.ifs)
+                    pending.append(gen.iter)
+                pending.extend(gen.ifs)
             payload = [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
-            pending.extend((part, inner) for part in payload)
+            pending.extend(payload)
+            pending.append(_ExpressionScopeEvent(bindings, True, reads))
         elif isinstance(node, ast.NamedExpr):
             if not isinstance(node.target, ast.Name):
                 return frozenset()
-            pending.append((node.value, bound))
+            pending.append(node.value)
         elif isinstance(node, allowed):
-            pending.extend((child, bound) for child in ast.iter_child_nodes(node))
+            pending.extend(ast.iter_child_nodes(node))
         else:
             return frozenset()
     return frozenset(names)
