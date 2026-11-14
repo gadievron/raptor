@@ -1223,8 +1223,7 @@ def _immediate_lambda_retains_reflective_reader(
     if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Lambda):
         return False
     args = node.func.args
-    if (args.kwarg is not None
-            or any(isinstance(argument, ast.Starred) for argument in node.args)
+    if (any(isinstance(argument, ast.Starred) for argument in node.args)
             or any(keyword.arg is None for keyword in node.keywords)):
         return False  # Opaque binding stays outside this additional check.
     positional = (*args.posonlyargs, *args.args)
@@ -1241,17 +1240,36 @@ def _immediate_lambda_retains_reflective_reader(
         positional, node.args,
     ))
     keyword_names = {parameter.arg for parameter in (*args.args, *args.kwonlyargs)}
+    collected_keywords: list[ast.expr] = []
+    seen_keywords: set[str] = set()
     for keyword in node.keywords:
-        if keyword.arg not in keyword_names or keyword.arg in supplied:
+        if keyword.arg is None or keyword.arg in seen_keywords:
             return False
-        supplied.add(keyword.arg)
-        values[keyword.arg] = keyword.value
+        seen_keywords.add(keyword.arg)
+        if keyword.arg in keyword_names:
+            if keyword.arg in supplied:
+                return False
+            supplied.add(keyword.arg)
+            values[keyword.arg] = keyword.value
+        elif args.kwarg is not None:
+            # Positional-only spellings may also enter the keyword collection;
+            # they do not bind or replace the fixed positional parameter.
+            collected_keywords.append(keyword.value)
+        else:
+            return False
     parameters = {parameter.arg for parameter in (*positional, *args.kwonlyargs)}
     if parameters - values.keys():
         return False  # An incomplete call cannot establish a supported binding.
     if args.vararg is not None:
         parameters.add(args.vararg.arg)
+    if args.kwarg is not None:
+        parameters.add(args.kwarg.arg)
     readers = inherited - parameters
+    if args.kwarg is not None and any(
+        _attribute_chain_str(value) in inherited or _scoped_expression_loads(value) & inherited
+        for value in collected_keywords
+    ):
+        readers |= frozenset({args.kwarg.arg})
     if args.vararg is not None and any(
         _attribute_chain_str(argument) in inherited
         or _scoped_expression_loads(argument) & inherited

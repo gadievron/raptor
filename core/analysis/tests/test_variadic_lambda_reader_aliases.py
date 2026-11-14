@@ -95,9 +95,8 @@ def test_adjacent_child_default_preserves_defining_frame_origin():
 
 @pytest.mark.parametrize('call', [
     '(lambda *read: read)(*(getattr,))',
-    '(lambda **read: read)(value=getattr)',
 ])
-def test_actual_expansion_and_keyword_collection_remain_outside_added_check(call):
+def test_actual_expansion_remains_outside_added_check(call):
     node = ast.parse(call, mode='eval').body
     assert not _immediate_lambda_retains_reflective_reader(node, frozenset({'getattr', 'hasattr'}))
 
