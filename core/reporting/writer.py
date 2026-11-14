@@ -398,12 +398,16 @@ def _load_generation_report(output_dir, current, *, root=None):
 
 
 def regenerate(document_path: Path, destination: Path, *, format: str = "markdown") -> list[str]:
-    document = load_document(document_path)
+    if Path(document_path).is_dir():
+        captured_context, document, _ = load_committed_report(Path(document_path))
+        artifacts = [*captured_context.artifacts, *document.extensions.get("raptor.artifacts", [])]
+    else:
+        document = load_document(document_path)
+        artifacts = document.extensions.get("raptor.artifacts", [])
     result = render_document(document, format)
     if Path(document_path).resolve() == Path(destination).resolve():
         raise ValueError("Regeneration cannot overwrite its input document")
     _check_report_destination(Path(destination))
-    artifacts = document.extensions.get("raptor.artifacts", [])
     context = ReportContext(document.kind, "regeneration", artifacts=artifacts)
     source_root = Path(document_path) if Path(document_path).is_dir() else Path(document_path).parent
     if Path(destination).resolve() in _protected(context, source_root):
