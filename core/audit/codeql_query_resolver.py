@@ -221,7 +221,10 @@ def resolve_query_id(query_id: str) -> str | None:
     with _CACHE_LOCK:
         cached = pack in _PACK_INDEX_CACHE
         index = _PACK_INDEX_CACHE.get(pack)
-        pack_lock = _PACK_LOCKS.setdefault(pack, threading.Lock())
+        pack_lock = _PACK_LOCKS.get(pack)
+        if pack_lock is None:
+            pack_lock = threading.Lock()
+            _PACK_LOCKS[pack] = pack_lock
     if not cached:
         with pack_lock:
             with _CACHE_LOCK:
