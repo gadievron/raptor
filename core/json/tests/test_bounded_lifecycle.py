@@ -1,4 +1,5 @@
 """Strict JSON readers retain operation errors while retiring owned resources."""
+from contextlib import ExitStack
 import errno
 import os
 from types import SimpleNamespace
@@ -16,13 +17,28 @@ def reader(tmp_path, monkeypatch):
     original_open, original_stat = os.open, os.fstat
     original_close, original_adopt = os.close, os.fdopen
     owners, streams, closed = [], [], []
+    generations = []
 
     def install(phase=None, primary=None, stream_error=None, close_error=None):
         def opened(*args, **kwargs):
-            fd = original_open(*args, **kwargs)
-            info = original_stat(fd)
-            owners.append((fd, (info.st_dev, info.st_ino)))
-            return fd
+            transferred, generation = False, None
+
+            def retire_setup(descriptor):
+                if not transferred:
+                    if generation is not None:
+                        generation["pending"] = False
+                    original_close(descriptor)
+
+            with ExitStack() as setup:
+                fd = original_open(*args, **kwargs)
+                setup.callback(retire_setup, fd)
+                info = original_stat(fd)
+                identity = (info.st_dev, info.st_ino)
+                generation = {"fd": fd, "identity": identity, "pending": True}
+                generations.append(generation)
+                owners.append((fd, identity))
+                transferred = True
+                return fd
 
         def checked(fd):
             if phase == 'stat':
@@ -51,6 +67,10 @@ def reader(tmp_path, monkeypatch):
             return stream
 
         def close(fd):
+            for generation in reversed(generations):
+                if generation["fd"] == fd and generation["pending"]:
+                    generation["pending"] = False
+                    break
             original_close(fd)
             closed.append(fd)
             if close_error is not None:
@@ -62,7 +82,10 @@ def reader(tmp_path, monkeypatch):
     yield SimpleNamespace(path=path, install=install, owners=owners, streams=streams, closed=closed)
     for stream in streams:
         stream.raw.close()
-    for fd, identity in owners:
+    for generation in generations:
+        if not generation["pending"]:
+            continue
+        fd, identity = generation["fd"], generation["identity"]
         try:
             info = original_stat(fd)
         except OSError:
