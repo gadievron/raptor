@@ -512,8 +512,9 @@ def _evaluate_with_refinement(
         )
         claim = "inconclusive"
     verdict = verdict_from(evidence, claim, polarity=hypothesis.polarity)
+    raw_reasoning = data.get("reasoning", "")
     reasoning = (
-        data.get("reasoning", "")
+        (raw_reasoning if isinstance(raw_reasoning, str) else "")
         or evidence.summary
         or (
             f"Tool '{evidence.tool}' did not run successfully: {evidence.error}"
