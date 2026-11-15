@@ -68,6 +68,20 @@ def _member_root(node: ast.AST) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _comprehension_target_binds(target: ast.AST, name: str) -> bool:
+    """Bare comprehension bindings, excluding attribute/subscript effects."""
+    pending = [target]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and node.id == name:
+            return True
+        if isinstance(node, (ast.Tuple, ast.List)):
+            pending.extend(node.elts)
+        elif isinstance(node, ast.Starred):
+            pending.append(node.value)
+    return False
+
+
 def known_python_identity_conflict(
     source_text: str, call_line: int, canonical_calls: tuple[str, ...],
 ) -> str | None:
@@ -124,9 +138,22 @@ def known_python_identity_conflict(
         and any(alias.name == "annotations" for alias in statement.names)
         for statement in tree.body
     )
+    comprehension_types = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
     child: ast.AST = call
     while child in parents:
         frame = parents[child]
+        comprehension = None
+        if isinstance(frame, ast.comprehension):
+            owner = parents.get(frame)
+            if (isinstance(owner, comprehension_types)
+                    and not (frame is owner.generators[0] and child is frame.iter)):
+                comprehension = owner
+        elif isinstance(frame, comprehension_types) and not isinstance(child, ast.comprehension):
+            comprehension = frame
+        if comprehension is not None and any(
+                _comprehension_target_binds(generator.target, root)
+                for generator in comprehension.generators):
+            return "source library root is locally shadowed"
         annotation_owner = None
         if isinstance(frame, ast.arg) and child is frame.annotation:
             arguments = parents.get(frame)
