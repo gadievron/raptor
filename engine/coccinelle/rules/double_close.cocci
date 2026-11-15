@@ -79,6 +79,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated close on a descriptor value without recognized replacement; review initial validity, close results, aliases and numeric descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -122,6 +124,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated close on a descriptor value without recognized replacement; review initial validity, close results, aliases and numeric descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -171,6 +175,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated close on a descriptor value without recognized replacement; review initial validity, close results, aliases and numeric descriptor reuse (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -216,6 +222,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated fclose/pclose on an unrebound stream value; review lifetime, ownership, aliases and reachability (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -254,6 +262,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated fclose/pclose on an unrebound stream value; review lifetime, ownership, aliases and reachability (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
@@ -298,6 +308,8 @@ msg = {
     "file": p[0].file,
     "line": int(p[0].line),
     "col": int(p[0].column),
+    "line_end": int(p[0].line_end),
+    "col_end": int(p[0].column_end),
     "message": "Candidate: repeated fclose/pclose on an unrebound stream value; review lifetime, ownership, aliases and reachability (CWE-675)",
 }
 print("COCCIRESULT:" + json.dumps(msg))
