@@ -447,11 +447,14 @@ def parse_sarif_data(data: Any, *, errors: list[str] | None = None) -> list[Semg
         if not isinstance(results, list):
             malformed += 1
             continue
-        # One usable lookup cannot amortize a full descriptor index. Ignore
-        # malformed siblings for this decision; the loop still diagnoses them.
-        usable_results = (result for result in results if isinstance(result, dict) and result)
-        next(usable_results, None)
-        multiple_results = next(usable_results, None) is not None
+        # One reference-bearing result cannot amortize a descriptor index.
+        # Reference-free siblings still reach recovery and diagnostics below.
+        referenced_results = (
+            result for result in results if isinstance(result, dict) and result
+            and any(key in result for key in ("ruleId", "ruleIndex", "rule"))
+        )
+        next(referenced_results, None)
+        multiple_results = next(referenced_results, None) is not None
         for result in results:
             if not isinstance(result, dict) or not result:
                 malformed += 1
