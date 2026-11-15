@@ -3,6 +3,7 @@
 
 from pkgutil import resolve_name as _mock_owner
 from core.testing.module_bindings import mock_module_attribute
+from core.testing.module_state import isolated_module_state
 
 import secrets
 import tempfile
@@ -432,8 +433,11 @@ class TestGetClientThreadSafety(unittest.TestCase):
 
     def setUp(self):
         from core.sage import hooks
-        hooks._client = None
-        hooks._client_initialised = False
+        self.enterContext(isolated_module_state(hooks, {
+            "_client": None,
+            "_client_initialised": False,
+            "_client_none_decided_at": hooks._client_none_decided_at,
+        }, lock=hooks._client_lock))
         self._gpu_patch = patch("core.sage.hooks._ollama_gpu_available", return_value=True)
         self._gpu_patch.start()
 
