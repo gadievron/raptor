@@ -4,9 +4,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.js.insecure-cookie-secure-false
     message: >-
-      Express cookie Secure flag explicitly set to false — the cookie will
-      be sent over unencrypted HTTP, exposing it to network sniffing. Set
-      secure: true.
+      A cookie call specifies secure: false. Confirm the framework API and effective options after spreads or overrides, then review the final response and intended transport. Enable Secure where HTTPS-only cookie transmission is required.
     languages: [javascript, typescript]
     severity: HIGH
     pattern: |
@@ -17,9 +15,7 @@ rules:
 
   - id: raptor.js.insecure-cookie-httponly-false
     message: >-
-      Express cookie httpOnly flag explicitly set to false — the cookie is
-      accessible to client-side JavaScript, enabling session theft via XSS.
-      Set httpOnly: true.
+      A cookie call specifies httpOnly: false. Confirm the framework API, effective options and whether script access to the final cookie is intended. Enable HttpOnly where client-side access is unnecessary.
     languages: [javascript, typescript]
     severity: HIGH
     pattern: |
@@ -33,9 +29,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.js.path-traversal
     message: >-
-      Untrusted data flows into a filesystem path operation, enabling
-      directory traversal. path.join does NOT prevent "../" traversal above
-      the base directory. Validate and sanitise the path component.
+      Potentially request-derived data reaches path construction or file I/O APIs. Review the actual operation, effective path and allowed roots before claiming traversal. path.join does not enforce confinement; validate the final destination against the intended base directory.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
