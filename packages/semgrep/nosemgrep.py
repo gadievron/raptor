@@ -26,7 +26,7 @@ from pathlib import Path
 
 from core.paths import confine
 from core.sarif.parser import ArtifactUriResolver, ResultRuleResolver, _result_rule_id, get_result_rule, sarif_uri_path
-from core.source import read_text_capped, split_lines
+from core.source import read_contained_text_capped, read_text_capped, split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,14 @@ _MAX_CACHE_FILES = 512
 
 def _read_source_lines(path: str | Path) -> list[str] | None:
     """Read complete source lines before using them as suppression evidence."""
-    got = read_text_capped(path, newline="")
+    return _complete_source_lines(read_text_capped(path, newline=""))
+
+
+def _read_annotation_lines(root: Path, path: str) -> list[str] | None:
+    return _complete_source_lines(read_contained_text_capped(root, path, newline=""))
+
+
+def _complete_source_lines(got: tuple[str, bool] | None) -> list[str] | None:
     if got is None:
         return None
     text, truncated = got
@@ -71,9 +78,10 @@ def _read_source_lines(path: str | Path) -> list[str] | None:
 class _FileCache:
     """LRU-ish file cache for source lines, scoped to one annotation pass."""
 
-    __slots__ = ("_store",)
+    __slots__ = ("_store", "_root")
 
-    def __init__(self) -> None:
+    def __init__(self, root: Path) -> None:
+        self._root = root
         self._store: dict[str, list[str] | None] = {}
 
     def lines(self, path: str) -> list[str] | None:
@@ -82,7 +90,7 @@ class _FileCache:
         if len(self._store) >= _MAX_CACHE_FILES:
             # Evict oldest entry (insertion-order dict).
             self._store.pop(next(iter(self._store)))
-        result = _read_source_lines(path)
+        result = _read_annotation_lines(self._root, path)
         self._store[path] = result
         return result
 
@@ -182,7 +190,7 @@ def annotate_sarif(sarif_data: dict, repo_root: str) -> int:
         root = Path(repo_root).absolute()
     except OSError:
         return 0
-    cache = _FileCache()
+    cache = _FileCache(root)
     annotated = 0
 
     def _dget(container: object, key: str) -> dict:
