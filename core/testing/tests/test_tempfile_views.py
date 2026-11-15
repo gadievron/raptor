@@ -33,8 +33,9 @@ def test_real_factory_obeys_private_root_and_releases_resources(tmp_path, borrow
     try:
         with ExitStack() as cleanup:
             if factory == "mkdtemp":
-                path = Path(view.mkdtemp(prefix="private-"))
-                cleanup.callback(shutil.rmtree, path)
+                name = view.mkdtemp(prefix="private-")
+                cleanup.callback(shutil.rmtree, name)
+                path = Path(name)
             elif factory == "mkstemp":
                 descriptor, name = view.mkstemp(prefix="private-")
                 cleanup.callback(os.unlink, name)
