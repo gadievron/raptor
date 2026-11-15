@@ -31,6 +31,7 @@ _SCRIPTS = [
     ("chroot_no_chdir", 0), ("dead_memset_free", 0),
     ("copy_user_size_mismatch", 0), ("copy_user_size_mismatch", 1),
     ("copy_user_size_mismatch", 2),
+    ("fcntl_flag_domain", 0), ("free_stack_array", 0),
 ]
 
 
@@ -50,7 +51,7 @@ def _report(name, index, position, **bindings):
     tree = ast.parse(_python_statements(scripts[index]))
     tree.body = [node for node in tree.body if not isinstance(node, (ast.Import, ast.ImportFrom))]
     output = io.StringIO()
-    namespace = {"json": json, "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
+    namespace = {"json": json, "ast": ast, "re": re, "ARR": "buffer", "COMMAND": "F_SETFD", "FLAGS": "O_NONBLOCK", "p": [position], "p2": [position], "PARAM": "count", "TD": "struct payload", "TL": "int", "T": "char", "LOCAL": "owned", "swap1": "htons", "swap2": "ntohs", "V": "secret"}
     namespace.update(bindings)
     with redirect_stdout(output):
         exec(compile(tree, str(rule), "exec"), namespace)
@@ -114,3 +115,11 @@ def test_script_extraction_preserves_python_strings_and_floor_division():
 def test_usercopy_type_filters_stay_quiet(index, bindings):
     position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
     assert _report("copy_user_size_mismatch", index, position, **bindings) == ""
+
+
+@pytest.mark.parametrize("command,flags", [
+    ("F_SETFL", "O_NONBLOCK"), ("F_SETFD", "FD_CLOEXEC"),
+], ids=["status-flags", "descriptor-flags"])
+def test_correct_fcntl_domain_stays_quiet(command, flags):
+    position = SimpleNamespace(file="owned.c", line=4, column=2, line_end=5, column_end=18)
+    assert _report("fcntl_flag_domain", 0, position, COMMAND=command, FLAGS=flags) == ""
