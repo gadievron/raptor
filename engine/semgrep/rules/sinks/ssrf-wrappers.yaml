@@ -9,8 +9,10 @@ rules:
   # No pattern-sanitizers on purpose: real SSRF guards are branch-style
   # host/scheme allowlist checks, which taint-mode sanitizers cannot
   # express faithfully — a name-based sanitizer here would silently
-  # suppress true positives. Guard sufficiency is adjudicated downstream
-  # (Z3 charset prescreen / LLM validation), not in the rule.
+  # suppress true positives. Guard sufficiency requires review of the
+  # original source, destination policy and actual request behavior.
+  # Conditional charset prescreens, where available, remain diagnostics
+  # rather than source-level proof.
   # ---------------------------------------------------------------------------
 
   # Java — request parameter appended into a StringBuilder that becomes
