@@ -11,9 +11,10 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.crypto.flow.mac-on-plaintext-after-encrypt.java
     message: >-
-      MAC is computed on the same data passed to Cipher.doFinal rather than
-      on the ciphertext output.  Prefer Encrypt-then-MAC of ciphertext.
-      Verify with test vectors.
+      Candidate: two doFinal calls use the same input expression. Review
+      receiver types, cipher direction, input changes and the surrounding
+      authentication protocol. If encryption and a separate MAC cover the
+      plaintext, review whether Encrypt-then-MAC of ciphertext is required.
     languages: [java, kotlin]
     severity: HIGH
     pattern-either:
