@@ -75,9 +75,14 @@ INTEGER_ABIS = {
 
 
 def resolve_integer_abi(value: IntegerABIInput) -> IntegerABI | None:
-    """Resolve explicit configuration or a validated broker record."""
+    """Resolve named layouts, exact ABI values or validated broker records.
+
+    Subclasses cannot supply a model: overridable validation, attributes or
+    record methods can make arithmetic and its cache context disagree.
+    Construct an IntegerABI value or pass a record of its declared fields.
+    """
     if isinstance(value, IntegerABI):
-        return value
+        return value if type(value) is IntegerABI else None
     if isinstance(value, str):
         try:
             name = str.__str__(value)
