@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -41,7 +43,7 @@ def test_deferred_writer_expires_enclosing_parameter(tmp_path, expression):
 @pytest.mark.parametrize('expression', WRITERS, ids=['element', 'filter', 'nested-eager', 'lambda-default'])
 def test_earlier_snapshot_survives_generator_write(tmp_path, expression):
     result = query(tmp_path, expression, snapshot=True)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize('expression', [
@@ -50,7 +52,7 @@ def test_earlier_snapshot_survives_generator_write(tmp_path, expression):
 ])
 def test_generator_local_bindings_preserve_outer_parameter(tmp_path, expression):
     result = query(tmp_path, expression)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_fresh_guard_retains_conservative_escaping_writer_refusal(tmp_path):

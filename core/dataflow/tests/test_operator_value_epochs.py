@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -35,7 +37,7 @@ def test_operator_effect_preserves_only_local_snapshot(tmp_path, expression, loc
     (tmp_path / 'app.py').write_text(source)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=len(source.splitlines()), sink_class='xss')
-    assert result.status is (sb.Tier0Status.SOUND if local else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if local else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('expression', ['operand + 0', 'not operand', 'operand == 0', 'operand and 0'])

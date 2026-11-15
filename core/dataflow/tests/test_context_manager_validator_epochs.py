@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 
 GUARD = '  if not re.fullmatch(r"[a-z]+", value): raise ValueError()'
@@ -28,7 +30,7 @@ def test_guard_exception_ownership_controls_certification(tmp_path, asynchronous
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="app.py", sink_line=6, sink_class="xss", language="python")
     expected = sb.Tier0Status.SOUND if inside else sb.Tier0Status.NOT_APPLICABLE
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
     if not inside:
         assert result.artifact is None
 

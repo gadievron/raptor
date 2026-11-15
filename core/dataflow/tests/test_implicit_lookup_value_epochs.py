@@ -1,6 +1,8 @@
 """Descriptor and getter dispatch cannot freeze a shared validated name."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -36,7 +38,7 @@ def test_python_lookup_preserves_only_owned_value_slot(tmp_path, access, paramet
     if access == 'sink-callee':
         middle, sink = ' pass', 'carrier.consume(value)'
     result = python_query(tmp_path, middle, sink, parameter=parameter)
-    assert result.status is (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('early', [False, True], ids=['late-lookup', 'snapshot'])
@@ -44,7 +46,7 @@ def test_python_alias_capture_order_around_descriptor(tmp_path, early):
     before = ' alias = value\n' if early else ''
     middle = ' unused = carrier.item' + ('' if early else '\n alias = value')
     result = python_query(tmp_path, middle, 'consume(alias)', before=before)
-    assert result.status is (sb.Tier0Status.SOUND if early else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if early else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 def test_python_default_lookup_is_an_inline_effect(tmp_path):
@@ -54,7 +56,7 @@ def test_python_default_lookup_is_an_inline_effect(tmp_path):
 
 def test_python_validation_after_lookup_refreshes_slot(tmp_path):
     result = python_query(tmp_path, ' unused = carrier.item', fresh=True)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize('language', ['javascript', 'typescript'])
@@ -79,7 +81,7 @@ def test_native_lookup_preserves_only_owned_value_slot(tmp_path, language, acces
     (tmp_path / name).write_text(text)
     result = sb.try_tier0(fix_diff='+' + guard + '\n', repo_root=tmp_path,
                           sink_uri=name, sink_line=len(text.splitlines())-1, sink_class='xss', language=language)
-    assert result.status is (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('early', [False, True], ids=['late-captured-read', 'local-snapshot'])
@@ -96,7 +98,7 @@ def test_known_nested_writer_makes_parameter_slot_shared(tmp_path, early):
     (tmp_path / 'captured.py').write_text(text)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='captured.py', sink_line=len(text.splitlines()), sink_class='xss')
-    assert result.status is (sb.Tier0Status.SOUND if early else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if early else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 def test_substitution_epoch_refuses_known_captured_writer():

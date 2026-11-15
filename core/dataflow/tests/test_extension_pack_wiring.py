@@ -92,6 +92,7 @@ _SHIM = (Path(__file__).resolve().parents[3] / "core" / "iris"
 def _run_shim(*args):
     env = dict(os.environ)
     env["_RAPTOR_TRUSTED"] = "1"
+    env["RAPTOR_DIR"] = str(_SHIM.parents[3])
     return run_standalone_cli(
         [sys.executable, str(_SHIM), *args],
         capture_output=True, text=True, timeout=60, env=env, check=False,

@@ -334,7 +334,7 @@
     "core/dataflow/tests/test_cvefix_bridge.py": "32765c23ff1e7c16e834bc25d0e52d25fb845cc47466aac2485bde839ec8c29e",
     "core/dataflow/tests/test_cvefix_pipeline_codeql_e2e.py": "2504800fae3132b999fbd27a15a2c3974987619fbf3487cff8e63c9e34ebf5e9",
     "core/dataflow/tests/test_cvefix_walk.py": "3db06ae0c3dcf861a9451836b42401e44965d6c15d058184f91d94f179992001",
-    "core/dataflow/tests/test_extension_pack_wiring.py": "6407c92b9cd9f2f25a908bd32ef69cdc6e10701b273e5f625d9aeb941857e1b0",
+    "core/dataflow/tests/test_extension_pack_wiring.py": "3383e3f46fb4e9adf1789853c945d36073d89cfc0aa5297be8fbe585d4cefb23",
     "core/dataflow/tests/test_ghsa_harvester.py": "c0fe2d8aaeac0f7680055e326627002bac0f6dd3f3d5bbdb10a18fbbc4a241f5",
     "core/dataflow/tests/test_parity_report_completion.py": "d54967d6694abe84c6f93575bd8b64da9f07ff4e0b3b565d773bfcca376fecfd",
     "core/dataflow/tests/test_parser_pack_harvest.py": "f10edde1caf52a89bd76d559257c4cef51601231e5a6f03d124a23784964e76f",

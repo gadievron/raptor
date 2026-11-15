@@ -5,6 +5,8 @@ import re
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 
 
@@ -46,7 +48,10 @@ def test_direct_literal_pattern_and_bare_input_remain_eligible(tmp_path, kind):
                          sink_uri="app.py", sink_line=4, sink_class="xss", language="python")
     # Python match/$ permits a final LF, unlike fullmatch.
     expected = sb.Tier0Status.SOUND if kind == "fullmatch" else sb.Tier0Status.DECLINED
-    assert result.status is expected, result.reasoning
+    if kind == "fullmatch":
+        assert_epoch_character_model(result, True)
+    else:
+        assert result.status is expected, result.reasoning
 
 
 def test_nested_call_refusal_reaches_tier1_and_prescreen(tmp_path):

@@ -1,6 +1,8 @@
 """Raw Java Unicode translation cannot be treated as a source proof."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -29,7 +31,7 @@ def test_ordinary_java_guard_remains_eligible(tmp_path):
     (tmp_path / "App.java").write_text(_source().replace(PREFIX, "ordinary comment"))
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="App.java", sink_line=5, sink_class="xss", language="java")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("kind", ["charset", "known_safe_call"])

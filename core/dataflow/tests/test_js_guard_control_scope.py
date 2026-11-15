@@ -1,6 +1,8 @@
 """JS-family multiline control ownership precedes source certificates."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -31,7 +33,7 @@ def test_ordinary_js_family_guard_stays_eligible(tmp_path, language, suffix):
     (tmp_path / name).write_bytes(source.encode())
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri=name, sink_line=3, sink_class="xss", language=language)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("language", ["javascript", "typescript"])

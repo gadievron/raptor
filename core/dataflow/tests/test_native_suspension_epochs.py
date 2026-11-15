@@ -2,6 +2,8 @@
 import pytest
 
 from core.analysis import validator_control_scope, validator_value_scope
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if (!/^[a-z]+$/.test(value)) return;'
@@ -66,7 +68,7 @@ def test_function_owned_slot_remains_eligible(tmp_path, language, binding):
         middle = (' const value = shared;\n' if binding == 'snapshot'
                   else ' ' + binding + ' value = "abc";\n')
     result = check(tmp_path, language, before, header, middle, resume=' await mutate();')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("language", ["javascript", "typescript"])
@@ -87,4 +89,4 @@ def test_nested_suspension_without_execution_keeps_existing_epoch(tmp_path, lang
 def test_validation_after_suspension_refreshes_shared_slot(tmp_path, language):
     result = check(tmp_path, language, 'let value = "abc";\n', 'async function handle() {',
                    ' await checkpoint();\n', resume='')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)

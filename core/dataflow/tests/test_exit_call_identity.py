@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 
 
@@ -38,7 +40,7 @@ def test_unshadowed_existing_exit_profiles_remain_eligible(tmp_path, call):
     (tmp_path / "app.py").write_text(text)
     result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                          sink_uri="app.py", sink_line=5, sink_class="xss", language="python")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_shadowed_handler_exit_cannot_hide_a_validation_failure(tmp_path):

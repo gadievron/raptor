@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -44,7 +46,7 @@ def test_python_alias_observes_call_order(tmp_path, capture_before):
     (tmp_path / 'app.py').write_text(text)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=sink_line, sink_class='xss')
-    assert result.status is (sb.Tier0Status.SOUND if capture_before else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if capture_before else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)
 
 
 def test_python_parameter_is_not_the_sibling_global(tmp_path):
@@ -52,7 +54,7 @@ def test_python_parameter_is_not_the_sibling_global(tmp_path):
     (tmp_path / 'app.py').write_text(text)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=sink_line, sink_class='xss')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_header_rebinding_ends_local_parameter_epoch():
@@ -79,4 +81,4 @@ def test_native_call_distinguishes_shared_and_function_slot(tmp_path, language, 
     (tmp_path / name).write_text(text)
     result = sb.try_tier0(fix_diff='+' + guard + '\n', repo_root=tmp_path,
                           sink_uri=name, sink_line=6, sink_class='xss', language=language)
-    assert result.status is (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (sb.Tier0Status.SOUND if parameter else sb.Tier0Status.NOT_APPLICABLE) is sb.Tier0Status.SOUND)

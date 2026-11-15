@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -35,7 +37,7 @@ def consume(argument): pass
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                          sink_uri='app.py', sink_line=len(source.splitlines()), sink_class='xss')
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 def test_augmented_dispatch_is_inclusive_for_shared_slot():

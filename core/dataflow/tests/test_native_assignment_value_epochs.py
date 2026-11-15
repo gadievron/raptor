@@ -5,6 +5,8 @@ import json
 import pytest
 
 from core.analysis import validator_control_scope as syntax
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 
 GUARD = " if (!/^[a-z]+$/.test(value)) return;"
@@ -70,7 +72,7 @@ def test_unrelated_targets_and_bare_self_assignment_keep_the_epoch(native, tmp_p
     (tmp_path / "app.js").write_text(text)
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="app.js", sink_line=8, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_composite_write_refusal_reaches_tier1_and_prescreen(native, tmp_path):

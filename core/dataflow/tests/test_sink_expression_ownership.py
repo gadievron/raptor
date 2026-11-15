@@ -1,6 +1,8 @@
 """Line-only sink proofs cannot select among separate explicit calls."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -29,7 +31,7 @@ def test_python_single_value_controls_remain_eligible(tmp_path, sink):
     (tmp_path / "app.py").write_text('import re\ndef handle(value):\n' + guard + '\n        return\n    ' + sink + '\n')
     result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                           sink_uri="app.py", sink_line=5, sink_class="xss")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.skipif(not z3_available(), reason="requires native Z3")
@@ -55,4 +57,4 @@ def test_javascript_single_value_controls_remain_eligible(tmp_path, sink):
     (tmp_path / "app.js").write_text('function handle(value) {\n' + guard + '\n ' + sink + '\n}\n')
     result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                           sink_uri="app.js", sink_line=3, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)

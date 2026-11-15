@@ -2,6 +2,8 @@
 import pytest
 
 from core.analysis import validator_value_scope as epochs
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -42,7 +44,7 @@ def test_non_replacing_declarations_keep_the_direct_validated_value(tmp_path, de
         assert result.status is sb.Tier0Status.NOT_APPLICABLE
         assert "does not dominate" in result.reasoning
     else:
-        assert result.status is sb.Tier0Status.SOUND, result.reasoning
+        assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("declaration", ['function value() {}', 'class value {}'], ids=["function", "class"])

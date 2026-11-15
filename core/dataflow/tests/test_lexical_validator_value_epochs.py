@@ -1,6 +1,8 @@
 """A source validator constrains one value epoch, not its later mixes."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -32,7 +34,7 @@ def test_identity_epoch_and_comment_decoys_remain_eligible(tmp_path, change):
     (tmp_path / "app.js").write_bytes(_source(change).encode())
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="app.js", sink_line=4, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.skipif(not z3_available(), reason="requires native Z3")

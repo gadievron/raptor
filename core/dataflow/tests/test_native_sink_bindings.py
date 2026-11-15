@@ -1,6 +1,8 @@
 """A validator certificate must reach a consumed value, not a name decoy."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier
 from core.smt_solver import z3_available
 
@@ -33,7 +35,7 @@ def test_direct_consumed_values_remain_eligible(tmp_path, sink):
     (tmp_path / "app.js").write_bytes(_source(sink).encode())
     result = smt_barrier.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                                   sink_uri="app.js", sink_line=3, sink_class="xss", language="javascript")
-    assert result.status is smt_barrier.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.skipif(not z3_available(), reason="requires native Z3")
@@ -60,7 +62,7 @@ def test_java_native_sink_argument_is_distinct_from_callee_name(tmp_path, direct
     (tmp_path / "App.java").write_bytes(source.encode())
     result = smt_barrier.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                                   sink_uri="App.java", sink_line=4, sink_class="xss", language="java")
-    assert result.status is (smt_barrier.Tier0Status.SOUND if direct else smt_barrier.Tier0Status.NOT_APPLICABLE), result.reasoning
+    assert_epoch_character_model(result, (smt_barrier.Tier0Status.SOUND if direct else smt_barrier.Tier0Status.NOT_APPLICABLE) is smt_barrier.Tier0Status.SOUND)
 
 
 @pytest.mark.skipif(not z3_available(), reason="requires native Z3")
@@ -70,7 +72,7 @@ def test_typescript_direct_typed_sink_expression_keeps_its_value(tmp_path):
     (tmp_path / "app.ts").write_bytes(source.encode())
     result = smt_barrier.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                                   sink_uri="app.ts", sink_line=3, sink_class="xss", language="typescript")
-    assert result.status is smt_barrier.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_sink_shape_veto_is_wired_to_both_other_consumers(tmp_path):

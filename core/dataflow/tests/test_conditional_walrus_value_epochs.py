@@ -1,6 +1,8 @@
 """Explicit RHS writes precede conditional reads and later tuple elements."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -37,7 +39,7 @@ def test_rhs_rebinding_cannot_seed_a_new_certificate(tmp_path, statement):
 ])
 def test_earlier_snapshot_remains_transferable(tmp_path, statement):
     result = query(tmp_path, statement, snapshot=True)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize('statement', [
@@ -49,7 +51,7 @@ def test_earlier_snapshot_remains_transferable(tmp_path, statement):
 ])
 def test_unrelated_or_lambda_local_write_preserves_transfer(tmp_path, statement):
     result = query(tmp_path, statement)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_whole_rhs_filter_conservatively_declines_earlier_tuple_capture(tmp_path):

@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", __doc__): return'
@@ -16,7 +18,7 @@ def native():
 
 
 def source(change, sink="__doc__"):
-    lines = ["import re", '__doc__ = "abc"', "def handle():", " global __doc__", GUARD]
+    lines = ["import re", '__doc__ = "abc"', 'def handle(other="abc"):', " global __doc__", GUARD]
     lines += change.splitlines()
     lines.append(" consume(" + sink + ")")
     return "\n".join(lines) + "\n", len(lines)
@@ -39,14 +41,19 @@ def test_global_deletion_cannot_reuse_the_old_charset(tmp_path, change):
 
 @pytest.mark.parametrize("change,sink", [
     (" alias = __doc__\n del __doc__", "alias"),
-    (' other = "abc"\n del other', "__doc__"),
+    (' del other', "__doc__"),
 ], ids=["preserved-alias", "unrelated-delete"])
 def test_deletion_does_not_remove_other_value_epochs(tmp_path, change, sink):
     text, sink_line = source(change, sink)
+    if sink == "__doc__":
+        # Deleting an arbitrary argument can run a finalizer; retain an owned
+        # parameter rather than assuming that the shared global stays frozen.
+        text = text.replace('def handle(other="abc"):\n global __doc__',
+                            'def handle(__doc__, other):\n pass')
     (tmp_path / "app.py").write_text(text)
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="app.py", sink_line=sink_line, sink_class="xss", language="python")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_substitution_epoch_also_ends_at_global_deletion():
@@ -76,7 +83,7 @@ def test_deletion_refusal_reaches_tier1_and_prescreen(tmp_path):
 
 def test_curated_transform_epoch_ends_at_deletion(tmp_path):
     line = " __doc__ = html.escape(raw)"
-    text = ("import html\ndef handle(raw):\n global __doc__\n"
+    text = ("import html\ndef handle(raw):\n"
             " if type(raw) is not str: return\n" + line + "\n del __doc__\n render(__doc__)\n")
     (tmp_path / "app.py").write_text(text)
     reply = json.dumps({"kind": "known_safe_call", "validator_source_line": line.strip(),
@@ -84,11 +91,15 @@ def test_curated_transform_epoch_ends_at_deletion(tmp_path):
 
     def check():
         return tier1_llm.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
-                                   sink_uri="app.py", sink_line=7, sink_class="xss", language="python",
+                                   sink_uri="app.py", sink_line=6, sink_class="xss", language="python",
                                    complete=lambda *_args: reply)
 
     result = check()
     assert result.status is sb.Tier0Status.NOT_APPLICABLE, result.reasoning
     (tmp_path / "app.py").write_text(text.replace(" del __doc__", " pass"))
     control = check()
-    assert control.status is sb.Tier0Status.SOUND, control.reasoning
+    assert control.status is sb.Tier0Status.NOT_APPLICABLE
+    assert control.extras["unverified_source_contracts"] == [
+        "html_text_or_quoted_attribute_sink_context_and_policy"
+    ]
+    assert "does not reach" in result.reasoning

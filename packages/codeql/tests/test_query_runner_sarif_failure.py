@@ -8,6 +8,7 @@ output read downstream as a clean scan.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -220,11 +221,12 @@ class TestRunLocalPackSarifFailure:
     ):
         import core.sandbox
 
-        (tmp_path / "out").mkdir()
-        (tmp_path / "out" / "codeql_python_iris.sarif").write_text(
-            "{not json", encoding="utf-8",
-        )
-        monkeypatch.setattr(core.sandbox, "run", _fake_sandbox())
+        def write_report(cmd):
+            output = Path(_sarif_out_path(cmd))
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("{not json", encoding="utf-8")
+
+        monkeypatch.setattr(core.sandbox, "run", _fake_sandbox(write_report))
         result = self._run(runner, tmp_path)
         assert result.success is False
         assert result.findings_count == 0
@@ -299,11 +301,12 @@ class TestNonSarifJsonIsFailure:
         import core.sandbox
         pack = tmp_path / "pack"
         pack.mkdir()
-        (tmp_path / "out").mkdir()
-        (tmp_path / "out" / "codeql_python_iris.sarif").write_text(
-            content, encoding="utf-8",
-        )
-        monkeypatch.setattr(core.sandbox, "run", _fake_sandbox())
+        def write_report(cmd):
+            output = Path(_sarif_out_path(cmd))
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(content, encoding="utf-8")
+
+        monkeypatch.setattr(core.sandbox, "run", _fake_sandbox(write_report))
         result = runner._run_local_pack(
             "python", tmp_path / "db", pack, tmp_path / "out",
             suite_name="raptor-iris-local",

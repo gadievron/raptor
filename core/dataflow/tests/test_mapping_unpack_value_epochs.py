@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -37,18 +39,18 @@ def test_mapping_dispatch_retains_owned_or_refreshed_values(tmp_path, mode, midd
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=len(text.splitlines()), sink_class='xss')
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('literal', ['{}', '{"fixed": 0}'])
 def test_plain_dictionary_literals_do_not_expire_shared_values(tmp_path, literal):
     pytest.importorskip('z3')
     text = PREFIX + 'def handle():\n' + GUARD
-    text += '\n unused = ' + literal + '\n consume(value)\n'
+    text += '\n ' + literal + '\n consume(value)\n'
     (tmp_path / 'app.py').write_text(text)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=len(text.splitlines()), sink_class='xss')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_mapping_effect_precedes_same_row_read():

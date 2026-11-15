@@ -1,6 +1,8 @@
 """Implicit native writes must not inherit an earlier validator certificate."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -34,7 +36,7 @@ def test_unrelated_iteration_target_keeps_direct_validated_value(tmp_path, heade
     (tmp_path / "app.js").write_bytes(source.encode())
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
         sink_uri="app.js", sink_line=4, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("target", ["value", "other"], ids=["rebound", "independent"])
@@ -47,7 +49,7 @@ def test_java_enhanced_for_target_changes_only_its_named_epoch(tmp_path, target)
     result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
         sink_uri="App.java", sink_line=5, sink_class="xss", language="java")
     expected = sb.Tier0Status.NOT_APPLICABLE if target == "value" else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 def test_implicit_epoch_veto_is_wired_to_tier1_and_prescreen(tmp_path):

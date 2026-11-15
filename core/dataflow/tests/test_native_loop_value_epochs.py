@@ -3,6 +3,8 @@
 import pytest
 
 from core.analysis.validator_control_scope import _native_source_tree
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = " if (!/^[a-z]+$/.test(value)) return;"
@@ -38,7 +40,7 @@ def test_unrelated_backedge_and_refreshed_guard_remain_eligible(tmp_path, refres
         lines.append(GUARD)
     lines += [" consume(value);", " value = ' ';" if refresh else " other = ' ';", " }", "}"]
     result = check(tmp_path, lines)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize("refresh", [False, True], ids=["outer-guard", "fresh-inner-guard"])
@@ -60,4 +62,4 @@ def test_java_backedge_respects_guard_refresh(tmp_path, refresh):
                          sink_uri="App.java", sink_line=lines.index(" consume(value);") + 1,
                          sink_class="xss", language="java")
     expected = sb.Tier0Status.SOUND if refresh else sb.Tier0Status.NOT_APPLICABLE
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)

@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -35,7 +37,7 @@ def query(tmp_path, middle, *, sink='value', mode='shared'):
 def test_unpack_effect_retains_only_owned_value(tmp_path, middle, mode):
     result = query(tmp_path, middle, mode=mode)
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('middle', [' alias, (left, right) = (value, source)',
@@ -44,14 +46,14 @@ def test_unpack_effect_retains_only_owned_value(tmp_path, middle, mode):
 def test_nested_target_unpack_preserves_captured_rhs(tmp_path, middle, sink):
     result = query(tmp_path, middle, sink=sink)
     expected = sb.Tier0Status.SOUND if sink == 'alias' else sb.Tier0Status.NOT_APPLICABLE
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('middle', [' alias, other = value, 0',
                                     ' other, (alias, spare) = (0, (value, 0))'])
 def test_pairable_literal_unpack_retains_identity_transfer(tmp_path, middle):
     result = query(tmp_path, middle, sink='alias')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_same_row_unpack_is_an_effect_before_shared_read():

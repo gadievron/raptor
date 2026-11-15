@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import injection_prescreen, smt_barrier as sb, tier1_llm
 from core.smt_solver import z3_available
 
@@ -18,7 +20,7 @@ def test_local_primitive_input_is_independent_of_unrelated_object_scope(tmp_path
     (tmp_path / filename).write_bytes(SOURCE.encode())
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
         sink_uri=filename, sink_line=5, sink_class='xss', language=language)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_same_primitive_fact_reaches_llm_and_prescreen_consumers(tmp_path):
@@ -29,7 +31,7 @@ def test_same_primitive_fact_reaches_llm_and_prescreen_consumers(tmp_path):
     result = tier1_llm.try_tier1b(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
         sink_uri='app.js', sink_line=5, sink_class='xss', language='javascript',
         complete=lambda *_args: reply)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
     spec = sb.extract_validator_from_line(GUARD, 'javascript')
     assert spec is not None
     refuted, reason, _ = injection_prescreen._step_refutes_path(

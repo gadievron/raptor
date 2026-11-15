@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -25,7 +27,7 @@ def query(tmp_path, expression, *, mode='shared', default=False, prefix=PREFIX):
     if mode == 'snapshot':
         text += ' alias = value\n'
     text += (' def later(argument=' + expression + '):\n  pass\n' if default
-             else ' unused = ' + expression + '\n')
+             else ' ' + expression + '\n')
     if mode == 'fresh':
         text += GUARD + '\n'
     text += ' consume(' + ('alias' if mode == 'snapshot' else 'value') + ')\n'
@@ -40,7 +42,7 @@ def query(tmp_path, expression, *, mode='shared', default=False, prefix=PREFIX):
 def test_unknown_key_dispatch_retains_owned_or_refreshed_values(tmp_path, expression, mode, default):
     result = query(tmp_path, expression, mode=mode, default=default)
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('expression', ['{}', '{"fixed": 0}', '{None: 0}', '{...: 0}',
@@ -48,7 +50,7 @@ def test_unknown_key_dispatch_retains_owned_or_refreshed_values(tmp_path, expres
     '{"fixed"}', '{(0, ("fixed", None))}', '{0: 1, False: 2, 0.0: 3, 0j: 4}'])
 def test_literal_key_construction_preserves_existing_shared_fact(tmp_path, expression):
     result = query(tmp_path, expression)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize('expression', ['{first: 0, second: 1}', '{first, second}'])

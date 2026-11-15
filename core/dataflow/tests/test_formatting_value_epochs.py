@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 GUARD = ' if not re.fullmatch(r"[a-z]+", value): return'
@@ -46,18 +48,18 @@ def test_formatted_value_effect_preserves_owned_or_refreshed_values(tmp_path, ex
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=len(text.splitlines()), sink_class='xss')
     expected = sb.Tier0Status.NOT_APPLICABLE if mode == 'shared' else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
 
 
 @pytest.mark.parametrize('expression', ['f"constant"', 'f"{{formatter}}"'])
 def test_constant_only_joined_strings_preserve_shared_values(tmp_path, expression):
     pytest.importorskip('z3')
     text = PREFIX + 'def handle():\n' + GUARD
-    text += '\n unused = ' + expression + '\n consume(value)\n'
+    text += '\n ' + expression + '\n consume(value)\n'
     (tmp_path / 'app.py').write_text(text)
     result = sb.try_tier0(fix_diff='+' + GUARD + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=len(text.splitlines()), sink_class='xss')
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 @pytest.mark.parametrize('expression', EXPRESSIONS)

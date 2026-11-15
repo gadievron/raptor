@@ -1,6 +1,8 @@
 """Unsupported sink-side control cannot inherit an outer guard certificate."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -31,7 +33,7 @@ def test_completed_unrelated_try_does_not_wrap_the_sink(tmp_path):
     (tmp_path / "app.js").write_bytes(source.encode())
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
         sink_uri="app.js", sink_line=4, sink_class="xss", language="javascript")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_java_sink_only_catch_cannot_inherit_field_guard(tmp_path):

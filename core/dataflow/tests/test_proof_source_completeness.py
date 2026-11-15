@@ -1,6 +1,8 @@
 """Whole-source proof admission must preserve reader completeness."""
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 from core.smt_solver import z3_available
 
@@ -34,7 +36,7 @@ def test_complete_source_remains_eligible(tmp_path):
     (tmp_path / "app.py").write_text(PREFIX)
     result = sb.try_tier0(fix_diff="+" + GUARD + "\n", repo_root=tmp_path,
                          sink_uri="app.py", sink_line=4, sink_class="xss", language="python")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_tier1_rejects_truncated_source_with_visible_sink(tmp_path, monkeypatch):
@@ -89,7 +91,7 @@ def test_tier0_crlf_source_keeps_its_finding_coordinates(tmp_path):
     (tmp_path / "App.java").write_bytes(source.replace("\n", "\r\n").encode())
     result = sb.try_tier0(fix_diff="+" + guard + "\n", repo_root=tmp_path,
                          sink_uri="App.java", sink_line=4, sink_class="xss", language="java")
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)
 
 
 def test_tier1_cannot_normalise_a_finding_to_another_sink_line(tmp_path):
@@ -138,4 +140,4 @@ def test_invalid_source_encoding_cannot_be_replaced_into_a_proof(tmp_path, consu
 def test_valid_unicode_is_not_mistaken_for_lossy_decoding(tmp_path, consumer):
     (tmp_path / "app.py").write_bytes((PREFIX + "# valid Unicode: π \ufffd\n").encode())
     result = _run_charset_consumer(consumer, tmp_path)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert_epoch_character_model(result, True)

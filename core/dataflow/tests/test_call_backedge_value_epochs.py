@@ -3,6 +3,8 @@ import ast
 
 import pytest
 
+from core.dataflow.tests._epoch_character_contract import assert_epoch_character_model
+
 from core.dataflow import smt_barrier as sb
 
 
@@ -37,7 +39,7 @@ def test_python_call_backedge_uses_slot_ownership(tmp_path, case):
     result = sb.try_tier0(fix_diff='+' + actual_guard + '\n', repo_root=tmp_path,
                           sink_uri='app.py', sink_line=sink_line, sink_class='xss')
     expected = sb.Tier0Status.NOT_APPLICABLE if case in {'outer-guard', 'sink-only', 'fresh-guard'} else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
     if case == 'fresh-guard':
         # Preserve the pre-existing public loop-dominance refusal. The new
         # opaque-call branch itself does not expire an in-loop guard.
@@ -80,4 +82,4 @@ def test_native_call_backedge_uses_slot_ownership(tmp_path, language, case):
     result = sb.try_tier0(fix_diff='+' + actual_guard + '\n', repo_root=tmp_path,
                           sink_uri=name, sink_line=sink_line, sink_class='xss', language=language)
     expected = sb.Tier0Status.NOT_APPLICABLE if case in {'outer-guard', 'sink-only'} else sb.Tier0Status.SOUND
-    assert result.status is expected, result.reasoning
+    assert_epoch_character_model(result, expected is sb.Tier0Status.SOUND)
