@@ -39,13 +39,11 @@ rules:
     mode: taint
     languages: [php]
     severity: MEDIUM
-    message: >
-      A Location response header is built from request-derived data
-      (request parameter, host/referer header, or request-URI echo),
-      so the redirect target is attacker-influenced (open redirect —
-      phishing bounce, and token leakage via Referer). Compare the
-      value against a fixed allowlist of local paths, or send a
-      server-configured absolute base URL.
+    message: >-
+      Request-derived data reaches a potential Location response header.
+      Review the effective target, URL parsing and allowed destinations
+      before concluding an open redirect. Use server-controlled destinations
+      or a fixed allowlist of permitted local paths.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
