@@ -57,7 +57,7 @@ from core.llm.transcript import (
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
-from core.source import read_text_capped, split_lines
+from core.source import read_contained_text_capped, read_text_capped, split_lines
 from core.source.windows import read_text_line_window_capped
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
@@ -524,8 +524,9 @@ class VulnerabilityContext:
                 window = (context_start, max(context_start, end_line + context_lines))
             # Keep legacy Python slice/error semantics for malformed spans
             # and unusual context arguments; the normal path streams once.
-            got = (read_text_line_window_capped(file_path, *window) if window is not None
-                   else read_text_capped(file_path, newline=""))
+            got = (read_text_line_window_capped(file_path, *window, target_root=self.repo_path)
+                   if window is not None
+                   else read_contained_text_capped(self.repo_path, file_path, newline=""))
             if got is None:
                 logger.warning("Cannot read file: %s", file_path)
                 return False
@@ -620,12 +621,13 @@ class VulnerabilityContext:
                 start = max(0, line - context_lines - 1)
                 got = read_text_line_window_capped(
                     file_path, start, max(start, line + context_lines),
+                    target_root=self.repo_path,
                 )
                 if got is None:
                     return f"[Error reading code: {file_uri}]"
                 numbered = enumerate(got[0], start=start)
             else:
-                text_result = read_text_capped(file_path, newline="")
+                text_result = read_contained_text_capped(self.repo_path, file_path, newline="")
                 if text_result is None:
                     return f"[Error reading code: {file_uri}]"
                 lines = split_lines(text_result[0])
