@@ -576,7 +576,12 @@ class DataflowValidator:
                 return None
 
             rule_id = result.get("ruleId", "")
-            message = (result.get("message") or {}).get("text", "")
+            message_value = result.get("message")
+            message = _text_value(message_value)
+            if (message is None and message_value is not None
+                    and (not isinstance(message_value, dict) or "text" in message_value)):
+                self.logger.warning("Invalid SARIF result message; using empty text")
+            message = message or ""
 
             paths: list[DataflowPath] = []
             malformed_containers = False
