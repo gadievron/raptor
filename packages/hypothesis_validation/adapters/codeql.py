@@ -23,7 +23,7 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from core.sarif.parser import load_sarif
+from core.sarif.parser import get_run_execution_diagnostics, load_sarif
 from core.source.lines import splitlines_prefix
 from core.config import RaptorConfig
 from packages.codeql.tunables import CodeQLTunables
@@ -826,8 +826,8 @@ def _qlpack_yaml(rule: str) -> str:
 def _parse_sarif(sarif_path: Path) -> list[dict] | None:
     """Extract matches from a CodeQL SARIF file.
 
-    Returns ``None`` on any read/parse/extraction failure so the caller
-    can report a tool failure — an empty list strictly means "the file
+    Returns ``None`` on read/parse/extraction failure or explicit run
+    incompleteness so the caller can report a tool failure — an empty list strictly means "the file
     parsed and contained no results". Collapsing failures into ``[]``
     made an unreadable SARIF indistinguishable from a genuine
     no-matches run, which downstream graded as a refuted hypothesis.
@@ -849,6 +849,8 @@ def _parse_sarif(sarif_path: Path) -> list[dict] | None:
         if not isinstance(runs, list):
             raise ValueError("SARIF runs must be a list")
         for run in runs:
+            if any(get_run_execution_diagnostics(run).values()):
+                raise ValueError("SARIF run reports incomplete or malformed execution")
             results = run.get("results", [])
             if not isinstance(results, list):
                 raise ValueError("SARIF results must be a list when present")
