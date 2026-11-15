@@ -26,7 +26,7 @@ rules:
       asvs: ["V2.4"]
 
   - id: raptor.crypto.pbkdf2.low-iterations.python
-    message: PBKDF2 iterations too low. Set >= 100000. Verify using configuration tests.
+    message: PBKDF2 call specifies fewer than 100000 iterations. Review the hash algorithm, call outcome and application requirements before assessing derivation strength.
     languages: [python]
     severity: HIGH
     patterns:

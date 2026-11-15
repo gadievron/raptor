@@ -26,7 +26,7 @@ rules:
       asvs: ["V3.11"]
 
   - id: raptor.crypto.pbkdf2.small-key.python
-    message: PBKDF2 derived key length too small. Use >= 16 bytes. Verify with test vectors.
+    message: PBKDF2 call requests fewer than 16 output bytes. Review the call outcome and how the derived bytes are used before assessing key strength.
     languages: [python]
     severity: MEDIUM
     patterns:
