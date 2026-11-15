@@ -38,8 +38,8 @@ rules:
   # Char-literal CR/LF handling (strchr rejects, manual strip loops:
   # any `if` mentioning a '\r' or '\n' character literal anywhere in
   # the function) silences REGARDLESS of polarity — the literal forms
-  # are too varied to discriminate honestly, so they trade FN for
-  # zero FP (confirm-only direction).
+  # are too varied for this pattern to distinguish, so these exclusions
+  # can miss candidates rather than certify guard adequacy.
   # Remaining exclusions, all FN-direction by design:
   #   - $V reassigned from ANY call before the sink (after a
   #     rebinding the rule cannot honestly claim unmodified variable
@@ -70,12 +70,10 @@ rules:
     languages: [c, cpp]
     severity: MEDIUM
     message: >
-      A bare variable is formatted into a protocol line (format
-      literal ends with "\r\n") with no CR/LF strip or reject between
-      the variable's last binding and the emit. Embedded "\r\n" in
-      the value terminates the current protocol command and injects
-      attacker-chosen commands into the stream. Strip or reject CR
-      and LF from the value before formatting it into the line.
+      Candidate: a bare value is used with a CRLF-ending format literal.
+      Review callee identity, precision bounds, prior validation and whether
+      the formatted bytes reach a line-oriented protocol. Reject or encode
+      CR/LF where untrusted data can control protocol fields.
     patterns:
       - pattern-either:
           - pattern: sprintf($BUF, $FMT, $V)
