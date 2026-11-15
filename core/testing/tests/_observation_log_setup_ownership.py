@@ -22,7 +22,7 @@ def audit(event, values):
 sys.addaudithook(audit)
 source_path = args.root / "core/audit/tests/test_frida_observe.py"
 source = source_path.read_bytes()
-assert hashlib.sha256(source).hexdigest() == "4dfee0d51426cf71f9220983ecbb1a7a123cdc3e5b96ae38a9dff00d3d6f1cfa"
+assert hashlib.sha256(source).hexdigest() == "3d88722238e20f776b85a5bddd2a8e5113a9c1a686ebb5839c288943433bb728"
 cls = next(n for n in ast.parse(source).body if isinstance(n, ast.ClassDef) and n.name == "TestParseObservations")
 method = next(n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == "_write_log")
 assert not method.decorator_list
@@ -40,6 +40,11 @@ def close(fd):
     assert len(owned) == 1 and fd == owned[0][0] and not closed
     os.close(fd)
     closed.append(fd)
+def unlink(name):
+    assert len(owned) == 1 and Path(name) == owned[0][1] and not unlinks
+    os.unlink(name)
+    unlinks.append(str(name))
+
 class OwnedPath(type(Path())):
     def write_text(self, text, *positional, **keywords):
         assert len(owned) == 1 and Path(self) == owned[0][1]
@@ -52,7 +57,7 @@ class OwnedPath(type(Path())):
         assert len(owned) == 1 and Path(self) == owned[0][1]
         Path.unlink(self, missing_ok=missing_ok)
         unlinks.append(str(self))
-namespace = {"tempfile": SimpleNamespace(mkstemp=allocate), "os": SimpleNamespace(close=close), "Path": OwnedPath}
+namespace = {"tempfile": SimpleNamespace(mkstemp=allocate), "os": SimpleNamespace(close=close, unlink=unlink), "Path": OwnedPath}
 exec(compile(ast.Module(body=[method], type_ignores=[]), str(source_path), "exec"), namespace)
 caught = None
 returned = None
