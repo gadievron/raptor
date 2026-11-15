@@ -48,8 +48,8 @@ def require_bv_pair(a: Any, b: Any) -> None:
 
 
 def require_symbol_name(name: Any, *, argument: str = "symbol name") -> str:
-    """Preserve string identity across the native NUL-terminated name API."""
-    if not isinstance(name, str):
+    """Require plain text across the native NUL-terminated name API."""
+    if type(name) is not str:
         raise ValueError(f"{argument} must be a string")
     if "\x00" in name:
         raise ValueError(f"{argument} must not contain NUL")
