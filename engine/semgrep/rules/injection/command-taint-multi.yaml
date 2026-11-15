@@ -117,7 +117,8 @@ rules:
         to: $A
     pattern-sinks:
       - pattern-either:
-          # Runtime.exec — string form invokes the shell
+          # Runtime.exec — string forms split command text into arguments;
+          # shell interpretation requires an explicitly selected interpreter.
           - pattern: Runtime.getRuntime().exec($CMD)
           - pattern: Runtime.getRuntime().exec($CMD, ...)
           # Variable receiver (Runtime r = Runtime.getRuntime();
