@@ -12,8 +12,10 @@ SOUND verdict still comes from a mechanical path we already trust:
     rejected with ``NOT_APPLICABLE`` (``DECLINED`` is reserved for a
     completed-but-unsound Z3 proof).
   * ``kind="known_safe_call"`` — look up the LLM's claimed library
-    call in :mod:`known_safe_calls` (curated table, human-verified).
-    Out-of-table → rejected with ``NOT_APPLICABLE``.
+    call in :mod:`known_safe_calls`, then check its additional source
+    contracts. Out-of-table calls and unverified source premises are
+    rejected with ``NOT_APPLICABLE``; catalogue membership alone is
+    insufficient.
   * ``kind="other"`` — LLM couldn't reduce to a sound shape; pass to
     Tier 2.
 
@@ -28,14 +30,14 @@ mode it's designed for:
   3. Chain tracking confirms the validated variable reaches the sink
      (catches "validator was added, but not for the value the sink
      uses").
-  4. Curated table catches unsafe library claims (any library not on
-     the table is rejected — we never trust an LLM-claimed library
-     name on its own).
+  4. Catalogue lookup supplies a conditional primitive contract. Its
+     additional source premises must be established before that contract
+     can support a verdict; an LLM-claimed library name supplies none.
 
-What's NEW in the trust surface vs Tier 0: the curated
-:mod:`known_safe_calls` table.  Every entry there is a soundness claim
-we own.  Nothing about the LLM's output is trusted as a safety
-assertion.
+The trust surface beyond Tier 0 includes the curated primitive contracts
+in :mod:`known_safe_calls` and their source-premise checks. Unverified
+contracts remain non-discharging. Nothing about the LLM's output is
+trusted as a safety assertion.
 """
 
 from __future__ import annotations
