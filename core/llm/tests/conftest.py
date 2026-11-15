@@ -52,8 +52,8 @@ def _isolate_scorecard():
 
 
 @pytest.fixture
-def monkeypatch(_isolate_scorecard, monkeypatch):
-    """Keep body patches inside the scorecard guard's lifetime."""
+def monkeypatch(_isolate_scorecard, _scrub_dispatcher_route, monkeypatch):
+    """Keep body patches inside the fixture guards' lifetimes."""
     try:
         yield monkeypatch
     finally:
@@ -105,7 +105,7 @@ def _reset_operator_primary_override():
 
 
 @pytest.fixture(autouse=True)
-def _scrub_dispatcher_route(monkeypatch):
+def _scrub_dispatcher_route():
     """Strip an ambient ``RAPTOR_LLM_SOCKET`` for every test in this
     directory.
 
@@ -118,7 +118,10 @@ def _scrub_dispatcher_route(monkeypatch):
     to the dispatcher path. Tests that exercise the dispatcher route
     on purpose set the var with ``monkeypatch.setenv`` inside the test
     body, which runs after this autouse scrub and wins."""
-    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("RAPTOR_LLM_SOCKET", "")
+        patch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        yield
 
 
 @pytest.fixture
