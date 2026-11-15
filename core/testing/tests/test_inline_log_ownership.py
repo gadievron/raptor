@@ -315,6 +315,12 @@ def test_health_offline_cli_restores_logging(fail, tmp_path, monkeypatch):
         name: logging.Logger(name, logging.ERROR)
         for name in logging_state.NOISY_THIRD_PARTY_LOGGERS
     }
+    manager = logging.Manager(root)
+    manager.disable = root.manager.disable
+    root.manager = manager
+    for logger in sdk.values():
+        logger.manager = manager
+        manager.loggerDict[logger.name] = logger
     proxy = SimpleNamespace(
         getLogger=lambda name=None: root if name is None else sdk[name]
     )
