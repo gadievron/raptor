@@ -124,11 +124,18 @@ def test_global_and_standard_size_exclusions_preserve_prior_policy():
         # Remaining global stored-span gap is intentionally NOT called fixed.
         assert run(raw, 2561) == expected == {'hole': b'x'}
     raw = archive(global_fields={'size': '4096', 'GNU.sparse.realsize': '1'})
-    assert native(raw)[2] == 3584
-    assert run(raw, 2561) == {'hole': b'x'}
+    members, expected, _ = native(raw)
+    assert members[0].pax_headers['size'] == '4096' and members[0].size == 1
+    # tarfile versions differ in whether the next-header offset retains the
+    # stored span or is recalculated from the sparse logical size. Our policy
+    # here excludes standard size overrides from local stored-span charging.
+    assert run(raw, 2561) == expected == {'hole': b'x'}
+    refused_before_selector(raw, 2560)
     raw = archive(local_size=4096)
-    assert native(raw)[2] == 2560
-    assert run(raw, 1537) == {'hole': b'x'}
+    members, expected, _ = native(raw)
+    assert members[0].pax_headers['size'] == '4096' and members[0].size == 1
+    assert run(raw, 1537) == expected == {'hole': b'x'}
+    refused_before_selector(raw, 1536)
 
 
 def test_ordinary_and_other_pax_sparse_formats_keep_old_charges():
