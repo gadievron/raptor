@@ -62,7 +62,7 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
     claude-shaped ancestor of the test process must never be adopted
     as the owning session).
     """
-    base = Path(base)
+    base = Path(base).resolve()
     # Hard-stop: the pin target must be scratch, never the real home
     # or a directory covering the real user-state roots (pinning at
     # such a base would re-route "isolated" writes straight back to
@@ -73,6 +73,7 @@ def pin_user_state_dirs(monkeypatch: "pytest.MonkeyPatch",
     home = Path.home()
     for root in (home, home / ".raptor",
                  home / ".local" / "share" / "raptor"):
+        root = root.resolve()
         if root == base or root.is_relative_to(base):
             raise ValueError(
                 f"refusing pin base {base}: it covers real user "
