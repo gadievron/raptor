@@ -50,6 +50,7 @@ void other_fn(void);
 class TestHarnessGenerator(unittest.TestCase):
     def test_no_llm_returns_fallback(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int parse_buf(const uint8_t *p, size_t n);\n")
             header = Path(f.name)
         try:
@@ -69,6 +70,7 @@ class TestHarnessGenerator(unittest.TestCase):
         Unsafe names (traversal, quote-breakout) are dropped, not
         interpolated into compiled source."""
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int parse_buf(const uint8_t *p, size_t n);\n")
             header = Path(f.name)
         try:
@@ -117,6 +119,7 @@ class TestHarnessGenerator(unittest.TestCase):
 
     def test_llm_success_path(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int parse_buf(const uint8_t *p, size_t n);\n")
             header = Path(f.name)
         try:
@@ -148,6 +151,7 @@ class TestHarnessGenerator(unittest.TestCase):
 
     def test_llm_returns_no_source_falls_back(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int x(void);\n")
             header = Path(f.name)
         try:
@@ -165,6 +169,7 @@ class TestHarnessGenerator(unittest.TestCase):
 
     def test_compile_command_includes_sanitisers(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int x(void);\n")
             header = Path(f.name)
         try:
@@ -183,6 +188,7 @@ class TestHarnessGenerator(unittest.TestCase):
 
     def test_write_creates_source_and_build_script(self):
         with tempfile.NamedTemporaryFile(mode="w", suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write("int x(void);\n")
             header = Path(f.name)
         try:
@@ -218,8 +224,8 @@ class TestCompileCommandShellSafety(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
             suffix=".h", delete=False, prefix="r2-cmdq-",
         ) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(body.encode())
-        self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
         return Path(f.name)
 
     def test_semicolon_in_target_function_rejected(self):
@@ -305,8 +311,8 @@ class TestTargetSymbolGrammar(unittest.TestCase):
 
     def _make_header(self) -> Path:
         with tempfile.NamedTemporaryFile(suffix=".h", delete=False) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(b"int foo(void);\n")
-        self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
         return Path(f.name)
 
     def _spec(self, name: str) -> HarnessSpec:
@@ -440,6 +446,7 @@ class TestPromptEnvelope(unittest.TestCase):
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".h", delete=False
         ) as f:
+            self.addCleanup(lambda p=f.name: Path(p).unlink(missing_ok=True))
             f.write(header_body)
             header = Path(f.name)
         try:
