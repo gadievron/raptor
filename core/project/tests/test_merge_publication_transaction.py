@@ -1,4 +1,5 @@
 """Direct merge callers receive complete output or retain their previous directory."""
+import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 import threading
@@ -10,6 +11,12 @@ from core.project import merge
 from core.project import merge_transaction as transaction
 from core.run import scratch
 from core.testing.state_isolation import pin_user_state_dirs
+
+
+@pytest.fixture(autouse=True)
+def _capture_recovery_logs(monkeypatch):
+    """Capture recovery diagnostics independently of earlier logging setup."""
+    monkeypatch.setattr(logging.getLogger("raptor"), "propagate", True)
 
 
 @pytest.fixture
