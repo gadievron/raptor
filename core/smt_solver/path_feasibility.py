@@ -174,6 +174,7 @@ class PathCondition:
 
     def __post_init__(self):
         require_bool(self.negated, argument="negated")
+        self.text = str.__str__(self.text)
 
 
 # --- Phase 8: weakest-precondition extraction ------------------------------
@@ -1105,6 +1106,7 @@ def _parse_condition_in_frame(
     ``text`` (the original) is preserved for rejection messages so
     callers can match failures back to their input.
     """
+    text = str.__str__(text)
     # Hard cap on input size before any parsing work runs.  Defends the
     # parser combinator against pathological inputs whose total length is
     # unboundedly large.  See ``_MAX_CONDITION_CHARS`` for the rationale
