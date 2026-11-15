@@ -575,9 +575,14 @@ class DataflowValidator:
                     if not isinstance(thread_flow, dict):
                         malformed_containers = True
                         continue
-                    path = self._path_from_locations(
-                        thread_flow.get("locations", []), rule_id, message,
-                    )
+                    try:
+                        path = self._path_from_locations(
+                            thread_flow.get("locations", []), rule_id, message,
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        # Reject the malformed path, retaining usable siblings.
+                        malformed_containers = True
+                        continue
                     if path is not None:
                         paths.append(path)
 
