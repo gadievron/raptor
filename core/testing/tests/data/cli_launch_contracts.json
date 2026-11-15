@@ -340,6 +340,7 @@
     "core/dataflow/tests/test_parser_pack_harvest.py": "f10edde1caf52a89bd76d559257c4cef51601231e5a6f03d124a23784964e76f",
     "core/dataflow/tests/test_run_corpus.py": "c50d112a11999abea063245fb9467220f19739b00ae8adf9bbbffbcae81b63d4",
     "core/dataflow/tests/test_sanitizer_cut_parity.py": "620995a93b300c89e48f0bc11859e8e551a797dc6817fdffa25edf2336a1aeb4",
+    "core/dataflow/tests/test_sourceless_module_origin.py": "a7cea00b8910ca29aab985473744c7546d7f031cb49635940861f0562446a0b7",
     "core/detectors/tests/test_python_sql.py": "cde1c0de282f646f13e543286a0477013d255aa9d752ee48e4cf6b210984df70",
     "core/detectors/tests/test_scalar_aliasing.py": "b38c73577926df61f795c08da74e92db3cf98a86501416ddf814c64ddab231da",
     "core/domains/tests/test_public_suffix.py": "89de012e35588a18219ea1a4f5f7cd20228b8b6dca979c85974f46085fb9fa7a",
@@ -380,6 +381,7 @@
     "core/llm/scorecard/tests/test_cli.py": "cce74f183697c136e936689047e0d57b0252c0fb145f5a5413f68708d284a368",
     "core/llm/tests/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "core/llm/tests/conftest.py": "5e1d63e803bc63e7af031cad6f2687e9925546851834164bbb44fd33011a74c4",
+    "core/llm/tests/test_ask_isolation.py": "7065f0ec59eec7efe49d781ef997080a53b288c7a1ea8df3617f1bfe9e4306a8",
     "core/llm/tests/test_cc_adapter.py": "5386df552d365fbd8fc3da4b27f1e49f2b187bbddc517520924cd274e2f549bf",
     "core/llm/tests/test_cc_streaming_pipes.py": "94ca544103e51618633ef0c46c79124e5a72ec66468a68d5e4f9bbf0d1a66b3b",
     "core/llm/tests/test_client_thread_ownership.py": "835e7f6f9f0d9a939d25ffa2ff9e63865db7c9ba6cd24b3a745ce5b4e8fe86db",
@@ -49904,6 +49906,30 @@
       "count": 1,
       "contract": "owned-custom-launch",
       "purpose": "TestProject setup ownership witness launches exactly one fixed sys.executable -I owned helper per error/healthy mode under standalone_cli_env and ownedXDG_RUNTIME. Exact whole/AST-hash bound unittest setUp/tearDown projection with real owned TemporaryDirectory/Path, controlled ordinary OSError, body/teardown counters and directoryabsence observed before independent rescue. Child refuses core/packages imports, subprocess/socket/ctypes/native operations. No originalproduct testbody, KBI, projectpipeline/native execution/importequivalence claim. Parent20sprocessgroup/ownedclosedSTDIO/bounded65536byteacceptance remain exactresourceprofile requirements."
+    },
+    {
+      "path": "core/dataflow/tests/test_sourceless_module_origin.py",
+      "scope": "test_selected_owned_sourceless_origin_requires_refusal",
+      "signature": "913e9120a20ea37ba23c61b90547b067467bd556f92f32ef3ca10e899933d670",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Loads only fixed test-created bytecode from the owned temporary search directory, checks the sourceless loader and origin, and retires the importer-cache entry in finally; no target or CLI execution."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation",
+      "signature": "7d2d63ec4198900c34a26e00b7401965ab21a85d78263da04f48a85cd178313c",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Loads the repository raptor-llm-ask CLI in process with its LLMClient and isolated worker replaced by owned mocks; ExitStack restores sys.path and logging, and the test asserts worker routing and terminal sanitisation without provider execution."
+    },
+    {
+      "path": "core/llm/tests/test_ask_isolation.py",
+      "scope": "test_cli_keyless_switch_uses_worker_and_keeps_terminal_sanitisation",
+      "signature": "f288a7e4629178635b744a4783b9e4d142bba5670a188656a952f2aaa0afca9a",
+      "count": 1,
+      "contract": "owned-in-process",
+      "purpose": "Loads the repository raptor-llm-ask CLI in process with its LLMClient and isolated worker replaced by owned mocks; ExitStack restores sys.path and logging, and the test asserts worker routing and terminal sanitisation without provider execution."
     }
   ],
   "shell_routers": {
