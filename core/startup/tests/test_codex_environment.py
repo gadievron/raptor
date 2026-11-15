@@ -329,11 +329,20 @@ def test_old_broker_requires_restart_before_changing_environment(context, monkey
 
 
 
-def test_stop_bootstrap_and_metadata_paths_do_not_load_broker_catalog(tmp_path):
-    import subprocess
+@pytest.mark.parametrize("inherited_state", ["ordinary", "stale-launch", "missing-tmpdir"])
+def test_stop_bootstrap_and_metadata_paths_do_not_load_broker_catalog(
+    tmp_path, monkeypatch, inherited_state,
+):
     import sys
     from pathlib import Path
+
+    from core.testing.standalone_cli import run_standalone_cli
+
     root = Path(__file__).resolve().parents[3]
+    if inherited_state == 'stale-launch':
+        monkeypatch.setenv('_RAPTOR_SCRATCH_AUTH', '{}')
+    elif inherited_state == 'missing-tmpdir':
+        monkeypatch.setenv('TMPDIR', str(tmp_path / 'missing'))
     program = '''
 import hashlib, io, json, os, runpy, sys
 sys.path.insert(0, sys.argv[1])
@@ -366,6 +375,8 @@ runpy.run_path(script, run_name='__main__')
 assert calls == ['session'], calls
 assert sys.modules['core.llm.model_brokers'] is None
 '''
-    result = subprocess.run([sys.executable, '-I', '-c', program, str(root), str(tmp_path)],
-                            capture_output=True, text=True, timeout=20)
+    result = run_standalone_cli(
+        [sys.executable, '-I', '-c', program, str(root), str(tmp_path)],
+        capture_output=True, text=True, timeout=20,
+    )
     assert result.returncode == 0, result.stderr
