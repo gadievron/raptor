@@ -10,6 +10,9 @@ def parse_witness_preference(
     string ``"max:varname"`` / ``"min:varname"`` (the form the libexec
     shim CLI parses out of a single ``--prefer-witness`` argument).
 
+    Stored tuple fields and string characters define the objective;
+    subclass protocols cannot replace or silently drop it.
+
     Returns ``None`` when input is ``None`` or empty.  Raises
     ``TypeError`` on unsupported input types and ``ValueError`` on malformed
     fields, so the caller fails fast rather
@@ -18,11 +21,13 @@ def parse_witness_preference(
     if spec is None:
         return None
     if isinstance(spec, tuple):
-        if len(spec) != 2:
-            msg = f"prefer_witness tuple must be (name, direction), got {spec!r}"
+        size = tuple.__len__(spec)
+        if size != 2:
+            msg = f"prefer_witness tuple must be (name, direction), got {size} fields"
             raise ValueError(msg)
-        name, direction = spec
+        name, direction = tuple.__getitem__(spec, 0), tuple.__getitem__(spec, 1)
     elif isinstance(spec, str):
+        spec = str.__str__(spec)
         if spec == "":
             return None
         if ":" not in spec:
@@ -40,8 +45,8 @@ def parse_witness_preference(
         raise TypeError(msg)
     if not isinstance(name, str) or not isinstance(direction, str):
         raise ValueError("prefer_witness name and direction must be strings")
-    direction = direction.strip().lower()
-    name = name.strip()
+    direction = str.__str__(direction).strip().lower()
+    name = str.__str__(name).strip()
     if direction not in ("max", "min"):
         msg = (
             f"prefer_witness direction must be 'max' or 'min', "
