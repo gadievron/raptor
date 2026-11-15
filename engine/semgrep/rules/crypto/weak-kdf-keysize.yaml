@@ -1,6 +1,6 @@
 rules:
   - id: raptor.crypto.pbkdf2.small-key.java
-    message: PBKDF2 derived key size too small. Use >= 128 bits. Verify with test vectors.
+    message: Password-based key specification requests fewer than 128 bits. Review the consuming key factory, algorithm and application requirements before assessing key strength.
     languages: [java]
     severity: MEDIUM
     patterns:
@@ -13,7 +13,7 @@ rules:
       asvs: ["V3.11"]
 
   - id: raptor.crypto.pbkdf2.small-key.kotlin
-    message: PBKDF2 derived key size too small. Use >= 128 bits. Verify with test vectors.
+    message: Password-based key specification requests fewer than 128 bits. Review the consuming key factory, algorithm and application requirements before assessing key strength.
     languages: [kotlin]
     severity: MEDIUM
     patterns:

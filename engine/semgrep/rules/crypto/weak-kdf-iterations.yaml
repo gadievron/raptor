@@ -1,6 +1,6 @@
 rules:
   - id: raptor.crypto.pbkdf2.low-iterations.java
-    message: PBKDF2 iterations too low. Set >= 100000. Verify using configuration tests.
+    message: Password-based key specification has an iteration count below 100000. Review the consuming key factory, algorithm and application requirements before assessing derivation strength.
     languages: [java]
     severity: HIGH
     patterns:
@@ -13,7 +13,7 @@ rules:
       asvs: ["V2.4"]
 
   - id: raptor.crypto.pbkdf2.low-iterations.kotlin
-    message: PBKDF2 iterations too low. Set >= 100000. Verify using configuration tests.
+    message: Password-based key specification has an iteration count below 100000. Review the consuming key factory, algorithm and application requirements before assessing derivation strength.
     languages: [kotlin]
     severity: HIGH
     patterns:
