@@ -32,12 +32,11 @@ from .session import solver_reason_unknown
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from .availability import z3
 
-if TYPE_CHECKING:
-    from .config import BVProfile
+from .config import BVProfile
 
 
 class RejectionKind(str, Enum):
@@ -272,6 +271,9 @@ def parse_literal_value(
 ) -> int | Rejection:
     """Validate and convert a literal token, or return a structured rejection.
 
+    The profile must be an exact BVProfile value. Subclasses and duck-typed
+    profiles can change width or signedness between validation and use.
+
     Centralised so atom-position literals and bitmask-form literals
     across all encoders reject the same things:
 
@@ -297,6 +299,10 @@ def parse_literal_value(
     stores ``outer_text`` in ``Rejection.text`` and folds the token
     into the detail message, removing the propagate dependency.
     """
+    # A mutable dispatch protocol cannot select one range here and a
+    # different native width when the caller constructs the literal.
+    if type(profile) is not BVProfile:
+        raise ValueError("literal profile must be an exact BVProfile value")
     # Interpret the stored source characters, not subclass conversion hooks.
     tok = str.__str__(tok)
     # Text anchor: prefer caller-supplied outer expression when
