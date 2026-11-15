@@ -107,7 +107,7 @@ def _owned_database_memos(monkeypatch):
     from core.testing.module_state import isolated_module_state
 
     replacements = {"_db_source_cache": {}, "_db_source_cache_chars": 0}
-    for name in ("_db_indexed_files", "_db_callable_inventory"):
+    for name in ("_db_indexed_files_cached", "_db_callable_inventory_cached"):
         original = getattr(dataflow_validation, name)
         replacements[name] = functools.lru_cache(**original.cache_parameters())(
             original.__wrapped__,

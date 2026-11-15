@@ -53,7 +53,7 @@ def _owned_database_memos(monkeypatch):
     from core.testing.module_state import isolated_module_state
 
     replacements = {"_db_source_cache": {}, "_db_source_cache_chars": 0}
-    for name in ("_db_indexed_files", "_db_callable_inventory"):
+    for name in ("_db_indexed_files_cached", "_db_callable_inventory_cached"):
         original = getattr(dataflow_validation, name)
         replacements[name] = functools.lru_cache(**original.cache_parameters())(
             original.__wrapped__,
@@ -1415,7 +1415,7 @@ class TestDbSourceReadBudget:
         for name in members:
             assert dv._read_db_source(db, name) == "x" * 1000
         retained = sum(
-            len(v) for v in dv._db_source_cache.values() if v
+            len(text) for _, text in dv._db_source_cache.values() if text
         )
         assert retained <= 2500 + 1000  # budget + at most the newest entry
         assert len(dv._db_source_cache) < 6  # old entries evicted

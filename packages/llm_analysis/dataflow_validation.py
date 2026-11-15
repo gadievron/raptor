@@ -1943,7 +1943,25 @@ def _refutation_coverage_ok(finding: dict, codeql_db: Path | None) -> bool:
     return True
 
 
-@functools.lru_cache(maxsize=64)
+def _db_coverage_identity(db_path: Path) -> tuple:
+    """Identify sequential DB replacements without query-scratch mtime churn."""
+    def file_identity(path: Path) -> tuple | None:
+        try:
+            info = path.stat()
+        except OSError:
+            return None
+        return (info.st_dev, info.st_ino, info.st_size,
+                info.st_mtime_ns, info.st_ctime_ns)
+
+    try:
+        root = db_path.stat()
+        root_identity = (root.st_dev, root.st_ino)
+    except OSError:
+        root_identity = None
+    return (root_identity, file_identity(db_path / "src.zip"),
+            file_identity(db_path / "codeql-database.yml"))
+
+
 def _db_indexed_files(db_path: Path) -> "frozenset[str]":
     """Return the set of source file paths indexed in a CodeQL DB.
 
@@ -1953,13 +1971,18 @@ def _db_indexed_files(db_path: Path) -> "frozenset[str]":
     can match by suffix — finding paths are typically relative
     (`src/foo.py`) and may not anchor to the same root.
 
-    Cached per (resolved) DB path. The src.zip is read once per
-    process per DB; subsequent queries are a frozenset membership
-    check. Falls back to `frozenset()` (i.e. "DB has no indexed
+    Cached per DB path and source/metadata generation. Unchanged
+    databases reuse the index; sequential replacements refresh it. Falls back to `frozenset()` (i.e. "DB has no indexed
     files we know about") on any I/O / zip error — the caller
     should treat empty as "can't verify coverage" and avoid the
     refuted verdict, which is the safe default.
     """
+    db_path = Path(db_path)
+    return _db_indexed_files_cached(db_path, _db_coverage_identity(db_path))
+
+
+@functools.lru_cache(maxsize=64)
+def _db_indexed_files_cached(db_path: Path, generation: tuple) -> "frozenset[str]":
     src_zip = Path(db_path) / "src.zip"
     if not src_zip.is_file():
         return frozenset()
@@ -1983,6 +2006,13 @@ def _db_indexed_files(db_path: Path) -> "frozenset[str]":
     except (zipfile.BadZipFile, OSError) as e:
         logger.debug("could not read CodeQL src.zip at %s: %s", src_zip, e)
         return frozenset()
+
+
+def _db_indexed_files_cache_clear() -> None:
+    _db_indexed_files_cached.cache_clear()
+
+
+_db_indexed_files.cache_clear = _db_indexed_files_cache_clear  # type: ignore[attr-defined]
 
 
 def _resolve_finding_in_db(finding: dict, db_path: Path) -> str | None:
@@ -2073,7 +2103,7 @@ _DB_SOURCE_MEMBER_CAP = 10 * 1024 * 1024
 # 64 MB members retained ~8 GB for process lifetime.
 _DB_SOURCE_CACHE_BUDGET = 64 * 1024 * 1024
 
-_db_source_cache: dict[tuple[str, str], str | None] = {}
+_db_source_cache: dict[tuple[str, str], tuple[tuple, str | None]] = {}
 _db_source_cache_chars = 0
 
 
@@ -2082,23 +2112,29 @@ def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
 
     Returns None on any error or on an over-budget member — caller
     treats that as 'can't verify' and biases away from refutation.
-    Cached per (db, path) so repeat findings in the same file don't
-    re-open the zip; the memo is bounded by total retained characters
-    (insertion-order eviction), not just entry count.
+    Cached per (db, path) with a generation stamp so replaced archives
+    refresh in place; repeat findings need not re-open the zip. The memo
+    is bounded by total retained characters (insertion-order eviction),
+    not just entry count.
     """
     global _db_source_cache_chars
     key = (str(db_path), indexed_path)
-    if key in _db_source_cache:
-        return _db_source_cache[key]
+    generation = _db_coverage_identity(Path(db_path))
+    cached = _db_source_cache.get(key)
+    if cached is not None:
+        if cached[0] == generation:
+            return cached[1]
+        _db_source_cache_chars -= len(cached[1]) if cached[1] else 0
+        _db_source_cache.pop(key)
     text = _read_db_source_uncached(Path(db_path), indexed_path)
-    _db_source_cache[key] = text
+    _db_source_cache[key] = (generation, text)
     _db_source_cache_chars += len(text) if text else 0
     while (_db_source_cache_chars > _DB_SOURCE_CACHE_BUDGET
            and len(_db_source_cache) > 1):
         old_key = next(iter(_db_source_cache))
         if old_key == key:
             break
-        old_text = _db_source_cache.pop(old_key)
+        _, old_text = _db_source_cache.pop(old_key)
         _db_source_cache_chars -= len(old_text) if old_text else 0
     return text
 
@@ -2215,10 +2251,7 @@ def _layer3_probe_path(language: str) -> Path | None:
     return None
 
 
-@functools.lru_cache(maxsize=8)
-def _db_callable_inventory(
-    db_path: Path, language: str,
-) -> "frozenset[tuple[str, str]] | None":
+def _db_callable_inventory(db_path: Path, language: str) -> "frozenset[tuple[str, str]] | None":
     """Return the set of `(relative_path, function_name)` callables
     extracted in the DB, by running a one-time probe query.
 
@@ -2231,8 +2264,8 @@ def _db_callable_inventory(
         toward refute, since None is indistinguishable from
         'function genuinely not in DB'.
 
-    Cached per (db, language). The probe runs at most once per
-    (DB, language) per process; subsequent finding-level lookups
+    Cached per (db, language, generation). The probe runs once per
+    unchanged database generation; subsequent finding-level lookups
     are O(1) frozenset membership tests.
 
     Cost: ~5-15s warm (CodeQL evaluator startup + SARIF interpret),
@@ -2240,6 +2273,14 @@ def _db_callable_inventory(
     /agentic run the dataflow query has already been compiled
     before Layer 3 fires, so we pay the warm cost only.
     """
+    db_path = Path(db_path)
+    return _db_callable_inventory_cached(db_path, language, _db_coverage_identity(db_path))
+
+
+@functools.lru_cache(maxsize=8)
+def _db_callable_inventory_cached(
+    db_path: Path, language: str, generation: tuple,
+) -> "frozenset[tuple[str, str]] | None":
     probe_path = _layer3_probe_path(language)
     if probe_path is None:
         logger.debug(
@@ -2281,6 +2322,13 @@ def _db_callable_inventory(
         language, db_path,
     )
     return frozenset(inventory)
+
+
+def _db_callable_inventory_cache_clear() -> None:
+    _db_callable_inventory_cached.cache_clear()
+
+
+_db_callable_inventory.cache_clear = _db_callable_inventory_cache_clear  # type: ignore[attr-defined]
 
 
 def _function_in_codeql_inventory(
