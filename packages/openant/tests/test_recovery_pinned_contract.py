@@ -127,6 +127,7 @@ class TestRecoveryPinnedContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls._td = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls._td.cleanup)
         base = Path(cls._td.name)
         cls.scan_dir = base / "scan"
         cls.scan_dir.mkdir()
