@@ -84,9 +84,10 @@ def from_sarif_result(
 ) -> Finding | None:
     """Convert one SARIF ``result`` entry into a :class:`Finding`.
 
-    Returns ``None`` when the result lacks a dataflow code-flow
-    structure (rules emitting a single location without a path are
-    not :class:`Finding` shapes).
+    Converts only the first thread flow of the first code flow; later
+    paths are not represented in the returned finding. Returns ``None``
+    when that first path is absent or has fewer than two locations,
+    without searching later flows for a usable path.
 
     Raises :class:`ValueError` from :class:`Step` validation when the
     SARIF data is structurally a path but contains malformed entries
