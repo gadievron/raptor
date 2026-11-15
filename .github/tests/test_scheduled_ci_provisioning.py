@@ -244,7 +244,7 @@ def test_floor_canary_owns_its_inputs_and_keeps_fresh_install_and_same_test_subs
     assert 'python -m pytest core/inventory core/dataflow -q -n "$workers" --dist loadfile' in run
     assert '-n auto' not in run
     assert 'python - <<' in script(named_step(body, 'Import smoke'))
-    assert '  PYTHON_VERSION: \'3.12\'' in source
+    assert '  PYTHON_VERSION: \'3.13\'' in source
 
 
 @pytest.mark.parametrize('failure', ['', 'venv', 'export', 'pip'])
