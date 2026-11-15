@@ -30,6 +30,12 @@ def private_logs(monkeypatch, tmp_path):
     ]
     root = logging.Logger("owned-root", logging.ERROR)
     loggers = {name: logging.Logger(name, logging.ERROR) for name in names}
+    manager = logging.Manager(root)
+    manager.disable = root.manager.disable
+    root.manager = manager
+    for logger in loggers.values():
+        logger.manager = manager
+        manager.loggerDict[logger.name] = logger
     loggers["core.sandbox.proxy"].parent = loggers["core.sandbox"]
     loggers["jailfix_guard_walk_test.child"].parent = loggers["jailfix_guard_walk_test"]
     loggers["jailfix_guard_walk_test.child"].propagate = False
