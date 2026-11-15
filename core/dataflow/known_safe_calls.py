@@ -408,6 +408,7 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("c", "cpp"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "GLib g_markup_escape_text (since GLib 2.0) escapes the XML "
             "metacharacters &, <, >, \", ' to their entity references. "

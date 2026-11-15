@@ -25,7 +25,6 @@ from core.analysis.finding_resolver import (
 from core.analysis.sanitizer_cut import (
     VERDICT_CANDIDATE_ONLY,
     VERDICT_NO_SUPPRESS,
-    VERDICT_SUPPRESS,
     evaluate_finding,
 )
 
@@ -44,8 +43,8 @@ _CORPUS_DIR = (
 # source_line is the ``void handle(...)`` header line — triggers the
 # function-entry / params source path in :func:`_resolve_source_cpp`.
 _CORPUS_CASES = [
-    ("straight_line_safe.c", "CWE-79", 12, 14, VERDICT_SUPPRESS, "y"),
-    ("symmetric_sanitize.c", "CWE-79", 14, 21, VERDICT_SUPPRESS, "out"),
+    ("straight_line_safe.c", "CWE-79", 12, 14, VERDICT_CANDIDATE_ONLY, "y"),
+    ("symmetric_sanitize.c", "CWE-79", 14, 21, VERDICT_CANDIDATE_ONLY, "out"),
     ("wrong_variable.c", "CWE-79", 15, 17, VERDICT_CANDIDATE_ONLY, "user"),
     ("bypass.c", "CWE-79", 12, 19, VERDICT_NO_SUPPRESS, "safe"),
     ("may_escape.c", "CWE-79", 16, 20, VERDICT_CANDIDATE_ONLY, "y"),
@@ -87,6 +86,14 @@ def test_corpus_fixture_verdict(
         source_symbols=resolved.source_symbols,
         sink_arg=resolved.sink_arg,
     )
+    if fixture in {"straight_line_safe.c", "symmetric_sanitize.c"}:
+        assert not result.suppress
+        assert len(result.value_bound_bindings) == (2 if fixture == "symmetric_sanitize.c" else 1)
+        for binding in result.value_bound_bindings:
+            assert binding.callable == "g_markup_escape_text"
+            assert binding.input_symbols == frozenset({"x"})
+            assert binding.output_symbols == frozenset({expected_sink_arg})
+            assert binding.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})
     assert result.verdict == expected_verdict, (
         f"{fixture}: verdict={result.verdict!r}, "
         f"expected {expected_verdict!r}. Reason: {result.reason}"
@@ -212,6 +219,7 @@ def test_callgraph_only_still_candidate_only():
     binding = next(iter(bindings))
     assert binding.input_symbols == frozenset()
     assert binding.output_symbols == frozenset()
+    assert binding.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})
     # The empty input_symbols means Phase 4 condition 2 always fails
     # for this binding regardless of the source taint — the
     # callgraph carve-out is intact.

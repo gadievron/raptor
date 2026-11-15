@@ -1,6 +1,6 @@
 /* Straight-line safe: x → g_markup_escape_text → y → render.
  *
- * Phase 11 verdict: suppress.
+ * Verdict: candidate_only; output context is unverified.
  *
  * Single CFG path from entry; one catalog sanitizer; cleaned value
  * reaches sink. The same shape as the Python ``straight_line_safe.py``

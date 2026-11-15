@@ -56,8 +56,14 @@ def test_explicit_raw_hint_keeps_existing_value_binding(tmp_path):
 
 @requires_ts('c')
 @pytest.mark.parametrize('call', ['render(aa)', 'render(aa, aa)', 'render(aa, "fixed")'])
-def test_one_distinct_name_keeps_existing_sanitizer_proof(tmp_path, call):
+def test_one_distinct_name_keeps_existing_sanitizer_binding(tmp_path, call):
     result = _resolve(tmp_path, call)
     assert isinstance(result, ResolvedFinding)
     assert result.sink_arg == 'aa'
-    assert _verdict(result).suppress is True
+    verdict = _verdict(result)
+    assert not verdict.suppress and verdict.verdict == "candidate_only"
+    binding, = verdict.value_bound_bindings
+    assert binding.callable == "g_markup_escape_text"
+    assert binding.input_symbols == frozenset({"raw"})
+    assert binding.output_symbols == frozenset({"aa"})
+    assert binding.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})

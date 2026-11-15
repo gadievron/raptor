@@ -51,8 +51,17 @@ def test_unhinted_compound_argument_shapes_refuse(tmp_path, call):
     'render(aa, /* constant sibling */ 1)',
     'L\'é\', render(aa, "fixed")',
 ])
-def test_existing_direct_cast_parenthesis_and_literal_shapes_keep_proof(tmp_path, call):
-    assert _verdict(_resolve(tmp_path, call)).suppress is True
+def test_existing_direct_cast_parenthesis_and_literal_shapes_keep_binding(tmp_path, call):
+    result = _resolve(tmp_path, call)
+    assert isinstance(result, ResolvedFinding)
+    assert result.sink_arg == "aa"
+    verdict = _verdict(result)
+    assert not verdict.suppress and verdict.verdict == "candidate_only"
+    binding, = verdict.value_bound_bindings
+    assert binding.callable == "g_markup_escape_text"
+    assert binding.input_symbols == frozenset({"raw"})
+    assert binding.output_symbols == frozenset({"aa"})
+    assert binding.unverified_source_contracts == frozenset({"html_text_or_quoted_attribute_sink_context_and_policy"})
 
 
 @requires_ts('c')

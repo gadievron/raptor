@@ -1,6 +1,6 @@
 /* Symmetric sanitize across if-branches.
  *
- * Phase 11 verdict: suppress.
+ * Verdict: candidate_only; output context is unverified.
  *
  * Both branches produce the cleaned value into ``out``; control-flow
  * cut holds and value-bound conditions 2 and 3 fire on both branch's
