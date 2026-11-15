@@ -144,8 +144,9 @@ def test_orphan_sweep_has_separate_scan_and_delete_caps(tmp_path, monkeypatch):
 def test_global_writer_lock_prevents_active_temp_reaping_and_redundant_generation(
     tmp_path, monkeypatch
 ):
+    import os
     from concurrent.futures import ThreadPoolExecutor
-    from contextlib import contextmanager
+    from contextlib import ExitStack, contextmanager
     from threading import Event, Lock
     from core.atomic_fs.fs_lock import artifact_lock
 
@@ -167,11 +168,15 @@ def test_global_writer_lock_prevents_active_temp_reaping_and_redundant_generatio
             yield
 
     def held_temp(*args, **kwargs):
-        result = mkstemp(*args, **kwargs)
-        temps.append(Path(result[1]))
-        entered.set()
-        assert release.wait(5)
-        return result
+        with ExitStack() as allocation:
+            result = mkstemp(*args, **kwargs)
+            allocation.callback(os.unlink, result[1])
+            allocation.callback(os.close, result[0])
+            temps.append(Path(result[1]))
+            entered.set()
+            assert release.wait(5)
+            allocation.pop_all()
+            return result
 
     monkeypatch.setattr(compact, "artifact_lock", tracked_lock)
     patch_module_attribute(monkeypatch, compact, 'tempfile', "mkstemp", held_temp)
