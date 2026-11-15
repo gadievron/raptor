@@ -121,7 +121,8 @@ if not target:
 @finalize:python@
 @@
 import json, sys
-for key in sorted(ignored_returns):
-    if key in checked_returns:
-        for result in sorted(ignored_returns[key], key=lambda item: (item["line"], item["col"])):
-            sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")
+if checked_returns:
+    for key in sorted(ignored_returns):
+        if key in checked_returns:
+            for result in sorted(ignored_returns[key], key=lambda item: (item["line"], item["col"])):
+                sys.stderr.write("COCCIRESULT:" + json.dumps(result) + "\n")
