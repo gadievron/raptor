@@ -1,4 +1,5 @@
 """Auxiliary header search resolves declarations without widening source scope."""
+from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 
@@ -103,8 +104,9 @@ def test_header_changes_invalidate_delivered_context_without_widening_catalogue(
     assert newer["consumer.c:consume"]["job"] == first["job"]
     assert newer["consumer.c:consume"]["evidence"] != first["evidence"]
     catalogue = load_json(out/"cross-entry-progress.json")["indexing"]["catalogue"]
-    with sqlite3.connect(catalogue) as db:
-        assert not any(row[0].startswith("../") for row in db.execute("SELECT path FROM files"))
+    with closing(sqlite3.connect(catalogue)) as db:
+        with db:
+            assert not any(row[0].startswith("../") for row in db.execute("SELECT path FROM files"))
     assert not (include/"cross-entry-work.sqlite").exists()
 
 
