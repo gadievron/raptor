@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from core.logging import configure_cli_logging, quiet_third_party_loggers
-from core.testing.logging_state import isolated_cli_logging
+from core.testing.logging_state import isolated_cli_logging, owned_log_handler
 
 
 @pytest.mark.parametrize("fail", [False, True])
@@ -21,10 +21,10 @@ def test_file_handler_and_levels_restored_on_every_exit(tmp_path, fail):
         created = []
 
         def call():
-            with isolated_cli_logging():
-                handler = logging.FileHandler(tmp_path / "debug.log", encoding="utf-8")
+            with isolated_cli_logging(), owned_log_handler(
+                root, logging.FileHandler(tmp_path / "debug.log", encoding="utf-8")
+            ) as handler:
                 created.append((handler, handler.stream))
-                root.addHandler(handler)
                 root.setLevel(logging.DEBUG)
                 for existing in original_handlers:
                     existing.setLevel(logging.ERROR)
