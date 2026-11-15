@@ -42,7 +42,8 @@ def test_partial_or_unrelated_calls_do_not_certify_the_binding(tmp_path, line):
 def test_direct_call_results_stay_bound_to_their_own_targets(tmp_path, line):
     pytest.importorskip("tree_sitter_javascript")
     result = _run(tmp_path, line)
-    assert result.status is Tier0Status.SOUND, result.reasoning
+    assert result.status.value == "not_applicable"
+    assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 @pytest.mark.parametrize("line", [
@@ -67,7 +68,8 @@ def test_typescript_direct_typed_binding_retains_the_call_value(tmp_path):
     result = tier1_llm.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
                                  sink_uri="app.ts", sink_line=3, sink_class="xss", language="typescript",
                                  complete=lambda *_args: reply)
-    assert result.status is Tier0Status.SOUND, result.reasoning
+    assert result.status.value == "not_applicable"
+    assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 @pytest.mark.parametrize("mixed", [False, True], ids=["direct", "mixed"])

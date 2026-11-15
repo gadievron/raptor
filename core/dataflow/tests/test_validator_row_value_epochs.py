@@ -74,7 +74,8 @@ def test_returned_validator_own_assignment_is_retained(tmp_path, tail):
     result = tier1_llm.try_tier1b(fix_diff="+" + line + "\n", repo_root=tmp_path,
                                  sink_uri="app.js", sink_line=3, sink_class="xss", language="javascript",
                                  complete=lambda *_args: reply)
-    assert result.status is sb.Tier0Status.SOUND, result.reasoning
+    assert result.status.value == "not_applicable"
+    assert result.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
 
 
 def test_native_row_check_distinguishes_guard_arms():

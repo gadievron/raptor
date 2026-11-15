@@ -227,10 +227,11 @@ _TABLE: tuple[KnownSafeCall, ...] = (
         sink_class="xss",
         languages=("javascript", "typescript"),
         input_arg_kind="transform",
+        required_source_contracts=frozenset({HTML_OUTPUT_POLICY}),
         soundness_note=(
             "validator.js escape() replaces &, <, >, \", ', / with their "
-            "HTML entity equivalents.  Output is XSS-safe in HTML "
-            "context (verified vs validator.js source 13.x)."
+            "HTML entity equivalents.  Output context and attribute policy "
+            "remain separate requirements."
         ),
     ),
     KnownSafeCall(

@@ -23,10 +23,14 @@ def test_local_js_validator_object_cannot_earn_library_certificate(tmp_path):
         )
     ordinary = ("function serve(req, res) {\n    let name = req.query.name;\n"
                 + call + "\n    res.send(name);\n}\n")
-    assert check(ordinary).status is t1.Tier0Status.SOUND
+    control = check(ordinary)
+    assert control.status is t1.Tier0Status.NOT_APPLICABLE
+    assert control.extras["unverified_source_contracts"] == ["html_text_or_quoted_attribute_sink_context_and_policy"]
     shadowed = ordinary.replace("    let name", "    const validator = {escape: value => value};\n    let name")
     result = check(shadowed)
-    assert result.status is not t1.Tier0Status.SOUND, result
+    assert result.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "receiver" in result.reasoning
+    assert "unverified_source_contracts" not in result.extras
 
 
 @pytest.mark.parametrize('source,conflict', [
