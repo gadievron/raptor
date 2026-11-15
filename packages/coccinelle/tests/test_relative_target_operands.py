@@ -61,4 +61,4 @@ def test_relative_target_operand_reaches_owned_input(tmp_path, monkeypatch, mode
         assert result.files_examined == [str(source)]
         assert len(result.matches) == 1
         assert result.matches[0].file == str(source)
-    assert len(calls) == 1
+    assert len(calls) == (2 if mode == "batch" else 1)

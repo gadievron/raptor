@@ -755,8 +755,10 @@ def run_rule(
     # parser accepts only the nonced marker.
     nonce = _make_nonce()
     exec_text = rule_text
+    reporting_unavailable = False
     if needs_harness:
         exec_text = _inject_harness(rule_text, rule_name)
+        reporting_unavailable = exec_text == rule_text
     exec_text = exec_text.replace(RESULT_PREFIX, _nonced_prefix(nonce))
 
     run_env = dict(env) if env is not None else RaptorConfig.get_safe_env()
@@ -951,6 +953,9 @@ def run_rule(
                 + (f": {stderr_tail}" if stderr_tail else "")
             )
 
+        if reporting_unavailable:
+            errors.append("Structured Coccinelle result reporting unavailable for this rule")
+
         # Reported parse failures or output loss can leave a zero-exit
         # run incomplete. Withhold quiet coverage and keep authentic
         # partial matches, as on the timeout path.
@@ -1101,9 +1106,9 @@ def run_rules_batched(
 
     Concatenates rule files into one temp file so spatch parses the C
     AST once.  Results are demultiplexed by the ``rule`` field in each
-    COCCIRESULT line.  Rules that already contain @script:python@ blocks
-    emitting COCCIRESULT are required (all engine/coccinelle/rules/ do),
-    so batch callers running the shipped rule set must pass
+    COCCIRESULT line. Plain rules needing an injected reporter run individually
+    through run_rule, which attempts harness injection and reports unavailable
+    structured output. Callers running scripted rules must pass
     ``allow_scripting=True``. With the default False, any rule declaring
     a scripting block gets a structured refusal result (no execution);
     the remaining rules still run.
@@ -1223,7 +1228,8 @@ def run_rules_batched(
             )
             continue
         view, ambiguous = _lexical_scan(text)
-        if ambiguous or _LIFECYCLE_BLOCK_RE.search(view):
+        needs_reporter = RESULT_PREFIX not in text and "script:python" not in view
+        if ambiguous or _LIFECYCLE_BLOCK_RE.search(view) or needs_reporter:
             isolated_stems.add(r.stem)
         parts.append(f"// --- begin {r.stem} ---\n{text}\n")
         rule_stems.append(r.stem)
@@ -1607,8 +1613,8 @@ def _inject_harness(rule_text: str, rule_name: str) -> str:
     un-harnessed (spatch still runs, just without COCCIRESULT
     structured output).
 
-    If no position metavariable is found, returns the rule unchanged
-    (matches won't produce structured output, but spatch still runs).
+    If no position metavariable is found, returns the rule unchanged.
+    The caller still executes it but discloses unavailable reporting.
     """
     # Reuse the lexer view so comment/string examples cannot supply a
     # position binding or masquerade as a second named rule.
