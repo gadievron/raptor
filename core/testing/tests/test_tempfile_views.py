@@ -37,9 +37,9 @@ def test_real_factory_obeys_private_root_and_releases_resources(tmp_path, borrow
                 cleanup.callback(shutil.rmtree, path)
             elif factory == "mkstemp":
                 descriptor, name = view.mkstemp(prefix="private-")
-                path = Path(name)
-                cleanup.callback(path.unlink)
+                cleanup.callback(os.unlink, name)
                 cleanup.callback(os.close, descriptor)
+                path = Path(name)
             else:
                 resource = cleanup.enter_context(getattr(view, factory)(prefix="private-"))
                 if factory == "TemporaryDirectory":
