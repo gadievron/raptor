@@ -954,6 +954,16 @@ class DataflowValidator:
         Returns:
             DataflowValidation result
         """
+        if not isinstance(dataflow.rule_id, str):
+            reason = "Invalid dataflow rule identity; expected a string"
+            return DataflowValidation(
+                is_exploitable=False, confidence=0.0,
+                sanitizers_effective=True, bypass_possible=False,
+                bypass_strategy=None, attack_complexity="high",
+                reasoning=reason, barriers=["Invalid rule identity"],
+                prerequisites=[], error=reason, smt_paths_checked=0,
+            )
+
         from core.reporting.formatting import display_rule_id
         self.logger.info("Validating dataflow path: %s", display_rule_id(dataflow.rule_id))
 
