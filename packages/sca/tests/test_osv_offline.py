@@ -300,19 +300,19 @@ def test_ingest_rechecks_freshness_after_taking_the_write_lock(
     skip the duplicate wipe+ingest instead of redoing it."""
     rec = _osv("GHSA-race", "PyPI", "racepkg", fixed="2.0")
     http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
-    winner = OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
-                          ttl_seconds=3600)
-    assert winner.ensure_fresh(["PyPI"])          # real ingest
+    with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
+                          ttl_seconds=3600)) as winner:
+        assert winner.ensure_fresh(["PyPI"])          # real ingest
 
-    loser = OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
-                         ttl_seconds=3600)
-    loser._init_db()
-    # Simulate losing the pre-download freshness race: the loser
-    # already decided to ingest (download done) before the winner's
-    # commit landed. The post-lock re-check must skip.
-    stats = loser._ingest_ecosystem("PyPI", "PyPI")
-    assert stats is None
-    assert loser.query("PyPI", "racepkg", "1.0")
+        with closing(OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
+                         ttl_seconds=3600)) as loser:
+            loser._init_db()
+            # Simulate losing the pre-download freshness race: the loser
+            # already decided to ingest (download done) before the winner's
+            # commit landed. The post-lock re-check must skip.
+            stats = loser._ingest_ecosystem("PyPI", "PyPI")
+            assert stats is None
+            assert loser.query("PyPI", "racepkg", "1.0")
 
 
 def test_failed_ingest_rolls_back_and_keeps_existing_advisories(
