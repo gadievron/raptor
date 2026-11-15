@@ -70,9 +70,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.command.taint.java
     message: >-
-      Untrusted data flows into command execution. Avoid Runtime.exec() and
-      ProcessBuilder with user-controlled arguments. Use a safe API or
-      strict input validation with an allowlist.
+      Potentially untrusted data reaches command construction or execution APIs. Review the actual executable, argument structure and whether the command is started. Keep executable names fixed or allowlisted and validate arguments for the selected program.
     languages: [java]
     severity: CRITICAL
     mode: taint
@@ -145,9 +143,7 @@ rules:
   # ---------------------------------------------------------------------------
   - id: raptor.injection.command.taint.javascript
     message: >-
-      Untrusted data flows into command execution. Avoid child_process.exec()
-      and spawn with shell:true. Use execFile() or spawn() without shell
-      option and pass arguments as an array.
+      Potentially untrusted data reaches shell command APIs or dynamic JavaScript code construction. Review the selected API, shell option, input origin and whether constructed code is executed. Prefer fixed programs with argument arrays and avoid interpreting untrusted code.
     languages: [javascript, typescript]
     severity: CRITICAL
     mode: taint
